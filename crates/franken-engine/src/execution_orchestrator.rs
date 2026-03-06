@@ -305,12 +305,13 @@ pub struct ExecutionOrchestrator {
     lane_router: LaneRouter,
     adaptive_router: RegretBoundedRouter,
     stopping_policies: BTreeMap<String, EscalationPolicy>,
-    last_cumulative_llr_millionths: i64,
+    last_cumulative_llr_by_extension: BTreeMap<String, i64>,
     posterior_updater: BayesianPosteriorUpdater,
     loss_selector: ExpectedLossSelector,
     ledger: InMemoryLedger,
     saga_orchestrator: SagaOrchestrator,
     containment_executor: ContainmentExecutor,
+    attempt_counter: u64,
     execution_counter: u64,
 }
 
@@ -338,12 +339,13 @@ impl ExecutionOrchestrator {
             lane_router: LaneRouter::new(),
             adaptive_router,
             stopping_policies: BTreeMap::new(),
-            last_cumulative_llr_millionths: 0,
+            last_cumulative_llr_by_extension: BTreeMap::new(),
             posterior_updater: BayesianPosteriorUpdater::new(prior, "orchestrator"),
             loss_selector: ExpectedLossSelector::new(loss_matrix),
             ledger: InMemoryLedger::new(),
             saga_orchestrator: SagaOrchestrator::new(config.epoch, config.max_concurrent_sagas),
             containment_executor: ContainmentExecutor::new(),
+            attempt_counter: 0,
             execution_counter: 0,
             config,
         }
@@ -391,8 +393,7 @@ impl ExecutionOrchestrator {
         Self::validate_package(package)?;
 
         // Step 1: Generate identifiers.
-        let trace_id = self.next_trace_id();
-        let decision_id = self.next_decision_id();
+        let (attempt_index, trace_id, decision_id) = self.allocate_attempt_identifiers();
         let source_label = format!("ext:{}", package.extension_id);
 
         // Step 2: Create execution cell.
@@ -441,7 +442,7 @@ impl ExecutionOrchestrator {
         let action_decision = self.loss_selector.select(&posterior);
         let expected_loss_millionths = action_decision.expected_loss_millionths;
         let (stopping_decision, optimal_stopping_certificate) =
-            self.observe_optimal_stopping(&update_result, package);
+            self.observe_optimal_stopping(&update_result, package, attempt_index);
         let mut containment_action = action_decision.action;
         if stopping_decision == StoppingDecision::Stop
             && containment_action == ContainmentAction::Allow
@@ -478,7 +479,7 @@ impl ExecutionOrchestrator {
         let deadline = DrainDeadline {
             max_ticks: self.config.drain_deadline_ticks,
         };
-        let trace_seed = self.execution_counter.wrapping_add(1000);
+        let trace_seed = attempt_index.wrapping_add(1000);
         let mut cx = MockCx::new(trace_id_from_seed(trace_seed), MockBudget::new(10_000));
         let finalize_result = cell.close(&mut cx, cancel_reason, deadline).ok();
 
@@ -716,16 +717,25 @@ impl ExecutionOrchestrator {
         &mut self,
         update: &UpdateResult,
         package: &ExtensionPackage,
+        attempt_index: u64,
     ) -> (StoppingDecision, Option<OptimalStoppingCertificate>) {
+        let previous_llr = self
+            .last_cumulative_llr_by_extension
+            .get(&package.extension_id)
+            .copied()
+            .unwrap_or(0);
         let llr_increment = update
             .cumulative_llr_millionths
-            .saturating_sub(self.last_cumulative_llr_millionths);
-        self.last_cumulative_llr_millionths = update.cumulative_llr_millionths;
+            .saturating_sub(previous_llr);
+        self.last_cumulative_llr_by_extension.insert(
+            package.extension_id.clone(),
+            update.cumulative_llr_millionths,
+        );
 
         let observation = StoppingObservation {
             llr_millionths: llr_increment,
             risk_score_millionths: update.posterior.p_malicious,
-            timestamp_us: self.execution_counter,
+            timestamp_us: attempt_index,
             source: package.extension_id.clone(),
         };
         let policy = self
@@ -1027,14 +1037,13 @@ impl ExecutionOrchestrator {
         Ok((Some(receipt), saga_id))
     }
 
-    fn next_trace_id(&self) -> String {
-        format!("{}:{}", self.config.trace_id_prefix, self.execution_counter)
-    }
-
-    fn next_decision_id(&self) -> String {
-        format!(
-            "{}:decision:{}",
-            self.config.trace_id_prefix, self.execution_counter
+    fn allocate_attempt_identifiers(&mut self) -> (u64, String, String) {
+        let attempt_index = self.attempt_counter;
+        self.attempt_counter = self.attempt_counter.wrapping_add(1);
+        (
+            attempt_index,
+            format!("{}:{}", self.config.trace_id_prefix, attempt_index),
+            format!("{}:decision:{}", self.config.trace_id_prefix, attempt_index),
         )
     }
 
@@ -1164,7 +1173,7 @@ mod tests {
             cumulative_llr_millionths: 6_000_000,
             update_count: 1,
         };
-        let (decision_a, cert_a) = orch.observe_optimal_stopping(&update_a, &pkg_a);
+        let (decision_a, cert_a) = orch.observe_optimal_stopping(&update_a, &pkg_a, 0);
         assert_eq!(decision_a, StoppingDecision::Stop);
         assert_eq!(cert_a.expect("certificate").algorithm, "cusum");
 
@@ -1174,17 +1183,18 @@ mod tests {
             cumulative_llr_millionths: 6_100_000,
             update_count: 2,
         };
-        let (decision_b, cert_b) = orch.observe_optimal_stopping(&update_b, &pkg_b);
-        assert_eq!(decision_b, StoppingDecision::Continue);
-        assert_eq!(cert_b.expect("certificate").algorithm, "none");
+        let (decision_b, cert_b) = orch.observe_optimal_stopping(&update_b, &pkg_b, 1);
+        assert_eq!(decision_b, StoppingDecision::Stop);
+        assert_eq!(cert_b.expect("certificate").algorithm, "cusum");
         assert_eq!(orch.stopping_policies.len(), 2);
     }
 
     #[test]
     fn optimal_stopping_handles_extreme_cumulative_delta_without_overflow() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        orch.last_cumulative_llr_millionths = i64::MAX;
         let pkg = package_with_id("ext-overflow");
+        orch.last_cumulative_llr_by_extension
+            .insert(pkg.extension_id.clone(), i64::MAX);
         let update = UpdateResult {
             posterior: Posterior::default_prior(),
             likelihoods: [500_000, 500_000, 500_000, 500_000],
@@ -1192,9 +1202,35 @@ mod tests {
             update_count: 1,
         };
 
-        let (decision, cert) = orch.observe_optimal_stopping(&update, &pkg);
+        let (decision, cert) = orch.observe_optimal_stopping(&update, &pkg, 0);
         assert_eq!(decision, StoppingDecision::Continue);
         assert_eq!(cert.expect("certificate").algorithm, "none");
+    }
+
+    #[test]
+    fn optimal_stopping_same_extension_still_uses_incremental_delta() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let pkg = package_with_id("ext-shared");
+        let update_a = UpdateResult {
+            posterior: Posterior::default_prior(),
+            likelihoods: [500_000, 500_000, 500_000, 500_000],
+            cumulative_llr_millionths: 4_800_000,
+            update_count: 1,
+        };
+        let update_b = UpdateResult {
+            posterior: Posterior::default_prior(),
+            likelihoods: [500_000, 500_000, 500_000, 500_000],
+            cumulative_llr_millionths: 5_300_000,
+            update_count: 2,
+        };
+
+        let (decision_a, cert_a) = orch.observe_optimal_stopping(&update_a, &pkg, 0);
+        let (decision_b, cert_b) = orch.observe_optimal_stopping(&update_b, &pkg, 1);
+
+        assert_eq!(decision_a, StoppingDecision::Continue);
+        assert_eq!(cert_a.expect("certificate").algorithm, "none");
+        assert_eq!(decision_b, StoppingDecision::Continue);
+        assert_eq!(cert_b.expect("certificate").algorithm, "none");
     }
 
     #[test]
@@ -1635,6 +1671,26 @@ mod tests {
         assert_eq!(orch.execution_count(), 1);
         orch.execute(&simple_package()).unwrap();
         assert_eq!(orch.execution_count(), 2);
+    }
+
+    #[test]
+    fn failed_execution_still_advances_trace_identifier() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let lowering_failure = ExtensionPackage {
+            source: "new Date()".to_string(),
+            ..simple_package()
+        };
+
+        let err = orch
+            .execute(&lowering_failure)
+            .expect_err("lowering should fail");
+        assert!(matches!(err, OrchestratorError::Lowering(_)));
+        assert_eq!(orch.execution_count(), 0);
+
+        let result = orch.execute(&simple_package()).expect("follow-up execute");
+        assert_eq!(result.trace_id, "orch:1");
+        assert_eq!(result.decision_id, "orch:decision:1");
+        assert_eq!(orch.execution_count(), 1);
     }
 
     // -- Enrichment: finalize result populated --

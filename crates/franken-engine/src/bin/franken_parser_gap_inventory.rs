@@ -8,6 +8,11 @@ use serde::Serialize;
 
 const OUTPUT_SCHEMA_VERSION: &str = "franken-engine.franken_parser_gap_inventory.v1";
 
+enum CliAction {
+    Help,
+    Run { out_dir: PathBuf },
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct CommandOutput {
     schema_version: String,
@@ -29,7 +34,13 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
-    let out_dir = parse_out_dir(&args[1..])?;
+    let out_dir = match parse_args(&args[1..])? {
+        CliAction::Help => {
+            println!("{}", help_text());
+            return Ok(());
+        }
+        CliAction::Run { out_dir } => out_dir,
+    };
     let artifacts =
         write_parser_gap_inventory_bundle(&out_dir, &args).map_err(|error| error.to_string())?;
     let output = CommandOutput {
@@ -47,7 +58,7 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn parse_out_dir(args: &[String]) -> Result<PathBuf, String> {
+fn parse_args(args: &[String]) -> Result<CliAction, String> {
     if args.is_empty() {
         return Err(help_text());
     }
@@ -56,7 +67,7 @@ fn parse_out_dir(args: &[String]) -> Result<PathBuf, String> {
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
-            "-h" | "--help" => return Err(help_text()),
+            "-h" | "--help" => return Ok(CliAction::Help),
             "--out-dir" => {
                 let Some(value) = args.get(index + 1) else {
                     return Err("--out-dir requires a path".to_string());
@@ -73,7 +84,9 @@ fn parse_out_dir(args: &[String]) -> Result<PathBuf, String> {
         }
     }
 
-    out_dir.ok_or_else(|| format!("missing required --out-dir\n\n{}", help_text()))
+    out_dir
+        .map(|out_dir| CliAction::Run { out_dir })
+        .ok_or_else(|| format!("missing required --out-dir\n\n{}", help_text()))
 }
 
 fn help_text() -> String {

@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,6 +26,8 @@ pub const PARSER_GAP_RUN_MANIFEST_SCHEMA_VERSION: &str =
 pub const PARSER_GAP_EVENT_SCHEMA_VERSION: &str = "franken-engine.parser-gap-inventory.event.v1";
 pub const PARSER_GAP_COMPONENT: &str = "parser_gap_inventory";
 pub const PARSER_GAP_POLICY_ID: &str = "franken-engine.parser-gap-inventory.policy.v1";
+
+static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -582,6 +587,8 @@ pub enum ParserGapInventoryWriteError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("bundle output directory is already locked by another writer: `{path}`")]
+    Busy { path: String },
     #[error("failed to write `{path}`: {source}")]
     Io {
         path: String,
@@ -608,7 +615,6 @@ pub fn write_parser_gap_inventory_bundle(
 
     let inventory_bytes = canonical_json_bytes(&inventory, &inventory_path)?;
     let inventory_hash = sha256_hex(&inventory_bytes);
-    write_atomic(&inventory_path, &inventory_bytes)?;
 
     let short_hash = inventory_hash.chars().take(16).collect::<String>();
     let trace_id = format!("trace-parser-gap-{short_hash}");
@@ -632,10 +638,7 @@ pub fn write_parser_gap_inventory_bundle(
             commands_txt: "commands.txt".to_string(),
         },
     };
-    write_atomic(
-        &run_manifest_path,
-        &canonical_json_bytes(&manifest, &run_manifest_path)?,
-    )?;
+    let manifest_bytes = canonical_json_bytes(&manifest, &run_manifest_path)?;
 
     let events = build_inventory_events(&inventory, &trace_id, &decision_id);
     let mut events_jsonl = String::new();
@@ -648,14 +651,20 @@ pub fn write_parser_gap_inventory_bundle(
         events_jsonl.push_str(&line);
         events_jsonl.push('\n');
     }
-    write_atomic(&events_path, events_jsonl.as_bytes())?;
 
     let mut commands_buf = String::new();
     for command in command_lines {
         commands_buf.push_str(command);
         commands_buf.push('\n');
     }
+
+    let _bundle_lock = acquire_bundle_write_lock(&out_dir)?;
+    remove_commit_marker(&run_manifest_path)?;
+    write_atomic(&inventory_path, &inventory_bytes)?;
+    write_atomic(&events_path, events_jsonl.as_bytes())?;
     write_atomic(&commands_path, commands_buf.as_bytes())?;
+    // Publish the manifest last so its presence acts as a commit marker for the bundle.
+    write_atomic(&run_manifest_path, &manifest_bytes)?;
 
     Ok(ParserGapInventoryArtifacts {
         out_dir,
@@ -730,6 +739,39 @@ fn canonical_json_bytes<T: Serialize>(
     })
 }
 
+fn acquire_bundle_write_lock(
+    out_dir: &Path,
+) -> Result<BundleWriteLock, ParserGapInventoryWriteError> {
+    let lock_path = out_dir.join(".parser_gap_inventory.lock");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => Ok(BundleWriteLock { path: lock_path }),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+            Err(ParserGapInventoryWriteError::Busy {
+                path: lock_path.display().to_string(),
+            })
+        }
+        Err(source) => Err(ParserGapInventoryWriteError::Io {
+            path: lock_path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn remove_commit_marker(path: &Path) -> Result<(), ParserGapInventoryWriteError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ParserGapInventoryWriteError::Io {
+            path: path.display().to_string(),
+            source,
+        }),
+    }
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ParserGapInventoryWriteError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| ParserGapInventoryWriteError::Io {
@@ -738,15 +780,43 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ParserGapInventoryWrite
         })?;
     }
 
-    let temp_path = path.with_extension("tmp");
+    let temp_path = unique_temp_path(path);
     fs::write(&temp_path, bytes).map_err(|source| ParserGapInventoryWriteError::Io {
         path: temp_path.display().to_string(),
         source,
     })?;
-    fs::rename(&temp_path, path).map_err(|source| ParserGapInventoryWriteError::Io {
-        path: path.display().to_string(),
-        source,
-    })
+    if let Err(source) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ParserGapInventoryWriteError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let sequence = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    let mut temp_name = OsString::from(".");
+    match path.file_name() {
+        Some(file_name) => temp_name.push(file_name),
+        None => temp_name.push("artifact"),
+    }
+    temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(temp_name)
+}
+
+#[derive(Debug)]
+struct BundleWriteLock {
+    path: PathBuf,
+}
+
+impl Drop for BundleWriteLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -863,5 +933,54 @@ mod tests {
         let commands_txt = fs::read_to_string(&artifacts.commands_path).expect("read commands");
         assert!(commands_txt.contains("franken_parser_gap_inventory"));
         assert!(commands_txt.contains("--out-dir"));
+        assert!(!out_dir.join(".parser_gap_inventory.lock").exists());
+    }
+
+    #[test]
+    fn unique_temp_path_is_distinct_for_each_write_attempt() {
+        let target = Path::new("artifacts/parser_gap_inventory.json");
+        let first = unique_temp_path(target);
+        let second = unique_temp_path(target);
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), second.parent());
+        assert_ne!(first.file_name(), Some(target.as_os_str()));
+        assert_ne!(second.file_name(), Some(target.as_os_str()));
+    }
+
+    #[test]
+    fn bundle_write_lock_rejects_concurrent_writer_until_release() {
+        let out_dir = unique_temp_dir("parser-gap-lock");
+        fs::create_dir_all(&out_dir).expect("create lock dir");
+
+        let first = acquire_bundle_write_lock(&out_dir).expect("first lock");
+        let second = acquire_bundle_write_lock(&out_dir).expect_err("second lock should fail");
+        assert!(matches!(second, ParserGapInventoryWriteError::Busy { .. }));
+
+        drop(first);
+
+        acquire_bundle_write_lock(&out_dir).expect("lock should be acquirable after release");
+    }
+
+    #[test]
+    fn failed_rewrite_removes_stale_manifest_commit_marker() {
+        let out_dir = unique_temp_dir("parser-gap-stale-manifest");
+        fs::create_dir_all(&out_dir).expect("create out dir");
+        let run_manifest_path = out_dir.join("run_manifest.json");
+        fs::write(&run_manifest_path, "{\"stale\":true}\n").expect("seed stale manifest");
+        fs::create_dir_all(out_dir.join("parser_gap_inventory.json"))
+            .expect("create blocking directory");
+
+        let commands = vec!["franken_parser_gap_inventory".to_string()];
+        let err = write_parser_gap_inventory_bundle(&out_dir, &commands)
+            .expect_err("rewrite should fail when target path is a directory");
+        assert!(matches!(err, ParserGapInventoryWriteError::Io { .. }));
+        assert!(
+            !run_manifest_path.exists(),
+            "stale commit marker should be removed on failed rewrite"
+        );
+        assert!(
+            !out_dir.join(".parser_gap_inventory.lock").exists(),
+            "bundle lock should be released after failure",
+        );
     }
 }

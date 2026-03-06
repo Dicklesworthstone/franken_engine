@@ -64,3 +64,20 @@ fn parser_gap_inventory_cli_writes_artifact_bundle() {
         64
     );
 }
+
+#[test]
+fn parser_gap_inventory_cli_help_exits_successfully() {
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_parser_gap_inventory"))
+        .arg("--help")
+        .output()
+        .expect("run parser gap inventory binary");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Usage: franken_parser_gap_inventory --out-dir <DIR>"));
+    assert!(output.stderr.is_empty());
+}

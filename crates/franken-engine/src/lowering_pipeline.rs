@@ -5089,6 +5089,36 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn lower_member_assignment_currently_emits_nop_placeholder() {
+        let ir0 = expr_ir0(Expression::Assignment {
+            operator: AssignmentOperator::Assign,
+            left: Box::new(Expression::Member {
+                object: Box::new(Expression::Identifier("obj".into())),
+                property: Box::new(Expression::Identifier("field".into())),
+                computed: false,
+            }),
+            right: Box::new(Expression::NumericLiteral(7)),
+        });
+        let result = lower_ir0_to_ir1(&ir0).expect("member assignment currently lowers");
+        assert!(result.module.ops.iter().any(|op| matches!(op, Ir1Op::Nop)));
+    }
+
+    #[test]
+    fn lower_non_arithmetic_binary_currently_collapses_to_add_placeholder() {
+        let ir0 = expr_ir0(Expression::Binary {
+            operator: BinaryOperator::LessThan,
+            left: Box::new(Expression::NumericLiteral(1)),
+            right: Box::new(Expression::NumericLiteral(2)),
+        });
+        let ctx = LoweringContext::new("trace-gap", "decision-gap", "policy-gap");
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("comparison currently lowers");
+        assert!(output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            crate::ir_contract::Ir3Instruction::Add { .. }
+        )));
+    }
+
     // ================================================================
     // Statement lowering enrichment
     // ================================================================
@@ -5268,20 +5298,45 @@ mod tests {
     fn lower_do_while_statement() {
         let ir0 = stmt_ir0(vec![Statement::DoWhile(DoWhileStatement {
             condition: Expression::BooleanLiteral(false),
-            body: Box::new(Statement::Expression(ExpressionStatement {
-                expression: Expression::NumericLiteral(1),
+            body: Box::new(Statement::Continue(ContinueStatement {
+                label: None,
                 span: span(),
             })),
             span: span(),
         })]);
         let result = lower_ir0_to_ir1(&ir0).expect("do-while should lower");
-        let labels = result
+        let labels: Vec<u32> = result
             .module
             .ops
             .iter()
-            .filter(|op| matches!(op, Ir1Op::Label { .. }))
-            .count();
-        assert_eq!(labels, 2); // loop + end
+            .filter_map(|op| match op {
+                Ir1Op::Label { id } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 3); // loop + continue-to-condition + end
+
+        let jumps: Vec<u32> = result
+            .module
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::Jump { label_id } => Some(*label_id),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            jumps.contains(&labels[1]),
+            "continue in do-while must jump to the condition-check label"
+        );
+        assert!(
+            jumps.contains(&labels[0]),
+            "do-while must retain a back-edge jump to the loop label"
+        );
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::JumpIfFalsy { label_id } if *label_id == labels[2]
+        )));
     }
 
     #[test]

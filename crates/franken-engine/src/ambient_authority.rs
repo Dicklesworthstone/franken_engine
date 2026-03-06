@@ -337,6 +337,10 @@ impl SourceAuditor {
         file_path: &str,
         source: &str,
     ) -> Vec<AuditFinding> {
+        if !self.module_in_scope(module_path) {
+            return Vec::new();
+        }
+
         let mut findings = Vec::new();
 
         for (line_num_0, line) in source.lines().enumerate() {
@@ -382,6 +386,10 @@ impl SourceAuditor {
         let mut modules_audited = BTreeSet::new();
 
         for ((module_path, file_path), source) in sources {
+            if !self.module_in_scope(module_path) {
+                continue;
+            }
+
             modules_audited.insert(module_path.clone());
             let findings = self.audit_source(module_path, file_path, source);
             all_findings.extend(findings);
@@ -407,6 +415,16 @@ impl SourceAuditor {
     /// Exemption registry.
     pub fn exemptions(&self) -> &ExemptionRegistry {
         &self.exemptions
+    }
+
+    fn module_in_scope(&self, module_path: &str) -> bool {
+        self.config.audited_modules.is_empty()
+            || self.config.audited_modules.iter().any(|prefix| {
+                module_path == prefix
+                    || module_path
+                        .strip_prefix(prefix)
+                        .is_some_and(|suffix| suffix.starts_with("::"))
+            })
     }
 }
 
@@ -984,6 +1002,21 @@ mod tests {
     }
 
     #[test]
+    fn audit_source_skips_modules_outside_scope() {
+        let mut config = AuditConfig::standard();
+        config.audit_module("engine::audited");
+        let auditor = SourceAuditor::new(config, ExemptionRegistry::new());
+
+        let findings = auditor.audit_source(
+            "engine::ignored",
+            "src/ignored.rs",
+            "let _ = std::fs::read(\"x\");",
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn audit_all_counts_exemptions() {
         let mut exemptions = ExemptionRegistry::new();
         exemptions.add(Exemption {
@@ -1014,6 +1047,77 @@ mod tests {
         assert!(result.passed);
         assert_eq!(result.violation_count, 0);
         assert!(result.exemption_count >= 2);
+    }
+
+    #[test]
+    fn audit_all_respects_configured_module_scope() {
+        let mut config = AuditConfig::standard();
+        config.audit_module("engine::audited");
+        let auditor = SourceAuditor::new(config, ExemptionRegistry::new());
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            (
+                "engine::audited::dirty".to_string(),
+                "src/audited.rs".to_string(),
+            ),
+            "let _ = std::fs::read(\"audited\");".to_string(),
+        );
+        sources.insert(
+            (
+                "engine::ignored::dirty".to_string(),
+                "src/ignored.rs".to_string(),
+            ),
+            "let _ = std::fs::read(\"ignored\");".to_string(),
+        );
+
+        let result = auditor.audit_all(&sources);
+
+        assert!(!result.passed);
+        assert_eq!(
+            result.modules_audited,
+            vec!["engine::audited::dirty".to_string()]
+        );
+        assert!(
+            result
+                .findings
+                .iter()
+                .all(|finding| finding.module_path.starts_with("engine::audited"))
+        );
+    }
+
+    #[test]
+    fn audit_scope_does_not_match_sibling_prefixes() {
+        let mut config = AuditConfig::standard();
+        config.audit_module("engine::audit");
+        let auditor = SourceAuditor::new(config, ExemptionRegistry::new());
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            (
+                "engine::audit::worker".to_string(),
+                "src/audited.rs".to_string(),
+            ),
+            "let _ = std::fs::read(\"audited\");".to_string(),
+        );
+        sources.insert(
+            (
+                "engine::auditedevil::worker".to_string(),
+                "src/ignored.rs".to_string(),
+            ),
+            "let _ = std::fs::read(\"ignored\");".to_string(),
+        );
+
+        let result = auditor.audit_all(&sources);
+
+        assert_eq!(
+            result.modules_audited,
+            vec!["engine::audit::worker".to_string()]
+        );
+        assert!(
+            result
+                .findings
+                .iter()
+                .all(|finding| finding.module_path == "engine::audit::worker")
+        );
     }
 
     // -----------------------------------------------------------------------

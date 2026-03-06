@@ -339,6 +339,92 @@ fn audit_all_multiple_modules() {
     assert_eq!(result.modules_audited.len(), 2);
 }
 
+#[test]
+fn scoped_audit_source_skips_out_of_scope_module() {
+    let mut config = AuditConfig::standard();
+    config.audit_module("engine::audited");
+    let auditor = SourceAuditor::new(config, ExemptionRegistry::new());
+
+    let findings = auditor.audit_source(
+        "engine::ignored",
+        "src/ignored.rs",
+        "let _ = std::fs::read(\"x\");",
+    );
+
+    assert!(findings.is_empty());
+}
+
+#[test]
+fn scoped_audit_all_only_reports_matching_modules() {
+    let mut config = AuditConfig::standard();
+    config.audit_module("engine::audited");
+    let auditor = SourceAuditor::new(config, ExemptionRegistry::new());
+    let mut sources = BTreeMap::new();
+    sources.insert(
+        (
+            "engine::audited::worker".to_string(),
+            "src/audited.rs".to_string(),
+        ),
+        "let _ = std::fs::read(\"audited\");".to_string(),
+    );
+    sources.insert(
+        (
+            "engine::ignored::worker".to_string(),
+            "src/ignored.rs".to_string(),
+        ),
+        "let _ = std::fs::read(\"ignored\");".to_string(),
+    );
+
+    let result = auditor.audit_all(&sources);
+
+    assert_eq!(
+        result.modules_audited,
+        vec!["engine::audited::worker".to_string()]
+    );
+    assert!(result.violation_count >= 1);
+    assert!(
+        result
+            .findings
+            .iter()
+            .all(|finding| finding.module_path.starts_with("engine::audited"))
+    );
+}
+
+#[test]
+fn scoped_audit_does_not_match_sibling_prefix_modules() {
+    let mut config = AuditConfig::standard();
+    config.audit_module("engine::audit");
+    let auditor = SourceAuditor::new(config, ExemptionRegistry::new());
+    let mut sources = BTreeMap::new();
+    sources.insert(
+        (
+            "engine::audit::worker".to_string(),
+            "src/audited.rs".to_string(),
+        ),
+        "let _ = std::fs::read(\"audited\");".to_string(),
+    );
+    sources.insert(
+        (
+            "engine::auditedevil::worker".to_string(),
+            "src/ignored.rs".to_string(),
+        ),
+        "let _ = std::fs::read(\"ignored\");".to_string(),
+    );
+
+    let result = auditor.audit_all(&sources);
+
+    assert_eq!(
+        result.modules_audited,
+        vec!["engine::audit::worker".to_string()]
+    );
+    assert!(
+        result
+            .findings
+            .iter()
+            .all(|finding| finding.module_path == "engine::audit::worker")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // SourceAuditor — finding structure
 // ---------------------------------------------------------------------------

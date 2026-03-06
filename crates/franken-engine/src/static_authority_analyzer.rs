@@ -38,6 +38,11 @@ fn analysis_report_schema_hash() -> crate::deterministic_serde::SchemaHash {
     )
 }
 
+fn append_canonical_field(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 // ---------------------------------------------------------------------------
 // Capability — atomic authority unit (string-based, lattice-sorted)
 // ---------------------------------------------------------------------------
@@ -315,14 +320,11 @@ impl StaticAnalysisReport {
         zone: &str,
     ) -> Result<crate::engine_object_id::EngineObjectId, crate::engine_object_id::IdError> {
         let mut canonical = Vec::new();
-        canonical.extend_from_slice(b"static-authority-analysis|");
-        canonical.extend_from_slice(extension_id.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(effect_graph_hash.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(manifest_hash.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(&timestamp_ns.to_be_bytes());
+        append_canonical_field(&mut canonical, b"static-authority-analysis");
+        append_canonical_field(&mut canonical, extension_id.as_bytes());
+        append_canonical_field(&mut canonical, effect_graph_hash.as_bytes());
+        append_canonical_field(&mut canonical, manifest_hash.as_bytes());
+        append_canonical_field(&mut canonical, &timestamp_ns.to_be_bytes());
         let schema_id = crate::engine_object_id::SchemaId::from_definition(
             analysis_report_schema_hash().0.as_slice(),
         );
@@ -337,18 +339,14 @@ impl StaticAnalysisReport {
     /// Content hash of this report for evidence chaining.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(self.report_id.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(self.extension_id.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(self.effect_graph_hash.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(self.manifest_hash.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(&self.timestamp_ns.to_be_bytes());
+        append_canonical_field(&mut buf, b"static-analysis-report");
+        append_canonical_field(&mut buf, self.report_id.as_bytes());
+        append_canonical_field(&mut buf, self.extension_id.as_bytes());
+        append_canonical_field(&mut buf, self.effect_graph_hash.as_bytes());
+        append_canonical_field(&mut buf, self.manifest_hash.as_bytes());
+        append_canonical_field(&mut buf, &self.timestamp_ns.to_be_bytes());
         for cap in &self.upper_bound_capabilities {
-            buf.push(b'|');
-            buf.extend_from_slice(cap.as_str().as_bytes());
+            append_canonical_field(&mut buf, cap.as_str().as_bytes());
         }
         ContentHash::compute(&buf)
     }
@@ -634,29 +632,51 @@ impl StaticAuthorityAnalyzer {
     /// Compute a deterministic content hash of the effect graph.
     fn compute_graph_hash(graph: &EffectGraph) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(b"effect-graph|");
-        buf.extend_from_slice(graph.extension_id.as_bytes());
-        for node in &graph.nodes {
-            buf.push(b'|');
-            buf.extend_from_slice(node.node_id.as_bytes());
-            buf.push(b':');
-            let kind_tag = match &node.kind {
-                EffectNodeKind::Entry => "entry",
-                EffectNodeKind::HostcallSite { .. } => "hostcall",
-                EffectNodeKind::ControlFlow => "control_flow",
-                EffectNodeKind::Computation => "computation",
-                EffectNodeKind::Exit => "exit",
-            };
-            buf.extend_from_slice(kind_tag.as_bytes());
-        }
-        for edge in &graph.edges {
-            buf.push(b'|');
-            buf.extend_from_slice(edge.from.as_bytes());
-            buf.extend_from_slice(b"->");
-            buf.extend_from_slice(edge.to.as_bytes());
-            if edge.provably_dead {
-                buf.extend_from_slice(b"[dead]");
+        append_canonical_field(&mut buf, b"effect-graph");
+        append_canonical_field(&mut buf, graph.extension_id.as_bytes());
+
+        let mut nodes = graph.nodes.iter().collect::<Vec<_>>();
+        nodes.sort_by(|left, right| {
+            left.node_id
+                .cmp(&right.node_id)
+                .then_with(|| left.kind.cmp(&right.kind))
+                .then_with(|| left.source_location.cmp(&right.source_location))
+        });
+        for node in nodes {
+            append_canonical_field(&mut buf, b"node");
+            append_canonical_field(&mut buf, node.node_id.as_bytes());
+            match &node.kind {
+                EffectNodeKind::Entry => append_canonical_field(&mut buf, b"entry"),
+                EffectNodeKind::HostcallSite { capability } => {
+                    append_canonical_field(&mut buf, b"hostcall");
+                    append_canonical_field(&mut buf, capability.as_str().as_bytes());
+                }
+                EffectNodeKind::ControlFlow => append_canonical_field(&mut buf, b"control_flow"),
+                EffectNodeKind::Computation => append_canonical_field(&mut buf, b"computation"),
+                EffectNodeKind::Exit => append_canonical_field(&mut buf, b"exit"),
             }
+
+            match &node.source_location {
+                Some(source_location) => {
+                    append_canonical_field(&mut buf, b"source_location");
+                    append_canonical_field(&mut buf, source_location.as_bytes());
+                }
+                None => append_canonical_field(&mut buf, b"no_source_location"),
+            }
+        }
+
+        let mut edges = graph.edges.iter().collect::<Vec<_>>();
+        edges.sort_by(|left, right| {
+            left.from
+                .cmp(&right.from)
+                .then_with(|| left.to.cmp(&right.to))
+                .then_with(|| left.provably_dead.cmp(&right.provably_dead))
+        });
+        for edge in edges {
+            append_canonical_field(&mut buf, b"edge");
+            append_canonical_field(&mut buf, edge.from.as_bytes());
+            append_canonical_field(&mut buf, edge.to.as_bytes());
+            append_canonical_field(&mut buf, if edge.provably_dead { b"dead" } else { b"live" });
         }
         ContentHash::compute(&buf)
     }
@@ -664,16 +684,15 @@ impl StaticAuthorityAnalyzer {
     /// Compute a deterministic content hash of the manifest intents.
     fn compute_manifest_hash(manifest: &ManifestIntents) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(b"manifest-intents|");
-        buf.extend_from_slice(manifest.extension_id.as_bytes());
+        append_canonical_field(&mut buf, b"manifest-intents");
+        append_canonical_field(&mut buf, manifest.extension_id.as_bytes());
+        append_canonical_field(&mut buf, b"declared");
         for cap in &manifest.declared_capabilities {
-            buf.push(b'|');
-            buf.extend_from_slice(cap.as_str().as_bytes());
+            append_canonical_field(&mut buf, cap.as_str().as_bytes());
         }
-        buf.extend_from_slice(b"|optional");
+        append_canonical_field(&mut buf, b"optional");
         for cap in &manifest.optional_capabilities {
-            buf.push(b'|');
-            buf.extend_from_slice(cap.as_str().as_bytes());
+            append_canonical_field(&mut buf, cap.as_str().as_bytes());
         }
         ContentHash::compute(&buf)
     }
@@ -720,6 +739,9 @@ impl AnalysisCache {
 
     /// Insert a report into the cache. Evicts oldest if at capacity.
     pub fn insert(&mut self, key: AnalysisCacheKey, report: StaticAnalysisReport) {
+        if self.max_entries == 0 {
+            return;
+        }
         // Remove existing entry with same key if present.
         self.entries.retain(|(k, _)| k != &key);
         if self.entries.len() >= self.max_entries {
@@ -1544,12 +1566,72 @@ mod tests {
     }
 
     #[test]
+    fn graph_hash_is_insertion_order_insensitive() {
+        let mut ordered = EffectGraph::new("ext-order");
+        ordered.add_node(entry_node("e0"));
+        ordered.add_node(hostcall_node("h1", "fs_read"));
+        ordered.add_node(exit_node("x2"));
+        ordered.add_edge(edge("e0", "h1"));
+        ordered.add_edge(edge("h1", "x2"));
+
+        let mut reordered = EffectGraph::new("ext-order");
+        reordered.add_node(exit_node("x2"));
+        reordered.add_node(hostcall_node("h1", "fs_read"));
+        reordered.add_node(entry_node("e0"));
+        reordered.add_edge(edge("h1", "x2"));
+        reordered.add_edge(edge("e0", "h1"));
+
+        let ordered_hash = StaticAuthorityAnalyzer::compute_graph_hash(&ordered);
+        let reordered_hash = StaticAuthorityAnalyzer::compute_graph_hash(&reordered);
+        assert_eq!(ordered_hash, reordered_hash);
+    }
+
+    #[test]
+    fn graph_hash_changes_when_hostcall_capability_changes() {
+        let mut graph_a = EffectGraph::new("ext-cap-diff");
+        graph_a.add_node(entry_node("e0"));
+        graph_a.add_node(hostcall_node("h1", "fs_read"));
+        graph_a.add_node(exit_node("x2"));
+        graph_a.add_edge(edge("e0", "h1"));
+        graph_a.add_edge(edge("h1", "x2"));
+
+        let mut graph_b = EffectGraph::new("ext-cap-diff");
+        graph_b.add_node(entry_node("e0"));
+        graph_b.add_node(hostcall_node("h1", "net_send"));
+        graph_b.add_node(exit_node("x2"));
+        graph_b.add_edge(edge("e0", "h1"));
+        graph_b.add_edge(edge("h1", "x2"));
+
+        let hash_a = StaticAuthorityAnalyzer::compute_graph_hash(&graph_a);
+        let hash_b = StaticAuthorityAnalyzer::compute_graph_hash(&graph_b);
+        assert_ne!(hash_a, hash_b);
+    }
+
+    #[test]
     fn manifest_hash_is_deterministic() {
         let m1 = simple_manifest();
         let m2 = simple_manifest();
         let h1 = StaticAuthorityAnalyzer::compute_manifest_hash(&m1);
         let h2 = StaticAuthorityAnalyzer::compute_manifest_hash(&m2);
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn manifest_hash_distinguishes_delimiter_ambiguous_inputs() {
+        let extension_encoded = ManifestIntents {
+            extension_id: "ext|fs_read".to_string(),
+            declared_capabilities: BTreeSet::new(),
+            optional_capabilities: BTreeSet::new(),
+        };
+        let capability_encoded = ManifestIntents {
+            extension_id: "ext".to_string(),
+            declared_capabilities: [cap("fs_read")].into(),
+            optional_capabilities: BTreeSet::new(),
+        };
+
+        let extension_hash = StaticAuthorityAnalyzer::compute_manifest_hash(&extension_encoded);
+        let capability_hash = StaticAuthorityAnalyzer::compute_manifest_hash(&capability_encoded);
+        assert_ne!(extension_hash, capability_hash);
     }
 
     #[test]
@@ -2075,6 +2157,32 @@ mod tests {
 
         let cached = cache.get(&key).unwrap();
         assert_eq!(cached.timestamp_ns, r2.timestamp_ns);
+    }
+
+    #[test]
+    fn cache_zero_capacity_insert_is_noop() {
+        let mut cache = AnalysisCache::new(0);
+        let analyzer = StaticAuthorityAnalyzer::new(default_config());
+        let report = analyzer
+            .analyze(
+                &simple_graph(),
+                &simple_manifest(),
+                SecurityEpoch::from_raw(1),
+                42_000,
+            )
+            .expect("report");
+
+        cache.insert(
+            AnalysisCacheKey {
+                effect_graph_hash: report.effect_graph_hash.clone(),
+                manifest_hash: report.manifest_hash.clone(),
+                path_sensitive: report.path_sensitive,
+            },
+            report,
+        );
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
     }
 
     // -----------------------------------------------------------------------

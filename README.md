@@ -547,6 +547,22 @@ rch exec -- env RUSTUP_TOOLCHAIN=nightly \
 ```
 
 Gate run manifests are written under `artifacts/parser_phase0_gate/<timestamp>/run_manifest.json`.
+
+## Lowering Gap Inventory
+
+`bd-1lsy.2.7` publishes a deterministic lowering-gap ledger that makes parser-ready versus execution-ready semantics explicit for the current placeholder and fail-closed lowering paths.
+
+```bash
+# deterministic lowering-gap inventory artifact bundle (rch-backed)
+./scripts/e2e/lowering_gap_inventory_replay.sh
+```
+
+Artifacts are written under:
+
+- `artifacts/lowering_gap_inventory/<timestamp>/lowering_gap_inventory.json`
+- `artifacts/lowering_gap_inventory/<timestamp>/run_manifest.json`
+- `artifacts/lowering_gap_inventory/<timestamp>/events.jsonl`
+- `artifacts/lowering_gap_inventory/<timestamp>/commands.txt`
 Event->AST equivalence manifests are written under
 `artifacts/parser_event_ast_equivalence/<timestamp>/run_manifest.json`.
 Reducer promotion manifests are written under

@@ -118,6 +118,7 @@ pub mod key_attestation;
 pub mod key_derivation;
 pub mod lab_runtime;
 pub mod lease_tracker;
+pub mod lowering_gap_inventory;
 pub mod lowering_pipeline;
 pub mod marker_stream;
 pub mod migration_compatibility;

@@ -8,11 +8,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::benchmark_denominator::{
-    evaluate_publication_gate, PublicationContext, PublicationGateInput,
+    PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
 use frankenengine_engine::benchmark_e2e::{
-    run_benchmark_suite, write_evidence_artifacts, BenchmarkFamily, BenchmarkSuiteConfig,
-    ScaleProfile,
+    BenchmarkFamily, BenchmarkSuiteConfig, ScaleProfile, run_benchmark_suite,
+    write_evidence_artifacts,
 };
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
 use frankenengine_engine::execution_orchestrator::{
@@ -20,29 +20,29 @@ use frankenengine_engine::execution_orchestrator::{
 };
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{
-    lower_ir0_to_ir3, LoweringContext, LoweringPipelineOutput,
+    LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 use frankenengine_engine::receipt_verifier_pipeline::{
-    render_verdict_summary, verify_receipt_by_id, ReceiptVerifierCliInput,
+    ReceiptVerifierCliInput, render_verdict_summary, verify_receipt_by_id,
 };
 use frankenengine_engine::region_lifecycle::FinalizeResult;
 use frankenengine_engine::runtime_diagnostics_cli::{
+    CompatibilityAdvisoryInput, CompatibilityAdvisoryOutput, EvidenceExportFilter,
+    OnboardingReadinessClass, OnboardingScorecardInput, OnboardingScorecardOutput,
+    OnboardingScorecardSignal, PreflightDoctorOutput, RolloutDecisionArtifactInput,
+    RolloutDecisionArtifactOutput, RolloutRecommendation, RuntimeDiagnosticsCliInput,
+    SupportBundleFile, SupportBundleOutput, SupportBundleRedactionPolicy,
     build_compatibility_advisories, build_onboarding_scorecard, build_rollout_decision_artifact,
-    parse_decision_type, parse_evidence_severity, run_preflight_doctor, CompatibilityAdvisoryInput,
-    CompatibilityAdvisoryOutput, EvidenceExportFilter, OnboardingReadinessClass,
-    OnboardingScorecardInput, OnboardingScorecardOutput, OnboardingScorecardSignal,
-    PreflightDoctorOutput, RolloutDecisionArtifactInput, RolloutDecisionArtifactOutput,
-    RolloutRecommendation, RuntimeDiagnosticsCliInput, SupportBundleFile, SupportBundleOutput,
-    SupportBundleRedactionPolicy,
+    parse_decision_type, parse_evidence_severity, run_preflight_doctor,
 };
 use frankenengine_engine::third_party_verifier::{
-    render_report_summary, verify_benchmark_claim, BenchmarkClaimBundle, ClaimedBenchmarkOutcome,
+    BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
-    THIRD_PARTY_VERIFIER_COMPONENT,
+    render_report_summary, verify_benchmark_claim,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
@@ -57,7 +57,7 @@ enum CommandSpec {
     Help,
     Compile(CompileArgs),
     Run(RunArgs),
-    Doctor(DoctorArgs),
+    Doctor(Box<DoctorArgs>),
     Verify(VerifyArgs),
     Benchmark(BenchmarkArgs),
     Replay(ReplayArgs),
@@ -327,7 +327,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         }
         CommandSpec::Compile(args) => execute_compile(args),
         CommandSpec::Run(args) => execute_run(args),
-        CommandSpec::Doctor(args) => execute_doctor(args),
+        CommandSpec::Doctor(args) => execute_doctor(*args),
         CommandSpec::Verify(args) => execute_verify(args),
         CommandSpec::Benchmark(args) => execute_benchmark(args),
         CommandSpec::Replay(args) => execute_replay(args),
@@ -352,7 +352,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "version" => Ok(CommandSpec::Version),
         "compile" => parse_compile_args(&args[1..]).map(CommandSpec::Compile),
         "run" => parse_run_args(&args[1..]).map(CommandSpec::Run),
-        "doctor" => parse_doctor_args(&args[1..]).map(CommandSpec::Doctor),
+        "doctor" => parse_doctor_args(&args[1..]).map(|args| CommandSpec::Doctor(Box::new(args))),
         "verify" => parse_verify_args(&args[1..]).map(CommandSpec::Verify),
         "benchmark" => parse_benchmark_args(&args[1..]).map(CommandSpec::Benchmark),
         "replay" => parse_replay_args(&args[1..]).map(CommandSpec::Replay),
@@ -945,11 +945,7 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
         print_json(&output)?;
     }
 
-    if blocked {
-        Ok(25)
-    } else {
-        Ok(0)
-    }
+    if blocked { Ok(25) } else { Ok(0) }
 }
 
 fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
@@ -964,11 +960,7 @@ fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
                 errors,
             };
             print_json(&output)?;
-            if output.passed {
-                Ok(0)
-            } else {
-                Ok(25)
-            }
+            if output.passed { Ok(0) } else { Ok(25) }
         }
         VerifyArgs::Receipt {
             input,
@@ -1045,11 +1037,7 @@ fn execute_benchmark_run(args: BenchmarkRunArgs) -> Result<i32, String> {
     };
 
     print_json(&output)?;
-    if result.blocked {
-        Ok(25)
-    } else {
-        Ok(0)
-    }
+    if result.blocked { Ok(25) } else { Ok(0) }
 }
 
 fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {

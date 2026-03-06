@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::fork_detection::{
-    evaluate_safe_mode_exit, evaluate_safe_mode_startup, ForkDetector, RecordCheckpointInput,
-    SafeModeExitCheckInput, SafeModeStartupInput, SafeModeStartupSource,
+    ForkDetector, RecordCheckpointInput, SafeModeExitCheckInput, SafeModeStartupInput,
+    SafeModeStartupSource, evaluate_safe_mode_exit, evaluate_safe_mode_startup,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::{
@@ -76,12 +76,16 @@ fn startup_artifact_preserves_evidence_logs_and_state() {
     assert!(artifact.evidence_preserved);
     assert!(artifact.logs_preserved);
     assert!(artifact.state_preserved);
-    assert!(artifact
-        .restricted_features
-        .contains(&"extension_auto_promotion".to_string()));
-    assert!(artifact
-        .exit_procedure
-        .contains(&"switch_runtime_to_normal_mode".to_string()));
+    assert!(
+        artifact
+            .restricted_features
+            .contains(&"extension_auto_promotion".to_string())
+    );
+    assert!(
+        artifact
+            .exit_procedure
+            .contains(&"switch_runtime_to_normal_mode".to_string())
+    );
 }
 
 #[test]

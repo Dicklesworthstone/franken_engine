@@ -1099,12 +1099,16 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     .expect("verify report should parse");
     assert_eq!(verify_report["claim_type"].as_str(), Some("benchmark"));
     assert_eq!(verify_report["verdict"].as_str(), Some("verified"));
-    assert!(verify_report["checks"]
-        .as_array()
-        .is_some_and(|checks| !checks.is_empty()));
-    assert!(verify_report["events"]
-        .as_array()
-        .is_some_and(|events| !events.is_empty()));
+    assert!(
+        verify_report["checks"]
+            .as_array()
+            .is_some_and(|checks| !checks.is_empty())
+    );
+    assert!(
+        verify_report["events"]
+            .as_array()
+            .is_some_and(|events| !events.is_empty())
+    );
 
     let _ = fs::remove_file(score_input_path);
     let _ = fs::remove_file(score_results_path);

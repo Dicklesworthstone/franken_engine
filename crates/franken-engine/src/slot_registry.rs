@@ -808,6 +808,22 @@ fn saturating_u128_to_i128(value: u128) -> i128 {
     }
 }
 
+fn expected_former_delegate_digest(entry: &SlotEntry) -> Option<&str> {
+    entry.rollback_target.as_deref().or_else(|| {
+        entry
+            .promotion_lineage
+            .iter()
+            .rev()
+            .find_map(|event| match event.transition {
+                PromotionTransition::RegisteredDelegate
+                | PromotionTransition::DemotedToDelegate => Some(event.digest.as_str()),
+                PromotionTransition::EnteredCandidacy
+                | PromotionTransition::PromotedToNative
+                | PromotionTransition::RolledBack => None,
+            })
+    })
+}
+
 // ---------------------------------------------------------------------------
 // SlotRegistry — the registry itself
 // ---------------------------------------------------------------------------
@@ -1144,6 +1160,13 @@ impl SlotRegistry {
             });
         }
 
+        if !native_authority.is_consistent() {
+            return Err(SlotRegistryError::InconsistentAuthority {
+                id: id.to_string(),
+                detail: "native required capabilities not within permitted set".into(),
+            });
+        }
+
         // Authority preservation check (Section 8.8 rule 4):
         // native cell authority envelope must be <= delegate declared envelope.
         if !entry.authority.subsumes(native_authority) {
@@ -1281,6 +1304,7 @@ impl SlotRegistry {
 
         let mut slot_statuses = Vec::with_capacity(self.slots.len());
         let mut events = Vec::with_capacity(self.slots.len().saturating_add(2));
+        let mut slot_event_metadata: BTreeMap<SlotId, (String, Option<String>)> = BTreeMap::new();
         let mut core_delegate_count = 0usize;
         let mut non_core_delegate_count = 0usize;
         let mut core_slots_missing_lineage = BTreeSet::new();
@@ -1349,6 +1373,44 @@ impl SlotRegistry {
                                         lineage.replacement_component_digest,
                                         entry.implementation_digest
                                     )
+                                } else if let Some(expected_digest) =
+                                    expected_former_delegate_digest(entry)
+                                {
+                                    if lineage.former_delegate_digest != expected_digest {
+                                        blocking = true;
+                                        core_slots_lineage_mismatch.insert(slot_id.clone());
+                                        error_code =
+                                            Some("FE-GA-LINEAGE-DIGEST-MISMATCH".to_string());
+                                        format!(
+                                            "lineage former delegate digest `{}` does not match expected delegate digest `{}`",
+                                            lineage.former_delegate_digest, expected_digest
+                                        )
+                                    } else if !lineage.signature_verified {
+                                        blocking = true;
+                                        core_slots_invalid_signature.insert(slot_id.clone());
+                                        error_code =
+                                            Some("FE-GA-LINEAGE-SIGNATURE-INVALID".to_string());
+                                        "signed lineage artifact failed trust-anchor verification"
+                                            .to_string()
+                                    } else if !lineage.equivalence_passed {
+                                        blocking = true;
+                                        core_slots_equivalence_failed.insert(slot_id.clone());
+                                        error_code = Some("FE-GA-EQUIVALENCE-FAILED".to_string());
+                                        format!(
+                                            "behavioral equivalence suite `{}` did not pass",
+                                            lineage.equivalence_suite_ref
+                                        )
+                                    } else if lineage.delegate_fallback_reachable {
+                                        blocking = true;
+                                        core_slots_delegate_fallback_reachable
+                                            .insert(slot_id.clone());
+                                        error_code =
+                                            Some("FE-GA-DELEGATE-FALLBACK-REACHABLE".to_string());
+                                        "delegate fallback path remains reachable in GA lane"
+                                            .to_string()
+                                    } else {
+                                        "core slot is native with verified signed lineage and unreachable delegate fallback".to_string()
+                                    }
                                 } else if !lineage.signature_verified {
                                     blocking = true;
                                     core_slots_invalid_signature.insert(slot_id.clone());
@@ -1405,17 +1467,7 @@ impl SlotRegistry {
                 delegate_fallback_reachable,
                 estimated_remediation,
             });
-            events.push(GaReleaseGuardEvent {
-                trace_id: input.trace_id.clone(),
-                decision_id: input.decision_id.clone(),
-                policy_id: input.policy_id.clone(),
-                component: "ga_release_delegate_guard".to_string(),
-                event: "slot_status_evaluated".to_string(),
-                outcome: if blocking { "fail" } else { "pass" }.to_string(),
-                error_code,
-                slot_id: Some(slot_id.as_str().to_string()),
-                detail,
-            });
+            slot_event_metadata.insert(slot_id.clone(), (detail, error_code));
         }
 
         let non_core_limit_breached = input
@@ -1425,9 +1477,20 @@ impl SlotRegistry {
             .unwrap_or(false);
 
         if non_core_limit_breached {
+            let limit = input.config.non_core_delegate_limit.unwrap_or(0);
             for status in &mut slot_statuses {
                 if status.slot_class == ReleaseSlotClass::NonCore && status.delegate_backed {
                     status.blocking = true;
+                    slot_event_metadata.insert(
+                        status.slot_id.clone(),
+                        (
+                            format!(
+                                "non-core slot delegate-backed and aggregate delegate count {} exceeds configured limit {}",
+                                non_core_delegate_count, limit
+                            ),
+                            Some("FE-GA-NONCORE-DELEGATE-LIMIT".to_string()),
+                        ),
+                    );
                 }
             }
             events.push(GaReleaseGuardEvent {
@@ -1444,6 +1507,24 @@ impl SlotRegistry {
                     non_core_delegate_count,
                     input.config.non_core_delegate_limit.unwrap_or(0)
                 ),
+            });
+        }
+
+        for status in &slot_statuses {
+            let (detail, error_code) = slot_event_metadata
+                .get(&status.slot_id)
+                .cloned()
+                .unwrap_or_else(|| ("slot status evaluated".to_string(), None));
+            events.push(GaReleaseGuardEvent {
+                trace_id: input.trace_id.clone(),
+                decision_id: input.decision_id.clone(),
+                policy_id: input.policy_id.clone(),
+                component: "ga_release_delegate_guard".to_string(),
+                event: "slot_status_evaluated".to_string(),
+                outcome: if status.blocking { "fail" } else { "pass" }.to_string(),
+                error_code,
+                slot_id: Some(status.slot_id.as_str().to_string()),
+                detail,
             });
         }
 
@@ -3895,6 +3976,38 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, SlotRegistryError::AuthorityBroadening { .. }));
+    }
+
+    #[test]
+    fn promote_rejects_inconsistent_native_authority() {
+        let mut reg = SlotRegistry::new();
+        let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
+        reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
+            .unwrap();
+        let bad_native_authority = AuthorityEnvelope {
+            required: vec![SlotCapability::ReadSource, SlotCapability::EmitIr],
+            permitted: vec![SlotCapability::ReadSource],
+        };
+        let err = reg
+            .promote(
+                &id,
+                "sha256:n1".into(),
+                &bad_native_authority,
+                "receipt-1".into(),
+                "t2".into(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            SlotRegistryError::InconsistentAuthority { .. }
+        ));
+        let entry = reg.get(&id).expect("slot remains registered");
+        assert!(matches!(
+            entry.status,
+            PromotionStatus::PromotionCandidate { .. }
+        ));
+        assert_eq!(entry.implementation_digest, "sha256:d1");
+        assert_eq!(entry.rollback_target, None);
     }
 
     #[test]

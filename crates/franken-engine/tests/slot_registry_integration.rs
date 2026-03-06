@@ -820,6 +820,43 @@ fn demote_nonexistent_slot_is_not_found() {
 }
 
 #[test]
+fn promote_rejects_inconsistent_native_authority() {
+    let mut registry = SlotRegistry::new();
+    let id = register_slot(
+        &mut registry,
+        "parser",
+        SlotKind::Parser,
+        "sha256:delegate-v1",
+    );
+    registry
+        .begin_candidacy(&id, "sha256:cand".into(), "t0".into())
+        .unwrap();
+    let bad_native_authority = AuthorityEnvelope {
+        required: vec![SlotCapability::ReadSource, SlotCapability::EmitIr],
+        permitted: vec![SlotCapability::ReadSource],
+    };
+
+    assert!(matches!(
+        registry.promote(
+            &id,
+            "sha256:native-v1".into(),
+            &bad_native_authority,
+            "receipt-native-v1".into(),
+            "t1".into()
+        ),
+        Err(SlotRegistryError::InconsistentAuthority { .. })
+    ));
+
+    let entry = registry.get(&id).expect("slot remains registered");
+    assert!(matches!(
+        entry.status,
+        PromotionStatus::PromotionCandidate { .. }
+    ));
+    assert_eq!(entry.implementation_digest, "sha256:delegate-v1");
+    assert_eq!(entry.rollback_target, None);
+}
+
+#[test]
 fn demote_from_candidate_is_invalid() {
     let mut registry = SlotRegistry::new();
     let id = register_slot(
@@ -1207,6 +1244,37 @@ fn ga_guard_blocks_on_lineage_digest_mismatch() {
     );
 }
 
+#[test]
+fn ga_guard_blocks_on_former_delegate_digest_mismatch() {
+    let mut registry = SlotRegistry::new();
+    let parser = register_slot(
+        &mut registry,
+        "parser",
+        SlotKind::Parser,
+        "sha256:delegate-parser",
+    );
+    promote_slot(&mut registry, &parser, "sha256:native-parser");
+
+    let core_slots = BTreeSet::from([parser.clone()]);
+    let mut input = guard_input(core_slots, None);
+    input.lineage_artifacts = vec![lineage_artifact(
+        &parser,
+        "sha256:someone-elses-delegate",
+        "sha256:native-parser",
+    )];
+
+    let artifact = registry
+        .evaluate_ga_release_guard(&input)
+        .expect("guard should complete");
+    assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
+    assert_eq!(artifact.core_slots_lineage_mismatch, vec![parser.clone()]);
+    assert!(artifact.events.iter().any(|event| {
+        event.slot_id.as_deref() == Some(parser.as_str())
+            && event.error_code.as_deref() == Some("FE-GA-LINEAGE-DIGEST-MISMATCH")
+            && event.detail.contains("former delegate digest")
+    }));
+}
+
 // ---------------------------------------------------------------------------
 // GA Release Guard — equivalence failure
 // ---------------------------------------------------------------------------
@@ -1355,6 +1423,58 @@ fn ga_guard_complex_blocked_multiple_reasons() {
     assert_eq!(artifact.non_core_delegate_count, 2);
     // All blocking: parser (core delegate), builtins & object-model (non-core limit), interpreter (bad sig)
     assert!(artifact.blocking_slots.len() >= 4);
+}
+
+#[test]
+fn ga_guard_non_core_limit_breach_marks_slot_events_as_fail() {
+    let mut registry = SlotRegistry::new();
+    let parser = register_slot(
+        &mut registry,
+        "parser",
+        SlotKind::Parser,
+        "sha256:delegate-parser",
+    );
+    promote_slot(&mut registry, &parser, "sha256:native-parser");
+
+    let builtins = register_slot(
+        &mut registry,
+        "builtins",
+        SlotKind::Builtins,
+        "sha256:delegate-builtins",
+    );
+    let module_loader = register_slot(
+        &mut registry,
+        "module-loader",
+        SlotKind::ModuleLoader,
+        "sha256:delegate-module-loader",
+    );
+
+    let core_slots = BTreeSet::from([parser.clone()]);
+    let mut input = guard_input(core_slots, Some(1));
+    input.lineage_artifacts = vec![lineage_artifact(
+        &parser,
+        "sha256:delegate-parser",
+        "sha256:native-parser",
+    )];
+
+    let artifact = registry
+        .evaluate_ga_release_guard(&input)
+        .expect("guard should complete");
+
+    assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
+    assert_eq!(artifact.non_core_delegate_count, 2);
+    for slot_id in [builtins, module_loader] {
+        assert!(
+            artifact.events.iter().any(|event| {
+                event.event == "slot_status_evaluated"
+                    && event.slot_id.as_deref() == Some(slot_id.as_str())
+                    && event.outcome == "fail"
+                    && event.error_code.as_deref() == Some("FE-GA-NONCORE-DELEGATE-LIMIT")
+            }),
+            "slot {} should emit a failing per-slot event when the aggregate limit is breached",
+            slot_id
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

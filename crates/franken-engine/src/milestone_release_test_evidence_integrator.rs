@@ -1819,6 +1819,7 @@ mod tests {
         cloned.sha256 = "mutated-sha".to_string();
         assert_eq!(original.artifact_id, "test-artifact");
         assert_ne!(original.artifact_id, cloned.artifact_id);
+        assert_eq!(cloned.sha256, "mutated-sha");
     }
 
     #[test]
@@ -1829,6 +1830,8 @@ mod tests {
         cloned.evidence_refs.push("extra-ref".to_string());
         assert_eq!(original.score_millionths, 980_000);
         assert_eq!(original.evidence_refs.len(), 1);
+        assert_eq!(cloned.score_millionths, 100_000);
+        assert_eq!(cloned.evidence_refs.len(), 2);
     }
 
     #[test]
@@ -1847,6 +1850,12 @@ mod tests {
                 .minimum_cut_line_scores_millionths
                 .contains_key("C99")
         );
+        assert_eq!(cloned.max_signal_age_ns, 999);
+        assert_eq!(cloned.min_schema_major, 99);
+        assert_eq!(
+            cloned.minimum_cut_line_scores_millionths.get("C99"),
+            Some(&999_999)
+        );
     }
 
     #[test]
@@ -1861,6 +1870,8 @@ mod tests {
         cloned.source = None;
         assert_eq!(original.message, "original");
         assert_eq!(original.source, Some(EvidenceSource::UnitDepthGate));
+        assert_eq!(cloned.message, "mutated");
+        assert_eq!(cloned.source, None);
     }
 
     #[test]
@@ -1876,6 +1887,7 @@ mod tests {
         let mut cloned = original.clone();
         cloned.signer = "hacker@evil".to_string();
         assert_eq!(original.signer, "admin@test");
+        assert_eq!(cloned.signer, "hacker@evil");
     }
 
     #[test]
@@ -1897,6 +1909,8 @@ mod tests {
             .insert("test".to_string(), 42);
         assert_eq!(original.aggregate_score_millionths, 950_000);
         assert!(original.delta_from_previous_millionths.is_empty());
+        assert_eq!(cloned.aggregate_score_millionths, 0);
+        assert_eq!(cloned.delta_from_previous_millionths.get("test"), Some(&42));
     }
 
     // Category 5: JSON field-name stability

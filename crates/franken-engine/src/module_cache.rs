@@ -2240,11 +2240,11 @@ fn simulate_single_queue_fifo(
         }
 
         counters.miss_count += 1;
-        if resident.len() >= config.capacity_entries {
-            if let Some(evicted) = queue.pop_front() {
-                resident.remove(&evicted);
-                counters.eviction_count += 1;
-            }
+        if resident.len() >= config.capacity_entries
+            && let Some(evicted) = queue.pop_front()
+        {
+            resident.remove(&evicted);
+            counters.eviction_count += 1;
         }
         queue.push_back(label.clone());
         resident.insert(label);

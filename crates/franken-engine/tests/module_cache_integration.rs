@@ -11,8 +11,11 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::module_cache::{
-    CacheContext, CacheError, CacheErrorCode, CacheEvent, CacheInsertRequest, CacheResult,
-    CacheSnapshot, ModuleCache, ModuleCacheEntry, ModuleCacheKey, ModuleVersionFingerprint,
+    CacheContext, CacheError, CacheErrorCode, CacheEvent, CacheInsertRequest, CacheLocalityClass,
+    CachePolicyBaselineReport, CachePolicyReportError, CacheResult, CacheSnapshot,
+    CacheTraceAccess, CacheTraceCase, CacheTraceCorpusManifest, CacheWorkloadClass, ModuleCache,
+    ModuleCacheEntry, ModuleCacheKey, ModuleVersionFingerprint, S3FifoAdoptionWedgeContract,
+    S3FifoConfig, SingleQueueFifoConfig, evaluate_s3fifo_baseline,
 };
 
 // ---------------------------------------------------------------------------
@@ -45,6 +48,18 @@ fn insert_module(
     cache.insert(
         CacheInsertRequest::new(module_id, version, artifact_hash(artifact_seed), specifier),
         &ctx(),
+    )
+}
+
+fn trace_key(
+    module_id: &str,
+    source_seed: &str,
+    policy_version: u64,
+    trust_revision: u64,
+) -> ModuleCacheKey {
+    ModuleCacheKey::new(
+        module_id,
+        ModuleVersionFingerprint::new(source_hash(source_seed), policy_version, trust_revision),
     )
 }
 
@@ -1108,4 +1123,96 @@ fn inserted_seq_advances_per_insert() {
         seqs.len(),
         "inserted_seq values must be unique"
     );
+}
+
+#[test]
+fn s3fifo_baseline_report_round_trips_via_public_api() {
+    let manifest = CacheTraceCorpusManifest::new(
+        "corpus.integration",
+        vec![CacheTraceCase {
+            trace_id: "trace.integration".to_string(),
+            workload_class: CacheWorkloadClass::PackageGraph,
+            accesses: vec![
+                CacheTraceAccess {
+                    sequence: 1,
+                    key: trace_key("mod:a", "s1", 1, 1),
+                    locality: CacheLocalityClass::Hot,
+                },
+                CacheTraceAccess {
+                    sequence: 2,
+                    key: trace_key("mod:b", "s2", 1, 1),
+                    locality: CacheLocalityClass::Warm,
+                },
+                CacheTraceAccess {
+                    sequence: 3,
+                    key: trace_key("mod:a", "s1", 1, 1),
+                    locality: CacheLocalityClass::Hot,
+                },
+                CacheTraceAccess {
+                    sequence: 4,
+                    key: trace_key("mod:c", "s3", 1, 1),
+                    locality: CacheLocalityClass::Scan,
+                },
+            ],
+        }],
+    )
+    .unwrap();
+
+    let report = evaluate_s3fifo_baseline(
+        &manifest,
+        &SingleQueueFifoConfig {
+            capacity_entries: 2,
+        },
+        &S3FifoConfig {
+            resident_capacity_entries: 2,
+            small_queue_entries: 1,
+            ghost_queue_entries: 2,
+        },
+        &S3FifoAdoptionWedgeContract::default(),
+    )
+    .unwrap();
+    report.validate(&manifest).unwrap();
+
+    let json = serde_json::to_string_pretty(&report).unwrap();
+    let recovered: CachePolicyBaselineReport = serde_json::from_str(&json).unwrap();
+    recovered.validate(&manifest).unwrap();
+    assert_eq!(recovered.baseline_policy_name, "single_queue_fifo");
+    assert_eq!(recovered.candidate_policy_name, "s3_fifo");
+}
+
+#[test]
+fn s3fifo_baseline_rejects_corrupted_manifest_hash() {
+    let mut manifest = CacheTraceCorpusManifest::new(
+        "corpus.corrupt",
+        vec![CacheTraceCase {
+            trace_id: "trace.corrupt".to_string(),
+            workload_class: CacheWorkloadClass::ScanHeavy,
+            accesses: vec![CacheTraceAccess {
+                sequence: 1,
+                key: trace_key("mod:a", "s1", 1, 1),
+                locality: CacheLocalityClass::Warm,
+            }],
+        }],
+    )
+    .unwrap();
+    manifest.corpus_hash = ContentHash::compute(b"tampered-manifest");
+
+    let err = evaluate_s3fifo_baseline(
+        &manifest,
+        &SingleQueueFifoConfig {
+            capacity_entries: 1,
+        },
+        &S3FifoConfig {
+            resident_capacity_entries: 2,
+            small_queue_entries: 1,
+            ghost_queue_entries: 2,
+        },
+        &S3FifoAdoptionWedgeContract::default(),
+    )
+    .unwrap_err();
+
+    match err {
+        CachePolicyReportError::CorpusHashMismatch { .. } => {}
+        other => panic!("unexpected error: {other}"),
+    }
 }

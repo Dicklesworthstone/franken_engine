@@ -543,6 +543,27 @@ fn doctor_command_writes_support_bundle_and_preflight_report() {
 }
 
 #[test]
+fn ga_evidence_package_command_requires_release_candidate() {
+    let input = clean_input();
+    let input_path = write_input_file(&input);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_runtime_diagnostics"))
+        .args([
+            "ga-evidence-package",
+            "--input",
+            input_path.to_str().expect("path should be utf8"),
+        ])
+        .output()
+        .expect("ga evidence package command should execute");
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(stderr.contains("missing required --release-candidate <id>"));
+
+    let _ = fs::remove_file(input_path);
+}
+
+#[test]
 fn ga_evidence_package_command_outputs_json_and_writes_files() {
     let input = clean_input();
     let input_path = write_input_file(&input);

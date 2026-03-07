@@ -1176,6 +1176,9 @@ fn run_ga_evidence_package(args: &[String]) -> Result<(), String> {
     }
 
     let path = input_path.ok_or_else(|| "missing required --input <path>".to_string())?;
+    let release_candidate_id = release_candidate_id
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "missing required --release-candidate <id>".to_string())?;
     let input = load_input(path)?;
     let redaction_policy = if redact_keys.is_empty() {
         SupportBundleRedactionPolicy::default()
@@ -1212,7 +1215,7 @@ fn run_ga_evidence_package(args: &[String]) -> Result<(), String> {
         platform_matrix_signals,
     });
     let output = build_ga_evidence_package(&GaEvidencePackageInput {
-        release_candidate_id: release_candidate_id.unwrap_or_default(),
+        release_candidate_id,
         support_bundle: preflight.support_bundle.clone(),
         onboarding_scorecard: scorecard.clone(),
         rollout_decision_artifact: artifact.clone(),

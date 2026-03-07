@@ -1312,6 +1312,43 @@ fn frankenctl_replay_empty_trace_completes_immediately() {
 }
 
 #[test]
+fn frankenctl_replay_unfinished_trace_fails_closed() {
+    let trace_path = temp_path("frankenctl_replay_unfinished", "json");
+
+    let mut trace = NondeterminismTrace::new("session-unfinished");
+    trace.capture(
+        NondeterminismSource::TimerRead,
+        vec![1, 2, 3],
+        1,
+        "integration-test",
+    );
+
+    fs::write(
+        &trace_path,
+        serde_json::to_vec_pretty(&trace).expect("trace should serialize"),
+    )
+    .expect("trace file should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            trace_path.to_str().unwrap(),
+            "--mode",
+            "strict",
+        ])
+        .output()
+        .expect("replay unfinished trace should execute");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(stderr.contains("trace is not finalised"), "{stderr}");
+
+    let _ = fs::remove_file(trace_path);
+}
+
+#[test]
 fn frankenctl_benchmark_verify_missing_bundle_dir_fails() {
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([

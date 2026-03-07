@@ -1,0 +1,530 @@
+{
+  "schema_version": "franken-engine.supremacy-cell-matrix.v1",
+  "contract_version": "0.1.0",
+  "log_schema_version": "franken-engine.supremacy-cell-matrix.log-event.v1",
+  "required_artifacts": [
+    "supremacy_cell_matrix.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt"
+  ],
+  "required_consumers": [
+    "benchmark",
+    "docs",
+    "rollout",
+    "ga"
+  ],
+  "changelog": [
+    {
+      "version": "0.1.0",
+      "rationale": "Define a machine-readable supremacy board that keeps React, cold-start, module, async, and mixed-board performance claims honest.",
+      "impact_assessment": "Adds explicit cell coverage plus interference and tail metadata so later supremacy verdicts cannot average away cross-workload regressions.",
+      "compatibility_notes": "Preparatory contract for RGC-705; blocked upstream data sources may still enrich the board later without changing the schema.",
+      "changed_at_utc": "2026-03-07T00:00:00Z"
+    }
+  ],
+  "matrix_dimensions": [
+    "workload_family",
+    "environment",
+    "entry_mode",
+    "warm_state",
+    "measurement_family",
+    "interference_profile"
+  ],
+  "cell_families": [
+    {
+      "family": "parse_compile",
+      "measurement_family": "latency",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "CLI and library parse-compile entrypoints on the shipped path."
+    },
+    {
+      "family": "cold_start",
+      "measurement_family": "latency",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Cold-start cells must remain explicit rather than folded into general startup averages."
+    },
+    {
+      "family": "warm_throughput",
+      "measurement_family": "throughput",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Hot-loop and warmed interpreter/tier-up throughput."
+    },
+    {
+      "family": "async",
+      "measurement_family": "latency",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Promise-heavy scheduling and async coordination behavior."
+    },
+    {
+      "family": "module_graphs",
+      "measurement_family": "macro",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Transitive resolution and module-graph loading on shipped resolver paths."
+    },
+    {
+      "family": "npm_cohorts",
+      "measurement_family": "macro",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Representative npm package cohorts, not synthetic micro-only stand-ins."
+    },
+    {
+      "family": "react_compile",
+      "measurement_family": "macro",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "React compile/lowering cells for classic and automatic runtime modes."
+    },
+    {
+      "family": "react_ssr",
+      "measurement_family": "macro",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Streaming and non-streaming SSR workloads on shipped render paths."
+    },
+    {
+      "family": "react_client",
+      "measurement_family": "macro",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Hydration and interactive client update cells."
+    },
+    {
+      "family": "mixed_package",
+      "measurement_family": "macro",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Mixed-package boards model real cross-workload interference instead of single-family isolation."
+    },
+    {
+      "family": "tail_latency",
+      "measurement_family": "tail_latency",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Tail cells keep p95/p99/p999 behavior explicit and decomposed by stage."
+    },
+    {
+      "family": "memory_pressure",
+      "measurement_family": "memory",
+      "required_dimensions": [
+        "workload_family",
+        "environment",
+        "entry_mode",
+        "warm_state",
+        "measurement_family",
+        "interference_profile"
+      ],
+      "required_for_board": true,
+      "shipped_surface_note": "Peak and steady-state memory cells that can disqualify otherwise fast boards."
+    }
+  ],
+  "cells": [
+    {
+      "cell_id": "parse_compile_cli_cold",
+      "family": "parse_compile",
+      "workload_kind": "Shipped CLI parse+compile on a cold script entrypoint.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "cli",
+      "warm_state": "cold",
+      "measurement_family": "latency",
+      "interference_profile": "isolated",
+      "mixed_with": [],
+      "interference_rule_ids": [],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "cold_start_cli_runtime",
+      "family": "cold_start",
+      "workload_kind": "Cold-start runtime bring-up for the shipped entrypoint.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "cli",
+      "warm_state": "cold",
+      "measurement_family": "latency",
+      "interference_profile": "isolated",
+      "mixed_with": [],
+      "interference_rule_ids": [],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "warm_throughput_hot_loop",
+      "family": "warm_throughput",
+      "workload_kind": "Warmed steady-state execution on a tiered hot loop family.",
+      "environment": "linux_x64_perf_lab",
+      "entry_mode": "library",
+      "warm_state": "warm",
+      "measurement_family": "throughput",
+      "interference_profile": "isolated",
+      "mixed_with": [],
+      "interference_rule_ids": [],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "async_scheduler_queue",
+      "family": "async",
+      "workload_kind": "Promise fan-out and scheduler queue pressure under shipped async paths.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "library",
+      "warm_state": "mixed",
+      "measurement_family": "latency",
+      "interference_profile": "scheduler_contention",
+      "mixed_with": [
+        "mixed_package"
+      ],
+      "interference_rule_ids": [
+        "async_scheduler_contention"
+      ],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "module_graph_npm_macro",
+      "family": "module_graphs",
+      "workload_kind": "Transitive module graph load on a cache-bearing package cohort.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "library",
+      "warm_state": "mixed",
+      "measurement_family": "macro",
+      "interference_profile": "shared_cache",
+      "mixed_with": [
+        "npm_cohorts"
+      ],
+      "interference_rule_ids": [
+        "module_graph_cache_contention"
+      ],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "npm_cohort_web_stack",
+      "family": "npm_cohorts",
+      "workload_kind": "Representative web-stack package cohort over shipped interop surfaces.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "mixed_package",
+      "warm_state": "mixed",
+      "measurement_family": "macro",
+      "interference_profile": "shared_cache",
+      "mixed_with": [
+        "module_graphs"
+      ],
+      "interference_rule_ids": [
+        "module_graph_cache_contention"
+      ],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "react_compile_automatic_runtime",
+      "family": "react_compile",
+      "workload_kind": "Native React compile/lowering in automatic JSX runtime mode.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "native_react_compile",
+      "warm_state": "cold",
+      "measurement_family": "macro",
+      "interference_profile": "isolated",
+      "mixed_with": [],
+      "interference_rule_ids": [],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "react_ssr_streaming_board",
+      "family": "react_ssr",
+      "workload_kind": "Streaming server-render workload with shipped hydration handoff.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "native_react_ssr",
+      "warm_state": "mixed",
+      "measurement_family": "macro",
+      "interference_profile": "mixed_board",
+      "mixed_with": [
+        "react_client",
+        "memory_pressure"
+      ],
+      "interference_rule_ids": [
+        "react_bundle_contention",
+        "memory_pressure_cross_family"
+      ],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "react_client_hydration_updates",
+      "family": "react_client",
+      "workload_kind": "Client hydration and event/update workload on shipped surfaces.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "native_react_client",
+      "warm_state": "mixed",
+      "measurement_family": "macro",
+      "interference_profile": "mixed_board",
+      "mixed_with": [
+        "react_ssr"
+      ],
+      "interference_rule_ids": [
+        "react_bundle_contention"
+      ],
+      "tail_axis_ids": [
+        "hydration_ns"
+      ],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "mixed_package_shipped_board",
+      "family": "mixed_package",
+      "workload_kind": "Real mixed-package board combining package graphs, async work, and React entrypoints.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "mixed_package",
+      "warm_state": "mixed",
+      "measurement_family": "macro",
+      "interference_profile": "mixed_board",
+      "mixed_with": [
+        "async",
+        "module_graphs",
+        "react_ssr"
+      ],
+      "interference_rule_ids": [
+        "mixed_board_frontend_contention",
+        "async_scheduler_contention"
+      ],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "tail_latency_mixed_board_p99",
+      "family": "tail_latency",
+      "workload_kind": "p99 board on the mixed-package path with scheduler and render decomposition.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "mixed_package",
+      "warm_state": "mixed",
+      "measurement_family": "tail_latency",
+      "interference_profile": "tail_stress",
+      "mixed_with": [
+        "mixed_package",
+        "react_ssr"
+      ],
+      "interference_rule_ids": [
+        "tail_latency_scheduler_pressure",
+        "memory_pressure_cross_family"
+      ],
+      "tail_axis_ids": [
+        "module_load_ns",
+        "queue_delay_ns",
+        "render_ns",
+        "gc_pause_ns"
+      ],
+      "required_for_universal_verdict": true
+    },
+    {
+      "cell_id": "memory_pressure_mixed_board",
+      "family": "memory_pressure",
+      "workload_kind": "Peak and steady-state memory envelope on the mixed-package board.",
+      "environment": "linux_x64_shipped",
+      "entry_mode": "mixed_package",
+      "warm_state": "mixed",
+      "measurement_family": "memory",
+      "interference_profile": "memory_contention",
+      "mixed_with": [
+        "react_ssr",
+        "module_graphs"
+      ],
+      "interference_rule_ids": [
+        "memory_pressure_cross_family"
+      ],
+      "tail_axis_ids": [],
+      "required_for_universal_verdict": true
+    }
+  ],
+  "interference_rules": [
+    {
+      "rule_id": "module_graph_cache_contention",
+      "primary_family": "module_graphs",
+      "concurrent_family": "npm_cohorts",
+      "shared_resources": [
+        "artifact_cache",
+        "module_cache",
+        "worker_threads"
+      ],
+      "decomposition_label": "cache_revalidation_vs_transitive_resolution",
+      "explanation": "Module-graph and npm cohort cells share cache and worker resources, so wins must be decomposed instead of merged into a single macro average."
+    },
+    {
+      "rule_id": "async_scheduler_contention",
+      "primary_family": "async",
+      "concurrent_family": "mixed_package",
+      "shared_resources": [
+        "scheduler_queue",
+        "worker_threads"
+      ],
+      "decomposition_label": "promise_queue_vs_cross_package_background_work",
+      "explanation": "Async cells can look better in isolation than they do inside a real mixed board when queue and worker budgets are shared."
+    },
+    {
+      "rule_id": "react_bundle_contention",
+      "primary_family": "react_ssr",
+      "concurrent_family": "react_client",
+      "shared_resources": [
+        "artifact_cache",
+        "scheduler_queue",
+        "memory_bandwidth"
+      ],
+      "decomposition_label": "ssr_streaming_vs_hydration_handoff",
+      "explanation": "SSR and client hydration reuse bundle artifacts and compete on the same queue/memory envelope; both surfaces must stay explicit."
+    },
+    {
+      "rule_id": "mixed_board_frontend_contention",
+      "primary_family": "mixed_package",
+      "concurrent_family": "module_graphs",
+      "shared_resources": [
+        "frontend_cpu",
+        "artifact_cache",
+        "worker_threads"
+      ],
+      "decomposition_label": "frontend_parse_compile_vs_transitive_module_activation",
+      "explanation": "Cross-family boards must record whether wins come from frontend speed, cache reuse, or simply moving contention elsewhere."
+    },
+    {
+      "rule_id": "tail_latency_scheduler_pressure",
+      "primary_family": "tail_latency",
+      "concurrent_family": "mixed_package",
+      "shared_resources": [
+        "scheduler_queue",
+        "worker_threads",
+        "memory_bandwidth"
+      ],
+      "decomposition_label": "queue_delay_gc_pause_render_tail_split",
+      "explanation": "Tail cells require stage-aware decomposition so p99 regressions cannot hide behind average throughput gains."
+    },
+    {
+      "rule_id": "memory_pressure_cross_family",
+      "primary_family": "memory_pressure",
+      "concurrent_family": "react_ssr",
+      "shared_resources": [
+        "memory_bandwidth",
+        "artifact_cache"
+      ],
+      "decomposition_label": "bundle_residency_vs_render_peak",
+      "explanation": "Memory disqualifiers must remain attributable to the family interactions that created them, not just to the final board outcome."
+    }
+  ],
+  "tail_decomposition_axes": [
+    {
+      "axis": "parse_ns",
+      "stage": "frontend_parse",
+      "description": "Frontend parse contribution to p95/p99 tail outcomes."
+    },
+    {
+      "axis": "compile_ns",
+      "stage": "frontend_compile",
+      "description": "Compile/lowering contribution to tail outcomes."
+    },
+    {
+      "axis": "module_load_ns",
+      "stage": "module_activation",
+      "description": "Transitive module activation and loader contribution to the tail."
+    },
+    {
+      "axis": "queue_delay_ns",
+      "stage": "scheduler_queue",
+      "description": "Time spent waiting in shared scheduler or worker queues."
+    },
+    {
+      "axis": "render_ns",
+      "stage": "react_render",
+      "description": "Render/commit or SSR render contribution to the tail."
+    },
+    {
+      "axis": "hydration_ns",
+      "stage": "react_hydration",
+      "description": "Hydration and client handoff contribution to the tail."
+    },
+    {
+      "axis": "gc_pause_ns",
+      "stage": "memory_reclamation",
+      "description": "GC or reclamation pause contribution to high-percentile latency."
+    }
+  ]
+}

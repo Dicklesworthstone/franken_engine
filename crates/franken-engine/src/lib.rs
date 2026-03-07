@@ -245,6 +245,7 @@ pub mod storage_adapter;
 pub mod structural_causal_model;
 pub mod succinct_witness_compiler;
 pub mod supervision;
+pub mod supremacy_cell_matrix;
 pub mod swarm_control_loop;
 pub mod synthesis_budget;
 pub mod tee_attestation_policy;

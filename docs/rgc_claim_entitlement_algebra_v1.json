@@ -1,0 +1,613 @@
+{
+  "schema_version": "franken-engine.rgc-claim-entitlement-algebra.v1",
+  "contract_version": "0.1.0",
+  "bead_id": "bd-1lsy.1.7",
+  "generated_by": "bd-1lsy.1.7",
+  "generated_at_utc": "2026-03-07T15:26:43Z",
+  "track": {
+    "id": "RGC-017",
+    "name": "Claim Entitlement Algebra"
+  },
+  "required_artifacts": [
+    "claim_atom_catalog.json",
+    "evidence_morphism_catalog.json",
+    "side_constraint_lattice.json",
+    "disqualifier_rules.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt"
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "claim_atom_catalog": {
+    "schema_version": "franken-engine.rgc-claim-atom-catalog.v1",
+    "atoms": [
+      {
+        "atom_id": "claim.frankenctl.compile.shipped",
+        "domain": "shipped_surface",
+        "tier": "shipped_fact",
+        "statement_class": "operator_surface",
+        "surface": "frankenctl compile",
+        "description": "The shipped CLI supports compile-to-artifact workflows for script and module goals.",
+        "source_documents": [
+          "README.md",
+          "docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.1",
+          "bd-1lsy.10.11.1"
+        ]
+      },
+      {
+        "atom_id": "claim.frankenctl.run.shipped",
+        "domain": "shipped_surface",
+        "tier": "shipped_fact",
+        "statement_class": "operator_surface",
+        "surface": "frankenctl run",
+        "description": "The shipped CLI supports run-through-orchestrator workflows on the current command surface.",
+        "source_documents": [
+          "README.md",
+          "docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.1",
+          "bd-1lsy.10.11.1"
+        ]
+      },
+      {
+        "atom_id": "claim.frankenctl.doctor.shipped",
+        "domain": "shipped_surface",
+        "tier": "shipped_fact",
+        "statement_class": "operator_surface",
+        "surface": "frankenctl doctor",
+        "description": "The shipped CLI supports deterministic doctor/preflight style reporting for runtime inputs.",
+        "source_documents": [
+          "README.md",
+          "docs/RGC_OPERATOR_INCIDENT_RUNBOOK.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.9",
+          "bd-1lsy.10.11.1"
+        ]
+      },
+      {
+        "atom_id": "claim.frankenctl.verify.shipped",
+        "domain": "shipped_surface",
+        "tier": "shipped_fact",
+        "statement_class": "operator_surface",
+        "surface": "frankenctl verify",
+        "description": "The shipped CLI supports compile-artifact and receipt verification on the documented subcommands.",
+        "source_documents": [
+          "README.md",
+          "docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.1",
+          "bd-1lsy.10.11.1"
+        ]
+      },
+      {
+        "atom_id": "claim.frankenctl.benchmark.shipped",
+        "domain": "shipped_surface",
+        "tier": "shipped_fact",
+        "statement_class": "operator_surface",
+        "surface": "frankenctl benchmark",
+        "description": "The shipped CLI supports benchmark run, score, and verify workflows described in the README/help surface.",
+        "source_documents": [
+          "README.md",
+          "docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.1",
+          "bd-1lsy.10.11.1"
+        ]
+      },
+      {
+        "atom_id": "claim.frankenctl.replay.shipped",
+        "domain": "shipped_surface",
+        "tier": "shipped_fact",
+        "statement_class": "operator_surface",
+        "surface": "frankenctl replay",
+        "description": "The shipped CLI supports deterministic replay execution through the current replay run command.",
+        "source_documents": [
+          "README.md",
+          "docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.1",
+          "bd-1lsy.10.11.1"
+        ]
+      },
+      {
+        "atom_id": "claim.react.compile.target",
+        "domain": "react",
+        "tier": "frontier_ambition",
+        "statement_class": "product_capability",
+        "surface": "React compile/build workflows",
+        "description": "React compile/build support remains a target/frontier objective rather than a shipped claim.",
+        "source_documents": [
+          "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.1.6.1",
+          "bd-1lsy.10.12"
+        ]
+      },
+      {
+        "atom_id": "claim.react.ssr.unsupported",
+        "domain": "react",
+        "tier": "unsupported_surface",
+        "statement_class": "unsupported_surface",
+        "surface": "React SSR entrypoint",
+        "description": "React SSR entrypoint support is explicitly unsupported until the parity and product-surface beads land.",
+        "source_documents": [
+          "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.5.7.2",
+          "bd-1lsy.10.12.3"
+        ]
+      },
+      {
+        "atom_id": "claim.v8.universal_dominance.frontier",
+        "domain": "supremacy",
+        "tier": "frontier_ambition",
+        "statement_class": "publication_language",
+        "surface": "V8 supremacy publication language",
+        "description": "Universal V8-dominance language remains a frontier objective until the full mandatory board is green on the shipped path.",
+        "source_documents": [
+          "docs/RGC_V8_SUPREMACY_CLAIM_CONTRACT_V1.md",
+          "docs/CLAIM_LANGUAGE_POLICY.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.1.6.2",
+          "bd-1lsy.1.6.3"
+        ]
+      },
+      {
+        "atom_id": "claim.v8.scoped_observed.publishable",
+        "domain": "supremacy",
+        "tier": "scoped_observed",
+        "statement_class": "publication_language",
+        "surface": "bounded V8 comparison language",
+        "description": "Scoped observed language is publishable only when the bounded cells are green and the claim carries qualifiers and artifact links.",
+        "source_documents": [
+          "docs/RGC_V8_SUPREMACY_CLAIM_CONTRACT_V1.md",
+          "docs/CLAIM_LANGUAGE_POLICY.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.1.6.2",
+          "bd-1lsy.1.6.3"
+        ]
+      },
+      {
+        "atom_id": "claim.rollout.doctor_guidance.shipped",
+        "domain": "rollout",
+        "tier": "shipped_fact",
+        "statement_class": "operator_surface",
+        "surface": "doctor/preflight rollout guidance",
+        "description": "Doctor/preflight outputs may guide rollout decisions only when they remain tied to current support and compatibility evidence.",
+        "source_documents": [
+          "README.md",
+          "docs/FRX_RELEASE_OPERATIONS_GATEBOOK_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.8",
+          "bd-1lsy.10.9"
+        ]
+      },
+      {
+        "atom_id": "claim.support.unsupported_surface.visible",
+        "domain": "support_surface",
+        "tier": "unsupported_surface",
+        "statement_class": "operator_guidance",
+        "surface": "unsupported-surface guidance",
+        "description": "Unsupported features are acceptable only when the user-visible diagnostics and remediation guidance stay explicit.",
+        "source_documents": [
+          "docs/CLAIM_LANGUAGE_POLICY.md",
+          "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.11.2"
+        ]
+      },
+      {
+        "atom_id": "claim.ga.exit_evidence.gated",
+        "domain": "ga",
+        "tier": "frontier_ambition",
+        "statement_class": "release_gate",
+        "surface": "GA evidence package",
+        "description": "GA exit language remains gated on complete product, rollout, and publication evidence rather than current ambition alone.",
+        "source_documents": [
+          "docs/CLAIM_LANGUAGE_POLICY.md",
+          "docs/FRX_RELEASE_OPERATIONS_GATEBOOK_V1.md"
+        ],
+        "owning_beads": [
+          "bd-1lsy.10.4"
+        ]
+      }
+    ]
+  },
+  "evidence_morphism_catalog": {
+    "schema_version": "franken-engine.rgc-evidence-morphism-catalog.v1",
+    "morphisms": [
+      {
+        "morphism_id": "morphism.docs_help_surface_audit_to_frankenctl_surface",
+        "evidence_kind": "docs_help_surface_audit",
+        "effect": "supports",
+        "target_atoms": [
+          "claim.frankenctl.compile.shipped",
+          "claim.frankenctl.run.shipped",
+          "claim.frankenctl.doctor.shipped",
+          "claim.frankenctl.verify.shipped",
+          "claim.frankenctl.benchmark.shipped",
+          "claim.frankenctl.replay.shipped"
+        ],
+        "requires_side_constraints": [
+          "constraint.surface.shipped_path",
+          "constraint.evidence.reproducible"
+        ],
+        "blocked_by_rules": [
+          "rule.stale_evidence",
+          "rule.docs_help_contradiction"
+        ],
+        "rationale": "The docs/help audit is the entitlement source for present-tense shipped CLI language."
+      },
+      {
+        "morphism_id": "morphism.frankenctl_cli_tests_to_frankenctl_surface",
+        "evidence_kind": "frankenctl_cli_tests",
+        "effect": "supports",
+        "target_atoms": [
+          "claim.frankenctl.compile.shipped",
+          "claim.frankenctl.run.shipped",
+          "claim.frankenctl.doctor.shipped",
+          "claim.frankenctl.verify.shipped",
+          "claim.frankenctl.benchmark.shipped",
+          "claim.frankenctl.replay.shipped"
+        ],
+        "requires_side_constraints": [
+          "constraint.surface.shipped_path",
+          "constraint.evidence.reproducible",
+          "constraint.quality.counterexample_free"
+        ],
+        "blocked_by_rules": [
+          "rule.stale_evidence",
+          "rule.docs_help_contradiction"
+        ],
+        "rationale": "CLI tests validate that the documented surfaces execute on the shipped path."
+      },
+      {
+        "morphism_id": "morphism.react_capability_contract_to_react_claims",
+        "evidence_kind": "react_capability_contract",
+        "effect": "constrains",
+        "target_atoms": [
+          "claim.react.compile.target",
+          "claim.react.ssr.unsupported",
+          "claim.support.unsupported_surface.visible"
+        ],
+        "requires_side_constraints": [
+          "constraint.publication.scoped_language",
+          "constraint.quality.user_visible_diagnostics"
+        ],
+        "blocked_by_rules": [
+          "rule.stale_evidence",
+          "rule.unsupported_surface_promoted"
+        ],
+        "rationale": "React capability rows distinguish between shipped support, target-only language, and explicit unsupported-surface messaging."
+      },
+      {
+        "morphism_id": "morphism.v8_supremacy_contract_to_publication_claims",
+        "evidence_kind": "v8_supremacy_contract",
+        "effect": "constrains",
+        "target_atoms": [
+          "claim.v8.universal_dominance.frontier",
+          "claim.v8.scoped_observed.publishable"
+        ],
+        "requires_side_constraints": [
+          "constraint.publication.scoped_language",
+          "constraint.performance.side_constraints_green",
+          "constraint.quality.counterexample_free"
+        ],
+        "blocked_by_rules": [
+          "rule.stale_evidence",
+          "rule.tail_or_memory_regression",
+          "rule.active_counterexample"
+        ],
+        "rationale": "The supremacy contract licenses scoped observed language while holding universal language behind stronger constraints."
+      },
+      {
+        "morphism_id": "morphism.runtime_diagnostics_doctor_to_rollout_claims",
+        "evidence_kind": "runtime_diagnostics_doctor",
+        "effect": "supports",
+        "target_atoms": [
+          "claim.rollout.doctor_guidance.shipped"
+        ],
+        "requires_side_constraints": [
+          "constraint.surface.shipped_path",
+          "constraint.evidence.reproducible",
+          "constraint.quality.user_visible_diagnostics"
+        ],
+        "blocked_by_rules": [
+          "rule.stale_evidence",
+          "rule.missing_platform_verification"
+        ],
+        "rationale": "Doctor outputs can drive rollout posture only if they remain tied to current, reproducible support evidence."
+      },
+      {
+        "morphism_id": "morphism.support_surface_contract_to_guidance_claims",
+        "evidence_kind": "support_surface_contract",
+        "effect": "supports",
+        "target_atoms": [
+          "claim.support.unsupported_surface.visible"
+        ],
+        "requires_side_constraints": [
+          "constraint.quality.user_visible_diagnostics"
+        ],
+        "blocked_by_rules": [
+          "rule.stale_evidence",
+          "rule.missing_user_guidance"
+        ],
+        "rationale": "Unsupported-surface publication is only honest when visible diagnostics and remediation guidance remain current."
+      },
+      {
+        "morphism_id": "morphism.ga_evidence_package_to_ga_claims",
+        "evidence_kind": "ga_evidence_package",
+        "effect": "supports",
+        "target_atoms": [
+          "claim.ga.exit_evidence.gated"
+        ],
+        "requires_side_constraints": [
+          "constraint.surface.shipped_path",
+          "constraint.evidence.reproducible",
+          "constraint.quality.platform_verified"
+        ],
+        "blocked_by_rules": [
+          "rule.stale_evidence",
+          "rule.active_counterexample"
+        ],
+        "rationale": "GA statements require the most conservative bundle of product, platform, and reproducibility evidence."
+      },
+      {
+        "morphism_id": "morphism.counterexample_ledger_to_claim_defeaters",
+        "evidence_kind": "counterexample_ledger",
+        "effect": "disqualifies",
+        "target_atoms": [
+          "claim.frankenctl.compile.shipped",
+          "claim.frankenctl.run.shipped",
+          "claim.frankenctl.doctor.shipped",
+          "claim.v8.scoped_observed.publishable",
+          "claim.rollout.doctor_guidance.shipped",
+          "claim.ga.exit_evidence.gated"
+        ],
+        "requires_side_constraints": [
+          "constraint.quality.counterexample_free"
+        ],
+        "blocked_by_rules": [
+          "rule.active_counterexample"
+        ],
+        "rationale": "Active counterexamples explicitly defeat otherwise positive claim entitlements."
+      }
+    ]
+  },
+  "side_constraint_lattice": {
+    "schema_version": "franken-engine.rgc-side-constraint-lattice.v1",
+    "top_constraint_id": "constraint.publication.universal_language",
+    "bottom_constraint_id": "constraint.intent.frontier_only",
+    "constraints": [
+      {
+        "constraint_id": "constraint.intent.frontier_only",
+        "constraint_class": "publication",
+        "description": "Only goal/roadmap language is licensed."
+      },
+      {
+        "constraint_id": "constraint.publication.scoped_language",
+        "constraint_class": "publication",
+        "description": "Claims must stay bounded, qualified, and scope-labeled."
+      },
+      {
+        "constraint_id": "constraint.surface.shipped_path",
+        "constraint_class": "surface",
+        "description": "The evidence must come from the actually shipped path rather than placeholder or aspirational lanes."
+      },
+      {
+        "constraint_id": "constraint.evidence.reproducible",
+        "constraint_class": "evidence",
+        "description": "Artifacts, commands, and replay paths must be sufficient for deterministic reruns."
+      },
+      {
+        "constraint_id": "constraint.quality.counterexample_free",
+        "constraint_class": "quality",
+        "description": "No active contradiction or counterexample defeats the claim."
+      },
+      {
+        "constraint_id": "constraint.quality.user_visible_diagnostics",
+        "constraint_class": "quality",
+        "description": "Unsupported or degraded surfaces must fail with explicit user-visible diagnostics and remediation guidance."
+      },
+      {
+        "constraint_id": "constraint.quality.platform_verified",
+        "constraint_class": "quality",
+        "description": "The claim surface is backed by current platform or environment verification, not a guessed support stance."
+      },
+      {
+        "constraint_id": "constraint.performance.side_constraints_green",
+        "constraint_class": "performance",
+        "description": "Tail-latency, memory, and other side constraints stay within declared bounds."
+      },
+      {
+        "constraint_id": "constraint.publication.universal_language",
+        "constraint_class": "publication",
+        "description": "Strong universal wording is licensed only when every stronger side constraint holds."
+      }
+    ],
+    "cover_relations": [
+      {
+        "lower_constraint_id": "constraint.intent.frontier_only",
+        "higher_constraint_id": "constraint.publication.scoped_language"
+      },
+      {
+        "lower_constraint_id": "constraint.publication.scoped_language",
+        "higher_constraint_id": "constraint.surface.shipped_path"
+      },
+      {
+        "lower_constraint_id": "constraint.surface.shipped_path",
+        "higher_constraint_id": "constraint.evidence.reproducible"
+      },
+      {
+        "lower_constraint_id": "constraint.evidence.reproducible",
+        "higher_constraint_id": "constraint.quality.counterexample_free"
+      },
+      {
+        "lower_constraint_id": "constraint.evidence.reproducible",
+        "higher_constraint_id": "constraint.quality.user_visible_diagnostics"
+      },
+      {
+        "lower_constraint_id": "constraint.quality.counterexample_free",
+        "higher_constraint_id": "constraint.quality.platform_verified"
+      },
+      {
+        "lower_constraint_id": "constraint.quality.platform_verified",
+        "higher_constraint_id": "constraint.performance.side_constraints_green"
+      },
+      {
+        "lower_constraint_id": "constraint.performance.side_constraints_green",
+        "higher_constraint_id": "constraint.publication.universal_language"
+      }
+    ]
+  },
+  "disqualifier_rules": {
+    "schema_version": "franken-engine.rgc-disqualifier-rules.v1",
+    "precedence_order": [
+      "rule.active_counterexample",
+      "rule.unsupported_surface_promoted",
+      "rule.stale_evidence",
+      "rule.missing_platform_verification",
+      "rule.missing_user_guidance",
+      "rule.tail_or_memory_regression",
+      "rule.docs_help_contradiction"
+    ],
+    "rules": [
+      {
+        "rule_id": "rule.active_counterexample",
+        "precedence": 0,
+        "evidence_kind": "counterexample_ledger",
+        "condition": "counterexample_status == active",
+        "target_atoms": [
+          "claim.frankenctl.compile.shipped",
+          "claim.frankenctl.run.shipped",
+          "claim.frankenctl.doctor.shipped",
+          "claim.v8.scoped_observed.publishable",
+          "claim.rollout.doctor_guidance.shipped",
+          "claim.ga.exit_evidence.gated"
+        ],
+        "verdict": "forbid",
+        "remediation": "Resolve or classify the active counterexample before restoring stronger language."
+      },
+      {
+        "rule_id": "rule.unsupported_surface_promoted",
+        "precedence": 1,
+        "evidence_kind": "support_surface_contract",
+        "condition": "support_status in [unsupported, deferred] but public wording uses shipped language",
+        "target_atoms": [
+          "claim.react.compile.target",
+          "claim.react.ssr.unsupported",
+          "claim.support.unsupported_surface.visible"
+        ],
+        "verdict": "downgrade_to_target",
+        "remediation": "Downgrade to target-only or unsupported-surface wording and restore diagnostics."
+      },
+      {
+        "rule_id": "rule.stale_evidence",
+        "precedence": 2,
+        "evidence_kind": "artifact_ttl",
+        "condition": "artifact_age_hours > declared_ttl_hours",
+        "target_atoms": [
+          "claim.frankenctl.compile.shipped",
+          "claim.frankenctl.run.shipped",
+          "claim.frankenctl.doctor.shipped",
+          "claim.frankenctl.verify.shipped",
+          "claim.frankenctl.benchmark.shipped",
+          "claim.frankenctl.replay.shipped",
+          "claim.v8.scoped_observed.publishable",
+          "claim.rollout.doctor_guidance.shipped",
+          "claim.ga.exit_evidence.gated"
+        ],
+        "verdict": "downgrade_to_scoped",
+        "remediation": "Refresh the expired evidence bundle before using present-tense shipped or scoped-observed language."
+      },
+      {
+        "rule_id": "rule.missing_platform_verification",
+        "precedence": 3,
+        "evidence_kind": "platform_verification_matrix",
+        "condition": "required target platform lacks a green verification row",
+        "target_atoms": [
+          "claim.rollout.doctor_guidance.shipped",
+          "claim.ga.exit_evidence.gated"
+        ],
+        "verdict": "downgrade_to_target",
+        "remediation": "Treat the claim as incomplete until the missing platform evidence exists."
+      },
+      {
+        "rule_id": "rule.missing_user_guidance",
+        "precedence": 4,
+        "evidence_kind": "support_surface_contract",
+        "condition": "unsupported or deferred surface lacks user-visible diagnostics or remediation guidance",
+        "target_atoms": [
+          "claim.react.ssr.unsupported",
+          "claim.support.unsupported_surface.visible"
+        ],
+        "verdict": "require_operator_guidance",
+        "remediation": "Publish explicit remediation guidance before allowing unsupported-surface messaging."
+      },
+      {
+        "rule_id": "rule.tail_or_memory_regression",
+        "precedence": 5,
+        "evidence_kind": "v8_supremacy_contract",
+        "condition": "tail or memory side constraints are non-green",
+        "target_atoms": [
+          "claim.v8.universal_dominance.frontier",
+          "claim.v8.scoped_observed.publishable"
+        ],
+        "verdict": "downgrade_to_scoped",
+        "remediation": "Shrink the scope or fix the side-constraint regressions before publishing stronger performance language."
+      },
+      {
+        "rule_id": "rule.docs_help_contradiction",
+        "precedence": 6,
+        "evidence_kind": "docs_help_surface_audit",
+        "condition": "README/help smoke contradicts the claimed shipped command surface",
+        "target_atoms": [
+          "claim.frankenctl.compile.shipped",
+          "claim.frankenctl.run.shipped",
+          "claim.frankenctl.doctor.shipped",
+          "claim.frankenctl.verify.shipped",
+          "claim.frankenctl.benchmark.shipped",
+          "claim.frankenctl.replay.shipped"
+        ],
+        "verdict": "downgrade_to_target",
+        "remediation": "Narrow the public wording or repair the shipped behavior so docs and implementation agree."
+      }
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_claim_entitlement_algebra_v1.json",
+    "./scripts/run_rgc_claim_entitlement_algebra.sh ci",
+    "./scripts/e2e/rgc_claim_entitlement_algebra_replay.sh ci",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/claim_atom_catalog.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/evidence_morphism_catalog.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/side_constraint_lattice.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/disqualifier_rules.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/run_manifest.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/events.jsonl",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/commands.txt"
+  ]
+}

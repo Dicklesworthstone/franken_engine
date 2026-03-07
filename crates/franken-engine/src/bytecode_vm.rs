@@ -452,7 +452,7 @@ impl BytecodeVm {
                 })
             }
             Instruction::Add { dst, lhs, rhs } => {
-                let value = self.binary_int_op(lhs, rhs, |l, r| l + r)?;
+                let value = self.binary_int_op(lhs, rhs, |l, r| l.wrapping_add(r))?;
                 self.write_register(dst, Value::Int(value))?;
                 Ok(ControlFlow::Continue {
                     next_ip: ip + 1,
@@ -460,7 +460,7 @@ impl BytecodeVm {
                 })
             }
             Instruction::Sub { dst, lhs, rhs } => {
-                let value = self.binary_int_op(lhs, rhs, |l, r| l - r)?;
+                let value = self.binary_int_op(lhs, rhs, |l, r| l.wrapping_sub(r))?;
                 self.write_register(dst, Value::Int(value))?;
                 Ok(ControlFlow::Continue {
                     next_ip: ip + 1,
@@ -468,7 +468,7 @@ impl BytecodeVm {
                 })
             }
             Instruction::Mul { dst, lhs, rhs } => {
-                let value = self.binary_int_op(lhs, rhs, |l, r| l * r)?;
+                let value = self.binary_int_op(lhs, rhs, |l, r| l.wrapping_mul(r))?;
                 self.write_register(dst, Value::Int(value))?;
                 Ok(ControlFlow::Continue {
                     next_ip: ip + 1,
@@ -481,7 +481,7 @@ impl BytecodeVm {
                 if right == 0 {
                     return Err(VmError::DivisionByZero);
                 }
-                self.write_register(dst, Value::Int(left / right))?;
+                self.write_register(dst, Value::Int(left.wrapping_div(right)))?;
                 Ok(ControlFlow::Continue {
                     next_ip: ip + 1,
                     cache_hit: None,

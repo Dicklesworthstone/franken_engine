@@ -22,6 +22,9 @@ const MILLION: i64 = 1_000_000;
 
 /// Schema version for tail-tournament gate artifacts.
 pub const TAIL_GATE_SCHEMA_VERSION: &str = "franken-engine.catastrophic-tail-tournament-gate.v1";
+/// Schema version for continuation cliff atlas artifacts.
+pub const CONTINUATION_CLIFF_ATLAS_SCHEMA_VERSION: &str =
+    "franken-engine.continuation-cliff-atlas.v1";
 
 /// Maximum number of threat classes.
 const MAX_THREAT_CLASSES: usize = 64;
@@ -43,6 +46,8 @@ const DEFAULT_E_VALUE_ALARM_MILLIONTHS: i64 = 20_000_000; // 20x
 
 /// Default minimum rounds per campaign for valid tail statistics.
 const DEFAULT_MIN_ROUNDS: u64 = 100;
+/// Default margin under which a neighborhood is treated as near-cliff.
+const DEFAULT_NEAR_CLIFF_MARGIN_MILLIONTHS: i64 = 50_000;
 
 // ── Threat Class ────────────────────────────────────────────────────────
 
@@ -165,6 +170,88 @@ impl fmt::Display for TailRiskMetrics {
     }
 }
 
+/// Stability band for a threat neighborhood in the continuation cliff atlas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CliffBand {
+    Stable,
+    NearCliff,
+    BeyondCliff,
+    MissingNeighborhood,
+}
+
+impl CliffBand {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::NearCliff => "near_cliff",
+            Self::BeyondCliff => "beyond_cliff",
+            Self::MissingNeighborhood => "missing_neighborhood",
+        }
+    }
+}
+
+impl fmt::Display for CliffBand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Per-threat certificate describing how close a neighborhood is to a cliff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CliffMarginCertificate {
+    pub threat_class_id: String,
+    pub cliff_band: CliffBand,
+    /// Positive means below the CVaR budget by this margin.
+    pub cvar_margin_millionths: i64,
+    /// Positive means below the e-value alarm threshold by this margin.
+    pub e_value_margin_millionths: i64,
+    /// Positive means the neighborhood has observations beyond the minimum support floor.
+    pub observation_margin: i64,
+}
+
+impl CliffMarginCertificate {
+    pub fn is_stable(&self) -> bool {
+        self.cliff_band == CliffBand::Stable
+    }
+}
+
+/// Witness describing a concrete or pending cliff in the evaluated manifold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CliffWitness {
+    pub threat_class_id: String,
+    pub cliff_band: CliffBand,
+    pub campaign_id: Option<String>,
+    pub max_payoff_millionths: i64,
+    pub worst_exploit: Option<String>,
+    pub escape_action: LaneAction,
+    pub rationale: String,
+}
+
+/// First-class artifact summarizing stable and unstable neighborhoods.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinuationCliffAtlas {
+    pub schema_version: String,
+    pub release_candidate_id: String,
+    pub epoch: SecurityEpoch,
+    pub margin_certificates: Vec<CliffMarginCertificate>,
+    pub witnesses: Vec<CliffWitness>,
+    pub atlas_hash: ContentHash,
+}
+
+impl ContinuationCliffAtlas {
+    pub fn stable_certificate_count(&self) -> usize {
+        self.margin_certificates
+            .iter()
+            .filter(|certificate| certificate.is_stable())
+            .count()
+    }
+
+    pub fn unstable_certificate_count(&self) -> usize {
+        self.margin_certificates.len() - self.stable_certificate_count()
+    }
+}
+
 // ── Gate Decision ───────────────────────────────────────────────────────
 
 /// Gate decision for a release candidate.
@@ -190,6 +277,8 @@ pub struct GateDecision {
     pub total_rounds: u64,
     /// Rollback playbook if tail budget exceeded.
     pub rollback_playbook: Option<RollbackPlaybook>,
+    /// Local stability geometry for the evaluated neighborhoods.
+    pub continuation_cliff_atlas: ContinuationCliffAtlas,
     /// Rationale for the decision.
     pub rationale: String,
     /// Artifact hash.
@@ -207,11 +296,12 @@ impl fmt::Display for GateDecision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "gate({}, {}, cvar={}, campaigns={})",
+            "gate({}, {}, cvar={}, campaigns={}, cliffs={})",
             self.release_candidate_id,
             self.verdict,
             self.aggregate_cvar_millionths,
-            self.campaigns_evaluated
+            self.campaigns_evaluated,
+            self.continuation_cliff_atlas.unstable_certificate_count()
         )
     }
 }
@@ -311,6 +401,8 @@ pub struct TailGateConfig {
     pub e_value_alarm_threshold_millionths: i64,
     /// Minimum rounds per campaign.
     pub min_rounds_per_campaign: u64,
+    /// Margin below which a neighborhood is classified as near-cliff.
+    pub near_cliff_margin_millionths: i64,
     /// Whether to generate rollback playbooks for failed candidates.
     pub generate_rollback_playbook: bool,
     /// Lane for rollback routing.
@@ -327,6 +419,7 @@ impl Default for TailGateConfig {
             tail_budget_millionths: DEFAULT_TAIL_BUDGET_MILLIONTHS,
             e_value_alarm_threshold_millionths: DEFAULT_E_VALUE_ALARM_MILLIONTHS,
             min_rounds_per_campaign: DEFAULT_MIN_ROUNDS,
+            near_cliff_margin_millionths: DEFAULT_NEAR_CLIFF_MARGIN_MILLIONTHS,
             generate_rollback_playbook: true,
             rollback_lane: LaneId("safe".to_string()),
             record_risk_ledger: true,
@@ -466,6 +559,14 @@ impl CatastrophicTailTournamentGate {
                 ),
             });
         }
+        if config.near_cliff_margin_millionths < 0 {
+            return Err(TailGateError::InvalidConfig {
+                detail: format!(
+                    "near_cliff_margin_millionths {} must be non-negative",
+                    config.near_cliff_margin_millionths
+                ),
+            });
+        }
 
         Ok(Self {
             config,
@@ -545,48 +646,76 @@ impl CatastrophicTailTournamentGate {
                 .push(campaign);
         }
 
-        // Compute tail-risk metrics per threat class.
+        // Compute tail-risk metrics per threat class. Missing neighborhoods are
+        // represented explicitly so the gate can fail closed on blind spots.
         let mut risk_metrics = Vec::new();
+        let mut witness_campaign_ids = BTreeMap::new();
         let mut total_rounds: u64 = 0;
 
-        for (threat_id, threat_campaigns) in &by_threat {
+        for threat_id in self.threat_classes.keys() {
+            let threat_campaigns = by_threat.get(threat_id).cloned().unwrap_or_default();
             let mut all_payoffs: Vec<i64> = Vec::new();
             let mut worst_exploit: Option<String> = None;
             let mut max_payoff: i64 = 0;
+            let mut witness_campaign_id: Option<String> = None;
 
-            for campaign in threat_campaigns {
+            for campaign in &threat_campaigns {
                 all_payoffs.extend_from_slice(&campaign.attacker_payoffs);
                 total_rounds += campaign.round_count();
+                let mut campaign_peak_payoff: i64 = 0;
+                let mut campaign_peak_exploit: Option<String> = None;
 
                 // Check for exploits in tournament result.
                 if let Some(trajectory) = &campaign.tournament_result.trajectory {
                     for round in &trajectory.rounds {
-                        if round.attacker_payoff_millionths > max_payoff {
-                            max_payoff = round.attacker_payoff_millionths;
-                        }
-                        if let Some(exploit) = &round.exploit_discovered {
-                            let exploit_str = format!("{}", exploit);
-                            worst_exploit = Some(exploit_str);
+                        if round.attacker_payoff_millionths > campaign_peak_payoff {
+                            campaign_peak_payoff = round.attacker_payoff_millionths;
+                            campaign_peak_exploit =
+                                round.exploit_discovered.as_ref().map(ToString::to_string);
+                        } else if round.attacker_payoff_millionths == campaign_peak_payoff
+                            && campaign_peak_exploit.is_none()
+                        {
+                            campaign_peak_exploit =
+                                round.exploit_discovered.as_ref().map(ToString::to_string);
                         }
                     }
                 }
 
                 // Also check payoffs directly.
                 for &p in &campaign.attacker_payoffs {
-                    if p > max_payoff {
-                        max_payoff = p;
+                    if p > campaign_peak_payoff {
+                        campaign_peak_payoff = p;
+                        campaign_peak_exploit = None;
                     }
+                }
+
+                if campaign_peak_payoff > max_payoff {
+                    max_payoff = campaign_peak_payoff;
+                    worst_exploit = campaign_peak_exploit;
+                    witness_campaign_id = Some(campaign.campaign_id.clone());
+                } else if campaign_peak_payoff == max_payoff
+                    && worst_exploit.is_none()
+                    && campaign_peak_exploit.is_some()
+                {
+                    worst_exploit = campaign_peak_exploit;
+                    witness_campaign_id = Some(campaign.campaign_id.clone());
                 }
             }
 
             let metrics =
                 self.compute_tail_metrics(threat_id, &all_payoffs, max_payoff, worst_exploit);
+            witness_campaign_ids.insert(threat_id.clone(), witness_campaign_id);
             risk_metrics.push(metrics);
         }
 
         // Compute aggregate weighted CVaR.
         let aggregate_cvar = self.compute_aggregate_cvar(&risk_metrics);
         let any_alarm = risk_metrics.iter().any(|m| m.alarm_active);
+        let continuation_cliff_atlas = self.build_continuation_cliff_atlas(
+            release_candidate_id,
+            &risk_metrics,
+            &witness_campaign_ids,
+        );
 
         // Determine verdict.
         let verdict = if risk_metrics.iter().any(|m| m.observation_count == 0) {
@@ -621,7 +750,17 @@ impl CatastrophicTailTournamentGate {
                 }
                 reasons.join("; ")
             }
-            GateVerdict::Inconclusive => "insufficient data for some threat classes".to_string(),
+            GateVerdict::Inconclusive => {
+                let missing: Vec<_> = risk_metrics
+                    .iter()
+                    .filter(|m| m.observation_count == 0)
+                    .map(|m| m.threat_class_id.clone())
+                    .collect();
+                format!(
+                    "insufficient data for threat classes: {}",
+                    missing.join(", ")
+                )
+            }
         };
 
         // Generate rollback playbook if failed.
@@ -635,6 +774,9 @@ impl CatastrophicTailTournamentGate {
         // Record risk ledger entries.
         if self.config.record_risk_ledger {
             for m in &risk_metrics {
+                if m.observation_count == 0 {
+                    continue;
+                }
                 self.risk_ledger.push(RiskLedgerEntry {
                     epoch: self.config.epoch,
                     threat_class_id: m.threat_class_id.clone(),
@@ -652,6 +794,7 @@ impl CatastrophicTailTournamentGate {
         hash_buf.extend_from_slice(&self.config.epoch.as_u64().to_le_bytes());
         hash_buf.extend_from_slice(&aggregate_cvar.to_le_bytes());
         hash_buf.extend_from_slice(&(campaigns.len() as u64).to_le_bytes());
+        hash_buf.extend_from_slice(continuation_cliff_atlas.atlas_hash.as_bytes());
         for m in &risk_metrics {
             hash_buf.extend_from_slice(m.threat_class_id.as_bytes());
             hash_buf.extend_from_slice(&m.cvar_millionths.to_le_bytes());
@@ -675,6 +818,7 @@ impl CatastrophicTailTournamentGate {
             campaigns_evaluated: campaigns.len() as u64,
             total_rounds,
             rollback_playbook,
+            continuation_cliff_atlas,
             rationale,
             artifact_hash: ContentHash::compute(&hash_buf),
         })
@@ -763,6 +907,134 @@ impl CatastrophicTailTournamentGate {
         }
 
         (weighted_cvar * MILLION) / total_weight
+    }
+
+    fn build_continuation_cliff_atlas(
+        &self,
+        release_candidate_id: &str,
+        risk_metrics: &[TailRiskMetrics],
+        witness_campaign_ids: &BTreeMap<String, Option<String>>,
+    ) -> ContinuationCliffAtlas {
+        let mut margin_certificates = Vec::with_capacity(risk_metrics.len());
+        let mut witnesses = Vec::new();
+
+        for metrics in risk_metrics {
+            let cvar_margin = self.config.tail_budget_millionths - metrics.cvar_millionths;
+            let e_value_margin =
+                self.config.e_value_alarm_threshold_millionths - metrics.e_value_millionths;
+            let observation_margin =
+                metrics.observation_count as i64 - self.config.min_rounds_per_campaign as i64;
+            let cliff_band = if metrics.observation_count == 0 {
+                CliffBand::MissingNeighborhood
+            } else if cvar_margin < 0 || e_value_margin < 0 {
+                CliffBand::BeyondCliff
+            } else if cvar_margin.min(e_value_margin) <= self.config.near_cliff_margin_millionths {
+                CliffBand::NearCliff
+            } else {
+                CliffBand::Stable
+            };
+
+            margin_certificates.push(CliffMarginCertificate {
+                threat_class_id: metrics.threat_class_id.clone(),
+                cliff_band,
+                cvar_margin_millionths: cvar_margin,
+                e_value_margin_millionths: e_value_margin,
+                observation_margin,
+            });
+
+            if cliff_band != CliffBand::Stable {
+                let rationale = match cliff_band {
+                    CliffBand::MissingNeighborhood => format!(
+                        "no campaigns exercised threat class {}; fail closed until the neighborhood is sampled",
+                        metrics.threat_class_id
+                    ),
+                    CliffBand::NearCliff => format!(
+                        "threat class {} is within the configured near-cliff margin (cvar_margin={}, e_value_margin={})",
+                        metrics.threat_class_id, cvar_margin, e_value_margin
+                    ),
+                    CliffBand::BeyondCliff => format!(
+                        "threat class {} crossed a cliff boundary (cvar_margin={}, e_value_margin={})",
+                        metrics.threat_class_id, cvar_margin, e_value_margin
+                    ),
+                    CliffBand::Stable => unreachable!("stable regions do not emit witnesses"),
+                };
+                let escape_action = if cliff_band == CliffBand::MissingNeighborhood {
+                    LaneAction::FallbackSafe
+                } else {
+                    LaneAction::RouteTo(self.config.rollback_lane.clone())
+                };
+                witnesses.push(CliffWitness {
+                    threat_class_id: metrics.threat_class_id.clone(),
+                    cliff_band,
+                    campaign_id: witness_campaign_ids
+                        .get(&metrics.threat_class_id)
+                        .cloned()
+                        .flatten(),
+                    max_payoff_millionths: metrics.max_payoff_millionths,
+                    worst_exploit: metrics.worst_exploit.clone(),
+                    escape_action,
+                    rationale,
+                });
+            }
+        }
+
+        let atlas_hash = self.compute_continuation_cliff_atlas_hash(
+            release_candidate_id,
+            &margin_certificates,
+            &witnesses,
+        );
+
+        ContinuationCliffAtlas {
+            schema_version: CONTINUATION_CLIFF_ATLAS_SCHEMA_VERSION.to_string(),
+            release_candidate_id: release_candidate_id.to_string(),
+            epoch: self.config.epoch,
+            margin_certificates,
+            witnesses,
+            atlas_hash,
+        }
+    }
+
+    fn compute_continuation_cliff_atlas_hash(
+        &self,
+        release_candidate_id: &str,
+        margin_certificates: &[CliffMarginCertificate],
+        witnesses: &[CliffWitness],
+    ) -> ContentHash {
+        let mut hash_buf = Vec::new();
+        hash_buf.extend_from_slice(CONTINUATION_CLIFF_ATLAS_SCHEMA_VERSION.as_bytes());
+        hash_buf.extend_from_slice(release_candidate_id.as_bytes());
+        hash_buf.extend_from_slice(&self.config.epoch.as_u64().to_le_bytes());
+        hash_buf.extend_from_slice(&self.config.near_cliff_margin_millionths.to_le_bytes());
+        for certificate in margin_certificates {
+            hash_buf.extend_from_slice(certificate.threat_class_id.as_bytes());
+            hash_buf.extend_from_slice(certificate.cliff_band.as_str().as_bytes());
+            hash_buf.extend_from_slice(&certificate.cvar_margin_millionths.to_le_bytes());
+            hash_buf.extend_from_slice(&certificate.e_value_margin_millionths.to_le_bytes());
+            hash_buf.extend_from_slice(&certificate.observation_margin.to_le_bytes());
+        }
+        for witness in witnesses {
+            hash_buf.extend_from_slice(witness.threat_class_id.as_bytes());
+            hash_buf.extend_from_slice(witness.cliff_band.as_str().as_bytes());
+            hash_buf.extend_from_slice(
+                witness
+                    .campaign_id
+                    .as_deref()
+                    .unwrap_or("missing-neighborhood")
+                    .as_bytes(),
+            );
+            hash_buf.extend_from_slice(&witness.max_payoff_millionths.to_le_bytes());
+            hash_buf.extend_from_slice(
+                witness
+                    .worst_exploit
+                    .as_deref()
+                    .unwrap_or("none")
+                    .as_bytes(),
+            );
+            let escape_action = witness.escape_action.to_string();
+            hash_buf.extend_from_slice(escape_action.as_bytes());
+            hash_buf.extend_from_slice(witness.rationale.as_bytes());
+        }
+        ContentHash::compute(&hash_buf)
     }
 
     // ── Rollback Playbook Generation ────────────────────────────────
@@ -895,6 +1167,15 @@ mod tests {
     }
 
     fn default_gate() -> CatastrophicTailTournamentGate {
+        let threats = vec![make_threat(
+            "t1",
+            ThreatCategory::CapabilityEscalation,
+            MILLION,
+        )];
+        CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats).unwrap()
+    }
+
+    fn dual_threat_gate() -> CatastrophicTailTournamentGate {
         let threats = vec![
             make_threat("t1", ThreatCategory::CapabilityEscalation, MILLION),
             make_threat("t2", ThreatCategory::ResourceExhaustion, MILLION),
@@ -923,7 +1204,7 @@ mod tests {
     #[test]
     fn new_creates_gate() {
         let gate = default_gate();
-        assert_eq!(gate.threat_class_count(), 2);
+        assert_eq!(gate.threat_class_count(), 1);
         assert_eq!(gate.evaluation_count(), 0);
         assert!(gate.risk_ledger().is_empty());
     }
@@ -989,6 +1270,21 @@ mod tests {
         assert!(matches!(result, Err(TailGateError::InvalidConfig { .. })));
     }
 
+    #[test]
+    fn new_rejects_negative_near_cliff_margin() {
+        let config = TailGateConfig {
+            near_cliff_margin_millionths: -1,
+            ..Default::default()
+        };
+        let threats = vec![make_threat(
+            "t1",
+            ThreatCategory::CapabilityEscalation,
+            MILLION,
+        )];
+        let result = CatastrophicTailTournamentGate::new(config, threats);
+        assert!(matches!(result, Err(TailGateError::InvalidConfig { .. })));
+    }
+
     // ── Evaluation Tests ────────────────────────────────────────────
 
     #[test]
@@ -1022,7 +1318,7 @@ mod tests {
 
     #[test]
     fn evaluate_passes_low_risk() {
-        let mut gate = default_gate();
+        let mut gate = dual_threat_gate();
         let campaigns = vec![
             make_campaign("c1", "t1", low_risk_payoffs(200)),
             make_campaign("c2", "t2", low_risk_payoffs(200)),
@@ -1066,13 +1362,31 @@ mod tests {
 
     #[test]
     fn evaluate_records_risk_ledger() {
-        let mut gate = default_gate();
+        let mut gate = dual_threat_gate();
         let campaigns = vec![
             make_campaign("c1", "t1", low_risk_payoffs(200)),
             make_campaign("c2", "t2", low_risk_payoffs(200)),
         ];
         let _ = gate.evaluate("rc-1", &campaigns).unwrap();
         assert_eq!(gate.risk_ledger().len(), 2);
+    }
+
+    #[test]
+    fn evaluate_missing_neighborhoods_are_inconclusive() {
+        let mut gate = dual_threat_gate();
+        let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
+        let decision = gate.evaluate("rc-gap", &campaigns).unwrap();
+        assert_eq!(decision.verdict, GateVerdict::Inconclusive);
+        assert_eq!(decision.risk_metrics.len(), 2);
+        assert!(decision.rationale.contains("t2"));
+        let missing = decision
+            .continuation_cliff_atlas
+            .witnesses
+            .iter()
+            .find(|witness| witness.threat_class_id == "t2")
+            .expect("missing threat should emit witness");
+        assert_eq!(missing.cliff_band, CliffBand::MissingNeighborhood);
+        assert!(matches!(missing.escape_action, LaneAction::FallbackSafe));
     }
 
     #[test]
@@ -1147,6 +1461,34 @@ mod tests {
         assert!(!decision.risk_metrics[0].alarm_active);
     }
 
+    #[test]
+    fn near_cliff_margin_emits_warning_witness() {
+        let config = TailGateConfig {
+            tail_budget_millionths: 120_000,
+            near_cliff_margin_millionths: 50_000,
+            ..Default::default()
+        };
+        let threats = vec![make_threat(
+            "t1",
+            ThreatCategory::CapabilityEscalation,
+            MILLION,
+        )];
+        let mut gate = CatastrophicTailTournamentGate::new(config, threats).unwrap();
+        let campaigns = vec![make_campaign("c1", "t1", vec![100_000; 200])];
+        let decision = gate.evaluate("rc-near", &campaigns).unwrap();
+        assert_eq!(decision.verdict, GateVerdict::Pass);
+        let certificate = &decision.continuation_cliff_atlas.margin_certificates[0];
+        assert_eq!(certificate.cliff_band, CliffBand::NearCliff);
+        assert_eq!(certificate.cvar_margin_millionths, 20_000);
+        assert_eq!(decision.continuation_cliff_atlas.witnesses.len(), 1);
+        assert_eq!(
+            decision.continuation_cliff_atlas.witnesses[0]
+                .campaign_id
+                .as_deref(),
+            Some("c1")
+        );
+    }
+
     // ── Aggregate CVaR Tests ────────────────────────────────────────
 
     #[test]
@@ -1195,7 +1537,7 @@ mod tests {
 
     #[test]
     fn no_playbook_on_pass() {
-        let mut gate = default_gate();
+        let mut gate = dual_threat_gate();
         let campaigns = vec![
             make_campaign("c1", "t1", low_risk_payoffs(200)),
             make_campaign("c2", "t2", low_risk_payoffs(200)),
@@ -1257,7 +1599,7 @@ mod tests {
 
     #[test]
     fn decision_total_rounds() {
-        let mut gate = default_gate();
+        let mut gate = dual_threat_gate();
         let campaigns = vec![
             make_campaign("c1", "t1", low_risk_payoffs(200)),
             make_campaign("c2", "t2", low_risk_payoffs(300)),
@@ -1498,6 +1840,10 @@ mod tests {
             DEFAULT_E_VALUE_ALARM_MILLIONTHS
         );
         assert_eq!(config.min_rounds_per_campaign, DEFAULT_MIN_ROUNDS);
+        assert_eq!(
+            config.near_cliff_margin_millionths,
+            DEFAULT_NEAR_CLIFF_MARGIN_MILLIONTHS
+        );
         assert!(config.generate_rollback_playbook);
         assert!(config.record_risk_ledger);
     }
@@ -1858,7 +2204,7 @@ mod tests {
         let gate = default_gate();
         let json = serde_json::to_string(&gate).unwrap();
         let back: CatastrophicTailTournamentGate = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.threat_class_count(), 2);
+        assert_eq!(back.threat_class_count(), 1);
         assert_eq!(back.evaluation_count(), 0);
     }
 
@@ -2008,7 +2354,7 @@ mod tests {
 
     #[test]
     fn display_gate_decision_fields_enrichment() {
-        let mut gate = default_gate();
+        let mut gate = dual_threat_gate();
         let campaigns = vec![
             make_campaign("c1", "t1", low_risk_payoffs(200)),
             make_campaign("c2", "t2", low_risk_payoffs(200)),
@@ -2214,6 +2560,61 @@ mod tests {
         assert_ne!(d1.artifact_hash, d2.artifact_hash);
     }
 
+    #[test]
+    fn continuation_cliff_atlas_hash_uses_escape_action_display_contract() {
+        let config = TailGateConfig {
+            tail_budget_millionths: 120_000,
+            near_cliff_margin_millionths: 50_000,
+            ..Default::default()
+        };
+        let threats = vec![make_threat(
+            "t1",
+            ThreatCategory::CapabilityEscalation,
+            MILLION,
+        )];
+        let mut gate = CatastrophicTailTournamentGate::new(config, threats).unwrap();
+        let campaigns = vec![make_campaign("c1", "t1", vec![100_000; 200])];
+        let decision = gate.evaluate("rc-display-hash", &campaigns).unwrap();
+        let atlas = &decision.continuation_cliff_atlas;
+
+        let mut hash_buf = Vec::new();
+        hash_buf.extend_from_slice(CONTINUATION_CLIFF_ATLAS_SCHEMA_VERSION.as_bytes());
+        hash_buf.extend_from_slice(atlas.release_candidate_id.as_bytes());
+        hash_buf.extend_from_slice(&atlas.epoch.as_u64().to_le_bytes());
+        hash_buf.extend_from_slice(&gate.config.near_cliff_margin_millionths.to_le_bytes());
+        for certificate in &atlas.margin_certificates {
+            hash_buf.extend_from_slice(certificate.threat_class_id.as_bytes());
+            hash_buf.extend_from_slice(certificate.cliff_band.as_str().as_bytes());
+            hash_buf.extend_from_slice(&certificate.cvar_margin_millionths.to_le_bytes());
+            hash_buf.extend_from_slice(&certificate.e_value_margin_millionths.to_le_bytes());
+            hash_buf.extend_from_slice(&certificate.observation_margin.to_le_bytes());
+        }
+        for witness in &atlas.witnesses {
+            hash_buf.extend_from_slice(witness.threat_class_id.as_bytes());
+            hash_buf.extend_from_slice(witness.cliff_band.as_str().as_bytes());
+            hash_buf.extend_from_slice(
+                witness
+                    .campaign_id
+                    .as_deref()
+                    .unwrap_or("missing-neighborhood")
+                    .as_bytes(),
+            );
+            hash_buf.extend_from_slice(&witness.max_payoff_millionths.to_le_bytes());
+            hash_buf.extend_from_slice(
+                witness
+                    .worst_exploit
+                    .as_deref()
+                    .unwrap_or("none")
+                    .as_bytes(),
+            );
+            let escape_action = witness.escape_action.to_string();
+            hash_buf.extend_from_slice(escape_action.as_bytes());
+            hash_buf.extend_from_slice(witness.rationale.as_bytes());
+        }
+
+        assert_eq!(atlas.atlas_hash, ContentHash::compute(&hash_buf));
+    }
+
     // ── Enrichment: Stress / Boundary Scenarios ─────────────────────
 
     #[test]
@@ -2359,7 +2760,7 @@ mod tests {
 
     #[test]
     fn multiple_evaluations_accumulate_ledger_enrichment() {
-        let mut gate = default_gate();
+        let mut gate = dual_threat_gate();
         let c1 = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let c2 = vec![make_campaign("c2", "t2", low_risk_payoffs(200))];
         let _ = gate.evaluate("rc-1", &c1).unwrap();

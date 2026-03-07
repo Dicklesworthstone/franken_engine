@@ -5,14 +5,16 @@
 //! gate decisions, rollback playbooks, and risk ledger accumulation.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use frankenengine_engine::adversarial_coevolution_harness::{
     ConvergenceDiagnostic, PolicyDelta, TournamentResult,
 };
 use frankenengine_engine::catastrophic_tail_tournament_gate::{
-    Campaign, CatastrophicTailTournamentGate, GateDecision, GateVerdict, MitigationStep,
-    RiskLedgerEntry, RollbackPlaybook, TAIL_GATE_SCHEMA_VERSION, TailGateConfig, TailGateError,
-    TailRiskMetrics, ThreatCategory, ThreatClass,
+    CONTINUATION_CLIFF_ATLAS_SCHEMA_VERSION, Campaign, CatastrophicTailTournamentGate, CliffBand,
+    CliffMarginCertificate, CliffWitness, ContinuationCliffAtlas, GateDecision, GateVerdict,
+    MitigationStep, RiskLedgerEntry, RollbackPlaybook, TAIL_GATE_SCHEMA_VERSION, TailGateConfig,
+    TailGateError, TailRiskMetrics, ThreatCategory, ThreatClass,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_decision_theory::{LaneAction, LaneId};
@@ -75,6 +77,15 @@ fn make_campaign(id: &str, threat_id: &str, payoffs: Vec<i64>) -> Campaign {
 }
 
 fn default_gate() -> CatastrophicTailTournamentGate {
+    let threats = vec![make_threat(
+        "t1",
+        ThreatCategory::CapabilityEscalation,
+        MILLION,
+    )];
+    CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats).unwrap()
+}
+
+fn dual_threat_gate() -> CatastrophicTailTournamentGate {
     let threats = vec![
         make_threat("t1", ThreatCategory::CapabilityEscalation, MILLION),
         make_threat("t2", ThreatCategory::ResourceExhaustion, MILLION),
@@ -93,6 +104,24 @@ fn high_risk_payoffs(n: usize) -> Vec<i64> {
         *p = 5_000_000;
     }
     payoffs
+}
+
+fn empty_cliff_atlas() -> ContinuationCliffAtlas {
+    ContinuationCliffAtlas {
+        schema_version: CONTINUATION_CLIFF_ATLAS_SCHEMA_VERSION.to_string(),
+        release_candidate_id: "rc-empty".to_string(),
+        epoch: SecurityEpoch::from_raw(1),
+        margin_certificates: vec![],
+        witnesses: vec![],
+        atlas_hash: ContentHash::compute(b"empty-cliff-atlas"),
+    }
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root")
 }
 
 // ── Schema Version ──────────────────────────────────────────────────────
@@ -281,6 +310,7 @@ fn gate_decision_is_pass() {
         campaigns_evaluated: 2,
         total_rounds: 400,
         rollback_playbook: None,
+        continuation_cliff_atlas: empty_cliff_atlas(),
         rationale: "within budget".to_string(),
         artifact_hash: ContentHash::compute(b"test"),
     };
@@ -300,6 +330,7 @@ fn gate_decision_is_not_pass_for_fail() {
         campaigns_evaluated: 1,
         total_rounds: 200,
         rollback_playbook: None,
+        continuation_cliff_atlas: empty_cliff_atlas(),
         rationale: "exceeded".to_string(),
         artifact_hash: ContentHash::compute(b"test2"),
     };
@@ -319,6 +350,7 @@ fn gate_decision_display() {
         campaigns_evaluated: 3,
         total_rounds: 600,
         rollback_playbook: None,
+        continuation_cliff_atlas: empty_cliff_atlas(),
         rationale: "insufficient data".to_string(),
         artifact_hash: ContentHash::compute(b"test3"),
     };
@@ -340,6 +372,7 @@ fn gate_decision_serde_roundtrip() {
         campaigns_evaluated: 1,
         total_rounds: 200,
         rollback_playbook: None,
+        continuation_cliff_atlas: empty_cliff_atlas(),
         rationale: "ok".to_string(),
         artifact_hash: ContentHash::compute(b"d4"),
     };
@@ -347,6 +380,10 @@ fn gate_decision_serde_roundtrip() {
     let back: GateDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(back.decision_id, "d4");
     assert_eq!(back.verdict, GateVerdict::Pass);
+    assert_eq!(
+        back.continuation_cliff_atlas.schema_version,
+        CONTINUATION_CLIFF_ATLAS_SCHEMA_VERSION
+    );
 }
 
 // ── MitigationStep ──────────────────────────────────────────────────────
@@ -458,6 +495,7 @@ fn tail_gate_config_defaults() {
     assert_eq!(config.tail_budget_millionths, 500_000);
     assert_eq!(config.e_value_alarm_threshold_millionths, 20_000_000);
     assert_eq!(config.min_rounds_per_campaign, 100);
+    assert_eq!(config.near_cliff_margin_millionths, 50_000);
     assert!(config.generate_rollback_playbook);
     assert!(config.record_risk_ledger);
 }
@@ -536,7 +574,7 @@ fn tail_gate_error_serde_roundtrip() {
 #[test]
 fn new_creates_gate_with_valid_inputs() {
     let gate = default_gate();
-    assert_eq!(gate.threat_class_count(), 2);
+    assert_eq!(gate.threat_class_count(), 1);
     assert_eq!(gate.evaluation_count(), 0);
     assert!(gate.risk_ledger().is_empty());
 }
@@ -671,7 +709,7 @@ fn evaluate_rejects_insufficient_rounds() {
 
 #[test]
 fn evaluate_low_risk_passes() {
-    let mut gate = default_gate();
+    let mut gate = dual_threat_gate();
     let campaigns = vec![
         make_campaign("c1", "t1", low_risk_payoffs(200)),
         make_campaign("c2", "t2", low_risk_payoffs(200)),
@@ -707,7 +745,7 @@ fn evaluate_pass_decision_id_includes_rc_and_epoch() {
 
 #[test]
 fn evaluate_pass_has_risk_metrics_per_threat() {
-    let mut gate = default_gate();
+    let mut gate = dual_threat_gate();
     let campaigns = vec![
         make_campaign("c1", "t1", low_risk_payoffs(200)),
         make_campaign("c2", "t2", low_risk_payoffs(200)),
@@ -727,7 +765,7 @@ fn evaluate_pass_has_risk_metrics_per_threat() {
 
 #[test]
 fn evaluate_high_risk_fails() {
-    let mut gate = default_gate();
+    let mut gate = dual_threat_gate();
     let campaigns = vec![
         make_campaign("c1", "t1", high_risk_payoffs(200)),
         make_campaign("c2", "t2", high_risk_payoffs(200)),
@@ -788,7 +826,7 @@ fn evaluate_fail_no_playbook_when_disabled() {
 
 #[test]
 fn evaluate_records_risk_ledger_entries() {
-    let mut gate = default_gate();
+    let mut gate = dual_threat_gate();
     let campaigns = vec![
         make_campaign("c1", "t1", low_risk_payoffs(200)),
         make_campaign("c2", "t2", low_risk_payoffs(200)),
@@ -913,7 +951,7 @@ fn gate_serde_roundtrip() {
     let json = serde_json::to_string(&gate).unwrap();
     let back: CatastrophicTailTournamentGate = serde_json::from_str(&json).unwrap();
     assert_eq!(back.evaluation_count(), 1);
-    assert_eq!(back.threat_class_count(), 2);
+    assert_eq!(back.threat_class_count(), 1);
     assert_eq!(back.risk_ledger().len(), gate.risk_ledger().len());
 }
 
@@ -921,7 +959,7 @@ fn gate_serde_roundtrip() {
 
 #[test]
 fn full_lifecycle_pass_then_fail_then_pass() {
-    let mut gate = default_gate();
+    let mut gate = dual_threat_gate();
 
     // 1. First candidate passes
     let low_campaigns = vec![
@@ -958,7 +996,7 @@ fn full_lifecycle_pass_then_fail_then_pass() {
 
 #[test]
 fn full_lifecycle_serde_preserves_state() {
-    let mut gate = default_gate();
+    let mut gate = dual_threat_gate();
     let campaigns = vec![
         make_campaign("c1", "t1", low_risk_payoffs(200)),
         make_campaign("c2", "t2", low_risk_payoffs(200)),
@@ -978,4 +1016,127 @@ fn full_lifecycle_serde_preserves_state() {
     let d3 = restored.evaluate("rc-3", &campaigns).unwrap();
     assert_eq!(d3.verdict, GateVerdict::Pass);
     assert_eq!(restored.evaluation_count(), 3);
+}
+
+#[test]
+fn evaluate_missing_neighborhood_is_inconclusive_and_emits_witness() {
+    let mut gate = dual_threat_gate();
+    let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
+    let decision = gate.evaluate("rc-gap", &campaigns).unwrap();
+    assert_eq!(decision.verdict, GateVerdict::Inconclusive);
+    assert!(decision.rationale.contains("t2"));
+    assert_eq!(decision.risk_metrics.len(), 2);
+
+    let missing = decision
+        .risk_metrics
+        .iter()
+        .find(|metrics| metrics.threat_class_id == "t2")
+        .expect("missing threat metrics should be present");
+    assert_eq!(missing.observation_count, 0);
+
+    let witness = decision
+        .continuation_cliff_atlas
+        .witnesses
+        .iter()
+        .find(|witness| witness.threat_class_id == "t2")
+        .expect("missing neighborhood should emit a witness");
+    assert_eq!(witness.cliff_band, CliffBand::MissingNeighborhood);
+    assert!(witness.campaign_id.is_none());
+    assert!(matches!(witness.escape_action, LaneAction::FallbackSafe));
+}
+
+#[test]
+fn evaluate_near_cliff_band_warns_without_failing() {
+    let config = TailGateConfig {
+        tail_budget_millionths: 120_000,
+        near_cliff_margin_millionths: 50_000,
+        ..Default::default()
+    };
+    let threats = vec![make_threat(
+        "t1",
+        ThreatCategory::CapabilityEscalation,
+        MILLION,
+    )];
+    let mut gate = CatastrophicTailTournamentGate::new(config, threats).unwrap();
+    let campaigns = vec![make_campaign("c1", "t1", vec![100_000; 200])];
+    let decision = gate.evaluate("rc-near", &campaigns).unwrap();
+    assert_eq!(decision.verdict, GateVerdict::Pass);
+
+    let certificate = decision
+        .continuation_cliff_atlas
+        .margin_certificates
+        .iter()
+        .find(|certificate| certificate.threat_class_id == "t1")
+        .expect("certificate");
+    assert_eq!(certificate.cliff_band, CliffBand::NearCliff);
+    assert_eq!(certificate.cvar_margin_millionths, 20_000);
+
+    let witness = decision
+        .continuation_cliff_atlas
+        .witnesses
+        .iter()
+        .find(|witness| witness.threat_class_id == "t1")
+        .expect("near-cliff witness");
+    assert_eq!(witness.cliff_band, CliffBand::NearCliff);
+    assert_eq!(witness.campaign_id.as_deref(), Some("c1"));
+}
+
+#[test]
+fn continuation_cliff_atlas_serde_roundtrip() {
+    let atlas = ContinuationCliffAtlas {
+        schema_version: CONTINUATION_CLIFF_ATLAS_SCHEMA_VERSION.to_string(),
+        release_candidate_id: "rc-atlas".to_string(),
+        epoch: SecurityEpoch::from_raw(9),
+        margin_certificates: vec![CliffMarginCertificate {
+            threat_class_id: "t1".to_string(),
+            cliff_band: CliffBand::NearCliff,
+            cvar_margin_millionths: 10_000,
+            e_value_margin_millionths: 20_000,
+            observation_margin: 100,
+        }],
+        witnesses: vec![CliffWitness {
+            threat_class_id: "t1".to_string(),
+            cliff_band: CliffBand::NearCliff,
+            campaign_id: Some("campaign-1".to_string()),
+            max_payoff_millionths: 140_000,
+            worst_exploit: Some("policy_bypass".to_string()),
+            escape_action: LaneAction::RouteTo(LaneId("safe".to_string())),
+            rationale: "near cliff".to_string(),
+        }],
+        atlas_hash: ContentHash::compute(b"atlas"),
+    };
+    let json = serde_json::to_string(&atlas).unwrap();
+    let back: ContinuationCliffAtlas = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, atlas);
+}
+
+#[test]
+fn continuation_cliff_atlas_contract_doc_mentions_fail_closed_missing_neighborhoods() {
+    let path = repo_root().join("docs/RGC_CONTINUATION_CLIFF_ATLAS_V1.md");
+    let doc = std::fs::read_to_string(path).expect("contract doc should exist");
+    assert!(doc.contains("missing_neighborhood"));
+    assert!(doc.contains("fail closed"));
+    assert!(doc.contains("./scripts/run_rgc_continuation_cliff_atlas_suite.sh ci"));
+}
+
+#[test]
+fn continuation_cliff_atlas_contract_json_is_machine_readable() {
+    let path = repo_root().join("docs/rgc_continuation_cliff_atlas_v1.json");
+    let json = std::fs::read_to_string(path).expect("contract json should exist");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    assert_eq!(
+        value["schema_version"].as_str(),
+        Some("franken-engine.continuation-cliff-atlas.contract.v1")
+    );
+    assert_eq!(value["primary_bead"].as_str(), Some("bd-1lsy.7.19"));
+}
+
+#[test]
+fn continuation_cliff_atlas_gate_script_exists_and_uses_rch() {
+    let path = repo_root().join("scripts/run_rgc_continuation_cliff_atlas_suite.sh");
+    let script = std::fs::read_to_string(path).expect("gate script should exist");
+    assert!(script.contains("rch exec"));
+    assert!(script.contains("CARGO_BUILD_JOBS"));
+    assert!(script.contains("evaluate_missing_neighborhood_is_inconclusive_and_emits_witness"));
+    assert!(script.contains("continuation_cliff_atlas_hash_uses_escape_action_display_contract"));
 }

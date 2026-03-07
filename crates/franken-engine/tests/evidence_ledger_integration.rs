@@ -10,9 +10,13 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::evidence_ledger::{
-    CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEmitter, EvidenceEntry,
-    EvidenceEntryBuilder, InMemoryLedger, LedgerError, SchemaVersionExt, Witness,
-    current_schema_version,
+    ArtifactRecord, CandidateAction, ChosenAction, Constraint, DecisionSemanticsAnnotations,
+    DecisionType, EvidenceEmitter, EvidenceEntry, EvidenceEntryBuilder,
+    EvidenceGraphEdgeKind, EvidenceLedgerStitchingBundle, InMemoryLedger, LedgerError,
+    SchemaVersionExt, Witness, current_schema_version,
+};
+use frankenengine_engine::hindsight_boundary_capture::{
+    BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -88,6 +92,39 @@ fn make_entry(
     })
     .build()
     .expect("build entry")
+}
+
+fn sample_boundary_records() -> Vec<BoundaryCaptureRecord> {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let context = BoundaryContext::new(
+        "trace-001",
+        "decision-001",
+        "policy-v1",
+        "integration-orchestrator",
+        128,
+    );
+    let scheduling = session
+        .capture_scheduling_decision(&context, "hot-lane", "task-17", "digest-order", None)
+        .expect("capture scheduling decision");
+    let override_record = session
+        .capture_controller_override(
+            &context,
+            "safety-router",
+            "force-sandbox",
+            "digest-override",
+            None,
+        )
+        .expect("capture controller override");
+    let policy = session
+        .capture_external_policy_read(
+            &context,
+            "release_policy",
+            "digest-policy",
+            11,
+            None,
+        )
+        .expect("capture policy read");
+    vec![scheduling, override_record, policy]
 }
 
 // ===========================================================================
@@ -1215,4 +1252,153 @@ fn serde_roundtrip_fully_populated_entry() {
     assert_eq!(restored.constraints.len(), 2);
     assert_eq!(restored.witnesses.len(), 2);
     assert_eq!(restored.metadata.len(), 2);
+}
+
+// ===========================================================================
+// 26. Evidence-ledger stitching bundle integration
+// ===========================================================================
+
+#[test]
+fn stitching_bundle_supports_controller_benchmark_support_and_release_queries() {
+    let entry = sample_entry();
+    let boundaries = sample_boundary_records();
+    let artifacts = vec![
+        ArtifactRecord::new(
+            "benchmark-snapshot",
+            "benchmark_manifest",
+            "artifacts/benchmark-snapshot.json",
+            "hash-benchmark",
+        )
+        .supporting_boundary(boundaries[0].correlation_key.clone()),
+        ArtifactRecord::new(
+            "release-gate",
+            "release_gate_report",
+            "artifacts/release-gate.json",
+            "hash-release",
+        )
+        .supporting_boundary(boundaries[2].correlation_key.clone()),
+        ArtifactRecord::new(
+            "support-export",
+            "support_bundle",
+            "artifacts/support-export.json",
+            "hash-support",
+        ),
+    ];
+    let annotations = DecisionSemanticsAnnotations {
+        confidence_tier: Some("high".to_string()),
+        fallback_reason: Some("safe-mode-ready".to_string()),
+        regret_summary: Some("expected_regret<=1000".to_string()),
+        scope_limits: vec![
+            "controller=safety-router".to_string(),
+            "release=report-only".to_string(),
+        ],
+        assumptions: BTreeMap::from([
+            ("benchmark_profile".to_string(), "p95".to_string()),
+            ("support_visibility".to_string(), "operator".to_string()),
+        ]),
+        linked_boundary_correlation_keys: boundaries
+            .iter()
+            .map(|boundary| boundary.correlation_key.clone())
+            .collect(),
+    };
+
+    let bundle =
+        EvidenceLedgerStitchingBundle::stitch(&entry, &boundaries, &artifacts, annotations)
+            .expect("stitching bundle");
+
+    assert_eq!(bundle.decision_semantics_log.len(), 1);
+    assert_eq!(bundle.artifact_lineage_index.len(), 3);
+    assert_eq!(bundle.evidence_ledger_graph.nodes.len(), 7);
+    assert_eq!(
+        bundle
+            .evidence_ledger_graph
+            .edges
+            .iter()
+            .filter(|edge| edge.edge_kind == EvidenceGraphEdgeKind::BoundaryInformsDecision)
+            .count(),
+        3
+    );
+    assert_eq!(
+        bundle
+            .evidence_ledger_graph
+            .edges
+            .iter()
+            .filter(|edge| edge.edge_kind == EvidenceGraphEdgeKind::DecisionProducesArtifact)
+            .count(),
+        3
+    );
+    assert_eq!(
+        bundle
+            .evidence_ledger_graph
+            .edges
+            .iter()
+            .filter(|edge| edge.edge_kind == EvidenceGraphEdgeKind::BoundarySupportsArtifact)
+            .count(),
+        5
+    );
+
+    let semantics = &bundle.decision_semantics_log[0];
+    assert_eq!(semantics.boundary_correlation_keys.len(), 3);
+    assert_eq!(semantics.confidence_tier.as_deref(), Some("high"));
+    assert_eq!(semantics.fallback_reason.as_deref(), Some("safe-mode-ready"));
+    assert_eq!(semantics.assumptions["benchmark_profile"], "p95");
+
+    let benchmark_lineage = bundle
+        .artifact_lineage_index
+        .iter()
+        .find(|artifact| artifact.artifact_id == "benchmark-snapshot")
+        .expect("benchmark lineage");
+    assert_eq!(benchmark_lineage.boundary_correlation_keys.len(), 1);
+    assert_eq!(
+        benchmark_lineage.boundary_correlation_keys[0],
+        boundaries[0].correlation_key
+    );
+
+    let support_lineage = bundle
+        .artifact_lineage_index
+        .iter()
+        .find(|artifact| artifact.artifact_id == "support-export")
+        .expect("support lineage");
+    assert_eq!(support_lineage.boundary_correlation_keys.len(), 3);
+
+    let query = bundle
+        .evidence_query_surface_snapshot
+        .by_decision("decision-001")
+        .expect("query record");
+    assert_eq!(query.boundary_correlation_keys.len(), 3);
+    assert_eq!(
+        query.artifact_ids,
+        vec!["benchmark-snapshot", "release-gate", "support-export"]
+    );
+    assert_eq!(query.confidence_tier.as_deref(), Some("high"));
+    assert_eq!(query.fallback_reason.as_deref(), Some("safe-mode-ready"));
+}
+
+#[test]
+fn stitching_bundle_rejects_artifact_boundary_gap() {
+    let entry = sample_entry();
+    let boundaries = sample_boundary_records();
+    let artifacts = vec![ArtifactRecord::new(
+        "support-export",
+        "support_bundle",
+        "artifacts/support-export.json",
+        "hash-support",
+    )
+    .supporting_boundary("bcorr_missing")];
+
+    let err = EvidenceLedgerStitchingBundle::stitch(
+        &entry,
+        &boundaries,
+        &artifacts,
+        DecisionSemanticsAnnotations::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        LedgerError::SchemaValidationFailed {
+            reason: "support-export references missing boundary correlation key: bcorr_missing"
+                .to_string(),
+        }
+    );
 }

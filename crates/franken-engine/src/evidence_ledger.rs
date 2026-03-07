@@ -9,11 +9,12 @@
 //! expected-loss actions), Top-10 #2 (guardplane), #3 (deterministic
 //! evidence graph and replay).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::hindsight_boundary_capture::BoundaryCaptureRecord;
 use crate::security_epoch::SecurityEpoch;
 
 pub use crate::control_plane::SchemaVersion;
@@ -464,6 +465,535 @@ impl EvidenceEmitter for InMemoryLedger {
     }
 }
 
+pub const EVIDENCE_LEDGER_CONTRACT_BEAD_ID: &str = "bd-1lsy.9.11";
+pub const EVIDENCE_LEDGER_GRAPH_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-evidence-ledger-graph.v1";
+pub const DECISION_SEMANTICS_LOG_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-decision-semantics-log.v1";
+pub const ARTIFACT_LINEAGE_INDEX_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-artifact-lineage-index.v1";
+pub const EVIDENCE_QUERY_SURFACE_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-evidence-query-surface.v1";
+pub const EVIDENCE_LEDGER_STITCHING_BUNDLE_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-evidence-ledger-stitching-bundle.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DecisionSemanticsAnnotations {
+    pub confidence_tier: Option<String>,
+    pub fallback_reason: Option<String>,
+    pub regret_summary: Option<String>,
+    pub scope_limits: Vec<String>,
+    pub assumptions: BTreeMap<String, String>,
+    pub linked_boundary_correlation_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactRecord {
+    pub artifact_id: String,
+    pub artifact_kind: String,
+    pub artifact_locator: String,
+    pub artifact_hash: String,
+    pub supporting_boundary_correlation_keys: Vec<String>,
+}
+
+impl ArtifactRecord {
+    pub fn new(
+        artifact_id: impl Into<String>,
+        artifact_kind: impl Into<String>,
+        artifact_locator: impl Into<String>,
+        artifact_hash: impl Into<String>,
+    ) -> Self {
+        Self {
+            artifact_id: artifact_id.into(),
+            artifact_kind: artifact_kind.into(),
+            artifact_locator: artifact_locator.into(),
+            artifact_hash: artifact_hash.into(),
+            supporting_boundary_correlation_keys: Vec::new(),
+        }
+    }
+
+    pub fn supporting_boundary(mut self, correlation_key: impl Into<String>) -> Self {
+        self.supporting_boundary_correlation_keys
+            .push(correlation_key.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceGraphNodeKind {
+    BoundaryCapture,
+    DecisionEntry,
+    Artifact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceGraphEdgeKind {
+    BoundaryInformsDecision,
+    DecisionProducesArtifact,
+    BoundarySupportsArtifact,
+}
+
+impl EvidenceGraphEdgeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::BoundaryInformsDecision => "boundary_informs_decision",
+            Self::DecisionProducesArtifact => "decision_produces_artifact",
+            Self::BoundarySupportsArtifact => "boundary_supports_artifact",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceGraphNode {
+    pub node_id: String,
+    pub node_kind: EvidenceGraphNodeKind,
+    pub label: String,
+    pub trace_id: String,
+    pub decision_id: Option<String>,
+    pub policy_id: Option<String>,
+    pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceGraphEdge {
+    pub edge_id: String,
+    pub edge_kind: EvidenceGraphEdgeKind,
+    pub from_node_id: String,
+    pub to_node_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceLedgerGraph {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub nodes: Vec<EvidenceGraphNode>,
+    pub edges: Vec<EvidenceGraphEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionSemanticsRecord {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub evidence_entry_id: String,
+    pub evidence_hash: String,
+    pub decision_type: DecisionType,
+    pub chosen_action: String,
+    pub expected_loss_millionths: i64,
+    pub filtered_candidates: Vec<String>,
+    pub active_constraints: Vec<String>,
+    pub witness_ids: Vec<String>,
+    pub boundary_correlation_keys: Vec<String>,
+    pub confidence_tier: Option<String>,
+    pub fallback_reason: Option<String>,
+    pub regret_summary: Option<String>,
+    pub scope_limits: Vec<String>,
+    pub assumptions: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactLineageRecord {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub artifact_id: String,
+    pub artifact_kind: String,
+    pub artifact_locator: String,
+    pub artifact_hash: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub evidence_entry_id: String,
+    pub boundary_correlation_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceQueryRecord {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub evidence_entry_id: String,
+    pub chosen_action: String,
+    pub boundary_correlation_keys: Vec<String>,
+    pub artifact_ids: Vec<String>,
+    pub witness_ids: Vec<String>,
+    pub confidence_tier: Option<String>,
+    pub fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceQuerySurfaceSnapshot {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub decisions: Vec<EvidenceQueryRecord>,
+}
+
+impl EvidenceQuerySurfaceSnapshot {
+    pub fn by_decision(&self, decision_id: &str) -> Option<&EvidenceQueryRecord> {
+        self.decisions
+            .iter()
+            .find(|record| record.decision_id == decision_id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceLedgerStitchingBundle {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub evidence_ledger_graph: EvidenceLedgerGraph,
+    pub decision_semantics_log: Vec<DecisionSemanticsRecord>,
+    pub artifact_lineage_index: Vec<ArtifactLineageRecord>,
+    pub evidence_query_surface_snapshot: EvidenceQuerySurfaceSnapshot,
+}
+
+impl EvidenceLedgerStitchingBundle {
+    pub fn stitch(
+        entry: &EvidenceEntry,
+        boundary_records: &[BoundaryCaptureRecord],
+        artifacts: &[ArtifactRecord],
+        annotations: DecisionSemanticsAnnotations,
+    ) -> Result<Self, LedgerError> {
+        let sorted_boundaries = normalize_boundary_records(entry, boundary_records)?;
+        let linked_boundary_correlation_keys = resolve_boundary_links(
+            &sorted_boundaries,
+            &annotations.linked_boundary_correlation_keys,
+            "decision semantics",
+        )?;
+        let sorted_artifacts = normalize_artifacts(artifacts)?;
+        let decision_node_id = build_decision_node_id(entry);
+
+        let mut nodes = Vec::with_capacity(1 + sorted_boundaries.len() + sorted_artifacts.len());
+        nodes.push(EvidenceGraphNode {
+            node_id: decision_node_id.clone(),
+            node_kind: EvidenceGraphNodeKind::DecisionEntry,
+            label: entry.chosen_action.action_name.clone(),
+            trace_id: entry.trace_id.clone(),
+            decision_id: Some(entry.decision_id.clone()),
+            policy_id: Some(entry.policy_id.clone()),
+            metadata: decision_metadata(entry),
+        });
+
+        let mut edges = Vec::new();
+        let mut boundary_node_ids = BTreeMap::new();
+        for boundary in &sorted_boundaries {
+            let node_id = build_boundary_node_id(boundary);
+            boundary_node_ids.insert(boundary.correlation_key.clone(), node_id.clone());
+            nodes.push(EvidenceGraphNode {
+                node_id: node_id.clone(),
+                node_kind: EvidenceGraphNodeKind::BoundaryCapture,
+                label: boundary.nondeterminism_tag.clone(),
+                trace_id: boundary.trace_id.clone(),
+                decision_id: Some(boundary.decision_id.clone()),
+                policy_id: Some(boundary.policy_id.clone()),
+                metadata: boundary_metadata(boundary),
+            });
+            if linked_boundary_correlation_keys.contains(&boundary.correlation_key) {
+                edges.push(build_edge(
+                    EvidenceGraphEdgeKind::BoundaryInformsDecision,
+                    node_id,
+                    decision_node_id.clone(),
+                ));
+            }
+        }
+
+        let mut artifact_lineage_index = Vec::with_capacity(sorted_artifacts.len());
+        let mut artifact_ids = Vec::with_capacity(sorted_artifacts.len());
+        for artifact in &sorted_artifacts {
+            let artifact_links = resolve_boundary_links(
+                &sorted_boundaries,
+                &artifact.supporting_boundary_correlation_keys,
+                artifact.artifact_id.as_str(),
+            )?;
+            let artifact_node_id = build_artifact_node_id(entry, artifact);
+            nodes.push(EvidenceGraphNode {
+                node_id: artifact_node_id.clone(),
+                node_kind: EvidenceGraphNodeKind::Artifact,
+                label: artifact.artifact_kind.clone(),
+                trace_id: entry.trace_id.clone(),
+                decision_id: Some(entry.decision_id.clone()),
+                policy_id: Some(entry.policy_id.clone()),
+                metadata: artifact_metadata(artifact),
+            });
+            edges.push(build_edge(
+                EvidenceGraphEdgeKind::DecisionProducesArtifact,
+                decision_node_id.clone(),
+                artifact_node_id.clone(),
+            ));
+            for correlation_key in &artifact_links {
+                let boundary_node_id = boundary_node_ids.get(correlation_key).ok_or_else(|| {
+                    LedgerError::SchemaValidationFailed {
+                        reason: format!(
+                            "artifact {} references missing boundary correlation key: {}",
+                            artifact.artifact_id, correlation_key
+                        ),
+                    }
+                })?;
+                edges.push(build_edge(
+                    EvidenceGraphEdgeKind::BoundarySupportsArtifact,
+                    boundary_node_id.clone(),
+                    artifact_node_id.clone(),
+                ));
+            }
+            artifact_ids.push(artifact.artifact_id.clone());
+            artifact_lineage_index.push(ArtifactLineageRecord {
+                schema_version: ARTIFACT_LINEAGE_INDEX_SCHEMA_VERSION.to_string(),
+                bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+                artifact_id: artifact.artifact_id.clone(),
+                artifact_kind: artifact.artifact_kind.clone(),
+                artifact_locator: artifact.artifact_locator.clone(),
+                artifact_hash: artifact.artifact_hash.clone(),
+                trace_id: entry.trace_id.clone(),
+                decision_id: entry.decision_id.clone(),
+                policy_id: entry.policy_id.clone(),
+                evidence_entry_id: entry.entry_id.clone(),
+                boundary_correlation_keys: artifact_links,
+            });
+        }
+
+        let decision_semantics = DecisionSemanticsRecord {
+            schema_version: DECISION_SEMANTICS_LOG_SCHEMA_VERSION.to_string(),
+            bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+            trace_id: entry.trace_id.clone(),
+            decision_id: entry.decision_id.clone(),
+            policy_id: entry.policy_id.clone(),
+            evidence_entry_id: entry.entry_id.clone(),
+            evidence_hash: entry.evidence_hash.clone(),
+            decision_type: entry.decision_type,
+            chosen_action: entry.chosen_action.action_name.clone(),
+            expected_loss_millionths: entry.chosen_action.expected_loss_millionths,
+            filtered_candidates: entry
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.filtered)
+                .map(|candidate| candidate.action_name.clone())
+                .collect(),
+            active_constraints: entry
+                .constraints
+                .iter()
+                .filter(|constraint| constraint.active)
+                .map(|constraint| constraint.constraint_id.clone())
+                .collect(),
+            witness_ids: entry
+                .witnesses
+                .iter()
+                .map(|witness| witness.witness_id.clone())
+                .collect(),
+            boundary_correlation_keys: linked_boundary_correlation_keys.clone(),
+            confidence_tier: annotations.confidence_tier.clone(),
+            fallback_reason: annotations.fallback_reason.clone(),
+            regret_summary: annotations.regret_summary.clone(),
+            scope_limits: annotations.scope_limits.clone(),
+            assumptions: annotations.assumptions.clone(),
+        };
+
+        let query_surface = EvidenceQuerySurfaceSnapshot {
+            schema_version: EVIDENCE_QUERY_SURFACE_SCHEMA_VERSION.to_string(),
+            bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+            decisions: vec![EvidenceQueryRecord {
+                trace_id: entry.trace_id.clone(),
+                decision_id: entry.decision_id.clone(),
+                policy_id: entry.policy_id.clone(),
+                evidence_entry_id: entry.entry_id.clone(),
+                chosen_action: entry.chosen_action.action_name.clone(),
+                boundary_correlation_keys: linked_boundary_correlation_keys,
+                artifact_ids,
+                witness_ids: entry
+                    .witnesses
+                    .iter()
+                    .map(|witness| witness.witness_id.clone())
+                    .collect(),
+                confidence_tier: annotations.confidence_tier,
+                fallback_reason: annotations.fallback_reason,
+            }],
+        };
+
+        Ok(Self {
+            schema_version: EVIDENCE_LEDGER_STITCHING_BUNDLE_SCHEMA_VERSION.to_string(),
+            bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+            evidence_ledger_graph: EvidenceLedgerGraph {
+                schema_version: EVIDENCE_LEDGER_GRAPH_SCHEMA_VERSION.to_string(),
+                bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+                trace_id: entry.trace_id.clone(),
+                decision_id: entry.decision_id.clone(),
+                policy_id: entry.policy_id.clone(),
+                nodes,
+                edges,
+            },
+            decision_semantics_log: vec![decision_semantics],
+            artifact_lineage_index,
+            evidence_query_surface_snapshot: query_surface,
+        })
+    }
+}
+
+fn normalize_boundary_records(
+    entry: &EvidenceEntry,
+    boundary_records: &[BoundaryCaptureRecord],
+) -> Result<Vec<BoundaryCaptureRecord>, LedgerError> {
+    let mut sorted = boundary_records.to_vec();
+    sorted.sort_by(|left, right| {
+        left.sequence
+            .cmp(&right.sequence)
+            .then_with(|| left.correlation_key.cmp(&right.correlation_key))
+    });
+    for boundary in &sorted {
+        if boundary.trace_id != entry.trace_id
+            || boundary.decision_id != entry.decision_id
+            || boundary.policy_id != entry.policy_id
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "boundary {} does not match decision identity ({}/{}/{})",
+                    boundary.correlation_key, entry.trace_id, entry.decision_id, entry.policy_id
+                ),
+            });
+        }
+    }
+    Ok(sorted)
+}
+
+fn normalize_artifacts(artifacts: &[ArtifactRecord]) -> Result<Vec<ArtifactRecord>, LedgerError> {
+    let mut seen = BTreeSet::new();
+    let mut sorted = artifacts.to_vec();
+    sorted.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.artifact_kind.cmp(&right.artifact_kind))
+            .then_with(|| left.artifact_locator.cmp(&right.artifact_locator))
+    });
+    for artifact in &sorted {
+        if artifact.artifact_id.is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: "artifact id must not be empty".to_string(),
+            });
+        }
+        if artifact.artifact_kind.is_empty() {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!("artifact {} has empty artifact_kind", artifact.artifact_id),
+            });
+        }
+        if !seen.insert(artifact.artifact_id.clone()) {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!("duplicate artifact id: {}", artifact.artifact_id),
+            });
+        }
+    }
+    Ok(sorted)
+}
+
+fn resolve_boundary_links(
+    boundary_records: &[BoundaryCaptureRecord],
+    requested: &[String],
+    label: &str,
+) -> Result<Vec<String>, LedgerError> {
+    if requested.is_empty() {
+        return Ok(boundary_records
+            .iter()
+            .map(|boundary| boundary.correlation_key.clone())
+            .collect());
+    }
+
+    let available = boundary_records
+        .iter()
+        .map(|boundary| boundary.correlation_key.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut resolved = BTreeSet::new();
+    for correlation_key in requested {
+        if !available.contains(correlation_key.as_str()) {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "{label} references missing boundary correlation key: {correlation_key}"
+                ),
+            });
+        }
+        resolved.insert(correlation_key.clone());
+    }
+    Ok(resolved.into_iter().collect())
+}
+
+fn decision_metadata(entry: &EvidenceEntry) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::new();
+    metadata.insert("decision_type".to_string(), entry.decision_type.to_string());
+    metadata.insert(
+        "chosen_action".to_string(),
+        entry.chosen_action.action_name.clone(),
+    );
+    metadata.insert("evidence_entry_id".to_string(), entry.entry_id.clone());
+    metadata.insert("evidence_hash".to_string(), entry.evidence_hash.clone());
+    metadata
+}
+
+fn boundary_metadata(boundary: &BoundaryCaptureRecord) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "boundary_class".to_string(),
+        boundary.boundary_class.to_string(),
+    );
+    metadata.insert(
+        "correlation_key".to_string(),
+        boundary.correlation_key.clone(),
+    );
+    metadata.insert("component".to_string(), boundary.component.clone());
+    metadata.insert("sequence".to_string(), boundary.sequence.to_string());
+    metadata
+}
+
+fn artifact_metadata(artifact: &ArtifactRecord) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::new();
+    metadata.insert("artifact_id".to_string(), artifact.artifact_id.clone());
+    metadata.insert("artifact_kind".to_string(), artifact.artifact_kind.clone());
+    metadata.insert(
+        "artifact_locator".to_string(),
+        artifact.artifact_locator.clone(),
+    );
+    metadata.insert("artifact_hash".to_string(), artifact.artifact_hash.clone());
+    metadata
+}
+
+fn build_decision_node_id(entry: &EvidenceEntry) -> String {
+    format!("dnode-{}", deterministic_hash(entry.entry_id.as_str()))
+}
+
+fn build_boundary_node_id(boundary: &BoundaryCaptureRecord) -> String {
+    format!(
+        "bnode-{}",
+        deterministic_hash(boundary.correlation_key.as_str())
+    )
+}
+
+fn build_artifact_node_id(entry: &EvidenceEntry, artifact: &ArtifactRecord) -> String {
+    format!(
+        "anode-{}",
+        deterministic_hash(
+            format!(
+                "{}:{}:{}:{}",
+                entry.entry_id, artifact.artifact_id, artifact.artifact_kind, artifact.artifact_hash
+            )
+            .as_str(),
+        )
+    )
+}
+
+fn build_edge(
+    edge_kind: EvidenceGraphEdgeKind,
+    from_node_id: String,
+    to_node_id: String,
+) -> EvidenceGraphEdge {
+    let seed = format!("{}:{from_node_id}:{to_node_id}", edge_kind.as_str());
+    EvidenceGraphEdge {
+        edge_id: format!("edge-{}", deterministic_hash(seed.as_str())),
+        edge_kind,
+        from_node_id,
+        to_node_id,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -471,6 +1001,7 @@ impl EvidenceEmitter for InMemoryLedger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hindsight_boundary_capture::{BoundaryCaptureSession, BoundaryContext};
 
     fn sample_entry() -> EvidenceEntry {
         EvidenceEntryBuilder::new(
@@ -506,6 +1037,36 @@ mod tests {
         .meta("extension_id", "ext-abc")
         .build()
         .expect("build sample entry")
+    }
+
+    fn sample_boundary_records() -> Vec<BoundaryCaptureRecord> {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new(
+            "trace-001",
+            "decision-001",
+            "policy-v1",
+            "orchestrator",
+            64,
+        );
+        let controller_override = session
+            .capture_controller_override(
+                &context,
+                "risk-controller",
+                "forced-sandbox",
+                "digest-override",
+                None,
+            )
+            .expect("capture controller override");
+        let external_policy = session
+            .capture_external_policy_read(
+                &context,
+                "extension_policy",
+                "digest-policy",
+                7,
+                None,
+            )
+            .expect("capture external policy read");
+        vec![controller_override, external_policy]
     }
 
     // -- Schema version --
@@ -1849,5 +2410,172 @@ mod tests {
     fn ledger_by_epoch_empty_result() {
         let ledger = InMemoryLedger::new();
         assert!(ledger.by_epoch(SecurityEpoch::from_raw(1)).is_empty());
+    }
+
+    #[test]
+    fn stitching_bundle_links_boundaries_decision_and_artifacts() {
+        let entry = sample_entry();
+        let boundaries = sample_boundary_records();
+        let artifacts = vec![
+            ArtifactRecord::new(
+                "release-gate",
+                "release_gate_report",
+                "artifacts/release-gate.json",
+                "hash-release-gate",
+            ),
+            ArtifactRecord::new(
+                "support-export",
+                "support_bundle",
+                "artifacts/support-export.json",
+                "hash-support-export",
+            )
+            .supporting_boundary(boundaries[0].correlation_key.clone()),
+        ];
+        let annotations = DecisionSemanticsAnnotations {
+            confidence_tier: Some("high".to_string()),
+            fallback_reason: Some("safe_mode_guard".to_string()),
+            regret_summary: Some("bounded_regret<=1000".to_string()),
+            scope_limits: vec!["extension_id=ext-abc".to_string()],
+            assumptions: BTreeMap::from([(
+                "policy_snapshot".to_string(),
+                "signed".to_string(),
+            )]),
+            linked_boundary_correlation_keys: boundaries
+                .iter()
+                .map(|boundary| boundary.correlation_key.clone())
+                .collect(),
+        };
+
+        let bundle =
+            EvidenceLedgerStitchingBundle::stitch(&entry, &boundaries, &artifacts, annotations)
+                .expect("stitching bundle");
+
+        assert_eq!(bundle.evidence_ledger_graph.nodes.len(), 5);
+        assert_eq!(
+            bundle
+                .evidence_ledger_graph
+                .edges
+                .iter()
+                .filter(|edge| edge.edge_kind == EvidenceGraphEdgeKind::BoundaryInformsDecision)
+                .count(),
+            2
+        );
+        assert_eq!(
+            bundle
+                .evidence_ledger_graph
+                .edges
+                .iter()
+                .filter(|edge| edge.edge_kind == EvidenceGraphEdgeKind::DecisionProducesArtifact)
+                .count(),
+            2
+        );
+        assert_eq!(
+            bundle
+                .evidence_ledger_graph
+                .edges
+                .iter()
+                .filter(|edge| edge.edge_kind == EvidenceGraphEdgeKind::BoundarySupportsArtifact)
+                .count(),
+            3
+        );
+        assert_eq!(bundle.decision_semantics_log.len(), 1);
+        assert_eq!(
+            bundle.decision_semantics_log[0].confidence_tier.as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            bundle.decision_semantics_log[0].boundary_correlation_keys.len(),
+            2
+        );
+        let query = bundle
+            .evidence_query_surface_snapshot
+            .by_decision("decision-001")
+            .expect("decision query record");
+        assert_eq!(query.artifact_ids, vec!["release-gate", "support-export"]);
+        assert_eq!(query.boundary_correlation_keys.len(), 2);
+        assert_eq!(query.fallback_reason.as_deref(), Some("safe_mode_guard"));
+    }
+
+    #[test]
+    fn stitching_bundle_is_deterministic_for_same_inputs() {
+        let entry = sample_entry();
+        let boundaries = sample_boundary_records();
+        let artifacts = vec![ArtifactRecord::new(
+            "benchmark-proof",
+            "benchmark_manifest",
+            "artifacts/benchmark-proof.json",
+            "hash-benchmark-proof",
+        )];
+        let annotations = DecisionSemanticsAnnotations {
+            confidence_tier: Some("medium".to_string()),
+            ..DecisionSemanticsAnnotations::default()
+        };
+
+        let left = EvidenceLedgerStitchingBundle::stitch(
+            &entry,
+            &boundaries,
+            &artifacts,
+            annotations.clone(),
+        )
+        .expect("left bundle");
+        let right =
+            EvidenceLedgerStitchingBundle::stitch(&entry, &boundaries, &artifacts, annotations)
+                .expect("right bundle");
+
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn stitching_bundle_rejects_missing_boundary_link() {
+        let entry = sample_entry();
+        let boundaries = sample_boundary_records();
+        let err = EvidenceLedgerStitchingBundle::stitch(
+            &entry,
+            &boundaries,
+            &[],
+            DecisionSemanticsAnnotations {
+                linked_boundary_correlation_keys: vec!["bcorr_missing".to_string()],
+                ..DecisionSemanticsAnnotations::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            LedgerError::SchemaValidationFailed {
+                reason: "decision semantics references missing boundary correlation key: bcorr_missing"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn stitching_bundle_rejects_boundary_from_other_decision() {
+        let entry = sample_entry();
+        let mut session = BoundaryCaptureSession::default_v1();
+        let mismatched_context = BoundaryContext::new(
+            "trace-other",
+            "decision-other",
+            "policy-v1",
+            "orchestrator",
+            10,
+        );
+        let mismatched = session
+            .capture_clock_read(&mismatched_context, "mono", "monotonic", 99, None)
+            .expect("capture clock read");
+
+        let err = EvidenceLedgerStitchingBundle::stitch(
+            &entry,
+            &[mismatched],
+            &[],
+            DecisionSemanticsAnnotations::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            LedgerError::SchemaValidationFailed { reason }
+            if reason.contains("does not match decision identity")
+        ));
     }
 }

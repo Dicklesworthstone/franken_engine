@@ -11,15 +11,15 @@
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::ast::{
-    ArrowBody, BinaryOperator, BindingPattern, BlockStatement, BreakStatement, CatchClause,
-    ContinueStatement, DoWhileStatement, ExportDeclaration, ExportKind, Expression,
+    ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
+    CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration, ExportKind, Expression,
     ExpressionStatement, ForStatement, FunctionDeclaration, FunctionParam, IfStatement,
     ImportDeclaration, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan, Statement,
     SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator,
     VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
 };
 use frankenengine_engine::ir_contract::{
-    BindingKind, Ir0Module, Ir1Op, Ir3Instruction, IrLevel, ScopeKind,
+    BindingKind, Ir0Module, Ir1Op, Ir1PropertyKey, Ir3Instruction, IrLevel, ScopeKind,
 };
 use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineError, LoweringPipelineOutput, lower_ir0_to_ir1,
@@ -1781,12 +1781,77 @@ fn lowering_member_expression() {
     let output = run_full(&ir0);
     assert_eq!(output.witnesses.len(), 3);
     let ir1 = lower_ir0_to_ir1(&ir0).unwrap();
-    let has_get_prop = ir1
-        .module
-        .ops
-        .iter()
-        .any(|op| matches!(op, Ir1Op::GetProperty { key } if key == "prop"));
+    let has_get_prop = ir1.module.ops.iter().any(|op| {
+        matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "prop"
+        )
+    });
     assert!(has_get_prop, "member expression should produce GetProperty");
+}
+
+#[test]
+fn lowering_computed_member_expression() {
+    let ir0 = make_ir0(
+        ParseGoal::Script,
+        vec![make_expr_stmt(Expression::Member {
+            object: Box::new(Expression::Identifier("obj".to_string())),
+            property: Box::new(Expression::Identifier("propKey".to_string())),
+            computed: true,
+        })],
+    );
+    let output = run_full(&ir0);
+    assert_eq!(output.witnesses.len(), 3);
+    let ir1 = lower_ir0_to_ir1(&ir0).unwrap();
+    let has_dynamic_get_prop = ir1.module.ops.iter().any(|op| {
+        matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )
+    });
+    assert!(
+        has_dynamic_get_prop,
+        "computed member expression should preserve a dynamic property key"
+    );
+}
+
+#[test]
+fn lowering_computed_member_assignment() {
+    let ir0 = make_ir0(
+        ParseGoal::Script,
+        vec![make_expr_stmt(Expression::Assignment {
+            operator: AssignmentOperator::Assign,
+            left: Box::new(Expression::Member {
+                object: Box::new(Expression::Identifier("obj".to_string())),
+                property: Box::new(Expression::Identifier("propKey".to_string())),
+                computed: true,
+            }),
+            right: Box::new(Expression::NumericLiteral(7)),
+        })],
+    );
+    let output = run_full(&ir0);
+    assert_eq!(output.witnesses.len(), 3);
+    let ir1 = lower_ir0_to_ir1(&ir0).unwrap();
+    let has_dynamic_set_prop = ir1.module.ops.iter().any(|op| {
+        matches!(
+            op,
+            Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )
+    });
+    assert!(
+        has_dynamic_set_prop,
+        "computed member assignment should preserve a dynamic property key"
+    );
+    assert!(
+        !ir1.module.ops.iter().any(|op| matches!(op, Ir1Op::Nop)),
+        "computed member assignment should no longer degrade to a Nop placeholder"
+    );
 }
 
 #[test]

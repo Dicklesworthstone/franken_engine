@@ -331,6 +331,36 @@ impl ScopeKind {
     }
 }
 
+/// IR1 property-key operand. Static keys can be carried directly, while
+/// computed members preserve the key on the value stack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Ir1PropertyKey {
+    Static(String),
+    Dynamic,
+}
+
+impl Ir1PropertyKey {
+    pub fn canonical_value(&self) -> CanonicalValue {
+        let mut map = BTreeMap::new();
+        match self {
+            Self::Static(key) => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("static".to_string()),
+                );
+                map.insert("value".to_string(), CanonicalValue::String(key.clone()));
+            }
+            Self::Dynamic => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("dynamic".to_string()),
+                );
+            }
+        }
+        CanonicalValue::Map(map)
+    }
+}
+
 /// IR1 operation — semantically resolved, position-independent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1Op {
@@ -367,10 +397,12 @@ pub enum Ir1Op {
     Jump { label_id: u32 },
     /// Jump if top-of-stack is falsy.
     JumpIfFalsy { label_id: u32 },
-    /// Object property read: key on top-of-stack, object below.
-    GetProperty { key: String },
-    /// Object property write: value on top, key below, object below that.
-    SetProperty { key: String },
+    /// Object property read. Dynamic keys remain on top-of-stack; static keys
+    /// are carried directly in the op.
+    GetProperty { key: Ir1PropertyKey },
+    /// Object property write. Value is always on top-of-stack; dynamic keys sit
+    /// below it, while static keys are carried directly in the op.
+    SetProperty { key: Ir1PropertyKey },
     /// Create a new array from top N elements.
     NewArray { count: u32 },
     /// Create a new object from top N key-value pairs.
@@ -529,14 +561,14 @@ impl Ir1Op {
                     "op".to_string(),
                     CanonicalValue::String("get_property".to_string()),
                 );
-                map.insert("key".to_string(), CanonicalValue::String(key.clone()));
+                map.insert("key".to_string(), key.canonical_value());
             }
             Self::SetProperty { key } => {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("set_property".to_string()),
                 );
-                map.insert("key".to_string(), CanonicalValue::String(key.clone()));
+                map.insert("key".to_string(), key.canonical_value());
             }
             Self::NewArray { count } => {
                 map.insert(

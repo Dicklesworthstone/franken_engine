@@ -16,9 +16,9 @@ use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
     BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module, Ir1Literal,
-    Ir1Module, Ir1Op, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError,
-    IrLevel, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source,
-    verify_ir3_specialization,
+    Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module,
+    IrError, IrLevel, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
+    verify_ir1_source, verify_ir3_specialization,
 };
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
@@ -1423,7 +1423,7 @@ pub fn lower_ir2_to_ir3(
                 .required_capability
                 .clone()
                 .unwrap_or_else(|| CapabilityTag("hostcall.invoke".to_string()));
-            
+
             // Reconstruct logic for HostCall intercept
             // If it's a Call, we should pop args. If not, we just pop 1 as a fallback.
             let (start_reg, arg_count) = if let Ir1Op::Call { arg_count } = &op.inner {
@@ -1437,13 +1437,17 @@ pub fn lower_ir2_to_ir3(
                 let start = register_cursor;
                 for arg_reg in args {
                     let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src: arg_reg });
+                    ir3.instructions
+                        .push(Ir3Instruction::Move { dst, src: arg_reg });
                 }
                 (start, count)
             } else {
                 let hostcall_arg = value_stack.pop().unwrap_or(0);
                 let start = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::Move { dst: start, src: hostcall_arg });
+                ir3.instructions.push(Ir3Instruction::Move {
+                    dst: start,
+                    src: hostcall_arg,
+                });
                 (start, 1)
             };
 
@@ -1505,13 +1509,14 @@ pub fn lower_ir2_to_ir3(
                 }
                 args.reverse();
                 let callee = value_stack.pop().unwrap_or(0);
-                
+
                 let start_reg = register_cursor;
                 for arg_reg in args {
                     let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src: arg_reg });
+                    ir3.instructions
+                        .push(Ir3Instruction::Move { dst, src: arg_reg });
                 }
-                
+
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::Call {
                     callee,
@@ -1557,7 +1562,10 @@ pub fn lower_ir2_to_ir3(
                     dst: register,
                     src: register,
                 });
-                if matches!(op.inner, Ir1Op::Nop | Ir1Op::BeginTry { .. } | Ir1Op::EndTry) {
+                if matches!(
+                    op.inner,
+                    Ir1Op::Nop | Ir1Op::BeginTry { .. } | Ir1Op::EndTry
+                ) {
                     value_stack.push(register);
                 }
             }
@@ -1570,9 +1578,7 @@ pub fn lower_ir2_to_ir3(
                     BinaryOperator::Subtract => Ir3Instruction::Sub { dst, lhs, rhs },
                     BinaryOperator::Multiply => Ir3Instruction::Mul { dst, lhs, rhs },
                     BinaryOperator::Divide => Ir3Instruction::Div { dst, lhs, rhs },
-                    _ => {
-                        Ir3Instruction::Add { dst, lhs, rhs }
-                    }
+                    _ => Ir3Instruction::Add { dst, lhs, rhs },
                 };
                 ir3.instructions.push(instr);
                 value_stack.push(dst);
@@ -1626,13 +1632,23 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(cond);
             }
             Ir1Op::GetProperty { key } => {
-                let obj = value_stack.pop().unwrap_or(0);
-                let key_reg = alloc_register(&mut register_cursor);
-                let pool_index = push_constant(&mut ir3.constant_pool, key);
-                ir3.instructions.push(Ir3Instruction::LoadStr {
-                    dst: key_reg,
-                    pool_index,
-                });
+                let (obj, key_reg) = match key {
+                    Ir1PropertyKey::Static(key) => {
+                        let obj = value_stack.pop().unwrap_or(0);
+                        let key_reg = alloc_register(&mut register_cursor);
+                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        ir3.instructions.push(Ir3Instruction::LoadStr {
+                            dst: key_reg,
+                            pool_index,
+                        });
+                        (obj, key_reg)
+                    }
+                    Ir1PropertyKey::Dynamic => {
+                        let key_reg = value_stack.pop().unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
+                        (obj, key_reg)
+                    }
+                };
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::GetProperty {
                     obj,
@@ -1643,13 +1659,23 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::SetProperty { key } => {
                 let val = value_stack.pop().unwrap_or(0);
-                let obj = value_stack.pop().unwrap_or(0);
-                let key_reg = alloc_register(&mut register_cursor);
-                let pool_index = push_constant(&mut ir3.constant_pool, key);
-                ir3.instructions.push(Ir3Instruction::LoadStr {
-                    dst: key_reg,
-                    pool_index,
-                });
+                let (obj, key_reg) = match key {
+                    Ir1PropertyKey::Static(key) => {
+                        let obj = value_stack.pop().unwrap_or(0);
+                        let key_reg = alloc_register(&mut register_cursor);
+                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        ir3.instructions.push(Ir3Instruction::LoadStr {
+                            dst: key_reg,
+                            pool_index,
+                        });
+                        (obj, key_reg)
+                    }
+                    Ir1PropertyKey::Dynamic => {
+                        let key_reg = value_stack.pop().unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
+                        (obj, key_reg)
+                    }
+                };
                 ir3.instructions.push(Ir3Instruction::SetProperty {
                     obj,
                     key: key_reg,
@@ -1663,14 +1689,14 @@ pub fn lower_ir2_to_ir3(
                     elements.push(value_stack.pop().unwrap_or(0));
                 }
                 elements.reverse();
-                
+
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::NewArray { dst });
-                
+
                 for (i, val_reg) in elements.into_iter().enumerate() {
                     let key_str = i.to_string();
                     let key_reg = alloc_register(&mut register_cursor);
-                    let pool_index = push_constant(&mut ir3.constant_pool, key_str);
+                    let pool_index = push_constant(&mut ir3.constant_pool, &key_str);
                     ir3.instructions.push(Ir3Instruction::LoadStr {
                         dst: key_reg,
                         pool_index,
@@ -1691,10 +1717,10 @@ pub fn lower_ir2_to_ir3(
                     properties.push((key, val));
                 }
                 properties.reverse();
-                
+
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::NewObject { dst });
-                
+
                 for (key_reg, val_reg) in properties {
                     ir3.instructions.push(Ir3Instruction::SetProperty {
                         obj: dst,
@@ -2303,9 +2329,24 @@ fn lower_expression_to_ir1(
                     binding_id,
                     operator: *operator,
                 });
-            } else if let Expression::Member { object, property, computed: _ } = left.as_ref() {
+            } else if let Expression::Member {
+                object,
+                property,
+                computed,
+            } = left.as_ref()
+            {
                 lower_expression_to_ir1(
                     object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
                     ops,
                     bindings,
                     binding_lookup,
@@ -2322,11 +2363,6 @@ fn lower_expression_to_ir1(
                     root_scope_id,
                     label_counter,
                 )?;
-                let key = match property.as_ref() {
-                    Expression::Identifier(name) => name.clone(),
-                    Expression::StringLiteral(s) => s.clone(),
-                    _ => "unknown".to_string(),
-                };
                 ops.push(Ir1Op::SetProperty { key });
             } else {
                 lower_expression_to_ir1(
@@ -2414,7 +2450,7 @@ fn lower_expression_to_ir1(
         Expression::Member {
             object,
             property,
-            computed: _,
+            computed,
         } => {
             lower_expression_to_ir1(
                 object,
@@ -2425,12 +2461,16 @@ fn lower_expression_to_ir1(
                 root_scope_id,
                 label_counter,
             )?;
-            // Extract property key as string.
-            let key = match property.as_ref() {
-                Expression::Identifier(name) => name.clone(),
-                Expression::StringLiteral(s) => s.clone(),
-                _ => "unknown".to_string(),
-            };
+            let key = lower_member_property_key_to_ir1(
+                property,
+                *computed,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
             ops.push(Ir1Op::GetProperty { key });
         }
         Expression::OptionalCall { .. } | Expression::OptionalMember { .. } => {
@@ -2548,6 +2588,39 @@ fn lower_expression_to_ir1(
         }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_member_property_key_to_ir1(
+    property: &Expression,
+    computed: bool,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<Ir1PropertyKey, LoweringPipelineError> {
+    if computed {
+        lower_expression_to_ir1(
+            property,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            label_counter,
+        )?;
+        return Ok(Ir1PropertyKey::Dynamic);
+    }
+
+    let key = match property {
+        Expression::Identifier(name) => name.clone(),
+        Expression::StringLiteral(value) => value.clone(),
+        Expression::NumericLiteral(value) => value.to_string(),
+        _ => "unknown".to_string(),
+    };
+    Ok(Ir1PropertyKey::Static(key))
 }
 
 fn classify_ir1_op(
@@ -4970,7 +5043,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_assignment_to_member_emits_nop() {
+    fn lower_assignment_to_member_emits_set_property() {
         let ir0 = expr_ir0(Expression::Assignment {
             operator: AssignmentOperator::Assign,
             left: Box::new(Expression::Member {
@@ -4981,7 +5054,12 @@ mod tests {
             right: Box::new(Expression::NumericLiteral(1)),
         });
         let result = lower_ir0_to_ir1(&ir0).expect("member assignment should lower");
-        assert!(result.module.ops.iter().any(|op| matches!(op, Ir1Op::Nop)));
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "prop"
+        )));
     }
 
     #[test]
@@ -5052,7 +5130,25 @@ mod tests {
         let result = lower_ir0_to_ir1(&ir0).expect("member should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
             op,
-            Ir1Op::GetProperty { key } if key == "key"
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "key"
+        )));
+    }
+
+    #[test]
+    fn lower_computed_member_expression_uses_dynamic_key() {
+        let ir0 = expr_ir0(Expression::Member {
+            object: Box::new(Expression::Identifier("obj".into())),
+            property: Box::new(Expression::Identifier("key".into())),
+            computed: true,
+        });
+        let result = lower_ir0_to_ir1(&ir0).expect("computed member should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
         )));
     }
 
@@ -5228,18 +5324,24 @@ mod tests {
     }
 
     #[test]
-    fn lower_member_assignment_currently_emits_nop_placeholder() {
+    fn lower_computed_member_assignment_uses_dynamic_key_without_nop() {
         let ir0 = expr_ir0(Expression::Assignment {
             operator: AssignmentOperator::Assign,
             left: Box::new(Expression::Member {
                 object: Box::new(Expression::Identifier("obj".into())),
                 property: Box::new(Expression::Identifier("field".into())),
-                computed: false,
+                computed: true,
             }),
             right: Box::new(Expression::NumericLiteral(7)),
         });
-        let result = lower_ir0_to_ir1(&ir0).expect("member assignment currently lowers");
-        assert!(result.module.ops.iter().any(|op| matches!(op, Ir1Op::Nop)));
+        let result = lower_ir0_to_ir1(&ir0).expect("computed member assignment should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Dynamic
+            }
+        )));
+        assert!(!result.module.ops.iter().any(|op| matches!(op, Ir1Op::Nop)));
     }
 
     #[test]
@@ -6393,7 +6495,7 @@ mod tests {
     #[test]
     fn classify_ir1_op_get_property_is_read_effect() {
         let (boundary, cap, flow) = classify_ir1_op(&Ir1Op::GetProperty {
-            key: "length".to_string(),
+            key: Ir1PropertyKey::Static("length".to_string()),
         });
         assert_eq!(boundary, EffectBoundary::ReadEffect);
         assert!(cap.is_none());
@@ -6403,7 +6505,7 @@ mod tests {
     #[test]
     fn classify_ir1_op_set_property_is_read_effect() {
         let (boundary, cap, flow) = classify_ir1_op(&Ir1Op::SetProperty {
-            key: "x".to_string(),
+            key: Ir1PropertyKey::Static("x".to_string()),
         });
         assert_eq!(boundary, EffectBoundary::ReadEffect);
         assert!(cap.is_none());

@@ -333,6 +333,38 @@ fn simulate_gate_events(fixture: &ContractFixture) -> Vec<GateEvent> {
         .collect()
 }
 
+fn scenario_by_id<'a>(fixture: &'a ContractFixture, scenario_id: &str) -> &'a PublicationScenario {
+    fixture
+        .publication_scenarios
+        .iter()
+        .find(|scenario| scenario.scenario_id == scenario_id)
+        .unwrap_or_else(|| panic!("missing publication scenario `{scenario_id}`"))
+}
+
+fn assert_scenario_matches_expected_verdict(fixture: &ContractFixture, scenario_id: &str) {
+    let scenario = scenario_by_id(fixture, scenario_id);
+    let actual = evaluate_publication_scenario(fixture, scenario);
+    let expected = PublicationVerdict::parse(scenario.expected_verdict.as_str());
+    assert_eq!(
+        actual, expected,
+        "unexpected publication verdict for scenario `{scenario_id}`"
+    );
+    assert!(
+        !scenario.replay_command.trim().is_empty(),
+        "scenario `{scenario_id}` must carry a replay command"
+    );
+}
+
+macro_rules! publication_scenario_test {
+    ($test_name:ident, $scenario_id:literal) => {
+        #[test]
+        fn $test_name() {
+            let fixture = load_fixture();
+            assert_scenario_matches_expected_verdict(&fixture, $scenario_id);
+        }
+    };
+}
+
 #[test]
 fn v8_supremacy_doc_has_required_sections() {
     let doc = load_doc();
@@ -549,12 +581,10 @@ fn threshold_entries_exist_for_every_family_and_use_allowed_procedures() {
 
     for threshold in &fixture.supremacy_claim_contract.family_thresholds {
         assert!(threshold.minimum_confidence_millionths >= 990_000);
-        assert!(
-            threshold
-                .allowed_procedures
-                .iter()
-                .all(|procedure| allowed.contains(procedure))
-        );
+        assert!(threshold
+            .allowed_procedures
+            .iter()
+            .all(|procedure| allowed.contains(procedure)));
         if threshold.family_id == "tail_latency" {
             assert_eq!(threshold.max_tail_regression_millionths, 0);
         }
@@ -582,12 +612,10 @@ fn published_language_contract_has_forbidden_literals_and_downgrade_rules() {
     ]);
     assert_eq!(phrase_classes, expected_classes);
 
-    assert!(
-        contract
-            .forbidden_universal_phrases
-            .iter()
-            .any(|phrase| phrase == "beats V8 across the board")
-    );
+    assert!(contract
+        .forbidden_universal_phrases
+        .iter()
+        .any(|phrase| phrase == "beats V8 across the board"));
     assert_eq!(
         contract.required_qualifier_terms,
         vec![
@@ -630,20 +658,50 @@ fn publication_policy_matches_scenario_expectations() {
         "publication scenarios must not be empty"
     );
     for scenario in &fixture.publication_scenarios {
-        let actual = evaluate_publication_scenario(&fixture, scenario);
-        let expected = PublicationVerdict::parse(scenario.expected_verdict.as_str());
-        assert_eq!(
-            actual, expected,
-            "unexpected publication verdict for scenario `{}`",
+        assert_scenario_matches_expected_verdict(&fixture, scenario.scenario_id.as_str());
+    }
+}
+
+#[test]
+fn replay_commands_are_exact_scenario_replays() {
+    let fixture = load_fixture();
+    for scenario in &fixture.publication_scenarios {
+        let expected = format!(
+            "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario {}",
             scenario.scenario_id
         );
-        assert!(
-            !scenario.replay_command.trim().is_empty(),
-            "scenario `{}` must carry a replay command",
+        assert_eq!(
+            scenario.replay_command, expected,
+            "scenario `{}` replay command must be exact and script-supported",
             scenario.scenario_id
         );
     }
 }
+
+publication_scenario_test!(
+    publication_scenario_all_green_universal,
+    "all_green_universal"
+);
+publication_scenario_test!(
+    publication_scenario_missing_react_ssr_universal,
+    "missing_react_ssr_universal"
+);
+publication_scenario_test!(
+    publication_scenario_tail_regression_universal,
+    "tail_regression_universal"
+);
+publication_scenario_test!(
+    publication_scenario_scoped_observed_startup_parse,
+    "scoped_observed_startup_parse"
+);
+publication_scenario_test!(
+    publication_scenario_target_until_react_client_green,
+    "target_until_react_client_green"
+);
+publication_scenario_test!(
+    publication_scenario_hypothesis_pending_mixed_board,
+    "hypothesis_pending_mixed_board"
+);
 
 #[test]
 fn gate_events_are_deterministic_and_log_complete() {

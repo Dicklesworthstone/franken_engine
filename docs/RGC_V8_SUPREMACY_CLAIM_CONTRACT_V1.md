@@ -144,11 +144,15 @@ Modes:
 - `test`: run the focused contract tests
 - `clippy`: lint the focused contract test target with `-D warnings`
 - `ci`: run `check`, `test`, and `clippy`
+- `--scenario <scenario_id>`: replay one exact publication scenario via the
+  corresponding exact Rust test name (for example
+  `hypothesis_pending_mixed_board`)
 
 ## Operator Verification
 
 ```bash
 ./scripts/run_rgc_v8_supremacy_claim_contract.sh ci
+./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario all_green_universal
 cat artifacts/rgc_v8_supremacy_claim_contract/<timestamp>/supremacy_claim_contract.json
 cat artifacts/rgc_v8_supremacy_claim_contract/<timestamp>/published_language_contract.json
 cat artifacts/rgc_v8_supremacy_claim_contract/<timestamp>/run_manifest.json
@@ -157,3 +161,6 @@ cat artifacts/rgc_v8_supremacy_claim_contract/<timestamp>/commands.txt
 ```
 
 The acceptance bar is simple: no artifact, no universal V8-supremacy language.
+Scenario replay must also be truthful: if a replay command advertises a specific
+scenario id, the runner must execute that exact scenario test instead of silently
+falling back to the whole suite.

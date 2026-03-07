@@ -518,6 +518,32 @@
       "memory_constraints_ok": false,
       "expected_verdict": "allow_qualified",
       "replay_command": "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario target_until_react_client_green"
+    },
+    {
+      "scenario_id": "hypothesis_pending_mixed_board",
+      "phrase_class": "hypothesis",
+      "phrase_text": "Hypothesis: FrankenEngine may outperform V8 once the remaining mixed board closes on the shipped path.",
+      "published_families": [],
+      "cell_statuses": {
+        "parse_compile": "green",
+        "startup": "mixed",
+        "throughput_hot_loops": "mixed",
+        "async": "missing",
+        "module_graphs": "green",
+        "npm_cohorts": "missing",
+        "react_compile": "mixed",
+        "react_ssr": "missing",
+        "react_client": "missing",
+        "macro_workloads": "missing",
+        "tail_latency": "mixed",
+        "memory": "mixed"
+      },
+      "evidence_complete": false,
+      "shipped_path": false,
+      "tail_constraints_ok": false,
+      "memory_constraints_ok": false,
+      "expected_verdict": "allow_qualified",
+      "replay_command": "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario hypothesis_pending_mixed_board"
     }
   ]
 }

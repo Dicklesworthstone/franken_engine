@@ -107,7 +107,7 @@ Artifacts live under:
 
 ```bash
 jq empty docs/rgc_hindsight_boundary_capture_v1.json
-cargo test -p frankenengine-engine --test rgc_hindsight_boundary_capture
+rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_rgc_hindsight_boundary_capture cargo test -p frankenengine-engine --test rgc_hindsight_boundary_capture
 ./scripts/run_rgc_hindsight_boundary_capture.sh ci
 ./scripts/e2e/rgc_hindsight_boundary_capture_replay.sh ci
 ```

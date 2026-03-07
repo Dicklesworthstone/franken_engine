@@ -153,8 +153,8 @@ run_mode_steps() {
       ;;
     clippy)
       run_step \
-        "cargo clippy -p frankenengine-engine --test rgc_hindsight_boundary_capture -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test rgc_hindsight_boundary_capture -- -D warnings
+        "cargo clippy -p frankenengine-engine --test rgc_hindsight_boundary_capture --no-deps -- -D warnings" \
+        cargo clippy -p frankenengine-engine --test rgc_hindsight_boundary_capture --no-deps -- -D warnings
       ;;
     ci)
       run_step \
@@ -164,8 +164,8 @@ run_mode_steps() {
         "cargo test -p frankenengine-engine --test rgc_hindsight_boundary_capture" \
         cargo test -p frankenengine-engine --test rgc_hindsight_boundary_capture
       run_step \
-        "cargo clippy -p frankenengine-engine --test rgc_hindsight_boundary_capture -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test rgc_hindsight_boundary_capture -- -D warnings
+        "cargo clippy -p frankenengine-engine --test rgc_hindsight_boundary_capture --no-deps -- -D warnings" \
+        cargo clippy -p frankenengine-engine --test rgc_hindsight_boundary_capture --no-deps -- -D warnings
       ;;
     *)
       echo "unsupported mode: ${mode} (expected check|test|clippy|ci)" >&2
@@ -236,10 +236,34 @@ emit_artifacts() {
       {
         schema_version: $schema_version,
         trace_id: $trace_id,
+        decision_id: "decision-rgc-811a-cache",
+        policy_id: $policy_id,
+        component: "module_cache",
+        sequence: 2,
+        boundary_class: "filesystem_input",
+        nondeterminism_tag: "filesystem_input",
+        correlation_key: "bcorr_sample_filesystem_input",
+        virtual_ts: 50,
+        minimal_fields: {
+          operation: "cache_read",
+          path_digest: "digest-cache-path",
+          content_digest: "digest-cache-entry"
+        },
+        redaction: {
+          operation: { privacy_class: "public_metadata", treatment: "plaintext" },
+          path_digest: { privacy_class: "path_digest", treatment: "digest_only" },
+          content_digest: { privacy_class: "secret_digest", treatment: "digest_only" }
+        },
+        sufficiency: "sufficient",
+        escalation_reason: null
+      },
+      {
+        schema_version: $schema_version,
+        trace_id: $trace_id,
         decision_id: "decision-rgc-811a-controller",
         policy_id: $policy_id,
         component: "controller",
-        sequence: 2,
+        sequence: 3,
         boundary_class: "controller_override",
         nondeterminism_tag: "controller_override",
         correlation_key: "bcorr_sample_controller_override",

@@ -84,6 +84,23 @@ fn rgc_811a_multi_boundary_scenario_emits_stable_jsonl() {
         )
         .expect("module capture succeeds");
 
+    let cache_context = BoundaryContext::new(
+        "trace-rgc-811a",
+        "decision-rgc-811a-cache",
+        "policy-rgc-811a",
+        "module_cache",
+        30,
+    );
+    session
+        .capture_filesystem_input(
+            &cache_context,
+            "cache_read",
+            "digest-cache-path",
+            "digest-cache-entry",
+            None,
+        )
+        .expect("cache capture succeeds");
+
     let scheduler_context = BoundaryContext::new(
         "trace-rgc-811a",
         "decision-rgc-811a-scheduler",
@@ -120,7 +137,7 @@ fn rgc_811a_multi_boundary_scenario_emits_stable_jsonl() {
 
     let rendered = session.log().render_jsonl().expect("jsonl renders");
     let lines: Vec<_> = rendered.lines().collect();
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 4);
 
     let correlation_keys: BTreeSet<_> = session
         .log()
@@ -128,7 +145,8 @@ fn rgc_811a_multi_boundary_scenario_emits_stable_jsonl() {
         .iter()
         .map(|record| record.correlation_key.as_str())
         .collect();
-    assert_eq!(correlation_keys.len(), 3);
+    assert_eq!(correlation_keys.len(), 4);
+    assert!(rendered.contains("\"boundary_class\":\"filesystem_input\""));
     assert!(rendered.contains("\"boundary_class\":\"module_resolution\""));
     assert!(rendered.contains("\"boundary_class\":\"scheduling_decision\""));
     assert!(rendered.contains("\"boundary_class\":\"controller_override\""));
@@ -139,6 +157,137 @@ fn rgc_811a_multi_boundary_scenario_emits_stable_jsonl() {
             .iter()
             .any(|record| record.sufficiency == ReplaySufficiency::NeedsEscalation)
     );
+}
+
+#[test]
+fn rgc_811a_minimal_replay_plan_covers_event_loop_module_cache_and_controller_flows() {
+    let mut session = BoundaryCaptureSession::default_v1();
+
+    session
+        .capture_module_resolution(
+            &BoundaryContext::new(
+                "trace-rgc-811a",
+                "decision-rgc-811a-module",
+                "policy-rgc-811a",
+                "module_loader",
+                20,
+            ),
+            "pkg:demo/widget",
+            "digest-referrer",
+            "digest-resolved",
+            None,
+        )
+        .expect("module capture succeeds");
+    session
+        .capture_filesystem_input(
+            &BoundaryContext::new(
+                "trace-rgc-811a",
+                "decision-rgc-811a-cache",
+                "policy-rgc-811a",
+                "module_cache",
+                30,
+            ),
+            "cache_read",
+            "digest-cache-path",
+            "digest-cache-entry",
+            None,
+        )
+        .expect("cache capture succeeds");
+    session
+        .capture_scheduling_decision(
+            &BoundaryContext::new(
+                "trace-rgc-811a",
+                "decision-rgc-811a-event-loop",
+                "policy-rgc-811a",
+                "event_loop",
+                40,
+            ),
+            "ready",
+            "task-41",
+            "digest-ordering",
+            None,
+        )
+        .expect("event-loop capture succeeds");
+    session
+        .capture_controller_override(
+            &BoundaryContext::new(
+                "trace-rgc-811a",
+                "decision-rgc-811a-controller",
+                "policy-rgc-811a",
+                "controller",
+                60,
+            ),
+            "router",
+            "force_safe_mode",
+            "digest-value",
+            None,
+        )
+        .expect("controller capture succeeds");
+
+    let plans = session
+        .minimal_replay_plans()
+        .expect("all non-escalated captures should be replayable");
+    assert_eq!(plans.len(), 4);
+
+    let replay_shape: BTreeSet<_> = plans
+        .iter()
+        .map(|plan| {
+            (
+                plan.decision_id.as_str(),
+                plan.inputs[0].boundary_class,
+                plan.inputs[0].component.as_str(),
+            )
+        })
+        .collect();
+
+    assert!(replay_shape.contains(&(
+        "decision-rgc-811a-module",
+        BoundaryClass::ModuleResolution,
+        "module_loader",
+    )));
+    assert!(replay_shape.contains(&(
+        "decision-rgc-811a-cache",
+        BoundaryClass::FilesystemInput,
+        "module_cache",
+    )));
+    assert!(replay_shape.contains(&(
+        "decision-rgc-811a-event-loop",
+        BoundaryClass::SchedulingDecision,
+        "event_loop",
+    )));
+    assert!(replay_shape.contains(&(
+        "decision-rgc-811a-controller",
+        BoundaryClass::ControllerOverride,
+        "controller",
+    )));
+}
+
+#[test]
+fn rgc_811a_minimal_replay_plan_rejects_escalation_triggering_capture() {
+    let mut session = BoundaryCaptureSession::default_v1();
+
+    session
+        .capture_controller_override(
+            &BoundaryContext::new(
+                "trace-rgc-811a",
+                "decision-rgc-811a-controller",
+                "policy-rgc-811a",
+                "controller",
+                60,
+            ),
+            "router",
+            "force_safe_mode",
+            "digest-value",
+            Some("interactive-controller-input"),
+        )
+        .expect("controller capture succeeds");
+
+    let error = session
+        .minimal_replay_plans()
+        .expect_err("escalated controller decision should fail closed");
+    let error_text = error.to_string();
+    assert!(error_text.contains("interactive-controller-input"));
+    assert!(error_text.contains("controller_override"));
 }
 
 #[test]

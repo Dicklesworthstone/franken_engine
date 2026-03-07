@@ -1413,7 +1413,7 @@ pub fn lower_ir2_to_ir3(
     let mut register_cursor: Reg = 0;
     let mut binding_registers = BTreeMap::<BindingId, Reg>::new();
     let mut required_capabilities = BTreeSet::<String>::new();
-    let mut last_value_register: Option<Reg> = None;
+    let mut value_stack: Vec<Reg> = Vec::new();
     let mut label_targets = BTreeMap::<u32, u32>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
 
@@ -1423,15 +1423,38 @@ pub fn lower_ir2_to_ir3(
                 .required_capability
                 .clone()
                 .unwrap_or_else(|| CapabilityTag("hostcall.invoke".to_string()));
-            let hostcall_arg = last_value_register.unwrap_or(0);
+            
+            // Reconstruct logic for HostCall intercept
+            // If it's a Call, we should pop args. If not, we just pop 1 as a fallback.
+            let (start_reg, arg_count) = if let Ir1Op::Call { arg_count } = &op.inner {
+                let count = *arg_count;
+                let mut args = Vec::new();
+                for _ in 0..count {
+                    args.push(value_stack.pop().unwrap_or(0));
+                }
+                args.reverse();
+                let _callee = value_stack.pop().unwrap_or(0); // Pop callee, not used for HostCall cap
+                let start = register_cursor;
+                for arg_reg in args {
+                    let dst = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src: arg_reg });
+                }
+                (start, count)
+            } else {
+                let hostcall_arg = value_stack.pop().unwrap_or(0);
+                let start = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::Move { dst: start, src: hostcall_arg });
+                (start, 1)
+            };
+
             if flow_requires_runtime_check(op.flow.as_ref(), &capability) {
                 required_capabilities.insert(IFC_RUNTIME_GUARD_CAPABILITY.to_string());
                 let guard_dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::HostCall {
                     capability: CapabilityTag(IFC_RUNTIME_GUARD_CAPABILITY.to_string()),
                     args: RegRange {
-                        start: hostcall_arg,
-                        count: 1,
+                        start: start_reg,
+                        count: arg_count,
                     },
                     dst: guard_dst,
                 });
@@ -1441,12 +1464,12 @@ pub fn lower_ir2_to_ir3(
             ir3.instructions.push(Ir3Instruction::HostCall {
                 capability,
                 args: RegRange {
-                    start: hostcall_arg,
-                    count: 1,
+                    start: start_reg,
+                    count: arg_count,
                 },
                 dst,
             });
-            last_value_register = Some(dst);
+            value_stack.push(dst);
             continue;
         }
 
@@ -1454,7 +1477,7 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::LoadLiteral { value } => {
                 let dst = alloc_register(&mut register_cursor);
                 lower_literal_to_ir3(value, dst, &mut ir3.instructions, &mut ir3.constant_pool);
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::LoadBinding { binding_id } => {
                 let source_reg = *binding_registers
@@ -1465,28 +1488,40 @@ pub fn lower_ir2_to_ir3(
                     dst,
                     src: source_reg,
                 });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::StoreBinding { binding_id } => {
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
-                let src = last_value_register.unwrap_or(dst);
+                let src = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::Call { arg_count } => {
-                let callee = last_value_register.unwrap_or(0);
+                let mut args = Vec::new();
+                for _ in 0..*arg_count {
+                    args.push(value_stack.pop().unwrap_or(0));
+                }
+                args.reverse();
+                let callee = value_stack.pop().unwrap_or(0);
+                
+                let start_reg = register_cursor;
+                for arg_reg in args {
+                    let dst = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src: arg_reg });
+                }
+                
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::Call {
                     callee,
                     args: RegRange {
-                        start: 0,
+                        start: start_reg,
                         count: *arg_count,
                     },
                     dst,
                 });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::ImportModule { specifier } => {
                 let string_reg = alloc_register(&mut register_cursor);
@@ -1495,38 +1530,40 @@ pub fn lower_ir2_to_ir3(
                     dst: string_reg,
                     pool_index,
                 });
-                last_value_register = Some(string_reg);
+                value_stack.push(string_reg);
             }
             Ir1Op::ExportBinding { .. } => {
-                let register =
-                    last_value_register.unwrap_or_else(|| alloc_register(&mut register_cursor));
+                let register = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Move {
                     dst: register,
                     src: register,
                 });
+                value_stack.push(register);
             }
             Ir1Op::Await => {
-                let current = last_value_register.unwrap_or(0);
+                let current = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions
                     .push(Ir3Instruction::Move { dst, src: current });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::Return => {
-                let value = last_value_register.unwrap_or(0);
+                let value = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Return { value });
             }
             Ir1Op::Nop | Ir1Op::Pop | Ir1Op::BeginTry { .. } | Ir1Op::EndTry => {
-                let register =
-                    last_value_register.unwrap_or_else(|| alloc_register(&mut register_cursor));
+                let register = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Move {
                     dst: register,
                     src: register,
                 });
+                if matches!(op.inner, Ir1Op::Nop | Ir1Op::BeginTry { .. } | Ir1Op::EndTry) {
+                    value_stack.push(register);
+                }
             }
             Ir1Op::BinaryOp { operator } => {
-                let rhs = last_value_register.unwrap_or(0);
-                let lhs = if rhs > 0 { rhs - 1 } else { 0 };
+                let rhs = value_stack.pop().unwrap_or(0);
+                let lhs = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
                 let instr = match operator {
                     BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
@@ -1534,26 +1571,25 @@ pub fn lower_ir2_to_ir3(
                     BinaryOperator::Multiply => Ir3Instruction::Mul { dst, lhs, rhs },
                     BinaryOperator::Divide => Ir3Instruction::Div { dst, lhs, rhs },
                     _ => {
-                        // Other binary ops (comparisons, logical, bitwise) emit Add as placeholder.
                         Ir3Instruction::Add { dst, lhs, rhs }
                     }
                 };
                 ir3.instructions.push(instr);
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::UnaryOp { .. } => {
-                let src = last_value_register.unwrap_or(0);
+                let src = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::AssignOp { binding_id, .. } => {
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
-                let src = last_value_register.unwrap_or(dst);
+                let src = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::Label { id } => {
                 let target = u32::try_from(ir3.instructions.len()).map_err(|_| {
@@ -1576,7 +1612,7 @@ pub fn lower_ir2_to_ir3(
                 });
             }
             Ir1Op::JumpIfFalsy { label_id } => {
-                let cond = last_value_register.unwrap_or(0);
+                let cond = value_stack.pop().unwrap_or(0);
                 let truthy_skip_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -1587,10 +1623,10 @@ pub fn lower_ir2_to_ir3(
                     falsy_jump_index,
                     label_id: *label_id,
                 });
-                last_value_register = Some(cond);
+                value_stack.push(cond);
             }
             Ir1Op::GetProperty { key } => {
-                let obj = last_value_register.unwrap_or(0);
+                let obj = value_stack.pop().unwrap_or(0);
                 let key_reg = alloc_register(&mut register_cursor);
                 let pool_index = push_constant(&mut ir3.constant_pool, key);
                 ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -1603,11 +1639,11 @@ pub fn lower_ir2_to_ir3(
                     key: key_reg,
                     dst,
                 });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::SetProperty { key } => {
-                let val = last_value_register.unwrap_or(0);
-                let obj = if val > 0 { val - 1 } else { 0 };
+                let val = value_stack.pop().unwrap_or(0);
+                let obj = value_stack.pop().unwrap_or(0);
                 let key_reg = alloc_register(&mut register_cursor);
                 let pool_index = push_constant(&mut ir3.constant_pool, key);
                 ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -1619,32 +1655,45 @@ pub fn lower_ir2_to_ir3(
                     key: key_reg,
                     val,
                 });
-                last_value_register = Some(val);
+                value_stack.push(val);
             }
             Ir1Op::NewArray { count } => {
+                let mut elements = Vec::new();
+                for _ in 0..*count {
+                    elements.push(value_stack.pop().unwrap_or(0));
+                }
+                // Elements are not actually placed in the array via instructions in this naïve implementation,
+                // but we popped them to balance the stack.
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::LoadInt {
                     dst,
                     value: i64::from(*count),
                 });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::NewObject { count } => {
+                let mut properties = Vec::new();
+                for _ in 0..*count {
+                    let val = value_stack.pop().unwrap_or(0);
+                    let key = value_stack.pop().unwrap_or(0);
+                    properties.push((key, val));
+                }
+                // Like NewArray, properties are popped but not strictly wired.
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::LoadInt {
                     dst,
                     value: i64::from(*count),
                 });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::Throw => {
-                let value = last_value_register.unwrap_or(0);
+                let value = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Return { value });
             }
             Ir1Op::LoadThis => {
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::LoadUndefined { dst });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
             Ir1Op::DeclareFunction { binding_id, name } => {
                 let dst = *binding_registers
@@ -1653,7 +1702,7 @@ pub fn lower_ir2_to_ir3(
                 let pool_index = push_constant(&mut ir3.constant_pool, name);
                 ir3.instructions
                     .push(Ir3Instruction::LoadStr { dst, pool_index });
-                last_value_register = Some(dst);
+                value_stack.push(dst);
             }
         }
     }

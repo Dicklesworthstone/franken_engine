@@ -1311,11 +1311,9 @@ mod tests {
         )
         .expect("create receipt");
 
-        assert!(
-            receipt
-                .verify_signature(&wrong_key.verification_key())
-                .is_err()
-        );
+        assert!(receipt
+            .verify_signature(&wrong_key.verification_key())
+            .is_err());
     }
 
     #[test]

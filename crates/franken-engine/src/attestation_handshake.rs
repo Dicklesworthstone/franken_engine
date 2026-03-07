@@ -1182,11 +1182,9 @@ mod tests {
         let client = test_client();
         do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
-        assert!(
-            verifier
-                .check_authorization("cell-001", "sign_receipts", 2000)
-                .is_ok()
-        );
+        assert!(verifier
+            .check_authorization("cell-001", "sign_receipts", 2000)
+            .is_ok());
     }
 
     #[test]

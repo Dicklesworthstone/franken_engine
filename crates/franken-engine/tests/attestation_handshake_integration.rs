@@ -358,16 +358,12 @@ fn revoke_one_cell_leaves_others() {
 
     assert!(verifier.revoke_authorization("cell-001"));
     assert_eq!(verifier.authorization_count(), 1);
-    assert!(
-        verifier
-            .check_authorization("cell-002", "sign_receipts", 3000)
-            .is_ok()
-    );
-    assert!(
-        verifier
-            .check_authorization("cell-001", "sign_receipts", 3000)
-            .is_err()
-    );
+    assert!(verifier
+        .check_authorization("cell-002", "sign_receipts", 3000)
+        .is_ok());
+    assert!(verifier
+        .check_authorization("cell-001", "sign_receipts", 3000)
+        .is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +732,71 @@ fn handshake_fails_for_unapproved_measurement() {
     let err = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000)
         .expect_err("should reject");
     assert!(matches!(err, HandshakeError::MeasurementNotApproved { .. }));
+}
+
+#[test]
+fn handshake_rejects_tampered_challenge_signature() {
+    let mut verifier = test_verifier();
+    let root = test_trust_root();
+    let measurement = test_measurement(&root);
+    verifier.approve_measurement(measurement.composite_hash());
+
+    let mut challenge = verifier
+        .generate_challenge([1u8; 32], 1000, 10_000)
+        .expect("challenge");
+    challenge.policy_plane_signature = vec![0xCA, 0xFE];
+
+    let client = test_client("cell-001");
+    let response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
+
+    let err = verifier
+        .verify_and_authorize(&challenge, &response, &root, 1000)
+        .expect_err("tampered challenge should be rejected");
+    assert!(matches!(err, HandshakeError::ChallengeSignatureInvalid));
+}
+
+#[test]
+fn handshake_rejects_tampered_quote_after_response_signing() {
+    let mut verifier = test_verifier();
+    let root = test_trust_root();
+    let measurement = test_measurement(&root);
+    verifier.approve_measurement(measurement.composite_hash());
+
+    let challenge = verifier
+        .generate_challenge([1u8; 32], 1000, 10_000)
+        .expect("challenge");
+    let client = test_client("cell-001");
+    let mut response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
+    response.attestation_quote.issued_at_ns = 999;
+
+    let err = verifier
+        .verify_and_authorize(&challenge, &response, &root, 1000)
+        .expect_err("tampered quote should break the response signature");
+    assert!(matches!(err, HandshakeError::ResponseSignatureInvalid));
+}
+
+#[test]
+fn authorization_tampering_is_rejected() {
+    let mut verifier = test_verifier();
+    let root = test_trust_root();
+    let measurement = test_measurement(&root);
+    verifier.approve_measurement(measurement.composite_hash());
+
+    let client = test_client("cell-001");
+    do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("handshake");
+
+    let mut verifier_json = serde_json::to_value(&verifier).expect("serialize verifier");
+    verifier_json["active_authorizations"]["cell-001"]["authorized_operations"]
+        .as_array_mut()
+        .expect("authorization operations array")
+        .push(serde_json::Value::String("admin_override".to_string()));
+
+    let tampered_verifier: PolicyPlaneVerifier =
+        serde_json::from_value(verifier_json).expect("deserialize tampered verifier");
+    let err = tampered_verifier
+        .check_authorization("cell-001", "admin_override", 2000)
+        .expect_err("tampered authorization should be rejected");
+    assert!(matches!(err, HandshakeError::AuthorizationSignatureInvalid));
 }
 
 // ---------------------------------------------------------------------------

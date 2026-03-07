@@ -46,7 +46,9 @@ Relation filter semantics:
 
 ## Failure Minimization
 
-When a relation diverges, the framework applies deterministic ddmin reduction and writes:
+When a relation diverges, the framework first shrinks recorded generator choices
+when replay is supported, then applies deterministic ddmin reduction over the
+resulting pair and writes:
 
 - `metamorphic_failure_{relation}_{hash}.json`
 
@@ -69,13 +71,25 @@ Each run writes deterministic metadata under:
 - `artifacts/metamorphic/<timestamp>/metamorphic_evidence.jsonl`
 - `artifacts/metamorphic/<timestamp>/seed_transcript.jsonl`
 - `artifacts/metamorphic/<timestamp>/seed_manifest.json`
+- `artifacts/metamorphic/<timestamp>/property_generator_catalog.json`
+- `artifacts/metamorphic/<timestamp>/generator_choice_stream_schema.json`
+- `artifacts/metamorphic/<timestamp>/shrinker_verdict_report.json`
+- `artifacts/metamorphic/<timestamp>/minimized_property_counterexamples.jsonl`
 - `artifacts/metamorphic/<timestamp>/triage_report.json`
 - `artifacts/metamorphic/<timestamp>/repro_governance_actions.json`
+- `artifacts/metamorphic/<timestamp>/trace_ids.json`
+- `artifacts/metamorphic/<timestamp>/env.json`
+- `artifacts/metamorphic/<timestamp>/manifest.json`
+- `artifacts/metamorphic/<timestamp>/repro.lock`
 - `artifacts/metamorphic/<timestamp>/failures/`
 - `artifacts/metamorphic/<timestamp>/commands.txt`
 
 `run_manifest.json` pins `bead_id=bd-1lsy.9.3` and includes a deterministic
 `replay_command` field for operator reruns.
+
+`property_generator_catalog.json` makes the adoption wedge explicit: the same
+recorded generators are consumable by metamorphic, fuzz, and differential lanes
+without changing the external command surface.
 
 Evidence rows include stable governance fields:
 - `trace_id`
@@ -119,6 +133,39 @@ Seed manifest rows capture deterministic campaign scheduling metadata:
 - `corpus_version`
 - `base_seed`
 - `relation_seed_schedule[]` (`relation_id`, `pairs_tested`, `start_seed`, `end_seed`, `schedule_policy`)
+
+Property-generator catalog rows capture the recorded generator inventory:
+- `relation_id`
+- `generator_id`
+- `sample_choice_count`
+- `replay_supported`
+- `shrink_strategy`
+- `consumers`
+
+Choice-stream schema rows capture the replay contract for each relation:
+- `relation_id`
+- `generator_id`
+- `fields[]` (`index`, `label`, `strategy`, `min_value`, `max_value`)
+
+Shrinker verdict rows capture stage-by-stage reduction decisions:
+- `relation_id`
+- `pair_index`
+- `generator_id`
+- `original_size_metric`
+- `minimized_size_metric`
+- `choice_stream_reduced`
+- `ddmin_reduced`
+- `verdicts[]`
+
+Minimized property counterexample rows capture replayable failing cases:
+- `relation_id`
+- `pair_index`
+- `generator_id`
+- `original_pair`
+- `minimized_pair`
+- `original_choice_stream`
+- `replayable_choice_stream`
+- `property_contract`
 
 Triage report rows capture severity-classified and owner-routed findings:
 - `counterexample_id`
@@ -168,8 +215,16 @@ cat artifacts/metamorphic/<timestamp>/relation_events.jsonl
 cat artifacts/metamorphic/<timestamp>/metamorphic_evidence.jsonl
 cat artifacts/metamorphic/<timestamp>/seed_transcript.jsonl
 cat artifacts/metamorphic/<timestamp>/seed_manifest.json
+cat artifacts/metamorphic/<timestamp>/property_generator_catalog.json
+cat artifacts/metamorphic/<timestamp>/generator_choice_stream_schema.json
+cat artifacts/metamorphic/<timestamp>/shrinker_verdict_report.json
+cat artifacts/metamorphic/<timestamp>/minimized_property_counterexamples.jsonl
 cat artifacts/metamorphic/<timestamp>/triage_report.json
 cat artifacts/metamorphic/<timestamp>/repro_governance_actions.json
+cat artifacts/metamorphic/<timestamp>/trace_ids.json
+cat artifacts/metamorphic/<timestamp>/env.json
+cat artifacts/metamorphic/<timestamp>/manifest.json
+cat artifacts/metamorphic/<timestamp>/repro.lock
 ls artifacts/metamorphic/<timestamp>/failures
 ./scripts/e2e/metamorphic_suite_replay.sh ci
 ```

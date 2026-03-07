@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::relation::{
-    GeneratedPair, MetamorphicRelation, OracleKind, RelationRunOutcome, Subsystem,
+    ChoiceStream, GeneratedPair, MetamorphicRelation, OracleKind, PropertyContract,
+    RelationRunOutcome, Subsystem,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +61,29 @@ impl Default for MinimizerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShrinkAttemptVerdict {
+    pub stage: String,
+    pub target: String,
+    pub choice_label: Option<String>,
+    pub candidate_value: Option<u64>,
+    pub accepted: bool,
+    pub reason: String,
+    pub before_size_metric: usize,
+    pub after_size_metric: usize,
+    pub before_ast_metric: usize,
+    pub after_ast_metric: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FailureMinimization {
+    replayable_choice_stream: Option<ChoiceStream>,
+    final_pair: GeneratedPair,
+    verdicts: Vec<ShrinkAttemptVerdict>,
+    choice_stream_reduced: bool,
+    ddmin_reduced: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureArtifact {
     pub relation_id: String,
     pub seed: u64,
@@ -75,8 +99,137 @@ pub struct FailureRecord {
     pub relation_id: String,
     pub pair_index: u32,
     pub seed: u64,
+    pub generator_id: String,
     pub divergence_detail: String,
     pub minimized: bool,
+    pub minimized_pair: GeneratedPair,
+    pub original_size_metric: usize,
+    pub minimized_size_metric: usize,
+    pub original_ast_metric: usize,
+    pub minimized_ast_metric: usize,
+    pub original_choice_count: usize,
+    pub minimized_choice_count: usize,
+    pub shrink_strategy: String,
+    pub choice_stream_reduced: bool,
+    pub ddmin_reduced: bool,
+    pub replayable_choice_stream: Option<ChoiceStream>,
+    pub shrink_verdicts: Vec<ShrinkAttemptVerdict>,
+    pub failure_file: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropertyGeneratorCatalogEntry {
+    pub relation_id: String,
+    pub subsystem: String,
+    pub oracle: String,
+    pub generator_id: String,
+    pub scheduled_pairs_budget: u32,
+    pub sample_seed: u64,
+    pub sample_choice_count: usize,
+    pub replay_supported: bool,
+    pub shrink_strategy: String,
+    pub consumers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropertyGeneratorCatalogReport {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub relation_catalog_hash: String,
+    pub generator_count: usize,
+    pub generators: Vec<PropertyGeneratorCatalogEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChoiceFieldSchema {
+    pub index: u32,
+    pub label: String,
+    pub strategy: String,
+    pub min_value: u64,
+    pub max_value: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelationChoiceStreamSchemaEntry {
+    pub relation_id: String,
+    pub generator_id: String,
+    pub replay_supported: bool,
+    pub fields: Vec<ChoiceFieldSchema>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratorChoiceStreamSchemaReport {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub relation_catalog_hash: String,
+    pub stream_schema_version: String,
+    pub top_level_fields: Vec<String>,
+    pub relation_schemas: Vec<RelationChoiceStreamSchemaEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShrinkerVerdictEntry {
+    pub relation_id: String,
+    pub pair_index: u32,
+    pub seed: u64,
+    pub generator_id: String,
+    pub original_size_metric: usize,
+    pub minimized_size_metric: usize,
+    pub original_ast_metric: usize,
+    pub minimized_ast_metric: usize,
+    pub original_choice_count: usize,
+    pub minimized_choice_count: usize,
+    pub choice_stream_reduced: bool,
+    pub ddmin_reduced: bool,
+    pub accepted_steps: usize,
+    pub rejected_steps: usize,
+    pub failure_file: Option<String>,
+    pub verdicts: Vec<ShrinkAttemptVerdict>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShrinkerVerdictReport {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub relation_catalog_hash: String,
+    pub total_failures: usize,
+    pub total_attempts: usize,
+    pub total_accepted: usize,
+    pub total_rejected: usize,
+    pub entries: Vec<ShrinkerVerdictEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MinimizedPropertyCounterexample {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub relation_id: String,
+    pub pair_index: u32,
+    pub seed: u64,
+    pub generator_id: String,
+    pub divergence_detail: String,
+    pub original_pair: GeneratedPair,
+    pub minimized_pair: GeneratedPair,
+    pub original_choice_stream: ChoiceStream,
+    pub replayable_choice_stream: Option<ChoiceStream>,
+    pub property_contract: PropertyContract,
+    pub original_size_metric: usize,
+    pub minimized_size_metric: usize,
+    pub original_ast_metric: usize,
+    pub minimized_ast_metric: usize,
+    pub choice_stream_reduced: bool,
+    pub ddmin_reduced: bool,
     pub failure_file: Option<String>,
 }
 
@@ -430,7 +583,8 @@ pub fn run_relation_with_budget(
 
         if !outcome.equivalence.is_equivalent() {
             violations_found = violations_found.saturating_add(1);
-            let minimized_pair = minimize_failure_pair(relation, &outcome.pair, minimizer);
+            let minimization = minimize_failure_outcome(relation, &outcome, minimizer);
+            let minimized_pair = minimization.final_pair;
             let minimized = minimized_pair.size_metric() < outcome.pair.size_metric();
             let pair_size = minimized_pair.ast_node_metric();
             let divergence_detail = outcome
@@ -465,8 +619,24 @@ pub fn run_relation_with_budget(
                 relation_id: relation.spec().id.clone(),
                 pair_index: offset,
                 seed: run_seed,
+                generator_id: outcome.generator_id.clone(),
                 divergence_detail,
                 minimized,
+                minimized_pair: minimized_pair.clone(),
+                original_size_metric: outcome.pair.size_metric(),
+                minimized_size_metric: minimized_pair.size_metric(),
+                original_ast_metric: outcome.pair.ast_node_metric(),
+                minimized_ast_metric: minimized_pair.ast_node_metric(),
+                original_choice_count: outcome.choice_stream.choice_count(),
+                minimized_choice_count: minimization.replayable_choice_stream.as_ref().map_or(
+                    outcome.choice_stream.choice_count(),
+                    ChoiceStream::choice_count,
+                ),
+                shrink_strategy: outcome.property_contract.shrink_strategy.clone(),
+                choice_stream_reduced: minimization.choice_stream_reduced,
+                ddmin_reduced: minimization.ddmin_reduced,
+                replayable_choice_stream: minimization.replayable_choice_stream,
+                shrink_verdicts: minimization.verdicts,
                 failure_file,
             });
         }
@@ -702,6 +872,225 @@ pub fn write_seed_manifest_json(path: &Path, manifest: &SeedManifest) -> std::io
     fs::write(path, payload)
 }
 
+pub fn property_generator_catalog_for_suite(
+    suite: &SuiteExecution,
+) -> PropertyGeneratorCatalogReport {
+    let generators = suite
+        .relation_executions
+        .iter()
+        .filter_map(|execution| {
+            let sample = execution.outcomes.first()?;
+            Some(PropertyGeneratorCatalogEntry {
+                relation_id: execution.relation_id.clone(),
+                subsystem: execution.subsystem.as_str().to_string(),
+                oracle: execution.oracle.as_str().to_string(),
+                generator_id: sample.generator_id.clone(),
+                scheduled_pairs_budget: execution.pairs_tested,
+                sample_seed: sample.seed,
+                sample_choice_count: sample.choice_stream.choice_count(),
+                replay_supported: sample.property_contract.replay_supported,
+                shrink_strategy: sample.property_contract.shrink_strategy.clone(),
+                consumers: vec![
+                    "metamorphic".to_string(),
+                    "fuzz".to_string(),
+                    "differential".to_string(),
+                ],
+            })
+        })
+        .collect::<Vec<_>>();
+
+    PropertyGeneratorCatalogReport {
+        schema_version: "franken-engine.metamorphic.property-generator-catalog.v1".to_string(),
+        trace_id: suite.trace_id.clone(),
+        decision_id: suite.decision_id.clone(),
+        policy_id: suite.policy_id.clone(),
+        component: suite.component.clone(),
+        relation_catalog_hash: suite.relation_catalog_hash.clone(),
+        generator_count: generators.len(),
+        generators,
+    }
+}
+
+pub fn write_property_generator_catalog_json(
+    path: &Path,
+    catalog: &PropertyGeneratorCatalogReport,
+) -> std::io::Result<()> {
+    let payload = serde_json::to_vec_pretty(catalog)
+        .expect("property generator catalog serialization should succeed");
+    fs::write(path, payload)
+}
+
+pub fn generator_choice_stream_schema_for_suite(
+    suite: &SuiteExecution,
+) -> GeneratorChoiceStreamSchemaReport {
+    let relation_schemas = suite
+        .relation_executions
+        .iter()
+        .filter_map(|execution| {
+            let sample = execution.outcomes.first()?;
+            Some(RelationChoiceStreamSchemaEntry {
+                relation_id: execution.relation_id.clone(),
+                generator_id: sample.generator_id.clone(),
+                replay_supported: sample.property_contract.replay_supported,
+                fields: sample
+                    .choice_stream
+                    .choices
+                    .iter()
+                    .map(|choice| ChoiceFieldSchema {
+                        index: choice.index,
+                        label: choice.label.clone(),
+                        strategy: choice.strategy.clone(),
+                        min_value: choice.min_value,
+                        max_value: choice.max_value,
+                    })
+                    .collect(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    GeneratorChoiceStreamSchemaReport {
+        schema_version: "franken-engine.metamorphic.generator-choice-stream-schema.v1".to_string(),
+        trace_id: suite.trace_id.clone(),
+        decision_id: suite.decision_id.clone(),
+        policy_id: suite.policy_id.clone(),
+        component: suite.component.clone(),
+        relation_catalog_hash: suite.relation_catalog_hash.clone(),
+        stream_schema_version: "franken-engine.metamorphic.choice-stream.v1".to_string(),
+        top_level_fields: vec![
+            "schema_version".to_string(),
+            "relation_id".to_string(),
+            "generator_id".to_string(),
+            "seed".to_string(),
+            "choices".to_string(),
+        ],
+        relation_schemas,
+    }
+}
+
+pub fn write_generator_choice_stream_schema_json(
+    path: &Path,
+    schema: &GeneratorChoiceStreamSchemaReport,
+) -> std::io::Result<()> {
+    let payload = serde_json::to_vec_pretty(schema)
+        .expect("generator choice stream schema serialization should succeed");
+    fs::write(path, payload)
+}
+
+pub fn minimized_property_counterexamples_for_suite(
+    suite: &SuiteExecution,
+) -> Vec<MinimizedPropertyCounterexample> {
+    suite
+        .relation_executions
+        .iter()
+        .flat_map(|execution| {
+            execution.failure_records.iter().filter_map(move |failure| {
+                let outcome = execution.outcomes.get(failure.pair_index as usize)?;
+                Some(MinimizedPropertyCounterexample {
+                    trace_id: suite.trace_id.clone(),
+                    decision_id: suite.decision_id.clone(),
+                    policy_id: suite.policy_id.clone(),
+                    component: suite.component.clone(),
+                    relation_id: execution.relation_id.clone(),
+                    pair_index: failure.pair_index,
+                    seed: failure.seed,
+                    generator_id: failure.generator_id.clone(),
+                    divergence_detail: failure.divergence_detail.clone(),
+                    original_pair: outcome.pair.clone(),
+                    minimized_pair: failure.minimized_pair.clone(),
+                    original_choice_stream: outcome.choice_stream.clone(),
+                    replayable_choice_stream: failure.replayable_choice_stream.clone(),
+                    property_contract: outcome.property_contract.clone(),
+                    original_size_metric: failure.original_size_metric,
+                    minimized_size_metric: failure.minimized_size_metric,
+                    original_ast_metric: failure.original_ast_metric,
+                    minimized_ast_metric: failure.minimized_ast_metric,
+                    choice_stream_reduced: failure.choice_stream_reduced,
+                    ddmin_reduced: failure.ddmin_reduced,
+                    failure_file: failure.failure_file.clone(),
+                })
+            })
+        })
+        .collect()
+}
+
+pub fn write_minimized_property_counterexamples_jsonl(
+    path: &Path,
+    counterexamples: &[MinimizedPropertyCounterexample],
+) -> std::io::Result<()> {
+    let mut lines = String::new();
+    for counterexample in counterexamples {
+        let json = serde_json::to_string(counterexample)
+            .expect("minimized property counterexample serialization should succeed");
+        lines.push_str(&json);
+        lines.push('\n');
+    }
+    fs::write(path, lines)
+}
+
+pub fn shrinker_verdict_report_for_suite(suite: &SuiteExecution) -> ShrinkerVerdictReport {
+    let entries = suite
+        .relation_executions
+        .iter()
+        .flat_map(|execution| {
+            execution
+                .failure_records
+                .iter()
+                .map(|failure| ShrinkerVerdictEntry {
+                    relation_id: execution.relation_id.clone(),
+                    pair_index: failure.pair_index,
+                    seed: failure.seed,
+                    generator_id: failure.generator_id.clone(),
+                    original_size_metric: failure.original_size_metric,
+                    minimized_size_metric: failure.minimized_size_metric,
+                    original_ast_metric: failure.original_ast_metric,
+                    minimized_ast_metric: failure.minimized_ast_metric,
+                    original_choice_count: failure.original_choice_count,
+                    minimized_choice_count: failure.minimized_choice_count,
+                    choice_stream_reduced: failure.choice_stream_reduced,
+                    ddmin_reduced: failure.ddmin_reduced,
+                    accepted_steps: failure
+                        .shrink_verdicts
+                        .iter()
+                        .filter(|verdict| verdict.accepted)
+                        .count(),
+                    rejected_steps: failure
+                        .shrink_verdicts
+                        .iter()
+                        .filter(|verdict| !verdict.accepted)
+                        .count(),
+                    failure_file: failure.failure_file.clone(),
+                    verdicts: failure.shrink_verdicts.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    let total_attempts = entries.iter().map(|entry| entry.verdicts.len()).sum();
+    let total_accepted = entries.iter().map(|entry| entry.accepted_steps).sum();
+    let total_rejected = entries.iter().map(|entry| entry.rejected_steps).sum();
+
+    ShrinkerVerdictReport {
+        schema_version: "franken-engine.metamorphic.shrinker-verdict-report.v1".to_string(),
+        trace_id: suite.trace_id.clone(),
+        decision_id: suite.decision_id.clone(),
+        policy_id: suite.policy_id.clone(),
+        component: suite.component.clone(),
+        relation_catalog_hash: suite.relation_catalog_hash.clone(),
+        total_failures: entries.len(),
+        total_attempts,
+        total_accepted,
+        total_rejected,
+        entries,
+    }
+}
+
+pub fn write_shrinker_verdict_report_json(
+    path: &Path,
+    report: &ShrinkerVerdictReport,
+) -> std::io::Result<()> {
+    let payload = serde_json::to_vec_pretty(report)
+        .expect("shrinker verdict report serialization should succeed");
+    fs::write(path, payload)
+}
+
 pub fn campaign_triage_report_for_suite(
     suite: &SuiteExecution,
     replay_command: &str,
@@ -873,6 +1262,298 @@ pub fn write_repro_governance_actions_json(
 }
 
 pub fn minimize_failure_pair(
+    relation: &dyn MetamorphicRelation,
+    pair: &GeneratedPair,
+    config: MinimizerConfig,
+) -> GeneratedPair {
+    ddmin_minimize_failure_pair(relation, pair, config)
+}
+
+fn minimize_failure_outcome(
+    relation: &dyn MetamorphicRelation,
+    outcome: &RelationRunOutcome,
+    config: MinimizerConfig,
+) -> FailureMinimization {
+    if outcome.equivalence.is_equivalent() {
+        return FailureMinimization {
+            replayable_choice_stream: Some(outcome.choice_stream.clone()),
+            final_pair: outcome.pair.clone(),
+            verdicts: vec![shrink_verdict(
+                ShrinkVerdictSpec {
+                    stage: "choice_stream",
+                    target: "pair",
+                    choice_label: None,
+                    candidate_value: None,
+                    reason: "already_equivalent",
+                },
+                false,
+                &outcome.pair,
+                &outcome.pair,
+            )],
+            choice_stream_reduced: false,
+            ddmin_reduced: false,
+        };
+    }
+
+    let start = Instant::now();
+    let mut verdicts = Vec::new();
+    let mut replayable_choice_stream = Some(outcome.choice_stream.clone());
+    let mut replay_pair = outcome.pair.clone();
+    let mut choice_stream_reduced = false;
+
+    if outcome.property_contract.replay_supported && outcome.choice_stream.choice_count() > 0 {
+        match minimize_recorded_choice_stream(relation, &outcome.choice_stream, config, start) {
+            Some((choice_stream, pair, choice_verdicts, reduced)) => {
+                replayable_choice_stream = Some(choice_stream);
+                replay_pair = pair;
+                verdicts.extend(choice_verdicts);
+                choice_stream_reduced = reduced;
+            }
+            None => {
+                replayable_choice_stream = None;
+                verdicts.push(shrink_verdict(
+                    ShrinkVerdictSpec {
+                        stage: "choice_stream",
+                        target: "pair",
+                        choice_label: None,
+                        candidate_value: None,
+                        reason: "replay_failed",
+                    },
+                    false,
+                    &outcome.pair,
+                    &outcome.pair,
+                ));
+            }
+        }
+    } else {
+        verdicts.push(shrink_verdict(
+            ShrinkVerdictSpec {
+                stage: "choice_stream",
+                target: "pair",
+                choice_label: None,
+                candidate_value: None,
+                reason: if outcome.property_contract.replay_supported {
+                    "no_recorded_choices"
+                } else {
+                    "replay_not_supported"
+                },
+            },
+            false,
+            &outcome.pair,
+            &outcome.pair,
+        ));
+    }
+
+    let ddmin_pair = ddmin_minimize_failure_pair(relation, &replay_pair, config);
+    let ddmin_reduced = is_strict_improvement(&replay_pair, &ddmin_pair);
+    verdicts.push(shrink_verdict(
+        ShrinkVerdictSpec {
+            stage: "ddmin",
+            target: "pair",
+            choice_label: None,
+            candidate_value: None,
+            reason: if ddmin_reduced {
+                "structural_reduction_accepted"
+            } else {
+                "no_structural_improvement"
+            },
+        },
+        ddmin_reduced,
+        &replay_pair,
+        &ddmin_pair,
+    ));
+
+    let final_pair = if ddmin_reduced {
+        ddmin_pair
+    } else {
+        replay_pair.clone()
+    };
+
+    FailureMinimization {
+        replayable_choice_stream,
+        final_pair,
+        verdicts,
+        choice_stream_reduced,
+        ddmin_reduced,
+    }
+}
+
+fn minimize_recorded_choice_stream(
+    relation: &dyn MetamorphicRelation,
+    choice_stream: &ChoiceStream,
+    config: MinimizerConfig,
+    start: Instant,
+) -> Option<(ChoiceStream, GeneratedPair, Vec<ShrinkAttemptVerdict>, bool)> {
+    let mut best_stream = choice_stream.clone();
+    let mut best_case = relation.replay_case(&best_stream)?;
+    let mut verdicts = Vec::new();
+    let mut reduced_any = false;
+    let mut iterations = 0usize;
+
+    loop {
+        if iterations >= config.max_iterations || start.elapsed() > config.max_duration {
+            break;
+        }
+
+        let mut improved = false;
+        for choice_index in 0..best_stream.choices.len() {
+            let choice = best_stream.choices[choice_index].clone();
+            if choice.value == choice.min_value {
+                verdicts.push(shrink_verdict(
+                    ShrinkVerdictSpec {
+                        stage: "choice_stream",
+                        target: "choice",
+                        choice_label: Some(choice.label.clone()),
+                        candidate_value: Some(choice.value),
+                        reason: "already_at_minimum",
+                    },
+                    false,
+                    &best_case.pair,
+                    &best_case.pair,
+                ));
+                continue;
+            }
+
+            for candidate_value in shrink_candidates(choice.value, choice.min_value) {
+                if iterations >= config.max_iterations || start.elapsed() > config.max_duration {
+                    break;
+                }
+                iterations = iterations.saturating_add(1);
+
+                let mut candidate_stream = best_stream.clone();
+                candidate_stream.choices[choice_index].value = candidate_value;
+                let Some(candidate_case) = relation.replay_case(&candidate_stream) else {
+                    verdicts.push(shrink_verdict(
+                        ShrinkVerdictSpec {
+                            stage: "choice_stream",
+                            target: "choice",
+                            choice_label: Some(choice.label.clone()),
+                            candidate_value: Some(candidate_value),
+                            reason: "replay_mismatch",
+                        },
+                        false,
+                        &best_case.pair,
+                        &best_case.pair,
+                    ));
+                    continue;
+                };
+
+                if relation.oracle(&candidate_case.pair).is_equivalent() {
+                    verdicts.push(shrink_verdict(
+                        ShrinkVerdictSpec {
+                            stage: "choice_stream",
+                            target: "choice",
+                            choice_label: Some(choice.label.clone()),
+                            candidate_value: Some(candidate_value),
+                            reason: "lost_divergence",
+                        },
+                        false,
+                        &best_case.pair,
+                        &candidate_case.pair,
+                    ));
+                    continue;
+                }
+
+                let accepted = is_strict_improvement(&best_case.pair, &candidate_case.pair);
+                verdicts.push(shrink_verdict(
+                    ShrinkVerdictSpec {
+                        stage: "choice_stream",
+                        target: "choice",
+                        choice_label: Some(choice.label.clone()),
+                        candidate_value: Some(candidate_value),
+                        reason: if accepted {
+                            "choice_stream_reduction_accepted"
+                        } else {
+                            "not_smaller"
+                        },
+                    },
+                    accepted,
+                    &best_case.pair,
+                    &candidate_case.pair,
+                ));
+
+                if accepted {
+                    best_stream = candidate_stream;
+                    best_case = candidate_case;
+                    improved = true;
+                    reduced_any = true;
+                    break;
+                }
+            }
+
+            if improved {
+                break;
+            }
+        }
+
+        if !improved {
+            break;
+        }
+    }
+
+    Some((best_stream, best_case.pair, verdicts, reduced_any))
+}
+
+fn shrink_candidates(current: u64, min_value: u64) -> Vec<u64> {
+    if current <= min_value {
+        return Vec::new();
+    }
+
+    let mut candidates = vec![min_value];
+    let mut probe = current;
+    while probe > min_value {
+        let next = min_value + (probe - min_value) / 2;
+        if next <= min_value || next >= probe {
+            break;
+        }
+        candidates.push(next);
+        probe = next;
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+}
+
+fn is_strict_improvement(current: &GeneratedPair, candidate: &GeneratedPair) -> bool {
+    let current_size = current.size_metric();
+    let candidate_size = candidate.size_metric();
+    let current_ast = current.ast_node_metric();
+    let candidate_ast = candidate.ast_node_metric();
+
+    candidate_size <= current_size
+        && candidate_ast <= current_ast
+        && (candidate_size < current_size || candidate_ast < current_ast)
+}
+
+struct ShrinkVerdictSpec<'a> {
+    stage: &'a str,
+    target: &'a str,
+    choice_label: Option<String>,
+    candidate_value: Option<u64>,
+    reason: &'a str,
+}
+
+fn shrink_verdict(
+    spec: ShrinkVerdictSpec<'_>,
+    accepted: bool,
+    before: &GeneratedPair,
+    after: &GeneratedPair,
+) -> ShrinkAttemptVerdict {
+    ShrinkAttemptVerdict {
+        stage: spec.stage.to_string(),
+        target: spec.target.to_string(),
+        choice_label: spec.choice_label,
+        candidate_value: spec.candidate_value,
+        accepted,
+        reason: spec.reason.to_string(),
+        before_size_metric: before.size_metric(),
+        after_size_metric: after.size_metric(),
+        before_ast_metric: before.ast_node_metric(),
+        after_ast_metric: after.ast_node_metric(),
+    }
+}
+
+fn ddmin_minimize_failure_pair(
     relation: &dyn MetamorphicRelation,
     pair: &GeneratedPair,
     config: MinimizerConfig,
@@ -1418,16 +2099,20 @@ mod tests {
 
     use crate::catalog::RelationCatalog;
     use crate::relation::{
-        Equivalence, GeneratedPair, MetamorphicRelation, OracleKind, RelationSpec, Subsystem,
+        ChoiceStream, Equivalence, GeneratedCase, GeneratedPair, GenerationChoice,
+        MetamorphicRelation, OracleKind, PropertyContract, RelationSpec, Subsystem,
+        default_generator_id,
     };
     use crate::{build_enabled_relations, build_relation};
 
     use super::{
         FindingClass, FindingSeverity, MinimizerConfig, RelationEvidenceEntry, RunContext,
-        campaign_triage_report_for_suite, evidence_entries_for_suite, minimize_failure_pair,
+        campaign_triage_report_for_suite, evidence_entries_for_suite,
+        generator_choice_stream_schema_for_suite, minimize_failure_pair,
+        minimized_property_counterexamples_for_suite, property_generator_catalog_for_suite,
         relation_log_events_for_suite, repro_governance_actions_from_triage,
         run_relation_with_budget, run_suite, seed_manifest_for_suite,
-        seed_transcript_entries_for_suite,
+        seed_transcript_entries_for_suite, shrinker_verdict_report_for_suite,
     };
 
     struct AlwaysPassRelation {
@@ -1517,6 +2202,125 @@ mod tests {
         fn oracle(&self, _pair: &GeneratedPair) -> Equivalence {
             Equivalence::Diverged {
                 detail: self.divergence_detail.to_string(),
+            }
+        }
+
+        fn validate_program(&self, source: &str) -> bool {
+            !source.trim().is_empty()
+        }
+    }
+
+    struct ChoiceStreamViolationRelation {
+        spec: RelationSpec,
+    }
+
+    impl ChoiceStreamViolationRelation {
+        fn make_pair(left: usize, right: usize) -> GeneratedPair {
+            let input_tokens = std::iter::repeat_n("node", left).collect::<Vec<_>>();
+            let variant_tokens = std::iter::repeat_n("node", right).collect::<Vec<_>>();
+            GeneratedPair {
+                input_source: input_tokens.join(" "),
+                variant_source: format!("{} bad", variant_tokens.join(" ")),
+            }
+        }
+    }
+
+    impl MetamorphicRelation for ChoiceStreamViolationRelation {
+        fn spec(&self) -> &RelationSpec {
+            &self.spec
+        }
+
+        fn generate_pair(&self, seed: u64) -> GeneratedPair {
+            let left = 2 + (seed as usize % 6);
+            let right = 3 + (seed as usize % 6);
+            Self::make_pair(left, right)
+        }
+
+        fn generate_case(&self, seed: u64) -> GeneratedCase {
+            let left = 2 + (seed as usize % 6);
+            let right = 3 + (seed as usize % 6);
+            let generator_id = default_generator_id(&self.spec.id);
+            let pair = Self::make_pair(left, right);
+
+            GeneratedCase {
+                relation_id: self.spec.id.clone(),
+                generator_id: generator_id.clone(),
+                seed,
+                pair: pair.clone(),
+                choice_stream: ChoiceStream {
+                    schema_version: "franken-engine.metamorphic.choice-stream.v1".to_string(),
+                    relation_id: self.spec.id.clone(),
+                    generator_id: generator_id.clone(),
+                    seed,
+                    choices: vec![
+                        GenerationChoice {
+                            index: 0,
+                            label: "left_nodes".to_string(),
+                            strategy: "integer_range".to_string(),
+                            min_value: 1,
+                            max_value: 8,
+                            value: left as u64,
+                        },
+                        GenerationChoice {
+                            index: 1,
+                            label: "right_nodes".to_string(),
+                            strategy: "integer_range".to_string(),
+                            min_value: 1,
+                            max_value: 8,
+                            value: right as u64,
+                        },
+                    ],
+                },
+                property_contract: PropertyContract {
+                    schema_version: "franken-engine.metamorphic.property-contract.v1".to_string(),
+                    relation_id: self.spec.id.clone(),
+                    generator_id,
+                    expected_equivalence: "equivalent".to_string(),
+                    validates_input: true,
+                    validates_variant: true,
+                    replay_supported: true,
+                    shrink_strategy: "recorded_choice_stream_then_ddmin".to_string(),
+                },
+            }
+        }
+
+        fn replay_case(&self, choice_stream: &ChoiceStream) -> Option<GeneratedCase> {
+            let left = choice_stream.choices.first()?.value as usize;
+            let right = choice_stream.choices.get(1)?.value as usize;
+            let generator_id = default_generator_id(&self.spec.id);
+            if choice_stream.generator_id != generator_id {
+                return None;
+            }
+            if choice_stream.relation_id != self.spec.id {
+                return None;
+            }
+
+            Some(GeneratedCase {
+                relation_id: self.spec.id.clone(),
+                generator_id: generator_id.clone(),
+                seed: choice_stream.seed,
+                pair: Self::make_pair(left, right),
+                choice_stream: choice_stream.clone(),
+                property_contract: PropertyContract {
+                    schema_version: "franken-engine.metamorphic.property-contract.v1".to_string(),
+                    relation_id: self.spec.id.clone(),
+                    generator_id,
+                    expected_equivalence: "equivalent".to_string(),
+                    validates_input: true,
+                    validates_variant: true,
+                    replay_supported: true,
+                    shrink_strategy: "recorded_choice_stream_then_ddmin".to_string(),
+                },
+            })
+        }
+
+        fn oracle(&self, pair: &GeneratedPair) -> Equivalence {
+            if pair.variant_source.contains("bad") {
+                Equivalence::Diverged {
+                    detail: "choice stream divergence".to_string(),
+                }
+            } else {
+                Equivalence::Equivalent
             }
         }
 
@@ -1656,6 +2460,49 @@ mod tests {
     }
 
     #[test]
+    fn property_contracts_remain_valid_for_enabled_relations() {
+        let catalog = RelationCatalog::load_default().expect("catalog should load");
+        let relations = build_enabled_relations(&catalog);
+
+        for relation in &relations {
+            let generated = relation.generate_case(11);
+            assert!(
+                generated.property_contract.validates_input,
+                "input contract invalid for {}",
+                relation.spec().id
+            );
+            assert!(
+                generated.property_contract.validates_variant,
+                "variant contract invalid for {}",
+                relation.spec().id
+            );
+            assert_eq!(
+                generated.property_contract.expected_equivalence,
+                "equivalent"
+            );
+            let replayed = relation
+                .replay_case(&generated.choice_stream)
+                .expect("recorded choice stream should replay");
+            assert_eq!(generated.pair, replayed.pair);
+        }
+    }
+
+    #[test]
+    fn catalog_relation_choice_stream_replay_round_trips() {
+        let catalog = RelationCatalog::load_default().expect("catalog should load");
+        let relation = build_relation(&catalog, "parser_whitespace_invariance")
+            .expect("relation should exist");
+        let generated = relation.generate_case(42);
+        let replayed = relation
+            .replay_case(&generated.choice_stream)
+            .expect("replay should succeed");
+
+        assert_eq!(generated.pair, replayed.pair);
+        assert_eq!(generated.choice_stream, replayed.choice_stream);
+        assert!(generated.choice_stream.choice_count() > 0);
+    }
+
+    #[test]
     fn minimizer_effectiveness_meta_test_reduces_to_target_budget() {
         let relation = SyntheticViolationRelation {
             spec: RelationSpec {
@@ -1684,6 +2531,98 @@ mod tests {
             minimized.ast_node_metric() <= 20,
             "expected <= 20 nodes, got {}",
             minimized.ast_node_metric()
+        );
+    }
+
+    #[test]
+    fn accepted_shrink_steps_are_monotonic() {
+        let relation = ChoiceStreamViolationRelation {
+            spec: RelationSpec {
+                id: "choice_stream_violation".to_string(),
+                subsystem: Subsystem::Parser,
+                description: "choice stream".to_string(),
+                oracle: OracleKind::AstEquality,
+                budget_pairs: 1,
+                enabled: true,
+            },
+        };
+
+        let execution = run_relation_with_budget(
+            &relation,
+            &test_context(),
+            1,
+            None,
+            MinimizerConfig {
+                max_iterations: 128,
+                max_duration: Duration::from_secs(30),
+                target_ast_nodes: 4,
+            },
+        )
+        .expect("relation should execute");
+
+        let failure = execution
+            .failure_records
+            .first()
+            .expect("relation should emit a failure");
+        assert!(failure.choice_stream_reduced);
+        assert!(failure.minimized_size_metric <= failure.original_size_metric);
+        assert!(failure.minimized_ast_metric <= failure.original_ast_metric);
+        assert!(
+            failure
+                .shrink_verdicts
+                .iter()
+                .filter(|verdict| verdict.accepted)
+                .all(
+                    |verdict| verdict.after_size_metric <= verdict.before_size_metric
+                        && verdict.after_ast_metric <= verdict.before_ast_metric
+                )
+        );
+    }
+
+    #[test]
+    fn generator_artifact_helpers_emit_choice_stream_outputs() {
+        let relation = ChoiceStreamViolationRelation {
+            spec: RelationSpec {
+                id: "choice_stream_artifact_relation".to_string(),
+                subsystem: Subsystem::Parser,
+                description: "choice stream artifact".to_string(),
+                oracle: OracleKind::AstEquality,
+                budget_pairs: 1,
+                enabled: true,
+            },
+        };
+        let context = test_context();
+        let relation_refs: Vec<&dyn MetamorphicRelation> = vec![&relation];
+        let suite = run_suite(
+            &relation_refs,
+            &context,
+            Some(1),
+            None,
+            MinimizerConfig::default(),
+        )
+        .expect("suite should run");
+
+        let generator_catalog = property_generator_catalog_for_suite(&suite);
+        assert_eq!(generator_catalog.generator_count, 1);
+        assert_eq!(
+            generator_catalog.generators[0].consumers,
+            vec!["metamorphic", "fuzz", "differential"]
+        );
+
+        let choice_schema = generator_choice_stream_schema_for_suite(&suite);
+        assert_eq!(choice_schema.relation_schemas.len(), 1);
+        assert_eq!(choice_schema.relation_schemas[0].fields.len(), 2);
+
+        let shrink_report = shrinker_verdict_report_for_suite(&suite);
+        assert_eq!(shrink_report.total_failures, 1);
+        assert!(shrink_report.total_attempts >= 1);
+
+        let counterexamples = minimized_property_counterexamples_for_suite(&suite);
+        assert_eq!(counterexamples.len(), 1);
+        assert!(counterexamples[0].replayable_choice_stream.is_some());
+        assert_eq!(
+            counterexamples[0].property_contract.expected_equivalence,
+            "equivalent"
         );
     }
 

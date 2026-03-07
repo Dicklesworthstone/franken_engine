@@ -9,10 +9,14 @@ use frankenengine_metamorphic::relation::MetamorphicRelation;
 use frankenengine_metamorphic::relations::CatalogBackedRelation;
 use frankenengine_metamorphic::runner::{
     MinimizerConfig, RunContext, campaign_triage_report_for_suite, evidence_entries_for_suite,
-    relation_log_events_for_suite, repro_governance_actions_from_triage, run_suite,
-    seed_manifest_for_suite, seed_transcript_entries_for_suite, write_campaign_triage_report_json,
-    write_evidence_jsonl, write_repro_governance_actions_json, write_seed_manifest_json,
-    write_seed_transcript_jsonl,
+    generator_choice_stream_schema_for_suite, minimized_property_counterexamples_for_suite,
+    property_generator_catalog_for_suite, relation_log_events_for_suite,
+    repro_governance_actions_from_triage, run_suite, seed_manifest_for_suite,
+    seed_transcript_entries_for_suite, shrinker_verdict_report_for_suite,
+    write_campaign_triage_report_json, write_evidence_jsonl,
+    write_generator_choice_stream_schema_json, write_minimized_property_counterexamples_jsonl,
+    write_property_generator_catalog_json, write_repro_governance_actions_json,
+    write_seed_manifest_json, write_seed_transcript_jsonl, write_shrinker_verdict_report_json,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -25,6 +29,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut events_path = PathBuf::from("artifacts/metamorphic/relation_events.jsonl");
     let mut seed_transcript_path = PathBuf::from("artifacts/metamorphic/seed_transcript.jsonl");
     let mut seed_manifest_path = PathBuf::from("artifacts/metamorphic/seed_manifest.json");
+    let mut property_generator_catalog_path =
+        PathBuf::from("artifacts/metamorphic/property_generator_catalog.json");
+    let mut generator_choice_stream_schema_path =
+        PathBuf::from("artifacts/metamorphic/generator_choice_stream_schema.json");
+    let mut shrinker_verdict_report_path =
+        PathBuf::from("artifacts/metamorphic/shrinker_verdict_report.json");
+    let mut minimized_counterexamples_path =
+        PathBuf::from("artifacts/metamorphic/minimized_property_counterexamples.jsonl");
     let mut triage_report_path = PathBuf::from("artifacts/metamorphic/triage_report.json");
     let mut governance_actions_path =
         PathBuf::from("artifacts/metamorphic/repro_governance_actions.json");
@@ -89,6 +101,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
                 seed_manifest_path = PathBuf::from(value);
             }
+            "--property-generator-catalog" => {
+                let Some(value) = args.next() else {
+                    return Err("missing value for --property-generator-catalog".into());
+                };
+                property_generator_catalog_path = PathBuf::from(value);
+            }
+            "--generator-choice-stream-schema" => {
+                let Some(value) = args.next() else {
+                    return Err("missing value for --generator-choice-stream-schema".into());
+                };
+                generator_choice_stream_schema_path = PathBuf::from(value);
+            }
+            "--shrinker-verdict-report" => {
+                let Some(value) = args.next() else {
+                    return Err("missing value for --shrinker-verdict-report".into());
+                };
+                shrinker_verdict_report_path = PathBuf::from(value);
+            }
+            "--minimized-counterexamples" => {
+                let Some(value) = args.next() else {
+                    return Err("missing value for --minimized-counterexamples".into());
+                };
+                minimized_counterexamples_path = PathBuf::from(value);
+            }
             "--triage-report" => {
                 let Some(value) = args.next() else {
                     return Err("missing value for --triage-report".into());
@@ -147,6 +183,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(parent) = seed_manifest_path.parent() {
         fs::create_dir_all(parent)?;
     }
+    if let Some(parent) = property_generator_catalog_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = generator_choice_stream_schema_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = shrinker_verdict_report_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = minimized_counterexamples_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     if let Some(parent) = triage_report_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -186,13 +234,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     write_seed_transcript_jsonl(&seed_transcript_path, &seed_transcript)?;
     let seed_manifest = seed_manifest_for_suite(&suite);
     write_seed_manifest_json(&seed_manifest_path, &seed_manifest)?;
+    let property_generator_catalog = property_generator_catalog_for_suite(&suite);
+    write_property_generator_catalog_json(
+        &property_generator_catalog_path,
+        &property_generator_catalog,
+    )?;
+    let generator_choice_stream_schema = generator_choice_stream_schema_for_suite(&suite);
+    write_generator_choice_stream_schema_json(
+        &generator_choice_stream_schema_path,
+        &generator_choice_stream_schema,
+    )?;
+    let shrinker_verdict_report = shrinker_verdict_report_for_suite(&suite);
+    write_shrinker_verdict_report_json(&shrinker_verdict_report_path, &shrinker_verdict_report)?;
+    let minimized_counterexamples = minimized_property_counterexamples_for_suite(&suite);
+    write_minimized_property_counterexamples_jsonl(
+        &minimized_counterexamples_path,
+        &minimized_counterexamples,
+    )?;
     let triage_report = campaign_triage_report_for_suite(&suite, &replay_command);
     write_campaign_triage_report_json(&triage_report_path, &triage_report)?;
     let governance_actions = repro_governance_actions_from_triage(&triage_report);
     write_repro_governance_actions_json(&governance_actions_path, &governance_actions)?;
 
     println!(
-        "metamorphic suite relations={} total_pairs={} violations={} evidence={} events={} seed_transcript={} seed_manifest={} triage_report={} governance_actions={} failures_dir={}",
+        "metamorphic suite relations={} total_pairs={} violations={} evidence={} events={} seed_transcript={} seed_manifest={} property_generator_catalog={} generator_choice_stream_schema={} shrinker_verdict_report={} minimized_property_counterexamples={} triage_report={} governance_actions={} failures_dir={}",
         suite.relation_executions.len(),
         suite.total_pairs,
         suite.total_violations,
@@ -200,6 +265,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         events_path.display(),
         seed_transcript_path.display(),
         seed_manifest_path.display(),
+        property_generator_catalog_path.display(),
+        generator_choice_stream_schema_path.display(),
+        shrinker_verdict_report_path.display(),
+        minimized_counterexamples_path.display(),
         triage_report_path.display(),
         governance_actions_path.display(),
         failures_dir.display()

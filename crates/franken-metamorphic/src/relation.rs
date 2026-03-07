@@ -77,6 +77,63 @@ impl GeneratedPair {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerationChoice {
+    pub index: u32,
+    pub label: String,
+    pub strategy: String,
+    pub min_value: u64,
+    pub max_value: u64,
+    pub value: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChoiceStream {
+    pub schema_version: String,
+    pub relation_id: String,
+    pub generator_id: String,
+    pub seed: u64,
+    pub choices: Vec<GenerationChoice>,
+}
+
+impl ChoiceStream {
+    pub fn empty(relation_id: &str, generator_id: &str, seed: u64) -> Self {
+        Self {
+            schema_version: "franken-engine.metamorphic.choice-stream.v1".to_string(),
+            relation_id: relation_id.to_string(),
+            generator_id: generator_id.to_string(),
+            seed,
+            choices: Vec::new(),
+        }
+    }
+
+    pub fn choice_count(&self) -> usize {
+        self.choices.len()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropertyContract {
+    pub schema_version: String,
+    pub relation_id: String,
+    pub generator_id: String,
+    pub expected_equivalence: String,
+    pub validates_input: bool,
+    pub validates_variant: bool,
+    pub replay_supported: bool,
+    pub shrink_strategy: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedCase {
+    pub relation_id: String,
+    pub generator_id: String,
+    pub seed: u64,
+    pub pair: GeneratedPair,
+    pub choice_stream: ChoiceStream,
+    pub property_contract: PropertyContract,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Equivalence {
     Equivalent,
@@ -108,15 +165,66 @@ pub struct RelationRunOutcome {
     pub relation_id: String,
     pub subsystem: Subsystem,
     pub oracle: OracleKind,
+    pub generator_id: String,
     pub seed: u64,
     pub pair: GeneratedPair,
+    pub choice_stream: ChoiceStream,
+    pub property_contract: PropertyContract,
     pub equivalence: Equivalence,
+}
+
+pub fn default_generator_id(relation_id: &str) -> String {
+    format!("{relation_id}.property-generator.v1")
 }
 
 pub trait MetamorphicRelation {
     fn spec(&self) -> &RelationSpec;
 
     fn generate_pair(&self, seed: u64) -> GeneratedPair;
+
+    fn generator_id(&self) -> String {
+        default_generator_id(&self.spec().id)
+    }
+
+    fn shrink_strategy(&self) -> &'static str {
+        "choice_stream_replay_then_ddmin"
+    }
+
+    fn generate_case(&self, seed: u64) -> GeneratedCase {
+        let pair = self.generate_pair(seed);
+        let generator_id = self.generator_id();
+        let choice_stream = ChoiceStream::empty(&self.spec().id, &generator_id, seed);
+        let property_contract = PropertyContract {
+            schema_version: "franken-engine.metamorphic.property-contract.v1".to_string(),
+            relation_id: self.spec().id.clone(),
+            generator_id: generator_id.clone(),
+            expected_equivalence: "equivalent".to_string(),
+            validates_input: self.validate_program(&pair.input_source),
+            validates_variant: self.validate_program(&pair.variant_source),
+            replay_supported: true,
+            shrink_strategy: self.shrink_strategy().to_string(),
+        };
+
+        GeneratedCase {
+            relation_id: self.spec().id.clone(),
+            generator_id,
+            seed,
+            pair,
+            choice_stream,
+            property_contract,
+        }
+    }
+
+    fn replay_case(&self, choice_stream: &ChoiceStream) -> Option<GeneratedCase> {
+        if choice_stream.relation_id != self.spec().id {
+            return None;
+        }
+        if choice_stream.generator_id != self.generator_id() {
+            return None;
+        }
+
+        Some(self.generate_case(choice_stream.seed))
+    }
 
     fn oracle(&self, pair: &GeneratedPair) -> Equivalence;
 
@@ -130,7 +238,8 @@ pub trait MetamorphicRelation {
         component: &str,
         seed: u64,
     ) -> RelationRunOutcome {
-        let pair = self.generate_pair(seed);
+        let generated_case = self.generate_case(seed);
+        let pair = generated_case.pair.clone();
         let equivalence = self.oracle(&pair);
         let outcome = if equivalence.is_equivalent() {
             "pass"
@@ -153,8 +262,11 @@ pub trait MetamorphicRelation {
             relation_id: self.spec().id.clone(),
             subsystem: self.spec().subsystem,
             oracle: self.spec().oracle,
+            generator_id: generated_case.generator_id,
             seed,
             pair,
+            choice_stream: generated_case.choice_stream,
+            property_contract: generated_case.property_contract,
             equivalence,
         }
     }

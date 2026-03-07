@@ -3,7 +3,10 @@ use std::collections::{BTreeSet, HashMap};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::relation::{Equivalence, GeneratedPair, MetamorphicRelation, RelationSpec};
+use crate::relation::{
+    ChoiceStream, Equivalence, GeneratedCase, GeneratedPair, GenerationChoice, MetamorphicRelation,
+    PropertyContract, RelationSpec, default_generator_id,
+};
 
 const IDENTIFIERS: [&str; 12] = [
     "alpha", "beta", "gamma", "delta", "theta", "sigma", "omega", "kappa", "lambda", "net", "fs",
@@ -342,7 +345,19 @@ impl MetamorphicRelation for CatalogBackedRelation {
     }
 
     fn generate_pair(&self, seed: u64) -> GeneratedPair {
-        generate_pair_for_relation(self.relation_id(), seed)
+        generate_case_for_relation(self.relation_id(), seed).pair
+    }
+
+    fn generate_case(&self, seed: u64) -> GeneratedCase {
+        generate_case_for_relation(self.relation_id(), seed)
+    }
+
+    fn replay_case(&self, choice_stream: &ChoiceStream) -> Option<GeneratedCase> {
+        replay_case_for_relation(choice_stream)
+    }
+
+    fn shrink_strategy(&self) -> &'static str {
+        "recorded_choice_stream_then_ddmin"
     }
 
     fn oracle(&self, pair: &GeneratedPair) -> Equivalence {
@@ -358,187 +373,272 @@ impl MetamorphicRelation for CatalogBackedRelation {
     }
 }
 
-fn generate_pair_for_relation(relation_id: &str, seed: u64) -> GeneratedPair {
+fn generate_case_for_relation(relation_id: &str, seed: u64) -> GeneratedCase {
+    let mut machine = GeneratorMachine::record(relation_id, seed);
+    let pair = generate_pair_for_relation(relation_id, &mut machine).unwrap_or(GeneratedPair {
+        input_source: "return 0;".to_string(),
+        variant_source: "return 0;".to_string(),
+    });
+    let generator_id = machine.generator_id().to_string();
+    let choice_stream = machine.finish_recording();
+    let property_contract = property_contract_for_pair(relation_id, &generator_id, &pair);
+
+    GeneratedCase {
+        relation_id: relation_id.to_string(),
+        generator_id,
+        seed,
+        pair,
+        choice_stream,
+        property_contract,
+    }
+}
+
+fn replay_case_for_relation(choice_stream: &ChoiceStream) -> Option<GeneratedCase> {
+    if choice_stream.generator_id != default_generator_id(&choice_stream.relation_id) {
+        return None;
+    }
+
+    let mut machine = GeneratorMachine::replay(choice_stream);
+    let pair = generate_pair_for_relation(choice_stream.relation_id.as_str(), &mut machine)?;
+    if !machine.replay_finished() {
+        return None;
+    }
+
+    let property_contract = property_contract_for_pair(
+        &choice_stream.relation_id,
+        &choice_stream.generator_id,
+        &pair,
+    );
+
+    Some(GeneratedCase {
+        relation_id: choice_stream.relation_id.clone(),
+        generator_id: choice_stream.generator_id.clone(),
+        seed: choice_stream.seed,
+        pair,
+        choice_stream: choice_stream.clone(),
+        property_contract,
+    })
+}
+
+fn property_contract_for_pair(
+    relation_id: &str,
+    generator_id: &str,
+    pair: &GeneratedPair,
+) -> PropertyContract {
+    PropertyContract {
+        schema_version: "franken-engine.metamorphic.property-contract.v1".to_string(),
+        relation_id: relation_id.to_string(),
+        generator_id: generator_id.to_string(),
+        expected_equivalence: "equivalent".to_string(),
+        validates_input: parse_program(&pair.input_source).is_ok(),
+        validates_variant: parse_program(&pair.variant_source).is_ok(),
+        replay_supported: true,
+        shrink_strategy: "recorded_choice_stream_then_ddmin".to_string(),
+    }
+}
+
+fn generate_pair_for_relation(
+    relation_id: &str,
+    machine: &mut GeneratorMachine<'_>,
+) -> Option<GeneratedPair> {
     match relation_id {
         "parser_whitespace_invariance" => {
-            let base = generate_arithmetic_program(seed);
-            let variant = inject_whitespace(&base, seed ^ 0x11);
-            GeneratedPair {
+            let base = generate_arithmetic_program(machine, "parser_whitespace_invariance.base")?;
+            let variant = inject_whitespace(&base, machine, "parser_whitespace_invariance")?;
+            Some(GeneratedPair {
                 input_source: base,
                 variant_source: variant,
-            }
+            })
         }
         "parser_comment_invariance" => {
-            let base = generate_arithmetic_program(seed);
-            let variant = inject_comments(&base, seed ^ 0x22);
-            GeneratedPair {
+            let base = generate_arithmetic_program(machine, "parser_comment_invariance.base")?;
+            let variant = inject_comments(&base, machine, "parser_comment_invariance")?;
+            Some(GeneratedPair {
                 input_source: base,
                 variant_source: variant,
-            }
+            })
         }
         "parser_parenthesization_invariance" => {
-            let mut rng = DeterministicRng::new(seed);
-            let name = pick_identifier(&mut rng);
-            let a = 2 + (rng.next_u64() % 7) as i64;
-            let b = 3 + (rng.next_u64() % 7) as i64;
-            GeneratedPair {
+            let name = pick_identifier(machine, "parser_parenthesization_invariance.name")?;
+            let a = machine.int_inclusive("parser_parenthesization_invariance.a", 2, 8)?;
+            let b = machine.int_inclusive("parser_parenthesization_invariance.b", 3, 9)?;
+            Some(GeneratedPair {
                 input_source: format!("let {name} = {a} + {b}; return {name};"),
                 variant_source: format!("let {name} = (({a})) + (({b})); return ({name});"),
-            }
+            })
         }
         "parser_asi_equivalence" => {
-            let mut rng = DeterministicRng::new(seed);
-            let name = pick_identifier(&mut rng);
-            let value = 1 + (rng.next_u64() % 9) as i64;
-            GeneratedPair {
+            let name = pick_identifier(machine, "parser_asi_equivalence.name")?;
+            let value = machine.int_inclusive("parser_asi_equivalence.value", 1, 9)?;
+            Some(GeneratedPair {
                 input_source: format!("let {name} = {value} + 1\nemit({name})\nreturn {name}\n"),
                 variant_source: format!("let {name} = {value} + 1; emit({name}); return {name};"),
-            }
+            })
         }
         "parser_unicode_escape_equivalence" => {
-            let mut rng = DeterministicRng::new(seed);
-            let plain = pick_identifier(&mut rng);
+            let plain = pick_identifier(machine, "parser_unicode_escape_equivalence.plain")?;
             let escaped = escape_identifier(plain);
-            GeneratedPair {
+            Some(GeneratedPair {
                 input_source: format!("let {plain} = 4 + 5; return {plain};"),
                 variant_source: format!("let {escaped} = 4 + 5; return {escaped};"),
-            }
+            })
         }
         "parser_source_position_independence" => {
-            let base = generate_arithmetic_program(seed);
+            let base =
+                generate_arithmetic_program(machine, "parser_source_position_independence.base")?;
             let variant = format!("\n\n\n    {base}");
-            GeneratedPair {
+            Some(GeneratedPair {
                 input_source: base,
                 variant_source: variant,
-            }
+            })
         }
         "ir_lowering_determinism" => {
-            let base = generate_arithmetic_program(seed);
-            GeneratedPair {
+            let base = generate_arithmetic_program(machine, "ir_lowering_determinism.base")?;
+            let variant = inject_whitespace(&base, machine, "ir_lowering_determinism")?;
+            Some(GeneratedPair {
                 input_source: base.clone(),
-                variant_source: inject_whitespace(&base, seed ^ 0x33),
-            }
+                variant_source: variant,
+            })
         }
         "ir_optimization_idempotence" => {
-            let mut rng = DeterministicRng::new(seed);
-            let name = pick_identifier(&mut rng);
-            GeneratedPair {
+            let name = pick_identifier(machine, "ir_optimization_idempotence.name")?;
+            Some(GeneratedPair {
                 input_source: format!("let {name} = 1 + 2 + 0; return {name};"),
                 variant_source: format!("let {name} = ((1 + 2)) + 0; return ({name});"),
-            }
+            })
         }
         "ir_capability_preservation" => {
-            let mut rng = DeterministicRng::new(seed);
-            let name = pick_identifier(&mut rng);
-            let second = pick_identifier(&mut rng);
-            GeneratedPair {
+            let name = pick_identifier(machine, "ir_capability_preservation.name")?;
+            let second = pick_identifier(machine, "ir_capability_preservation.second")?;
+            Some(GeneratedPair {
                 input_source: format!(
                     "cap(net); cap(fs); let {name} = 2 + 3; let {second} = {name} * 2; return {second};"
                 ),
                 variant_source: format!(
                     "cap(net); cap(fs);\nlet {name} = 2 + 3;\nlet {second} = ({name}) * 2;\nreturn {second};"
                 ),
-            }
+            })
         }
         "ir_dead_code_insertion_invariance" => {
-            let base = generate_arithmetic_program(seed);
-            GeneratedPair {
+            let base =
+                generate_arithmetic_program(machine, "ir_dead_code_insertion_invariance.base")?;
+            Some(GeneratedPair {
                 input_source: base.clone(),
                 variant_source: format!("if(false){{emit(999);}} {base}"),
-            }
+            })
         }
         "ir_constant_folding_equivalence" => {
-            let mut rng = DeterministicRng::new(seed);
-            let name = pick_identifier(&mut rng);
-            GeneratedPair {
+            let name = pick_identifier(machine, "ir_constant_folding_equivalence.name")?;
+            Some(GeneratedPair {
                 input_source: format!("let {name} = 2 + 3 * 4; return {name};"),
                 variant_source: format!("let {name} = 14; return {name};"),
-            }
+            })
         }
-        "execution_evaluation_order_determinism" => GeneratedPair {
+        "execution_evaluation_order_determinism" => Some(GeneratedPair {
             input_source: "emit(\"alpha\"); emit(\"beta\"); return 1;".to_string(),
             variant_source: "emit(\"alpha\"); emit(\"beta\"); return 1;".to_string(),
-        },
+        }),
         "execution_gc_timing_independence" => {
-            let base = generate_arithmetic_program(seed);
-            GeneratedPair {
+            let base =
+                generate_arithmetic_program(machine, "execution_gc_timing_independence.base")?;
+            Some(GeneratedPair {
                 input_source: base.clone(),
                 variant_source: base,
-            }
+            })
         }
         "execution_stack_depth_independence" => {
-            let depth = 5 + (seed % 20);
-            GeneratedPair {
+            let depth = machine.int_inclusive("execution_stack_depth_independence.depth", 5, 24)?;
+            Some(GeneratedPair {
                 input_source: format!("recurse({depth}); return {depth};"),
                 variant_source: format!("recurse({depth}); return {depth};"),
-            }
+            })
         }
         "execution_prototype_chain_equivalence" => {
-            let mut rng = DeterministicRng::new(seed);
-            let base = 10 + (rng.next_u64() % 20) as i64;
-            let derived = 50 + (rng.next_u64() % 20) as i64;
-            GeneratedPair {
+            let base =
+                machine.int_inclusive("execution_prototype_chain_equivalence.base", 10, 29)?;
+            let derived =
+                machine.int_inclusive("execution_prototype_chain_equivalence.derived", 50, 69)?;
+            Some(GeneratedPair {
                 input_source: format!(
                     "proto(base={base},derived={derived},key=base); return {base};"
                 ),
                 variant_source: format!(
                     "proto(base={base},derived={derived},key=base,mirror=true); return {base};"
                 ),
-            }
+            })
         }
-        "execution_promise_resolution_order_stability" => GeneratedPair {
+        "execution_promise_resolution_order_stability" => Some(GeneratedPair {
             input_source: "promise(alpha,beta,gamma,delta); return 0;".to_string(),
             variant_source: "promise(alpha,beta,gamma,delta); return 0;".to_string(),
-        },
-        _ => GeneratedPair {
+        }),
+        _ => Some(GeneratedPair {
             input_source: "return 0;".to_string(),
             variant_source: "return 0;".to_string(),
-        },
+        }),
     }
 }
 
-fn generate_arithmetic_program(seed: u64) -> String {
-    let mut rng = DeterministicRng::new(seed);
-    let left = pick_identifier(&mut rng);
-    let right = pick_identifier(&mut rng);
-    let first = 1 + (rng.next_u64() % 11) as i64;
-    let second = 1 + (rng.next_u64() % 11) as i64;
-    let multiplier = 2 + (rng.next_u64() % 5) as i64;
+fn generate_arithmetic_program(machine: &mut GeneratorMachine<'_>, prefix: &str) -> Option<String> {
+    let left = pick_identifier(machine, &format!("{prefix}.left"))?;
+    let right = pick_identifier(machine, &format!("{prefix}.right"))?;
+    let first = machine.int_inclusive(&format!("{prefix}.first"), 1, 11)?;
+    let second = machine.int_inclusive(&format!("{prefix}.second"), 1, 11)?;
+    let multiplier = machine.int_inclusive(&format!("{prefix}.multiplier"), 2, 6)?;
 
-    format!(
+    Some(format!(
         "let {left} = {first} + {second}; let {right} = {left} * {multiplier}; emit({right}); return {right};"
-    )
+    ))
 }
 
-fn inject_whitespace(source: &str, seed: u64) -> String {
-    let mut rng = DeterministicRng::new(seed);
+fn inject_whitespace(
+    source: &str,
+    machine: &mut GeneratorMachine<'_>,
+    prefix: &str,
+) -> Option<String> {
     let mut out = String::new();
+    let mut punctuation_index = 0usize;
     for ch in source.chars() {
         match ch {
             ';' | ',' | '=' | '+' | '*' | '(' | ')' | '{' | '}' => {
-                let left_spaces = 1 + (rng.next_u64() % 3) as usize;
-                let right_spaces = 1 + (rng.next_u64() % 3) as usize;
+                let left_spaces = machine.usize_inclusive(
+                    &format!("{prefix}.punctuation.{punctuation_index}.left_spaces"),
+                    1,
+                    3,
+                    "spacing_width",
+                )?;
+                let right_spaces = machine.usize_inclusive(
+                    &format!("{prefix}.punctuation.{punctuation_index}.right_spaces"),
+                    1,
+                    3,
+                    "spacing_width",
+                )?;
                 out.push_str(&" ".repeat(left_spaces));
                 out.push(ch);
                 out.push_str(&" ".repeat(right_spaces));
+                punctuation_index = punctuation_index.saturating_add(1);
             }
             _ => out.push(ch),
         }
     }
 
-    format!("  {}  ", out)
+    Some(format!("  {}  ", out))
 }
 
-fn inject_comments(source: &str, seed: u64) -> String {
-    let mut rng = DeterministicRng::new(seed);
-    let marker = (rng.next_u64() % 1000) as usize;
-    source
-        .split(';')
-        .filter(|segment| !segment.trim().is_empty())
-        .map(|segment| format!("/*meta-{marker}*/ {} // meta-{marker}\n", segment.trim()))
-        .collect::<Vec<_>>()
-        .join("; ")
-        + ";"
+fn inject_comments(
+    source: &str,
+    machine: &mut GeneratorMachine<'_>,
+    prefix: &str,
+) -> Option<String> {
+    let marker = machine.usize_inclusive(&format!("{prefix}.comment_marker"), 0, 999, "marker")?;
+    Some(
+        source
+            .split(';')
+            .filter(|segment| !segment.trim().is_empty())
+            .map(|segment| format!("/*meta-{marker}*/ {} // meta-{marker}\n", segment.trim()))
+            .collect::<Vec<_>>()
+            .join("; ")
+            + ";",
+    )
 }
 
 fn escape_identifier(identifier: &str) -> String {
@@ -550,9 +650,9 @@ fn escape_identifier(identifier: &str) -> String {
     format!("\\u{:04x}{}", first as u32, chars.collect::<String>())
 }
 
-fn pick_identifier(rng: &mut DeterministicRng) -> &'static str {
-    let idx = (rng.next_u64() as usize) % IDENTIFIERS.len();
-    IDENTIFIERS[idx]
+fn pick_identifier(machine: &mut GeneratorMachine<'_>, label: &str) -> Option<&'static str> {
+    let idx = machine.usize_inclusive(label, 0, IDENTIFIERS.len() - 1, "identifier_index")?;
+    Some(IDENTIFIERS[idx])
 }
 
 #[derive(Debug, Clone)]
@@ -577,6 +677,133 @@ impl DeterministicRng {
         x ^= x << 17;
         self.state = x;
         x
+    }
+}
+
+#[derive(Debug, Clone)]
+enum GeneratorMode<'a> {
+    Record {
+        rng: DeterministicRng,
+    },
+    Replay {
+        choices: &'a [GenerationChoice],
+        cursor: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct GeneratorMachine<'a> {
+    relation_id: &'a str,
+    generator_id: String,
+    seed: u64,
+    mode: GeneratorMode<'a>,
+    recorded_choices: Vec<GenerationChoice>,
+}
+
+impl<'a> GeneratorMachine<'a> {
+    fn record(relation_id: &'a str, seed: u64) -> Self {
+        Self {
+            relation_id,
+            generator_id: default_generator_id(relation_id),
+            seed,
+            mode: GeneratorMode::Record {
+                rng: DeterministicRng::new(seed),
+            },
+            recorded_choices: Vec::new(),
+        }
+    }
+
+    fn replay(choice_stream: &'a ChoiceStream) -> Self {
+        Self {
+            relation_id: choice_stream.relation_id.as_str(),
+            generator_id: choice_stream.generator_id.clone(),
+            seed: choice_stream.seed,
+            mode: GeneratorMode::Replay {
+                choices: &choice_stream.choices,
+                cursor: 0,
+            },
+            recorded_choices: Vec::new(),
+        }
+    }
+
+    fn generator_id(&self) -> &str {
+        self.generator_id.as_str()
+    }
+
+    fn finish_recording(self) -> ChoiceStream {
+        ChoiceStream {
+            schema_version: "franken-engine.metamorphic.choice-stream.v1".to_string(),
+            relation_id: self.relation_id.to_string(),
+            generator_id: self.generator_id,
+            seed: self.seed,
+            choices: self.recorded_choices,
+        }
+    }
+
+    fn replay_finished(&self) -> bool {
+        match &self.mode {
+            GeneratorMode::Record { .. } => true,
+            GeneratorMode::Replay { choices, cursor } => *cursor == choices.len(),
+        }
+    }
+
+    fn int_inclusive(&mut self, label: &str, min: i64, max: i64) -> Option<i64> {
+        let value = self.choose(label, "integer_range", min as u64, max as u64)?;
+        Some(value as i64)
+    }
+
+    fn usize_inclusive(
+        &mut self,
+        label: &str,
+        min: usize,
+        max: usize,
+        strategy: &str,
+    ) -> Option<usize> {
+        let value = self.choose(label, strategy, min as u64, max as u64)?;
+        Some(value as usize)
+    }
+
+    fn choose(
+        &mut self,
+        label: &str,
+        strategy: &str,
+        min_value: u64,
+        max_value: u64,
+    ) -> Option<u64> {
+        if min_value > max_value {
+            return None;
+        }
+
+        match &mut self.mode {
+            GeneratorMode::Record { rng } => {
+                let span = max_value.saturating_sub(min_value).saturating_add(1);
+                let raw = rng.next_u64();
+                let value = min_value.saturating_add(raw % span);
+                self.recorded_choices.push(GenerationChoice {
+                    index: self.recorded_choices.len() as u32,
+                    label: label.to_string(),
+                    strategy: strategy.to_string(),
+                    min_value,
+                    max_value,
+                    value,
+                });
+                Some(value)
+            }
+            GeneratorMode::Replay { choices, cursor } => {
+                let choice = choices.get(*cursor)?;
+                if choice.label != label
+                    || choice.strategy != strategy
+                    || choice.min_value != min_value
+                    || choice.max_value != max_value
+                    || choice.value < min_value
+                    || choice.value > max_value
+                {
+                    return None;
+                }
+                *cursor += 1;
+                Some(choice.value)
+            }
+        }
     }
 }
 

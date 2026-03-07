@@ -2257,17 +2257,16 @@ fn lower_expression_to_ir1(
             left,
             right,
         } => {
-            lower_expression_to_ir1(
-                right,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                root_scope_id,
-                label_counter,
-            )?;
-            // Resolve left-hand side as a binding target.
             if let Expression::Identifier(name) = left.as_ref() {
+                lower_expression_to_ir1(
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
                 let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
                     *existing
                 } else {
@@ -2286,8 +2285,41 @@ fn lower_expression_to_ir1(
                     binding_id,
                     operator: *operator,
                 });
+            } else if let Expression::Member { object, property, computed: _ } = left.as_ref() {
+                lower_expression_to_ir1(
+                    object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                lower_expression_to_ir1(
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                let key = match property.as_ref() {
+                    Expression::Identifier(name) => name.clone(),
+                    Expression::StringLiteral(s) => s.clone(),
+                    _ => "unknown".to_string(),
+                };
+                ops.push(Ir1Op::SetProperty { key });
             } else {
-                // Non-identifier LHS (member expression, etc.) — emit store placeholder.
+                lower_expression_to_ir1(
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
                 ops.push(Ir1Op::Nop);
             }
         }

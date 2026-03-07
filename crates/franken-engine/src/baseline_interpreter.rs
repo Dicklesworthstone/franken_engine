@@ -1,17 +1,18 @@
-//! Baseline interpreter skeleton for both execution lanes.
+//! Baseline interpreter skeleton for the current execution-profile contract.
 //!
 //! Consumes `Ir3Module` and produces execution results with `Ir4Module`
 //! witness artifacts.  The baseline interpreter is the canonical execution
 //! path — all optimized paths must prove equivalence against it (per 9F.1).
 //!
-//! Two lane implementations:
-//! - **QuickJs-inspired**: deterministic, low-overhead, for security-sensitive
-//!   and resource-constrained contexts.
-//! - **V8-inspired**: throughput-optimized with inline caches and dispatch
-//!   hints for performance-critical workloads.
+//! Two execution profiles are exposed today:
+//! - **baseline_deterministic_profile**: conservative budgets for
+//!   security-sensitive and resource-constrained contexts.
+//! - **baseline_throughput_profile**: larger budgets for performance-oriented
+//!   workloads.
 //!
-//! Both share the same `InterpreterCore` execution logic; the lane difference
-//! is in policy (instruction budget, register limit, dispatch strategy).
+//! Both profiles share the same `InterpreterCore` execution logic; the profile
+//! difference is in policy (instruction budget, register limit, dispatch
+//! strategy), not in a second engine backend.
 //!
 //! `BTreeMap`/`BTreeSet` for deterministic ordering.
 //! `#![forbid(unsafe_code)]` — no unsafe anywhere.
@@ -22,7 +23,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
@@ -35,20 +36,29 @@ use crate::ir_contract::{
 
 const COMPONENT: &str = "baseline_interpreter";
 
-/// Default instruction budget for quickjs-inspired lane.
+/// Default instruction budget for the deterministic profile.
 const DEFAULT_QUICKJS_BUDGET: u64 = 100_000;
 
-/// Default instruction budget for v8-inspired lane.
+/// Default instruction budget for the throughput profile.
 const DEFAULT_V8_BUDGET: u64 = 1_000_000;
 
-/// Default register file size for quickjs-inspired lane.
+/// Default register file size for the deterministic profile.
 const DEFAULT_QUICKJS_MAX_REGISTERS: u32 = 256;
 
-/// Default register file size for v8-inspired lane.
+/// Default register file size for the throughput profile.
 const DEFAULT_V8_MAX_REGISTERS: u32 = 4096;
 
 /// Maximum call-stack depth.
 const MAX_CALL_DEPTH: usize = 256;
+
+/// Canonical operator-facing label for the deterministic execution profile.
+pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
+/// Canonical operator-facing label for the throughput execution profile.
+pub const THROUGHPUT_PROFILE_LABEL: &str = "baseline_throughput_profile";
+/// Legacy lineage label still accepted on input for the deterministic profile.
+pub const LEGACY_QUICKJS_PROFILE_LABEL: &str = "quickjs_inspired_native";
+/// Legacy lineage label still accepted on input for the throughput profile.
+pub const LEGACY_V8_PROFILE_LABEL: &str = "v8_inspired_native";
 
 // ---------------------------------------------------------------------------
 // Value — JS runtime value representation
@@ -252,7 +262,7 @@ pub struct InterpreterConfig {
 }
 
 impl InterpreterConfig {
-    /// QuickJs-inspired lane defaults: conservative budgets.
+    /// Deterministic profile defaults: conservative budgets.
     pub fn quickjs_defaults() -> Self {
         Self {
             instruction_budget: DEFAULT_QUICKJS_BUDGET,
@@ -262,7 +272,7 @@ impl InterpreterConfig {
         }
     }
 
-    /// V8-inspired lane defaults: generous budgets.
+    /// Throughput profile defaults: generous budgets.
     pub fn v8_defaults() -> Self {
         Self {
             instruction_budget: DEFAULT_V8_BUDGET,
@@ -780,7 +790,7 @@ impl InterpreterCore {
 // Lane wrappers
 // ---------------------------------------------------------------------------
 
-/// QuickJs-inspired execution lane: conservative budgets, deterministic.
+/// Deterministic execution profile: conservative budgets and replay-stable defaults.
 pub struct QuickJsLane {
     config: InterpreterConfig,
 }
@@ -812,7 +822,7 @@ impl QuickJsLane {
     }
 }
 
-/// V8-inspired execution lane: generous budgets, throughput-optimized.
+/// Throughput execution profile: larger budgets for heavier workloads.
 pub struct V8Lane {
     config: InterpreterConfig,
 }
@@ -848,17 +858,70 @@ impl V8Lane {
 // LaneRouter — policy-directed routing
 // ---------------------------------------------------------------------------
 
-/// Lane selection reason.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Execution-profile choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneChoice {
-    /// QuickJs-inspired lane selected.
+    /// Deterministic baseline-interpreter profile selected.
     QuickJs,
-    /// V8-inspired lane selected.
+    /// Throughput-tuned baseline-interpreter profile selected.
     V8,
 }
 
+impl LaneChoice {
+    pub const fn stable_label(self) -> &'static str {
+        match self {
+            Self::QuickJs => DETERMINISTIC_PROFILE_LABEL,
+            Self::V8 => THROUGHPUT_PROFILE_LABEL,
+        }
+    }
+
+    pub const fn legacy_lineage_label(self) -> &'static str {
+        match self {
+            Self::QuickJs => LEGACY_QUICKJS_PROFILE_LABEL,
+            Self::V8 => LEGACY_V8_PROFILE_LABEL,
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            DETERMINISTIC_PROFILE_LABEL | LEGACY_QUICKJS_PROFILE_LABEL | "QuickJs" | "quickjs" => {
+                Some(Self::QuickJs)
+            }
+            THROUGHPUT_PROFILE_LABEL | LEGACY_V8_PROFILE_LABEL | "V8" | "v8" => Some(Self::V8),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for LaneChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.stable_label())
+    }
+}
+
+impl Serialize for LaneChoice {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.stable_label())
+    }
+}
+
+impl<'de> Deserialize<'de> for LaneChoice {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::from_label(&raw).ok_or_else(|| {
+            serde::de::Error::custom(format!("unknown execution profile label `{raw}`"))
+        })
+    }
+}
+
 /// Reason for lane selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneReason {
     /// Security-sensitive context requires deterministic execution.
     SecuritySensitive,
@@ -868,6 +931,53 @@ pub enum LaneReason {
     PolicyDirective,
     /// Default fallback to deterministic lane.
     DefaultFallback,
+}
+
+impl LaneReason {
+    pub const fn stable_label(self) -> &'static str {
+        match self {
+            Self::SecuritySensitive => "security_sensitive",
+            Self::ThroughputOptimized => "throughput_optimized",
+            Self::PolicyDirective => "policy_directive",
+            Self::DefaultFallback => "default_deterministic_profile",
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "security_sensitive" | "SecuritySensitive" => Some(Self::SecuritySensitive),
+            "throughput_optimized" | "ThroughputOptimized" => Some(Self::ThroughputOptimized),
+            "policy_directive" | "PolicyDirective" => Some(Self::PolicyDirective),
+            "default_deterministic_profile" | "DefaultFallback" => Some(Self::DefaultFallback),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for LaneReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.stable_label())
+    }
+}
+
+impl Serialize for LaneReason {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.stable_label())
+    }
+}
+
+impl<'de> Deserialize<'de> for LaneReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::from_label(&raw)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown lane reason `{raw}`")))
+    }
 }
 
 /// Result of lane routing.
@@ -934,17 +1044,17 @@ impl LaneRouter {
     }
 
     fn select_lane(&self, module: &Ir3Module) -> (LaneChoice, LaneReason) {
-        // If module requires capabilities (security-sensitive), use quickjs lane.
+        // Capabilities force the deterministic baseline profile.
         if !module.required_capabilities.is_empty() {
             return (LaneChoice::QuickJs, LaneReason::SecuritySensitive);
         }
 
-        // If module has many instructions, prefer v8 for throughput.
+        // Large programs use the throughput-tuned baseline profile.
         if module.instructions.len() > 1000 {
             return (LaneChoice::V8, LaneReason::ThroughputOptimized);
         }
 
-        // Default: deterministic lane.
+        // Default: deterministic profile.
         (LaneChoice::QuickJs, LaneReason::DefaultFallback)
     }
 }

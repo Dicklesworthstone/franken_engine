@@ -31,8 +31,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::baseline_interpreter::{
+    DETERMINISTIC_PROFILE_LABEL, LEGACY_QUICKJS_PROFILE_LABEL, LEGACY_V8_PROFILE_LABEL,
+    THROUGHPUT_PROFILE_LABEL,
+};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -59,35 +63,92 @@ const MAX_LATENCY_SAMPLES: usize = 10_000;
 
 /// Maximum number of decision trace entries retained.
 const MAX_TRACE_ENTRIES: usize = 50_000;
+/// Stable safe-mode lane label.
+const SAFE_MODE_LANE_LABEL: &str = "safe_mode";
 
 // ---------------------------------------------------------------------------
 // LaneId — typed lane identifier
 // ---------------------------------------------------------------------------
 
 /// Typed lane identifier for routing decisions.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LaneId(pub String);
 
 impl fmt::Display for LaneId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(self.stable_label())
     }
 }
 
 impl LaneId {
-    /// QuickJS-inspired native deterministic lane.
-    pub fn quickjs_native() -> Self {
-        Self("quickjs_inspired_native".into())
+    /// Canonical deterministic execution profile.
+    pub fn deterministic_profile() -> Self {
+        Self(DETERMINISTIC_PROFILE_LABEL.into())
     }
 
-    /// V8-inspired native throughput lane.
+    /// Canonical throughput-oriented execution profile.
+    pub fn throughput_profile() -> Self {
+        Self(THROUGHPUT_PROFILE_LABEL.into())
+    }
+
+    /// Legacy constructor retained for compatibility with existing call sites.
+    pub fn quickjs_native() -> Self {
+        Self::deterministic_profile()
+    }
+
+    /// Legacy constructor retained for compatibility with existing call sites.
     pub fn v8_native() -> Self {
-        Self("v8_inspired_native".into())
+        Self::throughput_profile()
     }
 
     /// Safe-mode fallback lane (deterministic, no adaptive logic).
     pub fn safe_mode() -> Self {
-        Self("safe_mode".into())
+        Self(SAFE_MODE_LANE_LABEL.into())
+    }
+
+    pub fn stable_label(&self) -> &str {
+        canonical_lane_label(&self.0).unwrap_or(self.0.as_str())
+    }
+
+    fn from_label(label: &str) -> Self {
+        match label {
+            DETERMINISTIC_PROFILE_LABEL | LEGACY_QUICKJS_PROFILE_LABEL | "QuickJs" => {
+                Self::deterministic_profile()
+            }
+            THROUGHPUT_PROFILE_LABEL | LEGACY_V8_PROFILE_LABEL | "V8" => Self::throughput_profile(),
+            SAFE_MODE_LANE_LABEL => Self::safe_mode(),
+            _ => Self(label.to_string()),
+        }
+    }
+}
+
+impl Serialize for LaneId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.stable_label())
+    }
+}
+
+impl<'de> Deserialize<'de> for LaneId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::from_label(&raw))
+    }
+}
+
+fn canonical_lane_label(label: &str) -> Option<&'static str> {
+    match label {
+        DETERMINISTIC_PROFILE_LABEL | LEGACY_QUICKJS_PROFILE_LABEL | "QuickJs" => {
+            Some(DETERMINISTIC_PROFILE_LABEL)
+        }
+        THROUGHPUT_PROFILE_LABEL | LEGACY_V8_PROFILE_LABEL | "V8" => Some(THROUGHPUT_PROFILE_LABEL),
+        SAFE_MODE_LANE_LABEL => Some(SAFE_MODE_LANE_LABEL),
+        _ => None,
     }
 }
 
@@ -262,7 +323,7 @@ pub struct AsymmetricLossPolicy {
 /// Single entry in the asymmetric loss policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LossPolicyEntry {
-    /// Action label (e.g., "select:v8_inspired_native").
+    /// Action label (for example, `select:baseline_throughput_profile`).
     pub action_label: String,
     /// Risk dimension.
     pub dimension: String,
@@ -287,8 +348,9 @@ impl AsymmetricLossPolicy {
         dimension: RiskDimension,
         loss_millionths: i64,
     ) {
+        let action_label = action_label.into();
         self.entries.push(LossPolicyEntry {
-            action_label: action_label.into(),
+            action_label: canonical_action_label(&action_label),
             dimension: dimension.to_string(),
             loss_millionths,
         });
@@ -308,6 +370,7 @@ impl AsymmetricLossPolicy {
         risk_posteriors: &BTreeMap<String, i64>,
         regime: RegimeEstimate,
     ) -> i64 {
+        let normalized_action_label = canonical_action_label(action_label);
         let regime_mult = self
             .regime_multipliers
             .get(&regime.to_string())
@@ -316,7 +379,7 @@ impl AsymmetricLossPolicy {
 
         let mut total_loss: i64 = 0;
         for entry in &self.entries {
-            if entry.action_label == action_label {
+            if canonical_action_label(&entry.action_label) == normalized_action_label {
                 let posterior = risk_posteriors.get(&entry.dimension).copied().unwrap_or(0);
                 // E[loss] = loss * P(risk) * regime_multiplier
                 // All in millionths, so divide by MILLION twice.
@@ -352,42 +415,62 @@ impl AsymmetricLossPolicy {
     }
 }
 
-/// Build a default asymmetric loss policy for dual-lane routing.
+fn canonical_action_label(action_label: &str) -> String {
+    match action_label {
+        "select:quickjs_inspired_native" | "select:QuickJs" => {
+            format!("select:{DETERMINISTIC_PROFILE_LABEL}")
+        }
+        "select:v8_inspired_native" | "select:V8" => {
+            format!("select:{THROUGHPUT_PROFILE_LABEL}")
+        }
+        _ => action_label.to_string(),
+    }
+}
+
+/// Build a default asymmetric loss policy for the current dual-profile router.
 pub fn default_routing_loss_policy() -> AsymmetricLossPolicy {
     let mut policy = AsymmetricLossPolicy::new("default-routing-v1");
 
-    // SelectLane(v8_native): high throughput but higher compatibility risk.
+    // SelectLane(throughput_profile): high throughput but higher compatibility risk.
     policy.add_entry(
-        "select:v8_inspired_native",
+        format!("select:{THROUGHPUT_PROFILE_LABEL}"),
         RiskDimension::Compatibility,
         400_000,
     );
-    policy.add_entry("select:v8_inspired_native", RiskDimension::Latency, 100_000);
-    policy.add_entry("select:v8_inspired_native", RiskDimension::Memory, 300_000);
     policy.add_entry(
-        "select:v8_inspired_native",
+        format!("select:{THROUGHPUT_PROFILE_LABEL}"),
+        RiskDimension::Latency,
+        100_000,
+    );
+    policy.add_entry(
+        format!("select:{THROUGHPUT_PROFILE_LABEL}"),
+        RiskDimension::Memory,
+        300_000,
+    );
+    policy.add_entry(
+        format!("select:{THROUGHPUT_PROFILE_LABEL}"),
         RiskDimension::IncidentSeverity,
         200_000,
     );
 
-    // SelectLane(quickjs_native): deterministic, lower compatibility risk.
+    // SelectLane(deterministic_profile): lower compatibility risk, stricter budgets.
     policy.add_entry(
-        "select:quickjs_inspired_native",
+        format!("select:{DETERMINISTIC_PROFILE_LABEL}"),
         RiskDimension::Compatibility,
         100_000,
     );
     policy.add_entry(
-        "select:quickjs_inspired_native",
+        format!("select:{DETERMINISTIC_PROFILE_LABEL}"),
         RiskDimension::Latency,
         400_000,
     );
     policy.add_entry(
-        "select:quickjs_inspired_native",
+        format!("select:{DETERMINISTIC_PROFILE_LABEL}"),
         RiskDimension::Memory,
         100_000,
     );
     policy.add_entry(
-        "select:quickjs_inspired_native",
+        format!("select:{DETERMINISTIC_PROFILE_LABEL}"),
         RiskDimension::IncidentSeverity,
         100_000,
     );
@@ -1292,7 +1375,7 @@ impl RuntimeDecisionCore {
                 let action = if best_label == "hold" {
                     RoutingAction::Hold
                 } else if let Some(lane_str) = best_label.strip_prefix("select:") {
-                    let lane = LaneId(lane_str.to_string());
+                    let lane = LaneId::from_label(lane_str);
                     self.state.active_lane = lane.clone();
                     RoutingAction::SelectLane(lane)
                 } else {
@@ -1449,9 +1532,9 @@ mod tests {
     fn lane_id_display() {
         assert_eq!(
             LaneId::quickjs_native().to_string(),
-            "quickjs_inspired_native"
+            DETERMINISTIC_PROFILE_LABEL
         );
-        assert_eq!(LaneId::v8_native().to_string(), "v8_inspired_native");
+        assert_eq!(LaneId::v8_native().to_string(), THROUGHPUT_PROFILE_LABEL);
         assert_eq!(LaneId::safe_mode().to_string(), "safe_mode");
     }
 
@@ -1462,15 +1545,23 @@ mod tests {
         let s = LaneId::safe_mode();
         let mut lanes = vec![v.clone(), s.clone(), q.clone()];
         lanes.sort();
-        assert_eq!(lanes, vec![q, s, v]);
+        assert_eq!(lanes, vec![q, v, s]);
     }
 
     #[test]
     fn lane_id_serde_roundtrip() {
         let lane = LaneId::v8_native();
         let json = serde_json::to_string(&lane).unwrap();
+        assert_eq!(json, format!("\"{THROUGHPUT_PROFILE_LABEL}\""));
         let back: LaneId = serde_json::from_str(&json).unwrap();
         assert_eq!(lane, back);
+    }
+
+    #[test]
+    fn lane_id_deserialize_accepts_legacy_lineage_labels() {
+        let back: LaneId = serde_json::from_str("\"v8_inspired_native\"").unwrap();
+        assert_eq!(back, LaneId::v8_native());
+        assert_eq!(back.to_string(), THROUGHPUT_PROFILE_LABEL);
     }
 
     // -- RiskDimension tests --
@@ -1497,7 +1588,7 @@ mod tests {
     fn routing_action_display() {
         assert_eq!(
             RoutingAction::SelectLane(LaneId::v8_native()).to_string(),
-            "select:v8_inspired_native"
+            format!("select:{THROUGHPUT_PROFILE_LABEL}")
         );
         assert_eq!(
             RoutingAction::FallbackSafeMode.to_string(),
@@ -1566,12 +1657,12 @@ mod tests {
         let policy = default_routing_loss_policy();
         let posteriors = default_risk_posteriors();
         let normal_loss = policy.expected_loss(
-            "select:v8_inspired_native",
+            &format!("select:{THROUGHPUT_PROFILE_LABEL}"),
             &posteriors,
             RegimeEstimate::Normal,
         );
         let attack_loss = policy.expected_loss(
-            "select:v8_inspired_native",
+            &format!("select:{THROUGHPUT_PROFILE_LABEL}"),
             &posteriors,
             RegimeEstimate::Attack,
         );
@@ -1586,10 +1677,16 @@ mod tests {
         let policy = default_routing_loss_policy();
         let low = default_risk_posteriors();
         let high = high_risk_posteriors();
-        let low_loss =
-            policy.expected_loss("select:v8_inspired_native", &low, RegimeEstimate::Normal);
-        let high_loss =
-            policy.expected_loss("select:v8_inspired_native", &high, RegimeEstimate::Normal);
+        let low_loss = policy.expected_loss(
+            &format!("select:{THROUGHPUT_PROFILE_LABEL}"),
+            &low,
+            RegimeEstimate::Normal,
+        );
+        let high_loss = policy.expected_loss(
+            &format!("select:{THROUGHPUT_PROFILE_LABEL}"),
+            &high,
+            RegimeEstimate::Normal,
+        );
         assert!(
             high_loss > low_loss,
             "high-risk loss {high_loss} should exceed low-risk loss {low_loss}"
@@ -1611,15 +1708,15 @@ mod tests {
         let policy = default_routing_loss_policy();
         let posteriors = default_risk_posteriors();
         let candidates = vec![
-            "select:v8_inspired_native".to_string(),
-            "select:quickjs_inspired_native".to_string(),
+            format!("select:{THROUGHPUT_PROFILE_LABEL}"),
+            format!("select:{DETERMINISTIC_PROFILE_LABEL}"),
             "hold".to_string(),
         ];
         let (best, _loss) = policy
             .select_min_loss_action(&candidates, &posteriors, RegimeEstimate::Normal)
             .unwrap();
-        // quickjs should be cheapest under low risk (lower compatibility cost).
-        assert_eq!(best, "select:quickjs_inspired_native");
+        // deterministic profile should be cheapest under low risk.
+        assert_eq!(best, format!("select:{DETERMINISTIC_PROFILE_LABEL}"));
     }
 
     #[test]
@@ -2606,7 +2703,7 @@ mod tests {
     #[test]
     fn loss_policy_entry_serde_roundtrip() {
         let entry = LossPolicyEntry {
-            action_label: "select:v8_inspired_native".into(),
+            action_label: format!("select:{THROUGHPUT_PROFILE_LABEL}"),
             dimension: "compatibility".into(),
             loss_millionths: 400_000,
         };

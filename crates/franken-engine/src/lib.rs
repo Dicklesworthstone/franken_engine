@@ -269,12 +269,15 @@ pub mod wave_handoff_contract;
 use std::{cmp::Ordering, error::Error, fmt};
 
 use crate::ast::{ParseGoal, SourceSpan};
-use crate::baseline_interpreter::{InterpreterError, LaneChoice, LaneRouter};
+use crate::baseline_interpreter::{
+    DETERMINISTIC_PROFILE_LABEL, InterpreterError, LEGACY_QUICKJS_PROFILE_LABEL,
+    LEGACY_V8_PROFILE_LABEL, LaneChoice, LaneRouter, THROUGHPUT_PROFILE_LABEL,
+};
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::Ir0Module;
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineError, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Canonical error classes for deterministic VM semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -705,21 +708,124 @@ pub fn propagate_result_across_boundary<T>(
     result.map_err(|error| propagate_error_across_boundary(error, boundary))
 }
 
-/// Execution lanes are de novo native Rust implementations inspired by
-/// proven ideas from QuickJS and V8, not FFI wrappers over external engines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+const ADAPTIVE_PROFILE_ROUTER_LABEL: &str = "adaptive_profile_router";
+
+/// Public execution-profile contract exposed by the evaluation pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
     QuickJsInspiredNative,
     V8InspiredNative,
     Hybrid,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+impl EngineKind {
+    pub const fn stable_label(self) -> &'static str {
+        match self {
+            Self::QuickJsInspiredNative => DETERMINISTIC_PROFILE_LABEL,
+            Self::V8InspiredNative => THROUGHPUT_PROFILE_LABEL,
+            Self::Hybrid => ADAPTIVE_PROFILE_ROUTER_LABEL,
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            DETERMINISTIC_PROFILE_LABEL
+            | LEGACY_QUICKJS_PROFILE_LABEL
+            | "QuickJsInspiredNative" => Some(Self::QuickJsInspiredNative),
+            THROUGHPUT_PROFILE_LABEL | LEGACY_V8_PROFILE_LABEL | "V8InspiredNative" => {
+                Some(Self::V8InspiredNative)
+            }
+            ADAPTIVE_PROFILE_ROUTER_LABEL | "Hybrid" => Some(Self::Hybrid),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for EngineKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.stable_label())
+    }
+}
+
+impl Serialize for EngineKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.stable_label())
+    }
+}
+
+impl<'de> Deserialize<'de> for EngineKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::from_label(&raw)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown engine kind `{raw}`")))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RouteReason {
     DirectEngineInvocation,
     ContainsImportKeyword,
     ContainsAwaitKeyword,
     DefaultQuickJsPath,
+}
+
+impl RouteReason {
+    pub const fn stable_label(self) -> &'static str {
+        match self {
+            Self::DirectEngineInvocation => "direct_profile_invocation",
+            Self::ContainsImportKeyword => "contains_import_keyword",
+            Self::ContainsAwaitKeyword => "contains_await_keyword",
+            Self::DefaultQuickJsPath => "default_deterministic_profile",
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "direct_profile_invocation" | "DirectEngineInvocation" => {
+                Some(Self::DirectEngineInvocation)
+            }
+            "contains_import_keyword" | "ContainsImportKeyword" => {
+                Some(Self::ContainsImportKeyword)
+            }
+            "contains_await_keyword" | "ContainsAwaitKeyword" => Some(Self::ContainsAwaitKeyword),
+            "default_deterministic_profile" | "DefaultQuickJsPath" => {
+                Some(Self::DefaultQuickJsPath)
+            }
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for RouteReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.stable_label())
+    }
+}
+
+impl Serialize for RouteReason {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.stable_label())
+    }
+}
+
+impl<'de> Deserialize<'de> for RouteReason {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::from_label(&raw)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown route reason `{raw}`")))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1334,9 +1440,22 @@ mod tests {
             EngineKind::Hybrid,
         ] {
             let json = serde_json::to_string(kind).expect("serialize");
+            let expected = match kind {
+                EngineKind::QuickJsInspiredNative => DETERMINISTIC_PROFILE_LABEL,
+                EngineKind::V8InspiredNative => THROUGHPUT_PROFILE_LABEL,
+                EngineKind::Hybrid => ADAPTIVE_PROFILE_ROUTER_LABEL,
+            };
+            assert_eq!(json, format!("\"{expected}\""));
             let decoded: EngineKind = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(&decoded, kind);
         }
+    }
+
+    #[test]
+    fn engine_kind_deserialize_accepts_legacy_lineage_labels() {
+        let decoded: EngineKind =
+            serde_json::from_str("\"quickjs_inspired_native\"").expect("deserialize");
+        assert_eq!(decoded, EngineKind::QuickJsInspiredNative);
     }
 
     #[test]
@@ -1349,9 +1468,23 @@ mod tests {
         ];
         for reason in &reasons {
             let json = serde_json::to_string(reason).expect("serialize");
+            let expected = match reason {
+                RouteReason::DirectEngineInvocation => "direct_profile_invocation",
+                RouteReason::ContainsImportKeyword => "contains_import_keyword",
+                RouteReason::ContainsAwaitKeyword => "contains_await_keyword",
+                RouteReason::DefaultQuickJsPath => "default_deterministic_profile",
+            };
+            assert_eq!(json, format!("\"{expected}\""));
             let decoded: RouteReason = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(&decoded, reason);
         }
+    }
+
+    #[test]
+    fn route_reason_deserialize_accepts_legacy_labels() {
+        let decoded: RouteReason =
+            serde_json::from_str("\"DefaultQuickJsPath\"").expect("deserialize");
+        assert_eq!(decoded, RouteReason::DefaultQuickJsPath);
     }
 
     #[test]

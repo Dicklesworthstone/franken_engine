@@ -441,25 +441,28 @@ fn rerun_command_for_case(args: &CliArgs, test_id: &str) -> String {
 
 fn evaluate_case_vector(
     case: &Test262CaseVector,
-) -> Result<String, frankenengine_engine::EvalError> {
+) -> Result<String, Box<frankenengine_engine::EvalError>> {
     match case.runtime_lane {
         RuntimeLane::Hybrid => {
             let mut router = HybridRouter::default();
             router
                 .eval(case.source.as_str())
                 .map(|outcome| outcome.value)
+                .map_err(Box::new)
         }
         RuntimeLane::QuickJs => {
             let mut engine = QuickJsInspiredNativeEngine;
             engine
                 .eval(case.source.as_str())
                 .map(|outcome| outcome.value)
+                .map_err(Box::new)
         }
         RuntimeLane::V8 => {
             let mut engine = V8InspiredNativeEngine;
             engine
                 .eval(case.source.as_str())
                 .map(|outcome| outcome.value)
+                .map_err(Box::new)
         }
     }
 }

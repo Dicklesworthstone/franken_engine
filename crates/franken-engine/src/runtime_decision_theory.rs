@@ -23,8 +23,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::baseline_interpreter::{
+    DETERMINISTIC_PROFILE_LABEL, LEGACY_QUICKJS_PROFILE_LABEL, LEGACY_V8_PROFILE_LABEL,
+    THROUGHPUT_PROFILE_LABEL,
+};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -50,12 +54,65 @@ const DRIFT_HISTOGRAM_BINS: usize = 10;
 // ---------------------------------------------------------------------------
 
 /// Identifies an execution lane.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LaneId(pub String);
 
 impl fmt::Display for LaneId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(self.stable_label())
+    }
+}
+
+impl LaneId {
+    pub fn deterministic_profile() -> Self {
+        Self(DETERMINISTIC_PROFILE_LABEL.into())
+    }
+
+    pub fn throughput_profile() -> Self {
+        Self(THROUGHPUT_PROFILE_LABEL.into())
+    }
+
+    pub fn stable_label(&self) -> &str {
+        canonical_lane_label(&self.0).unwrap_or(self.0.as_str())
+    }
+
+    fn from_label(label: &str) -> Self {
+        match label {
+            DETERMINISTIC_PROFILE_LABEL | LEGACY_QUICKJS_PROFILE_LABEL | "QuickJs" => {
+                Self::deterministic_profile()
+            }
+            THROUGHPUT_PROFILE_LABEL | LEGACY_V8_PROFILE_LABEL | "V8" => Self::throughput_profile(),
+            _ => Self(label.to_string()),
+        }
+    }
+}
+
+impl Serialize for LaneId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.stable_label())
+    }
+}
+
+impl<'de> Deserialize<'de> for LaneId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::from_label(&raw))
+    }
+}
+
+fn canonical_lane_label(label: &str) -> Option<&'static str> {
+    match label {
+        DETERMINISTIC_PROFILE_LABEL | LEGACY_QUICKJS_PROFILE_LABEL | "QuickJs" => {
+            Some(DETERMINISTIC_PROFILE_LABEL)
+        }
+        THROUGHPUT_PROFILE_LABEL | LEGACY_V8_PROFILE_LABEL | "V8" => Some(THROUGHPUT_PROFILE_LABEL),
+        _ => None,
     }
 }
 
@@ -1146,8 +1203,8 @@ impl Default for DecisionContextConfig {
             drift_config: DriftConfig::default(),
             budget_config: BudgetConfig::default(),
             lanes: vec![
-                LaneId("quickjs_inspired_native".into()),
-                LaneId("v8_inspired_native".into()),
+                LaneId::deterministic_profile(),
+                LaneId::throughput_profile(),
             ],
             risk_weights,
         }
@@ -1502,10 +1559,17 @@ mod tests {
 
     #[test]
     fn lane_id_serde_roundtrip() {
-        let lane = LaneId("v8_inspired_native".into());
+        let lane = LaneId::throughput_profile();
         let json = serde_json::to_string(&lane).unwrap();
+        assert_eq!(json, format!("\"{THROUGHPUT_PROFILE_LABEL}\""));
         let back: LaneId = serde_json::from_str(&json).unwrap();
         assert_eq!(lane, back);
+    }
+
+    #[test]
+    fn lane_id_deserialize_accepts_legacy_lineage_label() {
+        let back: LaneId = serde_json::from_str("\"quickjs_inspired_native\"").unwrap();
+        assert_eq!(back, LaneId::deterministic_profile());
     }
 
     // -----------------------------------------------------------------------
@@ -2200,7 +2264,7 @@ mod tests {
         let outcome = ctx.decide(&state);
         // Should route to first (safe) lane.
         if let LaneAction::RouteTo(lane) = &outcome.action {
-            assert_eq!(lane.0, "quickjs_inspired_native");
+            assert_eq!(lane.to_string(), DETERMINISTIC_PROFILE_LABEL);
         }
     }
 
@@ -2325,7 +2389,7 @@ mod tests {
         let state = default_state();
         let outcome = ctx.decide(&state);
         if let LaneAction::RouteTo(lane) = &outcome.action {
-            assert_eq!(lane.0, "v8_inspired_native");
+            assert_eq!(lane.to_string(), THROUGHPUT_PROFILE_LABEL);
         } else {
             panic!("expected RouteTo, got {:?}", outcome.action);
         }
@@ -2339,7 +2403,7 @@ mod tests {
         state.safe_mode_active = true;
         let outcome = ctx.decide(&state);
         if let LaneAction::RouteTo(lane) = &outcome.action {
-            assert_eq!(lane.0, "quickjs_inspired_native");
+            assert_eq!(lane.to_string(), DETERMINISTIC_PROFILE_LABEL);
         }
     }
 
@@ -2473,7 +2537,7 @@ mod tests {
         state.regime = RegimeLabel::Recovery;
         let outcome = ctx.decide(&state);
         if let LaneAction::RouteTo(lane) = &outcome.action {
-            assert_eq!(lane.0, "quickjs_inspired_native");
+            assert_eq!(lane.to_string(), DETERMINISTIC_PROFILE_LABEL);
         }
     }
 
@@ -2758,7 +2822,7 @@ mod tests {
         state.regime = RegimeLabel::Degraded;
         let outcome = ctx.decide(&state);
         if let LaneAction::RouteTo(lane) = &outcome.action {
-            assert_eq!(lane.0, "quickjs_inspired_native");
+            assert_eq!(lane.to_string(), DETERMINISTIC_PROFILE_LABEL);
         } else {
             panic!("expected RouteTo, got {:?}", outcome.action);
         }

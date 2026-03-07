@@ -99,6 +99,51 @@ impl DemotionReason {
             Self::OperatorInitiated { .. } => "operator_initiated",
         }
     }
+
+    fn append_canonical_bytes(&self, buf: &mut Vec<u8>) {
+        append_length_prefixed_str(buf, self.category());
+        match self {
+            Self::SemanticDivergence {
+                divergence_count,
+                first_divergence_artifact,
+            } => {
+                buf.extend_from_slice(&divergence_count.to_be_bytes());
+                buf.extend_from_slice(first_divergence_artifact.as_bytes());
+            }
+            Self::PerformanceBreach {
+                metric_name,
+                observed_millionths,
+                threshold_millionths,
+                sustained_duration_ns,
+            } => {
+                append_length_prefixed_str(buf, metric_name);
+                buf.extend_from_slice(&observed_millionths.to_be_bytes());
+                buf.extend_from_slice(&threshold_millionths.to_be_bytes());
+                buf.extend_from_slice(&sustained_duration_ns.to_be_bytes());
+            }
+            Self::RiskThresholdBreach {
+                observed_risk_millionths,
+                max_risk_millionths,
+            } => {
+                buf.extend_from_slice(&observed_risk_millionths.to_be_bytes());
+                buf.extend_from_slice(&max_risk_millionths.to_be_bytes());
+            }
+            Self::CapabilityViolation {
+                attempted_capability,
+                envelope_digest,
+            } => {
+                append_length_prefixed_str(buf, attempted_capability);
+                buf.extend_from_slice(envelope_digest.as_bytes());
+            }
+            Self::OperatorInitiated {
+                operator_id,
+                reason,
+            } => {
+                append_length_prefixed_str(buf, operator_id);
+                append_length_prefixed_str(buf, reason);
+            }
+        }
+    }
 }
 
 impl fmt::Display for DemotionReason {
@@ -180,6 +225,24 @@ pub struct DemotionEvidenceItem {
     pub collected_at_ns: u64,
     /// Human-readable summary.
     pub summary: String,
+}
+
+impl DemotionEvidenceItem {
+    fn append_canonical_bytes(&self, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(self.artifact_hash.as_bytes());
+        append_length_prefixed_str(buf, self.category.as_str());
+        buf.extend_from_slice(&self.collected_at_ns.to_be_bytes());
+        append_length_prefixed_str(buf, self.summary.as_str());
+    }
+}
+
+fn append_length_prefixed_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+fn append_length_prefixed_str(buf: &mut Vec<u8>, value: &str) {
+    append_length_prefixed_bytes(buf, value.as_bytes());
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +329,7 @@ impl DemotionReceipt {
         .map_err(DemotionError::IdDerivationFailed)?;
 
         let preimage_bytes = Self::compute_preimage_bytes(
+            SchemaVersion::V1,
             &receipt_id,
             input.slot_id,
             input.demoted_cell_digest,
@@ -273,6 +337,7 @@ impl DemotionReceipt {
             input.rollback_token_used,
             input.demotion_reason,
             input.severity,
+            input.evidence,
             input.timestamp_ns,
             input.epoch,
             input.zone,
@@ -301,6 +366,7 @@ impl DemotionReceipt {
     /// Verify the receipt signature.
     pub fn verify_signature(&self, vk: &VerificationKey) -> Result<(), DemotionError> {
         let preimage_bytes = Self::compute_preimage_bytes(
+            self.schema_version,
             &self.receipt_id,
             &self.slot_id,
             &self.demoted_cell_digest,
@@ -308,6 +374,7 @@ impl DemotionReceipt {
             &self.rollback_token_used,
             &self.demotion_reason,
             self.severity,
+            &self.evidence,
             self.timestamp_ns,
             self.epoch,
             &self.zone,
@@ -323,6 +390,7 @@ impl DemotionReceipt {
     /// Compute the canonical preimage bytes for signing/verification.
     #[allow(clippy::too_many_arguments)]
     fn compute_preimage_bytes(
+        schema_version: SchemaVersion,
         receipt_id: &crate::engine_object_id::EngineObjectId,
         slot_id: &SlotId,
         demoted_digest: &str,
@@ -330,46 +398,48 @@ impl DemotionReceipt {
         rollback_token: &str,
         reason: &DemotionReason,
         severity: DemotionSeverity,
+        evidence: &[DemotionEvidenceItem],
         timestamp_ns: u64,
         epoch: SecurityEpoch,
         zone: &str,
     ) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"demotion-receipt-v1|");
-        buf.extend_from_slice(receipt_id.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(slot_id.as_str().as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(demoted_digest.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(restored_digest.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(rollback_token.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(reason.category().as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(severity.as_str().as_bytes());
-        buf.push(b'|');
+        append_length_prefixed_str(&mut buf, &schema_version.to_string());
+        append_length_prefixed_bytes(&mut buf, receipt_id.as_bytes());
+        append_length_prefixed_str(&mut buf, slot_id.as_str());
+        append_length_prefixed_str(&mut buf, demoted_digest);
+        append_length_prefixed_str(&mut buf, restored_digest);
+        append_length_prefixed_str(&mut buf, rollback_token);
+        reason.append_canonical_bytes(&mut buf);
+        append_length_prefixed_str(&mut buf, severity.as_str());
         buf.extend_from_slice(&timestamp_ns.to_be_bytes());
-        buf.push(b'|');
         buf.extend_from_slice(&epoch.as_u64().to_be_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(zone.as_bytes());
+        append_length_prefixed_str(&mut buf, zone);
+        buf.extend_from_slice(&(evidence.len() as u64).to_be_bytes());
+        for item in evidence {
+            item.append_canonical_bytes(&mut buf);
+        }
         buf
     }
 
     /// Content hash of this receipt for lineage-log chaining.
     pub fn content_hash(&self) -> ContentHash {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(self.receipt_id.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(self.slot_id.as_str().as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(self.demoted_cell_digest.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(self.restored_cell_digest.as_bytes());
-        buf.push(b'|');
-        buf.extend_from_slice(&self.timestamp_ns.to_be_bytes());
+        let mut buf = Self::compute_preimage_bytes(
+            self.schema_version,
+            &self.receipt_id,
+            &self.slot_id,
+            &self.demoted_cell_digest,
+            &self.restored_cell_digest,
+            &self.rollback_token_used,
+            &self.demotion_reason,
+            self.severity,
+            &self.evidence,
+            self.timestamp_ns,
+            self.epoch,
+            &self.zone,
+        );
+        buf.extend_from_slice(&self.signature.to_bytes());
         ContentHash::compute(&buf)
     }
 }
@@ -3205,7 +3275,7 @@ mod tests {
     }
 
     #[test]
-    fn content_hash_independent_of_reason() {
+    fn content_hash_depends_on_reason_details() {
         let key = test_signing_key();
         let r1 = DemotionReceipt::create_signed(
             &key,
@@ -3214,9 +3284,11 @@ mod tests {
                 demoted_cell_digest: "native",
                 restored_cell_digest: "delegate",
                 rollback_token_used: "tok",
-                demotion_reason: &DemotionReason::SemanticDivergence {
-                    divergence_count: 1,
-                    first_divergence_artifact: ContentHash::compute(b"d"),
+                demotion_reason: &DemotionReason::PerformanceBreach {
+                    metric_name: "latency_p99_ns".to_string(),
+                    observed_millionths: 80_000_000,
+                    threshold_millionths: 50_000_000,
+                    sustained_duration_ns: 15_000_000_000,
                 },
                 severity: DemotionSeverity::Critical,
                 evidence: &[],
@@ -3234,11 +3306,13 @@ mod tests {
                 demoted_cell_digest: "native",
                 restored_cell_digest: "delegate",
                 rollback_token_used: "tok",
-                demotion_reason: &DemotionReason::OperatorInitiated {
-                    operator_id: "op".to_string(),
-                    reason: "manual".to_string(),
+                demotion_reason: &DemotionReason::PerformanceBreach {
+                    metric_name: "latency_p99_ns".to_string(),
+                    observed_millionths: 81_000_000,
+                    threshold_millionths: 50_000_000,
+                    sustained_duration_ns: 15_000_000_000,
                 },
-                severity: DemotionSeverity::Warning,
+                severity: DemotionSeverity::Critical,
                 evidence: &[],
                 timestamp_ns: 5_000_000_000,
                 epoch: SecurityEpoch::from_raw(1),
@@ -3247,10 +3321,132 @@ mod tests {
         )
         .expect("r2");
 
-        // content_hash depends only on receipt_id, slot_id, digests, timestamp —
-        // derive_receipt_id does not include reason, so both receipts get the same
-        // receipt_id and thus the same content_hash.
-        assert_eq!(r1.content_hash(), r2.content_hash());
+        assert_ne!(r1.content_hash(), r2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_depends_on_evidence() {
+        let key = test_signing_key();
+        let no_evidence = DemotionReceipt::create_signed(
+            &key,
+            CreateDemotionReceiptInput {
+                slot_id: &test_slot(),
+                demoted_cell_digest: "native",
+                restored_cell_digest: "delegate",
+                rollback_token_used: "tok",
+                demotion_reason: &DemotionReason::RiskThresholdBreach {
+                    observed_risk_millionths: 900_000,
+                    max_risk_millionths: 800_000,
+                },
+                severity: DemotionSeverity::Critical,
+                evidence: &[],
+                timestamp_ns: 5_000_000_000,
+                epoch: SecurityEpoch::from_raw(1),
+                zone: "z",
+            },
+        )
+        .expect("no evidence");
+        let with_evidence = DemotionReceipt::create_signed(
+            &key,
+            CreateDemotionReceiptInput {
+                slot_id: &test_slot(),
+                demoted_cell_digest: "native",
+                restored_cell_digest: "delegate",
+                rollback_token_used: "tok",
+                demotion_reason: &DemotionReason::RiskThresholdBreach {
+                    observed_risk_millionths: 900_000,
+                    max_risk_millionths: 800_000,
+                },
+                severity: DemotionSeverity::Critical,
+                evidence: &[DemotionEvidenceItem {
+                    artifact_hash: ContentHash::compute(b"trace"),
+                    category: "risk_snapshot".to_string(),
+                    collected_at_ns: 5_000_000_010,
+                    summary: "snapshot before rollback".to_string(),
+                }],
+                timestamp_ns: 5_000_000_000,
+                epoch: SecurityEpoch::from_raw(1),
+                zone: "z",
+            },
+        )
+        .expect("with evidence");
+
+        assert_ne!(no_evidence.content_hash(), with_evidence.content_hash());
+    }
+
+    #[test]
+    fn signature_verification_fails_when_reason_detail_is_tampered() {
+        let key = test_signing_key();
+        let mut receipt = DemotionReceipt::create_signed(
+            &key,
+            CreateDemotionReceiptInput {
+                slot_id: &test_slot(),
+                demoted_cell_digest: "native",
+                restored_cell_digest: "delegate",
+                rollback_token_used: "tok",
+                demotion_reason: &DemotionReason::PerformanceBreach {
+                    metric_name: "latency_p99_ns".to_string(),
+                    observed_millionths: 80_000_000,
+                    threshold_millionths: 50_000_000,
+                    sustained_duration_ns: 15_000_000_000,
+                },
+                severity: DemotionSeverity::Critical,
+                evidence: &[],
+                timestamp_ns: 1_000_000_000,
+                epoch: SecurityEpoch::from_raw(1),
+                zone: "z",
+            },
+        )
+        .expect("create");
+
+        if let DemotionReason::PerformanceBreach {
+            observed_millionths,
+            ..
+        } = &mut receipt.demotion_reason
+        {
+            *observed_millionths += 1;
+        }
+
+        assert!(matches!(
+            receipt.verify_signature(&key.verification_key()),
+            Err(DemotionError::SignatureInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn signature_verification_fails_when_evidence_is_tampered() {
+        let key = test_signing_key();
+        let mut receipt = DemotionReceipt::create_signed(
+            &key,
+            CreateDemotionReceiptInput {
+                slot_id: &test_slot(),
+                demoted_cell_digest: "native",
+                restored_cell_digest: "delegate",
+                rollback_token_used: "tok",
+                demotion_reason: &DemotionReason::SemanticDivergence {
+                    divergence_count: 1,
+                    first_divergence_artifact: ContentHash::compute(b"d"),
+                },
+                severity: DemotionSeverity::Critical,
+                evidence: &[DemotionEvidenceItem {
+                    artifact_hash: ContentHash::compute(b"trace"),
+                    category: "divergence_trace".to_string(),
+                    collected_at_ns: 1_000_000_010,
+                    summary: "first divergent trace".to_string(),
+                }],
+                timestamp_ns: 1_000_000_000,
+                epoch: SecurityEpoch::from_raw(1),
+                zone: "z",
+            },
+        )
+        .expect("create");
+
+        receipt.evidence[0].summary = "tampered summary".to_string();
+
+        assert!(matches!(
+            receipt.verify_signature(&key.verification_key()),
+            Err(DemotionError::SignatureInvalid { .. })
+        ));
     }
 
     #[test]

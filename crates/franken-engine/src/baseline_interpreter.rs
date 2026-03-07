@@ -528,6 +528,14 @@ impl InterpreterCore {
 
                             self.register_base += self.config.max_registers as usize;
 
+                            // Clear all registers in the new frame to prevent data leakage from previous calls
+                            let req_len = self.register_base + self.config.max_registers as usize;
+                            if req_len > self.registers.len() {
+                                self.registers.resize(req_len, Value::Undefined);
+                            } else {
+                                self.registers[self.register_base..req_len].fill(Value::Undefined);
+                            }
+
                             // Copy arguments into registers for the callee.
                             for (i, val) in arg_vals.into_iter().enumerate() {
                                 self.write_reg(i as u32, val)?;

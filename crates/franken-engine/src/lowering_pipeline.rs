@@ -486,6 +486,7 @@ pub fn lower_ir0_to_ir1(
                     .map_err(LoweringPipelineError::SemanticViolation)?;
                     ir1.ops.push(Ir1Op::StoreBinding { binding_id });
                 }
+                ir1.ops.push(Ir1Op::Pop);
             }
             Statement::Export(export) => match &export.kind {
                 ExportKind::Default(expression) => {
@@ -515,6 +516,7 @@ pub fn lower_ir0_to_ir1(
                         name: "default".to_string(),
                         binding_id,
                     });
+                    ir1.ops.push(Ir1Op::Pop);
                 }
                 ExportKind::NamedClause(clause) => {
                     for (local_name, exported_name) in parse_named_export_clause_bindings(clause) {
@@ -532,10 +534,12 @@ pub fn lower_ir0_to_ir1(
                                 detail: "reserved root binding missing from binding lookup",
                             },
                         )?;
+                        ir1.ops.push(Ir1Op::LoadBinding { binding_id });
                         ir1.ops.push(Ir1Op::ExportBinding {
                             name: exported_name,
                             binding_id,
                         });
+                        ir1.ops.push(Ir1Op::Pop);
                     }
                 }
             },
@@ -781,6 +785,7 @@ fn lower_statement_to_ir1_with_flow(
                 scope_id,
                 label_counter,
             )?;
+            ops.push(Ir1Op::Pop);
         }
         Statement::VariableDeclaration(vd) => {
             let binding_kind = binding_kind_for_variable_declaration(vd.kind);
@@ -825,6 +830,7 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
                 ops.push(Ir1Op::StoreBinding { binding_id: bid });
+                ops.push(Ir1Op::Pop);
             }
         }
         Statement::Block(block) => {
@@ -856,6 +862,7 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::JumpIfFalsy {
                 label_id: else_label,
             });
+            ops.push(Ir1Op::Pop);
             lower_statement_to_ir1_with_flow(
                 &if_stmt.consequent,
                 ops,
@@ -914,6 +921,7 @@ fn lower_statement_to_ir1_with_flow(
                 ops.push(Ir1Op::JumpIfFalsy {
                     label_id: end_label,
                 });
+                ops.push(Ir1Op::Pop);
             }
             lower_statement_to_ir1_with_flow(
                 &for_stmt.body,
@@ -974,6 +982,7 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::JumpIfFalsy {
                 label_id: end_label,
             });
+            ops.push(Ir1Op::Pop);
             lower_statement_to_ir1_with_flow(
                 &while_stmt.body,
                 ops,
@@ -1023,6 +1032,7 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::JumpIfFalsy {
                 label_id: end_label,
             });
+            ops.push(Ir1Op::Pop);
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
             });
@@ -1091,6 +1101,7 @@ fn lower_statement_to_ir1_with_flow(
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
                     ops.push(Ir1Op::StoreBinding { binding_id: bid });
+                ops.push(Ir1Op::Pop);
                 }
                 for inner in &handler.body.body {
                     lower_statement_to_ir1_with_flow(
@@ -1186,6 +1197,7 @@ fn lower_statement_to_ir1_with_flow(
                 name,
                 binding_id: bid,
             });
+            ops.push(Ir1Op::Pop);
         }
         Statement::Import(_) | Statement::Export(_) => {
             // Handled at top level only.
@@ -1257,6 +1269,7 @@ fn lower_switch_to_ir1(
             ops.push(Ir1Op::JumpIfFalsy {
                 label_id: next_case_label,
             });
+            ops.push(Ir1Op::Pop);
             ops.push(Ir1Op::Jump {
                 label_id: case_label,
             });
@@ -2398,6 +2411,7 @@ fn lower_expression_to_ir1(
             ops.push(Ir1Op::JumpIfFalsy {
                 label_id: else_label,
             });
+            ops.push(Ir1Op::Pop);
             lower_expression_to_ir1(
                 consequent,
                 ops,

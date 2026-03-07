@@ -14,10 +14,10 @@ Implemented in `crates/franken-engine/src/ts_normalization.rs`:
 - simple namespace lowering + merge (`namespace X { export const ... }`)
 - simple legacy class-decorator lowering (`@decorator` + `class X {}`)
 - constructor parameter-property lowering
-- abstract class keyword lowering (`abstract class` -> `class`)
+- abstract class keyword lowering (`abstract class` -> `class`) via token-aware scanning outside strings/comments
 - type annotation stripping
-- definite-assignment assertion normalization
-- const-assertion normalization (`as const` stripping)
+- definite-assignment assertion normalization via token-aware scanning outside strings/comments
+- const-assertion normalization (`as const` stripping) via token-aware scanning outside strings/comments
 - simple JSX lowering (`<X />`, `<X>expr</X>` -> `createElement`) when `jsx != preserve`
 - capability intent extraction from `hostcall<"capability">` forms
 - deterministic witness/event emission with stable governance keys

@@ -1099,6 +1099,10 @@ impl GuardplaneCalibrationState {
     }
 
     pub(crate) fn snapshot(&self) -> CalibrationSnapshot {
+        if !self.snapshot_fastpath.is_initialized() {
+            self.snapshot_fastpath
+                .seed_if_uninitialized(self.baseline_snapshot());
+        }
         self.snapshot_fastpath
             .read_clone_or_else(|| self.baseline_snapshot())
             .value
@@ -4494,6 +4498,15 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let restored: GuardplaneCalibrationState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, restored);
+
+        let snapshot = restored.snapshot();
+        assert_eq!(snapshot.detection_threshold_millionths, 700_000);
+
+        let telemetry = restored.snapshot_fastpath_telemetry();
+        assert_eq!(telemetry.fallback_reads, 0);
+        assert_eq!(telemetry.uninitialized_fallbacks, 0);
+        assert_eq!(telemetry.fast_path_reads, 1);
+        assert_eq!(telemetry.writes, 0);
     }
 
     // -----------------------------------------------------------------------

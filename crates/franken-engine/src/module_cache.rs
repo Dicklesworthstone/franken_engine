@@ -429,6 +429,10 @@ impl ModuleCache {
     }
 
     pub fn snapshot(&self) -> CacheSnapshot {
+        if !self.snapshot_fastpath.is_initialized() {
+            self.snapshot_fastpath
+                .seed_if_uninitialized(self.baseline_snapshot());
+        }
         self.snapshot_fastpath
             .read_clone_or_else(|| self.baseline_snapshot())
             .value

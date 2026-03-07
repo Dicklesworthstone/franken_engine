@@ -79,6 +79,10 @@ impl<T> SnapshotFastPath<T> {
         self.policy
     }
 
+    pub fn is_initialized(&self) -> bool {
+        self.initialized.load(Ordering::Acquire)
+    }
+
     pub fn new(policy: RetryBudgetPolicy) -> Self {
         Self {
             policy,
@@ -96,6 +100,28 @@ impl<T> SnapshotFastPath<T> {
             writer_pressure_fallbacks: AtomicU64::new(0),
             writes: AtomicU64::new(0),
         }
+    }
+
+    /// Seed a known baseline snapshot without counting it as a runtime write.
+    pub fn seed_if_uninitialized(&self, initial: T) -> bool {
+        if self.is_initialized() {
+            return false;
+        }
+
+        let _writer_guard = self
+            .writer_gate
+            .lock()
+            .expect("seqlock writer gate must not poison");
+        if self.is_initialized() {
+            return false;
+        }
+
+        *self
+            .snapshot
+            .write()
+            .expect("seqlock snapshot write must not poison") = Some(initial);
+        self.initialized.store(true, Ordering::Release);
+        true
     }
 
     pub fn publish(&self, next: T) {
@@ -306,5 +332,24 @@ mod tests {
 
         assert_eq!(fast_path, cloned);
         assert_eq!(cloned.policy(), RetryBudgetPolicy::new(2, 1));
+    }
+
+    #[test]
+    fn seeding_baseline_avoids_uninitialized_fallback_without_counting_write() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        assert!(fast_path.seed_if_uninitialized(41_u64));
+        assert!(!fast_path.seed_if_uninitialized(99_u64));
+
+        let result = fast_path.read_clone_or_else(|| 7_u64);
+
+        assert_eq!(result.value, 41);
+        assert_eq!(result.source, FastPathReadSource::FastPath);
+        assert_eq!(result.fallback_reason, None);
+
+        let telemetry = fast_path.telemetry();
+        assert_eq!(telemetry.writes, 0);
+        assert_eq!(telemetry.fast_path_reads, 1);
+        assert_eq!(telemetry.fallback_reads, 0);
+        assert_eq!(telemetry.uninitialized_fallbacks, 0);
     }
 }

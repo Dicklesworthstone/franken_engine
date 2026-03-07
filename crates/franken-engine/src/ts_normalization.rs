@@ -355,7 +355,7 @@ pub fn normalize_typescript_to_es2020(
     ));
     current = decorator_lowered;
 
-    let definite_assignment_removed = current.replace("!:", ":");
+    let definite_assignment_removed = normalize_definite_assignment_assertions(&current);
     decisions.push(build_decision(
         "definite_assignment_normalization",
         definite_assignment_removed != current,
@@ -363,7 +363,7 @@ pub fn normalize_typescript_to_es2020(
     ));
     current = definite_assignment_removed;
 
-    let const_assertion_removed = current.replace(" as const", "");
+    let const_assertion_removed = strip_const_assertions(&current);
     decisions.push(build_decision(
         "const_assertion_normalization",
         const_assertion_removed != current,
@@ -809,6 +809,201 @@ fn elide_type_only_imports(source: &str) -> String {
         .join("\n")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LexicalRewriteState {
+    Code,
+    SingleQuote,
+    DoubleQuote,
+    TemplateLiteral,
+    LineComment,
+    BlockComment,
+}
+
+fn rewrite_outside_strings_and_comments<F>(source: &str, mut rewrite: F) -> String
+where
+    F: FnMut(&str, usize, &mut String) -> Option<usize>,
+{
+    let bytes = source.as_bytes();
+    let mut output = String::with_capacity(source.len());
+    let mut index = 0usize;
+    let mut state = LexicalRewriteState::Code;
+
+    while index < source.len() {
+        match state {
+            LexicalRewriteState::Code => {
+                if let Some(next_index) = rewrite(source, index, &mut output) {
+                    index = next_index;
+                    continue;
+                }
+
+                if bytes[index] == b'/' && index + 1 < source.len() {
+                    match bytes[index + 1] {
+                        b'/' => {
+                            output.push_str("//");
+                            index += 2;
+                            state = LexicalRewriteState::LineComment;
+                            continue;
+                        }
+                        b'*' => {
+                            output.push_str("/*");
+                            index += 2;
+                            state = LexicalRewriteState::BlockComment;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+
+                let ch = source[index..]
+                    .chars()
+                    .next()
+                    .expect("scanner index should remain on char boundary");
+                output.push(ch);
+                index += ch.len_utf8();
+                state = match ch {
+                    '\'' => LexicalRewriteState::SingleQuote,
+                    '"' => LexicalRewriteState::DoubleQuote,
+                    '`' => LexicalRewriteState::TemplateLiteral,
+                    _ => LexicalRewriteState::Code,
+                };
+            }
+            LexicalRewriteState::SingleQuote => {
+                let ch = source[index..]
+                    .chars()
+                    .next()
+                    .expect("scanner index should remain on char boundary");
+                output.push(ch);
+                index += ch.len_utf8();
+                if ch == '\\' && index < source.len() {
+                    let escaped = source[index..]
+                        .chars()
+                        .next()
+                        .expect("escaped string should remain on char boundary");
+                    output.push(escaped);
+                    index += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '\'' {
+                    state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::DoubleQuote => {
+                let ch = source[index..]
+                    .chars()
+                    .next()
+                    .expect("scanner index should remain on char boundary");
+                output.push(ch);
+                index += ch.len_utf8();
+                if ch == '\\' && index < source.len() {
+                    let escaped = source[index..]
+                        .chars()
+                        .next()
+                        .expect("escaped string should remain on char boundary");
+                    output.push(escaped);
+                    index += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '"' {
+                    state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::TemplateLiteral => {
+                let ch = source[index..]
+                    .chars()
+                    .next()
+                    .expect("scanner index should remain on char boundary");
+                output.push(ch);
+                index += ch.len_utf8();
+                if ch == '\\' && index < source.len() {
+                    let escaped = source[index..]
+                        .chars()
+                        .next()
+                        .expect("escaped template byte should remain on char boundary");
+                    output.push(escaped);
+                    index += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '`' {
+                    state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::LineComment => {
+                let ch = source[index..]
+                    .chars()
+                    .next()
+                    .expect("scanner index should remain on char boundary");
+                output.push(ch);
+                index += ch.len_utf8();
+                if ch == '\n' {
+                    state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::BlockComment => {
+                if bytes[index] == b'*' && index + 1 < source.len() && bytes[index + 1] == b'/' {
+                    output.push_str("*/");
+                    index += 2;
+                    state = LexicalRewriteState::Code;
+                    continue;
+                }
+
+                let ch = source[index..]
+                    .chars()
+                    .next()
+                    .expect("scanner index should remain on char boundary");
+                output.push(ch);
+                index += ch.len_utf8();
+            }
+        }
+    }
+
+    output
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$')
+}
+
+fn has_token_boundary_before(source: &str, index: usize) -> bool {
+    source[..index]
+        .chars()
+        .next_back()
+        .is_none_or(|ch| !is_identifier_char(ch))
+}
+
+fn has_token_boundary_after(source: &str, index: usize) -> bool {
+    source[index..]
+        .chars()
+        .next()
+        .is_none_or(|ch| !is_identifier_char(ch))
+}
+
+fn starts_with_keyword(source: &str, index: usize, keyword: &str) -> bool {
+    source[index..].starts_with(keyword)
+        && has_token_boundary_before(source, index)
+        && has_token_boundary_after(source, index + keyword.len())
+}
+
+fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {
+    while index < source.len() {
+        let ch = source[index..]
+            .chars()
+            .next()
+            .expect("scanner index should remain on char boundary");
+        if !ch.is_ascii_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+
+    index
+}
+
+fn trim_trailing_inline_whitespace(output: &mut String) {
+    while matches!(output.chars().next_back(), Some(' ' | '\t')) {
+        let _ = output.pop();
+    }
+}
+
 fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError> {
     let mut namespace_order = Vec::<String>::new();
     let mut namespace_assignments = BTreeMap::<String, Vec<String>>::new();
@@ -1180,8 +1375,48 @@ fn lower_constructor_parameter_properties(source: &str) -> String {
     out.join("\n")
 }
 
+fn normalize_definite_assignment_assertions(source: &str) -> String {
+    rewrite_outside_strings_and_comments(source, |source, index, output| {
+        if source[index..].starts_with("!:") {
+            output.push(':');
+            return Some(index + 2);
+        }
+        None
+    })
+}
+
+fn strip_const_assertions(source: &str) -> String {
+    rewrite_outside_strings_and_comments(source, |source, index, output| {
+        if !starts_with_keyword(source, index, "as") {
+            return None;
+        }
+
+        let whitespace_start = index + "as".len();
+        let const_start = skip_ascii_whitespace(source, whitespace_start);
+        if const_start == whitespace_start || !starts_with_keyword(source, const_start, "const") {
+            return None;
+        }
+
+        trim_trailing_inline_whitespace(output);
+        Some(const_start + "const".len())
+    })
+}
+
 fn lower_abstract_class_keywords(source: &str) -> String {
-    source.replace("abstract class", "class")
+    rewrite_outside_strings_and_comments(source, |source, index, _output| {
+        if !starts_with_keyword(source, index, "abstract") {
+            return None;
+        }
+
+        let class_start = skip_ascii_whitespace(source, index + "abstract".len());
+        if class_start == index + "abstract".len()
+            || !starts_with_keyword(source, class_start, "class")
+        {
+            return None;
+        }
+
+        Some(class_start)
+    })
 }
 
 fn strip_type_annotations(source: &str) -> String {
@@ -1575,6 +1810,18 @@ const value: number = 1;
         assert!(!output.normalized_source.contains("!:"));
     }
 
+    #[test]
+    fn definite_assignment_normalization_skips_strings_and_comments() {
+        let source = r#"const label = "!:";
+// !:
+let value!: string;"#;
+        let normalized = normalize_definite_assignment_assertions(source);
+
+        assert!(normalized.contains(r#""!:""#));
+        assert!(normalized.contains("// !:"));
+        assert!(normalized.contains("let value: string;"));
+    }
+
     // --- Const assertion normalization ---
 
     #[test]
@@ -1589,6 +1836,18 @@ const value: number = 1;
         )
         .unwrap();
         assert!(!output.normalized_source.contains("as const"));
+    }
+
+    #[test]
+    fn const_assertion_stripping_skips_strings_and_comments() {
+        let source = r#"const label = "as const";
+/* as const */
+const arr = [1, 2, 3] as const;"#;
+        let normalized = strip_const_assertions(source);
+
+        assert!(normalized.contains(r#""as const""#));
+        assert!(normalized.contains("/* as const */"));
+        assert!(normalized.contains("const arr = [1, 2, 3];"));
     }
 
     // --- Abstract class lowering ---
@@ -1606,6 +1865,18 @@ const value: number = 1;
         .unwrap();
         assert!(!output.normalized_source.contains("abstract"));
         assert!(output.normalized_source.contains("class Base"));
+    }
+
+    #[test]
+    fn abstract_class_lowering_skips_strings_and_comments() {
+        let source = r#"const label = "abstract class";
+/* abstract class Commented {} */
+abstract class Base { }"#;
+        let normalized = lower_abstract_class_keywords(source);
+
+        assert!(normalized.contains(r#""abstract class""#));
+        assert!(normalized.contains("/* abstract class Commented {} */"));
+        assert!(normalized.contains("class Base { }"));
     }
 
     // --- Decorator lowering ---

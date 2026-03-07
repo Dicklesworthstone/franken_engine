@@ -56,8 +56,10 @@ fn module_cache_snapshot_fastpath_contract_updates_telemetry() {
     assert!(empty_snapshot.entries.is_empty());
 
     let cold_telemetry = cache.snapshot_fastpath_telemetry();
-    assert_eq!(cold_telemetry.fallback_reads, 1);
-    assert_eq!(cold_telemetry.uninitialized_fallbacks, 1);
+    assert_eq!(cold_telemetry.fallback_reads, 0);
+    assert_eq!(cold_telemetry.uninitialized_fallbacks, 0);
+    assert_eq!(cold_telemetry.fast_path_reads, 1);
+    assert_eq!(cold_telemetry.writes, 0);
 
     let ctx = CacheContext::new("trace-seqlock", "decision-seqlock", "policy-seqlock");
     let version = ModuleVersionFingerprint::new(ContentHash::compute(b"module-a"), 1, 1);
@@ -80,7 +82,7 @@ fn module_cache_snapshot_fastpath_contract_updates_telemetry() {
     let telemetry = cache.snapshot_fastpath_telemetry();
     assert_eq!(telemetry.writes, 1);
     assert!(telemetry.fast_path_reads >= 1);
-    assert_eq!(telemetry.fallback_reads, 1);
+    assert_eq!(telemetry.fallback_reads, 0);
 }
 
 #[test]
@@ -98,8 +100,10 @@ fn governance_head_view_fastpath_contract_tracks_checkpoint_projection() {
     assert!(ledger.latest_checkpoint_view().is_none());
 
     let cold_telemetry = ledger.head_view_fastpath_telemetry();
-    assert_eq!(cold_telemetry.fallback_reads, 1);
-    assert_eq!(cold_telemetry.uninitialized_fallbacks, 1);
+    assert_eq!(cold_telemetry.fallback_reads, 0);
+    assert_eq!(cold_telemetry.uninitialized_fallbacks, 0);
+    assert_eq!(cold_telemetry.fast_path_reads, 1);
+    assert_eq!(cold_telemetry.writes, 0);
 
     ledger
         .append(automatic_input(
@@ -130,5 +134,5 @@ fn governance_head_view_fastpath_contract_tracks_checkpoint_projection() {
     let telemetry = ledger.head_view_fastpath_telemetry();
     assert_eq!(telemetry.writes, 2);
     assert!(telemetry.fast_path_reads >= 2);
-    assert_eq!(telemetry.fallback_reads, 1);
+    assert_eq!(telemetry.fallback_reads, 0);
 }

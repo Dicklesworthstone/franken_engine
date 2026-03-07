@@ -596,6 +596,10 @@ impl GovernanceAuditLedger {
     }
 
     pub fn query(&self, query: &GovernanceLedgerQuery) -> Vec<GovernanceLedgerEntry> {
+        if !self.head_view_fastpath.is_initialized() {
+            self.head_view_fastpath
+                .seed_if_uninitialized(self.baseline_head_view());
+        }
         self.head_view_fastpath
             .read_clone_or_else(|| self.baseline_head_view())
             .value
@@ -747,6 +751,10 @@ impl GovernanceAuditLedger {
     }
 
     pub fn latest_checkpoint_view(&self) -> Option<GovernanceLedgerCheckpoint> {
+        if !self.head_view_fastpath.is_initialized() {
+            self.head_view_fastpath
+                .seed_if_uninitialized(self.baseline_head_view());
+        }
         self.head_view_fastpath
             .read_clone_or_else(|| self.baseline_head_view())
             .value

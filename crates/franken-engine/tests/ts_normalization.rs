@@ -56,6 +56,41 @@ let maybe!: string;
 }
 
 #[test]
+fn token_aware_normalization_skips_strings_and_comments() {
+    let source = r#"
+const label = "abstract class as const !:";
+/* abstract class Commented {} as const */
+abstract class Base {}
+const answer = [1, 2, 3] as const;
+class Holder { value!: string; }
+"#;
+
+    let output = normalize_typescript_to_es2020(
+        source,
+        &TsNormalizationConfig::default(),
+        "trace-token-aware",
+        "decision-token-aware",
+        "policy-token-aware",
+    )
+    .expect("normalization should pass");
+
+    assert!(
+        output
+            .normalized_source
+            .contains(r#""abstract class as const !:""#)
+    );
+    assert!(
+        output
+            .normalized_source
+            .contains("/* abstract class Commented {} as const */")
+    );
+    assert!(output.normalized_source.contains("class Base {}"));
+    assert!(!output.normalized_source.contains("abstract class Base"));
+    assert!(!output.normalized_source.contains("[1, 2, 3] as const"));
+    assert!(!output.normalized_source.contains("value!:"));
+}
+
+#[test]
 fn namespace_merging_is_lowered_deterministically() {
     let source = r#"
 namespace Demo { export const value = 1; }

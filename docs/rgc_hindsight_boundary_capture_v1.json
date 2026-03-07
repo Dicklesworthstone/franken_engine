@@ -1,0 +1,526 @@
+{
+  "schema_version": "franken-engine.rgc-hindsight-boundary-capture.contract.v1",
+  "bead_id": "bd-1lsy.9.11.1",
+  "boundary_catalog": {
+    "schema_version": "franken-engine.rgc-hindsight-boundary-catalog.v1",
+    "bead_id": "bd-1lsy.9.11.1",
+    "rules": [
+      {
+        "boundary_class": "clock_read",
+        "nondeterminism_tag": "clock_read",
+        "minimal_fields": [
+          {
+            "field": "clock_id",
+            "description": "stable identifier for the clock source"
+          },
+          {
+            "field": "clock_domain",
+            "description": "monotonic or realtime domain label"
+          },
+          {
+            "field": "observed_tick",
+            "description": "captured tick or timestamp value"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "clock-non-monotonic",
+            "description": "escalate when the clock source is observed to move backwards or drift unexpectedly"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "clock_id",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "clock_domain",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "observed_tick",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          }
+        ]
+      },
+      {
+        "boundary_class": "randomness_draw",
+        "nondeterminism_tag": "randomness_draw",
+        "minimal_fields": [
+          {
+            "field": "generator_id",
+            "description": "stable identifier for the randomness source"
+          },
+          {
+            "field": "draw_index",
+            "description": "monotonic draw index within the run"
+          },
+          {
+            "field": "sample_digest",
+            "description": "digest of the produced random sample"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "randomness-unseeded",
+            "description": "escalate when entropy is sourced outside the declared seeded generator path"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "generator_id",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "draw_index",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "sample_digest",
+            "privacy_class": "secret_digest",
+            "treatment": "digest_only"
+          }
+        ]
+      },
+      {
+        "boundary_class": "filesystem_input",
+        "nondeterminism_tag": "filesystem_input",
+        "minimal_fields": [
+          {
+            "field": "operation",
+            "description": "filesystem operation kind"
+          },
+          {
+            "field": "path_digest",
+            "description": "digest of the normalized path"
+          },
+          {
+            "field": "content_digest",
+            "description": "digest of the observed bytes or metadata"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "filesystem-path-explanation",
+            "description": "escalate when an operator explanation requires the raw path instead of the path digest"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "operation",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "path_digest",
+            "privacy_class": "path_digest",
+            "treatment": "digest_only"
+          },
+          {
+            "field": "content_digest",
+            "privacy_class": "secret_digest",
+            "treatment": "digest_only"
+          }
+        ]
+      },
+      {
+        "boundary_class": "network_response",
+        "nondeterminism_tag": "network_response",
+        "minimal_fields": [
+          {
+            "field": "request_digest",
+            "description": "digest of the normalized request envelope"
+          },
+          {
+            "field": "response_digest",
+            "description": "digest of the response body or headers"
+          },
+          {
+            "field": "status_code",
+            "description": "HTTP or transport status code"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "network-rich-body-needed",
+            "description": "escalate when replay or support requires structured body fields beyond the response digest"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "request_digest",
+            "privacy_class": "secret_digest",
+            "treatment": "digest_only"
+          },
+          {
+            "field": "response_digest",
+            "privacy_class": "secret_digest",
+            "treatment": "digest_only"
+          },
+          {
+            "field": "status_code",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          }
+        ]
+      },
+      {
+        "boundary_class": "module_resolution",
+        "nondeterminism_tag": "module_resolution",
+        "minimal_fields": [
+          {
+            "field": "specifier",
+            "description": "requested module specifier"
+          },
+          {
+            "field": "referrer_digest",
+            "description": "digest of the requesting referrer context"
+          },
+          {
+            "field": "resolved_path_digest",
+            "description": "digest of the resolved target"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "module-resolution-fallback",
+            "description": "escalate when resolution depended on ambient filesystem fallback heuristics"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "specifier",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "referrer_digest",
+            "privacy_class": "path_digest",
+            "treatment": "digest_only"
+          },
+          {
+            "field": "resolved_path_digest",
+            "privacy_class": "path_digest",
+            "treatment": "digest_only"
+          }
+        ]
+      },
+      {
+        "boundary_class": "scheduling_decision",
+        "nondeterminism_tag": "scheduling_decision",
+        "minimal_fields": [
+          {
+            "field": "queue_id",
+            "description": "stable queue or lane identifier"
+          },
+          {
+            "field": "task_id",
+            "description": "stable task identifier"
+          },
+          {
+            "field": "ordering_digest",
+            "description": "digest of the ordering witness used for the decision"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "scheduler-work-steal",
+            "description": "escalate when work stealing or contested wake-up ordering requires a richer queue snapshot"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "queue_id",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "task_id",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "ordering_digest",
+            "privacy_class": "secret_digest",
+            "treatment": "digest_only"
+          }
+        ]
+      },
+      {
+        "boundary_class": "controller_override",
+        "nondeterminism_tag": "controller_override",
+        "minimal_fields": [
+          {
+            "field": "controller_id",
+            "description": "stable controller identifier"
+          },
+          {
+            "field": "override_kind",
+            "description": "kind of override or forced route"
+          },
+          {
+            "field": "value_digest",
+            "description": "digest of the override payload"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "interactive-controller-input",
+            "description": "escalate when the override was sourced from interactive operator input"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "controller_id",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "override_kind",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "value_digest",
+            "privacy_class": "secret_digest",
+            "treatment": "digest_only"
+          }
+        ]
+      },
+      {
+        "boundary_class": "external_policy_read",
+        "nondeterminism_tag": "external_policy_read",
+        "minimal_fields": [
+          {
+            "field": "policy_name",
+            "description": "logical name of the policy surface"
+          },
+          {
+            "field": "policy_digest",
+            "description": "digest of the policy snapshot"
+          },
+          {
+            "field": "policy_epoch",
+            "description": "epoch or monotonic policy version"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "unsigned-policy-snapshot",
+            "description": "escalate when the policy snapshot lacks a stable signed digest"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "policy_name",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "policy_digest",
+            "privacy_class": "policy_digest",
+            "treatment": "digest_only"
+          },
+          {
+            "field": "policy_epoch",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          }
+        ]
+      },
+      {
+        "boundary_class": "hardware_surface_read",
+        "nondeterminism_tag": "hardware_surface_read",
+        "minimal_fields": [
+          {
+            "field": "surface_kind",
+            "description": "hardware surface or device class"
+          },
+          {
+            "field": "measurement_digest",
+            "description": "digest of the observed measurement"
+          },
+          {
+            "field": "driver_fingerprint",
+            "description": "stable digest of the driver or firmware surface"
+          }
+        ],
+        "escalation_cases": [
+          {
+            "case_id": "hardware-quote-required",
+            "description": "escalate when later validation requires the raw quote or vendor payload"
+          }
+        ],
+        "redaction_rules": [
+          {
+            "field": "surface_kind",
+            "privacy_class": "public_metadata",
+            "treatment": "plaintext"
+          },
+          {
+            "field": "measurement_digest",
+            "privacy_class": "hardware_fingerprint",
+            "treatment": "digest_only"
+          },
+          {
+            "field": "driver_fingerprint",
+            "privacy_class": "hardware_fingerprint",
+            "treatment": "digest_only"
+          }
+        ]
+      }
+    ]
+  },
+  "minimal_replay_input_schema": {
+    "schema_version": "franken-engine.rgc-minimal-replay-input-schema.v1",
+    "bead_id": "bd-1lsy.9.11.1",
+    "entries": [
+      {
+        "boundary_class": "clock_read",
+        "required_fields": [
+          "clock_id",
+          "clock_domain",
+          "observed_tick"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "clock-non-monotonic"
+        ]
+      },
+      {
+        "boundary_class": "randomness_draw",
+        "required_fields": [
+          "generator_id",
+          "draw_index",
+          "sample_digest"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "randomness-unseeded"
+        ]
+      },
+      {
+        "boundary_class": "filesystem_input",
+        "required_fields": [
+          "operation",
+          "path_digest",
+          "content_digest"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "filesystem-path-explanation"
+        ]
+      },
+      {
+        "boundary_class": "network_response",
+        "required_fields": [
+          "request_digest",
+          "response_digest",
+          "status_code"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "network-rich-body-needed"
+        ]
+      },
+      {
+        "boundary_class": "module_resolution",
+        "required_fields": [
+          "specifier",
+          "referrer_digest",
+          "resolved_path_digest"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "module-resolution-fallback"
+        ]
+      },
+      {
+        "boundary_class": "scheduling_decision",
+        "required_fields": [
+          "queue_id",
+          "task_id",
+          "ordering_digest"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "scheduler-work-steal"
+        ]
+      },
+      {
+        "boundary_class": "controller_override",
+        "required_fields": [
+          "controller_id",
+          "override_kind",
+          "value_digest"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "interactive-controller-input"
+        ]
+      },
+      {
+        "boundary_class": "external_policy_read",
+        "required_fields": [
+          "policy_name",
+          "policy_digest",
+          "policy_epoch"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "unsigned-policy-snapshot"
+        ]
+      },
+      {
+        "boundary_class": "hardware_surface_read",
+        "required_fields": [
+          "surface_kind",
+          "measurement_digest",
+          "driver_fingerprint"
+        ],
+        "sufficiency_rule": "minimal fields are sufficient unless the capture explicitly marks the event for escalation",
+        "escalation_cases": [
+          "hardware-quote-required"
+        ]
+      }
+    ]
+  },
+  "boundary_redaction_map": {
+    "schema_version": "franken-engine.rgc-boundary-redaction-map.v1",
+    "bead_id": "bd-1lsy.9.11.1",
+    "entries": [
+      { "boundary_class": "clock_read", "field": "clock_id", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "clock_read", "field": "clock_domain", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "clock_read", "field": "observed_tick", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "randomness_draw", "field": "generator_id", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "randomness_draw", "field": "draw_index", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "randomness_draw", "field": "sample_digest", "privacy_class": "secret_digest", "treatment": "digest_only" },
+      { "boundary_class": "filesystem_input", "field": "operation", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "filesystem_input", "field": "path_digest", "privacy_class": "path_digest", "treatment": "digest_only" },
+      { "boundary_class": "filesystem_input", "field": "content_digest", "privacy_class": "secret_digest", "treatment": "digest_only" },
+      { "boundary_class": "network_response", "field": "request_digest", "privacy_class": "secret_digest", "treatment": "digest_only" },
+      { "boundary_class": "network_response", "field": "response_digest", "privacy_class": "secret_digest", "treatment": "digest_only" },
+      { "boundary_class": "network_response", "field": "status_code", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "module_resolution", "field": "specifier", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "module_resolution", "field": "referrer_digest", "privacy_class": "path_digest", "treatment": "digest_only" },
+      { "boundary_class": "module_resolution", "field": "resolved_path_digest", "privacy_class": "path_digest", "treatment": "digest_only" },
+      { "boundary_class": "scheduling_decision", "field": "queue_id", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "scheduling_decision", "field": "task_id", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "scheduling_decision", "field": "ordering_digest", "privacy_class": "secret_digest", "treatment": "digest_only" },
+      { "boundary_class": "controller_override", "field": "controller_id", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "controller_override", "field": "override_kind", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "controller_override", "field": "value_digest", "privacy_class": "secret_digest", "treatment": "digest_only" },
+      { "boundary_class": "external_policy_read", "field": "policy_name", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "external_policy_read", "field": "policy_digest", "privacy_class": "policy_digest", "treatment": "digest_only" },
+      { "boundary_class": "external_policy_read", "field": "policy_epoch", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "hardware_surface_read", "field": "surface_kind", "privacy_class": "public_metadata", "treatment": "plaintext" },
+      { "boundary_class": "hardware_surface_read", "field": "measurement_digest", "privacy_class": "hardware_fingerprint", "treatment": "digest_only" },
+      { "boundary_class": "hardware_surface_read", "field": "driver_fingerprint", "privacy_class": "hardware_fingerprint", "treatment": "digest_only" }
+    ]
+  }
+}

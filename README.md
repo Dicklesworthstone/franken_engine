@@ -50,29 +50,28 @@ FrankenEngine provides two native execution lanes, a probabilistic guardplane wi
 
 ## Quick Example
 
+The shipped `frankenctl` CLI is intentionally narrower than the long-term
+operator roadmap. Today the binary exposes `version`, `compile`, `run`,
+`doctor`, `verify`, `benchmark`, and `replay`; other operator surfaces stay
+documented as planned/library-level capabilities until they are actually
+shipped.
+
 ```bash
 # 1) Install and verify
 frankenctl version
 
-# 2) Initialize a runtime workspace
-frankenctl init --profile secure --path ./demo-runtime
+# 2) Create a tiny source file and artifact directory
+mkdir -p ./artifacts
+printf 'const answer = 40 + 2;\n' > ./demo.js
 
-# 3) Compile an extension package to capability-typed IR
-frankenctl ext compile ./examples/weather-ext --out ./build/weather.fir
+# 3) Compile source to a versioned artifact
+frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
 
-# 4) Run in shadow mode with lockstep Node/Bun diff
-frankenctl shadow-run ./build/weather.fir --lockstep node,bun --report ./artifacts/shadow.json
+# 4) Verify the compile artifact contract
+frankenctl verify compile-artifact --input ./artifacts/demo.compile.json
 
-# 5) Promote to active with signed policy checkpoint
-frankenctl promote ./build/weather.fir --policy ./policies/default.toml --checkpoint-sign
-
-# 6) Trigger an incident drill and inspect containment action
-frankenctl drill run suspicious-exfiltration --target weather-ext
-frankenctl decision show --last --explain --receipt
-
-# 7) Verify receipt and replay deterministically
-frankenctl receipt verify --id $(frankenctl decision show --last --json | jq -r .receipt_id)
-frankenctl replay run --trace $(frankenctl decision show --last --json | jq -r .trace_id)
+# 5) Execute the same source through the orchestrator
+frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
 ```
 
 ## Design Philosophy
@@ -158,59 +157,69 @@ cd /dp/frankensqlite && cargo build --release
 
 ## Quick Start
 
-1. **Create config and keys**
+1. **Create a tiny demo source**
 ```bash
-frankenctl init --profile secure --path ./runtime
-frankenctl keys generate --out ./runtime/keys
+mkdir -p ./artifacts
+printf 'const answer = 40 + 2;\n' > ./demo.js
 ```
 
-2. **Enable control plane integration**
+2. **Compile to a deterministic artifact**
 ```bash
-frankenctl control-plane bind --asupersync /dp/asupersync
+frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
+frankenctl verify compile-artifact --input ./artifacts/demo.compile.json
 ```
 
-3. **Compile and validate extension package**
+3. **Run the source and persist the execution report**
 ```bash
-frankenctl ext compile ./examples/hello-ext --out ./runtime/ext/hello.fir
-frankenctl ext verify ./runtime/ext/hello.fir
+frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
 ```
 
-4. **Run guarded runtime**
+4. **Summarize a captured runtime snapshot**
 ```bash
-frankenctl run --config ./runtime/franken-engine.toml
+frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor
 ```
 
-5. **Inspect decisions and evidence**
+5. **Verify receipt bundles and benchmark publication inputs**
 ```bash
-frankenctl decision tail --follow
-frankenctl evidence export --since 1h --out ./artifacts/evidence.jsonl
+frankenctl verify receipt --input ./artifacts/verifier_input.json --receipt-id rcpt_01J... --summary
+frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json
 ```
 
-6. **Test deterministic replay and revocation paths**
+6. **Run benchmark and replay workflows when you have the required artifacts**
 ```bash
-frankenctl replay run --trace latest
-frankenctl revocation drill --scenario stale-head-recovery
+frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks
+frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json
+frankenctl replay run --trace ./artifacts/replay/demo-trace.json --mode validate --out ./artifacts/replay_report.json
 ```
 
 ## Command Reference
 
+The command table below is the current shipped `frankenctl` contract. Treat
+workspace init, promotion, revocation repair, lockstep diffing, TUI, and API
+serving as roadmap/library surfaces until dedicated CLI beads land them.
+
 | Command | Purpose | Example |
 |---|---|---|
-| `frankenctl init` | Create runtime workspace and default config | `frankenctl init --profile secure --path ./runtime` |
-| `frankenctl run` | Start runtime with configured lanes and guardplane | `frankenctl run --config ./runtime/franken-engine.toml` |
-| `frankenctl ext compile` | Compile TS extension package to capability-typed IR | `frankenctl ext compile ./ext/foo --out ./build/foo.fir` |
-| `frankenctl ext verify` | Validate capability declarations and IR invariants | `frankenctl ext verify ./build/foo.fir` |
-| `frankenctl shadow-run` | Run observe-only with lockstep differential analysis | `frankenctl shadow-run ./build/foo.fir --lockstep node,bun` |
-| `frankenctl promote` | Promote extension after shadow/conformance gates | `frankenctl promote ./build/foo.fir --checkpoint-sign` |
-| `frankenctl decision show` | Inspect last decision with posterior and loss terms | `frankenctl decision show --last --explain` |
-| `frankenctl receipt verify` | Verify cryptographic receipt and log consistency | `frankenctl receipt verify --id rcpt_01J...` |
-| `frankenctl replay run` | Deterministically replay incident trace | `frankenctl replay run --trace trace_01J...` |
-| `frankenctl quarantine` | Trigger containment action for extension/session | `frankenctl quarantine --extension foo --reason high-risk` |
-| `frankenctl revocation` | Manage revocation heads and propagation checks | `frankenctl revocation status --zone prod-us-east` |
-| `frankenctl benchmark` | Run category benchmark and emit reproducible artifacts | `frankenctl benchmark run --suite extension-heavy` |
-| `frankenctl lockstep` | Execute Node/Bun/FrankenEngine differential harness | `frankenctl lockstep run --suite compat-smoke` |
-| `frankenctl tui` | Open advanced operator console via frankentui | `frankenctl tui --view incident-replay` |
-| `frankenctl api serve` | Expose control APIs for operations and automation | `frankenctl api serve --bind 127.0.0.1:8787` |
+| `frankenctl version` | Print the shipped CLI schema/binary version | `frankenctl version` |
+| `frankenctl compile` | Parse and lower source into a versioned compile artifact | `frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script` |
+| `frankenctl run` | Execute source through the orchestrator and emit an execution report | `frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json` |
+| `frankenctl doctor` | Summarize runtime diagnostics input and emit operator artifacts | `frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor` |
+| `frankenctl verify compile-artifact` | Validate compile artifact integrity and schema invariants | `frankenctl verify compile-artifact --input ./artifacts/demo.compile.json` |
+| `frankenctl verify receipt` | Verify a receipt bundle against a specific receipt ID | `frankenctl verify receipt --input ./artifacts/verifier_input.json --receipt-id rcpt_01J... --summary` |
+| `frankenctl benchmark run` | Run bundled benchmark families and emit evidence artifacts | `frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks` |
+| `frankenctl benchmark score` | Score a publication-gate input against Node/Bun comparisons | `frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json` |
+| `frankenctl benchmark verify` | Verify a benchmark claim bundle and render a verdict report | `frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json` |
+| `frankenctl replay run` | Replay a captured nondeterminism trace in strict, best-effort, or validate mode | `frankenctl replay run --trace ./artifacts/replay/demo-trace.json --mode validate --out ./artifacts/replay_report.json` |
+
+## RGC Docs and Help Surface Audit
+
+The shipped CLI contract above is guarded by an explicit docs/help audit pack so
+README examples do not drift back toward aspirational subcommands.
+
+- `docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md`
+- `docs/rgc_docs_help_surface_audit_v1.json`
+- `./scripts/run_rgc_docs_help_surface_audit.sh ci`
+- `./scripts/e2e/rgc_docs_help_surface_audit_replay.sh ci`
 
 ## Configuration
 
@@ -1504,11 +1513,11 @@ Artifacts are written under:
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| `missing Cx context` errors | Effectful host path is bypassing control-plane threading | Run `frankenctl doctor cx` and update integration boundary to pass `Cx` |
-| Replay mismatch on high-severity trace | Snapshot or randomness transcript missing | Verify `replay.record_randomness_transcript=true` and rerun `frankenctl replay verify --trace ...` |
-| Receipt verification failure | Stale signature chain or broken transparency-log inclusion proof | Run `frankenctl receipt verify --repair-log` and check signer key rotation state |
-| Revocation lag above SLO | Anti-entropy backlog or network partition | Run `frankenctl revocation repair --zone <zone>` and inspect partition diagnostics |
-| Lockstep diff shows behavior drift | Intentional semantic change not declared, or regression in lane policy | Use `frankenctl lockstep explain --case <id>` and add policy declaration or patch runtime |
+| Compile artifact verification fails | Source path, parse goal, or artifact contents are stale/mismatched | Rerun `frankenctl compile --input <source.js> --out <artifact.json> --goal <script|module>` and then `frankenctl verify compile-artifact --input <artifact.json>` |
+| `doctor` summary reports missing readiness signals | Runtime diagnostics input or optional signal bundles are incomplete | Rebuild the JSON input bundle and rerun `frankenctl doctor --input <runtime_input.json> --summary --out-dir <dir>` |
+| Replay mismatch on a captured trace | Snapshot or nondeterminism transcript is incomplete | Rerun `frankenctl replay run --trace <trace.json> --mode validate --out <report.json>` and inspect the replay report |
+| Receipt verification failure | Verifier input is stale or the receipt ID does not match the bundle | Run `frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> --summary` and inspect the rendered verdict |
+| Benchmark publication gate fails | Claim bundle or publication input is incomplete, stale, or below the scoring threshold | Run `frankenctl benchmark verify --bundle <dir> --summary --output <report.json>` and `frankenctl benchmark score --input <publication_gate_input.json> --output <results.json>` |
 
 ## Limitations
 

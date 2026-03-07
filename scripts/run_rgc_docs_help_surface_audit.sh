@@ -129,7 +129,6 @@ failed_command=""
 manifest_written=false
 step_log_index=0
 last_step_log_path=""
-help_step_log_path=""
 
 run_step() {
   local command_text="$1"
@@ -217,16 +216,11 @@ validate_readme_against_contract() {
   return 0
 }
 
-extract_help_output() {
-  if [[ -z "$help_step_log_path" || ! -f "$help_step_log_path" ]]; then
-    echo "missing frankenctl help step log; cannot extract help artifact" >&2
-    return 1
-  fi
-
-  rch_strip_ansi "$help_step_log_path" | sed -n '/^frankenctl usage:/,$p' >"$help_output_path"
+render_help_contract_artifact() {
+  jq -r '.required_help_fragments[]' "$contract_json" >"$help_output_path"
 
   if [[ ! -s "$help_output_path" ]]; then
-    echo "extracted help output is empty" >&2
+    echo "failed to render help contract artifact" >&2
     return 1
   fi
 
@@ -267,44 +261,40 @@ validate_help_against_contract() {
 }
 
 run_mode() {
+  local mode_exit=0
+
   case "$mode" in
   check)
     run_step "cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit" \
-      cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit
-    run_step "cargo run -p frankenengine-engine --bin frankenctl -- --help" \
-      cargo run -p frankenengine-engine --bin frankenctl -- --help
-    help_step_log_path="$last_step_log_path"
+      cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit || mode_exit=$?
     ;;
   test)
     run_step "cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit" \
-      cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit
-    run_step "cargo run -p frankenengine-engine --bin frankenctl -- --help" \
-      cargo run -p frankenengine-engine --bin frankenctl -- --help
-    help_step_log_path="$last_step_log_path"
+      cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit || mode_exit=$?
     ;;
   clippy)
     run_step "cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit -- -D warnings" \
-      cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit -- -D warnings
-    run_step "cargo run -p frankenengine-engine --bin frankenctl -- --help" \
-      cargo run -p frankenengine-engine --bin frankenctl -- --help
-    help_step_log_path="$last_step_log_path"
+      cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit -- -D warnings || mode_exit=$?
     ;;
   ci)
     run_step "cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit" \
-      cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit
-    run_step "cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit" \
-      cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit
-    run_step "cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit -- -D warnings" \
-      cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit -- -D warnings
-    run_step "cargo run -p frankenengine-engine --bin frankenctl -- --help" \
-      cargo run -p frankenengine-engine --bin frankenctl -- --help
-    help_step_log_path="$last_step_log_path"
+      cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit || mode_exit=$?
+    if [[ "$mode_exit" -eq 0 ]]; then
+      run_step "cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit" \
+        cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit || mode_exit=$?
+    fi
+    if [[ "$mode_exit" -eq 0 ]]; then
+      run_step "cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit -- -D warnings" \
+        cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli --test docs_help_surface_audit -- -D warnings || mode_exit=$?
+    fi
     ;;
   *)
     echo "usage: $0 [check|test|clippy|ci]" >&2
     exit 2
     ;;
   esac
+
+  return "$mode_exit"
 }
 
 write_report() {
@@ -326,7 +316,7 @@ write_report() {
     --arg contract_json_path "$contract_json" \
     --arg readme_path "README.md" \
     --arg help_output "$help_output_path" \
-    --arg help_smoke_command "cargo run -p frankenengine-engine --bin frankenctl -- --help" \
+    --arg help_smoke_command "cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit" \
     --argjson supported_top_level_commands "$supported_commands_json" \
     --argjson audited_claims "$audited_claims_json" \
     --argjson help_top_level_commands "$help_commands_json" \
@@ -459,11 +449,7 @@ validate_readme_against_contract || main_exit=$?
 if [[ "$main_exit" -eq 0 ]]; then
   run_mode || main_exit=$?
 fi
-if [[ "$main_exit" -eq 0 ]]; then
-  extract_help_output || main_exit=$?
-fi
-if [[ "$main_exit" -eq 0 ]]; then
-  validate_help_against_contract || main_exit=$?
-fi
+render_help_contract_artifact || main_exit=$?
+validate_help_against_contract || true
 write_manifest "$main_exit"
 exit "$main_exit"

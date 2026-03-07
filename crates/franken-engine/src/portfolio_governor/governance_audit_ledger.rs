@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::portfolio_governor::{GovernorDecision, GovernorDecisionKind, Scorecard};
+use frankenengine_engine::seqlock_fastpath::{
+    FastPathTelemetry, RetryBudgetPolicy, SnapshotFastPath,
+};
 
 /// Decision classes captured by the governance ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -308,6 +311,12 @@ impl fmt::Display for GovernanceLedgerError {
 
 impl std::error::Error for GovernanceLedgerError {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct GovernanceLedgerHeadView {
+    entries: Vec<GovernanceLedgerEntry>,
+    latest_checkpoint: Option<GovernanceLedgerCheckpoint>,
+}
+
 /// Append-only governance audit ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GovernanceAuditLedger {
@@ -315,6 +324,8 @@ pub struct GovernanceAuditLedger {
     entries: Vec<GovernanceLedgerEntry>,
     checkpoints: Vec<GovernanceLedgerCheckpoint>,
     events: Vec<GovernanceLogEvent>,
+    #[serde(skip, default = "governance_head_view_fastpath")]
+    head_view_fastpath: SnapshotFastPath<GovernanceLedgerHeadView>,
 }
 
 impl GovernanceAuditLedger {
@@ -339,6 +350,7 @@ impl GovernanceAuditLedger {
             entries: Vec::new(),
             checkpoints: Vec::new(),
             events: Vec::new(),
+            head_view_fastpath: governance_head_view_fastpath(),
         })
     }
 
@@ -520,6 +532,7 @@ impl GovernanceAuditLedger {
             None,
             entry.timestamp_ns,
         );
+        self.publish_head_view_fastpath();
         Ok(entry)
     }
 
@@ -583,8 +596,11 @@ impl GovernanceAuditLedger {
     }
 
     pub fn query(&self, query: &GovernanceLedgerQuery) -> Vec<GovernanceLedgerEntry> {
-        self.entries
-            .iter()
+        self.head_view_fastpath
+            .read_clone_or_else(|| self.baseline_head_view())
+            .value
+            .entries
+            .into_iter()
             .filter(|entry| {
                 query
                     .moonshot_id
@@ -618,7 +634,6 @@ impl GovernanceAuditLedger {
                     .override_only
                     .is_none_or(|only| entry.is_override == only)
             })
-            .cloned()
             .collect()
     }
 
@@ -731,6 +746,21 @@ impl GovernanceAuditLedger {
         self.checkpoints.last()
     }
 
+    pub fn latest_checkpoint_view(&self) -> Option<GovernanceLedgerCheckpoint> {
+        self.head_view_fastpath
+            .read_clone_or_else(|| self.baseline_head_view())
+            .value
+            .latest_checkpoint
+    }
+
+    pub fn head_view_fastpath_policy(&self) -> RetryBudgetPolicy {
+        self.head_view_fastpath.policy()
+    }
+
+    pub fn head_view_fastpath_telemetry(&self) -> FastPathTelemetry {
+        self.head_view_fastpath.telemetry()
+    }
+
     pub fn latest_entry(&self) -> Option<&GovernanceLedgerEntry> {
         self.entries.last()
     }
@@ -758,6 +788,17 @@ impl GovernanceAuditLedger {
             timestamp_ns,
             signature,
         })
+    }
+
+    fn baseline_head_view(&self) -> GovernanceLedgerHeadView {
+        GovernanceLedgerHeadView {
+            entries: self.entries.clone(),
+            latest_checkpoint: self.checkpoints.last().cloned(),
+        }
+    }
+
+    fn publish_head_view_fastpath(&self) {
+        self.head_view_fastpath.publish(self.baseline_head_view());
     }
 
     fn validate_input(&self, input: &GovernanceLedgerInput) -> Result<(), GovernanceLedgerError> {
@@ -840,6 +881,10 @@ impl GovernanceAuditLedger {
             timestamp_ns,
         });
     }
+}
+
+fn governance_head_view_fastpath() -> SnapshotFastPath<GovernanceLedgerHeadView> {
+    SnapshotFastPath::new(RetryBudgetPolicy::new(4, 1))
 }
 
 #[derive(Debug, Default)]

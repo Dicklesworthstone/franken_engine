@@ -187,7 +187,7 @@ impl<T: Clone> SnapshotFastPath<T> {
                 .expect("seqlock snapshot read must not poison")
                 .clone();
             let end = self.sequence.load(Ordering::Acquire);
-            if start == end && end % 2 == 0 {
+            if start == end && end.is_multiple_of(2) {
                 if let Some(value) = cloned {
                     self.fast_path_reads.fetch_add(1, Ordering::Relaxed);
                     return FastPathReadResult {

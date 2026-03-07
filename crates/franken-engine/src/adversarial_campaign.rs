@@ -16,6 +16,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use frankenengine_engine::seqlock_fastpath::{
+    FastPathTelemetry, RetryBudgetPolicy, SnapshotFastPath,
+};
+
 const COMPONENT: &str = "adversarial_campaign_generator";
 const RED_BLUE_COMPONENT: &str = "red_blue_feedback_loop";
 const ERR_INVALID_GRAMMAR: &str = "FE-ADV-CAMP-0001";
@@ -1053,6 +1057,8 @@ pub struct GuardplaneCalibrationState {
     pub evidence_weights_millionths: BTreeMap<AttackDimension, u64>,
     pub loss_matrix_millionths: BTreeMap<ThreatCategory, u64>,
     pub calibration_epoch: u64,
+    #[serde(skip, default = "guardplane_snapshot_fastpath")]
+    snapshot_fastpath: SnapshotFastPath<CalibrationSnapshot>,
 }
 
 impl GuardplaneCalibrationState {
@@ -1081,14 +1087,33 @@ impl GuardplaneCalibrationState {
         }
         self.detection_threshold_millionths =
             clamp_millionths(self.detection_threshold_millionths.max(1));
+        self.refresh_snapshot_fastpath();
     }
 
-    fn snapshot(&self) -> CalibrationSnapshot {
+    fn baseline_snapshot(&self) -> CalibrationSnapshot {
         CalibrationSnapshot {
             detection_threshold_millionths: self.detection_threshold_millionths,
             evidence_weights_millionths: self.evidence_weights_millionths.clone(),
             loss_matrix_millionths: self.loss_matrix_millionths.clone(),
         }
+    }
+
+    pub(crate) fn snapshot(&self) -> CalibrationSnapshot {
+        self.snapshot_fastpath
+            .read_clone_or_else(|| self.baseline_snapshot())
+            .value
+    }
+
+    pub(crate) fn refresh_snapshot_fastpath(&self) {
+        self.snapshot_fastpath.publish(self.baseline_snapshot());
+    }
+
+    pub fn snapshot_fastpath_policy(&self) -> RetryBudgetPolicy {
+        self.snapshot_fastpath.policy()
+    }
+
+    pub fn snapshot_fastpath_telemetry(&self) -> FastPathTelemetry {
+        self.snapshot_fastpath.telemetry()
     }
 }
 
@@ -1099,10 +1124,15 @@ impl Default for GuardplaneCalibrationState {
             evidence_weights_millionths: BTreeMap::new(),
             loss_matrix_millionths: BTreeMap::new(),
             calibration_epoch: 0,
+            snapshot_fastpath: guardplane_snapshot_fastpath(),
         };
         state.ensure_defaults();
         state
     }
+}
+
+fn guardplane_snapshot_fastpath() -> SnapshotFastPath<CalibrationSnapshot> {
+    SnapshotFastPath::new(RetryBudgetPolicy::new(3, 1))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1431,6 +1461,7 @@ impl RedBlueLoopIntegrator {
                 .insert(classification.threat_category, updated);
         }
 
+        self.calibration_state.refresh_snapshot_fastpath();
         let new_snapshot = self.calibration_state.snapshot();
         if new_snapshot == old_snapshot {
             return Ok(None);
@@ -4000,6 +4031,45 @@ mod tests {
         assert!(!s.evidence_weights_millionths.is_empty());
         assert!(!s.loss_matrix_millionths.is_empty());
         assert_eq!(s.calibration_epoch, 0);
+    }
+
+    #[test]
+    fn guardplane_calibration_state_fastpath_tracks_refresh_and_reads() {
+        let mut state = GuardplaneCalibrationState::default();
+        assert_eq!(
+            state.snapshot_fastpath_policy(),
+            RetryBudgetPolicy::new(3, 1)
+        );
+
+        state.detection_threshold_millionths = 650_000;
+        state.calibration_epoch = 7;
+        state
+            .evidence_weights_millionths
+            .insert(AttackDimension::PolicyEvasion, 410_000);
+        state
+            .loss_matrix_millionths
+            .insert(ThreatCategory::PolicyEvasion, 480_000);
+        state.refresh_snapshot_fastpath();
+
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.detection_threshold_millionths, 650_000);
+        assert_eq!(
+            snapshot
+                .evidence_weights_millionths
+                .get(&AttackDimension::PolicyEvasion),
+            Some(&410_000),
+        );
+        assert_eq!(
+            snapshot
+                .loss_matrix_millionths
+                .get(&ThreatCategory::PolicyEvasion),
+            Some(&480_000),
+        );
+
+        let telemetry = state.snapshot_fastpath_telemetry();
+        assert!(telemetry.writes >= 2);
+        assert!(telemetry.fast_path_reads >= 1);
+        assert_eq!(telemetry.fallback_reads, 0);
     }
 
     #[test]

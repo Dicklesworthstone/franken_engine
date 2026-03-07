@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+extern crate self as frankenengine_engine;
+
 pub mod activation_lifecycle;
 pub mod adversarial_campaign;
 pub mod adversarial_coevolution_harness;
@@ -218,6 +220,8 @@ pub mod semantic_contract_baseline;
 pub mod semantic_transport_ledger;
 pub mod semantic_twin;
 pub mod semantic_twin_state_space;
+pub mod seqlock_candidate_inventory;
+pub mod seqlock_fastpath;
 pub mod session_hostcall_channel;
 pub mod shadow_ablation_engine;
 pub mod sibling_integration_benchmark_gate;

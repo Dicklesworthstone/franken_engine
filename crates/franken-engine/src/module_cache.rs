@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{CanonicalValue, encode_value};
 use crate::hash_tiers::ContentHash;
+use frankenengine_engine::seqlock_fastpath::{
+    FastPathTelemetry, RetryBudgetPolicy, SnapshotFastPath,
+};
 
 pub type CacheResult<T> = Result<T, Box<CacheError>>;
 
@@ -201,13 +204,15 @@ pub struct CacheSnapshot {
     pub state_hash: ContentHash,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleCache {
     entries: BTreeMap<ModuleCacheKey, ModuleCacheEntry>,
     latest_versions: BTreeMap<String, ModuleVersionFingerprint>,
     revoked_modules: BTreeSet<String>,
     events: Vec<CacheEvent>,
     next_event_seq: u64,
+    #[serde(skip, default = "module_cache_snapshot_fastpath")]
+    snapshot_fastpath: SnapshotFastPath<CacheSnapshot>,
 }
 
 impl ModuleCache {
@@ -295,6 +300,7 @@ impl ModuleCache {
         self.entries.insert(key, entry);
 
         self.prune_stale_entries(&request.module_id);
+        self.publish_snapshot_fastpath();
         self.push_event(
             "cache_insert",
             "allow",
@@ -325,6 +331,7 @@ impl ModuleCache {
             entry.key.version.source_hash != current_source_hash
         });
 
+        self.publish_snapshot_fastpath();
         self.push_event(
             "cache_invalidate_source_update",
             "allow",
@@ -355,6 +362,7 @@ impl ModuleCache {
             entry.key.version.policy_version != new_policy_version
         });
 
+        self.publish_snapshot_fastpath();
         self.push_event(
             "cache_invalidate_policy_change",
             "allow",
@@ -385,6 +393,7 @@ impl ModuleCache {
 
         let removed = self.remove_module_entries_where(module_id, |_| true);
 
+        self.publish_snapshot_fastpath();
         self.push_event(
             "cache_invalidate_trust_revocation",
             "allow",
@@ -408,6 +417,7 @@ impl ModuleCache {
         latest.trust_revision = latest.trust_revision.max(trust_revision);
         self.latest_versions.insert(module_id.to_string(), latest);
 
+        self.publish_snapshot_fastpath();
         self.push_event(
             "cache_restore_trust",
             "allow",
@@ -419,13 +429,17 @@ impl ModuleCache {
     }
 
     pub fn snapshot(&self) -> CacheSnapshot {
-        let entries = self.entries.values().cloned().collect::<Vec<_>>();
-        CacheSnapshot {
-            entries,
-            latest_versions: self.latest_versions.clone(),
-            revoked_modules: self.revoked_modules.clone(),
-            state_hash: self.state_hash(),
-        }
+        self.snapshot_fastpath
+            .read_clone_or_else(|| self.baseline_snapshot())
+            .value
+    }
+
+    pub fn snapshot_fastpath_policy(&self) -> RetryBudgetPolicy {
+        self.snapshot_fastpath.policy()
+    }
+
+    pub fn snapshot_fastpath_telemetry(&self) -> FastPathTelemetry {
+        self.snapshot_fastpath.telemetry()
     }
 
     pub fn merge_snapshot(&mut self, snapshot: &CacheSnapshot, context: &CacheContext) {
@@ -463,6 +477,7 @@ impl ModuleCache {
             self.prune_stale_entries(&module_id);
         }
 
+        self.publish_snapshot_fastpath();
         self.push_event(
             "cache_merge_snapshot",
             "allow",
@@ -504,6 +519,19 @@ impl ModuleCache {
 
     pub fn events(&self) -> &[CacheEvent] {
         &self.events
+    }
+
+    fn baseline_snapshot(&self) -> CacheSnapshot {
+        CacheSnapshot {
+            entries: self.entries.values().cloned().collect::<Vec<_>>(),
+            latest_versions: self.latest_versions.clone(),
+            revoked_modules: self.revoked_modules.clone(),
+            state_hash: self.state_hash(),
+        }
+    }
+
+    fn publish_snapshot_fastpath(&self) {
+        self.snapshot_fastpath.publish(self.baseline_snapshot());
     }
 
     fn prune_stale_entries(&mut self, module_id: &str) {
@@ -594,6 +622,23 @@ impl ModuleCache {
             event: self.events.last().expect("event was just pushed").clone(),
         })
     }
+}
+
+impl Default for ModuleCache {
+    fn default() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            latest_versions: BTreeMap::new(),
+            revoked_modules: BTreeSet::new(),
+            events: Vec::new(),
+            next_event_seq: 0,
+            snapshot_fastpath: module_cache_snapshot_fastpath(),
+        }
+    }
+}
+
+fn module_cache_snapshot_fastpath() -> SnapshotFastPath<CacheSnapshot> {
+    SnapshotFastPath::new(RetryBudgetPolicy::new(2, 2))
 }
 
 #[cfg(test)]

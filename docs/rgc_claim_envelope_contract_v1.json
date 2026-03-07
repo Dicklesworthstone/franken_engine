@@ -1,0 +1,251 @@
+{
+  "schema_version": "franken-engine.rgc-claim-envelope-contract.v1",
+  "contract_version": "0.1.0",
+  "bead_id": "bd-1lsy.1.6.3",
+  "generated_by": "bd-1lsy.1.6.3",
+  "generated_at_utc": "2026-03-07T00:00:00Z",
+  "track": {
+    "id": "RGC-016C",
+    "name": "Claim Envelope Contract"
+  },
+  "required_artifacts": [
+    "claim_envelope_contract.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json"
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code",
+    "requested_class",
+    "verdict"
+  ],
+  "contract_inputs": [
+    {
+      "input_id": "react_capability_contract",
+      "bead_id": "bd-1lsy.1.6.1",
+      "contract_doc": "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
+      "contract_json": "docs/rgc_react_capability_contract_v1.json",
+      "role": "defines the React-native compilation support rows that may enter the publishable board over time"
+    },
+    {
+      "input_id": "v8_supremacy_contract",
+      "bead_id": "bd-1lsy.1.6.2",
+      "contract_doc": "docs/RGC_V8_SUPREMACY_CLAIM_CONTRACT_V1.md",
+      "contract_json": "crates/franken-engine/tests/fixtures/rgc_v8_supremacy_claim_contract_v1.json",
+      "role": "defines the declared supremacy board, required cells, and forbidden universal language"
+    }
+  ],
+  "claim_classes": [
+    {
+      "class_id": "frontier_objective",
+      "tier": "frontier_objective",
+      "publishable": false,
+      "description": "North-star ambition for universal dominance over an expanding frontier board.",
+      "required_qualifier_terms": [
+        "frontier",
+        "objective"
+      ],
+      "allowed_surfaces": [
+        "docs",
+        "advisories",
+        "roadmap"
+      ]
+    },
+    {
+      "class_id": "publishable_universal",
+      "tier": "publishable_universal",
+      "publishable": true,
+      "description": "Present-tense published fact that every declared board family is green on the shipped path.",
+      "required_qualifier_terms": [],
+      "allowed_surfaces": [
+        "docs",
+        "rollout",
+        "ga"
+      ]
+    },
+    {
+      "class_id": "publishable_scoped",
+      "tier": "publishable_scoped",
+      "publishable": true,
+      "description": "Present-tense published fact constrained to the measured declared scope.",
+      "required_qualifier_terms": [
+        "observed",
+        "declared"
+      ],
+      "allowed_surfaces": [
+        "docs",
+        "rollout",
+        "ga",
+        "advisories"
+      ]
+    },
+    {
+      "class_id": "target",
+      "tier": "target",
+      "publishable": false,
+      "description": "Forward-looking target language for incomplete but actively pursued board regions.",
+      "required_qualifier_terms": [
+        "target"
+      ],
+      "allowed_surfaces": [
+        "docs",
+        "roadmap",
+        "advisories"
+      ]
+    },
+    {
+      "class_id": "hypothesis",
+      "tier": "hypothesis",
+      "publishable": false,
+      "description": "Explicit speculation while evidence or freshness conditions are incomplete.",
+      "required_qualifier_terms": [
+        "hypothesis"
+      ],
+      "allowed_surfaces": [
+        "docs",
+        "advisories",
+        "internal"
+      ]
+    }
+  ],
+  "board_linkage": {
+    "supremacy_contract_doc": "docs/RGC_V8_SUPREMACY_CLAIM_CONTRACT_V1.md",
+    "supremacy_contract_json": "crates/franken-engine/tests/fixtures/rgc_v8_supremacy_claim_contract_v1.json",
+    "react_contract_doc": "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
+    "react_contract_json": "docs/rgc_react_capability_contract_v1.json",
+    "declared_board_dimensions": [
+      "workload_cell",
+      "environment",
+      "entry_mode",
+      "warm_state",
+      "measurement_family"
+    ],
+    "declared_board_families": [
+      "parse_compile",
+      "startup",
+      "throughput_hot_loops",
+      "async",
+      "module_graphs",
+      "npm_cohorts",
+      "react_compile",
+      "react_ssr",
+      "react_client",
+      "macro_workloads",
+      "tail_latency",
+      "memory"
+    ],
+    "frontier_gap_artifact": "open_world_gap_ledger.json",
+    "frontier_gap_bead": "bd-1lsy.1.6.4"
+  },
+  "downgrade_rules": [
+    {
+      "rule_id": "missing_board_scope_downgrades_universal_to_scoped",
+      "when_condition": "declared board is incomplete but the requested scope is fully measured and evidence-complete",
+      "resulting_class": "publishable_scoped",
+      "rationale": "Universal language must narrow to the measured board rather than silently pretending uncovered regions are green."
+    },
+    {
+      "rule_id": "missing_evidence_downgrades_publishable_to_target",
+      "when_condition": "evidence bundle or shipped-path parity is incomplete",
+      "resulting_class": "target",
+      "rationale": "Unpublished or incomplete evidence may support an ambition target, but not a shipped-fact statement."
+    },
+    {
+      "rule_id": "stale_contract_downgrades_publishable_to_hypothesis",
+      "when_condition": "contract freshness exceeds 168 hours",
+      "resulting_class": "hypothesis",
+      "rationale": "Stale publication rules cannot continue to authorize present-tense claims."
+    },
+    {
+      "rule_id": "open_frontier_gap_blocks_universal_language",
+      "when_condition": "a known frontier gap overlaps the requested universal claim",
+      "resulting_class": "target",
+      "rationale": "Universal claims must collapse back to explicit target language until the gap becomes a measured green board cell."
+    }
+  ],
+  "consumer_channels": [
+    {
+      "channel_id": "docs_channel",
+      "consumer_bead": "bd-1lsy.10.11.3",
+      "allowed_classes": [
+        "frontier_objective",
+        "publishable_universal",
+        "publishable_scoped",
+        "target",
+        "hypothesis"
+      ],
+      "requires_artifacts": [
+        "claim_envelope_contract.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json"
+      ],
+      "rationale": "Docs checks must classify every claim sentence against the same envelope contract."
+    },
+    {
+      "channel_id": "advisories_channel",
+      "consumer_bead": "bd-1lsy.10.11.2",
+      "allowed_classes": [
+        "frontier_objective",
+        "publishable_scoped",
+        "target",
+        "hypothesis"
+      ],
+      "requires_artifacts": [
+        "claim_envelope_contract.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "trace_ids.json"
+      ],
+      "rationale": "Operator advisories may talk about objectives or scoped facts, but must not invent universal board claims."
+    },
+    {
+      "channel_id": "rollout_channel",
+      "consumer_bead": "bd-1lsy.10.4",
+      "allowed_classes": [
+        "publishable_universal",
+        "publishable_scoped",
+        "target"
+      ],
+      "requires_artifacts": [
+        "claim_envelope_contract.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json"
+      ],
+      "rationale": "Rollout gates need to know when a claim is ship-ready versus only a target."
+    },
+    {
+      "channel_id": "ga_channel",
+      "consumer_bead": "bd-1lsy.10.4",
+      "allowed_classes": [
+        "publishable_universal",
+        "publishable_scoped"
+      ],
+      "requires_artifacts": [
+        "claim_envelope_contract.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json"
+      ],
+      "rationale": "GA evidence packages must reject target or hypothesis language in published fact surfaces."
+    }
+  ],
+  "operator_verification": [
+    "jq empty docs/rgc_claim_envelope_contract_v1.json",
+    "./scripts/run_rgc_claim_envelope_contract.sh ci",
+    "./scripts/e2e/rgc_claim_envelope_contract_replay.sh ci"
+  ]
+}

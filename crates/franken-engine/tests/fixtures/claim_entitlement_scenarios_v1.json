@@ -1,0 +1,180 @@
+{
+  "schema_version": "franken-engine.rgc-claim-entitlement-scenarios.v1",
+  "scenario_version": "0.1.0",
+  "scenarios": [
+    {
+      "scenario_id": "fresh_shipped_surface",
+      "description": "Fresh shipped-path evidence entitles the current CLI and scoped supremacy claims.",
+      "evaluated_at_utc": "2026-03-07T20:40:00Z",
+      "observed_evidence": [
+        {
+          "evidence_kind": "docs_help_surface_audit",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        },
+        {
+          "evidence_kind": "frankenctl_cli_tests",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        },
+        {
+          "evidence_kind": "runtime_diagnostics_doctor",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        },
+        {
+          "evidence_kind": "support_surface_contract",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        },
+        {
+          "evidence_kind": "ga_evidence_package",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        },
+        {
+          "evidence_kind": "v8_supremacy_contract",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        },
+        {
+          "evidence_kind": "react_capability_contract",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        }
+      ],
+      "satisfied_constraints": [
+        "constraint.publication.scoped_language",
+        "constraint.surface.shipped_path",
+        "constraint.evidence.reproducible",
+        "constraint.quality.counterexample_free",
+        "constraint.quality.user_visible_diagnostics",
+        "constraint.quality.platform_verified",
+        "constraint.performance.side_constraints_green"
+      ],
+      "expected_outcomes": [
+        {
+          "atom_id": "claim.frankenctl.compile.shipped",
+          "state": "entitled",
+          "minimal_morphism_id": null,
+          "impossible_rule_id": null
+        },
+        {
+          "atom_id": "claim.rollout.doctor_guidance.shipped",
+          "state": "entitled",
+          "minimal_morphism_id": null,
+          "impossible_rule_id": null
+        },
+        {
+          "atom_id": "claim.v8.scoped_observed.publishable",
+          "state": "entitled",
+          "minimal_morphism_id": null,
+          "impossible_rule_id": null
+        }
+      ]
+    },
+    {
+      "scenario_id": "not_yet_proven_prefers_smallest_cutset",
+      "description": "No supporting evidence exists yet, so the evaluator should keep the claim unproven and pick the smaller docs/help cut set.",
+      "evaluated_at_utc": "2026-03-07T20:41:00Z",
+      "observed_evidence": [],
+      "satisfied_constraints": [
+        "constraint.surface.shipped_path",
+        "constraint.evidence.reproducible"
+      ],
+      "expected_outcomes": [
+        {
+          "atom_id": "claim.frankenctl.compile.shipped",
+          "state": "not_yet_proven",
+          "minimal_morphism_id": "morphism.docs_help_surface_audit_to_frankenctl_surface",
+          "impossible_rule_id": null
+        }
+      ]
+    },
+    {
+      "scenario_id": "stale_docs_surface_blocks_claim",
+      "description": "Stale docs/help evidence and missing tests leave the shipped compile claim blocked by missing evidence rather than entitled.",
+      "evaluated_at_utc": "2026-03-07T20:42:00Z",
+      "observed_evidence": [
+        {
+          "evidence_kind": "docs_help_surface_audit",
+          "state": "stale",
+          "triggered_rule_ids": [
+            "rule.stale_evidence"
+          ]
+        }
+      ],
+      "satisfied_constraints": [
+        "constraint.surface.shipped_path",
+        "constraint.evidence.reproducible"
+      ],
+      "expected_outcomes": [
+        {
+          "atom_id": "claim.frankenctl.compile.shipped",
+          "state": "blocked_by_missing_evidence",
+          "minimal_morphism_id": "morphism.docs_help_surface_audit_to_frankenctl_surface",
+          "impossible_rule_id": null
+        }
+      ]
+    },
+    {
+      "scenario_id": "active_counterexample_forbids_shipped_run",
+      "description": "A live counterexample defeats otherwise positive shipped-surface evidence and must emit an impossibility certificate.",
+      "evaluated_at_utc": "2026-03-07T20:43:00Z",
+      "observed_evidence": [
+        {
+          "evidence_kind": "docs_help_surface_audit",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        },
+        {
+          "evidence_kind": "frankenctl_cli_tests",
+          "state": "fresh",
+          "triggered_rule_ids": []
+        },
+        {
+          "evidence_kind": "counterexample_ledger",
+          "state": "fresh",
+          "triggered_rule_ids": [
+            "rule.active_counterexample"
+          ]
+        }
+      ],
+      "satisfied_constraints": [
+        "constraint.surface.shipped_path",
+        "constraint.evidence.reproducible"
+      ],
+      "expected_outcomes": [
+        {
+          "atom_id": "claim.frankenctl.run.shipped",
+          "state": "currently_false_under_active_counterexample",
+          "minimal_morphism_id": null,
+          "impossible_rule_id": "rule.active_counterexample"
+        }
+      ]
+    },
+    {
+      "scenario_id": "missing_guidance_blocks_unsupported_surface",
+      "description": "Unsupported-surface guidance is blocked when the support contract exists but user-visible diagnostics remain missing.",
+      "evaluated_at_utc": "2026-03-07T20:44:00Z",
+      "observed_evidence": [
+        {
+          "evidence_kind": "support_surface_contract",
+          "state": "fresh",
+          "triggered_rule_ids": [
+            "rule.missing_user_guidance"
+          ]
+        }
+      ],
+      "satisfied_constraints": [],
+      "expected_outcomes": [
+        {
+          "atom_id": "claim.support.unsupported_surface.visible",
+          "state": "blocked_by_missing_evidence",
+          "minimal_morphism_id": "morphism.support_surface_contract_to_guidance_claims",
+          "impossible_rule_id": null
+        }
+      ]
+    }
+  ]
+}

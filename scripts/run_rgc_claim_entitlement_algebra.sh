@@ -24,7 +24,12 @@ claim_atom_catalog_path="${run_dir}/claim_atom_catalog.json"
 evidence_morphism_catalog_path="${run_dir}/evidence_morphism_catalog.json"
 side_constraint_lattice_path="${run_dir}/side_constraint_lattice.json"
 disqualifier_rules_path="${run_dir}/disqualifier_rules.json"
+claim_entitlement_report_path="${run_dir}/claim_entitlement_report.json"
+missing_evidence_cutsets_path="${run_dir}/missing_evidence_cutsets.json"
+impossibility_certificates_path="${run_dir}/impossibility_certificates.json"
+claim_counterexample_ledger_path="${run_dir}/claim_counterexample_ledger.json"
 contract_json="docs/rgc_claim_entitlement_algebra_v1.json"
+scenario_fixture="${RGC_CLAIM_ENTITLEMENT_SCENARIO_FIXTURE:-crates/franken-engine/tests/fixtures/claim_entitlement_scenarios_v1.json}"
 component="rgc_claim_entitlement_algebra"
 policy_id="policy-rgc-claim-entitlement-algebra-v1"
 scenario_id="rgc-017-foundation"
@@ -65,11 +70,18 @@ if [[ ! -f "${contract_json}" ]]; then
   exit 2
 fi
 
+if [[ ! -f "${scenario_fixture}" ]]; then
+  echo "missing scenario fixture: ${scenario_fixture}" >&2
+  exit 2
+fi
+
 run_rch() {
   rch exec -- env \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+    "RGC_CLAIM_ENTITLEMENT_ARTIFACT_DIR=${run_dir}" \
+    "RGC_CLAIM_ENTITLEMENT_SCENARIO_FIXTURE=${scenario_fixture}" \
     "$@"
 }
 
@@ -103,6 +115,22 @@ run_step() {
   fi
 }
 
+assert_report_artifacts() {
+  local artifact_path
+
+  for artifact_path in \
+    "${claim_entitlement_report_path}" \
+    "${missing_evidence_cutsets_path}" \
+    "${impossibility_certificates_path}" \
+    "${claim_counterexample_ledger_path}"; do
+    if [[ ! -f "${artifact_path}" ]]; then
+      echo "missing expected artifact: ${artifact_path}" >&2
+      failed_command="artifact materialization (${artifact_path})"
+      return 1
+    fi
+  done
+}
+
 run_mode() {
   case "${mode}" in
     check)
@@ -112,6 +140,7 @@ run_mode() {
     test)
       run_step "cargo test -p frankenengine-engine --test claim_entitlement" \
         cargo test -p frankenengine-engine --test claim_entitlement
+      assert_report_artifacts
       ;;
     clippy)
       run_step "cargo clippy -p frankenengine-engine --test claim_entitlement -- -D warnings" \
@@ -122,6 +151,7 @@ run_mode() {
         cargo check -p frankenengine-engine --test claim_entitlement
       run_step "cargo test -p frankenengine-engine --test claim_entitlement" \
         cargo test -p frankenengine-engine --test claim_entitlement
+      assert_report_artifacts
       run_step "cargo clippy -p frankenengine-engine --test claim_entitlement -- -D warnings" \
         cargo clippy -p frankenengine-engine --test claim_entitlement -- -D warnings
       ;;
@@ -168,6 +198,7 @@ write_manifest() {
   "policy_id": "${policy_id}",
   "mode": "${mode}",
   "scenario_id": "${scenario_id}",
+  "scenario_fixture": "${scenario_fixture}",
   "trace_id": "${trace_id}",
   "decision_id": "${decision_id}",
   "toolchain": "${toolchain}",
@@ -181,6 +212,10 @@ write_manifest() {
     "evidence_morphism_catalog.json",
     "side_constraint_lattice.json",
     "disqualifier_rules.json",
+    "claim_entitlement_report.json",
+    "missing_evidence_cutsets.json",
+    "impossibility_certificates.json",
+    "claim_counterexample_ledger.json",
     "run_manifest.json",
     "events.jsonl",
     "commands.txt"

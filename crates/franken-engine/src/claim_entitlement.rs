@@ -8,6 +8,16 @@ pub const CLAIM_ENTITLEMENT_SCHEMA_VERSION: &str =
     "franken-engine.rgc-claim-entitlement-algebra.v1";
 pub const CLAIM_ENTITLEMENT_COMPONENT: &str = "rgc_claim_entitlement_algebra";
 pub const CLAIM_ENTITLEMENT_POLICY_ID: &str = "policy-rgc-claim-entitlement-algebra-v1";
+pub const CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-claim-entitlement-scenarios.v1";
+pub const CLAIM_ENTITLEMENT_REPORT_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-claim-entitlement-report.v1";
+pub const CLAIM_ENTITLEMENT_CUTSET_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-claim-entitlement-cutsets.v1";
+pub const CLAIM_ENTITLEMENT_IMPOSSIBILITY_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-claim-entitlement-impossibility.v1";
+pub const CLAIM_ENTITLEMENT_COUNTEREXAMPLE_LEDGER_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-claim-counterexample-ledger.v1";
 pub const CLAIM_ENTITLEMENT_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_claim_entitlement_algebra_v1.json");
 
@@ -145,6 +155,154 @@ pub enum DisqualifierVerdict {
     DowngradeToScoped,
     DowngradeToTarget,
     RequireOperatorGuidance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceState {
+    Fresh,
+    Stale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimEvaluationScenarioSet {
+    pub schema_version: String,
+    pub scenario_version: String,
+    pub scenarios: Vec<ClaimEvaluationScenario>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimEvaluationScenario {
+    pub scenario_id: String,
+    pub description: String,
+    pub evaluated_at_utc: String,
+    pub observed_evidence: Vec<ObservedEvidence>,
+    pub satisfied_constraints: Vec<String>,
+    pub expected_outcomes: Vec<ExpectedClaimOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedEvidence {
+    pub evidence_kind: String,
+    pub state: EvidenceState,
+    pub triggered_rule_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpectedClaimOutcome {
+    pub atom_id: String,
+    pub state: ClaimVerdictState,
+    pub minimal_morphism_id: Option<String>,
+    pub impossible_rule_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimVerdictState {
+    Entitled,
+    NotYetProven,
+    BlockedByMissingEvidence,
+    CurrentlyFalseUnderActiveCounterexample,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimEvaluationOutputs {
+    pub claim_entitlement_report: ClaimEntitlementReport,
+    pub missing_evidence_cutsets: MissingEvidenceCutsetReport,
+    pub impossibility_certificates: ImpossibilityCertificateReport,
+    pub claim_counterexample_ledger: ClaimCounterexampleLedger,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimEntitlementReport {
+    pub schema_version: String,
+    pub contract_version: String,
+    pub evaluated_scenarios: Vec<ScenarioVerdictReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScenarioVerdictReport {
+    pub scenario_id: String,
+    pub evaluated_at_utc: String,
+    pub verdicts: Vec<ClaimVerdict>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimVerdict {
+    pub atom_id: String,
+    pub state: ClaimVerdictState,
+    pub supporting_morphism_ids: Vec<String>,
+    pub active_rule_ids: Vec<String>,
+    pub minimal_cutset_ids: Vec<String>,
+    pub impossibility_certificate_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissingEvidenceCutsetReport {
+    pub schema_version: String,
+    pub contract_version: String,
+    pub evaluated_scenarios: Vec<ScenarioMissingEvidenceCutsets>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScenarioMissingEvidenceCutsets {
+    pub scenario_id: String,
+    pub cutsets: Vec<MissingEvidenceCutset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissingEvidenceCutset {
+    pub cutset_id: String,
+    pub atom_id: String,
+    pub supporting_morphism_id: String,
+    pub missing_evidence_kinds: Vec<String>,
+    pub missing_constraint_ids: Vec<String>,
+    pub blocking_rule_ids: Vec<String>,
+    pub cost: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpossibilityCertificateReport {
+    pub schema_version: String,
+    pub contract_version: String,
+    pub evaluated_scenarios: Vec<ScenarioImpossibilityCertificates>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScenarioImpossibilityCertificates {
+    pub scenario_id: String,
+    pub certificates: Vec<ImpossibilityCertificate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpossibilityCertificate {
+    pub certificate_id: String,
+    pub atom_id: String,
+    pub blocking_rule_id: String,
+    pub evidence_kind: String,
+    pub remediation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimCounterexampleLedger {
+    pub schema_version: String,
+    pub contract_version: String,
+    pub evaluated_scenarios: Vec<ScenarioCounterexampleLedger>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScenarioCounterexampleLedger {
+    pub scenario_id: String,
+    pub entries: Vec<CounterexampleLedgerEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CounterexampleLedgerEntry {
+    pub entry_id: String,
+    pub atom_id: String,
+    pub blocking_rule_id: String,
+    pub evidence_kind: String,
+    pub remediation: String,
 }
 
 impl ClaimEntitlementContract {
@@ -329,6 +487,398 @@ impl ClaimEntitlementContract {
         } else {
             Err(errors)
         }
+    }
+
+    pub fn evaluate_scenarios(
+        &self,
+        scenarios: &ClaimEvaluationScenarioSet,
+    ) -> Result<ClaimEvaluationOutputs, Vec<String>> {
+        let mut errors = Vec::new();
+        if let Err(validation_errors) = self.validate() {
+            errors.extend(validation_errors);
+        }
+
+        let atom_ids = self
+            .claim_atom_catalog
+            .atoms
+            .iter()
+            .map(|atom| atom.atom_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let morphism_ids = self
+            .evidence_morphism_catalog
+            .morphisms
+            .iter()
+            .map(|morphism| morphism.morphism_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let evidence_kinds = self
+            .evidence_morphism_catalog
+            .morphisms
+            .iter()
+            .map(|morphism| morphism.evidence_kind.as_str())
+            .collect::<BTreeSet<_>>();
+        let constraint_ids = self
+            .side_constraint_lattice
+            .constraints
+            .iter()
+            .map(|constraint| constraint.constraint_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let rule_lookup = self
+            .disqualifier_rules
+            .rules
+            .iter()
+            .map(|rule| (rule.rule_id.as_str(), rule))
+            .collect::<BTreeMap<_, _>>();
+
+        if scenarios.schema_version != CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION {
+            errors.push(format!(
+                "unexpected scenario schema_version `{}`",
+                scenarios.schema_version
+            ));
+        }
+
+        let mut scenario_ids = BTreeSet::new();
+        for scenario in &scenarios.scenarios {
+            if !scenario_ids.insert(scenario.scenario_id.as_str()) {
+                errors.push(format!("duplicate scenario id `{}`", scenario.scenario_id));
+            }
+
+            for evidence in &scenario.observed_evidence {
+                if !evidence_kinds.contains(evidence.evidence_kind.as_str()) {
+                    errors.push(format!(
+                        "scenario `{}` references unknown evidence_kind `{}`",
+                        scenario.scenario_id, evidence.evidence_kind
+                    ));
+                }
+                for rule_id in &evidence.triggered_rule_ids {
+                    if !rule_lookup.contains_key(rule_id.as_str()) {
+                        errors.push(format!(
+                            "scenario `{}` triggers unknown rule `{}`",
+                            scenario.scenario_id, rule_id
+                        ));
+                    }
+                }
+            }
+
+            for constraint_id in &scenario.satisfied_constraints {
+                if !constraint_ids.contains(constraint_id.as_str()) {
+                    errors.push(format!(
+                        "scenario `{}` references unknown satisfied constraint `{}`",
+                        scenario.scenario_id, constraint_id
+                    ));
+                }
+            }
+
+            for expected in &scenario.expected_outcomes {
+                if !atom_ids.contains(expected.atom_id.as_str()) {
+                    errors.push(format!(
+                        "scenario `{}` references unknown expected atom `{}`",
+                        scenario.scenario_id, expected.atom_id
+                    ));
+                }
+                if let Some(morphism_id) = expected.minimal_morphism_id.as_deref() {
+                    if !morphism_ids.contains(morphism_id) {
+                        errors.push(format!(
+                            "scenario `{}` references unknown expected morphism `{}`",
+                            scenario.scenario_id, morphism_id
+                        ));
+                    }
+                }
+                if let Some(rule_id) = expected.impossible_rule_id.as_deref() {
+                    if !rule_lookup.contains_key(rule_id) {
+                        errors.push(format!(
+                            "scenario `{}` references unknown expected rule `{}`",
+                            scenario.scenario_id, rule_id
+                        ));
+                    }
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        let target_morphisms = self
+            .claim_atom_catalog
+            .atoms
+            .iter()
+            .map(|atom| {
+                let morphisms = self
+                    .evidence_morphism_catalog
+                    .morphisms
+                    .iter()
+                    .filter(|morphism| {
+                        morphism.effect != MorphismEffect::Disqualifies
+                            && morphism.target_atoms.contains(&atom.atom_id)
+                    })
+                    .collect::<Vec<_>>();
+                (atom.atom_id.as_str(), morphisms)
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let mut scenario_reports = Vec::new();
+        let mut scenario_cutsets = Vec::new();
+        let mut scenario_certificates = Vec::new();
+        let mut scenario_ledgers = Vec::new();
+
+        for scenario in &scenarios.scenarios {
+            let fresh_evidence = scenario
+                .observed_evidence
+                .iter()
+                .filter(|evidence| evidence.state == EvidenceState::Fresh)
+                .map(|evidence| evidence.evidence_kind.as_str())
+                .collect::<BTreeSet<_>>();
+            let observed_evidence = scenario
+                .observed_evidence
+                .iter()
+                .map(|evidence| evidence.evidence_kind.as_str())
+                .collect::<BTreeSet<_>>();
+            let satisfied_constraints = scenario
+                .satisfied_constraints
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let active_rule_ids = scenario
+                .observed_evidence
+                .iter()
+                .flat_map(|evidence| evidence.triggered_rule_ids.iter().map(String::as_str))
+                .collect::<BTreeSet<_>>();
+
+            let mut verdicts = Vec::new();
+            let mut cutsets = Vec::new();
+            let mut certificates = Vec::new();
+            let mut counterexample_entries = Vec::new();
+
+            for atom in &self.claim_atom_catalog.atoms {
+                let forbidding_rules = self
+                    .disqualifier_rules
+                    .rules
+                    .iter()
+                    .filter(|rule| {
+                        active_rule_ids.contains(rule.rule_id.as_str())
+                            && rule.verdict == DisqualifierVerdict::Forbid
+                            && rule.target_atoms.contains(&atom.atom_id)
+                    })
+                    .collect::<Vec<_>>();
+
+                if !forbidding_rules.is_empty() {
+                    let certificate_ids = forbidding_rules
+                        .iter()
+                        .map(|rule| {
+                            format!(
+                                "{}::{}::{}",
+                                scenario.scenario_id, atom.atom_id, rule.rule_id
+                            )
+                        })
+                        .collect::<Vec<_>>();
+
+                    for rule in &forbidding_rules {
+                        let certificate_id = format!(
+                            "{}::{}::{}",
+                            scenario.scenario_id, atom.atom_id, rule.rule_id
+                        );
+                        certificates.push(ImpossibilityCertificate {
+                            certificate_id: certificate_id.clone(),
+                            atom_id: atom.atom_id.clone(),
+                            blocking_rule_id: rule.rule_id.clone(),
+                            evidence_kind: rule.evidence_kind.clone(),
+                            remediation: rule.remediation.clone(),
+                        });
+                        counterexample_entries.push(CounterexampleLedgerEntry {
+                            entry_id: certificate_id,
+                            atom_id: atom.atom_id.clone(),
+                            blocking_rule_id: rule.rule_id.clone(),
+                            evidence_kind: rule.evidence_kind.clone(),
+                            remediation: rule.remediation.clone(),
+                        });
+                    }
+
+                    verdicts.push(ClaimVerdict {
+                        atom_id: atom.atom_id.clone(),
+                        state: ClaimVerdictState::CurrentlyFalseUnderActiveCounterexample,
+                        supporting_morphism_ids: Vec::new(),
+                        active_rule_ids: forbidding_rules
+                            .iter()
+                            .map(|rule| rule.rule_id.clone())
+                            .collect(),
+                        minimal_cutset_ids: Vec::new(),
+                        impossibility_certificate_ids: certificate_ids,
+                    });
+                    continue;
+                }
+
+                let atom_morphisms = target_morphisms
+                    .get(atom.atom_id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+
+                let satisfying_morphisms = atom_morphisms
+                    .iter()
+                    .filter(|morphism| {
+                        fresh_evidence.contains(morphism.evidence_kind.as_str())
+                            && morphism
+                                .requires_side_constraints
+                                .iter()
+                                .all(|constraint_id| {
+                                    satisfied_constraints.contains(constraint_id.as_str())
+                                })
+                            && morphism.blocked_by_rules.iter().all(|rule_id| {
+                                !active_rule_ids.contains(rule_id.as_str())
+                                    || rule_lookup.get(rule_id.as_str()).is_some_and(|rule| {
+                                        rule.verdict == DisqualifierVerdict::Forbid
+                                    })
+                            })
+                    })
+                    .map(|morphism| morphism.morphism_id.clone())
+                    .collect::<Vec<_>>();
+
+                if !satisfying_morphisms.is_empty() {
+                    verdicts.push(ClaimVerdict {
+                        atom_id: atom.atom_id.clone(),
+                        state: ClaimVerdictState::Entitled,
+                        supporting_morphism_ids: satisfying_morphisms,
+                        active_rule_ids: Vec::new(),
+                        minimal_cutset_ids: Vec::new(),
+                        impossibility_certificate_ids: Vec::new(),
+                    });
+                    continue;
+                }
+
+                let mut candidates = atom_morphisms
+                    .iter()
+                    .map(|morphism| {
+                        let missing_evidence_kinds =
+                            if fresh_evidence.contains(morphism.evidence_kind.as_str()) {
+                                Vec::new()
+                            } else {
+                                vec![morphism.evidence_kind.clone()]
+                            };
+                        let missing_constraint_ids = morphism
+                            .requires_side_constraints
+                            .iter()
+                            .filter(|constraint_id| {
+                                !satisfied_constraints.contains(constraint_id.as_str())
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let blocking_rule_ids = morphism
+                            .blocked_by_rules
+                            .iter()
+                            .filter(|rule_id| active_rule_ids.contains(rule_id.as_str()))
+                            .filter(|rule_id| {
+                                rule_lookup
+                                    .get(rule_id.as_str())
+                                    .is_some_and(|rule| rule.verdict != DisqualifierVerdict::Forbid)
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        MissingEvidenceCutset {
+                            cutset_id: format!(
+                                "{}::{}::{}",
+                                scenario.scenario_id, atom.atom_id, morphism.morphism_id
+                            ),
+                            atom_id: atom.atom_id.clone(),
+                            supporting_morphism_id: morphism.morphism_id.clone(),
+                            cost: missing_evidence_kinds.len()
+                                + missing_constraint_ids.len()
+                                + blocking_rule_ids.len(),
+                            missing_evidence_kinds,
+                            missing_constraint_ids,
+                            blocking_rule_ids,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                candidates.sort_by(|left, right| {
+                    (
+                        left.cost,
+                        left.supporting_morphism_id.as_str(),
+                        left.atom_id.as_str(),
+                    )
+                        .cmp(&(
+                            right.cost,
+                            right.supporting_morphism_id.as_str(),
+                            right.atom_id.as_str(),
+                        ))
+                });
+
+                let minimal_cost = candidates
+                    .first()
+                    .map(|candidate| candidate.cost)
+                    .unwrap_or(0);
+                let minimal_candidates = candidates
+                    .into_iter()
+                    .filter(|candidate| candidate.cost == minimal_cost)
+                    .collect::<Vec<_>>();
+                let minimal_cutset_ids = minimal_candidates
+                    .iter()
+                    .map(|candidate| candidate.cutset_id.clone())
+                    .collect::<Vec<_>>();
+                let active_rule_ids = minimal_candidates
+                    .iter()
+                    .flat_map(|candidate| candidate.blocking_rule_ids.iter().cloned())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let has_partial_signal = atom_morphisms
+                    .iter()
+                    .any(|morphism| observed_evidence.contains(morphism.evidence_kind.as_str()));
+
+                cutsets.extend(minimal_candidates);
+                verdicts.push(ClaimVerdict {
+                    atom_id: atom.atom_id.clone(),
+                    state: if has_partial_signal {
+                        ClaimVerdictState::BlockedByMissingEvidence
+                    } else {
+                        ClaimVerdictState::NotYetProven
+                    },
+                    supporting_morphism_ids: Vec::new(),
+                    active_rule_ids,
+                    minimal_cutset_ids,
+                    impossibility_certificate_ids: Vec::new(),
+                });
+            }
+
+            scenario_reports.push(ScenarioVerdictReport {
+                scenario_id: scenario.scenario_id.clone(),
+                evaluated_at_utc: scenario.evaluated_at_utc.clone(),
+                verdicts,
+            });
+            scenario_cutsets.push(ScenarioMissingEvidenceCutsets {
+                scenario_id: scenario.scenario_id.clone(),
+                cutsets,
+            });
+            scenario_certificates.push(ScenarioImpossibilityCertificates {
+                scenario_id: scenario.scenario_id.clone(),
+                certificates,
+            });
+            scenario_ledgers.push(ScenarioCounterexampleLedger {
+                scenario_id: scenario.scenario_id.clone(),
+                entries: counterexample_entries,
+            });
+        }
+
+        Ok(ClaimEvaluationOutputs {
+            claim_entitlement_report: ClaimEntitlementReport {
+                schema_version: CLAIM_ENTITLEMENT_REPORT_SCHEMA_VERSION.to_string(),
+                contract_version: self.contract_version.clone(),
+                evaluated_scenarios: scenario_reports,
+            },
+            missing_evidence_cutsets: MissingEvidenceCutsetReport {
+                schema_version: CLAIM_ENTITLEMENT_CUTSET_SCHEMA_VERSION.to_string(),
+                contract_version: self.contract_version.clone(),
+                evaluated_scenarios: scenario_cutsets,
+            },
+            impossibility_certificates: ImpossibilityCertificateReport {
+                schema_version: CLAIM_ENTITLEMENT_IMPOSSIBILITY_SCHEMA_VERSION.to_string(),
+                contract_version: self.contract_version.clone(),
+                evaluated_scenarios: scenario_certificates,
+            },
+            claim_counterexample_ledger: ClaimCounterexampleLedger {
+                schema_version: CLAIM_ENTITLEMENT_COUNTEREXAMPLE_LEDGER_SCHEMA_VERSION.to_string(),
+                contract_version: self.contract_version.clone(),
+                evaluated_scenarios: scenario_ledgers,
+            },
+        })
     }
 }
 

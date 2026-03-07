@@ -3,7 +3,7 @@
   "contract_version": "0.1.0",
   "bead_id": "bd-1lsy.1.7",
   "generated_by": "bd-1lsy.1.7",
-  "generated_at_utc": "2026-03-07T15:26:43Z",
+  "generated_at_utc": "2026-03-07T20:58:00Z",
   "track": {
     "id": "RGC-017",
     "name": "Claim Entitlement Algebra"
@@ -13,6 +13,10 @@
     "evidence_morphism_catalog.json",
     "side_constraint_lattice.json",
     "disqualifier_rules.json",
+    "claim_entitlement_report.json",
+    "missing_evidence_cutsets.json",
+    "impossibility_certificates.json",
+    "claim_counterexample_ledger.json",
     "run_manifest.json",
     "events.jsonl",
     "commands.txt"
@@ -606,6 +610,10 @@
     "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/evidence_morphism_catalog.json",
     "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/side_constraint_lattice.json",
     "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/disqualifier_rules.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/claim_entitlement_report.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/missing_evidence_cutsets.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/impossibility_certificates.json",
+    "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/claim_counterexample_ledger.json",
     "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/run_manifest.json",
     "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/events.jsonl",
     "cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/commands.txt"

@@ -105,6 +105,18 @@ Current rule families:
 These rules are ordered. The precedence list is machine-readable so downstream
 consumers do not disagree about which blocker wins.
 
+Scenario evaluation on top of the algebra emits four deterministic report
+families for downstream gates:
+
+- `claim_entitlement_report.json`
+- `missing_evidence_cutsets.json`
+- `impossibility_certificates.json`
+- `claim_counterexample_ledger.json`
+
+These outputs make the claim state explicit instead of forcing later beads to
+re-derive why a statement is entitled, merely unproven, blocked by missing
+evidence, or currently false under an active counterexample.
+
 ## Operator Verification
 
 ```bash
@@ -115,6 +127,10 @@ cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/claim_atom_catalog.json
 cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/evidence_morphism_catalog.json
 cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/side_constraint_lattice.json
 cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/disqualifier_rules.json
+cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/claim_entitlement_report.json
+cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/missing_evidence_cutsets.json
+cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/impossibility_certificates.json
+cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/claim_counterexample_ledger.json
 cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/run_manifest.json
 cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/events.jsonl
 cat artifacts/rgc_claim_entitlement_algebra/<timestamp>/commands.txt

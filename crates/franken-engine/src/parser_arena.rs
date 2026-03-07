@@ -543,6 +543,8 @@ impl ParserArena {
             | Expression::Conditional { .. }
             | Expression::Call { .. }
             | Expression::Member { .. }
+            | Expression::OptionalCall { .. }
+            | Expression::OptionalMember { .. }
             | Expression::This
             | Expression::ArrayLiteral(_)
             | Expression::ObjectLiteral(_)
@@ -753,6 +755,8 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
         Expression::Conditional { .. } => "conditional",
         Expression::Call { .. } => "call",
         Expression::Member { .. } => "member",
+        Expression::OptionalCall { .. } => "optional_call",
+        Expression::OptionalMember { .. } => "optional_member",
         Expression::This => "this",
         Expression::ArrayLiteral(_) => "array_literal",
         Expression::ObjectLiteral(_) => "object_literal",

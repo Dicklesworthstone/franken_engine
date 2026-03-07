@@ -1329,6 +1329,15 @@ pub enum Expression {
         property: Box<Expression>,
         computed: bool,
     },
+    OptionalCall {
+        callee: Box<Expression>,
+        arguments: Vec<Expression>,
+    },
+    OptionalMember {
+        object: Box<Expression>,
+        property: Box<Expression>,
+        computed: bool,
+    },
     This,
     ArrayLiteral(Vec<Option<Expression>>),
     ObjectLiteral(Vec<ObjectProperty>),
@@ -1478,6 +1487,32 @@ impl Expression {
                 map.insert(
                     "kind".to_string(),
                     CanonicalValue::String("member".to_string()),
+                );
+                map.insert("object".to_string(), object.canonical_value());
+                map.insert("property".to_string(), property.canonical_value());
+                map.insert("computed".to_string(), CanonicalValue::Bool(*computed));
+            }
+            Self::OptionalCall { callee, arguments } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("optional_call".to_string()),
+                );
+                map.insert("callee".to_string(), callee.canonical_value());
+                map.insert(
+                    "arguments".to_string(),
+                    CanonicalValue::Array(
+                        arguments.iter().map(Expression::canonical_value).collect(),
+                    ),
+                );
+            }
+            Self::OptionalMember {
+                object,
+                property,
+                computed,
+            } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("optional_member".to_string()),
                 );
                 map.insert("object".to_string(), object.canonical_value());
                 map.insert("property".to_string(), property.canonical_value());
@@ -2875,6 +2910,47 @@ mod tests {
     }
 
     #[test]
+    fn expression_optional_call_canonical_value() {
+        let expr = Expression::OptionalCall {
+            callee: Box::new(Expression::Identifier("maybe_fn".to_string())),
+            arguments: vec![Expression::NumericLiteral(1)],
+        };
+        match expr.canonical_value() {
+            CanonicalValue::Map(map) => {
+                assert_eq!(
+                    map.get("kind"),
+                    Some(&CanonicalValue::String("optional_call".to_string()))
+                );
+                if let Some(CanonicalValue::Array(args)) = map.get("arguments") {
+                    assert_eq!(args.len(), 1);
+                } else {
+                    panic!("arguments should be array");
+                }
+            }
+            _ => panic!("expected map"),
+        }
+    }
+
+    #[test]
+    fn expression_optional_member_canonical_value() {
+        let expr = Expression::OptionalMember {
+            object: Box::new(Expression::Identifier("config".to_string())),
+            property: Box::new(Expression::Identifier("theme".to_string())),
+            computed: false,
+        };
+        match expr.canonical_value() {
+            CanonicalValue::Map(map) => {
+                assert_eq!(
+                    map.get("kind"),
+                    Some(&CanonicalValue::String("optional_member".to_string()))
+                );
+                assert_eq!(map.get("computed"), Some(&CanonicalValue::Bool(false)));
+            }
+            _ => panic!("expected map"),
+        }
+    }
+
+    #[test]
     fn expression_this_canonical_value() {
         let expr = Expression::This;
         match expr.canonical_value() {
@@ -3090,6 +3166,15 @@ mod tests {
             Expression::Member {
                 object: Box::new(Expression::Identifier("o".to_string())),
                 property: Box::new(Expression::Identifier("p".to_string())),
+                computed: false,
+            },
+            Expression::OptionalCall {
+                callee: Box::new(Expression::Identifier("maybe".to_string())),
+                arguments: vec![Expression::NullLiteral],
+            },
+            Expression::OptionalMember {
+                object: Box::new(Expression::Identifier("cfg".to_string())),
+                property: Box::new(Expression::Identifier("theme".to_string())),
                 computed: false,
             },
             Expression::This,

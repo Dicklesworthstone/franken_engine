@@ -1225,6 +1225,18 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
             walk_expression(state, object, span);
             walk_expression(state, property, span);
         }
+        Expression::OptionalCall { callee, arguments } => {
+            walk_expression(state, callee, span);
+            for arg in arguments {
+                walk_expression(state, arg, span);
+            }
+        }
+        Expression::OptionalMember {
+            object, property, ..
+        } => {
+            walk_expression(state, object, span);
+            walk_expression(state, property, span);
+        }
         Expression::ArrayLiteral(elements) => {
             for elem in elements.iter().flatten() {
                 walk_expression(state, elem, span);
@@ -1366,6 +1378,18 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
             }
         }
         Expression::Member {
+            object, property, ..
+        } => {
+            collect_identifier_refs(object, out);
+            collect_identifier_refs(property, out);
+        }
+        Expression::OptionalCall { callee, arguments } => {
+            collect_identifier_refs(callee, out);
+            for arg in arguments {
+                collect_identifier_refs(arg, out);
+            }
+        }
+        Expression::OptionalMember {
             object, property, ..
         } => {
             collect_identifier_refs(object, out);

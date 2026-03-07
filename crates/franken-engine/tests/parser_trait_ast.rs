@@ -2,9 +2,9 @@ use std::fs;
 use std::io::Cursor;
 
 use frankenengine_engine::ast::{
-    CANONICAL_AST_CONTRACT_VERSION, CANONICAL_AST_HASH_ALGORITHM, CANONICAL_AST_HASH_PREFIX,
-    CANONICAL_AST_SCHEMA_VERSION, ExportKind, Expression, ParseGoal, Statement, SyntaxTree,
-    VariableDeclarationKind,
+    BinaryOperator, CANONICAL_AST_CONTRACT_VERSION, CANONICAL_AST_HASH_ALGORITHM,
+    CANONICAL_AST_HASH_PREFIX, CANONICAL_AST_SCHEMA_VERSION, ExportKind, Expression, ParseGoal,
+    SourceSpan, Statement, SyntaxTree, VariableDeclarationKind,
 };
 use frankenengine_engine::parser::{
     CanonicalEs2020Parser, Es2020Parser, MaterializedSyntaxTree,
@@ -16,6 +16,11 @@ use frankenengine_engine::parser::{
     ParseDiagnosticEnvelope, ParseErrorCode, ParseEventIr, ParseEventKind,
     ParseEventMaterializationErrorCode, ParserBudget, ParserMode, ParserOptions, StreamInput,
 };
+
+fn single_line_source_span(source: &str) -> SourceSpan {
+    let width = source.len() as u64;
+    SourceSpan::new(0, width, 1, 1, 1, width + 1)
+}
 
 #[test]
 fn parser_goal_and_statement_hierarchy_are_emitted_deterministically() {
@@ -984,6 +989,211 @@ fn parser_emits_new_in_assignment() {
     } else {
         panic!("expected VariableDeclaration");
     }
+}
+
+#[test]
+fn parser_optional_chain_emits_member_expression() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse("const theme = config?.theme", ParseGoal::Script)
+        .expect("parse should succeed");
+    if let Statement::VariableDeclaration(decl) = &tree.body[0] {
+        let init = decl.declarations[0].initializer.as_ref().unwrap();
+        if let Expression::OptionalMember {
+            object,
+            property,
+            computed,
+        } = init
+        {
+            assert!(!computed);
+            assert!(matches!(object.as_ref(), Expression::Identifier(name) if name == "config"));
+            assert!(matches!(property.as_ref(), Expression::Identifier(name) if name == "theme"));
+        } else {
+            panic!("expected OptionalMember, got {:?}", init);
+        }
+    } else {
+        panic!("expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn parser_optional_chain_emits_computed_member_expression() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse("const value = config?.[key]", ParseGoal::Script)
+        .expect("parse should succeed");
+    if let Statement::VariableDeclaration(decl) = &tree.body[0] {
+        let init = decl.declarations[0].initializer.as_ref().unwrap();
+        if let Expression::OptionalMember {
+            object,
+            property,
+            computed,
+        } = init
+        {
+            assert!(*computed);
+            assert!(matches!(object.as_ref(), Expression::Identifier(name) if name == "config"));
+            assert!(matches!(property.as_ref(), Expression::Identifier(name) if name == "key"));
+        } else {
+            panic!("expected OptionalMember, got {:?}", init);
+        }
+    } else {
+        panic!("expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn parser_optional_chain_emits_call_expression() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse("const result = maybeFn?.(first, second)", ParseGoal::Script)
+        .expect("parse should succeed");
+    if let Statement::VariableDeclaration(decl) = &tree.body[0] {
+        let init = decl.declarations[0].initializer.as_ref().unwrap();
+        if let Expression::OptionalCall { callee, arguments } = init {
+            assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == "maybeFn"));
+            assert_eq!(arguments.len(), 2);
+            assert!(
+                matches!(&arguments[..], [Expression::Identifier(first), Expression::Identifier(second)] if first == "first" && second == "second")
+            );
+        } else {
+            panic!("expected OptionalCall, got {:?}", init);
+        }
+    } else {
+        panic!("expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn parser_optional_chain_supports_nested_package_style_expression() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse(
+            "const result = plugins?.[name]?.factory?.(ctx) ?? fallback",
+            ParseGoal::Script,
+        )
+        .expect("parse should succeed");
+    if let Statement::VariableDeclaration(decl) = &tree.body[0] {
+        let init = decl.declarations[0].initializer.as_ref().unwrap();
+        if let Expression::Binary {
+            operator,
+            left,
+            right,
+        } = init
+        {
+            assert_eq!(*operator, BinaryOperator::NullishCoalescing);
+            assert!(matches!(right.as_ref(), Expression::Identifier(name) if name == "fallback"));
+            if let Expression::OptionalCall { callee, arguments } = left.as_ref() {
+                assert!(
+                    matches!(&arguments[..], [Expression::Identifier(argument)] if argument == "ctx")
+                );
+                if let Expression::OptionalMember {
+                    object,
+                    property,
+                    computed,
+                } = callee.as_ref()
+                {
+                    assert!(!computed);
+                    assert!(
+                        matches!(property.as_ref(), Expression::Identifier(name) if name == "factory")
+                    );
+                    if let Expression::OptionalMember {
+                        object,
+                        property,
+                        computed,
+                    } = object.as_ref()
+                    {
+                        assert!(*computed);
+                        assert!(
+                            matches!(object.as_ref(), Expression::Identifier(name) if name == "plugins")
+                        );
+                        assert!(
+                            matches!(property.as_ref(), Expression::Identifier(name) if name == "name")
+                        );
+                    } else {
+                        panic!("expected nested OptionalMember, got {:?}", object);
+                    }
+                } else {
+                    panic!("expected OptionalMember callee, got {:?}", callee);
+                }
+            } else {
+                panic!("expected OptionalCall left operand, got {:?}", left);
+            }
+        } else {
+            panic!("expected Binary, got {:?}", init);
+        }
+    } else {
+        panic!("expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn parser_optional_chain_preserves_nullish_coalescing_precedence() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse("const theme = config?.theme ?? fallback", ParseGoal::Script)
+        .expect("parse should succeed");
+    if let Statement::VariableDeclaration(decl) = &tree.body[0] {
+        let init = decl.declarations[0].initializer.as_ref().unwrap();
+        if let Expression::Binary {
+            operator,
+            left,
+            right,
+        } = init
+        {
+            assert_eq!(*operator, BinaryOperator::NullishCoalescing);
+            assert!(matches!(left.as_ref(), Expression::OptionalMember { .. }));
+            assert!(matches!(right.as_ref(), Expression::Identifier(name) if name == "fallback"));
+        } else {
+            panic!("expected Binary, got {:?}", init);
+        }
+    } else {
+        panic!("expected VariableDeclaration");
+    }
+}
+
+#[test]
+fn parser_rejects_optional_chain_assignment_target() {
+    let parser = CanonicalEs2020Parser;
+    let source = "config?.theme = value";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("optional chaining assignment target should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(
+        err.message,
+        "optional chaining cannot be used as an assignment target"
+    );
+    assert_eq!(err.span, Some(single_line_source_span(source)));
+}
+
+#[test]
+fn parser_rejects_optional_chain_constructor_position() {
+    let parser = CanonicalEs2020Parser;
+    let source = "new config?.theme()";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("optional chaining constructor position should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(
+        err.message,
+        "optional chaining cannot be used in constructor position"
+    );
+    assert_eq!(err.span, Some(single_line_source_span(source)));
+}
+
+#[test]
+fn parser_rejects_invalid_optional_chain_property_form() {
+    let parser = CanonicalEs2020Parser;
+    let source = "const value = config?.123";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("invalid optional property should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(
+        err.message,
+        "optional chaining property access requires an identifier after `?.`"
+    );
+    assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 
 // ---------------------------------------------------------------------------

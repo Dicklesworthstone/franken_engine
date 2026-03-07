@@ -20,8 +20,15 @@ use crate::ir_contract::{
     IrLevel, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source,
     verify_ir3_specialization,
 };
-use crate::parser::{SemanticError, SemanticErrorCode, SemanticValidationResult};
-use crate::parser_gap_inventory::{ParserGapSiteId, UnsupportedSyntaxDiagnostic};
+use crate::parser::{
+    PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
+    PARSER_DIAGNOSTIC_TAXONOMY_VERSION, ParseDiagnosticCategory, ParseDiagnosticSeverity,
+    ParseErrorCode, SemanticError, SemanticErrorCode, SemanticValidationResult,
+};
+use crate::parser_gap_inventory::{
+    ParserGapSiteId, ParserGapStage, UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION,
+    UnsupportedSyntaxDiagnostic,
+};
 
 const COMPONENT: &str = "lowering_pipeline";
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
@@ -225,6 +232,31 @@ fn unsupported_syntax_error(
     LoweringPipelineError::UnsupportedSyntax(Box::new(UnsupportedSyntaxDiagnostic::from_site(
         site, "ir0", span,
     )))
+}
+
+fn unsupported_frontier_expression_error(
+    feature_family: &str,
+    message_template: &str,
+    span: Option<SourceSpan>,
+) -> LoweringPipelineError {
+    LoweringPipelineError::UnsupportedSyntax(Box::new(UnsupportedSyntaxDiagnostic {
+        schema_version: UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION.to_string(),
+        taxonomy_version: PARSER_DIAGNOSTIC_TAXONOMY_VERSION.to_string(),
+        hash_algorithm: PARSER_DIAGNOSTIC_HASH_ALGORITHM.to_string(),
+        hash_prefix: PARSER_DIAGNOSTIC_HASH_PREFIX.to_string(),
+        parse_error_code: ParseErrorCode::UnsupportedSyntax,
+        diagnostic_code: "FE-LOWER-OPTIONAL-CHAIN-0001".to_string(),
+        category: ParseDiagnosticCategory::Syntax,
+        severity: ParseDiagnosticSeverity::Error,
+        message_template: message_template.to_string(),
+        source_label: "ir0".to_string(),
+        span,
+        site_id: "lower_ir0_to_ir1.optional_chaining_frontier".to_string(),
+        stage: ParserGapStage::Ir0ToIr1,
+        owner: COMPONENT.to_string(),
+        feature_family: feature_family.to_string(),
+        api_surface: "lower_ir0_to_ir1".to_string(),
+    }))
 }
 
 pub fn lower_ir0_to_ir3(
@@ -2301,6 +2333,13 @@ fn lower_expression_to_ir1(
                 _ => "unknown".to_string(),
             };
             ops.push(Ir1Op::GetProperty { key });
+        }
+        Expression::OptionalCall { .. } | Expression::OptionalMember { .. } => {
+            return Err(unsupported_frontier_expression_error(
+                "optional_chaining",
+                "optional chaining lowering is not implemented; fail-closed frontier contract rejected the expression",
+                None,
+            ));
         }
         Expression::This => {
             ops.push(Ir1Op::LoadThis);

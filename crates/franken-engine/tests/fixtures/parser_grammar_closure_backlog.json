@@ -485,7 +485,7 @@
         "artifacts/parser_phase0_gate/<timestamp>/run_manifest.json",
         "artifacts/parser_phase0/golden_checksums.txt"
       ],
-      "notes": " PearlTower: added `new` expression parsing (new Foo(), new Foo.Bar(args)). Supports: foo(), foo.bar, foo[x], foo()(), foo.bar(), new Foo(args), new Foo.Bar(). Missing: optional chaining (?.), super, tagged templates."
+      "notes": " PearlTower + RoseLake: added `new` expression parsing (new Foo(), new Foo.Bar(args)) and typed optional chaining coverage for `foo?.bar`, `foo?.[key]`, `foo?.()`, and nullish-coalescing interaction. Supports: foo(), foo.bar, foo[x], foo()(), foo.bar(), new Foo(args), new Foo.Bar(), foo?.bar, foo?.[key], foo?.(). Missing: super, tagged templates."
     },
     {
       "family_id": "expression.object_array_literal",

@@ -1,0 +1,154 @@
+{
+  "schema_version": "franken-engine.rgc-docs-help-surface-audit.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.10.11.1",
+  "policy_id": "policy-rgc-docs-help-surface-audit-v1",
+  "audited_inputs": [
+    "README.md",
+    "crates/franken-engine/src/bin/frankenctl.rs",
+    "crates/franken-engine/tests/frankenctl_cli.rs"
+  ],
+  "supported_top_level_commands": [
+    "version",
+    "compile",
+    "run",
+    "doctor",
+    "verify",
+    "benchmark",
+    "replay"
+  ],
+  "required_help_fragments": [
+    "frankenctl usage:",
+    "frankenctl version",
+    "frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
+    "frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+    "frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir <path>]",
+    "frankenctl verify compile-artifact --input <artifact.json>",
+    "frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary]",
+    "frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
+    "frankenctl benchmark score --input <publication_gate_input.json>",
+    "frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
+    "frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]"
+  ],
+  "banned_help_fragments": [
+    "frankenctl init",
+    "frankenctl ext compile",
+    "frankenctl shadow-run",
+    "frankenctl promote",
+    "frankenctl decision show",
+    "frankenctl receipt verify",
+    "frankenctl quarantine",
+    "frankenctl revocation",
+    "frankenctl lockstep",
+    "frankenctl tui",
+    "frankenctl api serve"
+  ],
+  "required_readme_fragments": [
+    "The shipped `frankenctl` CLI is intentionally narrower than the long-term",
+    "frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script",
+    "frankenctl verify compile-artifact --input ./artifacts/demo.compile.json",
+    "frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json",
+    "frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor",
+    "frankenctl verify receipt --input ./artifacts/verifier_input.json --receipt-id rcpt_01J... --summary",
+    "frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks",
+    "frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json",
+    "frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json",
+    "frankenctl replay run --trace ./artifacts/replay/demo-trace.json --mode validate --out ./artifacts/replay_report.json",
+    "## RGC Docs and Help Surface Audit",
+    "./scripts/run_rgc_docs_help_surface_audit.sh ci",
+    "./scripts/e2e/rgc_docs_help_surface_audit_replay.sh ci"
+  ],
+  "banned_readme_fragments": [
+    "frankenctl init",
+    "frankenctl keys generate",
+    "frankenctl control-plane bind",
+    "frankenctl ext compile",
+    "frankenctl ext verify",
+    "frankenctl shadow-run",
+    "frankenctl promote",
+    "frankenctl drill run",
+    "frankenctl decision show",
+    "frankenctl decision tail",
+    "frankenctl evidence export",
+    "frankenctl receipt verify",
+    "frankenctl replay verify",
+    "frankenctl replay run --trace latest",
+    "frankenctl quarantine",
+    "frankenctl revocation",
+    "frankenctl lockstep",
+    "frankenctl tui",
+    "frankenctl api serve",
+    "frankenctl run --config",
+    "frankenctl benchmark run --suite",
+    "frankenctl doctor cx"
+  ],
+  "audited_claims": [
+    {
+      "claim_id": "readme-quick-example",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Removed unshipped workspace-init, promotion, and incident-drill commands from the top example."
+    },
+    {
+      "claim_id": "readme-quick-start",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Replaced unshipped setup/control-plane commands with current compile/run/doctor/verify/benchmark/replay workflows."
+    },
+    {
+      "claim_id": "readme-command-reference",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Reduced the command table to the exact top-level commands printed by frankenctl help."
+    },
+    {
+      "claim_id": "readme-troubleshooting",
+      "surface": "README.md",
+      "status": "narrowed",
+      "rationale": "Removed remediation advice that depended on non-existent subcommands and replaced it with shipped verify/doctor/replay guidance."
+    },
+    {
+      "claim_id": "frankenctl-top-level-help",
+      "surface": "crates/franken-engine/src/bin/frankenctl.rs",
+      "status": "accurate",
+      "rationale": "The help renderer already matches the implemented parser and remains the source of truth for the shipped CLI."
+    },
+    {
+      "claim_id": "frankenctl-cli-help-test",
+      "surface": "crates/franken-engine/tests/frankenctl_cli.rs",
+      "status": "accurate",
+      "rationale": "Existing integration coverage already asserts the supported help surface and remains part of the gate."
+    }
+  ],
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "scenario_id",
+    "path_type",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "docs_help_surface_report.json",
+    "frankenctl_help.txt",
+    "step_logs/step_*.log"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_docs_help_surface_audit.sh",
+    "replay_wrapper": "scripts/e2e/rgc_docs_help_surface_audit_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "franken-engine.rgc-docs-help-surface-audit.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_docs_help_surface_audit_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_docs_help_surface_audit cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit",
+    "./scripts/run_rgc_docs_help_surface_audit.sh ci",
+    "./scripts/e2e/rgc_docs_help_surface_audit_replay.sh ci"
+  ]
+}

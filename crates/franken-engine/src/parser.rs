@@ -3686,6 +3686,14 @@ fn parse_new_expression(
         } else {
             parse_comma_separated_exprs(args_inner, span, context, recursion_depth + 1)?
         };
+        if contains_optional_chain(&callee) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "optional chaining cannot be used in constructor position",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         return Ok(Expression::New {
             callee: Box::new(callee),
             arguments,
@@ -3693,6 +3701,14 @@ fn parse_new_expression(
     }
     // `new Foo` without arguments.
     let callee = parse_expression(rest, span, context, recursion_depth + 1)?;
+    if contains_optional_chain(&callee) {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "optional chaining cannot be used in constructor position",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
     Ok(Expression::New {
         callee: Box::new(callee),
         arguments: Vec::new(),
@@ -3887,6 +3903,14 @@ fn try_parse_assignment(
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
+            if contains_optional_chain(&left) {
+                return Some(Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "optional chaining cannot be used as an assignment target",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )));
+            }
             let right = match parse_expression(rhs, span, context, recursion_depth + 1) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
@@ -4505,6 +4529,18 @@ fn try_parse_postfix(
     {
         let callee_src = expr[..open_paren].trim();
         let args_src = &expr[open_paren + 1..expr.len() - 1]; // between ( and )
+        let (callee_src, optional) = if let Some(stripped) = callee_src.strip_suffix("?.") {
+            (stripped.trim(), true)
+        } else {
+            (callee_src, false)
+        };
+        if callee_src.is_empty() {
+            return Some(Err(optional_chaining_syntax_error(
+                "optional chaining call is missing a callee",
+                span,
+                context,
+            )));
+        }
         let callee = match parse_expression(callee_src, span, context, recursion_depth + 1) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
@@ -4514,9 +4550,16 @@ fn try_parse_postfix(
                 Ok(a) => a,
                 Err(e) => return Some(Err(e)),
             };
-        return Some(Ok(Expression::Call {
-            callee: Box::new(callee),
-            arguments,
+        return Some(Ok(if optional {
+            Expression::OptionalCall {
+                callee: Box::new(callee),
+                arguments,
+            }
+        } else {
+            Expression::Call {
+                callee: Box::new(callee),
+                arguments,
+            }
         }));
     }
 
@@ -4527,6 +4570,18 @@ fn try_parse_postfix(
     {
         let object_src = expr[..open_bracket].trim();
         let prop_src = &expr[open_bracket + 1..expr.len() - 1];
+        let (object_src, optional) = if let Some(stripped) = object_src.strip_suffix("?.") {
+            (stripped.trim(), true)
+        } else {
+            (object_src, false)
+        };
+        if object_src.is_empty() {
+            return Some(Err(optional_chaining_syntax_error(
+                "optional chaining member access is missing an object",
+                span,
+                context,
+            )));
+        }
         let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
@@ -4535,10 +4590,18 @@ fn try_parse_postfix(
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
-        return Some(Ok(Expression::Member {
-            object: Box::new(object),
-            property: Box::new(property),
-            computed: true,
+        return Some(Ok(if optional {
+            Expression::OptionalMember {
+                object: Box::new(object),
+                property: Box::new(property),
+                computed: true,
+            }
+        } else {
+            Expression::Member {
+                object: Box::new(object),
+                property: Box::new(property),
+                computed: true,
+            }
         }));
     }
 
@@ -4546,20 +4609,111 @@ fn try_parse_postfix(
     if let Some(dot_pos) = find_last_top_level_dot(expr) {
         let object_src = expr[..dot_pos].trim();
         let property_src = expr[dot_pos + 1..].trim();
+        let (object_src, optional) = if let Some(stripped) = object_src.strip_suffix('?') {
+            (stripped.trim(), true)
+        } else {
+            (object_src, false)
+        };
+        if optional && !is_identifier(property_src) {
+            return Some(Err(optional_chaining_syntax_error(
+                "optional chaining property access requires an identifier after `?.`",
+                span,
+                context,
+            )));
+        }
         if !object_src.is_empty() && is_identifier(property_src) {
             let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            return Some(Ok(Expression::Member {
-                object: Box::new(object),
-                property: Box::new(Expression::Identifier(property_src.to_string())),
-                computed: false,
+            return Some(Ok(if optional {
+                Expression::OptionalMember {
+                    object: Box::new(object),
+                    property: Box::new(Expression::Identifier(property_src.to_string())),
+                    computed: false,
+                }
+            } else {
+                Expression::Member {
+                    object: Box::new(object),
+                    property: Box::new(Expression::Identifier(property_src.to_string())),
+                    computed: false,
+                }
             }));
         }
     }
 
+    if find_last_top_level_optional_chain(expr).is_some() {
+        return Some(Err(optional_chaining_syntax_error(
+            "unsupported optional chaining form",
+            span,
+            context,
+        )));
+    }
+
     None
+}
+
+fn optional_chaining_syntax_error(
+    message: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseError {
+    ParseError::new(
+        ParseErrorCode::UnsupportedSyntax,
+        message,
+        context.source_label.to_string(),
+        Some(span.clone()),
+    )
+}
+
+fn contains_optional_chain(expression: &Expression) -> bool {
+    match expression {
+        Expression::OptionalCall { .. } | Expression::OptionalMember { .. } => true,
+        Expression::Await(inner) => contains_optional_chain(inner),
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            contains_optional_chain(left) || contains_optional_chain(right)
+        }
+        Expression::Unary { argument, .. } => contains_optional_chain(argument),
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => {
+            contains_optional_chain(test)
+                || contains_optional_chain(consequent)
+                || contains_optional_chain(alternate)
+        }
+        Expression::Call { callee, arguments } => {
+            contains_optional_chain(callee) || arguments.iter().any(contains_optional_chain)
+        }
+        Expression::Member {
+            object, property, ..
+        } => contains_optional_chain(object) || contains_optional_chain(property),
+        Expression::ArrayLiteral(elements) => {
+            elements.iter().flatten().any(contains_optional_chain)
+        }
+        Expression::ObjectLiteral(properties) => properties.iter().any(|property| {
+            contains_optional_chain(&property.key) || contains_optional_chain(&property.value)
+        }),
+        Expression::ArrowFunction { body, .. } => match body {
+            ArrowBody::Expression(expr) => contains_optional_chain(expr),
+            ArrowBody::Block(_) => false,
+        },
+        Expression::New { callee, arguments } => {
+            contains_optional_chain(callee) || arguments.iter().any(contains_optional_chain)
+        }
+        Expression::TemplateLiteral { expressions, .. } => {
+            expressions.iter().any(contains_optional_chain)
+        }
+        Expression::Identifier(_)
+        | Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral
+        | Expression::UndefinedLiteral
+        | Expression::This
+        | Expression::Raw(_) => false,
+    }
 }
 
 /// Find the first top-level backtick that begins a trailing template literal.
@@ -4748,6 +4902,89 @@ fn find_last_top_level_dot(s: &str) -> Option<usize> {
         }
     }
     last_dot
+}
+
+fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth_paren: i64 = 0;
+    let mut depth_bracket: i64 = 0;
+    let mut depth_brace: i64 = 0;
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut last_optional: Option<usize> = None;
+    let mut i = 0usize;
+
+    while i + 1 < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if b == b'\\' {
+                escaped = true;
+                i += 1;
+                continue;
+            }
+            if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                in_quote = Some(b);
+                i += 1;
+                continue;
+            }
+            b'(' => {
+                depth_paren += 1;
+                i += 1;
+                continue;
+            }
+            b')' => {
+                depth_paren -= 1;
+                i += 1;
+                continue;
+            }
+            b'[' => {
+                depth_bracket += 1;
+                i += 1;
+                continue;
+            }
+            b']' => {
+                depth_bracket -= 1;
+                i += 1;
+                continue;
+            }
+            b'{' => {
+                depth_brace += 1;
+                i += 1;
+                continue;
+            }
+            b'}' => {
+                depth_brace -= 1;
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        if depth_paren == 0
+            && depth_bracket == 0
+            && depth_brace == 0
+            && b == b'?'
+            && bytes[i + 1] == b'.'
+        {
+            last_optional = Some(i);
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+
+    last_optional
 }
 
 // ---------------------------------------------------------------------------

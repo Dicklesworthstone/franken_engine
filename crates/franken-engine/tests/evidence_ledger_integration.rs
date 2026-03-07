@@ -8,12 +8,14 @@
 //! edge cases (empty inputs, boundary values), and metadata ordering.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use frankenengine_engine::evidence_ledger::{
+    current_schema_version, emit_default_stitching_bundle, render_stitching_summary,
     ArtifactRecord, CandidateAction, ChosenAction, Constraint, DecisionSemanticsAnnotations,
     DecisionType, EvidenceEmitter, EvidenceEntry, EvidenceEntryBuilder, EvidenceGraphEdgeKind,
-    EvidenceLedgerStitchingBundle, InMemoryLedger, LedgerError, SchemaVersionExt, Witness,
-    current_schema_version,
+    EvidenceLedgerStitchingBundle, InMemoryLedger, LedgerError, SchemaVersionExt,
+    StitchingArtifactContext, Witness,
 };
 use frankenengine_engine::hindsight_boundary_capture::{
     BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
@@ -119,6 +121,19 @@ fn sample_boundary_records() -> Vec<BoundaryCaptureRecord> {
         .capture_external_policy_read(&context, "release_policy", "digest-policy", 11, None)
         .expect("capture policy read");
     vec![scheduling, override_record, policy]
+}
+
+fn temp_dir(label: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time before epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "franken-engine-evidence-ledger-integration-{label}-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).expect("create temp dir");
+    path
 }
 
 // ===========================================================================
@@ -839,11 +854,9 @@ fn by_decision_type_filters_correctly() {
 #[test]
 fn by_decision_type_on_empty_ledger_returns_empty() {
     let ledger = InMemoryLedger::new();
-    assert!(
-        ledger
-            .by_decision_type(DecisionType::SecurityAction)
-            .is_empty()
-    );
+    assert!(ledger
+        .by_decision_type(DecisionType::SecurityAction)
+        .is_empty());
 }
 
 // ===========================================================================
@@ -1375,15 +1388,13 @@ fn stitching_bundle_supports_controller_benchmark_support_and_release_queries() 
 fn stitching_bundle_rejects_artifact_boundary_gap() {
     let entry = sample_entry();
     let boundaries = sample_boundary_records();
-    let artifacts = vec![
-        ArtifactRecord::new(
-            "support-export",
-            "support_bundle",
-            "artifacts/support-export.json",
-            "hash-support",
-        )
-        .supporting_boundary("bcorr_missing"),
-    ];
+    let artifacts = vec![ArtifactRecord::new(
+        "support-export",
+        "support_bundle",
+        "artifacts/support-export.json",
+        "hash-support",
+    )
+    .supporting_boundary("bcorr_missing")];
 
     let err = EvidenceLedgerStitchingBundle::stitch(
         &entry,
@@ -1400,4 +1411,86 @@ fn stitching_bundle_rejects_artifact_boundary_gap() {
                 .to_string(),
         }
     );
+}
+
+#[test]
+fn emitted_stitching_bundle_publishes_operator_replay_artifacts() {
+    let artifact_dir = temp_dir("bundle");
+    let mut context = StitchingArtifactContext::new(&artifact_dir);
+    context.run_id = "run-rgc-811b-integration".to_string();
+    context.trace_id = "trace-rgc-811b-integration".to_string();
+    context.decision_id = "decision-rgc-811b-integration".to_string();
+    context.policy_id = "policy-rgc-811b-integration".to_string();
+    context.generated_at_utc = "2026-03-07T00:00:00Z".to_string();
+    context.source_commit = "deadbeef".to_string();
+    context.toolchain = "nightly".to_string();
+    context.command_invocation = format!(
+        "cargo run -p frankenengine-engine --bin franken_evidence_ledger_stitching -- --artifact-dir {}",
+        artifact_dir.display()
+    );
+
+    let report = emit_default_stitching_bundle(&context).expect("bundle should write");
+    let summary = render_stitching_summary(&report.bundle);
+
+    for artifact in [
+        "artifact_lineage_index.json",
+        "commands.txt",
+        "decision_semantics_log.jsonl",
+        "env.json",
+        "evidence_ledger_graph.json",
+        "evidence_ledger_stitching_bundle.json",
+        "evidence_query_surface_snapshot.json",
+        "events.jsonl",
+        "manifest.json",
+        "repro.lock",
+        "run_manifest.json",
+        "summary.md",
+        "trace_ids.json",
+    ] {
+        assert!(
+            artifact_dir.join(artifact).exists(),
+            "expected artifact `{artifact}` to exist",
+        );
+    }
+
+    let query_surface: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(artifact_dir.join("evidence_query_surface_snapshot.json"))
+            .expect("read query surface"),
+    )
+    .expect("parse query surface");
+    assert_eq!(
+        query_surface["decisions"][0]["artifact_ids"]
+            .as_array()
+            .expect("artifact ids array")
+            .len(),
+        3
+    );
+    assert_eq!(
+        query_surface["decisions"][0]["chosen_action"].as_str(),
+        Some("sandbox")
+    );
+    assert_eq!(
+        query_surface["decisions"][0]["boundary_correlation_keys"]
+            .as_array()
+            .expect("boundary keys array")
+            .len(),
+        3
+    );
+
+    let run_manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
+    )
+    .expect("parse run manifest");
+    assert_eq!(
+        run_manifest["schema_version"].as_str(),
+        Some("franken-engine.rgc-evidence-ledger-stitching-run-manifest.v1")
+    );
+    assert_eq!(run_manifest["artifact_count"].as_u64(), Some(3));
+    assert_eq!(run_manifest["boundary_count"].as_u64(), Some(3));
+
+    assert!(summary.contains("benchmark-snapshot"));
+    assert!(summary.contains("release-gate"));
+    assert!(summary.contains("support-export"));
+
+    let _ = std::fs::remove_dir_all(&artifact_dir);
 }

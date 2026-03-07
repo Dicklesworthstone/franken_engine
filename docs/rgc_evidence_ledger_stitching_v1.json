@@ -1,0 +1,41 @@
+{
+  "schema_version": "franken-engine.rgc-evidence-ledger-stitching-docs.v1",
+  "bead_id": "bd-1lsy.9.11.2",
+  "required_artifacts": [
+    "artifact_lineage_index.json",
+    "commands.txt",
+    "decision_semantics_log.jsonl",
+    "env.json",
+    "evidence_ledger_graph.json",
+    "evidence_ledger_stitching_bundle.json",
+    "evidence_query_surface_snapshot.json",
+    "events.jsonl",
+    "manifest.json",
+    "repro.lock",
+    "run_manifest.json",
+    "summary.md",
+    "trace_ids.json"
+  ],
+  "required_query_fields": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "evidence_entry_id",
+    "chosen_action",
+    "boundary_correlation_keys",
+    "artifact_ids",
+    "witness_ids",
+    "confidence_tier",
+    "fallback_reason"
+  ],
+  "artifact_kinds": [
+    "benchmark_manifest",
+    "release_gate_report",
+    "support_bundle"
+  ],
+  "edge_kinds": [
+    "boundary_informs_decision",
+    "boundary_supports_artifact",
+    "decision_produces_artifact"
+  ]
+}

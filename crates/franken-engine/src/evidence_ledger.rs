@@ -10,11 +10,20 @@
 //! evidence graph and replay).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt;
+use std::fs;
+use std::io::{self, ErrorKind};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use crate::hindsight_boundary_capture::BoundaryCaptureRecord;
+use crate::hindsight_boundary_capture::{
+    BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
+};
 use crate::security_epoch::SecurityEpoch;
 
 pub use crate::control_plane::SchemaVersion;
@@ -465,7 +474,8 @@ impl EvidenceEmitter for InMemoryLedger {
     }
 }
 
-pub const EVIDENCE_LEDGER_CONTRACT_BEAD_ID: &str = "bd-1lsy.9.11";
+pub const EVIDENCE_LEDGER_STITCHING_BEAD_ID: &str = "bd-1lsy.9.11.2";
+pub const EVIDENCE_LEDGER_STITCHING_COMPONENT: &str = "evidence_ledger_stitching";
 pub const EVIDENCE_LEDGER_GRAPH_SCHEMA_VERSION: &str =
     "franken-engine.rgc-evidence-ledger-graph.v1";
 pub const DECISION_SEMANTICS_LOG_SCHEMA_VERSION: &str =
@@ -476,6 +486,12 @@ pub const EVIDENCE_QUERY_SURFACE_SCHEMA_VERSION: &str =
     "franken-engine.rgc-evidence-query-surface.v1";
 pub const EVIDENCE_LEDGER_STITCHING_BUNDLE_SCHEMA_VERSION: &str =
     "franken-engine.rgc-evidence-ledger-stitching-bundle.v1";
+pub const EVIDENCE_LEDGER_STITCHING_TRACE_IDS_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-evidence-ledger-stitching-trace-ids.v1";
+pub const EVIDENCE_LEDGER_STITCHING_RUN_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-evidence-ledger-stitching-run-manifest.v1";
+
+static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct DecisionSemanticsAnnotations {
@@ -743,7 +759,7 @@ impl EvidenceLedgerStitchingBundle {
             artifact_ids.push(artifact.artifact_id.clone());
             artifact_lineage_index.push(ArtifactLineageRecord {
                 schema_version: ARTIFACT_LINEAGE_INDEX_SCHEMA_VERSION.to_string(),
-                bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+                bead_id: EVIDENCE_LEDGER_STITCHING_BEAD_ID.to_string(),
                 artifact_id: artifact.artifact_id.clone(),
                 artifact_kind: artifact.artifact_kind.clone(),
                 artifact_locator: artifact.artifact_locator.clone(),
@@ -758,7 +774,7 @@ impl EvidenceLedgerStitchingBundle {
 
         let decision_semantics = DecisionSemanticsRecord {
             schema_version: DECISION_SEMANTICS_LOG_SCHEMA_VERSION.to_string(),
-            bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+            bead_id: EVIDENCE_LEDGER_STITCHING_BEAD_ID.to_string(),
             trace_id: entry.trace_id.clone(),
             decision_id: entry.decision_id.clone(),
             policy_id: entry.policy_id.clone(),
@@ -794,7 +810,7 @@ impl EvidenceLedgerStitchingBundle {
 
         let query_surface = EvidenceQuerySurfaceSnapshot {
             schema_version: EVIDENCE_QUERY_SURFACE_SCHEMA_VERSION.to_string(),
-            bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+            bead_id: EVIDENCE_LEDGER_STITCHING_BEAD_ID.to_string(),
             decisions: vec![EvidenceQueryRecord {
                 trace_id: entry.trace_id.clone(),
                 decision_id: entry.decision_id.clone(),
@@ -815,10 +831,10 @@ impl EvidenceLedgerStitchingBundle {
 
         Ok(Self {
             schema_version: EVIDENCE_LEDGER_STITCHING_BUNDLE_SCHEMA_VERSION.to_string(),
-            bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+            bead_id: EVIDENCE_LEDGER_STITCHING_BEAD_ID.to_string(),
             evidence_ledger_graph: EvidenceLedgerGraph {
                 schema_version: EVIDENCE_LEDGER_GRAPH_SCHEMA_VERSION.to_string(),
-                bead_id: EVIDENCE_LEDGER_CONTRACT_BEAD_ID.to_string(),
+                bead_id: EVIDENCE_LEDGER_STITCHING_BEAD_ID.to_string(),
                 trace_id: entry.trace_id.clone(),
                 decision_id: entry.decision_id.clone(),
                 policy_id: entry.policy_id.clone(),
@@ -994,6 +1010,751 @@ fn build_edge(
         edge_kind,
         from_node_id,
         to_node_id,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StitchingTraceIdsArtifact {
+    pub schema_version: String,
+    pub trace_ids: Vec<String>,
+    pub decision_id: String,
+    pub policy_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StitchingStructuredLogEvent {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub event: String,
+    pub outcome: String,
+    pub error_code: Option<String>,
+    pub artifact_id: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StitchingArtifactContext {
+    pub artifact_dir: PathBuf,
+    pub run_id: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub generated_at_utc: String,
+    pub source_commit: String,
+    pub toolchain: String,
+    pub command_invocation: String,
+}
+
+impl StitchingArtifactContext {
+    pub fn new(artifact_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            artifact_dir: artifact_dir.into(),
+            run_id: format!(
+                "run-{}-{}",
+                EVIDENCE_LEDGER_STITCHING_COMPONENT,
+                Utc::now().format("%Y%m%dT%H%M%SZ")
+            ),
+            trace_id: "trace.rgc.811b".to_string(),
+            decision_id: "decision.rgc.811b".to_string(),
+            policy_id: "policy.rgc.811b".to_string(),
+            generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            source_commit: "unknown".to_string(),
+            toolchain: std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string()),
+            command_invocation: "cargo run -p frankenengine-engine --bin franken_evidence_ledger_stitching -- --artifact-dir <path>".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StitchingBundleWriteReport {
+    pub artifact_dir: PathBuf,
+    pub bundle: EvidenceLedgerStitchingBundle,
+    pub trace_ids_path: PathBuf,
+    pub written_files: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ManifestArtifactReference {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone)]
+struct EvaluatedStitchingArtifacts {
+    bundle: EvidenceLedgerStitchingBundle,
+    trace_ids: StitchingTraceIdsArtifact,
+    logs: Vec<StitchingStructuredLogEvent>,
+}
+
+#[derive(Debug, Clone)]
+struct BundleFileArtifact {
+    path: String,
+    contents: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct BundleWriteLock {
+    path: PathBuf,
+}
+
+impl Drop for BundleWriteLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+const DOCS_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.rgc-evidence-ledger-stitching-docs.v1";
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DocsContractFixture {
+    schema_version: String,
+    bead_id: String,
+    required_artifacts: Vec<String>,
+    required_query_fields: Vec<String>,
+    artifact_kinds: Vec<String>,
+    edge_kinds: Vec<String>,
+}
+
+pub fn render_stitching_summary(bundle: &EvidenceLedgerStitchingBundle) -> String {
+    let query = &bundle.evidence_query_surface_snapshot.decisions[0];
+    let semantics = &bundle.decision_semantics_log[0];
+    let mut lines = vec![
+        "# Evidence Ledger Stitching Summary".to_string(),
+        String::new(),
+        format!("- bead_id: `{}`", EVIDENCE_LEDGER_STITCHING_BEAD_ID),
+        format!("- component: `{}`", EVIDENCE_LEDGER_STITCHING_COMPONENT),
+        format!("- trace_id: `{}`", query.trace_id),
+        format!("- decision_id: `{}`", query.decision_id),
+        format!("- policy_id: `{}`", query.policy_id),
+        format!(
+            "- graph_nodes: `{}`",
+            bundle.evidence_ledger_graph.nodes.len()
+        ),
+        format!(
+            "- graph_edges: `{}`",
+            bundle.evidence_ledger_graph.edges.len()
+        ),
+        format!(
+            "- stitched_artifacts: `{}`",
+            bundle.artifact_lineage_index.len()
+        ),
+        format!(
+            "- linked_boundaries: `{}`",
+            query.boundary_correlation_keys.len()
+        ),
+        String::new(),
+        "## Query Surface".to_string(),
+        format!("- chosen_action: `{}`", query.chosen_action),
+        format!(
+            "- confidence_tier: `{}`",
+            semantics
+                .confidence_tier
+                .as_deref()
+                .unwrap_or("unspecified")
+        ),
+        format!(
+            "- fallback_reason: `{}`",
+            semantics.fallback_reason.as_deref().unwrap_or("none")
+        ),
+        String::new(),
+        "## Artifact Lineage".to_string(),
+    ];
+
+    for artifact in &bundle.artifact_lineage_index {
+        lines.push(format!(
+            "- `{}` kind=`{}` boundaries={} locator=`{}`",
+            artifact.artifact_id,
+            artifact.artifact_kind,
+            artifact.boundary_correlation_keys.len(),
+            artifact.artifact_locator,
+        ));
+    }
+
+    lines
+        .into_iter()
+        .chain(std::iter::once(String::new()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn emit_default_stitching_bundle(
+    context: &StitchingArtifactContext,
+) -> io::Result<StitchingBundleWriteReport> {
+    let evaluated = evaluate_default_stitching_artifacts(context)?;
+    write_stitching_bundle(context, &evaluated)
+}
+
+#[cfg(test)]
+fn build_docs_contract_fixture() -> DocsContractFixture {
+    let mut artifact_kinds = default_artifact_records(
+        &default_boundary_records(&StitchingArtifactContext {
+            artifact_dir: PathBuf::from("."),
+            run_id: "docs".to_string(),
+            trace_id: "trace-doc".to_string(),
+            decision_id: "decision-doc".to_string(),
+            policy_id: "policy-doc".to_string(),
+            generated_at_utc: "2026-03-07T00:00:00Z".to_string(),
+            source_commit: "deadbeef".to_string(),
+            toolchain: "nightly".to_string(),
+            command_invocation: "docs-fixture".to_string(),
+        })
+        .expect("docs boundaries"),
+    )
+    .into_iter()
+    .map(|artifact| artifact.artifact_kind)
+    .collect::<Vec<_>>();
+    artifact_kinds.sort();
+
+    DocsContractFixture {
+        schema_version: DOCS_CONTRACT_SCHEMA_VERSION.to_string(),
+        bead_id: EVIDENCE_LEDGER_STITCHING_BEAD_ID.to_string(),
+        required_artifacts: required_artifact_names(),
+        required_query_fields: vec![
+            "trace_id".to_string(),
+            "decision_id".to_string(),
+            "policy_id".to_string(),
+            "evidence_entry_id".to_string(),
+            "chosen_action".to_string(),
+            "boundary_correlation_keys".to_string(),
+            "artifact_ids".to_string(),
+            "witness_ids".to_string(),
+            "confidence_tier".to_string(),
+            "fallback_reason".to_string(),
+        ],
+        artifact_kinds,
+        edge_kinds: vec![
+            EvidenceGraphEdgeKind::BoundaryInformsDecision
+                .as_str()
+                .to_string(),
+            EvidenceGraphEdgeKind::BoundarySupportsArtifact
+                .as_str()
+                .to_string(),
+            EvidenceGraphEdgeKind::DecisionProducesArtifact
+                .as_str()
+                .to_string(),
+        ],
+    }
+}
+
+fn evaluate_default_stitching_artifacts(
+    context: &StitchingArtifactContext,
+) -> io::Result<EvaluatedStitchingArtifacts> {
+    let entry = default_stitching_entry(context);
+    let boundaries = default_boundary_records(context)?;
+    let artifacts = default_artifact_records(&boundaries);
+    let annotations = default_decision_annotations(&boundaries);
+    let bundle =
+        EvidenceLedgerStitchingBundle::stitch(&entry, &boundaries, &artifacts, annotations)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+
+    let mut logs = boundaries
+        .iter()
+        .map(|boundary| StitchingStructuredLogEvent {
+            trace_id: context.trace_id.clone(),
+            decision_id: context.decision_id.clone(),
+            policy_id: context.policy_id.clone(),
+            component: EVIDENCE_LEDGER_STITCHING_COMPONENT.to_string(),
+            event: "boundary_linked".to_string(),
+            outcome: "pass".to_string(),
+            error_code: None,
+            artifact_id: None,
+            detail: format!(
+                "boundary_class={} correlation_key={}",
+                boundary.boundary_class, boundary.correlation_key
+            ),
+        })
+        .collect::<Vec<_>>();
+
+    logs.extend(
+        bundle
+            .artifact_lineage_index
+            .iter()
+            .map(|artifact| StitchingStructuredLogEvent {
+                trace_id: context.trace_id.clone(),
+                decision_id: context.decision_id.clone(),
+                policy_id: context.policy_id.clone(),
+                component: EVIDENCE_LEDGER_STITCHING_COMPONENT.to_string(),
+                event: "artifact_lineage_recorded".to_string(),
+                outcome: "pass".to_string(),
+                error_code: None,
+                artifact_id: Some(artifact.artifact_id.clone()),
+                detail: format!(
+                    "artifact_kind={} linked_boundaries={}",
+                    artifact.artifact_kind,
+                    artifact.boundary_correlation_keys.len()
+                ),
+            }),
+    );
+
+    logs.push(StitchingStructuredLogEvent {
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        component: EVIDENCE_LEDGER_STITCHING_COMPONENT.to_string(),
+        event: "stitching_bundle_built".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        artifact_id: None,
+        detail: format!(
+            "nodes={} edges={} artifacts={}",
+            bundle.evidence_ledger_graph.nodes.len(),
+            bundle.evidence_ledger_graph.edges.len(),
+            bundle.artifact_lineage_index.len()
+        ),
+    });
+
+    logs.sort_by(|left, right| {
+        left.event
+            .cmp(&right.event)
+            .then(left.artifact_id.cmp(&right.artifact_id))
+            .then(left.detail.cmp(&right.detail))
+    });
+
+    Ok(EvaluatedStitchingArtifacts {
+        bundle,
+        trace_ids: StitchingTraceIdsArtifact {
+            schema_version: EVIDENCE_LEDGER_STITCHING_TRACE_IDS_SCHEMA_VERSION.to_string(),
+            trace_ids: vec![context.trace_id.clone()],
+            decision_id: context.decision_id.clone(),
+            policy_id: context.policy_id.clone(),
+        },
+        logs,
+    })
+}
+
+fn write_stitching_bundle(
+    context: &StitchingArtifactContext,
+    evaluated: &EvaluatedStitchingArtifacts,
+) -> io::Result<StitchingBundleWriteReport> {
+    fs::create_dir_all(&context.artifact_dir)?;
+
+    let summary_md = render_stitching_summary(&evaluated.bundle);
+    let artifact_dir_display = context.artifact_dir.display().to_string();
+    let commands = vec![
+        context.command_invocation.clone(),
+        format!(
+            "jq '.decisions[0]' {}/evidence_query_surface_snapshot.json",
+            artifact_dir_display
+        ),
+        format!(
+            "jq '.edges | length' {}/evidence_ledger_graph.json",
+            artifact_dir_display
+        ),
+        format!("cat {}/run_manifest.json", artifact_dir_display),
+    ];
+
+    let env_json = serde_json::to_string_pretty(&serde_json::json!({
+        "schema_version": "franken-engine.env.v1",
+        "captured_at_utc": &context.generated_at_utc,
+        "project": {
+            "name": "franken_engine",
+            "repo_url": "https://github.com/Dicklesworthstone/franken_engine",
+            "commit": &context.source_commit,
+            "bead_id": EVIDENCE_LEDGER_STITCHING_BEAD_ID,
+        },
+        "host": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+        },
+        "toolchain": {
+            "rustup_toolchain": &context.toolchain,
+        },
+        "runtime": {
+            "component": EVIDENCE_LEDGER_STITCHING_COMPONENT,
+            "trace_id": &context.trace_id,
+        },
+        "policy": {
+            "policy_id": &context.policy_id,
+        }
+    }))
+    .expect("env.json must serialize");
+
+    let mut primary_files = vec![
+        BundleFileArtifact::json("evidence_ledger_stitching_bundle.json", &evaluated.bundle),
+        BundleFileArtifact::json(
+            "evidence_ledger_graph.json",
+            &evaluated.bundle.evidence_ledger_graph,
+        ),
+        BundleFileArtifact::jsonl(
+            "decision_semantics_log.jsonl",
+            &evaluated.bundle.decision_semantics_log,
+        ),
+        BundleFileArtifact::json(
+            "artifact_lineage_index.json",
+            &evaluated.bundle.artifact_lineage_index,
+        ),
+        BundleFileArtifact::json(
+            "evidence_query_surface_snapshot.json",
+            &evaluated.bundle.evidence_query_surface_snapshot,
+        ),
+        BundleFileArtifact::json("trace_ids.json", &evaluated.trace_ids),
+        BundleFileArtifact::json(
+            "run_manifest.json",
+            &serde_json::json!({
+                "schema_version": EVIDENCE_LEDGER_STITCHING_RUN_MANIFEST_SCHEMA_VERSION,
+                "bead_id": EVIDENCE_LEDGER_STITCHING_BEAD_ID,
+                "component": EVIDENCE_LEDGER_STITCHING_COMPONENT,
+                "run_id": &context.run_id,
+                "generated_at_utc": &context.generated_at_utc,
+                "trace_id": &context.trace_id,
+                "decision_id": &context.decision_id,
+                "policy_id": &context.policy_id,
+                "node_count": evaluated.bundle.evidence_ledger_graph.nodes.len(),
+                "edge_count": evaluated.bundle.evidence_ledger_graph.edges.len(),
+                "artifact_count": evaluated.bundle.artifact_lineage_index.len(),
+                "boundary_count": evaluated.bundle.evidence_query_surface_snapshot.decisions[0].boundary_correlation_keys.len(),
+                "bundle_hash": digest_json(&serde_json::to_value(&evaluated.bundle).expect("bundle must serialize")),
+                "graph_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_ledger_graph).expect("graph must serialize")),
+                "query_snapshot_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_query_surface_snapshot).expect("query snapshot must serialize")),
+                "artifacts": required_artifact_names(),
+                "operator_verification": commands.clone(),
+            }),
+        ),
+        BundleFileArtifact::jsonl("events.jsonl", &evaluated.logs),
+        BundleFileArtifact::text("commands.txt", &commands.join("\n")),
+        BundleFileArtifact::text("summary.md", &summary_md),
+        BundleFileArtifact::text("env.json", &env_json),
+    ];
+    primary_files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let primary_hashes = primary_files
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.path.clone(),
+                format!("sha256:{}", sha256_hex(&artifact.contents)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let repro_lock = serde_json::to_string_pretty(&serde_json::json!({
+        "schema_version": "franken-engine.repro-lock.v1",
+        "generated_at_utc": &context.generated_at_utc,
+        "lock_id": format!("{}-{}", EVIDENCE_LEDGER_STITCHING_COMPONENT, context.run_id),
+        "source_commit": &context.source_commit,
+        "determinism": {
+            "allow_network": false,
+            "allow_wall_clock": false,
+            "allow_randomness": false,
+        },
+        "commands": commands.clone(),
+        "expected_outputs": primary_hashes.iter().map(|(path, sha256)| {
+            serde_json::json!({
+                "path": path,
+                "sha256": sha256,
+            })
+        }).collect::<Vec<_>>(),
+        "replay": {
+            "trace_id": &context.trace_id,
+            "decision_id": &context.decision_id,
+            "policy_id": &context.policy_id,
+        }
+    }))
+    .expect("repro.lock must serialize");
+    primary_files.push(BundleFileArtifact::text("repro.lock", &repro_lock));
+    primary_files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let manifest_artifacts = primary_files
+        .iter()
+        .map(|artifact| ManifestArtifactReference {
+            path: artifact.path.clone(),
+            sha256: format!("sha256:{}", sha256_hex(&artifact.contents)),
+        })
+        .collect::<Vec<_>>();
+
+    let manifest_json = serde_json::to_string_pretty(&serde_json::json!({
+        "schema_version": "franken-engine.manifest.v1",
+        "manifest_id": format!("{}-{}", EVIDENCE_LEDGER_STITCHING_COMPONENT, context.run_id),
+        "generated_at_utc": &context.generated_at_utc,
+        "claim": {
+            "claim_id": EVIDENCE_LEDGER_STITCHING_BEAD_ID,
+            "class": "implementation",
+            "statement": "Extend decision logs into deterministic evidence-ledger, artifact-lineage, and query-surface bundles.",
+            "status": "observed",
+            "bundle_root": &artifact_dir_display,
+        },
+        "source_revision": {
+            "repo": "franken_engine",
+            "branch": "main",
+            "commit": &context.source_commit,
+        },
+        "provenance": {
+            "trace_id": &context.trace_id,
+            "decision_id": &context.decision_id,
+            "policy_id": &context.policy_id,
+            "replay_pointer": format!("file://{artifact_dir_display}/commands.txt"),
+            "evidence_pointer": format!("file://{artifact_dir_display}/evidence_ledger_stitching_bundle.json"),
+        },
+        "artifacts": &manifest_artifacts,
+    }))
+    .expect("manifest.json must serialize");
+    let manifest_artifact = BundleFileArtifact::text("manifest.json", &manifest_json);
+
+    let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
+    remove_commit_marker(&context.artifact_dir.join(&manifest_artifact.path))?;
+    let mut written_files = BTreeMap::new();
+    for artifact in primary_files {
+        let full_path = context.artifact_dir.join(&artifact.path);
+        write_atomic(&full_path, &artifact.contents)?;
+        written_files.insert(
+            artifact.path,
+            format!("sha256:{}", sha256_hex(&artifact.contents)),
+        );
+    }
+    let manifest_path = context.artifact_dir.join(&manifest_artifact.path);
+    write_atomic(&manifest_path, &manifest_artifact.contents)?;
+    written_files.insert(
+        manifest_artifact.path,
+        format!("sha256:{}", sha256_hex(&manifest_artifact.contents)),
+    );
+
+    Ok(StitchingBundleWriteReport {
+        artifact_dir: context.artifact_dir.clone(),
+        bundle: evaluated.bundle.clone(),
+        trace_ids_path: context.artifact_dir.join("trace_ids.json"),
+        written_files,
+    })
+}
+
+fn default_stitching_entry(context: &StitchingArtifactContext) -> EvidenceEntry {
+    EvidenceEntryBuilder::new(
+        context.trace_id.clone(),
+        context.decision_id.clone(),
+        context.policy_id.clone(),
+        SecurityEpoch::from_raw(5),
+        DecisionType::SecurityAction,
+    )
+    .timestamp_ns(1_000_000)
+    .candidate(CandidateAction::new("sandbox", 100_000))
+    .candidate(CandidateAction::new("terminate", 500_000))
+    .candidate(CandidateAction::filtered(
+        "ignore",
+        900_000,
+        "exceeds loss budget",
+    ))
+    .constraint(Constraint {
+        constraint_id: "max-loss".to_string(),
+        description: "maximum expected loss threshold".to_string(),
+        active: true,
+    })
+    .chosen(ChosenAction {
+        action_name: "sandbox".to_string(),
+        expected_loss_millionths: 100_000,
+        rationale: "lowest expected loss within constraints".to_string(),
+    })
+    .witness(Witness {
+        witness_id: "obs-001".to_string(),
+        witness_type: "posterior".to_string(),
+        value: "0.85".to_string(),
+    })
+    .meta("extension_id", "ext-abc")
+    .build()
+    .expect("build default stitching entry")
+}
+
+fn default_boundary_records(
+    context: &StitchingArtifactContext,
+) -> io::Result<Vec<BoundaryCaptureRecord>> {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let boundary_context = BoundaryContext::new(
+        context.trace_id.as_str(),
+        context.decision_id.as_str(),
+        context.policy_id.as_str(),
+        EVIDENCE_LEDGER_STITCHING_COMPONENT,
+        128,
+    );
+    let scheduling = session
+        .capture_scheduling_decision(
+            &boundary_context,
+            "hot-lane",
+            "task-17",
+            "digest-order",
+            None,
+        )
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let override_record = session
+        .capture_controller_override(
+            &boundary_context,
+            "safety-router",
+            "force-sandbox",
+            "digest-override",
+            None,
+        )
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let policy = session
+        .capture_external_policy_read(
+            &boundary_context,
+            "release_policy",
+            "digest-policy",
+            11,
+            None,
+        )
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(vec![scheduling, override_record, policy])
+}
+
+fn default_artifact_records(boundaries: &[BoundaryCaptureRecord]) -> Vec<ArtifactRecord> {
+    vec![
+        ArtifactRecord::new(
+            "benchmark-snapshot",
+            "benchmark_manifest",
+            "artifacts/benchmark-snapshot.json",
+            "hash-benchmark",
+        )
+        .supporting_boundary(boundaries[0].correlation_key.clone()),
+        ArtifactRecord::new(
+            "release-gate",
+            "release_gate_report",
+            "artifacts/release-gate.json",
+            "hash-release",
+        )
+        .supporting_boundary(boundaries[2].correlation_key.clone()),
+        ArtifactRecord::new(
+            "support-export",
+            "support_bundle",
+            "artifacts/support-export.json",
+            "hash-support",
+        ),
+    ]
+}
+
+fn default_decision_annotations(
+    boundaries: &[BoundaryCaptureRecord],
+) -> DecisionSemanticsAnnotations {
+    DecisionSemanticsAnnotations {
+        confidence_tier: Some("high".to_string()),
+        fallback_reason: Some("safe_mode_guard".to_string()),
+        regret_summary: Some("bounded_regret<=1000".to_string()),
+        scope_limits: vec![
+            "controller=safety-router".to_string(),
+            "release=report-only".to_string(),
+        ],
+        assumptions: BTreeMap::from([
+            ("policy_snapshot".to_string(), "signed".to_string()),
+            ("support_visibility".to_string(), "operator".to_string()),
+        ]),
+        linked_boundary_correlation_keys: boundaries
+            .iter()
+            .map(|boundary| boundary.correlation_key.clone())
+            .collect(),
+    }
+}
+
+fn required_artifact_names() -> Vec<String> {
+    vec![
+        "artifact_lineage_index.json".to_string(),
+        "commands.txt".to_string(),
+        "decision_semantics_log.jsonl".to_string(),
+        "env.json".to_string(),
+        "evidence_ledger_graph.json".to_string(),
+        "evidence_ledger_stitching_bundle.json".to_string(),
+        "evidence_query_surface_snapshot.json".to_string(),
+        "events.jsonl".to_string(),
+        "manifest.json".to_string(),
+        "repro.lock".to_string(),
+        "run_manifest.json".to_string(),
+        "summary.md".to_string(),
+        "trace_ids.json".to_string(),
+    ]
+}
+
+fn acquire_bundle_write_lock(artifact_dir: &Path) -> io::Result<BundleWriteLock> {
+    let lock_path = artifact_dir.join(".evidence_ledger_stitching.lock");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => Ok(BundleWriteLock { path: lock_path }),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => Err(io::Error::new(
+            ErrorKind::AlreadyExists,
+            format!("bundle already being written: {}", lock_path.display()),
+        )),
+        Err(source) => Err(io::Error::new(
+            source.kind(),
+            format!(
+                "failed to acquire bundle write lock {}: {source}",
+                lock_path.display()
+            ),
+        )),
+    }
+}
+
+fn remove_commit_marker(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(source),
+    }
+}
+
+fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp_path = unique_temp_path(path);
+    fs::write(&temp_path, contents)?;
+    if let Err(source) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(source);
+    }
+    Ok(())
+}
+
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let sequence = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    let mut temp_name = OsString::from(".");
+    match path.file_name() {
+        Some(file_name) => temp_name.push(file_name),
+        None => temp_name.push("artifact"),
+    }
+    temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(temp_name)
+}
+
+fn digest_json(value: &serde_json::Value) -> String {
+    let bytes = serde_json::to_vec(value).expect("digest input must serialize");
+    sha256_hex(&bytes)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+impl BundleFileArtifact {
+    fn json<T: Serialize>(path: &str, value: &T) -> Self {
+        Self {
+            path: path.to_string(),
+            contents: serde_json::to_vec_pretty(value).expect("json artifact must serialize"),
+        }
+    }
+
+    fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
+        let mut contents = Vec::new();
+        for record in records {
+            let mut line = serde_json::to_vec(record).expect("jsonl record must serialize");
+            line.push(b'\n');
+            contents.extend_from_slice(&line);
+        }
+        Self {
+            path: path.to_string(),
+            contents,
+        }
+    }
+
+    fn text(path: &str, contents: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            contents: contents.as_bytes().to_vec(),
+        }
     }
 }
 
@@ -2391,11 +3152,9 @@ mod tests {
     #[test]
     fn ledger_by_decision_type_empty_result() {
         let ledger = InMemoryLedger::new();
-        assert!(
-            ledger
-                .by_decision_type(DecisionType::SecurityAction)
-                .is_empty()
-        );
+        assert!(ledger
+            .by_decision_type(DecisionType::SecurityAction)
+            .is_empty());
     }
 
     #[test]
@@ -2569,5 +3328,75 @@ mod tests {
             LedgerError::SchemaValidationFailed { reason }
             if reason.contains("does not match decision identity")
         ));
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "franken-engine-evidence-ledger-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    #[test]
+    fn emit_default_stitching_bundle_writes_required_artifacts() {
+        let artifact_dir = temp_dir("bundle");
+        let mut context = StitchingArtifactContext::new(&artifact_dir);
+        context.run_id = "run-rgc-811b-test".to_string();
+        context.trace_id = "trace-rgc-811b-test".to_string();
+        context.decision_id = "decision-rgc-811b-test".to_string();
+        context.policy_id = "policy-rgc-811b-test".to_string();
+        context.generated_at_utc = "2026-03-07T00:00:00Z".to_string();
+        context.source_commit = "deadbeef".to_string();
+        context.toolchain = "nightly".to_string();
+        context.command_invocation = format!(
+            "cargo run -p frankenengine-engine --bin franken_evidence_ledger_stitching -- --artifact-dir {}",
+            artifact_dir.display()
+        );
+
+        let bundle = emit_default_stitching_bundle(&context).expect("bundle should write");
+
+        for artifact in required_artifact_names() {
+            assert!(
+                artifact_dir.join(&artifact).exists(),
+                "expected artifact `{artifact}` to exist",
+            );
+        }
+
+        let run_manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
+        )
+        .expect("parse run manifest");
+        assert_eq!(
+            run_manifest["schema_version"].as_str(),
+            Some(EVIDENCE_LEDGER_STITCHING_RUN_MANIFEST_SCHEMA_VERSION)
+        );
+        assert_eq!(bundle.bundle.artifact_lineage_index.len(), 3);
+        assert_eq!(
+            bundle.bundle.evidence_query_surface_snapshot.decisions[0]
+                .artifact_ids
+                .len(),
+            3
+        );
+
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn docs_contract_fixture_matches_checked_in_json() {
+        let expected = build_docs_contract_fixture();
+        let docs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/rgc_evidence_ledger_stitching_v1.json");
+        let actual: DocsContractFixture =
+            serde_json::from_slice(&std::fs::read(&docs_path).expect("read docs fixture"))
+                .expect("fixture should parse");
+
+        assert_eq!(actual.schema_version, DOCS_CONTRACT_SCHEMA_VERSION);
+        assert_eq!(actual, expected);
     }
 }

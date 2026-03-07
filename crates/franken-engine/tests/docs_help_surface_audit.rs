@@ -58,6 +58,11 @@ fn parse_contract() -> DocsHelpSurfaceAuditContract {
     serde_json::from_str(CONTRACT_JSON).expect("docs/help audit contract must parse")
 }
 
+fn read_gate_script() -> String {
+    let path = repo_root().join("scripts/run_rgc_docs_help_surface_audit.sh");
+    read_to_string(&path)
+}
+
 fn actual_top_level_commands_from_help(stdout: &str) -> BTreeSet<String> {
     stdout
         .lines()
@@ -269,4 +274,46 @@ fn rgc_911a_help_output_matches_contract() {
         .cloned()
         .collect();
     assert_eq!(actual_commands, expected_commands);
+}
+
+#[test]
+fn rgc_911a_gate_script_captures_live_help_output() {
+    let script = read_gate_script();
+
+    assert!(
+        script.contains("cargo run -p frankenengine-engine --bin frankenctl -- --help"),
+        "gate script must capture actual frankenctl help output"
+    );
+    assert!(
+        script.contains("capture_actual_help_output"),
+        "gate script should use a dedicated actual-help capture path"
+    );
+    assert!(
+        !script.contains(
+            "jq -r '.required_help_fragments[]' \"$contract_json\" >\"$help_output_path\""
+        ),
+        "gate script must not synthesize help output from contract fragments"
+    );
+}
+
+#[test]
+fn rgc_911a_gate_script_fails_closed_on_help_validation_and_uses_isolated_target_dir() {
+    let script = read_gate_script();
+
+    assert!(
+        script.contains("validate_help_against_contract || main_exit=$?"),
+        "gate script must fail when actual help output diverges from the contract"
+    );
+    assert!(
+        !script.contains("validate_help_against_contract || true"),
+        "gate script must not ignore help-validation failures"
+    );
+    assert!(
+        script.contains("/tmp/rch_target_rgc_docs_help_surface_audit_"),
+        "gate script should use an isolated remote target dir"
+    );
+    assert!(
+        !script.contains("/data/projects/franken_engine/target_rch_rgc_docs_help_surface_audit"),
+        "gate script must not reuse a fixed repo-local remote target dir"
+    );
 }

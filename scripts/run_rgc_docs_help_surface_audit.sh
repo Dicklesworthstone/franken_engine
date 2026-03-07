@@ -9,10 +9,12 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/data/projects/franken_engine/target_rch_rgc_docs_help_surface_audit}"
+cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
 artifact_root="${RGC_DOCS_HELP_SURFACE_AUDIT_ARTIFACT_ROOT:-artifacts/rgc_docs_help_surface_audit}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+target_namespace="${mode}_$$"
+target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_rgc_docs_help_surface_audit_${target_namespace}}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
@@ -58,6 +60,7 @@ run_rch() {
     rch exec -- env \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
+    "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
     "$@"
 }
 
@@ -216,11 +219,69 @@ validate_readme_against_contract() {
   return 0
 }
 
-render_help_contract_artifact() {
-  jq -r '.required_help_fragments[]' "$contract_json" >"$help_output_path"
+extract_help_output_from_log() {
+  local log_path="$1"
+  rch_strip_ansi "$log_path" | awk '
+    /^frankenctl usage:$/ { capture=1 }
+    capture && (/^frankenctl usage:$/ || /^  frankenctl /) { print }
+  '
+}
 
+capture_actual_help_output() {
+  local command_text log_path status remote_exit_code
+
+  command_text="cargo run -p frankenengine-engine --bin frankenctl -- --help"
+  commands_run+=("${command_text}")
+  log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
+  step_log_index=$((step_log_index + 1))
+  last_step_log_path="$log_path"
+
+  echo "==> ${command_text}"
+
+  set +e
+  run_rch cargo run -p frankenengine-engine --bin frankenctl -- --help > >(tee "$log_path") 2>&1
+  status=$?
+  set -e
+
+  if [[ "${status}" -ne 0 ]]; then
+    if [[ "${status}" -eq 124 ]]; then
+      echo "==> failure: rch command timed out after ${rch_timeout_seconds}s" | tee -a "$log_path"
+      failed_command="${command_text} (timeout-${rch_timeout_seconds}s)"
+      return 1
+    fi
+
+    if rch_recovered_success "$log_path"; then
+      echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
+    else
+      remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
+      if [[ -n "${remote_exit_code}" ]]; then
+        failed_command="${command_text} (rch-exit=${status}; remote-exit=${remote_exit_code})"
+      else
+        failed_command="${command_text} (rch-exit=${status}; missing-remote-exit-marker)"
+      fi
+      return 1
+    fi
+  fi
+
+  if ! rch_reject_local_fallback "$log_path"; then
+    failed_command="${command_text} (rch-local-fallback-detected)"
+    return 1
+  fi
+
+  remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
+  if [[ -z "$remote_exit_code" ]]; then
+    failed_command="${command_text} (rch-exit=${status}; missing-remote-exit-marker)"
+    return 1
+  fi
+  if [[ "$remote_exit_code" != "0" ]]; then
+    failed_command="${command_text} (rch-exit=${status}; remote-exit=${remote_exit_code})"
+    return 1
+  fi
+
+  extract_help_output_from_log "$log_path" >"$help_output_path"
   if [[ ! -s "$help_output_path" ]]; then
-    echo "failed to render help contract artifact" >&2
+    echo "failed to capture actual frankenctl --help output" >&2
+    failed_command="${command_text} (missing-help-output)"
     return 1
   fi
 
@@ -371,7 +432,7 @@ write_manifest() {
   write_report "$outcome"
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
-  if git diff --quiet --ignore-submodules HEAD -- >/dev/null 2>&1; then
+  if [[ -z "$(git status --short --untracked-files=normal 2>/dev/null)" ]]; then
     dirty_worktree=false
   else
     dirty_worktree=true
@@ -449,7 +510,11 @@ validate_readme_against_contract || main_exit=$?
 if [[ "$main_exit" -eq 0 ]]; then
   run_mode || main_exit=$?
 fi
-render_help_contract_artifact || main_exit=$?
-validate_help_against_contract || true
+if [[ "$main_exit" -eq 0 ]]; then
+  capture_actual_help_output || main_exit=$?
+fi
+if [[ "$main_exit" -eq 0 ]]; then
+  validate_help_against_contract || main_exit=$?
+fi
 write_manifest "$main_exit"
 exit "$main_exit"

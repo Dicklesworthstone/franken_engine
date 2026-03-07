@@ -179,33 +179,33 @@ run_mode() {
   case "$mode" in
     check)
       run_step "cargo check -p frankenengine-engine --test rgc_v8_supremacy_claim_contract" \
-        cargo check -p frankenengine-engine --test rgc_v8_supremacy_claim_contract
+        cargo check -p frankenengine-engine --test rgc_v8_supremacy_claim_contract || return 1
       ;;
     test)
       if [[ -n "$scenario_test_name" ]]; then
         run_step "cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract ${scenario_test_name} -- --exact" \
-          cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract "${scenario_test_name}" -- --exact
+          cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract "${scenario_test_name}" -- --exact || return 1
       else
         run_step "cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract" \
-          cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract
+          cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract || return 1
       fi
       ;;
     clippy)
       run_step "cargo clippy -p frankenengine-engine --test rgc_v8_supremacy_claim_contract -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test rgc_v8_supremacy_claim_contract -- -D warnings
+        cargo clippy -p frankenengine-engine --test rgc_v8_supremacy_claim_contract -- -D warnings || return 1
       ;;
     ci)
       run_step "cargo check -p frankenengine-engine --test rgc_v8_supremacy_claim_contract" \
-        cargo check -p frankenengine-engine --test rgc_v8_supremacy_claim_contract
+        cargo check -p frankenengine-engine --test rgc_v8_supremacy_claim_contract || return 1
       if [[ -n "$scenario_test_name" ]]; then
         run_step "cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract ${scenario_test_name} -- --exact" \
-          cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract "${scenario_test_name}" -- --exact
+          cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract "${scenario_test_name}" -- --exact || return 1
       else
         run_step "cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract" \
-          cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract
+          cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract || return 1
       fi
       run_step "cargo clippy -p frankenengine-engine --test rgc_v8_supremacy_claim_contract -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test rgc_v8_supremacy_claim_contract -- -D warnings
+        cargo clippy -p frankenengine-engine --test rgc_v8_supremacy_claim_contract -- -D warnings || return 1
       ;;
     *)
       usage

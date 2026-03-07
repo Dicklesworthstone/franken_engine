@@ -76,6 +76,10 @@ Supported modes:
 Heavy cargo operations are remote-only (`rch`) and fail closed on local
 fallback detection.
 
+The emitted `frankenctl_help.txt` artifact must come from an actual
+`frankenctl --help` execution on the shipped binary path, never from replaying
+contract fragments into a synthetic file.
+
 ## Required Artifacts
 
 Each run emits:

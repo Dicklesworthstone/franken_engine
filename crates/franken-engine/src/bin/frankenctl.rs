@@ -1412,6 +1412,9 @@ fn append_benchmark_bundle_check(
 
 fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     let trace = load_json_file::<NondeterminismTrace>(&args.trace)?;
+    trace
+        .validate_for_replay()
+        .map_err(|error| format!("replay failed before sequence 0: {error}"))?;
     let replay_events = trace.events.clone();
     let session_id = trace.session_id.clone();
     let event_count = trace.events.len();

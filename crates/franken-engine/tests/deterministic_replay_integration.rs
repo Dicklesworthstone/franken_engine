@@ -38,6 +38,7 @@ fn make_trace() -> NondeterminismTrace {
         300,
         "api-client",
     );
+    trace.finalise(400);
     trace
 }
 
@@ -237,6 +238,7 @@ fn replay_strict_benign_divergence_continues() {
     // TimerRead divergence is Benign
     let mut trace = NondeterminismTrace::new("s1");
     trace.capture(NondeterminismSource::TimerRead, vec![1], 100, "c");
+    trace.finalise(200);
 
     let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
     let v = engine
@@ -283,6 +285,17 @@ fn replay_engine_serde_roundtrip() {
     let json = serde_json::to_string(&engine).unwrap();
     let restored: ReplayEngine = serde_json::from_str(&json).unwrap();
     assert_eq!(engine, restored);
+}
+
+#[test]
+fn replay_unfinalised_trace_rejected() {
+    let mut trace = NondeterminismTrace::new("unfinished");
+    trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "clock");
+
+    let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+    let result = engine.replay_next(NondeterminismSource::TimerRead, &[1]);
+    assert!(matches!(result, Err(ReplayError::TraceNotFinalised)));
+    assert!(!engine.is_complete());
 }
 
 // =========================================================================
@@ -917,6 +930,7 @@ fn trace_derive_id_differs_by_event_count() {
 fn replay_engine_derive_id_differs_by_cursor() {
     let mut trace = NondeterminismTrace::new("s");
     trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "c");
+    trace.finalise(20);
     let e0 = ReplayEngine::new(trace.clone(), ReplayMode::Strict);
     let mut e1 = ReplayEngine::new(trace, ReplayMode::Strict);
     e1.replay_next(NondeterminismSource::TimerRead, &[1])
@@ -952,6 +966,7 @@ fn clone_replay_engine_independent() {
     let mut trace = NondeterminismTrace::new("s");
     trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "c");
     trace.capture(NondeterminismSource::TimerRead, vec![2], 20, "c");
+    trace.finalise(30);
     let mut eng = ReplayEngine::new(trace, ReplayMode::BestEffort);
     let cloned = eng.clone();
     eng.replay_next(NondeterminismSource::TimerRead, &[1])
@@ -998,6 +1013,7 @@ fn clone_incident_bundle_independent() {
 fn divergence_timer_is_benign_via_engine() {
     let mut trace = NondeterminismTrace::new("s");
     trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "clk");
+    trace.finalise(20);
     let mut eng = ReplayEngine::new(trace, ReplayMode::BestEffort);
     eng.replay_next(NondeterminismSource::TimerRead, &[2])
         .unwrap();
@@ -1009,6 +1025,7 @@ fn divergence_timer_is_benign_via_engine() {
 fn divergence_thread_schedule_is_warning_via_engine() {
     let mut trace = NondeterminismTrace::new("s");
     trace.capture(NondeterminismSource::ThreadSchedule, vec![1], 10, "sched");
+    trace.finalise(20);
     let mut eng = ReplayEngine::new(trace, ReplayMode::BestEffort);
     eng.replay_next(NondeterminismSource::ThreadSchedule, &[2])
         .unwrap();
@@ -1021,6 +1038,7 @@ fn divergence_thread_schedule_is_warning_via_engine() {
 fn divergence_resource_check_is_critical_via_engine() {
     let mut trace = NondeterminismTrace::new("s");
     trace.capture(NondeterminismSource::ResourceCheck, vec![1], 10, "budget");
+    trace.finalise(20);
     let mut eng = ReplayEngine::new(trace, ReplayMode::BestEffort);
     eng.replay_next(NondeterminismSource::ResourceCheck, &[2])
         .unwrap();
@@ -1036,6 +1054,7 @@ fn divergence_user_interaction_is_benign_via_engine() {
         10,
         "ui",
     );
+    trace.finalise(20);
     let mut eng = ReplayEngine::new(trace, ReplayMode::BestEffort);
     eng.replay_next(NondeterminismSource::UserInteractionTiming, &[2])
         .unwrap();
@@ -1049,7 +1068,8 @@ fn divergence_user_interaction_is_benign_via_engine() {
 
 #[test]
 fn replay_empty_trace_exhausted_immediately() {
-    let trace = NondeterminismTrace::new("s1");
+    let mut trace = NondeterminismTrace::new("s1");
+    trace.finalise(0);
     let mut eng = ReplayEngine::new(trace, ReplayMode::Strict);
     let result = eng.replay_next(NondeterminismSource::TimerRead, &[1]);
     assert!(matches!(result, Err(ReplayError::TraceExhausted { .. })));
@@ -1358,6 +1378,7 @@ fn builder_none_sources_produces_no_artifacts() {
 fn builder_no_divergences_skips_divergence_artifact() {
     let mut trace = NondeterminismTrace::new("s");
     trace.capture(NondeterminismSource::TimerRead, vec![1], 10, "c");
+    trace.finalise(20);
     let mut eng = ReplayEngine::new(trace.clone(), ReplayMode::Strict);
     eng.replay_next(NondeterminismSource::TimerRead, &[1])
         .unwrap();
@@ -1456,6 +1477,7 @@ fn replay_remaining_counts_down() {
     for i in 0..5u64 {
         trace.capture(NondeterminismSource::TimerRead, vec![i as u8], i * 10, "c");
     }
+    trace.finalise(50);
     let mut eng = ReplayEngine::new(trace, ReplayMode::BestEffort);
     assert_eq!(eng.remaining(), 5);
     eng.replay_next(NondeterminismSource::TimerRead, &[0])

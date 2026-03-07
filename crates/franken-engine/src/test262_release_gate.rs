@@ -208,10 +208,19 @@ pub struct Test262Waiver {
     pub reviewer: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Test262WaiverSet {
     pub schema_version: String,
     pub waivers: Vec<Test262Waiver>,
+}
+
+impl Default for Test262WaiverSet {
+    fn default() -> Self {
+        Self {
+            schema_version: TEST262_WAIVER_SCHEMA.to_string(),
+            waivers: Vec::new(),
+        }
+    }
 }
 
 impl Test262WaiverSet {
@@ -1357,10 +1366,7 @@ mod tests {
     }
 
     fn valid_waiver_set() -> Test262WaiverSet {
-        Test262WaiverSet {
-            schema_version: TEST262_WAIVER_SCHEMA.to_string(),
-            waivers: vec![],
-        }
+        Test262WaiverSet::default()
     }
 
     fn valid_runner_config() -> Test262RunnerConfig {
@@ -1558,6 +1564,23 @@ mod tests {
     #[test]
     fn waiver_set_validate_empty() {
         assert!(valid_waiver_set().validate().is_ok());
+    }
+
+    #[test]
+    fn waiver_set_default_is_valid() {
+        assert!(Test262WaiverSet::default().validate().is_ok());
+    }
+
+    #[test]
+    fn waiver_set_load_missing_file_returns_valid_default() {
+        let path = std::env::temp_dir()
+            .join("franken_t262_missing")
+            .join("waivers.toml");
+        let waivers = Test262WaiverSet::load_toml(&path).expect("load missing file");
+        assert_eq!(waivers, Test262WaiverSet::default());
+        waivers
+            .validate()
+            .expect("missing-file default should validate");
     }
 
     #[test]

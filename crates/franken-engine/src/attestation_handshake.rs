@@ -117,6 +117,7 @@ impl AttestationResponse {
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.cell_id.as_bytes());
+        append_attestation_quote_canonical_bytes(&mut buf, &self.attestation_quote);
         buf.extend_from_slice(&self.signer_public_key);
         buf.extend_from_slice(&self.key_binding_proof);
         for cap in &self.claimed_capabilities {
@@ -126,6 +127,17 @@ impl AttestationResponse {
         buf.push(self.cell_function as u8);
         buf
     }
+}
+
+fn append_attestation_quote_canonical_bytes(buf: &mut Vec<u8>, quote: &AttestationQuote) {
+    buf.extend_from_slice(&quote.measurement.canonical_bytes());
+    buf.extend_from_slice(&quote.nonce);
+    buf.extend_from_slice(&quote.issued_at_ns.to_be_bytes());
+    buf.extend_from_slice(&quote.validity_window_ns.to_be_bytes());
+    buf.push(quote.trust_level as u8);
+    buf.push(quote.platform as u8);
+    buf.extend_from_slice(&quote.signature_bytes);
+    buf.extend_from_slice(quote.signer_key_id.as_bytes());
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +485,20 @@ impl PolicyPlaneVerifier {
         trust_root: &dyn TrustRootBackend,
         current_ns: u64,
     ) -> Result<CellAuthorization, HandshakeError> {
-        // 1. Check challenge freshness.
+        // 1. Verify challenge authenticity before using any of its fields.
+        let expected_challenge_signature = self.sign(&challenge.canonical_bytes());
+        if challenge.policy_plane_signature != expected_challenge_signature {
+            self.emit_failure_event(
+                &response.cell_id,
+                HandshakeOutcome::SignatureFailed,
+                None,
+                "challenge signature invalid",
+                current_ns,
+            );
+            return Err(HandshakeError::ChallengeSignatureInvalid);
+        }
+
+        // 2. Check challenge freshness.
         if !challenge.is_valid_at(current_ns) {
             self.emit_failure_event(
                 &response.cell_id,
@@ -489,7 +514,7 @@ impl PolicyPlaneVerifier {
             });
         }
 
-        // 2. Check nonce match.
+        // 3. Check nonce match.
         if response.attestation_quote.nonce != challenge.nonce {
             self.emit_failure_event(
                 &response.cell_id,
@@ -501,7 +526,7 @@ impl PolicyPlaneVerifier {
             return Err(HandshakeError::NonceMismatch);
         }
 
-        // 3. Verify attestation quote.
+        // 4. Verify attestation quote.
         let measurement = &response.attestation_quote.measurement;
         let verification = trust_root.verify(
             &response.attestation_quote,
@@ -522,7 +547,7 @@ impl PolicyPlaneVerifier {
             });
         }
 
-        // 4. Check measurement against approved set.
+        // 5. Check measurement against approved set.
         let measurement_hash = measurement.composite_hash();
         if !self.approved_measurements.contains(&measurement_hash) {
             self.emit_failure_event(
@@ -535,7 +560,7 @@ impl PolicyPlaneVerifier {
             return Err(HandshakeError::MeasurementNotApproved { measurement_hash });
         }
 
-        // 5. Verify key binding proof.
+        // 6. Verify key binding proof.
         let expected_binding = compute_key_binding(&response.signer_public_key, measurement);
         if response.key_binding_proof != expected_binding {
             self.emit_failure_event(
@@ -548,7 +573,7 @@ impl PolicyPlaneVerifier {
             return Err(HandshakeError::KeyBindingInvalid);
         }
 
-        // 6. Verify response signature.
+        // 7. Verify response signature.
         let expected_sig =
             compute_response_signature(&response.signer_public_key, &response.canonical_bytes());
         if response.response_signature != expected_sig {
@@ -562,7 +587,7 @@ impl PolicyPlaneVerifier {
             return Err(HandshakeError::ResponseSignatureInvalid);
         }
 
-        // 7. Issue authorization.
+        // 8. Issue authorization.
         let auth = self.issue_authorization(
             &response.cell_id,
             &response.claimed_capabilities,
@@ -570,7 +595,7 @@ impl PolicyPlaneVerifier {
             current_ns,
         )?;
 
-        // 8. Record success event.
+        // 9. Record success event.
         self.emit_event(HandshakeEvent {
             seq: 0,
             timestamp_ns: current_ns,
@@ -598,6 +623,11 @@ impl PolicyPlaneVerifier {
                 cell_id: cell_id.to_string(),
             }
         })?;
+
+        let expected_signature = self.sign(&auth.canonical_bytes());
+        if auth.authorization_signature != expected_signature {
+            return Err(HandshakeError::AuthorizationSignatureInvalid);
+        }
 
         if !auth.is_valid_at(current_ns) {
             return Err(HandshakeError::AuthorizationExpired {
@@ -701,7 +731,7 @@ impl PolicyPlaneVerifier {
         )
         .map_err(|e| HandshakeError::IdDerivation(e.to_string()))?;
 
-        let auth = CellAuthorization {
+        let mut auth = CellAuthorization {
             authorization_id: auth_id,
             cell_id: cell_id.to_string(),
             authorized_operations: capabilities.clone(),
@@ -710,13 +740,9 @@ impl PolicyPlaneVerifier {
             validity_window_ns: self.default_authorization_window_ns,
             policy_version: self.policy_version,
             verified_measurement: measurement_hash,
-            authorization_signature: self.sign(&{
-                let mut b = Vec::new();
-                b.extend_from_slice(cell_id.as_bytes());
-                b.extend_from_slice(&current_ns.to_be_bytes());
-                b
-            }),
+            authorization_signature: Vec::new(),
         };
+        auth.authorization_signature = self.sign(&auth.canonical_bytes());
 
         self.active_authorizations
             .insert(cell_id.to_string(), auth.clone());
@@ -1012,6 +1038,27 @@ mod tests {
     }
 
     #[test]
+    fn handshake_rejects_invalid_challenge_signature() {
+        let mut verifier = test_verifier();
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        verifier.approve_measurement(measurement.composite_hash());
+
+        let mut challenge = verifier
+            .generate_challenge([1u8; 32], 1000, 10_000)
+            .unwrap();
+        challenge.policy_plane_signature = vec![0xCA, 0xFE];
+
+        let client = test_client();
+        let response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
+
+        let err = verifier
+            .verify_and_authorize(&challenge, &response, &root, 1000)
+            .unwrap_err();
+        assert!(matches!(err, HandshakeError::ChallengeSignatureInvalid));
+    }
+
+    #[test]
     fn handshake_rejects_unapproved_measurement() {
         let mut verifier = test_verifier();
         // Don't approve any measurements.
@@ -1087,6 +1134,26 @@ mod tests {
     }
 
     #[test]
+    fn handshake_rejects_tampered_quote_after_response_signing() {
+        let mut verifier = test_verifier();
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        verifier.approve_measurement(measurement.composite_hash());
+
+        let challenge = verifier
+            .generate_challenge([1u8; 32], 1000, 10_000)
+            .unwrap();
+        let client = test_client();
+        let mut response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
+        response.attestation_quote.issued_at_ns = 999;
+
+        let err = verifier
+            .verify_and_authorize(&challenge, &response, &root, 1000)
+            .unwrap_err();
+        assert!(matches!(err, HandshakeError::ResponseSignatureInvalid));
+    }
+
+    #[test]
     fn handshake_rejects_revoked_trust_root() {
         let mut verifier = test_verifier();
         let mut root = test_trust_root();
@@ -1120,6 +1187,29 @@ mod tests {
                 .check_authorization("cell-001", "sign_receipts", 2000)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn check_authorization_rejects_tampered_authorized_operations() {
+        let mut verifier = test_verifier();
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        verifier.approve_measurement(measurement.composite_hash());
+
+        let client = test_client();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+
+        verifier
+            .active_authorizations
+            .get_mut("cell-001")
+            .expect("authorization")
+            .authorized_operations
+            .insert("admin_override".to_string());
+
+        let err = verifier
+            .check_authorization("cell-001", "admin_override", 2000)
+            .unwrap_err();
+        assert!(matches!(err, HandshakeError::AuthorizationSignatureInvalid));
     }
 
     #[test]
@@ -2058,6 +2148,21 @@ mod tests {
         client2.cell_id = "cell-999".to_string();
         let r1 = client1.respond(&challenge, &measurement, &root, 10_000, 1000);
         let r2 = client2.respond(&challenge, &measurement, &root, 10_000, 1000);
+        assert_ne!(r1.canonical_bytes(), r2.canonical_bytes());
+    }
+
+    #[test]
+    fn response_canonical_bytes_sensitive_to_quote_timestamp() {
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        let verifier = test_verifier();
+        let challenge = verifier
+            .generate_challenge([1u8; 32], 1000, 10_000)
+            .unwrap();
+        let client = test_client();
+        let r1 = client.respond(&challenge, &measurement, &root, 10_000, 1000);
+        let mut r2 = r1.clone();
+        r2.attestation_quote.issued_at_ns += 1;
         assert_ne!(r1.canonical_bytes(), r2.canonical_bytes());
     }
 

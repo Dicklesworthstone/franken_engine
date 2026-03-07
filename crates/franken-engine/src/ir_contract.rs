@@ -947,6 +947,10 @@ pub enum Ir3Instruction {
     GetProperty { obj: Reg, key: Reg, dst: Reg },
     /// Object property write: obj[key] = val.
     SetProperty { obj: Reg, key: Reg, val: Reg },
+    /// Allocate a new object on the heap.
+    NewObject { dst: Reg },
+    /// Allocate a new array on the heap.
+    NewArray { dst: Reg },
     /// Halt execution.
     Halt,
 }
@@ -1089,6 +1093,20 @@ impl Ir3Instruction {
                 map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
                 map.insert("val".to_string(), CanonicalValue::U64(u64::from(*val)));
+            }
+            Self::NewObject { dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("new_object".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::NewArray { dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("new_array".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }
             Self::Halt => {
                 map.insert("op".to_string(), CanonicalValue::String("halt".to_string()));

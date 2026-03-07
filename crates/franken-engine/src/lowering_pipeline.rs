@@ -1662,13 +1662,25 @@ pub fn lower_ir2_to_ir3(
                 for _ in 0..*count {
                     elements.push(value_stack.pop().unwrap_or(0));
                 }
-                // Elements are not actually placed in the array via instructions in this naïve implementation,
-                // but we popped them to balance the stack.
+                elements.reverse();
+                
                 let dst = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::LoadInt {
-                    dst,
-                    value: i64::from(*count),
-                });
+                ir3.instructions.push(Ir3Instruction::NewArray { dst });
+                
+                for (i, val_reg) in elements.into_iter().enumerate() {
+                    let key_str = i.to_string();
+                    let key_reg = alloc_register(&mut register_cursor);
+                    let pool_index = push_constant(&mut ir3.constant_pool, key_str);
+                    ir3.instructions.push(Ir3Instruction::LoadStr {
+                        dst: key_reg,
+                        pool_index,
+                    });
+                    ir3.instructions.push(Ir3Instruction::SetProperty {
+                        obj: dst,
+                        key: key_reg,
+                        val: val_reg,
+                    });
+                }
                 value_stack.push(dst);
             }
             Ir1Op::NewObject { count } => {
@@ -1678,12 +1690,18 @@ pub fn lower_ir2_to_ir3(
                     let key = value_stack.pop().unwrap_or(0);
                     properties.push((key, val));
                 }
-                // Like NewArray, properties are popped but not strictly wired.
+                properties.reverse();
+                
                 let dst = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::LoadInt {
-                    dst,
-                    value: i64::from(*count),
-                });
+                ir3.instructions.push(Ir3Instruction::NewObject { dst });
+                
+                for (key_reg, val_reg) in properties {
+                    ir3.instructions.push(Ir3Instruction::SetProperty {
+                        obj: dst,
+                        key: key_reg,
+                        val: val_reg,
+                    });
+                }
                 value_stack.push(dst);
             }
             Ir1Op::Throw => {

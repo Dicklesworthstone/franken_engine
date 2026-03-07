@@ -653,6 +653,11 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
+                Ir3Instruction::NewObject { dst } | Ir3Instruction::NewArray { dst } => {
+                    let id = self.alloc_object();
+                    self.write_reg(dst, Value::Object(id))?;
+                    self.ip += 1;
+                }
                 Ir3Instruction::Halt => {
                     return Err(InterpreterError::Halted);
                 }

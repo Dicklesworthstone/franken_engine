@@ -466,7 +466,8 @@ impl ExecutionOrchestrator {
             })?;
         let evidence_entries = vec![entry];
 
-        // Step 10: Containment + saga (if action > Allow).
+        // Step 10: Execute any selected containment action and attach a saga
+        // only for the actions that require follow-up orchestration.
         let (containment_receipt, saga_id) =
             self.phase_execute_containment(containment_action, package, &trace_id, &decision_id)?;
 
@@ -865,7 +866,7 @@ impl ExecutionOrchestrator {
         match instr {
             crate::ir_contract::Ir3Instruction::Jump { target } => {
                 let target = *target as usize;
-                if target > idx && target < instruction_count {
+                if target < instruction_count {
                     out.push(target);
                 }
             }
@@ -874,7 +875,7 @@ impl ExecutionOrchestrator {
                 if next < instruction_count {
                     out.push(next);
                 }
-                if target > idx && target < instruction_count {
+                if target < instruction_count {
                     out.push(target);
                 }
             }
@@ -995,10 +996,7 @@ impl ExecutionOrchestrator {
         trace_id: &str,
         decision_id: &str,
     ) -> Result<(Option<ContainmentReceipt>, Option<String>), OrchestratorError> {
-        if action == ContainmentAction::Allow
-            || action == ContainmentAction::Challenge
-            || action == ContainmentAction::Sandbox
-        {
+        if action == ContainmentAction::Allow {
             return Ok((None, None));
         }
 
@@ -1795,6 +1793,104 @@ mod tests {
     #[test]
     fn action_to_saga_type_challenge_returns_none() {
         assert!(ExecutionOrchestrator::action_to_saga_type(ContainmentAction::Challenge).is_none());
+    }
+
+    #[test]
+    fn phase_execute_containment_allow_remains_noop() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let pkg = package_with_id("ext-allow");
+        orch.containment_executor.register(&pkg.extension_id);
+
+        let (receipt, saga_id) = orch
+            .phase_execute_containment(
+                ContainmentAction::Allow,
+                &pkg,
+                "trace-allow",
+                "decision-allow",
+            )
+            .expect("allow containment should succeed");
+
+        assert!(receipt.is_none());
+        assert!(saga_id.is_none());
+        assert_eq!(
+            orch.containment_executor.state(&pkg.extension_id),
+            Some(crate::containment_executor::ContainmentState::Running)
+        );
+    }
+
+    #[test]
+    fn phase_execute_containment_challenge_emits_receipt_without_saga() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let pkg = package_with_id("ext-challenge");
+        orch.containment_executor.register(&pkg.extension_id);
+
+        let (receipt, saga_id) = orch
+            .phase_execute_containment(
+                ContainmentAction::Challenge,
+                &pkg,
+                "trace-challenge",
+                "decision-challenge",
+            )
+            .expect("challenge containment should succeed");
+
+        let receipt = receipt.expect("challenge should emit a containment receipt");
+        assert_eq!(receipt.action, ContainmentAction::Challenge);
+        assert_eq!(
+            orch.containment_executor.state(&pkg.extension_id),
+            Some(crate::containment_executor::ContainmentState::Challenged)
+        );
+        assert!(saga_id.is_none());
+    }
+
+    #[test]
+    fn phase_execute_containment_sandbox_emits_receipt_without_saga() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let pkg = package_with_id("ext-sandbox");
+        orch.containment_executor.register(&pkg.extension_id);
+
+        let (receipt, saga_id) = orch
+            .phase_execute_containment(
+                ContainmentAction::Sandbox,
+                &pkg,
+                "trace-sandbox",
+                "decision-sandbox",
+            )
+            .expect("sandbox containment should succeed");
+
+        let receipt = receipt.expect("sandbox should emit a containment receipt");
+        assert_eq!(receipt.action, ContainmentAction::Sandbox);
+        assert_eq!(
+            orch.containment_executor.state(&pkg.extension_id),
+            Some(crate::containment_executor::ContainmentState::Sandboxed)
+        );
+        assert!(saga_id.is_none());
+    }
+
+    #[test]
+    fn flow_successors_preserves_backward_jump_target() {
+        let successors = ExecutionOrchestrator::flow_successors(
+            1,
+            &crate::ir_contract::Ir3Instruction::Jump { target: 0 },
+            2,
+        );
+        assert_eq!(successors, vec![0]);
+    }
+
+    #[test]
+    fn estimate_ir3_schedule_cost_fail_closes_on_looping_control_flow() {
+        let mut ir3 = crate::ir_contract::Ir3Module::new(
+            ContentHash::compute(b"looping-ir3"),
+            "looping-ir3",
+        );
+        ir3.instructions = vec![
+            crate::ir_contract::Ir3Instruction::LoadInt { dst: 0, value: 1 },
+            crate::ir_contract::Ir3Instruction::Jump { target: 0 },
+        ];
+
+        assert!(
+            ExecutionOrchestrator::estimate_ir3_schedule_cost(&ir3).is_none(),
+            "looping control flow should not be flattened into an acyclic schedule cost"
+        );
     }
 
     // -- Enrichment: stable_symbol determinism --

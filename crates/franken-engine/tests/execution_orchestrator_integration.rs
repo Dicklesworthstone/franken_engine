@@ -854,15 +854,21 @@ fn force_lane_v8_produces_v8() {
 // =========================================================================
 
 #[test]
-fn simple_source_produces_no_containment_receipt() {
+fn simple_source_receipt_matches_selected_containment_action() {
     let mut orch = default_orch();
     let result = execute_simple(&mut orch);
-    // For benign/Allow/Challenge/Sandbox actions, containment receipt is None
-    if result.containment_action == ContainmentAction::Allow
-        || result.containment_action == ContainmentAction::Challenge
+
+    if result.containment_action == ContainmentAction::Allow {
+        assert!(result.containment_receipt.is_none());
+        assert!(result.saga_id.is_none());
+    } else if result.containment_action == ContainmentAction::Challenge
         || result.containment_action == ContainmentAction::Sandbox
     {
-        assert!(result.containment_receipt.is_none());
+        let receipt = result
+            .containment_receipt
+            .as_ref()
+            .expect("challenge/sandbox actions should emit a containment receipt");
+        assert_eq!(receipt.action, result.containment_action);
         assert!(result.saga_id.is_none());
     }
 }

@@ -3411,6 +3411,13 @@ fn parse_primary_expression(
     if expression == "this" {
         return Ok(Expression::This);
     }
+    if expression == "super" {
+        return Err(unsupported_expression_syntax_error(
+            "super expressions are not supported",
+            span,
+            context,
+        ));
+    }
 
     if let Some(rest) = expression.strip_prefix("await ") {
         let nested = parse_expression(rest.trim(), span, context, recursion_depth + 1)?;
@@ -4506,19 +4513,11 @@ fn try_parse_postfix(
         let callee_src = expr[..template_start].trim();
         let template_src = expr[template_start..].trim();
         if !callee_src.is_empty() && template_src.starts_with('`') && template_src.ends_with('`') {
-            let callee = match parse_expression(callee_src, span, context, recursion_depth + 1) {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
-            let template =
-                match parse_template_literal(template_src, span, context, recursion_depth + 1) {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
-            return Some(Ok(Expression::Call {
-                callee: Box::new(callee),
-                arguments: vec![template],
-            }));
+            return Some(Err(unsupported_expression_syntax_error(
+                "tagged template expressions are not supported",
+                span,
+                context,
+            )));
         }
     }
 
@@ -4537,6 +4536,13 @@ fn try_parse_postfix(
         if callee_src.is_empty() {
             return Some(Err(optional_chaining_syntax_error(
                 "optional chaining call is missing a callee",
+                span,
+                context,
+            )));
+        }
+        if callee_src == "super" {
+            return Some(Err(unsupported_expression_syntax_error(
+                "super expressions are not supported",
                 span,
                 context,
             )));
@@ -4582,6 +4588,13 @@ fn try_parse_postfix(
                 context,
             )));
         }
+        if object_src == "super" {
+            return Some(Err(unsupported_expression_syntax_error(
+                "super expressions are not supported",
+                span,
+                context,
+            )));
+        }
         let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
@@ -4619,6 +4632,18 @@ fn try_parse_postfix(
                 "optional chaining property access requires an identifier after `?.`",
                 span,
                 context,
+            )));
+        }
+        if object_src == "super" {
+            return Some(Err(unsupported_expression_syntax_error(
+                "super expressions are not supported",
+                span,
+                context,
+            )));
+        }
+        if let Some(message) = unsupported_meta_property_message(object_src, property_src) {
+            return Some(Err(unsupported_expression_syntax_error(
+                message, span, context,
             )));
         }
         if !object_src.is_empty() && is_identifier(property_src) {
@@ -4664,6 +4689,27 @@ fn optional_chaining_syntax_error(
         context.source_label.to_string(),
         Some(span.clone()),
     )
+}
+
+fn unsupported_expression_syntax_error(
+    message: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseError {
+    ParseError::new(
+        ParseErrorCode::UnsupportedSyntax,
+        message,
+        context.source_label.to_string(),
+        Some(span.clone()),
+    )
+}
+
+fn unsupported_meta_property_message(object_src: &str, property_src: &str) -> Option<&'static str> {
+    match (object_src, property_src) {
+        ("import", "meta") => Some("import.meta meta-property is not supported"),
+        ("new", "target") => Some("new.target meta-property is not supported"),
+        _ => None,
+    }
 }
 
 fn contains_optional_chain(expression: &Expression) -> bool {

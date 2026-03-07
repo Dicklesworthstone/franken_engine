@@ -485,7 +485,7 @@
         "artifacts/parser_phase0_gate/<timestamp>/run_manifest.json",
         "artifacts/parser_phase0/golden_checksums.txt"
       ],
-      "notes": " PearlTower + RoseLake: added `new` expression parsing (new Foo(), new Foo.Bar(args)) and typed optional chaining coverage for `foo?.bar`, `foo?.[key]`, `foo?.()`, and nullish-coalescing interaction. Supports: foo(), foo.bar, foo[x], foo()(), foo.bar(), new Foo(args), new Foo.Bar(), foo?.bar, foo?.[key], foo?.(). Missing: super, tagged templates."
+      "notes": " PearlTower + RoseLake + BoldGrove: added `new` expression parsing (new Foo(), new Foo.Bar(args)) and typed optional chaining coverage for `foo?.bar`, `foo?.[key]`, `foo?.()`, and nullish-coalescing interaction. Supports: foo(), foo.bar, foo[x], foo()(), foo.bar(), new Foo(args), new Foo.Bar(), foo?.bar, foo?.[key], foo?.(). Special forms `super`, tagged templates, `new.target`, and `import.meta` now fail closed instead of silently lowering."
     },
     {
       "family_id": "expression.object_array_literal",
@@ -523,8 +523,7 @@
       "implementation_slice": "phase2-template-semantics",
       "owner": "parser-frontier",
       "fixture_ids": [
-        "script_template_literal_raw",
-        "script_template_literal_tagged"
+        "script_template_literal_raw"
       ],
       "replay_commands": [
         "PARSER_GRAMMAR_FAMILY=expression.template_literal rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_parser_phase0_gate cargo test -p frankenengine-engine --test parser_grammar_closure_backlog parser_grammar_closure_backlog_fixtures_are_replayable_by_family -- --nocapture"
@@ -544,7 +543,7 @@
         "artifacts/parser_phase0_gate/<timestamp>/run_manifest.json",
         "artifacts/parser_phase0/golden_checksums.txt"
       ],
-      "notes": "Template literal parsing supports interpolation and deterministic tagged-template scaffold lowering."
+      "notes": "Template literal parsing supports interpolation; tagged templates now fail closed until the AST grows a typed tagged-template form."
     },
     {
       "family_id": "expression.arrow_function",

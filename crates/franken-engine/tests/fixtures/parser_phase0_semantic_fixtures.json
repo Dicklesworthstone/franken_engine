@@ -136,13 +136,6 @@
       "expected_hash": "sha256:d5fdd2a97f7d91426261cdad8b60161e06e31e53157ec172b1191e4027de41a2"
     },
     {
-      "id": "script_template_literal_tagged",
-      "family_id": "expression.template_literal",
-      "goal": "script",
-      "source": "render`hello ${name}`",
-      "expected_hash": "sha256:69d37f0508d4978ab439d31ef7478023b3964e389b8e5d7f16d92c7369834585"
-    },
-    {
       "id": "script_arrow_function_raw",
       "family_id": "expression.arrow_function",
       "goal": "script",

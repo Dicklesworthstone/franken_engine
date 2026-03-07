@@ -1338,30 +1338,51 @@ fn parser_template_literal_empty() {
 }
 
 #[test]
-fn parser_emits_tagged_template_as_scaffold_call() {
+fn parser_rejects_tagged_template_expressions() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("render`hello ${name}`", ParseGoal::Script)
-        .expect("parse should succeed");
-    assert_eq!(tree.body.len(), 1);
-    if let Statement::Expression(expr_stmt) = &tree.body[0] {
-        if let Expression::Call { callee, arguments } = &expr_stmt.expression {
-            assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == "render"));
-            assert_eq!(arguments.len(), 1);
-            assert!(matches!(
-                &arguments[..],
-                [Expression::TemplateLiteral { quasis, expressions }]
-                    if quasis == &["hello ", ""] && matches!(&expressions[..], [Expression::Identifier(name)] if name == "name")
-            ));
-        } else {
-            panic!(
-                "expected scaffold call for tagged template, got {:?}",
-                expr_stmt.expression
-            );
-        }
-    } else {
-        panic!("expected Expression statement");
-    }
+    let source = "render`hello ${name}`";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("tagged template should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.message, "tagged template expressions are not supported");
+    assert_eq!(err.span, Some(single_line_source_span(source)));
+}
+
+#[test]
+fn parser_rejects_new_target_meta_property() {
+    let parser = CanonicalEs2020Parser;
+    let source = "const target = new.target";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("new.target should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.message, "new.target meta-property is not supported");
+    assert_eq!(err.span, Some(single_line_source_span(source)));
+}
+
+#[test]
+fn parser_rejects_import_meta_property() {
+    let parser = CanonicalEs2020Parser;
+    let source = "const meta = import.meta";
+    let err = parser
+        .parse(source, ParseGoal::Module)
+        .expect_err("import.meta should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.message, "import.meta meta-property is not supported");
+    assert_eq!(err.span, Some(single_line_source_span(source)));
+}
+
+#[test]
+fn parser_rejects_super_member_expression() {
+    let parser = CanonicalEs2020Parser;
+    let source = "super.name";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("super member expression should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 
 #[test]

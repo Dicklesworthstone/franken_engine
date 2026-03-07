@@ -35,6 +35,31 @@ Selector semantics are deterministic:
 - exact selector: `bd-1lsy.4.1` matches only that bead
 - wildcard selector: `bd-1lsy.4.*` matches `bd-1lsy.4` and all `bd-1lsy.4.x` children
 
+## React/JSX/TSX Extension
+
+`RGC-016A` extends this matrix through the dedicated React capability contract:
+
+- `docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md`
+- `docs/rgc_react_capability_contract_v1.json`
+
+That extension carries explicit rows for:
+
+- JSX compile-path coverage
+- TSX compile-path coverage
+- fragment lowering
+- classic runtime
+- automatic runtime
+- `jsx-dev` runtime diagnostics
+- SSR entrypoints
+- client-entry preparation
+- hydration handoff artifacts
+- React diagnostics and source-map fidelity
+
+Until the React operator surface (`bd-1lsy.10.12*`) and parity gates
+(`bd-1lsy.9.7*`) are actually green, these rows remain fail-closed. The
+contract forbids treating narrow TSX demos as evidence that "React works" in a
+shipped, user-supportable sense.
+
 ## Compatibility Targets By Milestone
 
 | Milestone | Compatibility objective | Required beads (minimum) | Stop/Go rule |
@@ -85,6 +110,8 @@ jq empty docs/rgc_executable_compatibility_target_matrix_v1.json
 
 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_contract \
   cargo test -p frankenengine-engine --test rgc_executable_compatibility_target_matrix
+
+./scripts/run_rgc_react_capability_contract.sh ci
 
 ./scripts/run_phase_a_exit_gate.sh check
 ```

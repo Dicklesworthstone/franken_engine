@@ -23,6 +23,7 @@ struct CompatibilityMatrix {
     required_structured_log_fields: Vec<String>,
     critical_behavior_bead_ids: Vec<String>,
     milestone_targets: Vec<MilestoneTarget>,
+    react_capability_contract_ref: ReactCapabilityContractRef,
     coverage_rows: Vec<CoverageRow>,
     waiver_governance: WaiverGovernance,
     operator_verification: Vec<String>,
@@ -48,6 +49,16 @@ struct MilestoneTarget {
     description: String,
     required_beads: Vec<String>,
     stop_go_rule: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ReactCapabilityContractRef {
+    bead_id: String,
+    contract_doc: String,
+    contract_json: String,
+    coverage_row_id: String,
+    required_capability_ids: Vec<String>,
+    product_surface_beads: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +122,7 @@ fn rgc_011_doc_contains_required_sections() {
         "# RGC Executable Compatibility Target Matrix V1",
         "## Purpose",
         "## Matrix Model",
+        "## React/JSX/TSX Extension",
         "## Compatibility Targets By Milestone",
         "## Required Logging Fields",
         "## Waiver Governance",
@@ -402,6 +414,46 @@ fn rgc_011_operator_verification_commands_are_present() {
             "cargo test -p frankenengine-engine --test rgc_executable_compatibility_target_matrix"
         )),
         "operator verification must include matrix contract test"
+    );
+    assert!(
+        matrix
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("./scripts/run_rgc_react_capability_contract.sh ci")),
+        "operator verification must include react capability contract gate"
+    );
+}
+
+#[test]
+fn rgc_011_react_capability_extension_is_bound_and_covered() {
+    let matrix = parse_matrix();
+    let react = &matrix.react_capability_contract_ref;
+
+    assert_eq!(react.bead_id, "bd-1lsy.1.6.1");
+    assert_eq!(
+        react.contract_doc,
+        "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md"
+    );
+    assert_eq!(
+        react.contract_json,
+        "docs/rgc_react_capability_contract_v1.json"
+    );
+    assert_eq!(react.coverage_row_id, "rgc-react-capability-contract");
+    assert!(
+        matrix
+            .coverage_rows
+            .iter()
+            .any(|row| row.row_id == react.coverage_row_id),
+        "matrix must include the react capability coverage row"
+    );
+    assert_eq!(
+        react.required_capability_ids.len(),
+        10,
+        "expected explicit React capability row list"
+    );
+    assert!(
+        !react.product_surface_beads.is_empty(),
+        "react capability extension must name product surfaces"
     );
 }
 

@@ -1,0 +1,523 @@
+{
+  "schema_version": "franken-engine.rgc-v8-supremacy-claim-contract.v1",
+  "contract_version": "0.1.0",
+  "log_schema_version": "franken-engine.rgc-v8-supremacy-claim.log-event.v1",
+  "required_artifacts": [
+    "supremacy_claim_contract.json",
+    "published_language_contract.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt"
+  ],
+  "required_consumers": [
+    "benchmark",
+    "docs",
+    "rollout",
+    "ga"
+  ],
+  "changelog": [
+    {
+      "version": "0.1.0",
+      "rationale": "Create a fail-closed, machine-readable contract for V8-supremacy language before publication gates rely on it.",
+      "impact_assessment": "Adds explicit matrix cells, statistical thresholds, and downgrade rules so universal language cannot outrun evidence.",
+      "compatibility_notes": "Additive contract; existing benchmark and docs gates may consume it without changing their public surface.",
+      "changed_at_utc": "2026-03-07T00:00:00Z"
+    }
+  ],
+  "supremacy_claim_contract": {
+    "matrix_dimensions": [
+      "workload_cell",
+      "environment",
+      "entry_mode",
+      "warm_state",
+      "measurement_family"
+    ],
+    "allowed_statistical_procedures": [
+      "fixed_horizon_ci",
+      "sequential_test",
+      "effect_size_guard",
+      "tail_side_constraint",
+      "memory_side_constraint"
+    ],
+    "cell_families": [
+      {
+        "family_id": "parse_compile",
+        "description": "Parse and compile entry cells on shipped CLI and library paths.",
+        "measurement_family": "latency",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "startup",
+        "description": "Cold and warm startup latency cells.",
+        "measurement_family": "latency",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "throughput_hot_loops",
+        "description": "Steady-state throughput cells for hot loops and tiered execution.",
+        "measurement_family": "throughput",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "async",
+        "description": "Async scheduling and promise-heavy workload cells.",
+        "measurement_family": "latency",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "module_graphs",
+        "description": "Multi-module graph loading and resolution cells.",
+        "measurement_family": "latency",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "npm_cohorts",
+        "description": "Representative npm package cohort cells on shipped interop paths.",
+        "measurement_family": "macro",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "react_compile",
+        "description": "React compile and transform cells on the shipped path.",
+        "measurement_family": "macro",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "react_ssr",
+        "description": "Server-rendered React cells including streaming and hydration handoff.",
+        "measurement_family": "macro",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "react_client",
+        "description": "Client React execution cells including updates and eventing.",
+        "measurement_family": "macro",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "macro_workloads",
+        "description": "Macro workload blends that reflect production request mixes.",
+        "measurement_family": "macro",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "tail_latency",
+        "description": "Tail-latency guard cells preventing universal claims from hiding p95/p99 regressions.",
+        "measurement_family": "tail_latency",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      },
+      {
+        "family_id": "memory",
+        "description": "Peak and steady-state memory guard cells.",
+        "measurement_family": "memory",
+        "required_dimensions": [
+          "workload_cell",
+          "environment",
+          "entry_mode",
+          "warm_state",
+          "measurement_family"
+        ],
+        "required_for_universal_phrase": true
+      }
+    ],
+    "family_thresholds": [
+      {
+        "family_id": "parse_compile",
+        "minimum_confidence_millionths": 995000,
+        "minimum_effect_millionths": 30000,
+        "max_tail_regression_millionths": 0,
+        "max_memory_regression_millionths": 0,
+        "allowed_procedures": ["fixed_horizon_ci", "effect_size_guard"]
+      },
+      {
+        "family_id": "startup",
+        "minimum_confidence_millionths": 995000,
+        "minimum_effect_millionths": 25000,
+        "max_tail_regression_millionths": 0,
+        "max_memory_regression_millionths": 0,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "throughput_hot_loops",
+        "minimum_confidence_millionths": 990000,
+        "minimum_effect_millionths": 20000,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "async",
+        "minimum_confidence_millionths": 990000,
+        "minimum_effect_millionths": 15000,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "module_graphs",
+        "minimum_confidence_millionths": 990000,
+        "minimum_effect_millionths": 15000,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "npm_cohorts",
+        "minimum_confidence_millionths": 990000,
+        "minimum_effect_millionths": 20000,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "react_compile",
+        "minimum_confidence_millionths": 990000,
+        "minimum_effect_millionths": 20000,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "react_ssr",
+        "minimum_confidence_millionths": 990000,
+        "minimum_effect_millionths": 15000,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "react_client",
+        "minimum_confidence_millionths": 990000,
+        "minimum_effect_millionths": 15000,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "macro_workloads",
+        "minimum_confidence_millionths": 990000,
+        "minimum_effect_millionths": 15000,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["fixed_horizon_ci", "sequential_test", "effect_size_guard"]
+      },
+      {
+        "family_id": "tail_latency",
+        "minimum_confidence_millionths": 995000,
+        "minimum_effect_millionths": 0,
+        "max_tail_regression_millionths": 0,
+        "max_memory_regression_millionths": 10000,
+        "allowed_procedures": ["tail_side_constraint", "fixed_horizon_ci"]
+      },
+      {
+        "family_id": "memory",
+        "minimum_confidence_millionths": 995000,
+        "minimum_effect_millionths": 0,
+        "max_tail_regression_millionths": 10000,
+        "max_memory_regression_millionths": 0,
+        "allowed_procedures": ["memory_side_constraint", "fixed_horizon_ci"]
+      }
+    ],
+    "universal_phrase_requires_all_green": true,
+    "universal_phrase_side_constraints": [
+      "tail_latency_non_regression",
+      "memory_non_regression",
+      "shipped_path_only",
+      "artifact_complete"
+    ]
+  },
+  "published_language_contract": {
+    "phrase_classes": [
+      "universal_dominance",
+      "scoped_observed",
+      "target",
+      "hypothesis"
+    ],
+    "forbidden_universal_phrases": [
+      "beats V8 across the board",
+      "across the board",
+      "faster than V8 in every case",
+      "universally superior to V8"
+    ],
+    "required_qualifier_terms": [
+      "observed",
+      "target",
+      "hypothesis"
+    ],
+    "required_artifact_fields": [
+      "scope",
+      "environment",
+      "artifact_path",
+      "publication_date",
+      "revision"
+    ],
+    "downgrade_rules": [
+      {
+        "when_missing": "any required family missing_or_mixed",
+        "require_phrase_class": "scoped_observed"
+      },
+      {
+        "when_missing": "tail_or_memory_side_constraint_failed",
+        "require_phrase_class": "scoped_observed"
+      },
+      {
+        "when_missing": "board_incomplete_but_program_defined",
+        "require_phrase_class": "target"
+      },
+      {
+        "when_missing": "claim_speculative_without_green_cells",
+        "require_phrase_class": "hypothesis"
+      }
+    ]
+  },
+  "publication_scenarios": [
+    {
+      "scenario_id": "all_green_universal",
+      "phrase_class": "universal_dominance",
+      "phrase_text": "FrankenEngine beats V8 across the board on the shipped path.",
+      "published_families": [
+        "parse_compile",
+        "startup",
+        "throughput_hot_loops",
+        "async",
+        "module_graphs",
+        "npm_cohorts",
+        "react_compile",
+        "react_ssr",
+        "react_client",
+        "macro_workloads",
+        "tail_latency",
+        "memory"
+      ],
+      "cell_statuses": {
+        "parse_compile": "green",
+        "startup": "green",
+        "throughput_hot_loops": "green",
+        "async": "green",
+        "module_graphs": "green",
+        "npm_cohorts": "green",
+        "react_compile": "green",
+        "react_ssr": "green",
+        "react_client": "green",
+        "macro_workloads": "green",
+        "tail_latency": "green",
+        "memory": "green"
+      },
+      "evidence_complete": true,
+      "shipped_path": true,
+      "tail_constraints_ok": true,
+      "memory_constraints_ok": true,
+      "expected_verdict": "allow_universal",
+      "replay_command": "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario all_green_universal"
+    },
+    {
+      "scenario_id": "missing_react_ssr_universal",
+      "phrase_class": "universal_dominance",
+      "phrase_text": "FrankenEngine beats V8 across the board on the shipped path.",
+      "published_families": [
+        "parse_compile",
+        "startup",
+        "throughput_hot_loops",
+        "async",
+        "module_graphs",
+        "npm_cohorts",
+        "react_compile",
+        "react_client",
+        "macro_workloads",
+        "tail_latency",
+        "memory"
+      ],
+      "cell_statuses": {
+        "parse_compile": "green",
+        "startup": "green",
+        "throughput_hot_loops": "green",
+        "async": "green",
+        "module_graphs": "green",
+        "npm_cohorts": "green",
+        "react_compile": "green",
+        "react_ssr": "missing",
+        "react_client": "green",
+        "macro_workloads": "green",
+        "tail_latency": "green",
+        "memory": "green"
+      },
+      "evidence_complete": true,
+      "shipped_path": true,
+      "tail_constraints_ok": true,
+      "memory_constraints_ok": true,
+      "expected_verdict": "forbid",
+      "replay_command": "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario missing_react_ssr_universal"
+    },
+    {
+      "scenario_id": "tail_regression_universal",
+      "phrase_class": "universal_dominance",
+      "phrase_text": "FrankenEngine beats V8 across the board on the shipped path.",
+      "published_families": [
+        "parse_compile",
+        "startup",
+        "throughput_hot_loops",
+        "async",
+        "module_graphs",
+        "npm_cohorts",
+        "react_compile",
+        "react_ssr",
+        "react_client",
+        "macro_workloads",
+        "tail_latency",
+        "memory"
+      ],
+      "cell_statuses": {
+        "parse_compile": "green",
+        "startup": "green",
+        "throughput_hot_loops": "green",
+        "async": "green",
+        "module_graphs": "green",
+        "npm_cohorts": "green",
+        "react_compile": "green",
+        "react_ssr": "green",
+        "react_client": "green",
+        "macro_workloads": "green",
+        "tail_latency": "green",
+        "memory": "green"
+      },
+      "evidence_complete": true,
+      "shipped_path": true,
+      "tail_constraints_ok": false,
+      "memory_constraints_ok": true,
+      "expected_verdict": "forbid",
+      "replay_command": "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario tail_regression_universal"
+    },
+    {
+      "scenario_id": "scoped_observed_startup_parse",
+      "phrase_class": "scoped_observed",
+      "phrase_text": "Observed faster than V8 on startup and parse_compile cells in the published environment.",
+      "published_families": [
+        "startup",
+        "parse_compile"
+      ],
+      "cell_statuses": {
+        "parse_compile": "green",
+        "startup": "green",
+        "throughput_hot_loops": "mixed",
+        "async": "missing",
+        "module_graphs": "missing",
+        "npm_cohorts": "missing",
+        "react_compile": "missing",
+        "react_ssr": "missing",
+        "react_client": "missing",
+        "macro_workloads": "missing",
+        "tail_latency": "mixed",
+        "memory": "mixed"
+      },
+      "evidence_complete": true,
+      "shipped_path": true,
+      "tail_constraints_ok": false,
+      "memory_constraints_ok": false,
+      "expected_verdict": "allow_scoped",
+      "replay_command": "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario scoped_observed_startup_parse"
+    },
+    {
+      "scenario_id": "target_until_react_client_green",
+      "phrase_class": "target",
+      "phrase_text": "Target: beat V8 on the remaining React client cells before publication.",
+      "published_families": [],
+      "cell_statuses": {
+        "parse_compile": "green",
+        "startup": "green",
+        "throughput_hot_loops": "mixed",
+        "async": "mixed",
+        "module_graphs": "green",
+        "npm_cohorts": "missing",
+        "react_compile": "green",
+        "react_ssr": "green",
+        "react_client": "missing",
+        "macro_workloads": "missing",
+        "tail_latency": "mixed",
+        "memory": "mixed"
+      },
+      "evidence_complete": false,
+      "shipped_path": false,
+      "tail_constraints_ok": false,
+      "memory_constraints_ok": false,
+      "expected_verdict": "allow_qualified",
+      "replay_command": "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci --scenario target_until_react_client_green"
+    }
+  ]
+}

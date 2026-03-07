@@ -168,6 +168,30 @@
       "stop_go_rule": "Release blocked on missing run_manifest/events/commands artifact triad."
     }
   ],
+  "react_capability_contract_ref": {
+    "bead_id": "bd-1lsy.1.6.1",
+    "contract_doc": "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
+    "contract_json": "docs/rgc_react_capability_contract_v1.json",
+    "coverage_row_id": "rgc-react-capability-contract",
+    "required_capability_ids": [
+      "jsx-classic-runtime-compile",
+      "tsx-classic-runtime-compile",
+      "fragment-lowering-contract",
+      "jsx-automatic-runtime-compile",
+      "tsx-automatic-runtime-compile",
+      "jsx-dev-runtime-diagnostics",
+      "react-ssr-entrypoint",
+      "react-client-entry-preparation",
+      "react-hydration-handoff-artifacts",
+      "react-diagnostics-source-maps"
+    ],
+    "product_surface_beads": [
+      "bd-1lsy.10.11.2",
+      "bd-1lsy.10.12.1",
+      "bd-1lsy.10.12.2",
+      "bd-1lsy.10.12.3"
+    ]
+  },
   "coverage_rows": [
     {
       "row_id": "rgc-governance-contract",
@@ -207,6 +231,42 @@
       ],
       "gate_owner": "RGC-011",
       "pass_fail_interpretation": "Pass when schema, selector coverage, and milestone target invariants validate with no missing bead mapping."
+    },
+    {
+      "row_id": "rgc-react-capability-contract",
+      "bead_selectors": [
+        "bd-1lsy.1.6",
+        "bd-1lsy.1.6.*",
+        "bd-1lsy.3.6",
+        "bd-1lsy.3.6.*",
+        "bd-1lsy.5.7",
+        "bd-1lsy.5.7.*",
+        "bd-1lsy.9.7",
+        "bd-1lsy.9.7.*",
+        "bd-1lsy.10.11.2",
+        "bd-1lsy.10.12",
+        "bd-1lsy.10.12.*"
+      ],
+      "requirement_id": "RGC-REQ-REACT-CAP-001",
+      "test_kind": "integration",
+      "harness_entrypoint": "./scripts/run_rgc_react_capability_contract.sh ci",
+      "deterministic_seed_policy": "fixed-seed-react-capability-contract-v1",
+      "required_log_fields": [
+        "trace_id",
+        "decision_id",
+        "runtime_lane",
+        "seed",
+        "result",
+        "error_code"
+      ],
+      "artifact_paths": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt",
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json"
+      ],
+      "gate_owner": "RGC-016A",
+      "pass_fail_interpretation": "Pass when React capability rows explicitly map source form and runtime mode to implementation beads, parity gates, product surfaces, and fail-closed unsupported-surface diagnostics."
     },
     {
       "row_id": "rgc-core-unit",
@@ -322,7 +382,9 @@
   },
   "operator_verification": [
     "jq empty docs/rgc_executable_compatibility_target_matrix_v1.json",
+    "jq empty docs/rgc_react_capability_contract_v1.json",
     "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_contract cargo test -p frankenengine-engine --test rgc_executable_compatibility_target_matrix",
+    "./scripts/run_rgc_react_capability_contract.sh ci",
     "./scripts/run_phase_a_exit_gate.sh check"
   ]
 }

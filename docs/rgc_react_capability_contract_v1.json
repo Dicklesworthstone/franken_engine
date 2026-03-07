@@ -1,0 +1,377 @@
+{
+  "schema_version": "rgc.react-capability-contract.v1",
+  "bead_id": "bd-1lsy.1.6.1",
+  "generated_by": "bd-1lsy.1.6.1",
+  "generated_at_utc": "2026-03-07T03:29:08Z",
+  "track": {
+    "id": "RGC-016A",
+    "name": "React Capability Contract"
+  },
+  "extends_matrix_contract": {
+    "bead_id": "bd-1lsy.1.1",
+    "contract_doc": "docs/RGC_EXECUTABLE_COMPATIBILITY_TARGET_MATRIX_V1.md",
+    "contract_json": "docs/rgc_executable_compatibility_target_matrix_v1.json",
+    "coverage_row_id": "rgc-react-capability-contract"
+  },
+  "required_structured_log_fields": [
+    "schema_version",
+    "scenario_id",
+    "trace_id",
+    "decision_id",
+    "component",
+    "event",
+    "runtime_lane",
+    "seed",
+    "outcome",
+    "error_code"
+  ],
+  "product_surfaces": [
+    {
+      "surface_bead": "bd-1lsy.10.11.2",
+      "name": "Unsupported-surface diagnostics and operator remediation guidance",
+      "ship_status": "required"
+    },
+    {
+      "surface_bead": "bd-1lsy.10.12.1",
+      "name": "Real frankenctl contract for React compile/build workflows",
+      "ship_status": "planned"
+    },
+    {
+      "surface_bead": "bd-1lsy.10.12.2",
+      "name": "React-aware doctor, preflight, and support-bundle guidance",
+      "ship_status": "planned"
+    },
+    {
+      "surface_bead": "bd-1lsy.10.12.3",
+      "name": "End-to-end example-app workflows for the shipped React operator surface",
+      "ship_status": "planned"
+    }
+  ],
+  "capability_rows": [
+    {
+      "capability_id": "jsx-classic-runtime-compile",
+      "source_form": "jsx",
+      "runtime_mode": "classic_runtime",
+      "entry_surface": "compile_contract",
+      "support_status": "deferred",
+      "owning_implementation_bead": "bd-1lsy.3.6.1",
+      "parity_gate_bead": "bd-1lsy.9.7.1",
+      "product_surface_bead": "bd-1lsy.10.12.1",
+      "verification_lane": "react_compile_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0001",
+        "diagnostic_surface": "frankenctl react compile/build",
+        "message_template": "JSX classic-runtime compile support is not yet shipped; reject the request and route the user to unsupported-surface guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "tsx-classic-runtime-compile",
+      "source_form": "tsx",
+      "runtime_mode": "classic_runtime",
+      "entry_surface": "compile_contract",
+      "support_status": "deferred",
+      "owning_implementation_bead": "bd-1lsy.3.6.1",
+      "parity_gate_bead": "bd-1lsy.9.7.1",
+      "product_surface_bead": "bd-1lsy.10.12.1",
+      "verification_lane": "react_compile_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0002",
+        "diagnostic_surface": "frankenctl react compile/build",
+        "message_template": "TSX classic-runtime compile support is not yet shipped; reject the request and route the user to unsupported-surface guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "fragment-lowering-contract",
+      "source_form": "jsx_fragment",
+      "runtime_mode": "fragment_lowering",
+      "entry_surface": "compile_contract",
+      "support_status": "deferred",
+      "owning_implementation_bead": "bd-1lsy.3.6.1",
+      "parity_gate_bead": "bd-1lsy.9.7.1",
+      "product_surface_bead": "bd-1lsy.10.12.1",
+      "verification_lane": "react_compile_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0003",
+        "diagnostic_surface": "frankenctl react compile/build",
+        "message_template": "React fragment lowering is not yet shipped as a supported compile path; reject the request and route the user to unsupported-surface guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "jsx-automatic-runtime-compile",
+      "source_form": "jsx",
+      "runtime_mode": "automatic_runtime",
+      "entry_surface": "compile_contract",
+      "support_status": "deferred",
+      "owning_implementation_bead": "bd-1lsy.3.6.2",
+      "parity_gate_bead": "bd-1lsy.9.7.1",
+      "product_surface_bead": "bd-1lsy.10.12.1",
+      "verification_lane": "react_compile_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0004",
+        "diagnostic_surface": "frankenctl react compile/build",
+        "message_template": "JSX automatic-runtime compile support is not yet shipped; reject the request and route the user to unsupported-surface guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "tsx-automatic-runtime-compile",
+      "source_form": "tsx",
+      "runtime_mode": "automatic_runtime",
+      "entry_surface": "compile_contract",
+      "support_status": "deferred",
+      "owning_implementation_bead": "bd-1lsy.3.6.2",
+      "parity_gate_bead": "bd-1lsy.9.7.1",
+      "product_surface_bead": "bd-1lsy.10.12.1",
+      "verification_lane": "react_compile_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0005",
+        "diagnostic_surface": "frankenctl react compile/build",
+        "message_template": "TSX automatic-runtime compile support is not yet shipped; reject the request and route the user to unsupported-surface guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "jsx-dev-runtime-diagnostics",
+      "source_form": "jsx",
+      "runtime_mode": "jsx_dev_runtime",
+      "entry_surface": "diagnostic_contract",
+      "support_status": "unsupported",
+      "owning_implementation_bead": "bd-1lsy.3.6.2",
+      "parity_gate_bead": "bd-1lsy.9.7.1",
+      "product_surface_bead": "bd-1lsy.10.12.2",
+      "verification_lane": "react_diagnostics_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0006",
+        "diagnostic_surface": "frankenctl react doctor/preflight",
+        "message_template": "The jsx-dev runtime contract is not shipped; reject the request with diagnostics and unsupported-surface guidance instead of pretending to execute it.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "diagnostic_only_reject",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "react-ssr-entrypoint",
+      "source_form": "react_entry",
+      "runtime_mode": "server_render",
+      "entry_surface": "ssr_entry",
+      "support_status": "unsupported",
+      "owning_implementation_bead": "bd-1lsy.5.7.2",
+      "parity_gate_bead": "bd-1lsy.9.7.2",
+      "product_surface_bead": "bd-1lsy.10.12.3",
+      "verification_lane": "react_ssr_parity",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0007",
+        "diagnostic_surface": "frankenctl react build/run",
+        "message_template": "React SSR entrypoints are not yet a shipped surface; reject the request and direct the operator to deterministic unsupported-surface guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "react-client-entry-preparation",
+      "source_form": "react_entry",
+      "runtime_mode": "client_entry",
+      "entry_surface": "client_entry_preparation",
+      "support_status": "unsupported",
+      "owning_implementation_bead": "bd-1lsy.5.7.1",
+      "parity_gate_bead": "bd-1lsy.9.7.2",
+      "product_surface_bead": "bd-1lsy.10.12.3",
+      "verification_lane": "react_client_entry_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0008",
+        "diagnostic_surface": "frankenctl react build/run",
+        "message_template": "React client-entry preparation is not yet a shipped surface; reject the request and direct the operator to deterministic unsupported-surface guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "react-hydration-handoff-artifacts",
+      "source_form": "react_entry",
+      "runtime_mode": "hydration_handoff",
+      "entry_surface": "hydration_artifacts",
+      "support_status": "unsupported",
+      "owning_implementation_bead": "bd-1lsy.5.7.2",
+      "parity_gate_bead": "bd-1lsy.9.7.2",
+      "product_surface_bead": "bd-1lsy.10.12.3",
+      "verification_lane": "react_hydration_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0009",
+        "diagnostic_surface": "frankenctl react build/run",
+        "message_template": "React hydration handoff artifacts are not yet shipped; reject the request and direct the operator to deterministic unsupported-surface guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    },
+    {
+      "capability_id": "react-diagnostics-source-maps",
+      "source_form": "react_diagnostics",
+      "runtime_mode": "source_map_fidelity",
+      "entry_surface": "diagnostic_contract",
+      "support_status": "deferred",
+      "owning_implementation_bead": "bd-1lsy.10.5",
+      "parity_gate_bead": "bd-1lsy.9.7.1",
+      "product_surface_bead": "bd-1lsy.10.12.2",
+      "verification_lane": "react_diagnostics_contract",
+      "required_artifacts": [
+        "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
+        "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
+      ],
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0010",
+        "diagnostic_surface": "frankenctl react doctor/preflight",
+        "message_template": "React-specific diagnostics and source-map fidelity are not yet shipped as a user-supportable contract; reject the request with explicit remediation guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "unsupported_surface_policy": {
+        "fallback_mode": "diagnostic_only_reject",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5",
+        "claim_language_state": "target_only"
+      }
+    }
+  ],
+  "operator_verification": [
+    "jq empty docs/rgc_react_capability_contract_v1.json",
+    "./scripts/run_rgc_react_capability_contract.sh ci",
+    "./scripts/e2e/rgc_react_capability_contract_replay.sh ci"
+  ]
+}

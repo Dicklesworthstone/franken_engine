@@ -6,7 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::fs;
+use std::io;
+use std::path::PathBuf;
 
+use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{CanonicalValue, encode_value};
@@ -20,6 +24,22 @@ pub type CacheResult<T> = Result<T, Box<CacheError>>;
 pub const CACHE_TRACE_CORPUS_SCHEMA_VERSION: &str = "franken-engine.cache-trace-corpus.v1";
 pub const CACHE_POLICY_BASELINE_SCHEMA_VERSION: &str = "franken-engine.cache-policy-baseline.v1";
 pub const S3FIFO_ADOPTION_WEDGE_SCHEMA_VERSION: &str = "franken-engine.s3fifo-adoption-wedge.v1";
+pub const S3FIFO_BASELINE_COMPONENT: &str = "s3fifo_baseline_comparator";
+pub const S3FIFO_BASELINE_BEAD_ID: &str = "bd-1lsy.7.20.1";
+pub const S3FIFO_BASELINE_CONTRACT_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-s3fifo-baseline-comparator-contract.v1";
+pub const S3FIFO_BASELINE_EVENT_SCHEMA_VERSION: &str =
+    "franken-engine.s3fifo-baseline-comparator.event.v1";
+pub const S3FIFO_BASELINE_ENV_SCHEMA_VERSION: &str =
+    "franken-engine.s3fifo-baseline-comparator.env.v1";
+pub const S3FIFO_BASELINE_ARTIFACT_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.s3fifo-baseline-comparator.manifest.v1";
+pub const S3FIFO_BASELINE_REPRO_LOCK_SCHEMA_VERSION: &str =
+    "franken-engine.s3fifo-baseline-comparator.repro-lock.v1";
+pub const S3FIFO_BASELINE_RUN_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.s3fifo-baseline-comparator.run-manifest.v1";
+pub const S3FIFO_BASELINE_TRACE_IDS_SCHEMA_VERSION: &str =
+    "franken-engine.s3fifo-baseline-comparator.trace-ids.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ModuleVersionFingerprint {
@@ -753,14 +773,14 @@ impl CacheTraceCase {
 
         let mut previous_sequence = None;
         for access in &self.accesses {
-            if let Some(previous) = previous_sequence {
-                if access.sequence <= previous {
-                    return Err(CachePolicyReportError::NonMonotonicTraceSequence {
-                        trace_id: self.trace_id.clone(),
-                        previous,
-                        actual: access.sequence,
-                    });
-                }
+            if let Some(previous) = previous_sequence
+                && access.sequence <= previous
+            {
+                return Err(CachePolicyReportError::NonMonotonicTraceSequence {
+                    trace_id: self.trace_id.clone(),
+                    previous,
+                    actual: access.sequence,
+                });
             }
             previous_sequence = Some(access.sequence);
             if access.key.module_id.trim().is_empty() {
@@ -1314,10 +1334,813 @@ impl fmt::Display for CachePolicyReportError {
 
 impl std::error::Error for CachePolicyReportError {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineComparatorContractFixture {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub required_artifacts: Vec<String>,
+    pub baseline_policy_name: String,
+    pub candidate_policy_name: String,
+    pub workload_classes: Vec<String>,
+    pub trace_ids: Vec<String>,
+    pub win_metrics: Vec<String>,
+    pub replaced_surfaces: Vec<String>,
+    pub untouched_surfaces: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineArtifactContext {
+    pub artifact_dir: PathBuf,
+    pub run_id: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub generated_at_utc: String,
+    pub source_commit: String,
+    pub toolchain: String,
+    pub command_invocation: String,
+}
+
+impl S3FifoBaselineArtifactContext {
+    pub fn new(artifact_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            artifact_dir: artifact_dir.into(),
+            run_id: format!(
+                "run-{}-{}",
+                S3FIFO_BASELINE_COMPONENT,
+                Utc::now().format("%Y%m%dT%H%M%SZ")
+            ),
+            trace_id: "trace.rgc.620a".to_string(),
+            decision_id: "decision.rgc.620a".to_string(),
+            policy_id: "policy.rgc.620a".to_string(),
+            generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            source_commit: "unknown".to_string(),
+            toolchain: std::env::var("RUSTUP_TOOLCHAIN")
+                .unwrap_or_else(|_| "nightly".to_string()),
+            command_invocation: "cargo run -p frankenengine-engine --bin franken_s3fifo_baseline_comparator -- --artifact-dir <path>".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineArtifactReference {
+    pub path: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineArtifactManifest {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub component: String,
+    pub generated_at_utc: String,
+    pub artifacts: Vec<S3FifoBaselineArtifactReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineEnvironmentArtifact {
+    pub schema_version: String,
+    pub toolchain: String,
+    pub os: String,
+    pub arch: String,
+    pub generated_at_utc: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineReproLock {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub git_commit: String,
+    pub toolchain: String,
+    pub command_invocation: String,
+    pub expected_outputs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineRunManifest {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub component: String,
+    pub run_id: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub generated_at_utc: String,
+    pub source_commit: String,
+    pub toolchain: String,
+    pub corpus_id: String,
+    pub corpus_hash: ContentHash,
+    pub baseline_config: SingleQueueFifoConfig,
+    pub candidate_config: S3FifoConfig,
+    pub baseline_policy_name: String,
+    pub candidate_policy_name: String,
+    pub case_count: usize,
+    pub aggregate: CachePolicyAggregateSummary,
+    pub required_artifacts: Vec<String>,
+    pub artifact_hashes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineTraceIdsArtifact {
+    pub schema_version: String,
+    pub trace_ids: Vec<String>,
+    pub decision_ids: Vec<String>,
+    pub policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoBaselineBundleWriteReport {
+    pub artifact_dir: PathBuf,
+    pub manifest: CacheTraceCorpusManifest,
+    pub report: CachePolicyBaselineReport,
+    pub adoption_wedge: S3FifoAdoptionWedgeContract,
+    pub run_manifest_path: PathBuf,
+    pub trace_ids_path: PathBuf,
+    pub written_files: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct S3FifoBaselineEvent {
+    schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    component: String,
+    event: String,
+    outcome: String,
+    workload_class: Option<String>,
+    detail: String,
+}
+
+pub fn default_s3fifo_trace_corpus_manifest() -> CacheTraceCorpusManifest {
+    CacheTraceCorpusManifest::new(
+        "corpus.s3fifo.baseline",
+        vec![
+            CacheTraceCase {
+                trace_id: "trace.cache.cold_compile".to_string(),
+                workload_class: CacheWorkloadClass::ColdCompile,
+                accesses: vec![
+                    default_trace_access(
+                        1,
+                        "mod:entry",
+                        "cold-entry",
+                        1,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        2,
+                        "mod:resolver",
+                        "cold-resolver",
+                        1,
+                        1,
+                        CacheLocalityClass::Warm,
+                    ),
+                    default_trace_access(
+                        3,
+                        "mod:parser",
+                        "cold-parser",
+                        1,
+                        1,
+                        CacheLocalityClass::Warm,
+                    ),
+                    default_trace_access(
+                        4,
+                        "mod:entry",
+                        "cold-entry",
+                        1,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        5,
+                        "mod:optimizer",
+                        "cold-opt",
+                        1,
+                        1,
+                        CacheLocalityClass::Scan,
+                    ),
+                    default_trace_access(
+                        6,
+                        "mod:entry",
+                        "cold-entry",
+                        1,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                ],
+            },
+            CacheTraceCase {
+                trace_id: "trace.cache.warm_run".to_string(),
+                workload_class: CacheWorkloadClass::WarmRun,
+                accesses: vec![
+                    default_trace_access(
+                        1,
+                        "mod:router",
+                        "warm-router",
+                        1,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        2,
+                        "mod:router",
+                        "warm-router",
+                        1,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        3,
+                        "mod:bundle",
+                        "warm-bundle",
+                        1,
+                        1,
+                        CacheLocalityClass::Warm,
+                    ),
+                    default_trace_access(
+                        4,
+                        "mod:router",
+                        "warm-router",
+                        1,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        5,
+                        "mod:bundle",
+                        "warm-bundle",
+                        1,
+                        1,
+                        CacheLocalityClass::Warm,
+                    ),
+                    default_trace_access(
+                        6,
+                        "mod:router",
+                        "warm-router",
+                        1,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                ],
+            },
+            CacheTraceCase {
+                trace_id: "trace.cache.package_graph".to_string(),
+                workload_class: CacheWorkloadClass::PackageGraph,
+                accesses: vec![
+                    default_trace_access(1, "pkg:a", "pkg-a", 2, 1, CacheLocalityClass::Warm),
+                    default_trace_access(2, "pkg:b", "pkg-b", 2, 1, CacheLocalityClass::Warm),
+                    default_trace_access(3, "pkg:c", "pkg-c", 2, 1, CacheLocalityClass::Warm),
+                    default_trace_access(4, "pkg:a", "pkg-a", 2, 1, CacheLocalityClass::Warm),
+                    default_trace_access(5, "pkg:d", "pkg-d", 2, 1, CacheLocalityClass::Scan),
+                    default_trace_access(6, "pkg:b", "pkg-b", 2, 1, CacheLocalityClass::Warm),
+                    default_trace_access(7, "pkg:e", "pkg-e", 2, 1, CacheLocalityClass::Scan),
+                ],
+            },
+            CacheTraceCase {
+                trace_id: "trace.cache.react_app".to_string(),
+                workload_class: CacheWorkloadClass::ReactApp,
+                accesses: vec![
+                    default_trace_access(
+                        1,
+                        "react:entry",
+                        "react-entry",
+                        3,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        2,
+                        "react:route",
+                        "react-route",
+                        3,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        3,
+                        "react:client-shell",
+                        "react-shell",
+                        3,
+                        1,
+                        CacheLocalityClass::Warm,
+                    ),
+                    default_trace_access(
+                        4,
+                        "react:entry",
+                        "react-entry",
+                        3,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        5,
+                        "react:ssr-pass",
+                        "react-ssr",
+                        3,
+                        1,
+                        CacheLocalityClass::Warm,
+                    ),
+                    default_trace_access(
+                        6,
+                        "react:asset-scan",
+                        "react-asset",
+                        3,
+                        1,
+                        CacheLocalityClass::Scan,
+                    ),
+                    default_trace_access(
+                        7,
+                        "react:route",
+                        "react-route",
+                        3,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        8,
+                        "react:client-shell",
+                        "react-shell",
+                        3,
+                        1,
+                        CacheLocalityClass::Warm,
+                    ),
+                ],
+            },
+            CacheTraceCase {
+                trace_id: "trace.cache.scan_heavy".to_string(),
+                workload_class: CacheWorkloadClass::ScanHeavy,
+                accesses: vec![
+                    default_trace_access(
+                        1,
+                        "scan:hot-a",
+                        "scan-hot-a",
+                        4,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        2,
+                        "scan:hot-b",
+                        "scan-hot-b",
+                        4,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        3,
+                        "scan:catalog-1",
+                        "scan-cat-1",
+                        4,
+                        1,
+                        CacheLocalityClass::Scan,
+                    ),
+                    default_trace_access(
+                        4,
+                        "scan:catalog-2",
+                        "scan-cat-2",
+                        4,
+                        1,
+                        CacheLocalityClass::Scan,
+                    ),
+                    default_trace_access(
+                        5,
+                        "scan:catalog-3",
+                        "scan-cat-3",
+                        4,
+                        1,
+                        CacheLocalityClass::Scan,
+                    ),
+                    default_trace_access(
+                        6,
+                        "scan:hot-a",
+                        "scan-hot-a",
+                        4,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                    default_trace_access(
+                        7,
+                        "scan:hot-b",
+                        "scan-hot-b",
+                        4,
+                        1,
+                        CacheLocalityClass::Hot,
+                    ),
+                ],
+            },
+        ],
+    )
+    .expect("default S3-FIFO baseline corpus should be valid")
+}
+
+pub fn default_s3fifo_baseline_config() -> SingleQueueFifoConfig {
+    SingleQueueFifoConfig {
+        capacity_entries: 4,
+    }
+}
+
+pub fn default_s3fifo_candidate_config() -> S3FifoConfig {
+    S3FifoConfig {
+        resident_capacity_entries: 4,
+        small_queue_entries: 2,
+        ghost_queue_entries: 4,
+    }
+}
+
+pub fn default_s3fifo_baseline_report() -> Result<CachePolicyBaselineReport, CachePolicyReportError>
+{
+    let manifest = default_s3fifo_trace_corpus_manifest();
+    evaluate_s3fifo_baseline(
+        &manifest,
+        &default_s3fifo_baseline_config(),
+        &default_s3fifo_candidate_config(),
+        &S3FifoAdoptionWedgeContract::default(),
+    )
+}
+
+pub fn default_s3fifo_baseline_contract_fixture() -> S3FifoBaselineComparatorContractFixture {
+    let manifest = default_s3fifo_trace_corpus_manifest();
+    let adoption_wedge = S3FifoAdoptionWedgeContract::default();
+    S3FifoBaselineComparatorContractFixture {
+        schema_version: S3FIFO_BASELINE_CONTRACT_SCHEMA_VERSION.to_string(),
+        bead_id: S3FIFO_BASELINE_BEAD_ID.to_string(),
+        required_artifacts: s3fifo_required_artifact_names(),
+        baseline_policy_name: CachePolicyKind::SingleQueueFifo.as_str().to_string(),
+        candidate_policy_name: CachePolicyKind::S3Fifo.as_str().to_string(),
+        workload_classes: manifest
+            .cases
+            .iter()
+            .map(|case| case.workload_class.as_str().to_string())
+            .collect(),
+        trace_ids: manifest
+            .cases
+            .iter()
+            .map(|case| case.trace_id.clone())
+            .collect(),
+        win_metrics: adoption_wedge.win_metrics.clone(),
+        replaced_surfaces: adoption_wedge.replaced_surfaces.clone(),
+        untouched_surfaces: adoption_wedge.untouched_surfaces.clone(),
+    }
+}
+
+pub fn render_s3fifo_baseline_summary(report: &CachePolicyBaselineReport) -> String {
+    let mut lines = vec![
+        "# S3-FIFO Baseline Comparator Summary".to_string(),
+        String::new(),
+        format!("- bead_id: `{}`", S3FIFO_BASELINE_BEAD_ID),
+        format!("- corpus_id: `{}`", report.corpus_id),
+        format!("- corpus_hash: `{}`", report.corpus_hash.to_hex()),
+        format!("- baseline_policy: `{}`", report.baseline_policy_name),
+        format!("- candidate_policy: `{}`", report.candidate_policy_name),
+        format!("- cases: `{}`", report.aggregate.total_cases),
+        format!(
+            "- improved_hit_rate_cases: `{}`",
+            report.aggregate.improved_hit_rate_cases
+        ),
+        format!(
+            "- improved_hot_retention_cases: `{}`",
+            report.aggregate.improved_hot_retention_cases
+        ),
+        format!(
+            "- reduced_scan_pollution_cases: `{}`",
+            report.aggregate.reduced_scan_pollution_cases
+        ),
+        String::new(),
+        "## Case Deltas".to_string(),
+    ];
+
+    lines.extend(report.cases.iter().map(|case| {
+        format!(
+            "- `{}` ({}) hit_rate_delta={} hot_retention_delta={} scan_pollution_delta={}",
+            case.trace_id,
+            case.workload_class,
+            case.hit_rate_delta_millionths,
+            case.hot_retention_delta_millionths,
+            case.scan_pollution_delta_millionths,
+        )
+    }));
+    lines.push(String::new());
+    lines.push("## Adoption Wedge".to_string());
+    lines.push(format!(
+        "- replaced_surfaces: {}",
+        report.adoption_wedge.replaced_surfaces.join(", ")
+    ));
+    lines.push(format!(
+        "- untouched_surfaces: {}",
+        report.adoption_wedge.untouched_surfaces.join(", ")
+    ));
+    lines.push(format!(
+        "- win_metrics: {}",
+        report.adoption_wedge.win_metrics.join(", ")
+    ));
+    lines.join("\n")
+}
+
+pub fn emit_default_s3fifo_baseline_bundle(
+    context: &S3FifoBaselineArtifactContext,
+) -> io::Result<S3FifoBaselineBundleWriteReport> {
+    fs::create_dir_all(&context.artifact_dir)?;
+
+    let manifest = default_s3fifo_trace_corpus_manifest();
+    let baseline_config = default_s3fifo_baseline_config();
+    let candidate_config = default_s3fifo_candidate_config();
+    let adoption_wedge = S3FifoAdoptionWedgeContract::default();
+    let report = evaluate_s3fifo_baseline(
+        &manifest,
+        &baseline_config,
+        &candidate_config,
+        &adoption_wedge,
+    )
+    .map_err(report_to_io_error)?;
+    let summary = render_s3fifo_baseline_summary(&report);
+
+    let trace_ids = S3FifoBaselineTraceIdsArtifact {
+        schema_version: S3FIFO_BASELINE_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        trace_ids: manifest
+            .cases
+            .iter()
+            .map(|case| case.trace_id.clone())
+            .collect(),
+        decision_ids: vec![context.decision_id.clone()],
+        policy_ids: vec![context.policy_id.clone()],
+    };
+    let environment = S3FifoBaselineEnvironmentArtifact {
+        schema_version: S3FIFO_BASELINE_ENV_SCHEMA_VERSION.to_string(),
+        toolchain: context.toolchain.clone(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        generated_at_utc: context.generated_at_utc.clone(),
+    };
+    let events = build_s3fifo_baseline_events(context, &report);
+    let commands = format!("{}\n", context.command_invocation);
+
+    let manifest_bytes = json_bytes(&manifest)?;
+    let report_bytes = json_bytes(&report)?;
+    let adoption_wedge_bytes = json_bytes(&adoption_wedge)?;
+    let trace_ids_bytes = json_bytes(&trace_ids)?;
+    let env_bytes = json_bytes(&environment)?;
+    let events_bytes = jsonl_bytes(&events)?;
+    let commands_bytes = commands.into_bytes();
+    let summary_bytes = text_bytes(&summary);
+
+    let mut artifact_hashes = BTreeMap::new();
+    artifact_hashes.insert(
+        "cache_trace_corpus_manifest.json".to_string(),
+        content_hash_hex(&manifest_bytes),
+    );
+    artifact_hashes.insert(
+        "cache_policy_baseline_report.json".to_string(),
+        content_hash_hex(&report_bytes),
+    );
+    artifact_hashes.insert(
+        "s3fifo_adoption_wedge_contract.json".to_string(),
+        content_hash_hex(&adoption_wedge_bytes),
+    );
+    artifact_hashes.insert(
+        "trace_ids.json".to_string(),
+        content_hash_hex(&trace_ids_bytes),
+    );
+    artifact_hashes.insert("env.json".to_string(), content_hash_hex(&env_bytes));
+    artifact_hashes.insert("events.jsonl".to_string(), content_hash_hex(&events_bytes));
+    artifact_hashes.insert(
+        "commands.txt".to_string(),
+        content_hash_hex(&commands_bytes),
+    );
+    artifact_hashes.insert("summary.md".to_string(), content_hash_hex(&summary_bytes));
+
+    let run_manifest = S3FifoBaselineRunManifest {
+        schema_version: S3FIFO_BASELINE_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+        bead_id: S3FIFO_BASELINE_BEAD_ID.to_string(),
+        component: S3FIFO_BASELINE_COMPONENT.to_string(),
+        run_id: context.run_id.clone(),
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        generated_at_utc: context.generated_at_utc.clone(),
+        source_commit: context.source_commit.clone(),
+        toolchain: context.toolchain.clone(),
+        corpus_id: manifest.corpus_id.clone(),
+        corpus_hash: manifest.corpus_hash.clone(),
+        baseline_config,
+        candidate_config,
+        baseline_policy_name: report.baseline_policy_name.clone(),
+        candidate_policy_name: report.candidate_policy_name.clone(),
+        case_count: report.cases.len(),
+        aggregate: report.aggregate.clone(),
+        required_artifacts: s3fifo_required_artifact_names(),
+        artifact_hashes: artifact_hashes.clone(),
+    };
+    let run_manifest_bytes = json_bytes(&run_manifest)?;
+    artifact_hashes.insert(
+        "run_manifest.json".to_string(),
+        content_hash_hex(&run_manifest_bytes),
+    );
+
+    let repro_lock = S3FifoBaselineReproLock {
+        schema_version: S3FIFO_BASELINE_REPRO_LOCK_SCHEMA_VERSION.to_string(),
+        bead_id: S3FIFO_BASELINE_BEAD_ID.to_string(),
+        git_commit: context.source_commit.clone(),
+        toolchain: context.toolchain.clone(),
+        command_invocation: context.command_invocation.clone(),
+        expected_outputs: s3fifo_required_artifact_names(),
+    };
+    let repro_lock_bytes = json_bytes(&repro_lock)?;
+    artifact_hashes.insert(
+        "repro.lock".to_string(),
+        content_hash_hex(&repro_lock_bytes),
+    );
+
+    let artifact_manifest = S3FifoBaselineArtifactManifest {
+        schema_version: S3FIFO_BASELINE_ARTIFACT_MANIFEST_SCHEMA_VERSION.to_string(),
+        bead_id: S3FIFO_BASELINE_BEAD_ID.to_string(),
+        component: S3FIFO_BASELINE_COMPONENT.to_string(),
+        generated_at_utc: context.generated_at_utc.clone(),
+        artifacts: artifact_hashes
+            .iter()
+            .map(|(path, content_hash)| S3FifoBaselineArtifactReference {
+                path: path.clone(),
+                content_hash: content_hash.clone(),
+            })
+            .collect(),
+    };
+    let artifact_manifest_bytes = json_bytes(&artifact_manifest)?;
+    artifact_hashes.insert(
+        "manifest.json".to_string(),
+        content_hash_hex(&artifact_manifest_bytes),
+    );
+
+    let files = [
+        ("cache_trace_corpus_manifest.json", manifest_bytes),
+        ("cache_policy_baseline_report.json", report_bytes),
+        ("s3fifo_adoption_wedge_contract.json", adoption_wedge_bytes),
+        ("trace_ids.json", trace_ids_bytes),
+        ("env.json", env_bytes),
+        ("events.jsonl", events_bytes),
+        ("commands.txt", commands_bytes),
+        ("summary.md", summary_bytes),
+        ("run_manifest.json", run_manifest_bytes),
+        ("repro.lock", repro_lock_bytes),
+        ("manifest.json", artifact_manifest_bytes),
+    ];
+
+    for (relative_path, bytes) in files {
+        fs::write(context.artifact_dir.join(relative_path), bytes)?;
+    }
+
+    Ok(S3FifoBaselineBundleWriteReport {
+        artifact_dir: context.artifact_dir.clone(),
+        manifest,
+        report,
+        adoption_wedge,
+        run_manifest_path: context.artifact_dir.join("run_manifest.json"),
+        trace_ids_path: context.artifact_dir.join("trace_ids.json"),
+        written_files: artifact_hashes,
+    })
+}
+
+fn default_trace_access(
+    sequence: u64,
+    module_id: &str,
+    source_seed: &str,
+    policy_version: u64,
+    trust_revision: u64,
+    locality: CacheLocalityClass,
+) -> CacheTraceAccess {
+    CacheTraceAccess {
+        sequence,
+        key: ModuleCacheKey::new(
+            module_id,
+            ModuleVersionFingerprint::new(
+                ContentHash::compute(source_seed.as_bytes()),
+                policy_version,
+                trust_revision,
+            ),
+        ),
+        locality,
+    }
+}
+
+fn s3fifo_required_artifact_names() -> Vec<String> {
+    [
+        "cache_trace_corpus_manifest.json",
+        "cache_policy_baseline_report.json",
+        "s3fifo_adoption_wedge_contract.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "env.json",
+        "manifest.json",
+        "repro.lock",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn build_s3fifo_baseline_events(
+    context: &S3FifoBaselineArtifactContext,
+    report: &CachePolicyBaselineReport,
+) -> Vec<S3FifoBaselineEvent> {
+    let mut events = report
+        .cases
+        .iter()
+        .map(|case| S3FifoBaselineEvent {
+            schema_version: S3FIFO_BASELINE_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: context.trace_id.clone(),
+            decision_id: context.decision_id.clone(),
+            policy_id: context.policy_id.clone(),
+            component: S3FIFO_BASELINE_COMPONENT.to_string(),
+            event: "baseline_case_evaluated".to_string(),
+            outcome: if case.hit_rate_delta_millionths > 0 {
+                "candidate_improves_hit_rate".to_string()
+            } else if case.hit_rate_delta_millionths < 0 {
+                "candidate_regresses_hit_rate".to_string()
+            } else {
+                "candidate_ties_hit_rate".to_string()
+            },
+            workload_class: Some(case.workload_class.clone()),
+            detail: format!(
+                "{}: hit_rate_delta={} hot_retention_delta={} scan_pollution_delta={}",
+                case.trace_id,
+                case.hit_rate_delta_millionths,
+                case.hot_retention_delta_millionths,
+                case.scan_pollution_delta_millionths,
+            ),
+        })
+        .collect::<Vec<_>>();
+
+    events.push(S3FifoBaselineEvent {
+        schema_version: S3FIFO_BASELINE_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        component: S3FIFO_BASELINE_COMPONENT.to_string(),
+        event: "bundle_published".to_string(),
+        outcome: "pass".to_string(),
+        workload_class: None,
+        detail: format!(
+            "published {} comparator artifacts for corpus `{}`",
+            s3fifo_required_artifact_names().len(),
+            report.corpus_id
+        ),
+    });
+    events
+}
+
+fn json_bytes<T: Serialize>(value: &T) -> io::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(value).map_err(report_to_io_error)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn jsonl_bytes<T: Serialize>(records: &[T]) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    for record in records {
+        bytes.extend(serde_json::to_vec(record).map_err(report_to_io_error)?);
+        bytes.push(b'\n');
+    }
+    Ok(bytes)
+}
+
+fn text_bytes(text: &str) -> Vec<u8> {
+    let mut bytes = text.as_bytes().to_vec();
+    if !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+    }
+    bytes
+}
+
+fn content_hash_hex(bytes: &[u8]) -> String {
+    ContentHash::compute(bytes).to_hex()
+}
+
+fn report_to_io_error(error: impl ToString) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CachePolicyEntry {
     label: String,
     hot: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CachePolicyCounters {
+    hit_count: u64,
+    miss_count: u64,
+    ghost_hit_count: u64,
+    eviction_count: u64,
+    promotion_count: u64,
+    requeue_count: u64,
+}
+
+#[derive(Debug, Default)]
+struct S3FifoQueues {
+    small: VecDeque<CachePolicyEntry>,
+    main: VecDeque<CachePolicyEntry>,
+    ghost: VecDeque<String>,
 }
 
 pub fn evaluate_s3fifo_baseline(
@@ -1407,22 +2230,20 @@ fn simulate_single_queue_fifo(
 ) -> CachePolicyMetrics {
     let mut queue = VecDeque::new();
     let mut resident = BTreeSet::new();
-    let mut hit_count = 0_u64;
-    let mut miss_count = 0_u64;
-    let mut eviction_count = 0_u64;
+    let mut counters = CachePolicyCounters::default();
 
     for access in &case.accesses {
         let label = cache_trace_label(&access.key);
         if resident.contains(&label) {
-            hit_count += 1;
+            counters.hit_count += 1;
             continue;
         }
 
-        miss_count += 1;
+        counters.miss_count += 1;
         if resident.len() >= config.capacity_entries {
             if let Some(evicted) = queue.pop_front() {
                 resident.remove(&evicted);
-                eviction_count += 1;
+                counters.eviction_count += 1;
             }
         }
         queue.push_back(label.clone());
@@ -1432,169 +2253,130 @@ fn simulate_single_queue_fifo(
     build_policy_metrics(
         CachePolicyKind::SingleQueueFifo,
         case,
-        hit_count,
-        miss_count,
-        0,
-        eviction_count,
-        0,
-        0,
+        counters,
         queue.into_iter().collect(),
     )
 }
 
 fn simulate_s3fifo(case: &CacheTraceCase, config: &S3FifoConfig) -> CachePolicyMetrics {
-    let mut small = VecDeque::new();
-    let mut main = VecDeque::new();
-    let mut ghost = VecDeque::new();
-    let mut hit_count = 0_u64;
-    let mut miss_count = 0_u64;
-    let mut ghost_hit_count = 0_u64;
-    let mut eviction_count = 0_u64;
-    let mut promotion_count = 0_u64;
-    let mut requeue_count = 0_u64;
+    let mut queues = S3FifoQueues::default();
+    let mut counters = CachePolicyCounters::default();
 
     for access in &case.accesses {
         let label = cache_trace_label(&access.key);
 
-        if let Some(entry) = find_entry_mut(&mut small, &label) {
-            hit_count += 1;
+        if let Some(entry) = find_entry_mut(&mut queues.small, &label) {
+            counters.hit_count += 1;
             entry.hot = true;
             continue;
         }
-        if let Some(entry) = find_entry_mut(&mut main, &label) {
-            hit_count += 1;
+        if let Some(entry) = find_entry_mut(&mut queues.main, &label) {
+            counters.hit_count += 1;
             entry.hot = true;
             continue;
         }
 
-        miss_count += 1;
-        if remove_label(&mut ghost, &label) {
-            ghost_hit_count += 1;
+        counters.miss_count += 1;
+        if remove_label(&mut queues.ghost, &label) {
+            counters.ghost_hit_count += 1;
             insert_main_entry(
                 CachePolicyEntry { label, hot: false },
-                &mut main,
-                &mut ghost,
+                &mut queues,
                 config,
-                &mut eviction_count,
-                &mut requeue_count,
+                &mut counters,
             );
         } else {
             insert_small_entry(
                 CachePolicyEntry { label, hot: false },
-                &mut small,
-                &mut main,
-                &mut ghost,
+                &mut queues,
                 config,
-                &mut eviction_count,
-                &mut promotion_count,
-                &mut requeue_count,
+                &mut counters,
             );
         }
     }
 
-    let final_resident_keys = small
+    let final_resident_keys = queues
+        .small
         .iter()
-        .chain(main.iter())
+        .chain(queues.main.iter())
         .map(|entry| entry.label.clone())
         .collect::<Vec<_>>();
 
-    build_policy_metrics(
-        CachePolicyKind::S3Fifo,
-        case,
-        hit_count,
-        miss_count,
-        ghost_hit_count,
-        eviction_count,
-        promotion_count,
-        requeue_count,
-        final_resident_keys,
-    )
+    build_policy_metrics(CachePolicyKind::S3Fifo, case, counters, final_resident_keys)
 }
 
 fn insert_small_entry(
     entry: CachePolicyEntry,
-    small: &mut VecDeque<CachePolicyEntry>,
-    main: &mut VecDeque<CachePolicyEntry>,
-    ghost: &mut VecDeque<String>,
+    queues: &mut S3FifoQueues,
     config: &S3FifoConfig,
-    eviction_count: &mut u64,
-    promotion_count: &mut u64,
-    requeue_count: &mut u64,
+    counters: &mut CachePolicyCounters,
 ) {
-    while small.len() >= config.small_queue_entries {
-        if let Some(evicted) = small.pop_front() {
+    while queues.small.len() >= config.small_queue_entries {
+        if let Some(evicted) = queues.small.pop_front() {
             if evicted.hot {
-                *promotion_count += 1;
+                counters.promotion_count += 1;
                 insert_main_entry(
                     CachePolicyEntry {
                         label: evicted.label,
                         hot: false,
                     },
-                    main,
-                    ghost,
+                    queues,
                     config,
-                    eviction_count,
-                    requeue_count,
+                    counters,
                 );
             } else {
-                *eviction_count += 1;
-                push_ghost(&evicted.label, ghost, config.ghost_queue_entries);
+                counters.eviction_count += 1;
+                push_ghost(
+                    &evicted.label,
+                    &mut queues.ghost,
+                    config.ghost_queue_entries,
+                );
             }
         }
     }
-    small.push_back(entry);
+    queues.small.push_back(entry);
 }
 
 fn insert_main_entry(
     entry: CachePolicyEntry,
-    main: &mut VecDeque<CachePolicyEntry>,
-    ghost: &mut VecDeque<String>,
+    queues: &mut S3FifoQueues,
     config: &S3FifoConfig,
-    eviction_count: &mut u64,
-    requeue_count: &mut u64,
+    counters: &mut CachePolicyCounters,
 ) {
     let main_capacity = config.main_queue_entries();
-    while main.len() >= main_capacity {
-        make_room_in_main(
-            main,
-            ghost,
-            config.ghost_queue_entries,
-            eviction_count,
-            requeue_count,
-        );
+    while queues.main.len() >= main_capacity {
+        make_room_in_main(queues, config.ghost_queue_entries, counters);
     }
-    main.push_back(entry);
+    queues.main.push_back(entry);
 }
 
 fn make_room_in_main(
-    main: &mut VecDeque<CachePolicyEntry>,
-    ghost: &mut VecDeque<String>,
+    queues: &mut S3FifoQueues,
     ghost_capacity: usize,
-    eviction_count: &mut u64,
-    requeue_count: &mut u64,
+    counters: &mut CachePolicyCounters,
 ) {
-    let mut attempts = main.len();
+    let mut attempts = queues.main.len();
     while attempts > 0 {
-        let Some(mut candidate) = main.pop_front() else {
+        let Some(mut candidate) = queues.main.pop_front() else {
             return;
         };
 
         if candidate.hot {
             candidate.hot = false;
-            main.push_back(candidate);
-            *requeue_count += 1;
+            queues.main.push_back(candidate);
+            counters.requeue_count += 1;
             attempts -= 1;
             continue;
         }
 
-        *eviction_count += 1;
-        push_ghost(&candidate.label, ghost, ghost_capacity);
+        counters.eviction_count += 1;
+        push_ghost(&candidate.label, &mut queues.ghost, ghost_capacity);
         return;
     }
 
-    if let Some(candidate) = main.pop_front() {
-        *eviction_count += 1;
-        push_ghost(&candidate.label, ghost, ghost_capacity);
+    if let Some(candidate) = queues.main.pop_front() {
+        counters.eviction_count += 1;
+        push_ghost(&candidate.label, &mut queues.ghost, ghost_capacity);
     }
 }
 
@@ -1624,12 +2406,7 @@ fn remove_label(queue: &mut VecDeque<String>, label: &str) -> bool {
 fn build_policy_metrics(
     policy: CachePolicyKind,
     case: &CacheTraceCase,
-    hit_count: u64,
-    miss_count: u64,
-    ghost_hit_count: u64,
-    eviction_count: u64,
-    promotion_count: u64,
-    requeue_count: u64,
+    counters: CachePolicyCounters,
     final_resident_keys: Vec<String>,
 ) -> CachePolicyMetrics {
     let total_accesses = case.accesses.len() as u64;
@@ -1652,13 +2429,13 @@ fn build_policy_metrics(
     CachePolicyMetrics {
         policy_name: policy.as_str().to_string(),
         total_accesses,
-        hit_count,
-        miss_count,
-        ghost_hit_count,
-        eviction_count,
-        promotion_count,
-        requeue_count,
-        hit_rate_millionths: ratio_to_millionths(hit_count, total_accesses),
+        hit_count: counters.hit_count,
+        miss_count: counters.miss_count,
+        ghost_hit_count: counters.ghost_hit_count,
+        eviction_count: counters.eviction_count,
+        promotion_count: counters.promotion_count,
+        requeue_count: counters.requeue_count,
+        hit_rate_millionths: ratio_to_millionths(counters.hit_count, total_accesses),
         hot_retention_millionths: ratio_to_millionths(retained_hot, hot_keys.len() as u64),
         scan_pollution_millionths: ratio_to_millionths(resident_scan, resident.len() as u64),
         final_resident_keys,
@@ -1795,6 +2572,38 @@ mod tests {
     fn s3fifo_adoption_wedge_default_is_valid() {
         let wedge = S3FifoAdoptionWedgeContract::default();
         assert!(wedge.validate().is_ok());
+    }
+
+    #[test]
+    fn default_s3fifo_corpus_covers_declared_workloads_deterministically() {
+        let left = default_s3fifo_trace_corpus_manifest();
+        let right = default_s3fifo_trace_corpus_manifest();
+
+        assert_eq!(left, right);
+        assert_eq!(left.cases.len(), 5);
+        assert_eq!(
+            left.cases[0].workload_class,
+            CacheWorkloadClass::ColdCompile
+        );
+        assert_eq!(left.cases[1].workload_class, CacheWorkloadClass::WarmRun);
+        assert_eq!(
+            left.cases[2].workload_class,
+            CacheWorkloadClass::PackageGraph
+        );
+        assert_eq!(left.cases[3].workload_class, CacheWorkloadClass::ReactApp);
+        assert_eq!(left.cases[4].workload_class, CacheWorkloadClass::ScanHeavy);
+    }
+
+    #[test]
+    fn default_s3fifo_baseline_report_is_reproducible() {
+        let manifest = default_s3fifo_trace_corpus_manifest();
+        let left = default_s3fifo_baseline_report().expect("left report should build");
+        let right = default_s3fifo_baseline_report().expect("right report should build");
+
+        assert_eq!(left, right);
+        assert_eq!(left.baseline_policy_name, "single_queue_fifo");
+        assert_eq!(left.candidate_policy_name, "s3_fifo");
+        left.validate(&manifest).expect("report should validate");
     }
 
     #[test]

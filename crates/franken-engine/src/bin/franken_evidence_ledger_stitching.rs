@@ -1,5 +1,5 @@
 use frankenengine_engine::evidence_ledger::{
-    emit_default_stitching_bundle, render_stitching_summary, StitchingArtifactContext,
+    StitchingArtifactContext, emit_default_stitching_bundle, render_stitching_summary,
 };
 
 fn main() {

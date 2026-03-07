@@ -8,14 +8,22 @@
 //! round-trips, event audit trail, and deterministic replay.
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{self, Command};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::module_cache::{
     CacheContext, CacheError, CacheErrorCode, CacheEvent, CacheInsertRequest, CacheLocalityClass,
     CachePolicyBaselineReport, CachePolicyReportError, CacheResult, CacheSnapshot,
     CacheTraceAccess, CacheTraceCase, CacheTraceCorpusManifest, CacheWorkloadClass, ModuleCache,
-    ModuleCacheEntry, ModuleCacheKey, ModuleVersionFingerprint, S3FifoAdoptionWedgeContract,
-    S3FifoConfig, SingleQueueFifoConfig, evaluate_s3fifo_baseline,
+    ModuleCacheEntry, ModuleCacheKey, ModuleVersionFingerprint,
+    S3FIFO_BASELINE_CONTRACT_SCHEMA_VERSION, S3FIFO_BASELINE_RUN_MANIFEST_SCHEMA_VERSION,
+    S3FifoAdoptionWedgeContract, S3FifoBaselineArtifactContext,
+    S3FifoBaselineComparatorContractFixture, S3FifoConfig, SingleQueueFifoConfig,
+    default_s3fifo_baseline_contract_fixture, emit_default_s3fifo_baseline_bundle,
+    evaluate_s3fifo_baseline,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,6 +69,41 @@ fn trace_key(
         module_id,
         ModuleVersionFingerprint::new(source_hash(source_seed), policy_version, trust_revision),
     )
+}
+
+fn temp_dir(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "franken-engine-module-cache-{label}-{}-{nanos}",
+        process::id()
+    ));
+    fs::create_dir_all(&path).expect("create temp dir");
+    path
+}
+
+fn load_s3fifo_contract_doc() -> String {
+    fs::read_to_string(Path::new("../../docs/RGC_S3FIFO_BASELINE_COMPARATOR_V1.md"))
+        .expect("read S3-FIFO baseline doc")
+}
+
+fn load_s3fifo_contract_fixture() -> S3FifoBaselineComparatorContractFixture {
+    serde_json::from_slice(
+        &fs::read(Path::new(
+            "../../docs/rgc_s3fifo_baseline_comparator_v1.json",
+        ))
+        .expect("read S3-FIFO baseline contract fixture"),
+    )
+    .expect("deserialize S3-FIFO baseline contract fixture")
+}
+
+fn load_s3fifo_runner_script() -> String {
+    fs::read_to_string(Path::new(
+        "../../scripts/run_s3fifo_baseline_comparator_suite.sh",
+    ))
+    .expect("read S3-FIFO baseline runner")
 }
 
 // ===========================================================================
@@ -1215,4 +1258,216 @@ fn s3fifo_baseline_rejects_corrupted_manifest_hash() {
         CachePolicyReportError::CorpusHashMismatch { .. } => {}
         other => panic!("unexpected error: {other}"),
     }
+}
+
+#[test]
+fn s3fifo_contract_fixture_matches_generated_defaults() {
+    let actual = load_s3fifo_contract_fixture();
+    let expected = default_s3fifo_baseline_contract_fixture();
+
+    assert_eq!(
+        actual.schema_version,
+        S3FIFO_BASELINE_CONTRACT_SCHEMA_VERSION
+    );
+    assert_eq!(actual, expected);
+    assert_eq!(actual.trace_ids.len(), 5);
+    assert_eq!(actual.workload_classes.len(), 5);
+}
+
+#[test]
+fn s3fifo_baseline_doc_has_required_sections_and_keywords() {
+    let doc = load_s3fifo_contract_doc();
+
+    for section in [
+        "## Purpose",
+        "## Comparator Artifacts",
+        "## Default Corpus",
+        "## Adoption Wedge",
+        "## Verification",
+    ] {
+        assert!(
+            doc.contains(section),
+            "required section missing from doc: {section}"
+        );
+    }
+
+    for keyword in [
+        "cold_compile",
+        "warm_run",
+        "package_graph",
+        "react_app",
+        "scan_heavy",
+        "rch",
+        "cache_trace_corpus_manifest.json",
+        "cache_policy_baseline_report.json",
+        "s3fifo_adoption_wedge_contract.json",
+    ] {
+        assert!(
+            doc.contains(keyword),
+            "required keyword missing from doc: {keyword}"
+        );
+    }
+
+    let word_count = doc.split_whitespace().count();
+    assert!(
+        word_count >= 220,
+        "doc should have at least 220 words, found {word_count}"
+    );
+}
+
+#[test]
+fn s3fifo_baseline_runner_script_requires_rch_and_contract_outputs() {
+    let script = load_s3fifo_runner_script();
+
+    for snippet in [
+        "rch is required",
+        "cargo check -p frankenengine-engine --lib --test module_cache_integration --bin franken_s3fifo_baseline_comparator",
+        "cargo test -p frankenengine-engine --lib module_cache::tests:: -- --nocapture",
+        "cargo test -p frankenengine-engine --test module_cache_integration -- --nocapture",
+        "cargo clippy -p frankenengine-engine --lib --test module_cache_integration --bin franken_s3fifo_baseline_comparator -- -D warnings",
+        "cache_trace_corpus_manifest.json",
+        "cache_policy_baseline_report.json",
+        "s3fifo_adoption_wedge_contract.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "env.json",
+        "manifest.json",
+        "repro.lock",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "runner script missing required snippet: {snippet}"
+        );
+    }
+}
+
+#[test]
+fn emitted_s3fifo_baseline_bundle_publishes_operator_replay_artifacts() {
+    let artifact_dir = temp_dir("bundle");
+    let mut context = S3FifoBaselineArtifactContext::new(&artifact_dir);
+    context.run_id = "run-rgc-620a-integration".to_string();
+    context.trace_id = "trace-rgc-620a-integration".to_string();
+    context.decision_id = "decision-rgc-620a-integration".to_string();
+    context.policy_id = "policy-rgc-620a-integration".to_string();
+    context.generated_at_utc = "2026-03-07T00:00:00Z".to_string();
+    context.source_commit = "deadbeef".to_string();
+    context.toolchain = "nightly".to_string();
+    context.command_invocation = format!(
+        "cargo run -p frankenengine-engine --bin franken_s3fifo_baseline_comparator -- --artifact-dir {}",
+        artifact_dir.display()
+    );
+
+    let bundle = emit_default_s3fifo_baseline_bundle(&context).expect("bundle should write");
+    bundle
+        .report
+        .validate(&bundle.manifest)
+        .expect("baseline report should validate");
+
+    for artifact in [
+        "cache_trace_corpus_manifest.json",
+        "cache_policy_baseline_report.json",
+        "s3fifo_adoption_wedge_contract.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "env.json",
+        "manifest.json",
+        "repro.lock",
+        "summary.md",
+    ] {
+        assert!(
+            artifact_dir.join(artifact).exists(),
+            "expected artifact `{artifact}` to exist",
+        );
+    }
+
+    let run_manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
+    )
+    .expect("parse run manifest");
+    assert_eq!(
+        run_manifest["schema_version"].as_str(),
+        Some(S3FIFO_BASELINE_RUN_MANIFEST_SCHEMA_VERSION)
+    );
+    assert_eq!(run_manifest["case_count"].as_u64(), Some(5));
+    assert_eq!(
+        run_manifest["baseline_policy_name"].as_str(),
+        Some("single_queue_fifo")
+    );
+    assert_eq!(
+        run_manifest["candidate_policy_name"].as_str(),
+        Some("s3_fifo")
+    );
+
+    let manifest_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_dir.join("manifest.json")).expect("read manifest"),
+    )
+    .expect("parse artifact manifest");
+    let artifacts = manifest_json["artifacts"]
+        .as_array()
+        .expect("artifact list should be an array");
+    assert!(artifacts.iter().any(|entry| entry["path"] == "env.json"));
+    assert!(artifacts.iter().any(|entry| entry["path"] == "repro.lock"));
+
+    let trace_ids: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_dir.join("trace_ids.json")).expect("read trace ids"),
+    )
+    .expect("parse trace ids");
+    assert_eq!(
+        trace_ids["trace_ids"]
+            .as_array()
+            .expect("trace ids array")
+            .len(),
+        5
+    );
+    assert_eq!(
+        trace_ids["decision_ids"][0],
+        "decision-rgc-620a-integration"
+    );
+    assert_eq!(trace_ids["policy_ids"][0], "policy-rgc-620a-integration");
+
+    let commands = fs::read_to_string(artifact_dir.join("commands.txt")).expect("read commands");
+    assert!(commands.contains("franken_s3fifo_baseline_comparator"));
+    assert!(commands.contains("--artifact-dir"));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[test]
+fn s3fifo_baseline_cli_writes_bundle() {
+    let artifact_dir = temp_dir("cli");
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_s3fifo_baseline_comparator"))
+        .arg("--artifact-dir")
+        .arg(&artifact_dir)
+        .output()
+        .expect("run S3-FIFO baseline comparator binary");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let cli_json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout json summary");
+    assert_eq!(
+        cli_json["baseline_policy_name"].as_str(),
+        Some("single_queue_fifo")
+    );
+    assert_eq!(cli_json["candidate_policy_name"].as_str(), Some("s3_fifo"));
+    assert_eq!(cli_json["case_count"].as_u64(), Some(5));
+
+    let run_manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
+    )
+    .expect("parse run manifest");
+    assert_eq!(
+        run_manifest["schema_version"].as_str(),
+        Some(S3FIFO_BASELINE_RUN_MANIFEST_SCHEMA_VERSION)
+    );
+
+    let _ = fs::remove_dir_all(&artifact_dir);
 }

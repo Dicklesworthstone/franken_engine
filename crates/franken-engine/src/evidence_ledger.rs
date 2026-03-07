@@ -3152,9 +3152,11 @@ mod tests {
     #[test]
     fn ledger_by_decision_type_empty_result() {
         let ledger = InMemoryLedger::new();
-        assert!(ledger
-            .by_decision_type(DecisionType::SecurityAction)
-            .is_empty());
+        assert!(
+            ledger
+                .by_decision_type(DecisionType::SecurityAction)
+                .is_empty()
+        );
     }
 
     #[test]

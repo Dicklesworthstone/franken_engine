@@ -1101,7 +1101,7 @@ fn lower_statement_to_ir1_with_flow(
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
                     ops.push(Ir1Op::StoreBinding { binding_id: bid });
-                ops.push(Ir1Op::Pop);
+                    ops.push(Ir1Op::Pop);
                 }
                 for inner in &handler.body.body {
                     lower_statement_to_ir1_with_flow(

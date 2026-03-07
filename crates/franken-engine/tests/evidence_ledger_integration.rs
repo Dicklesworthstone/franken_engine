@@ -11,11 +11,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use frankenengine_engine::evidence_ledger::{
-    current_schema_version, emit_default_stitching_bundle, render_stitching_summary,
     ArtifactRecord, CandidateAction, ChosenAction, Constraint, DecisionSemanticsAnnotations,
     DecisionType, EvidenceEmitter, EvidenceEntry, EvidenceEntryBuilder, EvidenceGraphEdgeKind,
     EvidenceLedgerStitchingBundle, InMemoryLedger, LedgerError, SchemaVersionExt,
-    StitchingArtifactContext, Witness,
+    StitchingArtifactContext, Witness, current_schema_version, emit_default_stitching_bundle,
+    render_stitching_summary,
 };
 use frankenengine_engine::hindsight_boundary_capture::{
     BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
@@ -854,9 +854,11 @@ fn by_decision_type_filters_correctly() {
 #[test]
 fn by_decision_type_on_empty_ledger_returns_empty() {
     let ledger = InMemoryLedger::new();
-    assert!(ledger
-        .by_decision_type(DecisionType::SecurityAction)
-        .is_empty());
+    assert!(
+        ledger
+            .by_decision_type(DecisionType::SecurityAction)
+            .is_empty()
+    );
 }
 
 // ===========================================================================
@@ -1388,13 +1390,15 @@ fn stitching_bundle_supports_controller_benchmark_support_and_release_queries() 
 fn stitching_bundle_rejects_artifact_boundary_gap() {
     let entry = sample_entry();
     let boundaries = sample_boundary_records();
-    let artifacts = vec![ArtifactRecord::new(
-        "support-export",
-        "support_bundle",
-        "artifacts/support-export.json",
-        "hash-support",
-    )
-    .supporting_boundary("bcorr_missing")];
+    let artifacts = vec![
+        ArtifactRecord::new(
+            "support-export",
+            "support_bundle",
+            "artifacts/support-export.json",
+            "hash-support",
+        )
+        .supporting_boundary("bcorr_missing"),
+    ];
 
     let err = EvidenceLedgerStitchingBundle::stitch(
         &entry,

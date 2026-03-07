@@ -1311,7 +1311,7 @@ fn parser_emits_template_literal_nested_braces() {
 }
 
 #[test]
-fn parser_template_literal_empty() {
+fn parser_emits_template_literal_empty() {
     let parser = CanonicalEs2020Parser;
     let tree = parser
         .parse("const s = ``", ParseGoal::Script)
@@ -1338,7 +1338,7 @@ fn parser_template_literal_empty() {
 }
 
 #[test]
-fn parser_rejects_tagged_template_expressions() {
+fn parser_tagged_meta_frontier_rejects_tagged_template_expressions() {
     let parser = CanonicalEs2020Parser;
     let source = "render`hello ${name}`";
     let err = parser
@@ -1350,7 +1350,7 @@ fn parser_rejects_tagged_template_expressions() {
 }
 
 #[test]
-fn parser_rejects_new_target_meta_property() {
+fn parser_tagged_meta_frontier_rejects_new_target_meta_property() {
     let parser = CanonicalEs2020Parser;
     let source = "const target = new.target";
     let err = parser
@@ -1362,7 +1362,7 @@ fn parser_rejects_new_target_meta_property() {
 }
 
 #[test]
-fn parser_rejects_import_meta_property() {
+fn parser_tagged_meta_frontier_rejects_import_meta_property() {
     let parser = CanonicalEs2020Parser;
     let source = "const meta = import.meta";
     let err = parser
@@ -1374,12 +1374,48 @@ fn parser_rejects_import_meta_property() {
 }
 
 #[test]
-fn parser_rejects_super_member_expression() {
+fn parser_tagged_meta_frontier_rejects_super_member_expression() {
     let parser = CanonicalEs2020Parser;
     let source = "super.name";
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("super member expression should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.span, Some(single_line_source_span(source)));
+}
+
+#[test]
+fn parser_tagged_meta_frontier_rejects_super_computed_member_expression() {
+    let parser = CanonicalEs2020Parser;
+    let source = "super[name]";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("super computed member expression should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.span, Some(single_line_source_span(source)));
+}
+
+#[test]
+fn parser_tagged_meta_frontier_rejects_super_call_expression() {
+    let parser = CanonicalEs2020Parser;
+    let source = "super()";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("super call expression should fail");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.span, Some(single_line_source_span(source)));
+}
+
+#[test]
+fn parser_tagged_meta_frontier_rejects_bare_super_expression() {
+    let parser = CanonicalEs2020Parser;
+    let source = "const base = super";
+    let err = parser
+        .parse(source, ParseGoal::Script)
+        .expect_err("bare super expression should fail");
     assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
     assert_eq!(err.message, "super expressions are not supported");
     assert_eq!(err.span, Some(single_line_source_span(source)));

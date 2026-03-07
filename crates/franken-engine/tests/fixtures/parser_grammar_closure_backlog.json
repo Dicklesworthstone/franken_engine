@@ -479,13 +479,16 @@
       ],
       "e2e_conformance_scripts": [
         "./scripts/run_parser_phase0_gate.sh ci",
-        "./scripts/e2e/parser_oracle_smoke.sh"
+        "./scripts/e2e/parser_oracle_smoke.sh",
+        "./scripts/run_parser_tagged_meta_frontier_suite.sh ci"
       ],
       "evidence_paths": [
         "artifacts/parser_phase0_gate/<timestamp>/run_manifest.json",
-        "artifacts/parser_phase0/golden_checksums.txt"
+        "artifacts/parser_phase0/golden_checksums.txt",
+        "artifacts/parser_tagged_meta_frontier/<timestamp>/run_manifest.json",
+        "artifacts/parser_tagged_meta_frontier/<timestamp>/parser_tagged_meta_frontier_report.json"
       ],
-      "notes": " PearlTower + RoseLake + BoldGrove: added `new` expression parsing (new Foo(), new Foo.Bar(args)) and typed optional chaining coverage for `foo?.bar`, `foo?.[key]`, `foo?.()`, and nullish-coalescing interaction. Supports: foo(), foo.bar, foo[x], foo()(), foo.bar(), new Foo(args), new Foo.Bar(), foo?.bar, foo?.[key], foo?.(). Special forms `super`, tagged templates, `new.target`, and `import.meta` now fail closed instead of silently lowering."
+      "notes": "PearlTower + RoseLake + BoldGrove: added `new` expression parsing (new Foo(), new Foo.Bar(args)) and typed optional chaining coverage for `foo?.bar`, `foo?.[key]`, `foo?.()`, and nullish-coalescing interaction. Supports: foo(), foo.bar, foo[x], foo()(), foo.bar(), new Foo(args), new Foo.Bar(), foo?.bar, foo?.[key], foo?.(). Special forms `super`, tagged templates, `new.target`, and `import.meta` now fail closed instead of silently lowering. Downstream owner routing for the still-fail-closed forms: `super` call/member/computed-member -> `bd-1lsy.2.8` typed frontier IR, then `bd-1lsy.4.7.1` member-assignment/mutation runtime semantics; `new.target` -> `bd-1lsy.2.8`, then `bd-1lsy.4.7.2` constructor/new-target runtime semantics; `import.meta` -> `bd-1lsy.2.8`, then `bd-1lsy.4.10.1` executable module-graph/live-binding semantics."
     },
     {
       "family_id": "expression.object_array_literal",
@@ -537,13 +540,16 @@
       ],
       "e2e_conformance_scripts": [
         "./scripts/run_parser_phase0_gate.sh ci",
-        "./scripts/e2e/parser_oracle_smoke.sh"
+        "./scripts/e2e/parser_oracle_smoke.sh",
+        "./scripts/run_parser_tagged_meta_frontier_suite.sh ci"
       ],
       "evidence_paths": [
         "artifacts/parser_phase0_gate/<timestamp>/run_manifest.json",
-        "artifacts/parser_phase0/golden_checksums.txt"
+        "artifacts/parser_phase0/golden_checksums.txt",
+        "artifacts/parser_tagged_meta_frontier/<timestamp>/run_manifest.json",
+        "artifacts/parser_tagged_meta_frontier/<timestamp>/parser_tagged_meta_frontier_report.json"
       ],
-      "notes": "Template literal parsing supports interpolation; tagged templates now fail closed until the AST grows a typed tagged-template form."
+      "notes": "Template literal parsing supports interpolation; tagged templates now fail closed until the AST grows a typed tagged-template form. Downstream owner routing: tagged templates -> `bd-1lsy.2.8` typed frontier IR, then `bd-1lsy.4.7.2` constructor/template runtime semantics."
     },
     {
       "family_id": "expression.arrow_function",

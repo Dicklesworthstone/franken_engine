@@ -21,7 +21,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{self, CanonicalValue};
-use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
+use crate::engine_object_id::{derive_id, EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::ContentHash;
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,15 @@ use crate::hash_tiers::ContentHash;
 // ---------------------------------------------------------------------------
 
 const COMPOSITION_MATRIX_DOMAIN: &[u8] = b"FrankenEngine.ControllerCompositionMatrix.v1";
+const MILLION: i64 = 1_000_000;
+pub const CONTROLLER_REGISTRY_SCHEMA_VERSION: &str = "franken-engine.controller-registry.v1";
+pub const CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION: &str =
+    "franken-engine.controller-operator-graph.v1";
+pub const CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION: &str =
+    "franken-engine.controller-telemetry-snapshot.v1";
+pub const SPECTRAL_EDGE_TRACE_SCHEMA_VERSION: &str = "franken-engine.spectral-edge-trace.v1";
+pub const CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION: &str =
+    "franken-engine.controller-edge-uncertainty.v1";
 
 fn matrix_schema() -> SchemaId {
     SchemaId::from_definition(COMPOSITION_MATRIX_DOMAIN)
@@ -174,6 +183,635 @@ pub struct ControllerTimescale {
     pub write_interval_millionths: i64,
     /// Human-readable timescale statement.
     pub statement: String,
+}
+
+// ---------------------------------------------------------------------------
+// Controller registry and operator graph artifacts
+// ---------------------------------------------------------------------------
+
+/// Deterministic fallback declaration required for adaptive controllers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeterministicFallback {
+    pub fallback_mode: String,
+    pub trigger: String,
+    pub detail: String,
+}
+
+/// Declared bounds for a controller action channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActuationBound {
+    pub channel: String,
+    pub lower_bound_millionths: i64,
+    pub upper_bound_millionths: i64,
+    pub units: String,
+}
+
+/// Full controller contract used to derive composition telemetry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerContract {
+    pub timescale: ControllerTimescale,
+    pub observation_channels: BTreeSet<String>,
+    pub action_channels: BTreeSet<String>,
+    pub state_channels: BTreeSet<String>,
+    pub actuation_bounds: Vec<ActuationBound>,
+    pub shared_resources: BTreeSet<String>,
+    pub deterministic_fallback: Option<DeterministicFallback>,
+}
+
+impl ControllerContract {
+    pub fn controller_name(&self) -> &str {
+        &self.timescale.controller_name
+    }
+
+    pub fn role(&self) -> ControllerRole {
+        self.timescale.role
+    }
+}
+
+/// Missing metadata that prevents a controller from participating in shipped adaptive behavior.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum MetadataGapKind {
+    MissingObservationChannels,
+    MissingActionChannels,
+    MissingStateChannels,
+    MissingActuationBounds,
+    MissingDeterministicFallback,
+}
+
+impl MetadataGapKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MissingObservationChannels => "missing_observation_channels",
+            Self::MissingActionChannels => "missing_action_channels",
+            Self::MissingStateChannels => "missing_state_channels",
+            Self::MissingActuationBounds => "missing_actuation_bounds",
+            Self::MissingDeterministicFallback => "missing_deterministic_fallback",
+        }
+    }
+}
+
+impl fmt::Display for MetadataGapKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Metadata gap attached to a specific controller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerMetadataGap {
+    pub controller_name: String,
+    pub gap: MetadataGapKind,
+    pub detail: String,
+}
+
+/// Validation failures that prevent registry construction entirely.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ControllerRegistryError {
+    DuplicateController {
+        controller_name: String,
+    },
+    InvalidTimescale {
+        controller_name: String,
+        observation_interval_millionths: i64,
+        write_interval_millionths: i64,
+    },
+    InvalidActuationBound {
+        controller_name: String,
+        channel: String,
+        lower_bound_millionths: i64,
+        upper_bound_millionths: i64,
+    },
+}
+
+impl fmt::Display for ControllerRegistryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateController { controller_name } => {
+                write!(f, "duplicate controller contract: {controller_name}")
+            }
+            Self::InvalidTimescale {
+                controller_name,
+                observation_interval_millionths,
+                write_interval_millionths,
+            } => write!(
+                f,
+                "invalid timescale for {controller_name}: observation={} write={}",
+                observation_interval_millionths, write_interval_millionths
+            ),
+            Self::InvalidActuationBound {
+                controller_name,
+                channel,
+                lower_bound_millionths,
+                upper_bound_millionths,
+            } => write!(
+                f,
+                "invalid actuation bound for {controller_name}:{channel} [{} > {}]",
+                lower_bound_millionths, upper_bound_millionths
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ControllerRegistryError {}
+
+/// Deterministic snapshot of all declared controller contracts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerRegistrySnapshot {
+    pub schema_version: String,
+    pub registry_id: String,
+    pub controllers: Vec<ControllerContract>,
+    pub metadata_gaps: Vec<ControllerMetadataGap>,
+}
+
+/// Ship-readiness result for a registry snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerRegistryValidationReport {
+    pub schema_version: String,
+    pub ship_ready: bool,
+    pub metadata_gaps: Vec<ControllerMetadataGap>,
+}
+
+/// Uncertainty classification for an interaction edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum EdgeUncertainty {
+    Observed,
+    Partial,
+    Unknown,
+}
+
+impl EdgeUncertainty {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::Partial => "partial",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl fmt::Display for EdgeUncertainty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Pairwise interaction edge derived from controller contracts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerInteractionEdge {
+    pub controller_a: String,
+    pub controller_b: String,
+    pub interaction: InteractionClass,
+    pub observed_channel_overlap: Vec<String>,
+    pub shared_resource_overlap: Vec<String>,
+    pub timescale_separation_millionths: i64,
+    pub coupling_score_millionths: i64,
+    pub uncertainty: EdgeUncertainty,
+    pub rationale: String,
+}
+
+/// Operator-readable interaction graph.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerOperatorGraph {
+    pub schema_version: String,
+    pub graph_id: String,
+    pub controller_names: Vec<String>,
+    pub edges: Vec<ControllerInteractionEdge>,
+}
+
+/// Aggregated operator telemetry derived from the interaction graph.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerTelemetrySnapshot {
+    pub schema_version: String,
+    pub controller_count: usize,
+    pub edge_count: usize,
+    pub partial_edge_count: usize,
+    pub unknown_edge_count: usize,
+    pub max_coupling_score_millionths: i64,
+    pub fallback_ready_controllers: Vec<String>,
+    pub shared_resource_hotspots: Vec<String>,
+}
+
+/// Edge-level early-warning monitor derived from the operator graph.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpectralEdgeTrace {
+    pub schema_version: String,
+    pub edge_id: String,
+    pub controller_a: String,
+    pub controller_b: String,
+    pub interaction: String,
+    pub timescale_ratio_millionths: i64,
+    pub coupling_score_millionths: i64,
+    pub active_warning: bool,
+}
+
+/// Explicit ledger entry for partially observed or unknown edges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControllerEdgeUncertaintyEntry {
+    pub schema_version: String,
+    pub controller_a: String,
+    pub controller_b: String,
+    pub uncertainty: EdgeUncertainty,
+    pub reasons: Vec<String>,
+}
+
+fn metadata_gaps_for_controller(contract: &ControllerContract) -> Vec<ControllerMetadataGap> {
+    let mut gaps = Vec::new();
+    let controller_name = contract.controller_name().to_string();
+    if contract.observation_channels.is_empty() {
+        gaps.push(ControllerMetadataGap {
+            controller_name: controller_name.clone(),
+            gap: MetadataGapKind::MissingObservationChannels,
+            detail: "controller must declare at least one observed input channel".to_string(),
+        });
+    }
+    if contract.state_channels.is_empty() {
+        gaps.push(ControllerMetadataGap {
+            controller_name: controller_name.clone(),
+            gap: MetadataGapKind::MissingStateChannels,
+            detail: "controller must declare a replay-visible state summary".to_string(),
+        });
+    }
+    if contract.role() != ControllerRole::Monitor && contract.action_channels.is_empty() {
+        gaps.push(ControllerMetadataGap {
+            controller_name: controller_name.clone(),
+            gap: MetadataGapKind::MissingActionChannels,
+            detail: "adaptive controllers must declare at least one action channel".to_string(),
+        });
+    }
+    if !contract.action_channels.is_empty() && contract.actuation_bounds.is_empty() {
+        gaps.push(ControllerMetadataGap {
+            controller_name: controller_name.clone(),
+            gap: MetadataGapKind::MissingActuationBounds,
+            detail: "action channels require explicit actuation bounds".to_string(),
+        });
+    }
+    if contract.role() != ControllerRole::Monitor && contract.deterministic_fallback.is_none() {
+        gaps.push(ControllerMetadataGap {
+            controller_name,
+            gap: MetadataGapKind::MissingDeterministicFallback,
+            detail: "adaptive controllers require a deterministic fallback declaration".to_string(),
+        });
+    }
+    gaps
+}
+
+fn registry_id_from_contracts(controllers: &[ControllerContract]) -> String {
+    let json = serde_json::to_vec(controllers).unwrap_or_default();
+    format!("registry-{}", to_hex(&hash_bytes(&json)[..12]))
+}
+
+/// Build the deterministic controller registry snapshot.
+pub fn build_controller_registry(
+    contracts: &[ControllerContract],
+) -> Result<ControllerRegistrySnapshot, ControllerRegistryError> {
+    let mut seen = BTreeSet::new();
+    let mut normalized = contracts.to_vec();
+    normalized.sort_by(|left, right| {
+        left.controller_name()
+            .cmp(right.controller_name())
+            .then_with(|| left.role().cmp(&right.role()))
+    });
+
+    let mut metadata_gaps = Vec::new();
+    for contract in &normalized {
+        let controller_name = contract.controller_name();
+        if !seen.insert(controller_name.to_string()) {
+            return Err(ControllerRegistryError::DuplicateController {
+                controller_name: controller_name.to_string(),
+            });
+        }
+        if contract.timescale.observation_interval_millionths <= 0
+            || contract.timescale.write_interval_millionths <= 0
+        {
+            return Err(ControllerRegistryError::InvalidTimescale {
+                controller_name: controller_name.to_string(),
+                observation_interval_millionths: contract.timescale.observation_interval_millionths,
+                write_interval_millionths: contract.timescale.write_interval_millionths,
+            });
+        }
+        for bound in &contract.actuation_bounds {
+            if bound.lower_bound_millionths > bound.upper_bound_millionths {
+                return Err(ControllerRegistryError::InvalidActuationBound {
+                    controller_name: controller_name.to_string(),
+                    channel: bound.channel.clone(),
+                    lower_bound_millionths: bound.lower_bound_millionths,
+                    upper_bound_millionths: bound.upper_bound_millionths,
+                });
+            }
+        }
+        metadata_gaps.extend(metadata_gaps_for_controller(contract));
+    }
+
+    Ok(ControllerRegistrySnapshot {
+        schema_version: CONTROLLER_REGISTRY_SCHEMA_VERSION.to_string(),
+        registry_id: registry_id_from_contracts(&normalized),
+        controllers: normalized,
+        metadata_gaps,
+    })
+}
+
+/// Evaluate whether the controller registry is complete enough for shipped adaptive behavior.
+pub fn validate_controller_registry(
+    registry: &ControllerRegistrySnapshot,
+) -> ControllerRegistryValidationReport {
+    ControllerRegistryValidationReport {
+        schema_version: CONTROLLER_REGISTRY_SCHEMA_VERSION.to_string(),
+        ship_ready: registry.metadata_gaps.is_empty(),
+        metadata_gaps: registry.metadata_gaps.clone(),
+    }
+}
+
+fn shared_channel_overlap(a: &ControllerContract, b: &ControllerContract) -> Vec<String> {
+    let forward = a
+        .action_channels
+        .intersection(&b.observation_channels)
+        .map(|channel| format!("{}->{}", a.controller_name(), channel))
+        .collect::<BTreeSet<_>>();
+    let reverse = b
+        .action_channels
+        .intersection(&a.observation_channels)
+        .map(|channel| format!("{}->{}", b.controller_name(), channel))
+        .collect::<BTreeSet<_>>();
+    forward.union(&reverse).cloned().collect()
+}
+
+fn shared_resource_overlap(a: &ControllerContract, b: &ControllerContract) -> Vec<String> {
+    a.shared_resources
+        .intersection(&b.shared_resources)
+        .cloned()
+        .collect()
+}
+
+fn edge_uncertainty_and_reasons(
+    left: &ControllerContract,
+    right: &ControllerContract,
+    registry: &ControllerRegistrySnapshot,
+    interaction: InteractionClass,
+    channel_overlap: &[String],
+    resource_overlap: &[String],
+) -> (EdgeUncertainty, Vec<String>) {
+    let mut reasons = Vec::new();
+    for gap in &registry.metadata_gaps {
+        if gap.controller_name == left.controller_name()
+            || gap.controller_name == right.controller_name()
+        {
+            reasons.push(format!("{}:{}", gap.controller_name, gap.gap.as_str()));
+        }
+    }
+    if resource_overlap.is_empty() {
+        reasons.push("no_shared_resource_overlap_declared".to_string());
+    }
+    if channel_overlap.is_empty()
+        && matches!(
+            interaction,
+            InteractionClass::ProducerConsumer | InteractionClass::WriteConflict
+        )
+    {
+        reasons.push("matrix_requires_coupling_but_no_channel_overlap_declared".to_string());
+    }
+
+    let uncertainty = if reasons
+        .iter()
+        .any(|reason| reason.contains("missing_") || reason.contains("no_shared_resource_overlap"))
+    {
+        if matches!(
+            interaction,
+            InteractionClass::Independent | InteractionClass::ReadShared
+        ) {
+            EdgeUncertainty::Partial
+        } else {
+            EdgeUncertainty::Unknown
+        }
+    } else {
+        EdgeUncertainty::Observed
+    };
+
+    (uncertainty, reasons)
+}
+
+fn coupling_score_millionths(
+    interaction: InteractionClass,
+    channel_overlap_count: usize,
+    resource_overlap_count: usize,
+    timescale_separation_millionths: i64,
+    uncertainty: EdgeUncertainty,
+) -> i64 {
+    let base = match interaction {
+        InteractionClass::Independent => 50_000,
+        InteractionClass::ReadShared => 150_000,
+        InteractionClass::ProducerConsumer => 350_000,
+        InteractionClass::WriteConflict => 600_000,
+        InteractionClass::MutuallyExclusive => MILLION,
+    };
+    let channel_bonus = (channel_overlap_count as i64) * 100_000;
+    let resource_bonus = (resource_overlap_count as i64) * 75_000;
+    let timescale_penalty = if timescale_separation_millionths <= 0 {
+        250_000
+    } else {
+        (1_000_000_i64 / timescale_separation_millionths.max(1)).min(250_000)
+    };
+    let uncertainty_penalty = match uncertainty {
+        EdgeUncertainty::Observed => 0,
+        EdgeUncertainty::Partial => 100_000,
+        EdgeUncertainty::Unknown => 200_000,
+    };
+    (base + channel_bonus + resource_bonus + timescale_penalty + uncertainty_penalty)
+        .clamp(0, MILLION)
+}
+
+fn graph_id_from_edges(controller_names: &[String], edges: &[ControllerInteractionEdge]) -> String {
+    let json = serde_json::to_vec(&(controller_names, edges)).unwrap_or_default();
+    format!("graph-{}", to_hex(&hash_bytes(&json)[..12]))
+}
+
+/// Derive the operator interaction graph from controller contracts and the role matrix.
+pub fn derive_controller_operator_graph(
+    registry: &ControllerRegistrySnapshot,
+    matrix: &ControllerCompositionMatrix,
+) -> ControllerOperatorGraph {
+    let mut edges = Vec::new();
+    let controller_names = registry
+        .controllers
+        .iter()
+        .map(|controller| controller.controller_name().to_string())
+        .collect::<Vec<_>>();
+
+    for (index, left) in registry.controllers.iter().enumerate() {
+        for right in &registry.controllers[index + 1..] {
+            let interaction = matrix
+                .lookup(left.role(), right.role())
+                .map(|entry| entry.interaction)
+                .unwrap_or(InteractionClass::Independent);
+            let rationale = matrix
+                .lookup(left.role(), right.role())
+                .map(|entry| entry.rationale.clone())
+                .unwrap_or_else(|| "no interaction rule declared".to_string());
+            let channel_overlap = shared_channel_overlap(left, right);
+            let resource_overlap = shared_resource_overlap(left, right);
+            let timescale_separation_millionths =
+                left.timescale
+                    .write_interval_millionths
+                    .abs_diff(right.timescale.write_interval_millionths) as i64;
+            let (uncertainty, _) = edge_uncertainty_and_reasons(
+                left,
+                right,
+                registry,
+                interaction,
+                &channel_overlap,
+                &resource_overlap,
+            );
+            edges.push(ControllerInteractionEdge {
+                controller_a: left.controller_name().to_string(),
+                controller_b: right.controller_name().to_string(),
+                interaction,
+                observed_channel_overlap: channel_overlap.clone(),
+                shared_resource_overlap: resource_overlap.clone(),
+                timescale_separation_millionths,
+                coupling_score_millionths: coupling_score_millionths(
+                    interaction,
+                    channel_overlap.len(),
+                    resource_overlap.len(),
+                    timescale_separation_millionths,
+                    uncertainty,
+                ),
+                uncertainty,
+                rationale,
+            });
+        }
+    }
+
+    ControllerOperatorGraph {
+        schema_version: CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION.to_string(),
+        graph_id: graph_id_from_edges(&controller_names, &edges),
+        controller_names,
+        edges,
+    }
+}
+
+/// Build a compact operator telemetry snapshot from the interaction graph.
+pub fn build_controller_telemetry_snapshot(
+    registry: &ControllerRegistrySnapshot,
+    graph: &ControllerOperatorGraph,
+) -> ControllerTelemetrySnapshot {
+    let mut resource_counts = BTreeMap::<String, usize>::new();
+    for edge in &graph.edges {
+        for resource in &edge.shared_resource_overlap {
+            *resource_counts.entry(resource.clone()).or_insert(0) += 1;
+        }
+    }
+    let shared_resource_hotspots = resource_counts
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(resource, _)| resource)
+        .collect::<Vec<_>>();
+
+    ControllerTelemetrySnapshot {
+        schema_version: CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION.to_string(),
+        controller_count: registry.controllers.len(),
+        edge_count: graph.edges.len(),
+        partial_edge_count: graph
+            .edges
+            .iter()
+            .filter(|edge| edge.uncertainty == EdgeUncertainty::Partial)
+            .count(),
+        unknown_edge_count: graph
+            .edges
+            .iter()
+            .filter(|edge| edge.uncertainty == EdgeUncertainty::Unknown)
+            .count(),
+        max_coupling_score_millionths: graph
+            .edges
+            .iter()
+            .map(|edge| edge.coupling_score_millionths)
+            .max()
+            .unwrap_or(0),
+        fallback_ready_controllers: registry
+            .controllers
+            .iter()
+            .filter(|contract| contract.deterministic_fallback.is_some())
+            .map(|contract| contract.controller_name().to_string())
+            .collect(),
+        shared_resource_hotspots,
+    }
+}
+
+/// Emit edge-level early-warning traces suitable for operator replay surfaces.
+pub fn build_spectral_edge_traces(graph: &ControllerOperatorGraph) -> Vec<SpectralEdgeTrace> {
+    graph
+        .edges
+        .iter()
+        .map(|edge| {
+            let left = edge.timescale_separation_millionths;
+            let ratio = if left <= 0 {
+                MILLION
+            } else {
+                (MILLION / left.max(1)).min(MILLION)
+            };
+            SpectralEdgeTrace {
+                schema_version: SPECTRAL_EDGE_TRACE_SCHEMA_VERSION.to_string(),
+                edge_id: format!(
+                    "edge-{}",
+                    to_hex(
+                        &hash_bytes(
+                            format!(
+                                "{}:{}:{}",
+                                edge.controller_a,
+                                edge.controller_b,
+                                edge.coupling_score_millionths
+                            )
+                            .as_bytes()
+                        )[..10]
+                    )
+                ),
+                controller_a: edge.controller_a.clone(),
+                controller_b: edge.controller_b.clone(),
+                interaction: edge.interaction.to_string(),
+                timescale_ratio_millionths: ratio,
+                coupling_score_millionths: edge.coupling_score_millionths,
+                active_warning: edge.coupling_score_millionths >= 700_000
+                    || edge.uncertainty == EdgeUncertainty::Unknown,
+            }
+        })
+        .collect()
+}
+
+/// Emit an uncertainty ledger for non-observed interaction edges.
+pub fn build_controller_edge_uncertainty_ledger(
+    registry: &ControllerRegistrySnapshot,
+    graph: &ControllerOperatorGraph,
+) -> Vec<ControllerEdgeUncertaintyEntry> {
+    let by_name = registry
+        .controllers
+        .iter()
+        .map(|controller| (controller.controller_name().to_string(), controller))
+        .collect::<BTreeMap<_, _>>();
+
+    graph
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            if edge.uncertainty == EdgeUncertainty::Observed {
+                return None;
+            }
+            let left = by_name.get(&edge.controller_a)?;
+            let right = by_name.get(&edge.controller_b)?;
+            let (_, reasons) = edge_uncertainty_and_reasons(
+                left,
+                right,
+                registry,
+                edge.interaction,
+                &edge.observed_channel_overlap,
+                &edge.shared_resource_overlap,
+            );
+            Some(ControllerEdgeUncertaintyEntry {
+                schema_version: CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION.to_string(),
+                controller_a: edge.controller_a.clone(),
+                controller_b: edge.controller_b.clone(),
+                uncertainty: edge.uncertainty,
+                reasons,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1095,11 +1733,9 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let blocked = matrix.blocked_pairs();
         assert!(blocked.len() >= 2); // Router-Router and Fallback-Fallback
-        assert!(
-            blocked
-                .iter()
-                .any(|e| e.role_a == ControllerRole::Router && e.role_b == ControllerRole::Router)
-        );
+        assert!(blocked
+            .iter()
+            .any(|e| e.role_a == ControllerRole::Router && e.role_b == ControllerRole::Router));
     }
 
     #[test]
@@ -1107,14 +1743,12 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let sep = matrix.separation_required_pairs();
         assert!(sep.len() >= 2);
-        assert!(
-            sep.iter()
-                .any(|e| e.interaction == InteractionClass::ProducerConsumer)
-        );
-        assert!(
-            sep.iter()
-                .any(|e| e.interaction == InteractionClass::WriteConflict)
-        );
+        assert!(sep
+            .iter()
+            .any(|e| e.interaction == InteractionClass::ProducerConsumer));
+        assert!(sep
+            .iter()
+            .any(|e| e.interaction == InteractionClass::WriteConflict));
     }
 
     #[test]
@@ -1309,12 +1943,10 @@ mod tests {
         let config = GateConfig::default();
         let result = evaluate_composition_gate("trace-empty", &[], &matrix, &config);
         assert!(!result.is_approved());
-        assert!(
-            result
-                .failures
-                .iter()
-                .any(|f| matches!(f, GateFailureReason::EmptyDeployment))
-        );
+        assert!(result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::EmptyDeployment)));
     }
 
     #[test]
@@ -1368,12 +2000,10 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-sep", &controllers, &matrix, &config);
         assert!(!result.is_approved());
-        assert!(
-            result
-                .failures
-                .iter()
-                .any(|f| matches!(f, GateFailureReason::InsufficientTimescaleSeparation { .. }))
-        );
+        assert!(result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::InsufficientTimescaleSeparation { .. })));
     }
 
     #[test]
@@ -1402,12 +2032,10 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-bad", &controllers, &matrix, &config);
         assert!(!result.is_approved());
-        assert!(
-            result
-                .failures
-                .iter()
-                .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. }))
-        );
+        assert!(result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. })));
     }
 
     #[test]
@@ -1435,12 +2063,10 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-dup-name", &controllers, &matrix, &config);
         assert!(!result.is_approved());
-        assert!(
-            result
-                .failures
-                .iter()
-                .any(|f| matches!(f, GateFailureReason::DuplicateController { .. }))
-        );
+        assert!(result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::DuplicateController { .. })));
     }
 
     #[test]
@@ -1475,12 +2101,10 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-mbf", &controllers, &matrix, &config);
         assert!(!result.is_approved());
-        assert!(
-            result
-                .failures
-                .iter()
-                .any(|f| matches!(f, GateFailureReason::MicrobenchBudgetExceeded { .. }))
-        );
+        assert!(result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::MicrobenchBudgetExceeded { .. })));
     }
 
     #[test]
@@ -1870,11 +2494,9 @@ mod tests {
             entries: Vec::new(),
             schema_version: "1.0.0".to_string(),
         };
-        assert!(
-            matrix
-                .lookup(ControllerRole::Router, ControllerRole::Monitor)
-                .is_none()
-        );
+        assert!(matrix
+            .lookup(ControllerRole::Router, ControllerRole::Monitor)
+            .is_none());
     }
 
     #[test]

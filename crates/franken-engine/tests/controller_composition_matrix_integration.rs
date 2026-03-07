@@ -6,13 +6,30 @@
 //! harness, acceptance gate evaluation, and operator summary rendering.
 
 use std::collections::BTreeSet;
+use std::error::Error;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use frankenengine_engine::controller_composition_matrix::ControllerOperatorGraph;
 use frankenengine_engine::controller_composition_matrix::{
-    ControllerCompositionMatrix, ControllerRole, ControllerTimescale, GateConfig,
-    GateFailureReason, GateResult, GateVerdict, InteractionClass, MatrixEntry, MicrobenchConfig,
-    MicrobenchResult, OperatorSummary, evaluate_composition_gate, render_operator_summary,
-    run_microbench,
+    build_controller_edge_uncertainty_ledger, build_controller_registry,
+    build_controller_telemetry_snapshot, build_spectral_edge_traces,
+    derive_controller_operator_graph, evaluate_composition_gate, render_operator_summary,
+    run_microbench, validate_controller_registry, ActuationBound, ControllerCompositionMatrix,
+    ControllerContract, ControllerEdgeUncertaintyEntry, ControllerMetadataGap,
+    ControllerRegistryError, ControllerRegistrySnapshot, ControllerRole,
+    ControllerTelemetrySnapshot, ControllerTimescale, DeterministicFallback, EdgeUncertainty,
+    GateConfig, GateFailureReason, GateResult, GateVerdict, InteractionClass, MatrixEntry,
+    MicrobenchConfig, MicrobenchResult, OperatorSummary, SpectralEdgeTrace,
+    CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION, CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION,
+    CONTROLLER_REGISTRY_SCHEMA_VERSION, CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION,
+    SPECTRAL_EDGE_TRACE_SCHEMA_VERSION,
 };
+use frankenengine_engine::rgc_test_harness::{
+    DeterministicTestContext, EventInput, HarnessLane, HarnessLogEvent,
+};
+use serde::{Deserialize, Serialize};
 
 // ===========================================================================
 // Helpers
@@ -25,6 +42,340 @@ fn ts(name: &str, role: ControllerRole, obs: i64, write: i64) -> ControllerTimes
         observation_interval_millionths: obs,
         write_interval_millionths: write,
         statement: format!("{name} timescale"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contract(
+    name: &str,
+    role: ControllerRole,
+    obs: i64,
+    write: i64,
+    observed: &[&str],
+    actions: &[&str],
+    state: &[&str],
+    resources: &[&str],
+) -> ControllerContract {
+    ControllerContract {
+        timescale: ts(name, role, obs, write),
+        observation_channels: observed.iter().map(|value| value.to_string()).collect(),
+        action_channels: actions.iter().map(|value| value.to_string()).collect(),
+        state_channels: state.iter().map(|value| value.to_string()).collect(),
+        actuation_bounds: actions
+            .iter()
+            .map(|channel| ActuationBound {
+                channel: (*channel).to_string(),
+                lower_bound_millionths: 0,
+                upper_bound_millionths: 1_000_000,
+                units: "ratio".to_string(),
+            })
+            .collect(),
+        shared_resources: resources.iter().map(|value| value.to_string()).collect(),
+        deterministic_fallback: if role == ControllerRole::Monitor {
+            None
+        } else {
+            Some(DeterministicFallback {
+                fallback_mode: "safe".to_string(),
+                trigger: "telemetry-gap".to_string(),
+                detail: format!("{name} falls back deterministically"),
+            })
+        },
+    }
+}
+
+type ArtifactTestResult<T> = Result<T, Box<dyn Error>>;
+
+const CONTROLLER_OPERATOR_GRAPH_RUN_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.controller-operator-graph.run-manifest.v1";
+const CONTROLLER_OPERATOR_GRAPH_TRACE_IDS_SCHEMA_VERSION: &str =
+    "franken-engine.controller-operator-graph.trace-ids.v1";
+const CONTROLLER_OPERATOR_GRAPH_BEAD_ID: &str = "bd-1lsy.7.14.1";
+const CONTROLLER_OPERATOR_GRAPH_COMPONENT: &str = "controller_operator_graph_suite";
+const CONTROLLER_OPERATOR_GRAPH_SCENARIO_ID: &str = "rgc-614a-controller-operator-graph";
+const CONTROLLER_OPERATOR_GRAPH_GENERATED_AT_UNIX_MS: u64 = 1_700_006_140_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ControllerOperatorGraphArtifactPaths {
+    manifest: String,
+    events: String,
+    commands: String,
+    controller_registry: String,
+    controller_operator_graph: String,
+    controller_telemetry_snapshot: String,
+    spectral_edge_trace: String,
+    controller_edge_uncertainty_ledger: String,
+    trace_ids: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ControllerOperatorGraphRunManifest {
+    schema_version: String,
+    bead_id: String,
+    component: String,
+    scenario_id: String,
+    run_id: String,
+    replay_command: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    generated_at_unix_ms: u64,
+    ship_ready: bool,
+    metadata_gap_count: usize,
+    blocked_controller_names: Vec<String>,
+    controller_count: usize,
+    edge_count: usize,
+    partial_edge_count: usize,
+    unknown_edge_count: usize,
+    artifacts: ControllerOperatorGraphArtifactPaths,
+    commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ControllerOperatorGraphTraceIds {
+    schema_version: String,
+    trace_ids: Vec<String>,
+    decision_ids: Vec<String>,
+    policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ControllerOperatorGraphArtifactBundle {
+    run_dir: PathBuf,
+    manifest_path: PathBuf,
+    events_path: PathBuf,
+    commands_path: PathBuf,
+    controller_registry_path: PathBuf,
+    controller_operator_graph_path: PathBuf,
+    controller_telemetry_snapshot_path: PathBuf,
+    spectral_edge_trace_path: PathBuf,
+    controller_edge_uncertainty_ledger_path: PathBuf,
+    trace_ids_path: PathBuf,
+}
+
+fn temp_dir(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock drift")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "franken_engine_{label}_{nanos}_{}",
+        std::process::id()
+    ))
+}
+
+fn write_json_file<T: Serialize>(path: &Path, value: &T) -> ArtifactTestResult<()> {
+    fs::write(path, serde_json::to_vec_pretty(value)?)?;
+    Ok(())
+}
+
+fn write_jsonl_file<T: Serialize>(path: &Path, values: &[T]) -> ArtifactTestResult<()> {
+    let mut jsonl = String::new();
+    for value in values {
+        jsonl.push_str(&serde_json::to_string(value)?);
+        jsonl.push('\n');
+    }
+    fs::write(path, jsonl)?;
+    Ok(())
+}
+
+fn read_jsonl_file<T>(path: &Path) -> ArtifactTestResult<Vec<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let raw = fs::read_to_string(path)?;
+    raw.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<T>(line).map_err(Into::into))
+        .collect()
+}
+
+fn controller_operator_graph_demo_state() -> (
+    ControllerRegistrySnapshot,
+    ControllerOperatorGraph,
+    ControllerTelemetrySnapshot,
+    Vec<SpectralEdgeTrace>,
+    Vec<ControllerEdgeUncertaintyEntry>,
+) {
+    let router = contract(
+        "router",
+        ControllerRole::Router,
+        1_000_000,
+        500_000,
+        &["queue.depth", "optimizer.gain", "fallback.mode"],
+        &["lane.route"],
+        &["router.state"],
+        &["work-queue", "allocator"],
+    );
+    let optimizer = contract(
+        "optimizer",
+        ControllerRole::Optimizer,
+        5_000_000,
+        2_000_000,
+        &["lane.route"],
+        &["optimizer.gain"],
+        &["optimizer.state"],
+        &["allocator"],
+    );
+    let mut custom = contract(
+        "custom",
+        ControllerRole::Custom,
+        2_000_000,
+        500_000,
+        &["lane.route"],
+        &["custom.override"],
+        &["custom.state"],
+        &[],
+    );
+    custom.deterministic_fallback = None;
+
+    let registry = build_controller_registry(&[router, optimizer, custom]).unwrap();
+    let graph =
+        derive_controller_operator_graph(&registry, &ControllerCompositionMatrix::default_matrix());
+    let telemetry = build_controller_telemetry_snapshot(&registry, &graph);
+    let traces = build_spectral_edge_traces(&graph);
+    let ledger = build_controller_edge_uncertainty_ledger(&registry, &graph);
+    (registry, graph, telemetry, traces, ledger)
+}
+
+fn emit_controller_operator_graph_artifacts_to_dir(
+    run_dir: &Path,
+) -> ArtifactTestResult<ControllerOperatorGraphArtifactBundle> {
+    fs::create_dir_all(run_dir)?;
+
+    let manifest_path = run_dir.join("run_manifest.json");
+    let events_path = run_dir.join("events.jsonl");
+    let commands_path = run_dir.join("commands.txt");
+    let controller_registry_path = run_dir.join("controller_registry.json");
+    let controller_operator_graph_path = run_dir.join("controller_operator_graph.json");
+    let controller_telemetry_snapshot_path = run_dir.join("controller_telemetry_snapshot.json");
+    let spectral_edge_trace_path = run_dir.join("spectral_edge_trace.jsonl");
+    let controller_edge_uncertainty_ledger_path =
+        run_dir.join("controller_edge_uncertainty_ledger.json");
+    let trace_ids_path = run_dir.join("trace_ids.json");
+
+    let (registry, graph, telemetry, traces, ledger) = controller_operator_graph_demo_state();
+    let validation = validate_controller_registry(&registry);
+    let context = DeterministicTestContext::new(
+        CONTROLLER_OPERATOR_GRAPH_SCENARIO_ID,
+        "controller-composition-matrix",
+        HarnessLane::E2e,
+        614_001,
+    );
+    let replay_command = std::env::var("CONTROLLER_OPERATOR_GRAPH_REPLAY_COMMAND")
+        .unwrap_or_else(|_| "./scripts/run_controller_operator_graph_suite.sh ci".to_string());
+    let command = std::env::var("CONTROLLER_OPERATOR_GRAPH_COMMAND").unwrap_or_else(|_| {
+        "env CONTROLLER_OPERATOR_GRAPH_ARTIFACT_DIR=<run_dir> cargo test -p frankenengine-engine --test controller_composition_matrix_integration controller_operator_graph_artifact -- --nocapture".to_string()
+    });
+    let blocked_controller_names = registry
+        .metadata_gaps
+        .iter()
+        .map(|gap| gap.controller_name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let run_id = run_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(CONTROLLER_OPERATOR_GRAPH_SCENARIO_ID)
+        .to_string();
+    let events = vec![
+        context.event(EventInput {
+            sequence: 1,
+            component: CONTROLLER_OPERATOR_GRAPH_COMPONENT,
+            event: "registry_evaluated",
+            outcome: if validation.ship_ready {
+                "pass"
+            } else {
+                "blocked"
+            },
+            error_code: if validation.ship_ready {
+                None
+            } else {
+                Some("FE-CONTROLLER-REGISTRY-INCOMPLETE")
+            },
+            timing_us: 614_001,
+            timestamp_unix_ms: CONTROLLER_OPERATOR_GRAPH_GENERATED_AT_UNIX_MS,
+        }),
+        context.event(EventInput {
+            sequence: 2,
+            component: CONTROLLER_OPERATOR_GRAPH_COMPONENT,
+            event: "artifacts_emitted",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 614_101,
+            timestamp_unix_ms: CONTROLLER_OPERATOR_GRAPH_GENERATED_AT_UNIX_MS + 1,
+        }),
+    ];
+    let commands = vec![command];
+    let manifest = ControllerOperatorGraphRunManifest {
+        schema_version: CONTROLLER_OPERATOR_GRAPH_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+        bead_id: CONTROLLER_OPERATOR_GRAPH_BEAD_ID.to_string(),
+        component: CONTROLLER_OPERATOR_GRAPH_COMPONENT.to_string(),
+        scenario_id: CONTROLLER_OPERATOR_GRAPH_SCENARIO_ID.to_string(),
+        run_id,
+        replay_command,
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        generated_at_unix_ms: CONTROLLER_OPERATOR_GRAPH_GENERATED_AT_UNIX_MS,
+        ship_ready: validation.ship_ready,
+        metadata_gap_count: validation.metadata_gaps.len(),
+        blocked_controller_names,
+        controller_count: registry.controllers.len(),
+        edge_count: graph.edges.len(),
+        partial_edge_count: telemetry.partial_edge_count,
+        unknown_edge_count: telemetry.unknown_edge_count,
+        artifacts: ControllerOperatorGraphArtifactPaths {
+            manifest: manifest_path.display().to_string(),
+            events: events_path.display().to_string(),
+            commands: commands_path.display().to_string(),
+            controller_registry: controller_registry_path.display().to_string(),
+            controller_operator_graph: controller_operator_graph_path.display().to_string(),
+            controller_telemetry_snapshot: controller_telemetry_snapshot_path.display().to_string(),
+            spectral_edge_trace: spectral_edge_trace_path.display().to_string(),
+            controller_edge_uncertainty_ledger: controller_edge_uncertainty_ledger_path
+                .display()
+                .to_string(),
+            trace_ids: trace_ids_path.display().to_string(),
+        },
+        commands: commands.clone(),
+    };
+    let trace_ids = ControllerOperatorGraphTraceIds {
+        schema_version: CONTROLLER_OPERATOR_GRAPH_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        trace_ids: vec![context.trace_id.clone()],
+        decision_ids: vec![context.decision_id.clone()],
+        policy_ids: vec![context.policy_id.clone()],
+    };
+
+    write_json_file(&manifest_path, &manifest)?;
+    write_jsonl_file(&events_path, &events)?;
+    fs::write(&commands_path, format!("{}\n", commands.join("\n")))?;
+    write_json_file(&controller_registry_path, &registry)?;
+    write_json_file(&controller_operator_graph_path, &graph)?;
+    write_json_file(&controller_telemetry_snapshot_path, &telemetry)?;
+    write_jsonl_file(&spectral_edge_trace_path, &traces)?;
+    write_json_file(&controller_edge_uncertainty_ledger_path, &ledger)?;
+    write_json_file(&trace_ids_path, &trace_ids)?;
+
+    Ok(ControllerOperatorGraphArtifactBundle {
+        run_dir: run_dir.to_path_buf(),
+        manifest_path,
+        events_path,
+        commands_path,
+        controller_registry_path,
+        controller_operator_graph_path,
+        controller_telemetry_snapshot_path,
+        spectral_edge_trace_path,
+        controller_edge_uncertainty_ledger_path,
+        trace_ids_path,
+    })
+}
+
+fn emit_controller_operator_graph_artifacts_if_configured(
+) -> ArtifactTestResult<Option<ControllerOperatorGraphArtifactBundle>> {
+    match std::env::var("CONTROLLER_OPERATOR_GRAPH_ARTIFACT_DIR") {
+        Ok(path) => emit_controller_operator_graph_artifacts_to_dir(Path::new(&path)).map(Some),
+        Err(_) => Ok(None),
     }
 }
 
@@ -173,11 +524,9 @@ fn default_matrix_blocked_pairs() {
     let m = ControllerCompositionMatrix::default_matrix();
     let blocked = m.blocked_pairs();
     assert!(blocked.len() >= 2); // Router-Router, Fallback-Fallback
-    assert!(
-        blocked
-            .iter()
-            .any(|e| e.role_a == ControllerRole::Router && e.role_b == ControllerRole::Router)
-    );
+    assert!(blocked
+        .iter()
+        .any(|e| e.role_a == ControllerRole::Router && e.role_b == ControllerRole::Router));
 }
 
 #[test]
@@ -358,12 +707,10 @@ fn gate_rejects_empty_deployment() {
     let m = ControllerCompositionMatrix::default_matrix();
     let result = evaluate_composition_gate("trace-2", &[], &m, &no_bench_config());
     assert!(!result.is_approved());
-    assert!(
-        result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::EmptyDeployment))
-    );
+    assert!(result
+        .failures
+        .iter()
+        .any(|f| matches!(f, GateFailureReason::EmptyDeployment)));
 }
 
 // ===========================================================================
@@ -379,12 +726,10 @@ fn gate_rejects_duplicate_controllers() {
     let m = ControllerCompositionMatrix::default_matrix();
     let result = evaluate_composition_gate("trace-3", &controllers, &m, &no_bench_config());
     assert!(!result.is_approved());
-    assert!(
-        result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::DuplicateController { .. }))
-    );
+    assert!(result
+        .failures
+        .iter()
+        .any(|f| matches!(f, GateFailureReason::DuplicateController { .. })));
 }
 
 // ===========================================================================
@@ -400,12 +745,10 @@ fn gate_rejects_mutually_exclusive_roles() {
     let m = ControllerCompositionMatrix::default_matrix();
     let result = evaluate_composition_gate("trace-4", &controllers, &m, &no_bench_config());
     assert!(!result.is_approved());
-    assert!(
-        result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::MutuallyExclusiveRoles { .. }))
-    );
+    assert!(result
+        .failures
+        .iter()
+        .any(|f| matches!(f, GateFailureReason::MutuallyExclusiveRoles { .. })));
 }
 
 // ===========================================================================
@@ -439,12 +782,10 @@ fn gate_rejects_invalid_timescale() {
     let m = ControllerCompositionMatrix::default_matrix();
     let result = evaluate_composition_gate("trace-6", &controllers, &m, &no_bench_config());
     assert!(!result.is_approved());
-    assert!(
-        result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. }))
-    );
+    assert!(result
+        .failures
+        .iter()
+        .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. })));
 }
 
 // ===========================================================================
@@ -742,7 +1083,7 @@ fn five_controller_deployment() {
     let result = evaluate_composition_gate("trace-big", &controllers, &m, &default_gate_config());
     assert_eq!(result.controllers_evaluated, 5);
     assert_eq!(result.pairs_evaluated, 10); // C(5,2) = 10
-    // Should have microbench results
+                                            // Should have microbench results
     assert!(result.microbench.is_some());
 }
 
@@ -820,5 +1161,426 @@ fn matrix_has_entries_for_all_role_pairs() {
                 "missing entry for ({a:?}, {b:?})"
             );
         }
+    }
+}
+
+// ===========================================================================
+// 36. Controller registry contracts
+// ===========================================================================
+
+#[test]
+fn controller_registry_schema_version_constant_nonempty() {
+    assert!(CONTROLLER_REGISTRY_SCHEMA_VERSION.starts_with("franken-engine."));
+}
+
+#[test]
+fn controller_registry_rejects_duplicate_controller_names() {
+    let controllers = vec![
+        contract(
+            "router",
+            ControllerRole::Router,
+            1_000_000,
+            500_000,
+            &["queue.depth"],
+            &["lane.route"],
+            &["router.state"],
+            &["work-queue"],
+        ),
+        contract(
+            "router",
+            ControllerRole::Monitor,
+            2_000_000,
+            1_000_000,
+            &["queue.depth"],
+            &[],
+            &["monitor.state"],
+            &["work-queue"],
+        ),
+    ];
+    let err = build_controller_registry(&controllers).unwrap_err();
+    assert!(matches!(
+        err,
+        ControllerRegistryError::DuplicateController { .. }
+    ));
+}
+
+#[test]
+fn controller_registry_collects_metadata_gaps_for_incomplete_contracts() {
+    let mut incomplete = contract(
+        "optimizer",
+        ControllerRole::Optimizer,
+        2_000_000,
+        750_000,
+        &["latency.p95"],
+        &["optimizer.gain"],
+        &[],
+        &[],
+    );
+    incomplete.actuation_bounds.clear();
+    incomplete.deterministic_fallback = None;
+
+    let registry = build_controller_registry(&[incomplete]).unwrap();
+    let report = validate_controller_registry(&registry);
+    assert!(!report.ship_ready);
+    assert!(report
+        .metadata_gaps
+        .iter()
+        .any(|gap: &ControllerMetadataGap| { gap.gap.to_string() == "missing_state_channels" }));
+    assert!(report
+        .metadata_gaps
+        .iter()
+        .any(|gap: &ControllerMetadataGap| { gap.gap.to_string() == "missing_actuation_bounds" }));
+    assert!(report
+        .metadata_gaps
+        .iter()
+        .any(|gap: &ControllerMetadataGap| {
+            gap.gap.to_string() == "missing_deterministic_fallback"
+        }));
+}
+
+#[test]
+fn controller_registry_normalizes_order_deterministically() {
+    let left = contract(
+        "router",
+        ControllerRole::Router,
+        1_000_000,
+        500_000,
+        &["queue.depth"],
+        &["lane.route"],
+        &["router.state"],
+        &["work-queue"],
+    );
+    let right = contract(
+        "optimizer",
+        ControllerRole::Optimizer,
+        5_000_000,
+        2_000_000,
+        &["lane.route"],
+        &["optimizer.gain"],
+        &["optimizer.state"],
+        &["work-queue", "allocator"],
+    );
+
+    let a = build_controller_registry(&[left.clone(), right.clone()]).unwrap();
+    let b = build_controller_registry(&[right, left]).unwrap();
+    assert_eq!(a.registry_id, b.registry_id);
+    assert_eq!(a.controllers, b.controllers);
+}
+
+// ===========================================================================
+// 37. Operator graph and telemetry artifacts
+// ===========================================================================
+
+#[test]
+fn operator_graph_schema_version_constant_nonempty() {
+    assert!(CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION.contains("graph"));
+}
+
+#[test]
+fn operator_graph_derivation_is_order_independent() {
+    let router = contract(
+        "router",
+        ControllerRole::Router,
+        1_000_000,
+        500_000,
+        &["queue.depth", "optimizer.gain"],
+        &["lane.route"],
+        &["router.state"],
+        &["work-queue", "allocator"],
+    );
+    let optimizer = contract(
+        "optimizer",
+        ControllerRole::Optimizer,
+        5_000_000,
+        2_000_000,
+        &["lane.route"],
+        &["optimizer.gain"],
+        &["optimizer.state"],
+        &["work-queue", "allocator"],
+    );
+
+    let matrix = ControllerCompositionMatrix::default_matrix();
+    let left = build_controller_registry(&[router.clone(), optimizer.clone()]).unwrap();
+    let right = build_controller_registry(&[optimizer, router]).unwrap();
+    let graph_left = derive_controller_operator_graph(&left, &matrix);
+    let graph_right = derive_controller_operator_graph(&right, &matrix);
+
+    assert_eq!(graph_left.graph_id, graph_right.graph_id);
+    assert_eq!(graph_left.edges, graph_right.edges);
+}
+
+#[test]
+fn operator_graph_edge_captures_overlap_and_coupling() {
+    let router = contract(
+        "router",
+        ControllerRole::Router,
+        1_000_000,
+        500_000,
+        &["optimizer.gain"],
+        &["lane.route"],
+        &["router.state"],
+        &["work-queue", "allocator"],
+    );
+    let optimizer = contract(
+        "optimizer",
+        ControllerRole::Optimizer,
+        5_000_000,
+        2_000_000,
+        &["lane.route"],
+        &["optimizer.gain"],
+        &["optimizer.state"],
+        &["work-queue", "allocator"],
+    );
+
+    let registry = build_controller_registry(&[router, optimizer]).unwrap();
+    let graph =
+        derive_controller_operator_graph(&registry, &ControllerCompositionMatrix::default_matrix());
+    let edge = graph.edges.first().expect("expected one edge");
+    assert_eq!(edge.interaction, InteractionClass::ProducerConsumer);
+    assert!(!edge.observed_channel_overlap.is_empty());
+    assert!(!edge.shared_resource_overlap.is_empty());
+    assert!(edge.coupling_score_millionths > 0);
+}
+
+#[test]
+fn operator_telemetry_snapshot_counts_uncertain_edges() {
+    let router = contract(
+        "router",
+        ControllerRole::Router,
+        1_000_000,
+        500_000,
+        &["queue.depth"],
+        &["lane.route"],
+        &["router.state"],
+        &[],
+    );
+    let mut custom = contract(
+        "custom",
+        ControllerRole::Custom,
+        1_500_000,
+        500_000,
+        &["lane.route"],
+        &["custom.override"],
+        &["custom.state"],
+        &[],
+    );
+    custom.deterministic_fallback = None;
+
+    let registry = build_controller_registry(&[router, custom]).unwrap();
+    let graph =
+        derive_controller_operator_graph(&registry, &ControllerCompositionMatrix::default_matrix());
+    let snapshot: ControllerTelemetrySnapshot =
+        build_controller_telemetry_snapshot(&registry, &graph);
+    assert_eq!(
+        snapshot.schema_version,
+        CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION
+    );
+    assert_eq!(snapshot.edge_count, 1);
+    assert!(snapshot.unknown_edge_count >= 1 || snapshot.partial_edge_count >= 1);
+}
+
+#[test]
+fn spectral_edge_traces_emit_warning_for_unknown_high_coupling_edges() {
+    let router = contract(
+        "router",
+        ControllerRole::Router,
+        1_000_000,
+        500_000,
+        &["queue.depth"],
+        &["lane.route"],
+        &["router.state"],
+        &[],
+    );
+    let mut custom = contract(
+        "custom",
+        ControllerRole::Custom,
+        1_000_000,
+        500_000,
+        &["lane.route"],
+        &["custom.override"],
+        &["custom.state"],
+        &[],
+    );
+    custom.deterministic_fallback = None;
+
+    let registry = build_controller_registry(&[router, custom]).unwrap();
+    let graph =
+        derive_controller_operator_graph(&registry, &ControllerCompositionMatrix::default_matrix());
+    let traces: Vec<SpectralEdgeTrace> = build_spectral_edge_traces(&graph);
+    assert_eq!(traces[0].schema_version, SPECTRAL_EDGE_TRACE_SCHEMA_VERSION);
+    assert!(traces[0].active_warning);
+}
+
+#[test]
+fn uncertainty_ledger_records_non_observed_edges() {
+    let router = contract(
+        "router",
+        ControllerRole::Router,
+        1_000_000,
+        500_000,
+        &["queue.depth"],
+        &["lane.route"],
+        &["router.state"],
+        &[],
+    );
+    let mut custom = contract(
+        "custom",
+        ControllerRole::Custom,
+        2_000_000,
+        500_000,
+        &["lane.route"],
+        &["custom.override"],
+        &["custom.state"],
+        &[],
+    );
+    custom.deterministic_fallback = None;
+
+    let registry: ControllerRegistrySnapshot =
+        build_controller_registry(&[router, custom]).unwrap();
+    let graph =
+        derive_controller_operator_graph(&registry, &ControllerCompositionMatrix::default_matrix());
+    let ledger: Vec<ControllerEdgeUncertaintyEntry> =
+        build_controller_edge_uncertainty_ledger(&registry, &graph);
+    assert_eq!(
+        ledger[0].schema_version,
+        CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION
+    );
+    assert!(matches!(
+        ledger[0].uncertainty,
+        EdgeUncertainty::Partial | EdgeUncertainty::Unknown
+    ));
+    assert!(!ledger[0].reasons.is_empty());
+}
+
+#[test]
+fn controller_operator_graph_artifact_bundle_has_expected_contents() {
+    let run_dir = temp_dir("controller_operator_graph_artifacts");
+    let bundle = emit_controller_operator_graph_artifacts_to_dir(&run_dir)
+        .expect("artifact bundle should emit cleanly");
+
+    assert!(bundle.run_dir.exists());
+    assert!(bundle.manifest_path.exists());
+    assert!(bundle.events_path.exists());
+    assert!(bundle.commands_path.exists());
+    assert!(bundle.controller_registry_path.exists());
+    assert!(bundle.controller_operator_graph_path.exists());
+    assert!(bundle.controller_telemetry_snapshot_path.exists());
+    assert!(bundle.spectral_edge_trace_path.exists());
+    assert!(bundle.controller_edge_uncertainty_ledger_path.exists());
+    assert!(bundle.trace_ids_path.exists());
+
+    let manifest: ControllerOperatorGraphRunManifest = serde_json::from_str(
+        &fs::read_to_string(&bundle.manifest_path).expect("manifest should be readable"),
+    )
+    .expect("manifest should parse");
+    assert_eq!(
+        manifest.schema_version,
+        CONTROLLER_OPERATOR_GRAPH_RUN_MANIFEST_SCHEMA_VERSION
+    );
+    assert_eq!(manifest.bead_id, CONTROLLER_OPERATOR_GRAPH_BEAD_ID);
+    assert_eq!(manifest.component, CONTROLLER_OPERATOR_GRAPH_COMPONENT);
+    assert_eq!(manifest.scenario_id, CONTROLLER_OPERATOR_GRAPH_SCENARIO_ID);
+    assert!(!manifest.ship_ready);
+    assert!(manifest.metadata_gap_count >= 1);
+    assert!(manifest
+        .blocked_controller_names
+        .iter()
+        .any(|controller| controller == "custom"));
+    assert!(manifest.commands[0].contains("cargo test"));
+
+    let registry: ControllerRegistrySnapshot = serde_json::from_str(
+        &fs::read_to_string(&bundle.controller_registry_path).expect("registry should be readable"),
+    )
+    .expect("registry should parse");
+    assert_eq!(registry.schema_version, CONTROLLER_REGISTRY_SCHEMA_VERSION);
+    assert!(registry
+        .metadata_gaps
+        .iter()
+        .any(|gap| gap.controller_name == "custom"));
+
+    let graph: ControllerOperatorGraph = serde_json::from_str(
+        &fs::read_to_string(&bundle.controller_operator_graph_path)
+            .expect("graph should be readable"),
+    )
+    .expect("graph should parse");
+    assert_eq!(
+        graph.schema_version,
+        CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION
+    );
+    assert_eq!(graph.controller_names.len(), 3);
+    assert!(!graph.edges.is_empty());
+
+    let telemetry: ControllerTelemetrySnapshot = serde_json::from_str(
+        &fs::read_to_string(&bundle.controller_telemetry_snapshot_path)
+            .expect("telemetry should be readable"),
+    )
+    .expect("telemetry should parse");
+    assert_eq!(
+        telemetry.schema_version,
+        CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION
+    );
+    assert!(telemetry.unknown_edge_count >= 1);
+
+    let traces: Vec<SpectralEdgeTrace> =
+        read_jsonl_file(&bundle.spectral_edge_trace_path).expect("trace jsonl should parse");
+    assert!(!traces.is_empty());
+    assert_eq!(traces[0].schema_version, SPECTRAL_EDGE_TRACE_SCHEMA_VERSION);
+    assert!(traces.iter().any(|trace| trace.active_warning));
+
+    let ledger: Vec<ControllerEdgeUncertaintyEntry> = serde_json::from_str(
+        &fs::read_to_string(&bundle.controller_edge_uncertainty_ledger_path)
+            .expect("ledger should be readable"),
+    )
+    .expect("ledger should parse");
+    assert!(!ledger.is_empty());
+    assert_eq!(
+        ledger[0].schema_version,
+        CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION
+    );
+
+    let events: Vec<HarnessLogEvent> =
+        read_jsonl_file(&bundle.events_path).expect("events should parse");
+    assert_eq!(events.len(), 2);
+    assert!(events
+        .iter()
+        .any(|event| event.event == "registry_evaluated" && event.outcome == "blocked"));
+    assert!(events
+        .iter()
+        .any(|event| event.event == "artifacts_emitted" && event.outcome == "pass"));
+
+    let trace_ids: ControllerOperatorGraphTraceIds = serde_json::from_str(
+        &fs::read_to_string(&bundle.trace_ids_path).expect("trace ids should be readable"),
+    )
+    .expect("trace ids should parse");
+    assert_eq!(
+        trace_ids.schema_version,
+        CONTROLLER_OPERATOR_GRAPH_TRACE_IDS_SCHEMA_VERSION
+    );
+    assert_eq!(trace_ids.trace_ids.len(), 1);
+    assert_eq!(trace_ids.trace_ids[0], manifest.trace_id);
+    assert_eq!(trace_ids.decision_ids[0], manifest.decision_id);
+    assert_eq!(trace_ids.policy_ids[0], manifest.policy_id);
+}
+
+#[test]
+fn controller_operator_graph_artifact_emits_if_env_configured() {
+    let emitted = emit_controller_operator_graph_artifacts_if_configured()
+        .expect("env-gated artifact emission should not fail");
+    if let Ok(run_dir) = std::env::var("CONTROLLER_OPERATOR_GRAPH_ARTIFACT_DIR") {
+        let bundle = emitted.expect("artifact bundle should emit when env is set");
+        assert_eq!(bundle.run_dir, PathBuf::from(run_dir));
+        assert!(bundle.manifest_path.exists());
+        assert!(bundle.events_path.exists());
+        assert!(bundle.commands_path.exists());
+        assert!(bundle.controller_registry_path.exists());
+        assert!(bundle.controller_operator_graph_path.exists());
+        assert!(bundle.spectral_edge_trace_path.exists());
+        assert!(bundle.controller_edge_uncertainty_ledger_path.exists());
+        assert!(bundle.trace_ids_path.exists());
+    } else {
+        assert!(
+            emitted.is_none(),
+            "without CONTROLLER_OPERATOR_GRAPH_ARTIFACT_DIR set, emission should be a no-op"
+        );
     }
 }

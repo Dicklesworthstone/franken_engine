@@ -33,13 +33,13 @@ curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/m
 Node and Bun are fast enough for many workloads, but extension-heavy agent systems need a different default posture: active containment, deterministic forensics, and explicit runtime authority boundaries.
 
 ### The Solution
-FrankenEngine provides two native execution lanes, a probabilistic guardplane with expected-loss actioning, deterministic replay for high-severity decisions, and signed evidence contracts for every high-impact containment event.
+FrankenEngine provides one native baseline interpreter with deterministic and throughput execution profiles, a probabilistic guardplane with expected-loss actioning, deterministic replay for high-severity decisions, and signed evidence contracts for every high-impact containment event.
 
 ### Why Use FrankenEngine?
 
 | Capability | What You Get In Practice |
 |---|---|
-| Native dual-lane execution | `quickjs_inspired_native` for deterministic control paths and `v8_inspired_native` for throughput-heavy paths |
+| Native execution profiles | `baseline_deterministic_profile` for conservative control paths, `baseline_throughput_profile` for throughput-heavy paths, and `adaptive_profile_router` when policy routing is enabled |
 | Probabilistic Guardplane | Bayesian risk updates and e-process boundaries that trigger `allow/challenge/sandbox/suspend/terminate/quarantine` |
 | Deterministic replay | Bit-stable replay for high-severity decision paths with counterfactual policy simulation |
 | Cryptographic governance | Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |
@@ -114,7 +114,7 @@ Reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`) are
 
 | Dimension | FrankenEngine | Node.js | Bun |
 |---|---|---|---|
-| Core execution ownership | Native Rust lanes | V8 embedding | JavaScriptCore + Zig runtime |
+| Core execution ownership | Native Rust baseline interpreter + profile router | V8 embedding | JavaScriptCore + Zig runtime |
 | Deterministic replay for high-severity decisions | Built in, mandatory release gate | External tooling only | External tooling only |
 | Probabilistic containment policy | Built in guardplane | Not default runtime behavior | Not default runtime behavior |
 | Cryptographic decision receipts | First-class runtime artifact | Not a core runtime primitive | Not a core runtime primitive |
@@ -221,6 +221,17 @@ README examples do not drift back toward aspirational subcommands.
 - `./scripts/run_rgc_docs_help_surface_audit.sh ci`
 - `./scripts/e2e/rgc_docs_help_surface_audit_replay.sh ci`
 
+## Execution Profile Contract Migration
+
+Operator-facing execution labels now use the honest profile contract:
+`baseline_deterministic_profile`, `baseline_throughput_profile`, and
+`adaptive_profile_router`.
+
+Legacy lineage labels such as `quickjs_inspired_native` and
+`v8_inspired_native` remain accepted on input for migration purposes. The
+mapping and rollout guidance live in
+[`docs/RGC_EXECUTION_PROFILE_CONTRACT_MIGRATION_V1.md`](./docs/RGC_EXECUTION_PROFILE_CONTRACT_MIGRATION_V1.md).
+
 ## Configuration
 
 `franken-engine.toml`
@@ -232,15 +243,15 @@ cluster = "prod"
 zone = "us-east-1"
 mode = "secure"
 
-# Select execution lanes and router policy
-[lanes]
-default = "hybrid_router"
-quickjs_inspired_native_enabled = true
-v8_inspired_native_enabled = true
+# Select execution profiles and router policy
+[execution_profiles]
+default = "adaptive_profile_router"
+baseline_deterministic_profile_enabled = true
+baseline_throughput_profile_enabled = true
 
 [router]
 policy = "risk_aware"
-fallback_lane = "quickjs_inspired_native"
+fallback_lane = "baseline_deterministic_profile"
 
 # Guardplane decision settings
 [guardplane]
@@ -333,9 +344,10 @@ default_memory_budget_mb = 128
 |  | Native Data Plane |      |  Control Plane (Constitutional) |  |
 |  |-------------------|      |----------------------------------|  |
 |  | parser + IR       |      | Cx capability contracts          |  |
-|  | execution lanes   |<---->| decision contracts               |  |
-|  | GC + scheduler    |      | evidence + receipts              |  |
-|  | module runtime    |      | cancel -> drain -> finalize      |  |
+|  | baseline interp.  |<---->| decision contracts               |  |
+|  | + profile router  |      | evidence + receipts              |  |
+|  | GC + scheduler    |      | cancel -> drain -> finalize      |  |
+|  | module runtime    |      |                                  |  |
 |  +-------------------+      +----------------------------------+  |
 |            |                                   |                  |
 +------------+-----------------------------------+------------------+

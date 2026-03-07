@@ -228,13 +228,28 @@ fn frankenctl_run_writes_execution_report() {
     assert_eq!(stdout_json["extension_id"].as_str(), Some("ext-cli-run"));
     assert!(stdout_json["trace_id"].as_str().is_some());
     assert!(stdout_json["decision_id"].as_str().is_some());
-    assert!(stdout_json["lane"].as_str().is_some());
+    assert_eq!(
+        stdout_json["lane"].as_str(),
+        Some("baseline_deterministic_profile")
+    );
+    assert_eq!(
+        stdout_json["lane_reason"].as_str(),
+        Some("default_deterministic_profile")
+    );
     assert!(stdout_json["containment_action"].as_str().is_some());
 
     let report_bytes = fs::read(&report_path).expect("run report should be written");
     let report_json: serde_json::Value =
         serde_json::from_slice(&report_bytes).expect("report should parse as json");
     assert_eq!(report_json["extension_id"].as_str(), Some("ext-cli-run"));
+    assert_eq!(
+        report_json["lane"].as_str(),
+        Some("baseline_deterministic_profile")
+    );
+    assert_eq!(
+        report_json["lane_reason"].as_str(),
+        Some("default_deterministic_profile")
+    );
 
     let _ = fs::remove_file(source_path);
     let _ = fs::remove_file(report_path);

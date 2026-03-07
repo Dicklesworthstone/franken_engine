@@ -122,8 +122,8 @@ fn budget_config_default_deterministic_fallback() {
 fn decision_context_config_default_lanes() {
     let c = DecisionContextConfig::default();
     assert_eq!(c.lanes.len(), 2);
-    assert_eq!(c.lanes[0].to_string(), "quickjs_inspired_native");
-    assert_eq!(c.lanes[1].to_string(), "v8_inspired_native");
+    assert_eq!(c.lanes[0].to_string(), "baseline_deterministic_profile");
+    assert_eq!(c.lanes[1].to_string(), "baseline_throughput_profile");
 }
 
 #[test]

@@ -66,9 +66,12 @@ fn standard_lanes() -> Vec<LaneId> {
 fn lane_id_display() {
     assert_eq!(
         LaneId::quickjs_native().to_string(),
-        "quickjs_inspired_native"
+        "baseline_deterministic_profile"
     );
-    assert_eq!(LaneId::v8_native().to_string(), "v8_inspired_native");
+    assert_eq!(
+        LaneId::v8_native().to_string(),
+        "baseline_throughput_profile"
+    );
     assert_eq!(LaneId::safe_mode().to_string(), "safe_mode");
 }
 
@@ -131,7 +134,7 @@ fn risk_dimension_serde() {
 fn routing_action_display() {
     assert_eq!(
         RoutingAction::SelectLane(LaneId::v8_native()).to_string(),
-        "select:v8_inspired_native"
+        "select:baseline_throughput_profile"
     );
     assert_eq!(
         RoutingAction::FallbackSafeMode.to_string(),
@@ -263,8 +266,8 @@ fn loss_policy_select_min_loss_action() {
     let policy = default_routing_loss_policy();
     let posteriors = low_risk_posteriors();
     let candidates = vec![
-        "select:quickjs_inspired_native".into(),
-        "select:v8_inspired_native".into(),
+        "select:baseline_deterministic_profile".into(),
+        "select:baseline_throughput_profile".into(),
         "fallback:safe_mode".into(),
         "hold".into(),
     ];

@@ -1,0 +1,85 @@
+{
+  "schema_version": "franken-engine.rgc-execution-profile-contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.4.11.1",
+  "policy_id": "policy-rgc-execution-profile-contract-v1",
+  "audited_inputs": [
+    "README.md",
+    "docs/RGC_EXECUTION_PROFILE_CONTRACT_MIGRATION_V1.md",
+    "crates/franken-engine/src/baseline_interpreter.rs",
+    "crates/franken-engine/src/runtime_decision_core.rs",
+    "crates/franken-engine/src/runtime_decision_theory.rs",
+    "crates/franken-engine/src/lib.rs",
+    "crates/franken-engine/src/bin/frankenctl.rs"
+  ],
+  "required_readme_fragments": [
+    "baseline_deterministic_profile",
+    "baseline_throughput_profile",
+    "adaptive_profile_router",
+    "[execution_profiles]",
+    "baseline_deterministic_profile_enabled = true",
+    "baseline_throughput_profile_enabled = true",
+    "fallback_lane = \"baseline_deterministic_profile\"",
+    "docs/RGC_EXECUTION_PROFILE_CONTRACT_MIGRATION_V1.md"
+  ],
+  "banned_readme_fragments": [
+    "| Native dual-lane execution | `quickjs_inspired_native` for deterministic control paths and `v8_inspired_native` for throughput-heavy paths |",
+    "[lanes]",
+    "default = \"hybrid_router\"",
+    "quickjs_inspired_native_enabled = true",
+    "v8_inspired_native_enabled = true",
+    "fallback_lane = \"quickjs_inspired_native\""
+  ],
+  "required_migration_fragments": [
+    "# RGC Execution Profile Contract Migration V1",
+    "`quickjs_inspired_native` -> `baseline_deterministic_profile`",
+    "`v8_inspired_native` -> `baseline_throughput_profile`",
+    "`Hybrid` / `hybrid_router` -> `adaptive_profile_router`",
+    "`DefaultFallback` / `DefaultQuickJsPath` -> `default_deterministic_profile`",
+    "The FRX JS/WASM lane charter in `runtime_kernel_lane_charter.rs` is separate and",
+    "unaffected."
+  ],
+  "source_fragment_checks": [
+    {
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "fragment": "pub const DETERMINISTIC_PROFILE_LABEL: &str = \"baseline_deterministic_profile\";"
+    },
+    {
+      "path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "fragment": "pub const THROUGHPUT_PROFILE_LABEL: &str = \"baseline_throughput_profile\";"
+    },
+    {
+      "path": "crates/franken-engine/src/lib.rs",
+      "fragment": "const ADAPTIVE_PROFILE_ROUTER_LABEL: &str = \"adaptive_profile_router\";"
+    },
+    {
+      "path": "crates/franken-engine/src/bin/frankenctl.rs",
+      "fragment": "lane: result.lane.to_string(),"
+    },
+    {
+      "path": "crates/franken-engine/src/bin/frankenctl.rs",
+      "fragment": "lane_reason: result.lane_reason.to_string(),"
+    }
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "execution_profile_contract_report.json",
+    "step_logs/step_*.log"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_execution_profile_contract_audit.sh",
+    "replay_wrapper": "scripts/e2e/rgc_execution_profile_contract_audit_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "franken-engine.rgc-execution-profile-contract.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_execution_profile_contract_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_execution_profile_contract cargo test -p frankenengine-engine --no-run --lib --bin frankenctl --test baseline_interpreter_edge_cases --test eval_pipeline_integration --test runtime_decision_core_integration --test runtime_decision_theory_enrichment_integration --test frankenctl_cli",
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_execution_profile_contract cargo test -p frankenengine-engine --lib --test baseline_interpreter_edge_cases --test eval_pipeline_integration --test runtime_decision_core_integration --test runtime_decision_theory_enrichment_integration --test frankenctl_cli",
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_execution_profile_contract cargo clippy -p frankenengine-engine --lib --bin frankenctl --test baseline_interpreter_edge_cases --test eval_pipeline_integration --test runtime_decision_core_integration --test runtime_decision_theory_enrichment_integration --test frankenctl_cli -- -D warnings",
+    "./scripts/run_rgc_execution_profile_contract_audit.sh ci",
+    "./scripts/e2e/rgc_execution_profile_contract_audit_replay.sh ci"
+  ]
+}

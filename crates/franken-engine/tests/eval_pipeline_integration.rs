@@ -680,6 +680,12 @@ fn engine_kind_serde_roundtrip() {
     ];
     for kind in &kinds {
         let json = serde_json::to_string(kind).unwrap();
+        let expected = match kind {
+            EngineKind::QuickJsInspiredNative => "baseline_deterministic_profile",
+            EngineKind::V8InspiredNative => "baseline_throughput_profile",
+            EngineKind::Hybrid => unreachable!("hybrid is not covered here"),
+        };
+        assert_eq!(json, format!("\"{expected}\""));
         let back: EngineKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*kind, back);
     }

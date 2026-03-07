@@ -358,12 +358,16 @@ fn revoke_one_cell_leaves_others() {
 
     assert!(verifier.revoke_authorization("cell-001"));
     assert_eq!(verifier.authorization_count(), 1);
-    assert!(verifier
-        .check_authorization("cell-002", "sign_receipts", 3000)
-        .is_ok());
-    assert!(verifier
-        .check_authorization("cell-001", "sign_receipts", 3000)
-        .is_err());
+    assert!(
+        verifier
+            .check_authorization("cell-002", "sign_receipts", 3000)
+            .is_ok()
+    );
+    assert!(
+        verifier
+            .check_authorization("cell-001", "sign_receipts", 3000)
+            .is_err()
+    );
 }
 
 // ---------------------------------------------------------------------------

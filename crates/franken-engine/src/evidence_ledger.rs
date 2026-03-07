@@ -973,7 +973,10 @@ fn build_artifact_node_id(entry: &EvidenceEntry, artifact: &ArtifactRecord) -> S
         deterministic_hash(
             format!(
                 "{}:{}:{}:{}",
-                entry.entry_id, artifact.artifact_id, artifact.artifact_kind, artifact.artifact_hash
+                entry.entry_id,
+                artifact.artifact_id,
+                artifact.artifact_kind,
+                artifact.artifact_hash
             )
             .as_str(),
         )
@@ -1041,13 +1044,8 @@ mod tests {
 
     fn sample_boundary_records() -> Vec<BoundaryCaptureRecord> {
         let mut session = BoundaryCaptureSession::default_v1();
-        let context = BoundaryContext::new(
-            "trace-001",
-            "decision-001",
-            "policy-v1",
-            "orchestrator",
-            64,
-        );
+        let context =
+            BoundaryContext::new("trace-001", "decision-001", "policy-v1", "orchestrator", 64);
         let controller_override = session
             .capture_controller_override(
                 &context,
@@ -1058,13 +1056,7 @@ mod tests {
             )
             .expect("capture controller override");
         let external_policy = session
-            .capture_external_policy_read(
-                &context,
-                "extension_policy",
-                "digest-policy",
-                7,
-                None,
-            )
+            .capture_external_policy_read(&context, "extension_policy", "digest-policy", 7, None)
             .expect("capture external policy read");
         vec![controller_override, external_policy]
     }
@@ -2436,10 +2428,7 @@ mod tests {
             fallback_reason: Some("safe_mode_guard".to_string()),
             regret_summary: Some("bounded_regret<=1000".to_string()),
             scope_limits: vec!["extension_id=ext-abc".to_string()],
-            assumptions: BTreeMap::from([(
-                "policy_snapshot".to_string(),
-                "signed".to_string(),
-            )]),
+            assumptions: BTreeMap::from([("policy_snapshot".to_string(), "signed".to_string())]),
             linked_boundary_correlation_keys: boundaries
                 .iter()
                 .map(|boundary| boundary.correlation_key.clone())
@@ -2484,7 +2473,9 @@ mod tests {
             Some("high")
         );
         assert_eq!(
-            bundle.decision_semantics_log[0].boundary_correlation_keys.len(),
+            bundle.decision_semantics_log[0]
+                .boundary_correlation_keys
+                .len(),
             2
         );
         let query = bundle
@@ -2543,8 +2534,9 @@ mod tests {
         assert_eq!(
             err,
             LedgerError::SchemaValidationFailed {
-                reason: "decision semantics references missing boundary correlation key: bcorr_missing"
-                    .to_string(),
+                reason:
+                    "decision semantics references missing boundary correlation key: bcorr_missing"
+                        .to_string(),
             }
         );
     }

@@ -581,10 +581,12 @@ fn threshold_entries_exist_for_every_family_and_use_allowed_procedures() {
 
     for threshold in &fixture.supremacy_claim_contract.family_thresholds {
         assert!(threshold.minimum_confidence_millionths >= 990_000);
-        assert!(threshold
-            .allowed_procedures
-            .iter()
-            .all(|procedure| allowed.contains(procedure)));
+        assert!(
+            threshold
+                .allowed_procedures
+                .iter()
+                .all(|procedure| allowed.contains(procedure))
+        );
         if threshold.family_id == "tail_latency" {
             assert_eq!(threshold.max_tail_regression_millionths, 0);
         }
@@ -612,10 +614,12 @@ fn published_language_contract_has_forbidden_literals_and_downgrade_rules() {
     ]);
     assert_eq!(phrase_classes, expected_classes);
 
-    assert!(contract
-        .forbidden_universal_phrases
-        .iter()
-        .any(|phrase| phrase == "beats V8 across the board"));
+    assert!(
+        contract
+            .forbidden_universal_phrases
+            .iter()
+            .any(|phrase| phrase == "beats V8 across the board")
+    );
     assert_eq!(
         contract.required_qualifier_terms,
         vec![

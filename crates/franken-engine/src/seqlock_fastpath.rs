@@ -333,23 +333,4 @@ mod tests {
         assert_eq!(fast_path, cloned);
         assert_eq!(cloned.policy(), RetryBudgetPolicy::new(2, 1));
     }
-
-    #[test]
-    fn seeding_baseline_avoids_uninitialized_fallback_without_counting_write() {
-        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
-        assert!(fast_path.seed_if_uninitialized(41_u64));
-        assert!(!fast_path.seed_if_uninitialized(99_u64));
-
-        let result = fast_path.read_clone_or_else(|| 7_u64);
-
-        assert_eq!(result.value, 41);
-        assert_eq!(result.source, FastPathReadSource::FastPath);
-        assert_eq!(result.fallback_reason, None);
-
-        let telemetry = fast_path.telemetry();
-        assert_eq!(telemetry.writes, 0);
-        assert_eq!(telemetry.fast_path_reads, 1);
-        assert_eq!(telemetry.fallback_reads, 0);
-        assert_eq!(telemetry.uninitialized_fallbacks, 0);
-    }
 }

@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 
 use frankenengine_engine::evidence_ledger::{
     ArtifactRecord, CandidateAction, ChosenAction, Constraint, DecisionSemanticsAnnotations,
-    DecisionType, EvidenceEmitter, EvidenceEntry, EvidenceEntryBuilder,
-    EvidenceGraphEdgeKind, EvidenceLedgerStitchingBundle, InMemoryLedger, LedgerError,
-    SchemaVersionExt, Witness, current_schema_version,
+    DecisionType, EvidenceEmitter, EvidenceEntry, EvidenceEntryBuilder, EvidenceGraphEdgeKind,
+    EvidenceLedgerStitchingBundle, InMemoryLedger, LedgerError, SchemaVersionExt, Witness,
+    current_schema_version,
 };
 use frankenengine_engine::hindsight_boundary_capture::{
     BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
@@ -116,13 +116,7 @@ fn sample_boundary_records() -> Vec<BoundaryCaptureRecord> {
         )
         .expect("capture controller override");
     let policy = session
-        .capture_external_policy_read(
-            &context,
-            "release_policy",
-            "digest-policy",
-            11,
-            None,
-        )
+        .capture_external_policy_read(&context, "release_policy", "digest-policy", 11, None)
         .expect("capture policy read");
     vec![scheduling, override_record, policy]
 }
@@ -1340,7 +1334,10 @@ fn stitching_bundle_supports_controller_benchmark_support_and_release_queries() 
     let semantics = &bundle.decision_semantics_log[0];
     assert_eq!(semantics.boundary_correlation_keys.len(), 3);
     assert_eq!(semantics.confidence_tier.as_deref(), Some("high"));
-    assert_eq!(semantics.fallback_reason.as_deref(), Some("safe-mode-ready"));
+    assert_eq!(
+        semantics.fallback_reason.as_deref(),
+        Some("safe-mode-ready")
+    );
     assert_eq!(semantics.assumptions["benchmark_profile"], "p95");
 
     let benchmark_lineage = bundle
@@ -1378,13 +1375,15 @@ fn stitching_bundle_supports_controller_benchmark_support_and_release_queries() 
 fn stitching_bundle_rejects_artifact_boundary_gap() {
     let entry = sample_entry();
     let boundaries = sample_boundary_records();
-    let artifacts = vec![ArtifactRecord::new(
-        "support-export",
-        "support_bundle",
-        "artifacts/support-export.json",
-        "hash-support",
-    )
-    .supporting_boundary("bcorr_missing")];
+    let artifacts = vec![
+        ArtifactRecord::new(
+            "support-export",
+            "support_bundle",
+            "artifacts/support-export.json",
+            "hash-support",
+        )
+        .supporting_boundary("bcorr_missing"),
+    ];
 
     let err = EvidenceLedgerStitchingBundle::stitch(
         &entry,

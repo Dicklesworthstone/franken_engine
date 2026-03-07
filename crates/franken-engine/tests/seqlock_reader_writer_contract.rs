@@ -6,7 +6,9 @@ use frankenengine_engine::portfolio_governor::governance_audit_ledger::{
     GovernanceActor, GovernanceAuditLedger, GovernanceDecisionType, GovernanceLedgerConfig,
     GovernanceLedgerInput, GovernanceLedgerQuery, GovernanceRationale, ScorecardSnapshot,
 };
-use frankenengine_engine::seqlock_fastpath::RetryBudgetPolicy;
+use frankenengine_engine::seqlock_fastpath::{
+    FastPathReadSource, RetryBudgetPolicy, SnapshotFastPath,
+};
 
 fn sample_scorecard() -> ScorecardSnapshot {
     ScorecardSnapshot {
@@ -83,6 +85,25 @@ fn module_cache_snapshot_fastpath_contract_updates_telemetry() {
     assert_eq!(telemetry.writes, 1);
     assert!(telemetry.fast_path_reads >= 1);
     assert_eq!(telemetry.fallback_reads, 0);
+}
+
+#[test]
+fn seeded_fastpath_baseline_is_read_without_fallback_or_synthetic_write() {
+    let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+    assert!(fast_path.seed_if_uninitialized(41_u64));
+    assert!(!fast_path.seed_if_uninitialized(99_u64));
+
+    let result = fast_path.read_clone_or_else(|| 7_u64);
+
+    assert_eq!(result.value, 41);
+    assert_eq!(result.source, FastPathReadSource::FastPath);
+    assert_eq!(result.fallback_reason, None);
+
+    let telemetry = fast_path.telemetry();
+    assert_eq!(telemetry.writes, 0);
+    assert_eq!(telemetry.fast_path_reads, 1);
+    assert_eq!(telemetry.fallback_reads, 0);
+    assert_eq!(telemetry.uninitialized_fallbacks, 0);
 }
 
 #[test]

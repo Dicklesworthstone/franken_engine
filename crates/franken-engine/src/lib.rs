@@ -120,6 +120,7 @@ pub mod js_runtime_lane;
 pub mod key_attestation;
 pub mod key_derivation;
 pub mod lab_runtime;
+pub mod law_mining;
 pub mod lease_tracker;
 pub mod lowering_gap_inventory;
 pub mod lowering_pipeline;

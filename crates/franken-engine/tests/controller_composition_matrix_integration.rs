@@ -13,18 +13,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::controller_composition_matrix::ControllerOperatorGraph;
 use frankenengine_engine::controller_composition_matrix::{
+    ActuationBound, CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION,
+    CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION, CONTROLLER_REGISTRY_SCHEMA_VERSION,
+    CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION, ControllerCompositionMatrix, ControllerContract,
+    ControllerEdgeUncertaintyEntry, ControllerMetadataGap, ControllerRegistryError,
+    ControllerRegistrySnapshot, ControllerRole, ControllerTelemetrySnapshot, ControllerTimescale,
+    DeterministicFallback, EdgeUncertainty, GateConfig, GateFailureReason, GateResult, GateVerdict,
+    InteractionClass, MatrixEntry, MicrobenchConfig, MicrobenchResult, OperatorSummary,
+    SPECTRAL_EDGE_TRACE_SCHEMA_VERSION, SpectralEdgeTrace,
     build_controller_edge_uncertainty_ledger, build_controller_registry,
     build_controller_telemetry_snapshot, build_spectral_edge_traces,
     derive_controller_operator_graph, evaluate_composition_gate, render_operator_summary,
-    run_microbench, validate_controller_registry, ActuationBound, ControllerCompositionMatrix,
-    ControllerContract, ControllerEdgeUncertaintyEntry, ControllerMetadataGap,
-    ControllerRegistryError, ControllerRegistrySnapshot, ControllerRole,
-    ControllerTelemetrySnapshot, ControllerTimescale, DeterministicFallback, EdgeUncertainty,
-    GateConfig, GateFailureReason, GateResult, GateVerdict, InteractionClass, MatrixEntry,
-    MicrobenchConfig, MicrobenchResult, OperatorSummary, SpectralEdgeTrace,
-    CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION, CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION,
-    CONTROLLER_REGISTRY_SCHEMA_VERSION, CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION,
-    SPECTRAL_EDGE_TRACE_SCHEMA_VERSION,
+    run_microbench, validate_controller_registry,
 };
 use frankenengine_engine::rgc_test_harness::{
     DeterministicTestContext, EventInput, HarnessLane, HarnessLogEvent,
@@ -371,8 +371,8 @@ fn emit_controller_operator_graph_artifacts_to_dir(
     })
 }
 
-fn emit_controller_operator_graph_artifacts_if_configured(
-) -> ArtifactTestResult<Option<ControllerOperatorGraphArtifactBundle>> {
+fn emit_controller_operator_graph_artifacts_if_configured()
+-> ArtifactTestResult<Option<ControllerOperatorGraphArtifactBundle>> {
     match std::env::var("CONTROLLER_OPERATOR_GRAPH_ARTIFACT_DIR") {
         Ok(path) => emit_controller_operator_graph_artifacts_to_dir(Path::new(&path)).map(Some),
         Err(_) => Ok(None),
@@ -524,9 +524,11 @@ fn default_matrix_blocked_pairs() {
     let m = ControllerCompositionMatrix::default_matrix();
     let blocked = m.blocked_pairs();
     assert!(blocked.len() >= 2); // Router-Router, Fallback-Fallback
-    assert!(blocked
-        .iter()
-        .any(|e| e.role_a == ControllerRole::Router && e.role_b == ControllerRole::Router));
+    assert!(
+        blocked
+            .iter()
+            .any(|e| e.role_a == ControllerRole::Router && e.role_b == ControllerRole::Router)
+    );
 }
 
 #[test]
@@ -707,10 +709,12 @@ fn gate_rejects_empty_deployment() {
     let m = ControllerCompositionMatrix::default_matrix();
     let result = evaluate_composition_gate("trace-2", &[], &m, &no_bench_config());
     assert!(!result.is_approved());
-    assert!(result
-        .failures
-        .iter()
-        .any(|f| matches!(f, GateFailureReason::EmptyDeployment)));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::EmptyDeployment))
+    );
 }
 
 // ===========================================================================
@@ -726,10 +730,12 @@ fn gate_rejects_duplicate_controllers() {
     let m = ControllerCompositionMatrix::default_matrix();
     let result = evaluate_composition_gate("trace-3", &controllers, &m, &no_bench_config());
     assert!(!result.is_approved());
-    assert!(result
-        .failures
-        .iter()
-        .any(|f| matches!(f, GateFailureReason::DuplicateController { .. })));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::DuplicateController { .. }))
+    );
 }
 
 // ===========================================================================
@@ -745,10 +751,12 @@ fn gate_rejects_mutually_exclusive_roles() {
     let m = ControllerCompositionMatrix::default_matrix();
     let result = evaluate_composition_gate("trace-4", &controllers, &m, &no_bench_config());
     assert!(!result.is_approved());
-    assert!(result
-        .failures
-        .iter()
-        .any(|f| matches!(f, GateFailureReason::MutuallyExclusiveRoles { .. })));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::MutuallyExclusiveRoles { .. }))
+    );
 }
 
 // ===========================================================================
@@ -782,10 +790,12 @@ fn gate_rejects_invalid_timescale() {
     let m = ControllerCompositionMatrix::default_matrix();
     let result = evaluate_composition_gate("trace-6", &controllers, &m, &no_bench_config());
     assert!(!result.is_approved());
-    assert!(result
-        .failures
-        .iter()
-        .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. })));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. }))
+    );
 }
 
 // ===========================================================================
@@ -1083,7 +1093,7 @@ fn five_controller_deployment() {
     let result = evaluate_composition_gate("trace-big", &controllers, &m, &default_gate_config());
     assert_eq!(result.controllers_evaluated, 5);
     assert_eq!(result.pairs_evaluated, 10); // C(5,2) = 10
-                                            // Should have microbench results
+    // Should have microbench results
     assert!(result.microbench.is_some());
 }
 
@@ -1222,20 +1232,28 @@ fn controller_registry_collects_metadata_gaps_for_incomplete_contracts() {
     let registry = build_controller_registry(&[incomplete]).unwrap();
     let report = validate_controller_registry(&registry);
     assert!(!report.ship_ready);
-    assert!(report
-        .metadata_gaps
-        .iter()
-        .any(|gap: &ControllerMetadataGap| { gap.gap.to_string() == "missing_state_channels" }));
-    assert!(report
-        .metadata_gaps
-        .iter()
-        .any(|gap: &ControllerMetadataGap| { gap.gap.to_string() == "missing_actuation_bounds" }));
-    assert!(report
-        .metadata_gaps
-        .iter()
-        .any(|gap: &ControllerMetadataGap| {
-            gap.gap.to_string() == "missing_deterministic_fallback"
-        }));
+    assert!(
+        report
+            .metadata_gaps
+            .iter()
+            .any(|gap: &ControllerMetadataGap| { gap.gap.to_string() == "missing_state_channels" })
+    );
+    assert!(
+        report
+            .metadata_gaps
+            .iter()
+            .any(|gap: &ControllerMetadataGap| {
+                gap.gap.to_string() == "missing_actuation_bounds"
+            })
+    );
+    assert!(
+        report
+            .metadata_gaps
+            .iter()
+            .any(|gap: &ControllerMetadataGap| {
+                gap.gap.to_string() == "missing_deterministic_fallback"
+            })
+    );
 }
 
 #[test]
@@ -1482,10 +1500,12 @@ fn controller_operator_graph_artifact_bundle_has_expected_contents() {
     assert_eq!(manifest.scenario_id, CONTROLLER_OPERATOR_GRAPH_SCENARIO_ID);
     assert!(!manifest.ship_ready);
     assert!(manifest.metadata_gap_count >= 1);
-    assert!(manifest
-        .blocked_controller_names
-        .iter()
-        .any(|controller| controller == "custom"));
+    assert!(
+        manifest
+            .blocked_controller_names
+            .iter()
+            .any(|controller| controller == "custom")
+    );
     assert!(manifest.commands[0].contains("cargo test"));
 
     let registry: ControllerRegistrySnapshot = serde_json::from_str(
@@ -1493,10 +1513,12 @@ fn controller_operator_graph_artifact_bundle_has_expected_contents() {
     )
     .expect("registry should parse");
     assert_eq!(registry.schema_version, CONTROLLER_REGISTRY_SCHEMA_VERSION);
-    assert!(registry
-        .metadata_gaps
-        .iter()
-        .any(|gap| gap.controller_name == "custom"));
+    assert!(
+        registry
+            .metadata_gaps
+            .iter()
+            .any(|gap| gap.controller_name == "custom")
+    );
 
     let graph: ControllerOperatorGraph = serde_json::from_str(
         &fs::read_to_string(&bundle.controller_operator_graph_path)
@@ -1541,12 +1563,16 @@ fn controller_operator_graph_artifact_bundle_has_expected_contents() {
     let events: Vec<HarnessLogEvent> =
         read_jsonl_file(&bundle.events_path).expect("events should parse");
     assert_eq!(events.len(), 2);
-    assert!(events
-        .iter()
-        .any(|event| event.event == "registry_evaluated" && event.outcome == "blocked"));
-    assert!(events
-        .iter()
-        .any(|event| event.event == "artifacts_emitted" && event.outcome == "pass"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event == "registry_evaluated" && event.outcome == "blocked")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event == "artifacts_emitted" && event.outcome == "pass")
+    );
 
     let trace_ids: ControllerOperatorGraphTraceIds = serde_json::from_str(
         &fs::read_to_string(&bundle.trace_ids_path).expect("trace ids should be readable"),

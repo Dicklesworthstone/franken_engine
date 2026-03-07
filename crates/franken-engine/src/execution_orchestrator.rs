@@ -1878,10 +1878,8 @@ mod tests {
 
     #[test]
     fn estimate_ir3_schedule_cost_fail_closes_on_looping_control_flow() {
-        let mut ir3 = crate::ir_contract::Ir3Module::new(
-            ContentHash::compute(b"looping-ir3"),
-            "looping-ir3",
-        );
+        let mut ir3 =
+            crate::ir_contract::Ir3Module::new(ContentHash::compute(b"looping-ir3"), "looping-ir3");
         ir3.instructions = vec![
             crate::ir_contract::Ir3Instruction::LoadInt { dst: 0, value: 1 },
             crate::ir_contract::Ir3Instruction::Jump { target: 0 },

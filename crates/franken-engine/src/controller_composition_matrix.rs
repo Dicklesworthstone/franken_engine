@@ -21,7 +21,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{self, CanonicalValue};
-use crate::engine_object_id::{derive_id, EngineObjectId, ObjectDomain, SchemaId};
+use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
 
 // ---------------------------------------------------------------------------
@@ -1733,9 +1733,11 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let blocked = matrix.blocked_pairs();
         assert!(blocked.len() >= 2); // Router-Router and Fallback-Fallback
-        assert!(blocked
-            .iter()
-            .any(|e| e.role_a == ControllerRole::Router && e.role_b == ControllerRole::Router));
+        assert!(
+            blocked
+                .iter()
+                .any(|e| e.role_a == ControllerRole::Router && e.role_b == ControllerRole::Router)
+        );
     }
 
     #[test]
@@ -1743,12 +1745,14 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let sep = matrix.separation_required_pairs();
         assert!(sep.len() >= 2);
-        assert!(sep
-            .iter()
-            .any(|e| e.interaction == InteractionClass::ProducerConsumer));
-        assert!(sep
-            .iter()
-            .any(|e| e.interaction == InteractionClass::WriteConflict));
+        assert!(
+            sep.iter()
+                .any(|e| e.interaction == InteractionClass::ProducerConsumer)
+        );
+        assert!(
+            sep.iter()
+                .any(|e| e.interaction == InteractionClass::WriteConflict)
+        );
     }
 
     #[test]
@@ -1943,10 +1947,12 @@ mod tests {
         let config = GateConfig::default();
         let result = evaluate_composition_gate("trace-empty", &[], &matrix, &config);
         assert!(!result.is_approved());
-        assert!(result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::EmptyDeployment)));
+        assert!(
+            result
+                .failures
+                .iter()
+                .any(|f| matches!(f, GateFailureReason::EmptyDeployment))
+        );
     }
 
     #[test]
@@ -2000,10 +2006,12 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-sep", &controllers, &matrix, &config);
         assert!(!result.is_approved());
-        assert!(result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::InsufficientTimescaleSeparation { .. })));
+        assert!(
+            result
+                .failures
+                .iter()
+                .any(|f| matches!(f, GateFailureReason::InsufficientTimescaleSeparation { .. }))
+        );
     }
 
     #[test]
@@ -2032,10 +2040,12 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-bad", &controllers, &matrix, &config);
         assert!(!result.is_approved());
-        assert!(result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. })));
+        assert!(
+            result
+                .failures
+                .iter()
+                .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. }))
+        );
     }
 
     #[test]
@@ -2063,10 +2073,12 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-dup-name", &controllers, &matrix, &config);
         assert!(!result.is_approved());
-        assert!(result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::DuplicateController { .. })));
+        assert!(
+            result
+                .failures
+                .iter()
+                .any(|f| matches!(f, GateFailureReason::DuplicateController { .. }))
+        );
     }
 
     #[test]
@@ -2101,10 +2113,12 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-mbf", &controllers, &matrix, &config);
         assert!(!result.is_approved());
-        assert!(result
-            .failures
-            .iter()
-            .any(|f| matches!(f, GateFailureReason::MicrobenchBudgetExceeded { .. })));
+        assert!(
+            result
+                .failures
+                .iter()
+                .any(|f| matches!(f, GateFailureReason::MicrobenchBudgetExceeded { .. }))
+        );
     }
 
     #[test]
@@ -2494,9 +2508,11 @@ mod tests {
             entries: Vec::new(),
             schema_version: "1.0.0".to_string(),
         };
-        assert!(matrix
-            .lookup(ControllerRole::Router, ControllerRole::Monitor)
-            .is_none());
+        assert!(
+            matrix
+                .lookup(ControllerRole::Router, ControllerRole::Monitor)
+                .is_none()
+        );
     }
 
     #[test]

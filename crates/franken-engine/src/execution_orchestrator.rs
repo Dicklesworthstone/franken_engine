@@ -841,6 +841,8 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::HostCall { .. } => "host_call",
             crate::ir_contract::Ir3Instruction::GetProperty { .. } => "get_property",
             crate::ir_contract::Ir3Instruction::SetProperty { .. } => "set_property",
+            crate::ir_contract::Ir3Instruction::NewObject { .. } => "new_object",
+            crate::ir_contract::Ir3Instruction::NewArray { .. } => "new_array",
             crate::ir_contract::Ir3Instruction::Halt => "halt",
         }
     }

@@ -9,16 +9,23 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const BEAD_ID: &str = "bd-1lsy.7.21.1";
+pub const BEAD_ID: &str = "bd-1lsy.7.21.2";
+pub const PREDECESSOR_BEAD_ID: &str = "bd-1lsy.7.21.1";
 pub const COMPONENT: &str = "seqlock_candidate_inventory";
 pub const INVENTORY_SCHEMA_VERSION: &str = "franken-engine.rgc-seqlock-candidate-inventory.v1";
 pub const RETRY_SAFETY_SCHEMA_VERSION: &str = "franken-engine.rgc-seqlock-retry-safety-matrix.v1";
 pub const BASELINE_COMPARATOR_SCHEMA_VERSION: &str =
     "franken-engine.rgc-seqlock-baseline-comparator.v1";
+pub const READER_WRITER_CONTRACT_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-seqlock-reader-writer-contract.v1";
+pub const RETRY_BUDGET_POLICY_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-seqlock-retry-budget-policy.v1";
+pub const INCUMBENT_FALLBACK_MATRIX_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-seqlock-incumbent-fallback-matrix.v1";
 pub const TRACE_IDS_SCHEMA_VERSION: &str = "franken-engine.rgc-seqlock-trace-ids.v1";
 pub const RUN_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.rgc-seqlock-run-manifest.v1";
 #[cfg(test)]
-pub const CONTRACT_SCHEMA_VERSION: &str = "franken-engine.rgc-seqlock-candidate-contract.v1";
+pub const CONTRACT_SCHEMA_VERSION: &str = "franken-engine.rgc-seqlock-reader-writer-bundle.v1";
 
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -180,6 +187,95 @@ pub struct SnapshotBaselineComparatorArtifact {
     pub rows: Vec<SnapshotBaselineComparatorRow>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FallbackReason {
+    UnsupportedCandidate,
+    WriterActive,
+    RetryBudgetExhausted,
+    ExternalJoinBoundary,
+    ImmutableValueObject,
+    HotPathWritePressure,
+    NonRetrySafeRead,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadResolution {
+    Optimistic,
+    IncumbentFallback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeqlockReaderWriterContractRow {
+    pub candidate_id: String,
+    pub disposition: CandidateDisposition,
+    pub optimistic_reads_enabled: bool,
+    pub writer_exclusive: bool,
+    pub reader_retry_safe: bool,
+    pub publication_boundary: String,
+    pub fallback_target: String,
+    pub telemetry_fields: Vec<String>,
+    pub contract_notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeqlockReaderWriterContractArtifact {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub predecessor_bead_id: String,
+    pub component: String,
+    pub generated_at_utc: String,
+    pub contract_hash: String,
+    pub rows: Vec<SeqlockReaderWriterContractRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryBudgetPolicyRow {
+    pub candidate_id: String,
+    pub disposition: CandidateDisposition,
+    pub max_retries: u32,
+    pub fallback_target: String,
+    pub fallback_reason: FallbackReason,
+    pub write_pressure_limit: WriteProfile,
+    pub policy_rationale: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryBudgetPolicyArtifact {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub predecessor_bead_id: String,
+    pub component: String,
+    pub generated_at_utc: String,
+    pub policy_hash: String,
+    pub rows: Vec<RetryBudgetPolicyRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncumbentFallbackMatrixRow {
+    pub candidate_id: String,
+    pub disposition: CandidateDisposition,
+    pub baseline_path: String,
+    pub incumbent_baseline: String,
+    pub immediate_fallback: bool,
+    pub fallback_target: String,
+    pub fallback_reason: FallbackReason,
+    pub fallback_conditions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncumbentFallbackMatrixArtifact {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub predecessor_bead_id: String,
+    pub component: String,
+    pub generated_at_utc: String,
+    pub matrix_hash: String,
+    pub rows: Vec<IncumbentFallbackMatrixRow>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceIdsArtifact {
     pub schema_version: String,
@@ -201,6 +297,54 @@ pub struct StructuredLogEvent {
     pub detail: String,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimulatedSeqlock<T> {
+    current_value: T,
+    sequence: u64,
+    writer_active: bool,
+    fallback_reads: u64,
+    write_pressure_violations: u64,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadInterference<T> {
+    Stable,
+    WriterActive,
+    Publish(T),
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadOutcome<T> {
+    pub value: T,
+    pub resolution: ReadResolution,
+    pub retries: u32,
+    pub fallback_reason: Option<FallbackReason>,
+    pub write_pressure_violations: u64,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeqlockContractError {
+    WriterAlreadyActive,
+    WriterNotActive,
+}
+
+#[cfg(test)]
+impl std::fmt::Display for SeqlockContractError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WriterAlreadyActive => f.write_str("writer already active"),
+            Self::WriterNotActive => f.write_str("writer not active"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl std::error::Error for SeqlockContractError {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactContext {
     pub artifact_dir: PathBuf,
@@ -219,13 +363,127 @@ impl ArtifactContext {
         Self {
             artifact_dir: artifact_dir.into(),
             run_id: format!("run-{}-{}", COMPONENT, Utc::now().format("%Y%m%dT%H%M%SZ")),
-            trace_id: "trace.rgc.621a".to_string(),
-            decision_id: "decision.rgc.621a".to_string(),
-            policy_id: "policy.rgc.621a".to_string(),
+            trace_id: "trace.rgc.621b".to_string(),
+            decision_id: "decision.rgc.621b".to_string(),
+            policy_id: "policy.rgc.621b".to_string(),
             generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
             source_commit: "unknown".to_string(),
             toolchain: std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string()),
             command_invocation: "cargo run -p frankenengine-engine --bin franken_seqlock_candidate_inventory -- --artifact-dir <path>".to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl<T: Clone + Eq> SimulatedSeqlock<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            current_value: value,
+            sequence: 0,
+            writer_active: false,
+            fallback_reads: 0,
+            write_pressure_violations: 0,
+        }
+    }
+
+    pub fn begin_write(&mut self) -> Result<(), SeqlockContractError> {
+        if self.writer_active {
+            return Err(SeqlockContractError::WriterAlreadyActive);
+        }
+        self.writer_active = true;
+        self.sequence = self.sequence.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn commit_write(&mut self, value: T) -> Result<(), SeqlockContractError> {
+        if !self.writer_active {
+            return Err(SeqlockContractError::WriterNotActive);
+        }
+        self.current_value = value;
+        self.writer_active = false;
+        self.sequence = self.sequence.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn read_with_interference(
+        &mut self,
+        policy: &RetryBudgetPolicyRow,
+        plan: &[ReadInterference<T>],
+    ) -> ReadOutcome<T> {
+        if policy.max_retries == 0 || !matches!(policy.disposition, CandidateDisposition::Accept) {
+            return self.fallback_outcome(policy.fallback_reason, 0);
+        }
+
+        let mut retries = 0u32;
+        let mut violations = 0u64;
+        for step in plan {
+            let start_sequence = self.sequence;
+            let observed = self.current_value.clone();
+            match step {
+                ReadInterference::Stable => {}
+                ReadInterference::WriterActive => {
+                    violations = violations.saturating_add(1);
+                    if retries >= policy.max_retries {
+                        self.write_pressure_violations =
+                            self.write_pressure_violations.saturating_add(violations);
+                        return self
+                            .fallback_outcome(FallbackReason::RetryBudgetExhausted, retries);
+                    }
+                    retries = retries.saturating_add(1);
+                    continue;
+                }
+                ReadInterference::Publish(next_value) => {
+                    let _ = self.begin_write();
+                    let _ = self.commit_write(next_value.clone());
+                }
+            }
+
+            if start_sequence == self.sequence {
+                self.write_pressure_violations =
+                    self.write_pressure_violations.saturating_add(violations);
+                return ReadOutcome {
+                    value: observed,
+                    resolution: ReadResolution::Optimistic,
+                    retries,
+                    fallback_reason: None,
+                    write_pressure_violations: violations,
+                };
+            }
+
+            if retries >= policy.max_retries {
+                self.write_pressure_violations =
+                    self.write_pressure_violations.saturating_add(violations);
+                return self.fallback_outcome(FallbackReason::RetryBudgetExhausted, retries);
+            }
+            retries = retries.saturating_add(1);
+        }
+
+        self.write_pressure_violations = self.write_pressure_violations.saturating_add(violations);
+        ReadOutcome {
+            value: self.current_value.clone(),
+            resolution: ReadResolution::Optimistic,
+            retries,
+            fallback_reason: None,
+            write_pressure_violations: violations,
+        }
+    }
+
+    pub fn fallback_reads(&self) -> u64 {
+        self.fallback_reads
+    }
+
+    pub fn write_pressure_violations(&self) -> u64 {
+        self.write_pressure_violations
+    }
+
+    fn fallback_outcome(&mut self, reason: FallbackReason, retries: u32) -> ReadOutcome<T> {
+        self.fallback_reads = self.fallback_reads.saturating_add(1);
+        ReadOutcome {
+            value: self.current_value.clone(),
+            resolution: ReadResolution::IncumbentFallback,
+            retries,
+            fallback_reason: Some(reason),
+            write_pressure_violations: self.write_pressure_violations,
         }
     }
 }
@@ -242,6 +500,9 @@ pub struct BundleWriteReport {
     pub inventory: SeqlockCandidateInventoryArtifact,
     pub retry_safety: RetrySafetyMatrixArtifact,
     pub baseline_comparator: SnapshotBaselineComparatorArtifact,
+    pub reader_writer_contract: SeqlockReaderWriterContractArtifact,
+    pub retry_budget_policy: RetryBudgetPolicyArtifact,
+    pub incumbent_fallback_matrix: IncumbentFallbackMatrixArtifact,
     pub trace_ids_path: PathBuf,
     pub written_files: BTreeMap<String, String>,
 }
@@ -267,6 +528,9 @@ struct EvaluatedArtifacts {
     inventory: SeqlockCandidateInventoryArtifact,
     retry_safety: RetrySafetyMatrixArtifact,
     baseline_comparator: SnapshotBaselineComparatorArtifact,
+    reader_writer_contract: SeqlockReaderWriterContractArtifact,
+    retry_budget_policy: RetryBudgetPolicyArtifact,
+    incumbent_fallback_matrix: IncumbentFallbackMatrixArtifact,
     trace_ids: TraceIdsArtifact,
     logs: Vec<StructuredLogEvent>,
 }
@@ -349,6 +613,7 @@ pub fn render_summary(inventory: &SeqlockCandidateInventoryArtifact) -> String {
         String::new(),
         format!("- bead_id: `{}`", BEAD_ID),
         format!("- component: `{}`", COMPONENT),
+        format!("- predecessor_bead_id: `{}`", PREDECESSOR_BEAD_ID),
         format!("- generated_at_utc: `{}`", inventory.generated_at_utc),
         format!("- accepted: `{}`", inventory.counts.accept),
         format!("- conditional: `{}`", inventory.counts.conditional),
@@ -435,6 +700,10 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> EvaluatedArtifacts {
         comparator_hash,
         rows: comparator_rows,
     };
+    let reader_writer_contract = build_reader_writer_contract_artifact(context, &inventory);
+    let retry_budget_policy = build_retry_budget_policy_artifact(context, &inventory);
+    let incumbent_fallback_matrix =
+        build_incumbent_fallback_matrix_artifact(context, &inventory, &retry_budget_policy);
 
     let trace_ids = TraceIdsArtifact {
         schema_version: TRACE_IDS_SCHEMA_VERSION.to_string(),
@@ -462,6 +731,81 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> EvaluatedArtifacts {
             detail: candidate.classification_rationale.join("; "),
         })
         .collect::<Vec<_>>();
+    logs.extend(
+        reader_writer_contract
+            .rows
+            .iter()
+            .map(|row| StructuredLogEvent {
+                trace_id: context.trace_id.clone(),
+                decision_id: context.decision_id.clone(),
+                policy_id: context.policy_id.clone(),
+                component: COMPONENT.to_string(),
+                event: "reader_writer_contract_derived".to_string(),
+                outcome: if row.optimistic_reads_enabled {
+                    "optimistic_enabled".to_string()
+                } else {
+                    "fallback_only".to_string()
+                },
+                error_code: None,
+                candidate_id: Some(row.candidate_id.clone()),
+                detail: format!(
+                    "writer_exclusive={} reader_retry_safe={} telemetry_fields={}",
+                    row.writer_exclusive,
+                    row.reader_retry_safe,
+                    row.telemetry_fields.join(","),
+                ),
+            }),
+    );
+    logs.extend(
+        retry_budget_policy
+            .rows
+            .iter()
+            .map(|row| StructuredLogEvent {
+                trace_id: context.trace_id.clone(),
+                decision_id: context.decision_id.clone(),
+                policy_id: context.policy_id.clone(),
+                component: COMPONENT.to_string(),
+                event: "retry_budget_policy_derived".to_string(),
+                outcome: if row.max_retries > 0 {
+                    "bounded_retry".to_string()
+                } else {
+                    "immediate_fallback".to_string()
+                },
+                error_code: None,
+                candidate_id: Some(row.candidate_id.clone()),
+                detail: format!(
+                    "max_retries={} fallback_reason={} write_pressure_limit={}",
+                    row.max_retries,
+                    fallback_reason_label(row.fallback_reason),
+                    write_profile_label(row.write_pressure_limit),
+                ),
+            }),
+    );
+    logs.extend(
+        incumbent_fallback_matrix
+            .rows
+            .iter()
+            .map(|row| StructuredLogEvent {
+                trace_id: context.trace_id.clone(),
+                decision_id: context.decision_id.clone(),
+                policy_id: context.policy_id.clone(),
+                component: COMPONENT.to_string(),
+                event: "incumbent_fallback_matrix_derived".to_string(),
+                outcome: if row.immediate_fallback {
+                    "fallback_immediate".to_string()
+                } else {
+                    "fallback_after_retry_budget".to_string()
+                },
+                error_code: None,
+                candidate_id: Some(row.candidate_id.clone()),
+                detail: format!(
+                    "fallback_target={} fallback_reason={} conditions={}",
+                    row.fallback_target,
+                    fallback_reason_label(row.fallback_reason),
+                    row.fallback_conditions.join("; "),
+                ),
+            }),
+    );
     logs.push(StructuredLogEvent {
         trace_id: context.trace_id.clone(),
         decision_id: context.decision_id.clone(),
@@ -476,6 +820,35 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> EvaluatedArtifacts {
             inventory.counts.accept, inventory.counts.conditional, inventory.counts.reject
         ),
     });
+    logs.push(StructuredLogEvent {
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        component: COMPONENT.to_string(),
+        event: "operator_telemetry_summary".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        candidate_id: None,
+        detail: format!(
+            "optimistic_candidates={} immediate_fallback_candidates={} max_retry_budget={} telemetry_fields=retry_count,fallback_count,write_pressure_violations,read_resolution,trace_id,run_id",
+            reader_writer_contract
+                .rows
+                .iter()
+                .filter(|row| row.optimistic_reads_enabled)
+                .count(),
+            incumbent_fallback_matrix
+                .rows
+                .iter()
+                .filter(|row| row.immediate_fallback)
+                .count(),
+            retry_budget_policy
+                .rows
+                .iter()
+                .map(|row| row.max_retries)
+                .max()
+                .unwrap_or(0),
+        ),
+    });
     logs.sort_by(|left, right| {
         left.event
             .cmp(&right.event)
@@ -487,8 +860,270 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> EvaluatedArtifacts {
         inventory,
         retry_safety,
         baseline_comparator,
+        reader_writer_contract,
+        retry_budget_policy,
+        incumbent_fallback_matrix,
         trace_ids,
         logs,
+    }
+}
+
+fn build_reader_writer_contract_artifact(
+    context: &ArtifactContext,
+    inventory: &SeqlockCandidateInventoryArtifact,
+) -> SeqlockReaderWriterContractArtifact {
+    let mut rows = inventory
+        .candidates
+        .iter()
+        .map(build_reader_writer_contract_row)
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| left.candidate_id.cmp(&right.candidate_id));
+    let contract_hash = digest_json(&serde_json::json!({ "rows": &rows }));
+
+    SeqlockReaderWriterContractArtifact {
+        schema_version: READER_WRITER_CONTRACT_SCHEMA_VERSION.to_string(),
+        bead_id: BEAD_ID.to_string(),
+        predecessor_bead_id: PREDECESSOR_BEAD_ID.to_string(),
+        component: COMPONENT.to_string(),
+        generated_at_utc: context.generated_at_utc.clone(),
+        contract_hash,
+        rows,
+    }
+}
+
+fn build_retry_budget_policy_artifact(
+    context: &ArtifactContext,
+    inventory: &SeqlockCandidateInventoryArtifact,
+) -> RetryBudgetPolicyArtifact {
+    let mut rows = inventory
+        .candidates
+        .iter()
+        .map(build_retry_budget_policy_row)
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| left.candidate_id.cmp(&right.candidate_id));
+    let policy_hash = digest_json(&serde_json::json!({ "rows": &rows }));
+
+    RetryBudgetPolicyArtifact {
+        schema_version: RETRY_BUDGET_POLICY_SCHEMA_VERSION.to_string(),
+        bead_id: BEAD_ID.to_string(),
+        predecessor_bead_id: PREDECESSOR_BEAD_ID.to_string(),
+        component: COMPONENT.to_string(),
+        generated_at_utc: context.generated_at_utc.clone(),
+        policy_hash,
+        rows,
+    }
+}
+
+fn build_incumbent_fallback_matrix_artifact(
+    context: &ArtifactContext,
+    inventory: &SeqlockCandidateInventoryArtifact,
+    retry_budget_policy: &RetryBudgetPolicyArtifact,
+) -> IncumbentFallbackMatrixArtifact {
+    let policy_by_candidate = retry_budget_policy
+        .rows
+        .iter()
+        .map(|row| (row.candidate_id.as_str(), row))
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = inventory
+        .candidates
+        .iter()
+        .map(|candidate| {
+            let policy = policy_by_candidate
+                .get(candidate.candidate_id.as_str())
+                .expect("retry budget policy row must exist for every inventory candidate");
+            build_incumbent_fallback_matrix_row(candidate, policy)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| left.candidate_id.cmp(&right.candidate_id));
+    let matrix_hash = digest_json(&serde_json::json!({ "rows": &rows }));
+
+    IncumbentFallbackMatrixArtifact {
+        schema_version: INCUMBENT_FALLBACK_MATRIX_SCHEMA_VERSION.to_string(),
+        bead_id: BEAD_ID.to_string(),
+        predecessor_bead_id: PREDECESSOR_BEAD_ID.to_string(),
+        component: COMPONENT.to_string(),
+        generated_at_utc: context.generated_at_utc.clone(),
+        matrix_hash,
+        rows,
+    }
+}
+
+fn build_reader_writer_contract_row(
+    candidate: &CandidateInventoryEntry,
+) -> SeqlockReaderWriterContractRow {
+    let optimistic_reads_enabled = candidate.disposition == CandidateDisposition::Accept;
+    let mut contract_notes = candidate.classification_rationale.clone();
+    contract_notes.extend(candidate.notes.clone());
+    if optimistic_reads_enabled {
+        contract_notes.push(
+            "require a single exclusive writer to publish the full snapshot boundary".to_string(),
+        );
+        contract_notes.push(format!(
+            "fallback remains `{}` if retries exceed the budget or write pressure becomes hostile",
+            candidate.incumbent_baseline
+        ));
+    } else {
+        contract_notes.push(format!(
+            "optimistic readers stay disabled and `{}` remains authoritative",
+            candidate.incumbent_baseline
+        ));
+    }
+
+    SeqlockReaderWriterContractRow {
+        candidate_id: candidate.candidate_id.clone(),
+        disposition: candidate.disposition,
+        optimistic_reads_enabled,
+        writer_exclusive: optimistic_reads_enabled,
+        reader_retry_safe: candidate.read_side_effect_free && candidate.retry_safe_read,
+        publication_boundary: publication_boundary(candidate),
+        fallback_target: candidate.incumbent_baseline.clone(),
+        telemetry_fields: vec![
+            "retry_count".to_string(),
+            "fallback_count".to_string(),
+            "write_pressure_violations".to_string(),
+            "read_resolution".to_string(),
+            "trace_id".to_string(),
+            "run_id".to_string(),
+        ],
+        contract_notes,
+    }
+}
+
+fn build_retry_budget_policy_row(candidate: &CandidateInventoryEntry) -> RetryBudgetPolicyRow {
+    let max_retries = retry_budget_for(candidate);
+    let fallback_reason = fallback_reason_for(candidate);
+    let mut policy_rationale = candidate.classification_rationale.clone();
+    match candidate.disposition {
+        CandidateDisposition::Accept => policy_rationale.push(format!(
+            "allow up to {max_retries} optimistic retries before falling back to `{}`",
+            candidate.incumbent_baseline
+        )),
+        CandidateDisposition::Conditional => policy_rationale.push(format!(
+            "set retry budget to zero until `{}` is promoted behind one versioned publication boundary",
+            candidate.surface_name
+        )),
+        CandidateDisposition::Reject => policy_rationale.push(format!(
+            "set retry budget to zero because `{}` should keep the incumbent path",
+            candidate.surface_name
+        )),
+    }
+    policy_rationale.push(format!(
+        "treat `{}` write pressure as the retry ceiling for this surface",
+        write_profile_label(candidate.write_profile)
+    ));
+
+    RetryBudgetPolicyRow {
+        candidate_id: candidate.candidate_id.clone(),
+        disposition: candidate.disposition,
+        max_retries,
+        fallback_target: candidate.incumbent_baseline.clone(),
+        fallback_reason,
+        write_pressure_limit: candidate.write_profile,
+        policy_rationale,
+    }
+}
+
+fn build_incumbent_fallback_matrix_row(
+    candidate: &CandidateInventoryEntry,
+    policy: &RetryBudgetPolicyRow,
+) -> IncumbentFallbackMatrixRow {
+    let mut fallback_conditions = candidate.exact_fallback_conditions.clone();
+    if policy.max_retries > 0 {
+        fallback_conditions.push(format!(
+            "fallback after {} retries if the single writer keeps the publication boundary unstable",
+            policy.max_retries
+        ));
+    } else {
+        fallback_conditions.push(format!(
+            "fallback immediately because the retry budget is zero and `{}` stays authoritative",
+            candidate.incumbent_baseline
+        ));
+    }
+
+    IncumbentFallbackMatrixRow {
+        candidate_id: candidate.candidate_id.clone(),
+        disposition: candidate.disposition,
+        baseline_path: candidate.baseline_path.clone(),
+        incumbent_baseline: candidate.incumbent_baseline.clone(),
+        immediate_fallback: policy.max_retries == 0,
+        fallback_target: candidate.incumbent_baseline.clone(),
+        fallback_reason: policy.fallback_reason,
+        fallback_conditions,
+    }
+}
+
+fn retry_budget_for(candidate: &CandidateInventoryEntry) -> u32 {
+    if candidate.disposition != CandidateDisposition::Accept {
+        return 0;
+    }
+
+    match candidate.write_profile {
+        WriteProfile::Rare => 3,
+        WriteProfile::Moderate => 2,
+        WriteProfile::Bursty => 1,
+        WriteProfile::HotPath => 0,
+    }
+}
+
+fn fallback_reason_for(candidate: &CandidateInventoryEntry) -> FallbackReason {
+    if candidate.disposition == CandidateDisposition::Accept {
+        return FallbackReason::RetryBudgetExhausted;
+    }
+
+    if candidate.requires_external_input_join {
+        return FallbackReason::ExternalJoinBoundary;
+    }
+
+    if candidate.immutable_value_object {
+        return FallbackReason::ImmutableValueObject;
+    }
+
+    if !candidate.read_side_effect_free || !candidate.retry_safe_read {
+        return FallbackReason::NonRetrySafeRead;
+    }
+
+    if candidate.write_profile == WriteProfile::HotPath {
+        return FallbackReason::HotPathWritePressure;
+    }
+
+    FallbackReason::UnsupportedCandidate
+}
+
+fn publication_boundary(candidate: &CandidateInventoryEntry) -> String {
+    if candidate.immutable_value_object {
+        return "immutable value publication via pointer or ownership handoff".to_string();
+    }
+
+    if candidate.requires_external_input_join {
+        return "versioned publication must span the local snapshot and its external signal join"
+            .to_string();
+    }
+
+    if candidate.requires_atomic_multi_structure_view {
+        return "single writer sequence gate over the full multi-structure snapshot".to_string();
+    }
+
+    "single writer sequence gate over one snapshot publication boundary".to_string()
+}
+
+fn fallback_reason_label(reason: FallbackReason) -> &'static str {
+    match reason {
+        FallbackReason::UnsupportedCandidate => "unsupported_candidate",
+        FallbackReason::WriterActive => "writer_active",
+        FallbackReason::RetryBudgetExhausted => "retry_budget_exhausted",
+        FallbackReason::ExternalJoinBoundary => "external_join_boundary",
+        FallbackReason::ImmutableValueObject => "immutable_value_object",
+        FallbackReason::HotPathWritePressure => "hot_path_write_pressure",
+        FallbackReason::NonRetrySafeRead => "non_retry_safe_read",
+    }
+}
+
+fn write_profile_label(profile: WriteProfile) -> &'static str {
+    match profile {
+        WriteProfile::Rare => "rare",
+        WriteProfile::Moderate => "moderate",
+        WriteProfile::Bursty => "bursty",
+        WriteProfile::HotPath => "hot_path",
     }
 }
 
@@ -504,6 +1139,14 @@ fn write_bundle(
         context.command_invocation.clone(),
         format!(
             "jq '.counts' {}/seqlock_candidate_inventory.json",
+            artifact_dir_display
+        ),
+        format!(
+            "jq '.rows[] | {{candidate_id,max_retries,fallback_reason}}' {}/retry_budget_policy.json",
+            artifact_dir_display
+        ),
+        format!(
+            "jq '.rows[] | {{candidate_id,optimistic_reads_enabled,writer_exclusive}}' {}/seqlock_reader_writer_contract.json",
             artifact_dir_display
         ),
         format!("cat {}/run_manifest.json", artifact_dir_display),
@@ -542,6 +1185,15 @@ fn write_bundle(
             "snapshot_baseline_comparator.json",
             &evaluated.baseline_comparator,
         ),
+        FileArtifact::json(
+            "seqlock_reader_writer_contract.json",
+            &evaluated.reader_writer_contract,
+        ),
+        FileArtifact::json("retry_budget_policy.json", &evaluated.retry_budget_policy),
+        FileArtifact::json(
+            "incumbent_fallback_matrix.json",
+            &evaluated.incumbent_fallback_matrix,
+        ),
         FileArtifact::json("trace_ids.json", &evaluated.trace_ids),
         FileArtifact::json(
             "run_manifest.json",
@@ -559,6 +1211,9 @@ fn write_bundle(
                 "inventory_hash": &evaluated.inventory.inventory_hash,
                 "retry_safety_hash": &evaluated.retry_safety.matrix_hash,
                 "baseline_comparator_hash": &evaluated.baseline_comparator.comparator_hash,
+                "reader_writer_contract_hash": &evaluated.reader_writer_contract.contract_hash,
+                "retry_budget_policy_hash": &evaluated.retry_budget_policy.policy_hash,
+                "incumbent_fallback_matrix_hash": &evaluated.incumbent_fallback_matrix.matrix_hash,
                 "artifacts": required_artifact_names(),
                 "operator_verification": commands.clone(),
             }),
@@ -622,8 +1277,8 @@ fn write_bundle(
         "generated_at_utc": &context.generated_at_utc,
         "claim": {
             "claim_id": BEAD_ID,
-            "class": "inventory",
-            "statement": "Inventory retry-safe read-mostly runtime and policy surfaces for seqlock adoption.",
+            "class": "reader_writer_contract",
+            "statement": "Deterministic seqlock reader/writer contracts, retry budgets, and incumbent fallback rules for candidate snapshot surfaces.",
             "status": "observed",
             "bundle_root": &artifact_dir_display,
         },
@@ -637,7 +1292,7 @@ fn write_bundle(
             "decision_id": &context.decision_id,
             "policy_id": &context.policy_id,
             "replay_pointer": format!("file://{artifact_dir_display}/commands.txt"),
-            "evidence_pointer": format!("file://{artifact_dir_display}/seqlock_candidate_inventory.json"),
+            "evidence_pointer": format!("file://{artifact_dir_display}/seqlock_reader_writer_contract.json"),
         },
         "artifacts": &manifest_artifacts,
     }))
@@ -667,6 +1322,9 @@ fn write_bundle(
         inventory: evaluated.inventory.clone(),
         retry_safety: evaluated.retry_safety.clone(),
         baseline_comparator: evaluated.baseline_comparator.clone(),
+        reader_writer_contract: evaluated.reader_writer_contract.clone(),
+        retry_budget_policy: evaluated.retry_budget_policy.clone(),
+        incumbent_fallback_matrix: evaluated.incumbent_fallback_matrix.clone(),
         trace_ids_path: context.artifact_dir.join("trace_ids.json"),
         written_files,
     })
@@ -805,11 +1463,14 @@ fn required_artifact_names() -> Vec<String> {
         "commands.txt".to_string(),
         "env.json".to_string(),
         "events.jsonl".to_string(),
+        "incumbent_fallback_matrix.json".to_string(),
         "manifest.json".to_string(),
         "repro.lock".to_string(),
+        "retry_budget_policy.json".to_string(),
         "retry_safety_matrix.json".to_string(),
         "run_manifest.json".to_string(),
         "seqlock_candidate_inventory.json".to_string(),
+        "seqlock_reader_writer_contract.json".to_string(),
         "snapshot_baseline_comparator.json".to_string(),
         "summary.md".to_string(),
         "trace_ids.json".to_string(),
@@ -1223,6 +1884,145 @@ mod tests {
                 .any(|artifact| artifact == "manifest.json")
         );
         assert_eq!(fixture.candidate_expectations.len(), 9);
+    }
+
+    #[test]
+    fn evaluated_artifacts_include_reader_writer_bundle_rows() {
+        let artifact_dir = temp_dir("evaluated");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        let evaluated = evaluate_default_artifacts(&context);
+
+        assert_eq!(evaluated.reader_writer_contract.rows.len(), 9);
+        assert_eq!(evaluated.retry_budget_policy.rows.len(), 9);
+        assert_eq!(evaluated.incumbent_fallback_matrix.rows.len(), 9);
+
+        let module_cache_contract = evaluated
+            .reader_writer_contract
+            .rows
+            .iter()
+            .find(|row| row.candidate_id == "module-cache-snapshot")
+            .expect("module-cache contract row");
+        assert!(module_cache_contract.optimistic_reads_enabled);
+        assert!(module_cache_contract.writer_exclusive);
+        assert!(module_cache_contract.reader_retry_safe);
+        assert!(
+            module_cache_contract
+                .telemetry_fields
+                .iter()
+                .any(|field| field == "write_pressure_violations")
+        );
+
+        let slot_registry_policy = evaluated
+            .retry_budget_policy
+            .rows
+            .iter()
+            .find(|row| row.candidate_id == "slot-registry-replacement-progress")
+            .expect("slot-registry policy row");
+        assert_eq!(slot_registry_policy.max_retries, 0);
+        assert_eq!(
+            slot_registry_policy.fallback_reason,
+            FallbackReason::ExternalJoinBoundary
+        );
+
+        let slot_registry_fallback = evaluated
+            .incumbent_fallback_matrix
+            .rows
+            .iter()
+            .find(|row| row.candidate_id == "slot-registry-replacement-progress")
+            .expect("slot-registry fallback row");
+        assert!(slot_registry_fallback.immediate_fallback);
+        assert_eq!(
+            slot_registry_fallback.fallback_reason,
+            FallbackReason::ExternalJoinBoundary
+        );
+
+        let _ = fs::remove_dir_all(&artifact_dir);
+    }
+
+    fn accepted_policy(max_retries: u32) -> RetryBudgetPolicyRow {
+        RetryBudgetPolicyRow {
+            candidate_id: "module-cache-snapshot".to_string(),
+            disposition: CandidateDisposition::Accept,
+            max_retries,
+            fallback_target: "full snapshot clone from owner-thread cache state".to_string(),
+            fallback_reason: FallbackReason::RetryBudgetExhausted,
+            write_pressure_limit: WriteProfile::Moderate,
+            policy_rationale: vec!["test policy".to_string()],
+        }
+    }
+
+    #[test]
+    fn simulated_seqlock_enforces_writer_exclusivity() {
+        let mut seqlock = SimulatedSeqlock::new("v1");
+        seqlock.begin_write().expect("first writer should acquire");
+        assert_eq!(
+            seqlock.begin_write(),
+            Err(SeqlockContractError::WriterAlreadyActive)
+        );
+        seqlock
+            .commit_write("v2")
+            .expect("active writer should be able to publish");
+        assert_eq!(
+            seqlock.commit_write("v3"),
+            Err(SeqlockContractError::WriterNotActive)
+        );
+    }
+
+    #[test]
+    fn simulated_seqlock_read_plan_is_deterministic() {
+        let policy = accepted_policy(3);
+        let plan = [
+            ReadInterference::WriterActive,
+            ReadInterference::Publish("v2"),
+            ReadInterference::Stable,
+        ];
+
+        let mut left = SimulatedSeqlock::new("v1");
+        let mut right = SimulatedSeqlock::new("v1");
+        let left_outcome = left.read_with_interference(&policy, &plan);
+        let right_outcome = right.read_with_interference(&policy, &plan);
+
+        assert_eq!(left_outcome, right_outcome);
+        assert_eq!(left_outcome.value, "v2");
+        assert_eq!(left_outcome.resolution, ReadResolution::Optimistic);
+        assert_eq!(left_outcome.retries, 2);
+    }
+
+    #[test]
+    fn simulated_seqlock_falls_back_after_retry_budget_is_exhausted() {
+        let policy = accepted_policy(1);
+        let plan = [
+            ReadInterference::WriterActive,
+            ReadInterference::WriterActive,
+        ];
+        let mut seqlock = SimulatedSeqlock::new("v1");
+
+        let outcome = seqlock.read_with_interference(&policy, &plan);
+
+        assert_eq!(outcome.resolution, ReadResolution::IncumbentFallback);
+        assert_eq!(
+            outcome.fallback_reason,
+            Some(FallbackReason::RetryBudgetExhausted)
+        );
+        assert_eq!(outcome.retries, 1);
+        assert_eq!(seqlock.fallback_reads(), 1);
+        assert_eq!(seqlock.write_pressure_violations(), 2);
+    }
+
+    #[test]
+    fn simulated_seqlock_successful_retry_returns_latest_committed_value() {
+        let policy = accepted_policy(3);
+        let plan = [ReadInterference::Publish("v2"), ReadInterference::Stable];
+        let mut seqlock = SimulatedSeqlock::new("v1");
+
+        let outcome = seqlock.read_with_interference(&policy, &plan);
+
+        assert_eq!(outcome.resolution, ReadResolution::Optimistic);
+        assert_eq!(outcome.fallback_reason, None);
+        assert_eq!(outcome.value, "v2");
+        assert_eq!(outcome.retries, 1);
+        assert_eq!(seqlock.fallback_reads(), 0);
     }
 
     #[test]

@@ -27,7 +27,7 @@ fn temp_dir(label: &str) -> PathBuf {
 fn bundle_writes_required_artifacts_and_contract_files() {
     let artifact_dir = temp_dir("bundle");
     let mut context = ArtifactContext::new(&artifact_dir);
-    context.run_id = "run-rgc-621a-test".to_string();
+    context.run_id = "run-rgc-621b-test".to_string();
     context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
     context.source_commit = "deadbeef".to_string();
     context.toolchain = "nightly".to_string();
@@ -42,11 +42,14 @@ fn bundle_writes_required_artifacts_and_contract_files() {
         "commands.txt",
         "env.json",
         "events.jsonl",
+        "incumbent_fallback_matrix.json",
         "manifest.json",
         "repro.lock",
+        "retry_budget_policy.json",
         "retry_safety_matrix.json",
         "run_manifest.json",
         "seqlock_candidate_inventory.json",
+        "seqlock_reader_writer_contract.json",
         "snapshot_baseline_comparator.json",
         "summary.md",
         "trace_ids.json",
@@ -79,8 +82,29 @@ fn bundle_writes_required_artifacts_and_contract_files() {
         &fs::read(artifact_dir.join("trace_ids.json")).expect("read trace ids"),
     )
     .expect("trace ids parse");
-    assert_eq!(trace_ids["trace_ids"][0], "trace.rgc.621a");
+    assert_eq!(trace_ids["trace_ids"][0], "trace.rgc.621b");
+
+    let run_manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
+    )
+    .expect("run manifest should parse");
+    assert_eq!(
+        run_manifest["reader_writer_contract_hash"].as_str(),
+        Some(bundle.reader_writer_contract.contract_hash.as_str())
+    );
+    assert_eq!(
+        run_manifest["retry_budget_policy_hash"].as_str(),
+        Some(bundle.retry_budget_policy.policy_hash.as_str())
+    );
+    assert_eq!(
+        run_manifest["incumbent_fallback_matrix_hash"].as_str(),
+        Some(bundle.incumbent_fallback_matrix.matrix_hash.as_str())
+    );
+
     assert_eq!(bundle.inventory.counts.accept, 3);
+    assert_eq!(bundle.reader_writer_contract.rows.len(), 9);
+    assert_eq!(bundle.retry_budget_policy.rows.len(), 9);
+    assert_eq!(bundle.incumbent_fallback_matrix.rows.len(), 9);
     assert!(
         !artifact_dir
             .join(".seqlock_candidate_inventory.lock")

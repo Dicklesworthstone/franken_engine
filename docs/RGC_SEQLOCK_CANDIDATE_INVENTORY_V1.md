@@ -1,8 +1,8 @@
 # RGC Seqlock Candidate Inventory v1
 
-Bead: `bd-1lsy.7.21.1`
+Bead: `bd-1lsy.7.21.2`
 
-This contract inventories read-mostly runtime and policy surfaces that may or may not be suitable for seqlock-style optimistic reads.
+This contract extends the 621A inventory into concrete reader/writer contracts, bounded retry budgets, and deterministic incumbent fallback rules for read-mostly runtime and policy surfaces.
 
 ## Classification Rules
 
@@ -14,6 +14,9 @@ This contract inventories read-mostly runtime and policy surfaces that may or ma
 
 - `seqlock_candidate_inventory.json`
 - `retry_safety_matrix.json`
+- `seqlock_reader_writer_contract.json`
+- `retry_budget_policy.json`
+- `incumbent_fallback_matrix.json`
 - `snapshot_baseline_comparator.json`
 - `run_manifest.json`
 - `events.jsonl`
@@ -31,4 +34,4 @@ This contract inventories read-mostly runtime and policy surfaces that may or ma
 ./scripts/e2e/seqlock_candidate_inventory_replay.sh ci
 ```
 
-The suite is `rch`-backed and emits the required bundle under `artifacts/seqlock_candidate_inventory/<timestamp>/`.
+The suite is `rch`-backed and emits the required 621B bundle under `artifacts/seqlock_candidate_inventory/<timestamp>/`.

@@ -13,9 +13,9 @@ target_dir="${CARGO_TARGET_DIR:-/var/tmp/rch_target_franken_engine_seqlock_candi
 generated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/suite_run_manifest.json"
-trace_id="${SEQLOCK_CANDIDATE_TRACE_ID:-trace.rgc.621a}"
-decision_id="${SEQLOCK_CANDIDATE_DECISION_ID:-decision.rgc.621a}"
-policy_id="${SEQLOCK_CANDIDATE_POLICY_ID:-policy.rgc.621a}"
+trace_id="${SEQLOCK_CANDIDATE_TRACE_ID:-trace.rgc.621b}"
+decision_id="${SEQLOCK_CANDIDATE_DECISION_ID:-decision.rgc.621b}"
+policy_id="${SEQLOCK_CANDIDATE_POLICY_ID:-policy.rgc.621b}"
 run_id="run-seqlock-candidate-inventory-${timestamp}"
 source_commit="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 suite_commands_path="${run_dir}/suite_commands.txt"
@@ -47,6 +47,9 @@ verify_bundle() {
   for artifact in \
     seqlock_candidate_inventory.json \
     retry_safety_matrix.json \
+    seqlock_reader_writer_contract.json \
+    retry_budget_policy.json \
+    incumbent_fallback_matrix.json \
     snapshot_baseline_comparator.json \
     run_manifest.json \
     events.jsonl \
@@ -64,7 +67,11 @@ verify_bundle() {
 
   jq -e '.counts.accept >= 1 and .counts.reject >= 1' \
     "${run_dir}/seqlock_candidate_inventory.json" >/dev/null
+  jq -e '.schema_version == "franken-engine.rgc-seqlock-reader-writer-contract.v1"' \
+    "${run_dir}/seqlock_reader_writer_contract.json" >/dev/null
   jq -e '.schema_version == "franken-engine.rgc-seqlock-run-manifest.v1"' \
+    "${run_dir}/run_manifest.json" >/dev/null
+  jq -e '.retry_budget_policy_hash != null and .incumbent_fallback_matrix_hash != null' \
     "${run_dir}/run_manifest.json" >/dev/null
 }
 
@@ -174,11 +181,15 @@ write_manifest() {
     echo '  "artifacts": {'
     echo "    \"command_log\": \"${suite_commands_path}\","
     echo "    \"inventory\": \"${run_dir}/seqlock_candidate_inventory.json\","
+    echo "    \"reader_writer_contract\": \"${run_dir}/seqlock_reader_writer_contract.json\","
+    echo "    \"retry_budget_policy\": \"${run_dir}/retry_budget_policy.json\","
+    echo "    \"incumbent_fallback_matrix\": \"${run_dir}/incumbent_fallback_matrix.json\","
     echo "    \"runner_manifest\": \"${run_dir}/run_manifest.json\","
     echo "    \"suite_manifest\": \"${manifest_path}\""
     echo '  },'
     echo '  "operator_verification": ['
     echo "    \"cat ${run_dir}/seqlock_candidate_inventory.json\","
+    echo "    \"cat ${run_dir}/seqlock_reader_writer_contract.json\","
     echo "    \"cat ${manifest_path}\","
     echo "    \"${0} ci\""
     echo '  ]'

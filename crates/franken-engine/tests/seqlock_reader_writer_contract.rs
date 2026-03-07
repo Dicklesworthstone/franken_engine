@@ -47,7 +47,10 @@ fn automatic_input(
 #[test]
 fn module_cache_snapshot_fastpath_contract_updates_telemetry() {
     let mut cache = ModuleCache::new();
-    assert_eq!(cache.snapshot_fastpath_policy(), RetryBudgetPolicy::new(2, 2));
+    assert_eq!(
+        cache.snapshot_fastpath_policy(),
+        RetryBudgetPolicy::new(2, 2)
+    );
 
     let empty_snapshot = cache.snapshot();
     assert!(empty_snapshot.entries.is_empty());
@@ -88,7 +91,10 @@ fn governance_head_view_fastpath_contract_tracks_checkpoint_projection() {
         policy_id: "moonshot-governor-policy-test".to_string(),
     })
     .expect("ledger");
-    assert_eq!(ledger.head_view_fastpath_policy(), RetryBudgetPolicy::new(4, 1));
+    assert_eq!(
+        ledger.head_view_fastpath_policy(),
+        RetryBudgetPolicy::new(4, 1)
+    );
     assert!(ledger.latest_checkpoint_view().is_none());
 
     let cold_telemetry = ledger.head_view_fastpath_telemetry();

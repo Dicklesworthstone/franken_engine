@@ -1,15 +1,18 @@
 {
-  "schema_version": "franken-engine.rgc-seqlock-candidate-contract.v1",
-  "bead_id": "bd-1lsy.7.21.1",
+  "schema_version": "franken-engine.rgc-seqlock-reader-writer-bundle.v1",
+  "bead_id": "bd-1lsy.7.21.2",
   "required_artifacts": [
     "commands.txt",
     "env.json",
     "events.jsonl",
+    "incumbent_fallback_matrix.json",
     "manifest.json",
     "repro.lock",
+    "retry_budget_policy.json",
     "retry_safety_matrix.json",
     "run_manifest.json",
     "seqlock_candidate_inventory.json",
+    "seqlock_reader_writer_contract.json",
     "snapshot_baseline_comparator.json",
     "summary.md",
     "trace_ids.json"

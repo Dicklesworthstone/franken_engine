@@ -39,6 +39,7 @@ impl LoweringGapStage {
 pub enum LoweringGapStatus {
     FailClosed,
     OpenPlaceholder,
+    Resolved,
 }
 
 impl LoweringGapStatus {
@@ -46,6 +47,7 @@ impl LoweringGapStatus {
         match self {
             Self::FailClosed => "fail_closed",
             Self::OpenPlaceholder => "open_placeholder",
+            Self::Resolved => "resolved",
         }
     }
 }
@@ -114,10 +116,12 @@ impl LoweringGapSiteId {
         match self {
             Self::BinaryNonArithmeticAddPlaceholder
             | Self::NonIdentifierAssignmentNopPlaceholder => LoweringGapStatus::OpenPlaceholder,
-            Self::ForInStatementPlaceholder
-            | Self::ForOfStatementPlaceholder
-            | Self::NewExpressionCallPlaceholder
-            | Self::TemplateLiteralRawPlaceholder => LoweringGapStatus::FailClosed,
+            Self::ForInStatementPlaceholder | Self::ForOfStatementPlaceholder => {
+                LoweringGapStatus::Resolved
+            }
+            Self::NewExpressionCallPlaceholder | Self::TemplateLiteralRawPlaceholder => {
+                LoweringGapStatus::FailClosed
+            }
         }
     }
 
@@ -139,8 +143,8 @@ impl LoweringGapSiteId {
     pub const fn emitted_ir_shape(self) -> &'static str {
         match self {
             Self::BinaryNonArithmeticAddPlaceholder => "ir3.instruction.add_placeholder",
-            Self::ForInStatementPlaceholder => "no_ir.fail_closed_diagnostic",
-            Self::ForOfStatementPlaceholder => "no_ir.fail_closed_diagnostic",
+            Self::ForInStatementPlaceholder => "ir1.for_in_init_next_loop",
+            Self::ForOfStatementPlaceholder => "ir1.for_of_init_next_close_loop",
             Self::NewExpressionCallPlaceholder => "no_ir.fail_closed_diagnostic",
             Self::NonIdentifierAssignmentNopPlaceholder => "ir1.op.nop_placeholder",
             Self::TemplateLiteralRawPlaceholder => "no_ir.fail_closed_diagnostic",
@@ -153,10 +157,10 @@ impl LoweringGapSiteId {
                 "comparison, logical, and bitwise intent collapses into arithmetic addition in IR3"
             }
             Self::ForInStatementPlaceholder => {
-                "enumeration semantics are unavailable because lowering rejects the node before IR1"
+                "resolved: for-in lowers to ForInInit/ForInNext IR1 loop with key-binding semantics"
             }
             Self::ForOfStatementPlaceholder => {
-                "iterator-driven execution is unavailable because lowering rejects the node before IR1"
+                "resolved: for-of lowers to ForOfInit/ForOfNext/IteratorClose IR1 loop with value-binding semantics"
             }
             Self::NewExpressionCallPlaceholder => {
                 "constructor allocation/prototype semantics never reach execution because lowering stops early"
@@ -176,10 +180,10 @@ impl LoweringGapSiteId {
                 "guards, branching predicates, and bitwise-heavy code can report success while executing the wrong operator semantics"
             }
             Self::ForInStatementPlaceholder => {
-                "for-in syntax parses but cannot execute as an object-key iteration workload"
+                "resolved: for-in lowers and executes as a real key-enumeration loop"
             }
             Self::ForOfStatementPlaceholder => {
-                "for-of syntax parses but cannot execute as an iterator protocol workload"
+                "resolved: for-of lowers and executes as a real iterator-protocol loop"
             }
             Self::NewExpressionCallPlaceholder => {
                 "constructor-style package bootstrap code parses but cannot lower honestly into allocation semantics"
@@ -244,8 +248,8 @@ impl LoweringGapSiteId {
             Self::BinaryNonArithmeticAddPlaceholder => {
                 "lower_non_arithmetic_binary_currently_collapses_to_add_placeholder"
             }
-            Self::ForInStatementPlaceholder => "lower_for_in_statement_fails_closed",
-            Self::ForOfStatementPlaceholder => "lower_for_of_statement_fails_closed",
+            Self::ForInStatementPlaceholder => "lower_for_in_statement_produces_ir1_ops",
+            Self::ForOfStatementPlaceholder => "lower_for_of_statement_produces_ir1_ops",
             Self::NewExpressionCallPlaceholder => "lower_new_expression_fails_closed",
             Self::NonIdentifierAssignmentNopPlaceholder => {
                 "lower_member_assignment_currently_emits_nop_placeholder"
@@ -688,7 +692,7 @@ mod tests {
             LoweringGapSiteId::ALL.len()
         );
         assert_eq!(inventory.execution_ready_site_count(), 0);
-        assert_eq!(inventory.fail_closed_site_count(), 4);
+        assert_eq!(inventory.fail_closed_site_count(), 2);
         assert_eq!(inventory.open_placeholder_site_count(), 2);
     }
 
@@ -738,7 +742,7 @@ mod tests {
             serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
                 .expect("manifest json");
         assert_eq!(manifest.site_count as usize, LoweringGapSiteId::ALL.len());
-        assert_eq!(manifest.fail_closed_site_count, 4);
+        assert_eq!(manifest.fail_closed_site_count, 2);
         assert_eq!(manifest.open_placeholder_site_count, 2);
         assert_eq!(
             manifest.parser_ready_site_count,

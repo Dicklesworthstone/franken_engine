@@ -50,6 +50,7 @@ impl ParserGapStage {
 pub enum ParserGapRemediationStatus {
     FailClosed,
     OpenPlaceholder,
+    Resolved,
 }
 
 impl ParserGapRemediationStatus {
@@ -57,6 +58,7 @@ impl ParserGapRemediationStatus {
         match self {
             Self::FailClosed => "fail_closed",
             Self::OpenPlaceholder => "open_placeholder",
+            Self::Resolved => "resolved",
         }
     }
 }
@@ -123,10 +125,12 @@ impl ParserGapSiteId {
 
     pub const fn remediation_status(self) -> ParserGapRemediationStatus {
         match self {
-            Self::ForInStatementPlaceholder
-            | Self::ForOfStatementPlaceholder
-            | Self::NewExpressionCallPlaceholder
-            | Self::TemplateLiteralRawPlaceholder => ParserGapRemediationStatus::FailClosed,
+            Self::ForInStatementPlaceholder | Self::ForOfStatementPlaceholder => {
+                ParserGapRemediationStatus::Resolved
+            }
+            Self::NewExpressionCallPlaceholder | Self::TemplateLiteralRawPlaceholder => {
+                ParserGapRemediationStatus::FailClosed
+            }
             Self::BinaryNonArithmeticAddPlaceholder
             | Self::NonIdentifierAssignmentNopPlaceholder => {
                 ParserGapRemediationStatus::OpenPlaceholder
@@ -872,7 +876,7 @@ mod tests {
             .collect();
         assert_eq!(site_ids.len(), ParserGapSiteId::ALL.len());
         assert_eq!(diagnostic_codes.len(), ParserGapSiteId::ALL.len());
-        assert_eq!(inventory.fail_closed_site_count(), 4);
+        assert_eq!(inventory.fail_closed_site_count(), 2);
         assert_eq!(inventory.open_placeholder_site_count(), 2);
     }
 
@@ -920,7 +924,7 @@ mod tests {
             serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
                 .expect("manifest json");
         assert_eq!(manifest.site_count as usize, ParserGapSiteId::ALL.len());
-        assert_eq!(manifest.fail_closed_site_count, 4);
+        assert_eq!(manifest.fail_closed_site_count, 2);
         assert_eq!(manifest.open_placeholder_site_count, 2);
         assert_eq!(
             manifest.artifact_paths.parser_gap_inventory,

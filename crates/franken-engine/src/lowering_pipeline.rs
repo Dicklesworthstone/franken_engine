@@ -4351,6 +4351,7 @@ mod tests {
                     value: Ir1Literal::Undefined
                 },
                 Ir1Op::StoreBinding { binding_id },
+                Ir1Op::Pop,
                 Ir1Op::Return
             ] if *binding_id == counter_binding.binding_id
         ));
@@ -4404,12 +4405,14 @@ mod tests {
                 Ir1Op::StoreBinding {
                     binding_id: store_y_binding_id
                 },
+                Ir1Op::Pop,
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::Integer(1)
                 },
                 Ir1Op::StoreBinding {
                     binding_id: store_x_binding_id
                 },
+                Ir1Op::Pop,
                 Ir1Op::Return
             ] if *load_x_binding_id == x_binding.binding_id
                 && *store_y_binding_id == y_binding.binding_id
@@ -5098,7 +5101,16 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Ir1Op::Jump { .. }))
         );
-        assert!(!result.module.ops.iter().any(|op| matches!(op, Ir1Op::Pop)));
+        // Expression statements now emit a trailing Pop to balance the stack.
+        // The conditional expression itself should not emit Pop within its
+        // branch arms; the single Pop at the end is from the expression-statement wrapper.
+        let pop_count = result
+            .module
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Ir1Op::Pop))
+            .count();
+        assert_eq!(pop_count, 1, "only the expression-statement Pop expected");
         let label_count = result
             .module
             .ops

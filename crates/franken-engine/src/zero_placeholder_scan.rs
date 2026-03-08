@@ -1,0 +1,1047 @@
+use std::ffi::OsString;
+use std::fs;
+use std::io;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::lowering_gap_inventory::{self, LoweringGapInventory, LoweringGapStatus};
+use crate::parser_gap_inventory::{self, ParserGapInventory, ParserGapRemediationStatus};
+
+pub const ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION: &str = "franken-engine.zero-placeholder-scan.v1";
+pub const ZERO_PLACEHOLDER_SCAN_TRACE_IDS_SCHEMA_VERSION: &str =
+    "franken-engine.zero-placeholder-scan.trace-ids.v1";
+pub const ZERO_PLACEHOLDER_SCAN_RUN_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.zero-placeholder-scan.run-manifest.v1";
+pub const ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION: &str =
+    "franken-engine.zero-placeholder-scan.event.v1";
+pub const ZERO_PLACEHOLDER_SCAN_COMPONENT: &str = "zero_placeholder_scan";
+pub const ZERO_PLACEHOLDER_SCAN_POLICY_ID: &str = "franken-engine.zero-placeholder-scan.policy.v1";
+pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 15;
+
+const DOCS_HELP_AUDIT_CONTRACT_JSON: &str =
+    include_str!("../../../docs/rgc_docs_help_surface_audit_v1.json");
+const CLI_DOCS_HELP_POLICY_ID: &str = "policy-rgc-docs-help-surface-audit-v1";
+const CLI_DOCS_HELP_BEAD_ID: &str = "bd-1lsy.10.11.1";
+const JSON_RUNTIME_BEAD_ID: &str = "bd-1lsy.4.9.1";
+
+static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZeroPlaceholderSubsystem {
+    Parser,
+    Lowering,
+    Runtime,
+    CliDocs,
+}
+
+impl ZeroPlaceholderSubsystem {
+    pub const ALL: [Self; 4] = [Self::Parser, Self::Lowering, Self::Runtime, Self::CliDocs];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Parser => "parser",
+            Self::Lowering => "lowering",
+            Self::Runtime => "runtime",
+            Self::CliDocs => "cli_docs",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZeroPlaceholderStatus {
+    OpenPlaceholder,
+    FailClosed,
+    Resolved,
+}
+
+impl ZeroPlaceholderStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenPlaceholder => "open_placeholder",
+            Self::FailClosed => "fail_closed",
+            Self::Resolved => "resolved",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZeroPlaceholderSeverity {
+    High,
+    Medium,
+    Low,
+}
+
+impl ZeroPlaceholderSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Medium => "medium",
+            Self::Low => "low",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZeroPlaceholderFinding {
+    pub finding_id: String,
+    pub subsystem: ZeroPlaceholderSubsystem,
+    pub status: ZeroPlaceholderStatus,
+    pub severity: ZeroPlaceholderSeverity,
+    pub owner: String,
+    pub owner_bead_id: String,
+    pub subject_area: String,
+    pub source_reference: String,
+    pub observed_behavior: String,
+    pub required_behavior: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZeroPlaceholderInventory {
+    pub schema_version: String,
+    pub component: String,
+    pub findings: Vec<ZeroPlaceholderFinding>,
+}
+
+impl ZeroPlaceholderInventory {
+    pub fn open_placeholder_finding_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
+            .count()
+    }
+
+    pub fn fail_closed_finding_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.status == ZeroPlaceholderStatus::FailClosed)
+            .count()
+    }
+
+    pub fn resolved_finding_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.status == ZeroPlaceholderStatus::Resolved)
+            .count()
+    }
+
+    pub fn subsystem_summaries(&self) -> Vec<ZeroPlaceholderSubsystemSummary> {
+        ZeroPlaceholderSubsystem::ALL
+            .iter()
+            .map(|subsystem| {
+                let findings = self
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.subsystem == *subsystem);
+                let mut finding_count = 0u64;
+                let mut open_placeholder_finding_count = 0u64;
+                let mut fail_closed_finding_count = 0u64;
+                let mut resolved_finding_count = 0u64;
+
+                for finding in findings {
+                    finding_count += 1;
+                    match finding.status {
+                        ZeroPlaceholderStatus::OpenPlaceholder => {
+                            open_placeholder_finding_count += 1;
+                        }
+                        ZeroPlaceholderStatus::FailClosed => {
+                            fail_closed_finding_count += 1;
+                        }
+                        ZeroPlaceholderStatus::Resolved => {
+                            resolved_finding_count += 1;
+                        }
+                    }
+                }
+
+                ZeroPlaceholderSubsystemSummary {
+                    subsystem: *subsystem,
+                    finding_count,
+                    open_placeholder_finding_count,
+                    fail_closed_finding_count,
+                    resolved_finding_count,
+                }
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZeroPlaceholderSubsystemSummary {
+    pub subsystem: ZeroPlaceholderSubsystem,
+    pub finding_count: u64,
+    pub open_placeholder_finding_count: u64,
+    pub fail_closed_finding_count: u64,
+    pub resolved_finding_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZeroPlaceholderScanArtifactPaths {
+    pub zero_placeholder_inventory: String,
+    pub trace_ids: String,
+    pub run_manifest: String,
+    pub events_jsonl: String,
+    pub commands_txt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZeroPlaceholderScanTraceIds {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub inventory_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZeroPlaceholderScanRunManifest {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub inventory_hash: String,
+    pub finding_count: u64,
+    pub open_placeholder_finding_count: u64,
+    pub fail_closed_finding_count: u64,
+    pub resolved_finding_count: u64,
+    pub subsystem_summaries: Vec<ZeroPlaceholderSubsystemSummary>,
+    pub artifact_paths: ZeroPlaceholderScanArtifactPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZeroPlaceholderScanEvent {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub event: String,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subsystem: Option<ZeroPlaceholderSubsystem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZeroPlaceholderScanArtifacts {
+    pub out_dir: PathBuf,
+    pub inventory_path: PathBuf,
+    pub trace_ids_path: PathBuf,
+    pub run_manifest_path: PathBuf,
+    pub events_path: PathBuf,
+    pub commands_path: PathBuf,
+    pub inventory_hash: String,
+    pub finding_count: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ZeroPlaceholderScanWriteError {
+    #[error("failed to serialize `{path}`: {source}")]
+    Json {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("failed to write `{path}`: {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("bundle output directory is already locked by another writer: `{path}`")]
+    Busy { path: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DocsHelpSurfaceAuditContract {
+    policy_id: String,
+    required_help_fragments: Vec<String>,
+    banned_help_fragments: Vec<String>,
+    required_readme_fragments: Vec<String>,
+    banned_readme_fragments: Vec<String>,
+}
+
+pub fn zero_placeholder_scan_inventory() -> ZeroPlaceholderInventory {
+    let parser_inventory = parser_gap_inventory::parser_gap_inventory();
+    let lowering_inventory = lowering_gap_inventory::lowering_gap_inventory();
+
+    let mut findings = Vec::with_capacity(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT);
+    findings.extend(parser_findings(&parser_inventory));
+    findings.extend(lowering_findings(&lowering_inventory));
+    findings.extend(runtime_findings());
+    findings.push(cli_docs_truth_guard_finding());
+
+    ZeroPlaceholderInventory {
+        schema_version: ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.to_string(),
+        component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+        findings,
+    }
+}
+
+pub fn write_zero_placeholder_scan_bundle(
+    out_dir: impl AsRef<Path>,
+    command_lines: &[String],
+) -> Result<ZeroPlaceholderScanArtifacts, ZeroPlaceholderScanWriteError> {
+    let out_dir = out_dir.as_ref().to_path_buf();
+    fs::create_dir_all(&out_dir).map_err(|source| ZeroPlaceholderScanWriteError::Io {
+        path: out_dir.display().to_string(),
+        source,
+    })?;
+
+    let inventory = zero_placeholder_scan_inventory();
+    let inventory_path = out_dir.join("zero_placeholder_inventory.json");
+    let trace_ids_path = out_dir.join("trace_ids.json");
+    let run_manifest_path = out_dir.join("run_manifest.json");
+    let events_path = out_dir.join("events.jsonl");
+    let commands_path = out_dir.join("commands.txt");
+
+    let inventory_bytes = canonical_json_bytes(&inventory, &inventory_path)?;
+    let inventory_hash = sha256_hex(&inventory_bytes);
+    let short_hash = inventory_hash.chars().take(16).collect::<String>();
+    let trace_id = format!("trace-zero-placeholder-{short_hash}");
+    let decision_id = format!("decision-zero-placeholder-{short_hash}");
+
+    let trace_ids = ZeroPlaceholderScanTraceIds {
+        schema_version: ZERO_PLACEHOLDER_SCAN_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+        trace_id: trace_id.clone(),
+        decision_id: decision_id.clone(),
+        policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+        inventory_hash: inventory_hash.clone(),
+    };
+    let trace_ids_bytes = canonical_json_bytes(&trace_ids, &trace_ids_path)?;
+
+    let manifest = ZeroPlaceholderScanRunManifest {
+        schema_version: ZERO_PLACEHOLDER_SCAN_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+        component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+        trace_id: trace_id.clone(),
+        decision_id: decision_id.clone(),
+        policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+        inventory_hash: inventory_hash.clone(),
+        finding_count: inventory.findings.len() as u64,
+        open_placeholder_finding_count: inventory.open_placeholder_finding_count() as u64,
+        fail_closed_finding_count: inventory.fail_closed_finding_count() as u64,
+        resolved_finding_count: inventory.resolved_finding_count() as u64,
+        subsystem_summaries: inventory.subsystem_summaries(),
+        artifact_paths: ZeroPlaceholderScanArtifactPaths {
+            zero_placeholder_inventory: "zero_placeholder_inventory.json".to_string(),
+            trace_ids: "trace_ids.json".to_string(),
+            run_manifest: "run_manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+        },
+    };
+    let manifest_bytes = canonical_json_bytes(&manifest, &run_manifest_path)?;
+
+    let events = build_inventory_events(&inventory, &trace_id, &decision_id);
+    let mut events_jsonl = String::new();
+    for event in &events {
+        let line =
+            serde_json::to_string(event).map_err(|source| ZeroPlaceholderScanWriteError::Json {
+                path: events_path.display().to_string(),
+                source,
+            })?;
+        events_jsonl.push_str(&line);
+        events_jsonl.push('\n');
+    }
+
+    let mut commands_buf = String::new();
+    for command in command_lines {
+        commands_buf.push_str(command);
+        commands_buf.push('\n');
+    }
+
+    let _bundle_lock = acquire_bundle_write_lock(&out_dir)?;
+    remove_commit_marker(&run_manifest_path)?;
+    write_atomic(&inventory_path, &inventory_bytes)?;
+    write_atomic(&trace_ids_path, &trace_ids_bytes)?;
+    write_atomic(&events_path, events_jsonl.as_bytes())?;
+    write_atomic(&commands_path, commands_buf.as_bytes())?;
+    write_atomic(&run_manifest_path, &manifest_bytes)?;
+
+    Ok(ZeroPlaceholderScanArtifacts {
+        out_dir,
+        inventory_path,
+        trace_ids_path,
+        run_manifest_path,
+        events_path,
+        commands_path,
+        inventory_hash,
+        finding_count: inventory.findings.len(),
+    })
+}
+
+fn parser_findings(inventory: &ParserGapInventory) -> Vec<ZeroPlaceholderFinding> {
+    inventory
+        .sites
+        .iter()
+        .map(|site| ZeroPlaceholderFinding {
+            finding_id: format!("parser::{}", site.site_id),
+            subsystem: ZeroPlaceholderSubsystem::Parser,
+            status: map_parser_status(site.remediation_status),
+            severity: severity_for_status(map_parser_status(site.remediation_status)),
+            owner: site.owner.clone(),
+            owner_bead_id: bead_id_for_parser_feature(&site.feature_family).to_string(),
+            subject_area: site.feature_family.clone(),
+            source_reference: site.source_reference.clone(),
+            observed_behavior: site.observed_fallback_behavior.clone(),
+            required_behavior: site.required_fail_closed_contract.clone(),
+            diagnostic_code: Some(site.desired_diagnostic_code.clone()),
+        })
+        .collect()
+}
+
+fn lowering_findings(inventory: &LoweringGapInventory) -> Vec<ZeroPlaceholderFinding> {
+    inventory
+        .sites
+        .iter()
+        .map(|site| ZeroPlaceholderFinding {
+            finding_id: format!("lowering::{}", site.site_id),
+            subsystem: ZeroPlaceholderSubsystem::Lowering,
+            status: map_lowering_status(site.status),
+            severity: severity_for_status(map_lowering_status(site.status)),
+            owner: site.owner.clone(),
+            owner_bead_id: bead_id_for_lowering_family(&site.ast_node_family).to_string(),
+            subject_area: site.ast_node_family.clone(),
+            source_reference: site.source_reference.clone(),
+            observed_behavior: site.user_visible_divergence.clone(),
+            required_behavior: site.target_replacement_strategy.clone(),
+            diagnostic_code: Some(site.diagnostic_code.clone()),
+        })
+        .collect()
+}
+
+fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
+    vec![
+        ZeroPlaceholderFinding {
+            finding_id: "runtime::json_parse_compound_placeholder".to_string(),
+            subsystem: ZeroPlaceholderSubsystem::Runtime,
+            status: ZeroPlaceholderStatus::OpenPlaceholder,
+            severity: ZeroPlaceholderSeverity::High,
+            owner: "stdlib".to_string(),
+            owner_bead_id: JSON_RUNTIME_BEAD_ID.to_string(),
+            subject_area: "json.parse.compound".to_string(),
+            source_reference: "crates/franken-engine/src/stdlib.rs::json_parse".to_string(),
+            observed_behavior:
+                "JSON.parse returns a [json-compound:<len>] descriptor for arrays and objects instead of a heap-backed value."
+                    .to_string(),
+            required_behavior:
+                "Parse arrays and objects into deterministic runtime values without placeholder descriptors."
+                    .to_string(),
+            diagnostic_code: None,
+        },
+        ZeroPlaceholderFinding {
+            finding_id: "runtime::json_stringify_object_placeholder".to_string(),
+            subsystem: ZeroPlaceholderSubsystem::Runtime,
+            status: ZeroPlaceholderStatus::OpenPlaceholder,
+            severity: ZeroPlaceholderSeverity::High,
+            owner: "stdlib".to_string(),
+            owner_bead_id: JSON_RUNTIME_BEAD_ID.to_string(),
+            subject_area: "json.stringify.object".to_string(),
+            source_reference: "crates/franken-engine/src/stdlib.rs::json_stringify".to_string(),
+            observed_behavior:
+                "JSON.stringify returns the [json-object] placeholder for Object and Function values instead of traversing heap state."
+                    .to_string(),
+            required_behavior:
+                "Stringify object graphs and callable values through deterministic heap traversal instead of placeholder output."
+                    .to_string(),
+            diagnostic_code: None,
+        },
+    ]
+}
+
+fn cli_docs_truth_guard_finding() -> ZeroPlaceholderFinding {
+    let required_behavior = format!(
+        "Keep README/help claims aligned with the shipped CLI surface and the {CLI_DOCS_HELP_POLICY_ID} contract."
+    );
+    let source_reference = "docs/rgc_docs_help_surface_audit_v1.json; README.md; crates/franken-engine/src/bin/frankenctl.rs";
+
+    let contract =
+        match serde_json::from_str::<DocsHelpSurfaceAuditContract>(DOCS_HELP_AUDIT_CONTRACT_JSON) {
+            Ok(contract) => contract,
+            Err(error) => {
+                return ZeroPlaceholderFinding {
+                    finding_id: "cli_docs::help_surface_truth_guard".to_string(),
+                    subsystem: ZeroPlaceholderSubsystem::CliDocs,
+                    status: ZeroPlaceholderStatus::FailClosed,
+                    severity: ZeroPlaceholderSeverity::Medium,
+                    owner: "docs_help_surface_audit".to_string(),
+                    owner_bead_id: CLI_DOCS_HELP_BEAD_ID.to_string(),
+                    subject_area: "surface.help_and_readme".to_string(),
+                    source_reference: source_reference.to_string(),
+                    observed_behavior: format!(
+                        "docs/help truth contract could not be parsed: {error}"
+                    ),
+                    required_behavior,
+                    diagnostic_code: None,
+                };
+            }
+        };
+
+    let repo_root = repo_root();
+    let readme_path = repo_root.join("README.md");
+    let help_source_path = repo_root.join("crates/franken-engine/src/bin/frankenctl.rs");
+    let readme = match fs::read_to_string(&readme_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            return ZeroPlaceholderFinding {
+                finding_id: "cli_docs::help_surface_truth_guard".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::CliDocs,
+                status: ZeroPlaceholderStatus::FailClosed,
+                severity: ZeroPlaceholderSeverity::Medium,
+                owner: "docs_help_surface_audit".to_string(),
+                owner_bead_id: CLI_DOCS_HELP_BEAD_ID.to_string(),
+                subject_area: "surface.help_and_readme".to_string(),
+                source_reference: source_reference.to_string(),
+                observed_behavior: format!(
+                    "docs/help truth guard could not read {}: {error}",
+                    readme_path.display()
+                ),
+                required_behavior,
+                diagnostic_code: None,
+            };
+        }
+    };
+    let help_source = match fs::read_to_string(&help_source_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            return ZeroPlaceholderFinding {
+                finding_id: "cli_docs::help_surface_truth_guard".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::CliDocs,
+                status: ZeroPlaceholderStatus::FailClosed,
+                severity: ZeroPlaceholderSeverity::Medium,
+                owner: "docs_help_surface_audit".to_string(),
+                owner_bead_id: CLI_DOCS_HELP_BEAD_ID.to_string(),
+                subject_area: "surface.help_and_readme".to_string(),
+                source_reference: source_reference.to_string(),
+                observed_behavior: format!(
+                    "docs/help truth guard could not read {}: {error}",
+                    help_source_path.display()
+                ),
+                required_behavior,
+                diagnostic_code: None,
+            };
+        }
+    };
+
+    let (status, severity, observed_behavior) =
+        evaluate_cli_docs_truth_guard(&contract, &readme, &help_source);
+
+    ZeroPlaceholderFinding {
+        finding_id: "cli_docs::help_surface_truth_guard".to_string(),
+        subsystem: ZeroPlaceholderSubsystem::CliDocs,
+        status,
+        severity,
+        owner: "docs_help_surface_audit".to_string(),
+        owner_bead_id: CLI_DOCS_HELP_BEAD_ID.to_string(),
+        subject_area: "surface.help_and_readme".to_string(),
+        source_reference: source_reference.to_string(),
+        observed_behavior,
+        required_behavior,
+        diagnostic_code: None,
+    }
+}
+
+fn evaluate_cli_docs_truth_guard(
+    contract: &DocsHelpSurfaceAuditContract,
+    readme: &str,
+    help_source: &str,
+) -> (ZeroPlaceholderStatus, ZeroPlaceholderSeverity, String) {
+    let mut mismatches = Vec::new();
+
+    for fragment in &contract.required_readme_fragments {
+        if !readme.contains(fragment) {
+            mismatches.push(format!("missing README fragment `{fragment}`"));
+        }
+    }
+    for fragment in &contract.banned_readme_fragments {
+        if readme.contains(fragment) {
+            mismatches.push(format!("banned README fragment present `{fragment}`"));
+        }
+    }
+    for fragment in &contract.required_help_fragments {
+        if !help_source.contains(fragment) {
+            mismatches.push(format!("missing help fragment `{fragment}`"));
+        }
+    }
+    for fragment in &contract.banned_help_fragments {
+        if help_source.contains(fragment) {
+            mismatches.push(format!("banned help fragment present `{fragment}`"));
+        }
+    }
+
+    if mismatches.is_empty() {
+        (
+            ZeroPlaceholderStatus::Resolved,
+            ZeroPlaceholderSeverity::Low,
+            format!(
+                "README/help source currently satisfies the {} contract: {} required README fragments, {} required help fragments, and no banned fragments detected.",
+                contract.policy_id,
+                contract.required_readme_fragments.len(),
+                contract.required_help_fragments.len(),
+            ),
+        )
+    } else {
+        (
+            ZeroPlaceholderStatus::FailClosed,
+            ZeroPlaceholderSeverity::Medium,
+            format!(
+                "docs/help truth contract drift detected under {}: {}",
+                contract.policy_id,
+                mismatches.join("; "),
+            ),
+        )
+    }
+}
+
+fn build_inventory_events(
+    inventory: &ZeroPlaceholderInventory,
+    trace_id: &str,
+    decision_id: &str,
+) -> Vec<ZeroPlaceholderScanEvent> {
+    let mut events = vec![ZeroPlaceholderScanEvent {
+        schema_version: ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+        component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+        event: "inventory_started".to_string(),
+        outcome: "started".to_string(),
+        subsystem: None,
+        finding_id: None,
+        detail: Some("authoritative zero-placeholder scan generation began".to_string()),
+    }];
+
+    events.extend(
+        inventory
+            .findings
+            .iter()
+            .map(|finding| ZeroPlaceholderScanEvent {
+                schema_version: ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION.to_string(),
+                trace_id: trace_id.to_string(),
+                decision_id: decision_id.to_string(),
+                policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+                component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+                event: "finding_recorded".to_string(),
+                outcome: finding.status.as_str().to_string(),
+                subsystem: Some(finding.subsystem),
+                finding_id: Some(finding.finding_id.clone()),
+                detail: Some(finding.observed_behavior.clone()),
+            }),
+    );
+
+    events.push(ZeroPlaceholderScanEvent {
+        schema_version: ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+        component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+        event: "inventory_completed".to_string(),
+        outcome: "completed".to_string(),
+        subsystem: None,
+        finding_id: None,
+        detail: Some(format!(
+            "{} findings recorded ({} open placeholders, {} fail-closed, {} resolved)",
+            inventory.findings.len(),
+            inventory.open_placeholder_finding_count(),
+            inventory.fail_closed_finding_count(),
+            inventory.resolved_finding_count(),
+        )),
+    });
+
+    events
+}
+
+fn canonical_json_bytes<T: Serialize>(
+    value: &T,
+    path: &Path,
+) -> Result<Vec<u8>, ZeroPlaceholderScanWriteError> {
+    serde_json::to_vec(value).map_err(|source| ZeroPlaceholderScanWriteError::Json {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+fn acquire_bundle_write_lock(
+    out_dir: &Path,
+) -> Result<BundleWriteLock, ZeroPlaceholderScanWriteError> {
+    let lock_path = out_dir.join(".zero_placeholder_scan.lock");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => Ok(BundleWriteLock { path: lock_path }),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+            Err(ZeroPlaceholderScanWriteError::Busy {
+                path: lock_path.display().to_string(),
+            })
+        }
+        Err(source) => Err(ZeroPlaceholderScanWriteError::Io {
+            path: lock_path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn remove_commit_marker(path: &Path) -> Result<(), ZeroPlaceholderScanWriteError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ZeroPlaceholderScanWriteError::Io {
+            path: path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ZeroPlaceholderScanWriteError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ZeroPlaceholderScanWriteError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+
+    let temp_path = unique_temp_path(path);
+    fs::write(&temp_path, bytes).map_err(|source| ZeroPlaceholderScanWriteError::Io {
+        path: temp_path.display().to_string(),
+        source,
+    })?;
+    if let Err(source) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ZeroPlaceholderScanWriteError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let sequence = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    let mut temp_name = OsString::from(".");
+    match path.file_name() {
+        Some(file_name) => temp_name.push(file_name),
+        None => temp_name.push("artifact"),
+    }
+    temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(temp_name)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn map_parser_status(status: ParserGapRemediationStatus) -> ZeroPlaceholderStatus {
+    match status {
+        ParserGapRemediationStatus::OpenPlaceholder => ZeroPlaceholderStatus::OpenPlaceholder,
+        ParserGapRemediationStatus::FailClosed => ZeroPlaceholderStatus::FailClosed,
+        ParserGapRemediationStatus::Resolved => ZeroPlaceholderStatus::Resolved,
+    }
+}
+
+fn map_lowering_status(status: LoweringGapStatus) -> ZeroPlaceholderStatus {
+    match status {
+        LoweringGapStatus::OpenPlaceholder => ZeroPlaceholderStatus::OpenPlaceholder,
+        LoweringGapStatus::FailClosed => ZeroPlaceholderStatus::FailClosed,
+        LoweringGapStatus::Resolved => ZeroPlaceholderStatus::Resolved,
+    }
+}
+
+fn severity_for_status(status: ZeroPlaceholderStatus) -> ZeroPlaceholderSeverity {
+    match status {
+        ZeroPlaceholderStatus::OpenPlaceholder => ZeroPlaceholderSeverity::High,
+        ZeroPlaceholderStatus::FailClosed => ZeroPlaceholderSeverity::Medium,
+        ZeroPlaceholderStatus::Resolved => ZeroPlaceholderSeverity::Low,
+    }
+}
+
+fn bead_id_for_parser_feature(feature_family: &str) -> &'static str {
+    match feature_family {
+        "for_in_statement" | "for_of_statement" => "bd-1lsy.4.8",
+        "new_expression" | "template_literal" => "bd-1lsy.4.7.2",
+        "binary_non_arithmetic_expression" => "bd-1lsy.4.7.3",
+        "member_assignment_expression" => "bd-1lsy.4.7.1",
+        _ => "bd-1lsy.9.5.1",
+    }
+}
+
+fn bead_id_for_lowering_family(ast_node_family: &str) -> &'static str {
+    match ast_node_family {
+        "statement.for_in" | "statement.for_of" => "bd-1lsy.4.8",
+        "expression.new" | "expression.template_literal" => "bd-1lsy.4.7.2",
+        "expression.binary_non_arithmetic" => "bd-1lsy.4.7.3",
+        "expression.assignment_member_target" => "bd-1lsy.4.7.1",
+        _ => "bd-1lsy.9.5.1",
+    }
+}
+
+#[derive(Debug)]
+struct BundleWriteLock {
+    path: PathBuf,
+}
+
+impl Drop for BundleWriteLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        env::temp_dir().join(format!("frankenengine-{label}-{}-{nanos}", process::id()))
+    }
+
+    fn sample_contract() -> DocsHelpSurfaceAuditContract {
+        DocsHelpSurfaceAuditContract {
+            policy_id: CLI_DOCS_HELP_POLICY_ID.to_string(),
+            required_help_fragments: vec!["frankenctl usage:".to_string()],
+            banned_help_fragments: vec!["frankenctl init".to_string()],
+            required_readme_fragments: vec!["frankenctl compile".to_string()],
+            banned_readme_fragments: vec!["frankenctl shadow-run".to_string()],
+        }
+    }
+
+    #[test]
+    fn zero_placeholder_inventory_aggregates_all_subsystems() {
+        let inventory = zero_placeholder_scan_inventory();
+        assert_eq!(
+            inventory.findings.len(),
+            ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
+        );
+        assert_eq!(inventory.open_placeholder_finding_count(), 2);
+
+        let parser_count = inventory
+            .findings
+            .iter()
+            .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::Parser)
+            .count();
+        let lowering_count = inventory
+            .findings
+            .iter()
+            .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::Lowering)
+            .count();
+        let runtime_count = inventory
+            .findings
+            .iter()
+            .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::Runtime)
+            .count();
+        let cli_docs_count = inventory
+            .findings
+            .iter()
+            .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::CliDocs)
+            .count();
+
+        assert_eq!(parser_count, 6);
+        assert_eq!(lowering_count, 6);
+        assert_eq!(runtime_count, 2);
+        assert_eq!(cli_docs_count, 1);
+    }
+
+    #[test]
+    fn runtime_findings_are_high_severity_open_placeholders() {
+        let inventory = zero_placeholder_scan_inventory();
+        let runtime_findings: Vec<_> = inventory
+            .findings
+            .iter()
+            .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::Runtime)
+            .collect();
+        assert_eq!(runtime_findings.len(), 2);
+        assert!(
+            runtime_findings
+                .iter()
+                .all(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
+        );
+        assert!(
+            runtime_findings
+                .iter()
+                .all(|finding| finding.severity == ZeroPlaceholderSeverity::High)
+        );
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_resolves_when_fragments_match() {
+        let contract = sample_contract();
+        let (status, severity, detail) =
+            evaluate_cli_docs_truth_guard(&contract, "frankenctl compile\n", "frankenctl usage:\n");
+        assert_eq!(status, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(severity, ZeroPlaceholderSeverity::Low);
+        assert!(detail.contains("satisfies"));
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_fails_closed_on_fragment_drift() {
+        let contract = sample_contract();
+        let (status, severity, detail) =
+            evaluate_cli_docs_truth_guard(&contract, "shadow", "frankenctl init");
+        assert_eq!(status, ZeroPlaceholderStatus::FailClosed);
+        assert_eq!(severity, ZeroPlaceholderSeverity::Medium);
+        assert!(detail.contains("drift detected"));
+        assert!(detail.contains("missing README fragment"));
+        assert!(detail.contains("banned help fragment present"));
+    }
+
+    #[test]
+    fn write_zero_placeholder_scan_bundle_emits_expected_artifacts() {
+        let out_dir = unique_temp_dir("zero-placeholder-scan");
+        let commands = vec![
+            "franken_zero_placeholder_scan".to_string(),
+            "--out-dir".to_string(),
+            out_dir.display().to_string(),
+        ];
+        let artifacts =
+            write_zero_placeholder_scan_bundle(&out_dir, &commands).expect("write artifacts");
+        assert!(artifacts.inventory_path.exists());
+        assert!(artifacts.trace_ids_path.exists());
+        assert!(artifacts.run_manifest_path.exists());
+        assert!(artifacts.events_path.exists());
+        assert!(artifacts.commands_path.exists());
+
+        let inventory: ZeroPlaceholderInventory =
+            serde_json::from_slice(&fs::read(&artifacts.inventory_path).expect("read inventory"))
+                .expect("inventory json");
+        assert_eq!(
+            inventory.findings.len(),
+            ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
+        );
+
+        let manifest: ZeroPlaceholderScanRunManifest =
+            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
+                .expect("manifest json");
+        assert_eq!(
+            manifest.finding_count as usize,
+            ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
+        );
+        assert_eq!(manifest.open_placeholder_finding_count, 2);
+        assert_eq!(
+            manifest.open_placeholder_finding_count
+                + manifest.fail_closed_finding_count
+                + manifest.resolved_finding_count,
+            manifest.finding_count
+        );
+        assert_eq!(manifest.subsystem_summaries.len(), 4);
+
+        let trace_ids: ZeroPlaceholderScanTraceIds =
+            serde_json::from_slice(&fs::read(&artifacts.trace_ids_path).expect("read trace ids"))
+                .expect("trace ids json");
+        assert_eq!(
+            trace_ids.schema_version,
+            ZERO_PLACEHOLDER_SCAN_TRACE_IDS_SCHEMA_VERSION
+        );
+        assert_eq!(trace_ids.inventory_hash, artifacts.inventory_hash);
+
+        let events = fs::read_to_string(&artifacts.events_path).expect("read events");
+        assert_eq!(
+            events.lines().count(),
+            ZERO_PLACEHOLDER_SCAN_FINDING_COUNT + 2
+        );
+
+        let commands_txt = fs::read_to_string(&artifacts.commands_path).expect("read commands");
+        assert!(commands_txt.contains("franken_zero_placeholder_scan"));
+        assert!(commands_txt.contains("--out-dir"));
+        assert!(!out_dir.join(".zero_placeholder_scan.lock").exists());
+    }
+
+    #[test]
+    fn unique_temp_path_is_distinct_for_each_write_attempt() {
+        let target = Path::new("artifacts/zero_placeholder_inventory.json");
+        let first = unique_temp_path(target);
+        let second = unique_temp_path(target);
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), second.parent());
+        assert_ne!(first.file_name(), Some(target.as_os_str()));
+        assert_ne!(second.file_name(), Some(target.as_os_str()));
+    }
+
+    #[test]
+    fn bundle_write_lock_rejects_concurrent_writer_until_release() {
+        let out_dir = unique_temp_dir("zero-placeholder-lock");
+        fs::create_dir_all(&out_dir).expect("create lock dir");
+
+        let first = acquire_bundle_write_lock(&out_dir).expect("first lock");
+        let second = acquire_bundle_write_lock(&out_dir).expect_err("second lock should fail");
+        assert!(matches!(second, ZeroPlaceholderScanWriteError::Busy { .. }));
+
+        drop(first);
+
+        acquire_bundle_write_lock(&out_dir).expect("lock should be acquirable after release");
+    }
+
+    #[test]
+    fn busy_bundle_write_does_not_mutate_existing_artifacts() {
+        let out_dir = unique_temp_dir("zero-placeholder-busy");
+        fs::create_dir_all(&out_dir).expect("create out dir");
+        let events_path = out_dir.join("events.jsonl");
+        fs::write(&events_path, "previous-events\n").expect("seed events");
+        let commands = vec!["franken_zero_placeholder_scan".to_string()];
+
+        let lock = acquire_bundle_write_lock(&out_dir).expect("hold lock");
+        let err = write_zero_placeholder_scan_bundle(&out_dir, &commands)
+            .expect_err("write should block");
+        assert!(matches!(err, ZeroPlaceholderScanWriteError::Busy { .. }));
+        assert_eq!(
+            fs::read_to_string(&events_path).expect("read events after busy failure"),
+            "previous-events\n"
+        );
+        drop(lock);
+    }
+
+    #[test]
+    fn failed_rewrite_removes_stale_manifest_commit_marker() {
+        let out_dir = unique_temp_dir("zero-placeholder-stale-manifest");
+        fs::create_dir_all(&out_dir).expect("create out dir");
+        let run_manifest_path = out_dir.join("run_manifest.json");
+        fs::write(&run_manifest_path, "{\"stale\":true}\n").expect("seed stale manifest");
+        fs::create_dir_all(out_dir.join("zero_placeholder_inventory.json"))
+            .expect("create blocking directory");
+
+        let commands = vec!["franken_zero_placeholder_scan".to_string()];
+        let err = write_zero_placeholder_scan_bundle(&out_dir, &commands)
+            .expect_err("rewrite should fail when target path is a directory");
+        assert!(matches!(err, ZeroPlaceholderScanWriteError::Io { .. }));
+        assert!(
+            !run_manifest_path.exists(),
+            "stale commit marker should be removed on failed rewrite"
+        );
+        assert!(
+            !out_dir.join(".zero_placeholder_scan.lock").exists(),
+            "bundle lock should be released after failure",
+        );
+    }
+}

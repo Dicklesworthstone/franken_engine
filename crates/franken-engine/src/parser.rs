@@ -10983,49 +10983,31 @@ mod tests {
     }
 
     #[test]
-    fn tagged_template_expression_is_scaffold_call() {
-        let tree = parse_script("render`hello ${name}`");
-        match &tree.body[0] {
-            Statement::Expression(e) => {
-                let Expression::Call { callee, arguments } = &e.expression else {
-                    panic!("expected scaffold call, got {:?}", e.expression);
-                };
-                assert!(matches!(
-                    callee.as_ref(),
-                    Expression::Identifier(name) if name == "render"
-                ));
-                assert_eq!(arguments.len(), 1);
-                assert!(matches!(
-                    &arguments[0],
-                    Expression::TemplateLiteral {
-                        quasis,
-                        expressions
-                    } if quasis == &["hello ", ""] && matches!(&expressions[..], [Expression::Identifier(name)] if name == "name")
-                ));
-            }
-            other => panic!("expected Expression, got {other:?}"),
-        }
+    fn tagged_template_expression_is_rejected_as_unsupported() {
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("render`hello ${name}`", ParseGoal::Script)
+            .expect_err("tagged template expressions should be rejected");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert!(
+            err.message.contains("tagged template"),
+            "error message should mention tagged templates: {}",
+            err.message
+        );
     }
 
     #[test]
-    fn tagged_template_member_expression_is_scaffold_call() {
-        let tree = parse_script("view.render`ok`");
-        match &tree.body[0] {
-            Statement::Expression(e) => {
-                let Expression::Call { callee, arguments } = &e.expression else {
-                    panic!("expected scaffold call, got {:?}", e.expression);
-                };
-                assert!(matches!(callee.as_ref(), Expression::Member { .. }));
-                assert!(matches!(
-                    &arguments[..],
-                    [Expression::TemplateLiteral {
-                        quasis,
-                        expressions
-                    }] if quasis == &["ok"] && expressions.is_empty()
-                ));
-            }
-            other => panic!("expected Expression, got {other:?}"),
-        }
+    fn tagged_template_member_expression_is_rejected_as_unsupported() {
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("view.render`ok`", ParseGoal::Script)
+            .expect_err("tagged template member expressions should be rejected");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert!(
+            err.message.contains("tagged template"),
+            "error message should mention tagged templates: {}",
+            err.message
+        );
     }
 
     #[test]

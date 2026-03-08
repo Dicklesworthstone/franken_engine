@@ -75,10 +75,7 @@ fn parser_frontier_harness_fixture_schema_and_policy_are_stable() {
     );
     assert_eq!(fixture.contract_version, "1.0.0");
     assert_eq!(fixture.bead_id, "bd-1lsy.2.6.4");
-    assert_eq!(
-        fixture.policy_id,
-        "policy-parser-frontier-harness-v1"
-    );
+    assert_eq!(fixture.policy_id, "policy-parser-frontier-harness-v1");
 }
 
 #[test]

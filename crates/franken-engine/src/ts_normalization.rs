@@ -281,7 +281,8 @@ pub enum TsNormalizationError {
 }
 
 pub fn classify_source_language(source_label: Option<&str>, source: &str) -> SourceLanguage {
-    if source_label.is_some_and(source_label_has_typescript_extension) || source_looks_typescript(source)
+    if source_label.is_some_and(source_label_has_typescript_extension)
+        || source_looks_typescript(source)
     {
         SourceLanguage::TypeScript
     } else {
@@ -313,8 +314,13 @@ pub fn prepare_source_entry_for_public_entrypoints(
             normalization_output: None,
         }),
         SourceLanguage::TypeScript => {
-            let normalization_output =
-                normalize_typescript_to_es2020(source, &TsNormalizationConfig::default(), trace_id, decision_id, policy_id)?;
+            let normalization_output = normalize_typescript_to_es2020(
+                source,
+                &TsNormalizationConfig::default(),
+                trace_id,
+                decision_id,
+                policy_id,
+            )?;
             let source_ingestion = SourceIngestionSummary {
                 source_language,
                 normalization_applied: true,
@@ -803,9 +809,13 @@ fn looks_like_typed_variable_declaration(line: &str) -> bool {
     };
     let annotation = trimmed[..eq_index].trim();
     !annotation.is_empty()
-        && annotation
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$' | '<' | '>' | '[' | ']' | '|' | '&' | '?' | ',' | '.' | ' '))
+        && annotation.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '_' | '$' | '<' | '>' | '[' | ']' | '|' | '&' | '?' | ',' | '.' | ' '
+                )
+        })
 }
 
 fn normalize_spacing(source: String) -> String {
@@ -2880,7 +2890,10 @@ abstract class Base { }"#;
         )
         .unwrap();
 
-        assert_eq!(prepared.source_ingestion.source_language, SourceLanguage::JavaScript);
+        assert_eq!(
+            prepared.source_ingestion.source_language,
+            SourceLanguage::JavaScript
+        );
         assert!(!prepared.source_ingestion.normalization_applied);
         assert_eq!(prepared.prepared_source, "const value = 1;");
         assert!(prepared.normalization_output.is_none());
@@ -2901,7 +2914,10 @@ abstract class Base { }"#;
         )
         .unwrap();
 
-        assert_eq!(prepared.source_ingestion.source_language, SourceLanguage::TypeScript);
+        assert_eq!(
+            prepared.source_ingestion.source_language,
+            SourceLanguage::TypeScript
+        );
         assert!(prepared.source_ingestion.normalization_applied);
         assert_ne!(
             prepared.source_ingestion.original_source_hash,

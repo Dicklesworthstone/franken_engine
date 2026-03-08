@@ -117,7 +117,7 @@ run_rch_strict_logged() {
   local fifo_path fallback_flag_path reader_pid rch_pid rch_status=0
   local line
 
-  fifo_path="$(mktemp -u "${run_dir}/rch-stream.XXXXXX")"
+  fifo_path="$(mktemp -u "${TMPDIR:-/tmp}/rch-security-conformance-stream.XXXXXX")"
   fallback_flag_path="$(mktemp "${run_dir}/rch-fallback.XXXXXX")"
   rm -f "$fallback_flag_path"
   mkfifo "$fifo_path"

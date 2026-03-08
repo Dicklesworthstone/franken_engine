@@ -116,6 +116,7 @@ pub mod incentive_governance_mechanism;
 pub mod incident_replay_bundle;
 pub mod interleaving_explorer;
 pub mod ir_contract;
+pub mod iterator_protocol;
 pub mod js_runtime_lane;
 pub mod key_attestation;
 pub mod key_derivation;
@@ -988,7 +989,12 @@ fn prepare_eval_source(source: &str, trace_scope: &str) -> EvalResult<PreparedEv
     .map_err(|error| {
         let eval_error = EvalError::parse_failure(error.to_string());
         let eval_error = annotate_error_stage(eval_error, "ts_normalization", None);
-        attach_eval_correlation(eval_error, trace_id.as_str(), decision_id.as_str(), policy_id.as_str())
+        attach_eval_correlation(
+            eval_error,
+            trace_id.as_str(),
+            decision_id.as_str(),
+            policy_id.as_str(),
+        )
     })?;
     let parse_goal = infer_parse_goal(prepared.prepared_source.as_str());
 
@@ -1025,10 +1031,7 @@ fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
 }
 
 #[allow(clippy::result_large_err)]
-fn eval_via_native_pipeline(
-    prepared: &PreparedEvalSource,
-    lane: LaneChoice,
-) -> EvalResult<String> {
+fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> EvalResult<String> {
     let parser = CanonicalEs2020Parser;
     let syntax_tree = parser
         .parse_with_options(

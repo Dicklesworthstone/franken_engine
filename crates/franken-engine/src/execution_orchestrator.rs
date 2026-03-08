@@ -324,11 +324,11 @@ impl ExecutionOrchestrator {
             vec![
                 AdaptiveLaneArm {
                     lane_id: "quickjs".to_string(),
-                    description: "QuickJs-inspired deterministic lane".to_string(),
+                    description: "Baseline deterministic execution profile".to_string(),
                 },
                 AdaptiveLaneArm {
                     lane_id: "v8".to_string(),
-                    description: "V8-inspired throughput lane".to_string(),
+                    description: "Baseline throughput execution profile".to_string(),
                 },
             ],
             ADAPTIVE_ROUTER_GAMMA_MILLIONTHS,
@@ -1376,6 +1376,29 @@ mod tests {
     fn fresh_orchestrator_ledger_empty() {
         let orch = ExecutionOrchestrator::with_defaults();
         assert_eq!(orch.ledger().len(), 0);
+    }
+
+    #[test]
+    fn adaptive_router_uses_canonical_execution_profile_descriptions() {
+        let orch = ExecutionOrchestrator::with_defaults();
+        assert_eq!(orch.adaptive_router.arms.len(), 2);
+        assert_eq!(orch.adaptive_router.arms[0].lane_id, "quickjs");
+        assert_eq!(
+            orch.adaptive_router.arms[0].description,
+            "Baseline deterministic execution profile"
+        );
+        assert_eq!(orch.adaptive_router.arms[1].lane_id, "v8");
+        assert_eq!(
+            orch.adaptive_router.arms[1].description,
+            "Baseline throughput execution profile"
+        );
+        assert!(
+            orch.adaptive_router
+                .arms
+                .iter()
+                .all(|arm| !arm.description.contains("inspired")),
+            "adaptive-router descriptions must use the canonical execution-profile contract"
+        );
     }
 
     // -- trace / decision id format -------------------------------------------

@@ -427,7 +427,7 @@ fn canonical_action_label(action_label: &str) -> String {
     }
 }
 
-/// Build a default asymmetric loss policy for the current dual-profile router.
+/// Build a default asymmetric loss policy for the current execution-profile router.
 pub fn default_routing_loss_policy() -> AsymmetricLossPolicy {
     let mut policy = AsymmetricLossPolicy::new("default-routing-v1");
 

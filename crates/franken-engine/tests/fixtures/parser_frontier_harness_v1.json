@@ -1,0 +1,55 @@
+{
+  "schema_version": "franken-engine.parser-frontier-harness.contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.2.6.4",
+  "policy_id": "policy-parser-frontier-harness-v1",
+  "required_modes": [
+    "check",
+    "test",
+    "clippy",
+    "ci"
+  ],
+  "required_scenarios": [
+    "positive",
+    "negative",
+    "inventory",
+    "full"
+  ],
+  "required_manifest_keys": [
+    "schema_version",
+    "bead_id",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "deterministic_environment",
+    "replay_command",
+    "child_runs",
+    "commands",
+    "artifacts",
+    "operator_verification"
+  ],
+  "required_event_keys": [
+    "schema_version",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "parser_gap_report.json",
+    "case_diagnostics_dir"
+  ],
+  "required_child_runs": [
+    "optional_chaining",
+    "tagged_meta_frontier",
+    "parser_gap_inventory"
+  ],
+  "replay_command_template": "./scripts/e2e/parser_frontier_harness_replay.sh full ci"
+}

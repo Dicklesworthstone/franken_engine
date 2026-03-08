@@ -179,7 +179,7 @@ record_event() {
 run_step_rch() {
   local lane="$1"
   local command_text="$2"
-  local log_path remote_exit_code run_rch_exit command_slug missing_marker_reason missing_marker_error_code
+  local log_path remote_exit_code run_rch_exit command_slug missing_marker_reason missing_marker_error_code non_compilation_marker
   local attempt=0
   local max_retries="$rch_missing_marker_retry_count"
   shift 2
@@ -204,8 +204,19 @@ run_step_rch() {
     run_rch_exit=$?
     set -e
 
+    non_compilation_marker=false
+    if rch_strip_ansi "$log_path" | grep -Fq 'exec called with non-compilation command'; then
+      non_compilation_marker=true
+    fi
+
+    remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
+    if [[ -z "$remote_exit_code" && "$non_compilation_marker" == true ]]; then
+      echo "==> info: remote exit marker missing for non-compilation command; using rch process exit=${run_rch_exit}" \
+        | tee -a "$log_path"
+      remote_exit_code="${run_rch_exit}"
+    fi
+
     if [[ "$run_rch_exit" -ne 0 ]]; then
-      remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
       if [[ "$remote_exit_code" == "0" ]]; then
         echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
       elif [[ -n "$remote_exit_code" ]]; then
@@ -241,7 +252,6 @@ run_step_rch() {
       return 1
     fi
 
-    remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
     if [[ -z "$remote_exit_code" ]]; then
       missing_marker_reason="$(rch_missing_remote_exit_reason "$log_path" "$run_rch_exit")"
       if (( attempt < max_retries )) && [[ "$missing_marker_reason" == "timeout-before-remote-exit-marker" || "$missing_marker_reason" == "remote-exit-marker-lost-after-remote-start" ]]; then

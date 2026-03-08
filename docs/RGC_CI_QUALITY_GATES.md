@@ -42,6 +42,19 @@ The gate supports deterministic lane modes:
 All Cargo verification lanes in this gate run through `rch exec -- ...`.
 If `rch` reports local fallback semantics, the gate fails closed.
 
+The `fmt` lane is a special case because `cargo fmt --check` is a Cargo
+subcommand that `rch` classifies as a non-compilation command. In that case the
+daemon may omit the usual remote-exit marker even when the remote process exits
+successfully. The gate accepts that path only when:
+
+- the log explicitly reports `exec called with non-compilation command`
+- no local-fallback signature is present in the log
+- the `rch` process exit status is used as the authoritative fallback exit code
+
+This keeps `fmt` remote-only without misclassifying a successful non-compilation
+run as a provenance failure or hiding a real formatting failure behind a missing
+marker artifact.
+
 ## Regression Verdict Ingestion (RGC-703 hook)
 
 When a verdict file is provided (via `RGC_PERF_REGRESSION_VERDICT_PATH` or

@@ -201,6 +201,16 @@ fn rgc_ci_quality_script_contract_references_rch_for_heavy_lanes() {
         script.contains("remote-exit-marker-lost-after-remote-start"),
         "script must classify post-remote-start marker loss separately"
     );
+    assert!(
+        script.contains("exec called with non-compilation command"),
+        "script must detect rch non-compilation command warnings"
+    );
+    assert!(
+        script.contains(
+            "remote exit marker missing for non-compilation command; using rch process exit=${run_rch_exit}"
+        ),
+        "script must use the rch process exit for non-compilation commands without a remote marker"
+    );
 
     for contract in fixture.lane_command_contract {
         assert!(
@@ -243,6 +253,9 @@ fn rgc_ci_quality_doc_and_replay_wrapper_exist_and_reference_contract() {
     assert!(doc.contains("## Required Artifacts"));
     assert!(doc.contains("./scripts/run_rgc_ci_quality_gates.sh ci"));
     assert!(doc.contains("cargo fmt --check"));
+    assert!(doc.contains("non-compilation command"));
+    assert!(doc.contains("daemon may omit the usual remote-exit marker"));
+    assert!(doc.contains("authoritative fallback exit code"));
     assert!(doc.contains("./scripts/run_rgc_test_harness_suite.sh ci"));
     assert!(doc.contains("./scripts/run_rgc_verification_coverage_matrix.sh ci"));
     assert!(doc.contains("./scripts/e2e/rgc_test_harness_replay.sh ci"));

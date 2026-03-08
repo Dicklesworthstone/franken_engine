@@ -569,6 +569,29 @@ rch exec -- env RUSTUP_TOOLCHAIN=nightly \
 
 Gate run manifests are written under `artifacts/parser_phase0_gate/<timestamp>/run_manifest.json`.
 
+## Parser Frontier Harness
+
+`bd-1lsy.2.6.4` aggregates the existing parser frontier proof surfaces into one
+replayable harness: the optional-chaining suite, the tagged-template/meta-property
+frontier suite, and the parser-gap inventory bundle.
+
+```bash
+# parser frontier harness (rch-backed child suites + parser-gap inventory + contract checks)
+./scripts/run_parser_frontier_harness.sh ci
+
+# deterministic replay wrapper
+./scripts/e2e/parser_frontier_harness_replay.sh full ci
+```
+
+Artifacts are written under:
+
+- `artifacts/parser_frontier_harness/<timestamp>/run_manifest.json`
+- `artifacts/parser_frontier_harness/<timestamp>/events.jsonl`
+- `artifacts/parser_frontier_harness/<timestamp>/commands.txt`
+- `artifacts/parser_frontier_harness/<timestamp>/trace_ids.json`
+- `artifacts/parser_frontier_harness/<timestamp>/parser_gap_report.json`
+- `artifacts/parser_frontier_harness/<timestamp>/case_diagnostics/*.json`
+
 ## Lowering Gap Inventory
 
 `bd-1lsy.2.7` publishes a deterministic lowering-gap ledger that makes parser-ready versus execution-ready semantics explicit for the current placeholder and fail-closed lowering paths.

@@ -7,6 +7,7 @@
     "README.md",
     "docs/RGC_EXECUTION_PROFILE_CONTRACT_MIGRATION_V1.md",
     "crates/franken-engine/src/baseline_interpreter.rs",
+    "crates/franken-engine/src/execution_orchestrator.rs",
     "crates/franken-engine/src/runtime_decision_core.rs",
     "crates/franken-engine/src/runtime_decision_theory.rs",
     "crates/franken-engine/src/lib.rs",
@@ -51,6 +52,14 @@
     {
       "path": "crates/franken-engine/src/lib.rs",
       "fragment": "const ADAPTIVE_PROFILE_ROUTER_LABEL: &str = \"adaptive_profile_router\";"
+    },
+    {
+      "path": "crates/franken-engine/src/execution_orchestrator.rs",
+      "fragment": "description: \"Baseline deterministic execution profile\".to_string(),"
+    },
+    {
+      "path": "crates/franken-engine/src/execution_orchestrator.rs",
+      "fragment": "description: \"Baseline throughput execution profile\".to_string(),"
     },
     {
       "path": "crates/franken-engine/src/bin/frankenctl.rs",

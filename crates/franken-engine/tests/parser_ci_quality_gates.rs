@@ -729,7 +729,7 @@ fn parser_ci_quality_dominant_error_signature_tiebreaks_alphabetically() {
     // When two signatures tie in frequency the helper picks the one that sorts
     // first in the tie-break branch (right.0.cmp(&left.0) → reverse alphabetical
     // among equal counts, so earlier letter wins via the `.then_with`).
-    let runs = vec![
+    let runs = [
         CiRunRecord {
             run_id: "r1".into(),
             epoch: 1,
@@ -766,7 +766,7 @@ fn parser_ci_quality_dominant_error_signature_tiebreaks_alphabetically() {
 
 #[test]
 fn parser_ci_quality_dominant_error_signature_ignores_pass_runs() {
-    let runs = vec![CiRunRecord {
+    let runs = [CiRunRecord {
         run_id: "r1".into(),
         epoch: 1,
         suite_kind: "unit".into(),

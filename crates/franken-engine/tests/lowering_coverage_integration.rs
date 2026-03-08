@@ -1571,7 +1571,7 @@ fn lowering_binary_operators_all_arithmetic() {
         let ir0 = make_ir0(
             ParseGoal::Script,
             vec![make_expr_stmt(Expression::Binary {
-                operator: op.clone(),
+                operator: op,
                 left: Box::new(Expression::NumericLiteral(10)),
                 right: Box::new(Expression::NumericLiteral(3)),
             })],
@@ -1594,7 +1594,7 @@ fn lowering_binary_comparison_operators() {
         let ir0 = make_ir0(
             ParseGoal::Script,
             vec![make_expr_stmt(Expression::Binary {
-                operator: op.clone(),
+                operator: op,
                 left: Box::new(Expression::NumericLiteral(1)),
                 right: Box::new(Expression::NumericLiteral(2)),
             })],
@@ -1614,7 +1614,7 @@ fn lowering_binary_logical_operators() {
         let ir0 = make_ir0(
             ParseGoal::Script,
             vec![make_expr_stmt(Expression::Binary {
-                operator: op.clone(),
+                operator: op,
                 left: Box::new(Expression::BooleanLiteral(true)),
                 right: Box::new(Expression::BooleanLiteral(false)),
             })],
@@ -1659,7 +1659,7 @@ fn lowering_unary_operators_all_variants() {
         let ir0 = make_ir0(
             ParseGoal::Script,
             vec![make_expr_stmt(Expression::Unary {
-                operator: op.clone(),
+                operator: op,
                 argument: Box::new(Expression::NumericLiteral(1)),
             })],
         );
@@ -1704,9 +1704,21 @@ fn lowering_conditional_produces_branch_ops() {
         has_branch_ops,
         "conditional expression should lower through explicit branch control flow"
     );
+    // A Pop after JumpIfFalsy is correct: it clears the test value from the
+    // stack before evaluating the selected branch.  Eager evaluation would
+    // mean both branches appear without any JumpIfFalsy in between.
+    let jump_pos = ir1
+        .module
+        .ops
+        .iter()
+        .position(|op| matches!(op, Ir1Op::JumpIfFalsy { .. }))
+        .expect("conditional must emit JumpIfFalsy");
+    let pop_before_jump = ir1.module.ops[..jump_pos]
+        .iter()
+        .any(|op| matches!(op, Ir1Op::Pop));
     assert!(
-        !ir1.module.ops.iter().any(|op| matches!(op, Ir1Op::Pop)),
-        "conditional expression should not eagerly evaluate both branches"
+        !pop_before_jump,
+        "conditional expression should not eagerly evaluate both branches before branching"
     );
 }
 

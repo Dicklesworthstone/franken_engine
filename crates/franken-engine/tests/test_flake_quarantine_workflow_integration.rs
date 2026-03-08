@@ -408,11 +408,12 @@ fn classify_flakes_reproducer_bundle_fields() {
 
 #[test]
 fn classify_flakes_dominant_error_signature_most_frequent() {
-    let mut runs = Vec::new();
-    runs.push(make_run("p1", 1, "e2e", "sc-sig", "pass", None, 1));
-    runs.push(make_run("f1", 1, "e2e", "sc-sig", "fail", Some("sig-A"), 1));
-    runs.push(make_run("f2", 1, "e2e", "sc-sig", "fail", Some("sig-A"), 1));
-    runs.push(make_run("f3", 1, "e2e", "sc-sig", "fail", Some("sig-B"), 1));
+    let runs = vec![
+        make_run("p1", 1, "e2e", "sc-sig", "pass", None, 1),
+        make_run("f1", 1, "e2e", "sc-sig", "fail", Some("sig-A"), 1),
+        make_run("f2", 1, "e2e", "sc-sig", "fail", Some("sig-A"), 1),
+        make_run("f3", 1, "e2e", "sc-sig", "fail", Some("sig-B"), 1),
+    ];
     let result = classify_flakes(&runs, &default_sensitive_policy());
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].dominant_error_signature, "sig-A");
@@ -420,9 +421,10 @@ fn classify_flakes_dominant_error_signature_most_frequent() {
 
 #[test]
 fn classify_flakes_dominant_error_signature_none_when_no_error_sigs() {
-    let mut runs = Vec::new();
-    runs.push(make_run("p1", 1, "e2e", "sc-no", "pass", None, 1));
-    runs.push(make_run("f1", 1, "e2e", "sc-no", "fail", None, 1));
+    let runs = vec![
+        make_run("p1", 1, "e2e", "sc-no", "pass", None, 1),
+        make_run("f1", 1, "e2e", "sc-no", "fail", None, 1),
+    ];
     let result = classify_flakes(&runs, &default_sensitive_policy());
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].dominant_error_signature, "none");

@@ -199,7 +199,7 @@ fn log_append_multiple() {
         let receipt = make_receipt(
             &format!("old-{i}"),
             &format!("new-{i}"),
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         );
         let seq = log
             .append(
@@ -224,12 +224,12 @@ fn log_entries_have_hash_chain() {
         let receipt = make_receipt(
             &format!("old-{i}"),
             &format!("new-{i}"),
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         );
         log.append(
             receipt,
             ReplacementKind::DelegateToNative,
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         )
         .unwrap();
     }
@@ -269,12 +269,12 @@ fn inclusion_proof_verifies() {
         let receipt = make_receipt(
             &format!("old-{i}"),
             &format!("new-{i}"),
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         );
         log.append(
             receipt,
             ReplacementKind::DelegateToNative,
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         )
         .unwrap();
     }
@@ -334,12 +334,12 @@ fn consistency_proof_between_checkpoints() {
         let receipt = make_receipt(
             &format!("old-{i}"),
             &format!("new-{i}"),
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         );
         log.append(
             receipt,
             ReplacementKind::DelegateToNative,
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         )
         .unwrap();
     }
@@ -349,12 +349,12 @@ fn consistency_proof_between_checkpoints() {
         let receipt = make_receipt(
             &format!("old-{i}"),
             &format!("new-{i}"),
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         );
         log.append(
             receipt,
             ReplacementKind::DelegateToNative,
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         )
         .unwrap();
     }
@@ -375,12 +375,12 @@ fn query_all() {
         let receipt = make_receipt(
             &format!("old-{i}"),
             &format!("new-{i}"),
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         );
         log.append(
             receipt,
             ReplacementKind::DelegateToNative,
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         )
         .unwrap();
     }
@@ -488,12 +488,12 @@ fn audit_populated_log() {
         let receipt = make_receipt(
             &format!("old-{i}"),
             &format!("new-{i}"),
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         );
         log.append(
             receipt,
             ReplacementKind::DelegateToNative,
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         )
         .unwrap();
     }
@@ -614,12 +614,12 @@ fn full_lifecycle_lineage_log() {
         let receipt = make_receipt(
             &format!("cell-v{i}"),
             &format!("cell-v{}", i + 1),
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         );
         log.append(
             receipt,
             ReplacementKind::DelegateToNative,
-            (i + 1) as u64 * 1_000_000,
+            (i + 1) * 1_000_000,
         )
         .unwrap();
     }

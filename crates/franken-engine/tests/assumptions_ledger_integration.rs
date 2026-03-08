@@ -994,7 +994,7 @@ fn ledger_error_display_invalid_transition() {
 
 #[test]
 fn ledger_error_all_display_strings_distinct() {
-    let errors = vec![
+    let errors = [
         LedgerError::DuplicateAssumption("x".into()),
         LedgerError::AssumptionNotFound("x".into()),
         LedgerError::MonitorNotFound("x".into()),

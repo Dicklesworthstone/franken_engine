@@ -886,7 +886,7 @@ fn generator_empty_policy_id_rejected() {
         },
         0xAA,
     );
-    let err = result.err().expect("should fail with empty policy_id");
+    let err = result.expect_err("should fail with empty policy_id");
     assert!(err.to_string().contains("policy_id"));
 }
 
@@ -901,8 +901,7 @@ fn generator_zero_campaigns_per_hour_rejected() {
         0xBB,
     );
     let err = result
-        .err()
-        .expect("should fail with zero campaigns_per_hour");
+        .expect_err("should fail with zero campaigns_per_hour");
     assert!(err.to_string().contains("campaigns_per_hour"));
 }
 

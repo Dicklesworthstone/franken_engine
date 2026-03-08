@@ -517,18 +517,16 @@ fn decision_context_attack_regime_forces_safe() {
     };
     let outcome = ctx.decide(&state);
     // Attack regime should select the safe (first) lane
-    match &outcome.action {
-        LaneAction::RouteTo(lane) => {
-            // First lane in default config
-            assert!(
-                ctx.policy_bundle()
-                    .lanes
-                    .first()
-                    .is_some_and(|l| *l == *lane)
-            );
-        }
-        _ => {} // FallbackSafe is also acceptable
+    if let LaneAction::RouteTo(lane) = &outcome.action {
+        // First lane in default config
+        assert!(
+            ctx.policy_bundle()
+                .lanes
+                .first()
+                .is_some_and(|l| *l == *lane)
+        );
     }
+    // FallbackSafe is also acceptable
 }
 
 #[test]
@@ -539,17 +537,15 @@ fn decision_context_safe_mode_forces_safe_lane() {
         ..default_state()
     };
     let outcome = ctx.decide(&state);
-    match &outcome.action {
-        LaneAction::RouteTo(lane) => {
-            assert!(
-                ctx.policy_bundle()
-                    .lanes
-                    .first()
-                    .is_some_and(|l| *l == *lane)
-            );
-        }
-        _ => {} // FallbackSafe also acceptable
+    if let LaneAction::RouteTo(lane) = &outcome.action {
+        assert!(
+            ctx.policy_bundle()
+                .lanes
+                .first()
+                .is_some_and(|l| *l == *lane)
+        );
     }
+    // FallbackSafe also acceptable
 }
 
 // ===========================================================================

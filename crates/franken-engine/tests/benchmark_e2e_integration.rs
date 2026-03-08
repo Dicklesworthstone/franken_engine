@@ -20,7 +20,7 @@ use frankenengine_engine::benchmark_e2e::{
 fn constants_non_empty() {
     assert!(!BENCHMARK_E2E_COMPONENT.is_empty());
     assert!(!BENCHMARK_E2E_SCHEMA_VERSION.is_empty());
-    assert!(MIN_START_BUDGET_MILLIONTHS > 0);
+    const { assert!(MIN_START_BUDGET_MILLIONTHS > 0) };
 }
 
 // ── ScaleProfile ────────────────────────────────────────────────────────

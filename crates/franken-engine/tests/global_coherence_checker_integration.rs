@@ -401,7 +401,7 @@ fn adjacency_for_kind_filters_correctly() {
     );
     let pc = g.adjacency_for_kind(&CompositionEdgeKind::ParentChild);
     assert_eq!(pc.get("A").map(|v| v.len()), Some(1));
-    assert!(pc.get("B").is_none());
+    assert!(!pc.contains_key("B"));
 
     let cf = g.adjacency_for_kind(&CompositionEdgeKind::ContextFlow);
     assert_eq!(cf.get("A").unwrap(), &vec!["C".to_string()]);
@@ -1313,7 +1313,7 @@ fn blocking_violations_filtered() {
     let result = checker().check(&inp).unwrap();
     let blocking = result.blocking_violations();
     // Unresolved context is blocking (critical), orphaned provider is not (low)
-    assert!(blocking.len() >= 1);
+    assert!(!blocking.is_empty());
     assert!(blocking.iter().all(|v| v.severity.is_blocking()));
 }
 

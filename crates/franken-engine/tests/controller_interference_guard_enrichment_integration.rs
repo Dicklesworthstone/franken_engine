@@ -460,7 +460,7 @@ fn subscription_sequences_are_monotonic() {
     ];
     let eval = run_scenario(&config, &regs, &[], &writes, &subs, &BTreeMap::new());
 
-    for (_key, updates) in &eval.subscription_streams {
+    for updates in eval.subscription_streams.values() {
         let mut prev_seq = 0u64;
         for upd in updates {
             assert!(

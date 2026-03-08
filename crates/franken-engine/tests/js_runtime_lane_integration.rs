@@ -599,7 +599,7 @@ fn dom_tree_remove_property() {
         key: "class".into(),
     })
     .unwrap();
-    assert!(t.get(id).unwrap().properties.get("class").is_none());
+    assert!(!t.get(id).unwrap().properties.contains_key("class"));
 }
 
 #[test]

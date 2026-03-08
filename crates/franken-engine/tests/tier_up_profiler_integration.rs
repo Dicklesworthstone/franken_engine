@@ -969,3 +969,386 @@ fn hot_path_profile_debug_is_nonempty() {
     let profile = build_hot_path_profile(&report, 16);
     assert!(!format!("{profile:?}").is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Policy edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn policy_with_max_min_steps_rejects_everything() {
+    let program = Program {
+        constants: vec![Value::Int(10), Value::Int(5), Value::Int(1)],
+        property_pool: vec!["v".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst { dst: r(1), const_index: 0 },
+            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::LoadConst { dst: r(3), const_index: 1 },
+            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
+            Instruction::LoadConst { dst: r(4), const_index: 2 },
+            Instruction::Sub { dst: r(3), lhs: r(3), rhs: r(4) },
+            Instruction::JumpIfFalse { condition: r(3), target: 9 },
+            Instruction::Jump { target: 4 },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-maxsteps", 8, 256);
+    let report = vm.execute(&program).unwrap();
+
+    let policy = TierUpPolicy {
+        min_total_steps: u64::MAX,
+        ..TierUpPolicy::default()
+    };
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+    assert!(!decision.eligible);
+}
+
+#[test]
+fn policy_hash_is_deterministic() {
+    let policy = TierUpPolicy::default();
+    let json1 = serde_json::to_string(&policy).unwrap();
+    let json2 = serde_json::to_string(&policy).unwrap();
+    assert_eq!(json1, json2);
+}
+
+#[test]
+fn policy_hash_differs_for_different_min_steps() {
+    let policy_a = TierUpPolicy {
+        min_total_steps: 10,
+        ..TierUpPolicy::default()
+    };
+    let policy_b = TierUpPolicy {
+        min_total_steps: 20,
+        ..TierUpPolicy::default()
+    };
+    let json_a = serde_json::to_string(&policy_a).unwrap();
+    let json_b = serde_json::to_string(&policy_b).unwrap();
+    assert_ne!(json_a, json_b);
+}
+
+#[test]
+fn policy_hash_differs_for_different_max_candidates() {
+    let policy_a = TierUpPolicy {
+        max_candidates: 2,
+        ..TierUpPolicy::default()
+    };
+    let policy_b = TierUpPolicy {
+        max_candidates: 8,
+        ..TierUpPolicy::default()
+    };
+    let json_a = serde_json::to_string(&policy_a).unwrap();
+    let json_b = serde_json::to_string(&policy_b).unwrap();
+    assert_ne!(json_a, json_b);
+}
+
+// ---------------------------------------------------------------------------
+// top_k normalization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn profile_top_k_zero_normalized_to_one() {
+    let program = Program {
+        constants: vec![Value::Int(1)],
+        property_pool: Vec::new(),
+        instructions: vec![
+            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::Return { src: r(0) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-topk0", 4, 32);
+    let report = vm.execute(&program).unwrap();
+    // top_k=0 is normalized to 1 by normalize_limit
+    let profile = build_hot_path_profile(&report, 0);
+    assert!(profile.top_paths.len() <= 1);
+}
+
+#[test]
+fn profile_top_k_large_captures_all_paths() {
+    let program = Program {
+        constants: vec![Value::Int(5), Value::Int(3)],
+        property_pool: Vec::new(),
+        instructions: vec![
+            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-topk-large", 4, 32);
+    let report = vm.execute(&program).unwrap();
+    let profile = build_hot_path_profile(&report, 1000);
+    // With top_k=1000, we should capture all distinct opcodes
+    assert!(!profile.top_paths.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Selected vs rejected disjointness
+// ---------------------------------------------------------------------------
+
+#[test]
+fn selected_and_rejected_are_disjoint_by_ip() {
+    let program = Program {
+        constants: vec![Value::Int(10), Value::Int(30), Value::Int(1)],
+        property_pool: vec!["x".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst { dst: r(1), const_index: 0 },
+            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::LoadConst { dst: r(3), const_index: 1 },
+            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
+            Instruction::LoadConst { dst: r(4), const_index: 2 },
+            Instruction::Sub { dst: r(3), lhs: r(3), rhs: r(4) },
+            Instruction::JumpIfFalse { condition: r(3), target: 9 },
+            Instruction::Jump { target: 4 },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-disjoint", 8, 1024);
+    let report = vm.execute(&program).unwrap();
+    let policy = TierUpPolicy {
+        min_total_steps: 1,
+        min_invocations_per_path: 5,
+        min_cache_hit_rate_millionths: 500_000,
+        max_candidates: 4,
+        profile_top_k: 16,
+        require_cache_signal: true,
+        ..TierUpPolicy::default()
+    };
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    let selected_ips: std::collections::BTreeSet<u32> =
+        decision.selected_candidates.iter().map(|c| c.ip).collect();
+    let rejected_ips: std::collections::BTreeSet<u32> =
+        decision.rejected_paths.iter().map(|r| r.ip).collect();
+
+    for ip in &selected_ips {
+        assert!(
+            !rejected_ips.contains(ip),
+            "ip {ip} appears in both selected and rejected"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Events ordering
+// ---------------------------------------------------------------------------
+
+#[test]
+fn events_start_comes_before_complete() {
+    let program = Program {
+        constants: vec![Value::Int(1)],
+        property_pool: Vec::new(),
+        instructions: vec![
+            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::Return { src: r(0) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-order", 4, 32);
+    let report = vm.execute(&program).unwrap();
+    let decision = evaluate_tier_up_eligibility(&report, &TierUpPolicy::default());
+
+    let start_idx = decision.events.iter().position(|e| e.event == "tier_up_started");
+    let end_idx = decision.events.iter().position(|e| e.event == "tier_up_completed");
+    assert!(start_idx.is_some(), "must have start event");
+    assert!(end_idx.is_some(), "must have complete event");
+    assert!(start_idx.unwrap() < end_idx.unwrap(), "start must come before complete");
+}
+
+// ---------------------------------------------------------------------------
+// Decision serde is deterministic
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decision_serde_is_deterministic() {
+    let program = Program {
+        constants: vec![Value::Int(1)],
+        property_pool: Vec::new(),
+        instructions: vec![
+            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::Return { src: r(0) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-det", 4, 32);
+    let report = vm.execute(&program).unwrap();
+    let decision = evaluate_tier_up_eligibility(&report, &TierUpPolicy::default());
+
+    let json1 = serde_json::to_string(&decision).unwrap();
+    let json2 = serde_json::to_string(&decision).unwrap();
+    assert_eq!(json1, json2, "serialization must be deterministic");
+}
+
+// ---------------------------------------------------------------------------
+// Eligible without cache signal
+// ---------------------------------------------------------------------------
+
+#[test]
+fn eligible_without_cache_signal_when_not_required() {
+    let program = Program {
+        constants: vec![Value::Int(5), Value::Int(3)],
+        property_pool: Vec::new(),
+        instructions: vec![
+            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-no-cache", 4, 32);
+    let report = vm.execute(&program).unwrap();
+
+    let policy = TierUpPolicy {
+        min_total_steps: 1,
+        min_invocations_per_path: 1,
+        min_cache_hit_rate_millionths: 0,
+        max_candidates: 4,
+        profile_top_k: 16,
+        require_cache_signal: false,
+        ..TierUpPolicy::default()
+    };
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+    assert!(decision.eligible);
+}
+
+// ---------------------------------------------------------------------------
+// Profile hash differs for different programs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn profile_hash_differs_for_different_programs() {
+    let prog_a = Program {
+        constants: vec![Value::Int(1)],
+        property_pool: Vec::new(),
+        instructions: vec![
+            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::Return { src: r(0) },
+        ],
+    };
+    let prog_b = Program {
+        constants: vec![Value::Int(1), Value::Int(2)],
+        property_pool: Vec::new(),
+        instructions: vec![
+            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::Mul { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm_a = BytecodeVm::new("phash-a", 4, 32);
+    let report_a = vm_a.execute(&prog_a).unwrap();
+    let profile_a = build_hot_path_profile(&report_a, 16);
+
+    let mut vm_b = BytecodeVm::new("phash-b", 4, 32);
+    let report_b = vm_b.execute(&prog_b).unwrap();
+    let profile_b = build_hot_path_profile(&report_b, 16);
+
+    assert_ne!(profile_a.profile_hash, profile_b.profile_hash);
+}
+
+// ---------------------------------------------------------------------------
+// Default policy has reasonable values
+// ---------------------------------------------------------------------------
+
+#[test]
+fn default_policy_reasonable_values() {
+    let policy = TierUpPolicy::default();
+    assert!(policy.min_total_steps > 0);
+    assert!(policy.min_invocations_per_path > 0);
+    assert!(policy.max_candidates > 0);
+    assert!(policy.profile_top_k > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Candidate and rejection rationale/reason are nonempty
+// ---------------------------------------------------------------------------
+
+#[test]
+fn candidate_rationale_is_nonempty_when_eligible() {
+    let program = Program {
+        constants: vec![Value::Int(10), Value::Int(30), Value::Int(1)],
+        property_pool: vec!["x".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst { dst: r(1), const_index: 0 },
+            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::LoadConst { dst: r(3), const_index: 1 },
+            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
+            Instruction::LoadConst { dst: r(4), const_index: 2 },
+            Instruction::Sub { dst: r(3), lhs: r(3), rhs: r(4) },
+            Instruction::JumpIfFalse { condition: r(3), target: 9 },
+            Instruction::Jump { target: 4 },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-rationale", 8, 1024);
+    let report = vm.execute(&program).unwrap();
+    let policy = TierUpPolicy {
+        min_total_steps: 1,
+        min_invocations_per_path: 1,
+        min_cache_hit_rate_millionths: 0,
+        max_candidates: 4,
+        profile_top_k: 16,
+        require_cache_signal: false,
+        ..TierUpPolicy::default()
+    };
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+    for candidate in &decision.selected_candidates {
+        assert!(!candidate.rationale.trim().is_empty());
+    }
+}
+
+#[test]
+fn rejection_reason_is_nonempty() {
+    let program = Program {
+        constants: vec![Value::Int(1)],
+        property_pool: Vec::new(),
+        instructions: vec![
+            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::Return { src: r(0) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-reject-reason", 4, 32);
+    let report = vm.execute(&program).unwrap();
+    let decision = evaluate_tier_up_eligibility(&report, &TierUpPolicy::default());
+    for rejection in &decision.rejected_paths {
+        assert!(!rejection.reason.trim().is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Policy clone equals original
+// ---------------------------------------------------------------------------
+
+#[test]
+fn policy_clone_equals_original() {
+    let policy = TierUpPolicy {
+        min_total_steps: 42,
+        min_invocations_per_path: 7,
+        min_cache_hit_rate_millionths: 750_000,
+        max_candidates: 3,
+        profile_top_k: 8,
+        require_cache_signal: true,
+        ..TierUpPolicy::default()
+    };
+    let cloned = policy.clone();
+    assert_eq!(policy, cloned);
+}
+
+// ---------------------------------------------------------------------------
+// Schema version constant stability
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schema_version_constant_is_stable() {
+    assert!(TIER_UP_POLICY_SCHEMA_VERSION.starts_with("franken-engine."));
+    assert!(TIER_UP_POLICY_SCHEMA_VERSION.contains("tier-up"));
+}

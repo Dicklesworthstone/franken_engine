@@ -434,7 +434,7 @@ fn capability_display_matches_inner() {
 
 #[test]
 fn capability_ordering_lexicographic() {
-    let mut caps = vec![cap("z:cap"), cap("a:cap"), cap("m:cap")];
+    let mut caps = [cap("z:cap"), cap("a:cap"), cap("m:cap")];
     caps.sort();
     assert_eq!(caps[0].as_str(), "a:cap");
     assert_eq!(caps[1].as_str(), "m:cap");

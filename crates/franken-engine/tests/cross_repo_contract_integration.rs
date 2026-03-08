@@ -1286,7 +1286,7 @@ fn fastapi_endpoint_response_deterministic_serde() {
 
 #[test]
 fn fastapi_endpoint_response_log_structured_compliance() {
-    let json = serde_json::to_value(&sample_health_response()).unwrap();
+    let json = serde_json::to_value(sample_health_response()).unwrap();
     let log_json = &json["log"];
     let violations = verify_structured_log(log_json, "fastapi_rust");
     assert!(violations.is_empty());

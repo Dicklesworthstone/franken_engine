@@ -368,11 +368,11 @@ fn compare_increments_replay_count() {
     let trace = simple_trace();
     let policies = vec![make_alternate_policy("alt", "d")];
     engine
-        .compare(&[trace.clone()], &policies, &default_scope(), None)
+        .compare(std::slice::from_ref(&trace), &policies, &default_scope(), None)
         .unwrap();
     assert_eq!(engine.replay_count(), 1);
     engine
-        .compare(&[trace], &policies, &default_scope(), None)
+        .compare(std::slice::from_ref(&trace), &policies, &default_scope(), None)
         .unwrap();
     assert_eq!(engine.replay_count(), 2);
 }
@@ -553,9 +553,9 @@ fn comparison_result_artifact_hash_deterministic() {
     let scope = default_scope();
 
     let r1 = engine1
-        .compare(&[trace.clone()], &policies, &scope, None)
+        .compare(std::slice::from_ref(&trace), &policies, &scope, None)
         .unwrap();
-    let r2 = engine2.compare(&[trace], &policies, &scope, None).unwrap();
+    let r2 = engine2.compare(std::slice::from_ref(&trace), &policies, &scope, None).unwrap();
     assert_eq!(r1.artifact_hash, r2.artifact_hash);
 }
 

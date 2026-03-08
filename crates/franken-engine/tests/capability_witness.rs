@@ -2168,7 +2168,7 @@ fn witness_clone_independence() {
     let w1 = build_test_witness();
     let mut w2 = w1.clone();
     w2.metadata.insert("cloned".to_string(), "true".to_string());
-    assert!(w1.metadata.get("cloned").is_none());
+    assert!(!w1.metadata.contains_key("cloned"));
 }
 
 #[test]

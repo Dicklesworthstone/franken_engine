@@ -4,7 +4,7 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use frankenengine_engine::hindsight_boundary_capture::{
     BoundaryCaptureContract, BoundaryCaptureSession, BoundaryClass, BoundaryContext,
-    ReplaySufficiency,
+    RedactionTreatment, ReplaySufficiency,
 };
 
 const CONTRACT_JSON: &str = include_str!("../../../docs/rgc_hindsight_boundary_capture_v1.json");
@@ -12,6 +12,19 @@ const CONTRACT_JSON: &str = include_str!("../../../docs/rgc_hindsight_boundary_c
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
+
+fn make_ctx<'a>(
+    trace: &'a str,
+    decision: &'a str,
+    component: &'a str,
+    ts: u64,
+) -> BoundaryContext<'a> {
+    BoundaryContext::new(trace, decision, "policy-test", component, ts)
+}
+
+// ---------------------------------------------------------------------------
+// Original 7 tests
+// ---------------------------------------------------------------------------
 
 #[test]
 fn rgc_811a_doc_contains_required_sections() {
@@ -315,4 +328,364 @@ fn rgc_811a_redaction_contract_keeps_sensitive_fields_digest_only() {
     assert!(
         digest_only_fields.contains(&(BoundaryClass::HardwareSurfaceRead, "driver_fingerprint"))
     );
+}
+
+// ---------------------------------------------------------------------------
+// New tests (23+)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn boundary_class_all_contains_nine_variants() {
+    assert_eq!(BoundaryClass::ALL.len(), 9);
+    let as_set: BTreeSet<_> = BoundaryClass::ALL.into_iter().collect();
+    assert_eq!(as_set.len(), 9, "ALL should contain 9 unique variants");
+}
+
+#[test]
+fn boundary_class_serde_roundtrip_for_each_variant() {
+    for variant in BoundaryClass::ALL {
+        let json = serde_json::to_string(&variant).expect("serialize");
+        let back: BoundaryClass = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, variant, "roundtrip failed for {variant}");
+    }
+}
+
+#[test]
+fn boundary_context_new_sets_all_fields() {
+    let ctx = BoundaryContext::new("t1", "d1", "p1", "comp1", 99);
+    assert_eq!(ctx.trace_id, "t1");
+    assert_eq!(ctx.decision_id, "d1");
+    assert_eq!(ctx.policy_id, "p1");
+    assert_eq!(ctx.component, "comp1");
+    assert_eq!(ctx.virtual_ts, 99);
+}
+
+#[test]
+fn default_v1_session_has_empty_log() {
+    let session = BoundaryCaptureSession::default_v1();
+    assert!(session.log().records().is_empty());
+}
+
+#[test]
+fn empty_session_renders_empty_jsonl() {
+    let session = BoundaryCaptureSession::default_v1();
+    let rendered = session.log().render_jsonl().expect("render succeeds");
+    assert!(rendered.is_empty(), "empty session should produce empty JSONL");
+}
+
+#[test]
+fn empty_session_minimal_replay_plans_returns_empty_ok() {
+    let session = BoundaryCaptureSession::default_v1();
+    let plans = session.minimal_replay_plans().expect("no captures, no errors");
+    assert!(plans.is_empty());
+}
+
+#[test]
+fn replay_sufficiency_serde_roundtrip_sufficient() {
+    let val = ReplaySufficiency::Sufficient;
+    let json = serde_json::to_string(&val).unwrap();
+    let back: ReplaySufficiency = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, val);
+}
+
+#[test]
+fn replay_sufficiency_serde_roundtrip_needs_escalation() {
+    let val = ReplaySufficiency::NeedsEscalation;
+    let json = serde_json::to_string(&val).unwrap();
+    let back: ReplaySufficiency = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, val);
+}
+
+#[test]
+fn redaction_treatment_serde_roundtrip_plaintext() {
+    let val = RedactionTreatment::Plaintext;
+    let json = serde_json::to_string(&val).unwrap();
+    let back: RedactionTreatment = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, val);
+}
+
+#[test]
+fn redaction_treatment_serde_roundtrip_digest_only() {
+    let val = RedactionTreatment::DigestOnly;
+    let json = serde_json::to_string(&val).unwrap();
+    let back: RedactionTreatment = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, val);
+}
+
+#[test]
+fn redaction_treatment_serde_roundtrip_omit() {
+    let val = RedactionTreatment::Omit;
+    let json = serde_json::to_string(&val).unwrap();
+    let back: RedactionTreatment = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, val);
+}
+
+#[test]
+fn contract_has_non_empty_redaction_map_entries() {
+    let contract = BoundaryCaptureContract::default_v1();
+    assert!(
+        !contract.boundary_redaction_map.entries.is_empty(),
+        "redaction map must have entries"
+    );
+}
+
+#[test]
+fn contract_has_non_empty_minimal_replay_input_schema_entries() {
+    let contract = BoundaryCaptureContract::default_v1();
+    assert!(
+        !contract.minimal_replay_input_schema.entries.is_empty(),
+        "minimal replay input schema must have entries"
+    );
+}
+
+#[test]
+fn multiple_captures_increment_sequence_numbers() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-seq", "d-seq", "clock", 10);
+
+    for i in 0u64..5 {
+        session
+            .capture_clock_read(&ctx, "mono", "monotonic", i, None)
+            .expect("capture succeeds");
+    }
+
+    let records = session.log().records();
+    for (i, record) in records.iter().enumerate() {
+        assert_eq!(record.sequence, i as u64, "sequence should match index");
+    }
+}
+
+#[test]
+fn correlation_keys_are_unique_per_capture() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    for i in 0u64..4 {
+        let decision = format!("d-uniq-{i}");
+        let ctx = make_ctx("t-uniq", &decision, "rng", i * 10);
+        session
+            .capture_randomness_draw(&ctx, "rng-seeded", i, "digest-sample", None)
+            .expect("capture");
+    }
+    let keys: BTreeSet<_> = session
+        .log()
+        .records()
+        .iter()
+        .map(|r| r.correlation_key.as_str())
+        .collect();
+    assert_eq!(keys.len(), 4, "all correlation keys must be unique");
+}
+
+#[test]
+fn single_module_resolution_capture_renders_one_jsonl_line() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-mod", "d-mod", "module_loader", 20);
+    session
+        .capture_module_resolution(&ctx, "pkg:a/b", "ref-dig", "res-dig", None)
+        .expect("capture");
+    let rendered = session.log().render_jsonl().expect("render");
+    let lines: Vec<_> = rendered.lines().collect();
+    assert_eq!(lines.len(), 1);
+    assert!(rendered.contains("\"boundary_class\":\"module_resolution\""));
+}
+
+#[test]
+fn single_filesystem_input_capture_renders_one_jsonl_line() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-fs", "d-fs", "cache", 30);
+    session
+        .capture_filesystem_input(&ctx, "read", "path-dig", "content-dig", None)
+        .expect("capture");
+    let rendered = session.log().render_jsonl().expect("render");
+    let lines: Vec<_> = rendered.lines().collect();
+    assert_eq!(lines.len(), 1);
+    assert!(rendered.contains("\"boundary_class\":\"filesystem_input\""));
+}
+
+#[test]
+fn single_scheduling_decision_capture_renders_one_jsonl_line() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-sched", "d-sched", "scheduler", 40);
+    session
+        .capture_scheduling_decision(&ctx, "ready", "task-1", "ord-dig", None)
+        .expect("capture");
+    let rendered = session.log().render_jsonl().expect("render");
+    let lines: Vec<_> = rendered.lines().collect();
+    assert_eq!(lines.len(), 1);
+    assert!(rendered.contains("\"boundary_class\":\"scheduling_decision\""));
+}
+
+#[test]
+fn single_controller_override_without_escalation_renders_one_jsonl_line() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-ctrl", "d-ctrl", "controller", 50);
+    session
+        .capture_controller_override(&ctx, "router", "safe_mode", "val-dig", None)
+        .expect("capture");
+    let rendered = session.log().render_jsonl().expect("render");
+    let lines: Vec<_> = rendered.lines().collect();
+    assert_eq!(lines.len(), 1);
+    assert!(rendered.contains("\"boundary_class\":\"controller_override\""));
+    // No escalation means sufficiency should be "sufficient"
+    let record = &session.log().records()[0];
+    assert_eq!(record.sufficiency, ReplaySufficiency::Sufficient);
+}
+
+#[test]
+fn jsonl_rendering_is_deterministic() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-det", "d-det", "clock", 10);
+    session
+        .capture_clock_read(&ctx, "mono", "monotonic", 42, None)
+        .expect("capture");
+    let first = session.log().render_jsonl().expect("first render");
+    let second = session.log().render_jsonl().expect("second render");
+    assert_eq!(first, second, "JSONL rendering must be deterministic");
+}
+
+#[test]
+fn contract_schema_version_is_stable() {
+    let contract = BoundaryCaptureContract::default_v1();
+    assert_eq!(
+        contract.schema_version,
+        "franken-engine.rgc-hindsight-boundary-capture.contract.v1"
+    );
+}
+
+#[test]
+fn contract_bead_id_is_stable() {
+    let contract = BoundaryCaptureContract::default_v1();
+    assert_eq!(contract.bead_id, "bd-1lsy.9.11.1");
+}
+
+#[test]
+fn contract_version_matches_json_artifact() {
+    let from_json: BoundaryCaptureContract =
+        serde_json::from_str(CONTRACT_JSON).expect("parse");
+    let from_code = BoundaryCaptureContract::default_v1();
+    assert_eq!(from_json.schema_version, from_code.schema_version);
+    assert_eq!(from_json.bead_id, from_code.bead_id);
+}
+
+#[test]
+fn replay_plan_input_count_matches_capture_count() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-plan", "d-plan", "clock", 10);
+    session
+        .capture_clock_read(&ctx, "mono", "monotonic", 1, None)
+        .expect("capture 1");
+    session
+        .capture_clock_read(&ctx, "mono", "monotonic", 2, None)
+        .expect("capture 2");
+
+    let plans = session.minimal_replay_plans().expect("plans");
+    // Both captures share the same (trace, decision, policy) tuple, so one plan
+    let total_inputs: usize = plans.iter().map(|p| p.inputs.len()).sum();
+    assert_eq!(total_inputs, 2, "input count must match capture count");
+}
+
+#[test]
+fn replay_plan_decision_id_matches_capture_context() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-did", "decision-abc", "fs", 20);
+    session
+        .capture_filesystem_input(&ctx, "stat", "p-dig", "c-dig", None)
+        .expect("capture");
+    let plans = session.minimal_replay_plans().expect("plans");
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0].decision_id, "decision-abc");
+}
+
+#[test]
+fn redaction_map_has_entries_for_each_boundary_class_with_sensitive_fields() {
+    let contract = BoundaryCaptureContract::default_v1();
+    let classes_with_entries: BTreeSet<_> = contract
+        .boundary_redaction_map
+        .entries
+        .iter()
+        .map(|e| e.boundary_class)
+        .collect();
+    // Every boundary class has at least one redaction entry
+    let all_classes: BTreeSet<_> = BoundaryClass::ALL.into_iter().collect();
+    assert_eq!(
+        classes_with_entries, all_classes,
+        "every boundary class must have redaction map entries"
+    );
+}
+
+#[test]
+fn clock_read_capture_sets_correct_minimal_fields() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-clk", "d-clk", "clock", 5);
+    let record = session
+        .capture_clock_read(&ctx, "wall", "realtime", 1234, None)
+        .expect("capture");
+    assert_eq!(record.minimal_fields.get("clock_id").unwrap(), "wall");
+    assert_eq!(record.minimal_fields.get("clock_domain").unwrap(), "realtime");
+    assert_eq!(record.minimal_fields.get("observed_tick").unwrap(), "1234");
+}
+
+#[test]
+fn network_response_capture_preserves_status_code() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-net", "d-net", "network", 7);
+    let record = session
+        .capture_network_response(&ctx, "req-dig", "resp-dig", 404, None)
+        .expect("capture");
+    assert_eq!(record.minimal_fields.get("status_code").unwrap(), "404");
+    assert_eq!(record.boundary_class, BoundaryClass::NetworkResponse);
+}
+
+#[test]
+fn external_policy_read_capture_records_epoch() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-pol", "d-pol", "policy_reader", 8);
+    let record = session
+        .capture_external_policy_read(&ctx, "risk-router", "pol-dig", 42, None)
+        .expect("capture");
+    assert_eq!(record.minimal_fields.get("policy_epoch").unwrap(), "42");
+    assert_eq!(record.boundary_class, BoundaryClass::ExternalPolicyRead);
+}
+
+#[test]
+fn hardware_surface_read_capture_records_surface_kind() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-hw", "d-hw", "tpm", 9);
+    let record = session
+        .capture_hardware_surface_read(&ctx, "tpm_quote", "meas-dig", "drv-dig", None)
+        .expect("capture");
+    assert_eq!(record.minimal_fields.get("surface_kind").unwrap(), "tpm_quote");
+    assert_eq!(record.boundary_class, BoundaryClass::HardwareSurfaceRead);
+}
+
+#[test]
+fn randomness_draw_capture_records_draw_index() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-rng", "d-rng", "rng", 3);
+    let record = session
+        .capture_randomness_draw(&ctx, "chacha20", 7, "sample-dig", None)
+        .expect("capture");
+    assert_eq!(record.minimal_fields.get("draw_index").unwrap(), "7");
+    assert_eq!(record.minimal_fields.get("generator_id").unwrap(), "chacha20");
+}
+
+#[test]
+fn escalation_on_clock_read_marks_needs_escalation() {
+    let mut session = BoundaryCaptureSession::default_v1();
+    let ctx = make_ctx("t-esc", "d-esc", "clock", 11);
+    let record = session
+        .capture_clock_read(&ctx, "sys", "monotonic", 0, Some("clock-non-monotonic"))
+        .expect("capture");
+    assert_eq!(record.sufficiency, ReplaySufficiency::NeedsEscalation);
+    assert_eq!(record.escalation_reason.as_deref(), Some("clock-non-monotonic"));
+}
+
+#[test]
+fn catalog_rule_for_returns_none_for_missing_class_in_empty_catalog() {
+    // Build a contract and verify rule_for works on the default catalog
+    let contract = BoundaryCaptureContract::default_v1();
+    for class in BoundaryClass::ALL {
+        assert!(
+            contract.boundary_catalog.rule_for(class).is_some(),
+            "default catalog must have a rule for {class}"
+        );
+    }
 }

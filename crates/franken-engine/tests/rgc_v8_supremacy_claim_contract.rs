@@ -707,6 +707,258 @@ publication_scenario_test!(
     "hypothesis_pending_mixed_board"
 );
 
+// ---------------------------------------------------------------------------
+// PhraseClass tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phrase_class_parse_universal_dominance() {
+    assert_eq!(PhraseClass::parse("universal_dominance"), PhraseClass::UniversalDominance);
+}
+
+#[test]
+fn phrase_class_parse_scoped_observed() {
+    assert_eq!(PhraseClass::parse("scoped_observed"), PhraseClass::ScopedObserved);
+}
+
+#[test]
+fn phrase_class_parse_target() {
+    assert_eq!(PhraseClass::parse("target"), PhraseClass::Target);
+}
+
+#[test]
+fn phrase_class_parse_hypothesis() {
+    assert_eq!(PhraseClass::parse("hypothesis"), PhraseClass::Hypothesis);
+}
+
+#[test]
+fn phrase_class_as_str_roundtrips() {
+    let variants = [
+        PhraseClass::UniversalDominance,
+        PhraseClass::ScopedObserved,
+        PhraseClass::Target,
+        PhraseClass::Hypothesis,
+    ];
+    for variant in variants {
+        assert_eq!(PhraseClass::parse(variant.as_str()), variant);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CellStatus tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cell_status_parse_all_variants() {
+    assert_eq!(CellStatus::parse("green"), CellStatus::Green);
+    assert_eq!(CellStatus::parse("missing"), CellStatus::Missing);
+    assert_eq!(CellStatus::parse("mixed"), CellStatus::Mixed);
+    assert_eq!(CellStatus::parse("red"), CellStatus::Red);
+}
+
+// ---------------------------------------------------------------------------
+// PublicationVerdict tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn publication_verdict_parse_all_variants() {
+    assert_eq!(PublicationVerdict::parse("allow_universal"), PublicationVerdict::AllowUniversal);
+    assert_eq!(PublicationVerdict::parse("allow_scoped"), PublicationVerdict::AllowScoped);
+    assert_eq!(PublicationVerdict::parse("allow_qualified"), PublicationVerdict::AllowQualified);
+    assert_eq!(PublicationVerdict::parse("forbid"), PublicationVerdict::Forbid);
+}
+
+#[test]
+fn publication_verdict_as_str_roundtrips() {
+    let variants = [
+        PublicationVerdict::AllowUniversal,
+        PublicationVerdict::AllowScoped,
+        PublicationVerdict::AllowQualified,
+        PublicationVerdict::Forbid,
+    ];
+    for variant in variants {
+        assert_eq!(PublicationVerdict::parse(variant.as_str()), variant);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fnv1a64 tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fnv1a64_determinism_same_input_same_hash() {
+    let input = b"hello world";
+    assert_eq!(fnv1a64(input), fnv1a64(input));
+}
+
+#[test]
+fn fnv1a64_different_inputs_different_hashes() {
+    assert_ne!(fnv1a64(b"alpha"), fnv1a64(b"beta"));
+    assert_ne!(fnv1a64(b"abc"), fnv1a64(b"abd"));
+}
+
+#[test]
+fn fnv1a64_empty_input_returns_offset_basis() {
+    // FNV-1a with empty input should return the offset basis (no XOR/MUL iterations).
+    let expected: u64 = 0xcbf2_9ce4_8422_2325;
+    assert_eq!(fnv1a64(b""), expected);
+}
+
+// ---------------------------------------------------------------------------
+// deterministic_id tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deterministic_id_format_prefix_hex() {
+    let id = deterministic_id("trace", "scenario_a", PhraseClass::Target);
+    assert!(id.starts_with("trace-"), "id should start with prefix: {id}");
+    let hex_part = &id["trace-".len()..];
+    assert_eq!(hex_part.len(), 16, "hex portion should be 16 chars: {hex_part}");
+    assert!(
+        hex_part.chars().all(|c| c.is_ascii_hexdigit()),
+        "hex portion must be hex digits: {hex_part}"
+    );
+}
+
+#[test]
+fn deterministic_id_same_inputs_same_output() {
+    let a = deterministic_id("pfx", "sc1", PhraseClass::Hypothesis);
+    let b = deterministic_id("pfx", "sc1", PhraseClass::Hypothesis);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn deterministic_id_different_phrase_class_different_output() {
+    let a = deterministic_id("pfx", "sc1", PhraseClass::Target);
+    let b = deterministic_id("pfx", "sc1", PhraseClass::Hypothesis);
+    assert_ne!(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// phrase_contains_required_term tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phrase_contains_required_term_case_insensitive() {
+    assert!(phrase_contains_required_term("We OBSERVED improvements", "observed"));
+    assert!(phrase_contains_required_term("Observed: better perf", "OBSERVED"));
+}
+
+#[test]
+fn phrase_contains_required_term_matching_and_non_matching() {
+    assert!(phrase_contains_required_term("this is a hypothesis about perf", "hypothesis"));
+    assert!(!phrase_contains_required_term("this is a claim about perf", "hypothesis"));
+}
+
+// ---------------------------------------------------------------------------
+// phrase_uses_forbidden_literal tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phrase_uses_forbidden_literal_detects_forbidden() {
+    let fixture = load_fixture();
+    assert!(phrase_uses_forbidden_literal(
+        &fixture,
+        "FrankenEngine beats V8 across the board on shipped path"
+    ));
+}
+
+#[test]
+fn phrase_uses_forbidden_literal_allows_clean_phrase() {
+    let fixture = load_fixture();
+    assert!(!phrase_uses_forbidden_literal(
+        &fixture,
+        "Observed faster startup in two workload cells"
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// GateEvent serde tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_event_serde_roundtrip() {
+    let event = GateEvent {
+        schema_version: "v1".to_string(),
+        trace_id: "t-001".to_string(),
+        decision_id: "d-001".to_string(),
+        policy_id: "pol-1".to_string(),
+        component: "comp".to_string(),
+        event: "eval".to_string(),
+        outcome: "forbid".to_string(),
+        error_code: Some("ERR-001".to_string()),
+        scenario_id: "sc-1".to_string(),
+        phrase_class: "target".to_string(),
+        replay_command: "./run.sh ci".to_string(),
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert_eq!(parsed["outcome"], "forbid");
+    assert_eq!(parsed["error_code"], "ERR-001");
+    assert_eq!(parsed["scenario_id"], "sc-1");
+}
+
+#[test]
+fn gate_event_forbid_verdict_has_error_code() {
+    let fixture = load_fixture();
+    let events = simulate_gate_events(&fixture);
+    for event in &events {
+        if event.outcome == "forbid" {
+            assert!(
+                event.error_code.is_some(),
+                "forbid events must carry an error_code for scenario `{}`",
+                event.scenario_id
+            );
+        }
+    }
+}
+
+#[test]
+fn gate_event_allow_verdict_has_no_error_code() {
+    let fixture = load_fixture();
+    let events = simulate_gate_events(&fixture);
+    for event in &events {
+        if event.outcome != "forbid" {
+            assert_eq!(
+                event.error_code, None,
+                "allow events must not carry an error_code for scenario `{}`",
+                event.scenario_id
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fixture-level property tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fixture_publication_scenarios_all_have_non_empty_replay_commands() {
+    let fixture = load_fixture();
+    for scenario in &fixture.publication_scenarios {
+        assert!(
+            !scenario.replay_command.trim().is_empty(),
+            "scenario `{}` must have a non-empty replay_command",
+            scenario.scenario_id
+        );
+    }
+}
+
+#[test]
+fn fixture_allowed_statistical_procedures_are_non_empty() {
+    let fixture = load_fixture();
+    assert!(
+        !fixture
+            .supremacy_claim_contract
+            .allowed_statistical_procedures
+            .is_empty(),
+        "allowed_statistical_procedures must not be empty"
+    );
+    for proc in &fixture.supremacy_claim_contract.allowed_statistical_procedures {
+        assert!(!proc.trim().is_empty(), "procedure name must not be blank");
+    }
+}
+
 #[test]
 fn gate_events_are_deterministic_and_log_complete() {
     let fixture = load_fixture();

@@ -87,9 +87,9 @@ fn load_script() -> String {
     fs::read_to_string(path).expect("read parser correctness promotion gate script")
 }
 
-fn unresolved_high_drifts<'a>(
-    fixture: &'a ParserCorrectnessPromotionGateFixture,
-) -> Vec<&'a DriftRecord> {
+fn unresolved_high_drifts(
+    fixture: &ParserCorrectnessPromotionGateFixture,
+) -> Vec<&DriftRecord> {
     let high_set = fixture
         .high_severity_levels
         .iter()

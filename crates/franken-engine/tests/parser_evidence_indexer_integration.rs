@@ -62,6 +62,7 @@ fn event_jsonl_with_error(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn event_jsonl_full(
     schema: &str,
     trace: &str,

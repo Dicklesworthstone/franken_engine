@@ -1033,7 +1033,7 @@ fn bulkhead_class_display_all_unique() {
 
 #[test]
 fn bulkhead_error_display_all_unique() {
-    let displays: std::collections::BTreeSet<String> = vec![
+    let displays: std::collections::BTreeSet<String> = [
         BulkheadError::BulkheadFull {
             bulkhead_id: "b".into(),
             max_concurrent: 10,

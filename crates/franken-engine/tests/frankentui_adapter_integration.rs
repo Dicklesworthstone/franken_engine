@@ -46,7 +46,7 @@ use frankenengine_engine::slot_registry::{
 
 #[test]
 fn schema_version_is_positive() {
-    assert!(FRANKENTUI_ADAPTER_SCHEMA_VERSION > 0);
+    const { assert!(FRANKENTUI_ADAPTER_SCHEMA_VERSION > 0) };
 }
 
 // ===========================================================================

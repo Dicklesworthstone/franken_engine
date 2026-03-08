@@ -91,7 +91,7 @@ fn verbosity_serde_snake_case_names() {
 fn verbosity_clone_and_copy() {
     let v = VerbosityLevel::GalaxyBrain;
     let v2 = v;
-    let v3 = v.clone();
+    let v3 = v;
     assert_eq!(v, v2);
     assert_eq!(v, v3);
 }
@@ -274,7 +274,7 @@ fn rejection_reason_ord() {
     // Just verify ordering is implemented and consistent.
     let a = RejectionReason::HigherLoss;
     let b = RejectionReason::PolicyForbidden;
-    assert!(a < b || a > b || a == b);
+    assert!(a <= b || a >= b);
 }
 
 // =========================================================================

@@ -673,8 +673,8 @@ fn run_handshake_program_exercises_all_opcodes() {
     // Build input so that opcodes at cursor positions cycle through 0..7
     let mut data = vec![0u8; 256];
     // First 15 bytes for config
-    for i in 0..15 {
-        data[i] = (i as u8).wrapping_add(1);
+    for (i, item) in data.iter_mut().enumerate().take(15) {
+        *item = (i as u8).wrapping_add(1);
     }
     // From offset 14 onward, place each opcode variant
     for (step, opcode) in (0..8u8).enumerate() {

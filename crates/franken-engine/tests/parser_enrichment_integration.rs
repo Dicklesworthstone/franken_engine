@@ -388,13 +388,13 @@ fn diagnostic_taxonomy_v1_version() {
 
 #[test]
 fn canonical_parser_default() {
-    let _parser = CanonicalEs2020Parser::default();
+    let _parser = CanonicalEs2020Parser;
 }
 
 #[test]
 fn canonical_parser_clone() {
-    let parser = CanonicalEs2020Parser::default();
-    let _clone = parser.clone();
+    let parser = CanonicalEs2020Parser;
+    let _clone = parser;
 }
 
 // ===========================================================================

@@ -649,9 +649,11 @@ fn certifier_new_uses_defaults() {
 
 #[test]
 fn certifier_with_custom_config() {
-    let mut config = ObstructionCertifierConfig::default();
-    config.max_certificates = 5;
-    config.include_non_blocking = false;
+    let config = ObstructionCertifierConfig {
+        max_certificates: 5,
+        include_non_blocking: false,
+        ..ObstructionCertifierConfig::default()
+    };
     let certifier = ObstructionCertifier::with_config(config);
     let _ = format!("{:?}", certifier);
 }
@@ -662,7 +664,7 @@ fn certifier_with_custom_config() {
 
 #[test]
 fn fallback_action_kind_ordering_stable() {
-    let mut kinds = vec![
+    let mut kinds = [
         FallbackActionKind::Escalate,
         FallbackActionKind::Isolate,
         FallbackActionKind::RemoveAndStub,
@@ -681,7 +683,7 @@ fn fallback_action_kind_ordering_stable() {
 
 #[test]
 fn certification_outcome_ordering_stable() {
-    let mut outcomes = vec![
+    let mut outcomes = [
         CertificationOutcome::BudgetExhausted,
         CertificationOutcome::Clear,
         CertificationOutcome::ObstructedNoFallback,
@@ -1228,10 +1230,12 @@ fn serde_roundtrip_fallback_plan() {
 
 #[test]
 fn serde_roundtrip_obstruction_certifier_config() {
-    let mut config = ObstructionCertifierConfig::default();
-    config.max_certificates = 42;
-    config.max_actions_per_plan = 7;
-    config.include_non_blocking = false;
+    let config = ObstructionCertifierConfig {
+        max_certificates: 42,
+        max_actions_per_plan: 7,
+        include_non_blocking: false,
+        ..ObstructionCertifierConfig::default()
+    };
     let json = serde_json::to_string(&config).unwrap();
     let rt: ObstructionCertifierConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, rt);
@@ -1288,7 +1292,7 @@ fn render_certification_report_with_certificates() {
 
 #[test]
 fn witness_fragment_ordering_stable() {
-    let mut fragments = vec![
+    let mut fragments = [
         WitnessFragment {
             component_id: "z".to_string(),
             contract_aspect: "timing".to_string(),

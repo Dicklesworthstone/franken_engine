@@ -398,7 +398,7 @@ fn unresolved_context_has_fallback_plan() {
     let plan = cert.fallback_plan.as_ref().unwrap();
     assert!(plan.has_feasible_resolution);
     assert!(!plan.actions.is_empty());
-    assert!(plan.feasible_actions().len() >= 1);
+    assert!(!plan.feasible_actions().is_empty());
 }
 
 #[test]
@@ -687,7 +687,7 @@ fn blocking_certificates_filter() {
     );
     let result = certifier().certify(&check).unwrap();
     let blocking = result.blocking_certificates();
-    assert!(blocking.len() >= 1);
+    assert!(!blocking.is_empty());
     // All blocking should have severity >= medium
     assert!(blocking.iter().all(|c| c.is_blocking()));
 }

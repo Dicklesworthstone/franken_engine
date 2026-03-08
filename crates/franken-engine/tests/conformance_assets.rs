@@ -554,7 +554,7 @@ fn sha256_hex_nonempty_for_nonempty_input() {
 #[test]
 fn conformance_runner_config_default_is_constructible() {
     let config = ConformanceRunnerConfig::default();
-    assert!(config.seed > 0 || config.seed == 0);
+    let _ = config.seed; // seed is always valid (u64)
 }
 
 #[test]

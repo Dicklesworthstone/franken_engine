@@ -275,7 +275,7 @@ fn action_decision_margin_non_negative() {
 fn action_decision_selected_is_minimum() {
     let mut sel = ExpectedLossSelector::balanced();
     let d = sel.select(&uniform_posterior());
-    for (_, &loss) in &d.explanation.all_expected_losses {
+    for &loss in d.explanation.all_expected_losses.values() {
         assert!(
             d.expected_loss_millionths <= loss,
             "selected loss {} > some action loss {}",
@@ -730,7 +730,7 @@ fn selected_action_is_minimum_across_posteriors() {
     for p in &posteriors {
         let d = sel.select(p);
         let losses = sel.expected_losses(p);
-        for (_, &loss) in &losses {
+        for &loss in losses.values() {
             assert!(
                 d.expected_loss_millionths <= loss,
                 "selected {} ({}) > other action ({})",

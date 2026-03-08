@@ -377,3 +377,400 @@ fn rgc_016c_component_and_policy_ids_are_stable() {
         "policy-rgc-claim-envelope-contract-v1"
     );
 }
+
+// --- New enrichment tests below ---
+
+#[test]
+fn tier_serde_roundtrip_frontier_objective() {
+    let tier = ClaimEnvelopeTier::FrontierObjective;
+    let json = serde_json::to_string(&tier).unwrap();
+    assert_eq!(json, "\"frontier_objective\"");
+    let back: ClaimEnvelopeTier = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, tier);
+}
+
+#[test]
+fn tier_serde_roundtrip_publishable_universal() {
+    let tier = ClaimEnvelopeTier::PublishableUniversal;
+    let json = serde_json::to_string(&tier).unwrap();
+    assert_eq!(json, "\"publishable_universal\"");
+    let back: ClaimEnvelopeTier = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, tier);
+}
+
+#[test]
+fn tier_serde_roundtrip_publishable_scoped() {
+    let tier = ClaimEnvelopeTier::PublishableScoped;
+    let json = serde_json::to_string(&tier).unwrap();
+    assert_eq!(json, "\"publishable_scoped\"");
+    let back: ClaimEnvelopeTier = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, tier);
+}
+
+#[test]
+fn tier_serde_roundtrip_target() {
+    let tier = ClaimEnvelopeTier::Target;
+    let json = serde_json::to_string(&tier).unwrap();
+    assert_eq!(json, "\"target\"");
+    let back: ClaimEnvelopeTier = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, tier);
+}
+
+#[test]
+fn tier_serde_roundtrip_hypothesis() {
+    let tier = ClaimEnvelopeTier::Hypothesis;
+    let json = serde_json::to_string(&tier).unwrap();
+    assert_eq!(json, "\"hypothesis\"");
+    let back: ClaimEnvelopeTier = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, tier);
+}
+
+#[test]
+fn verdict_serde_roundtrip_allow_requested() {
+    let v = ClaimEnvelopeVerdict::AllowRequested;
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(json, "\"allow_requested\"");
+    let back: ClaimEnvelopeVerdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, v);
+}
+
+#[test]
+fn verdict_serde_roundtrip_downgrade_to_scoped() {
+    let v = ClaimEnvelopeVerdict::DowngradeToScoped;
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(json, "\"downgrade_to_scoped\"");
+    let back: ClaimEnvelopeVerdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, v);
+}
+
+#[test]
+fn verdict_serde_roundtrip_downgrade_to_target() {
+    let v = ClaimEnvelopeVerdict::DowngradeToTarget;
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(json, "\"downgrade_to_target\"");
+    let back: ClaimEnvelopeVerdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, v);
+}
+
+#[test]
+fn verdict_serde_roundtrip_downgrade_to_hypothesis() {
+    let v = ClaimEnvelopeVerdict::DowngradeToHypothesis;
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(json, "\"downgrade_to_hypothesis\"");
+    let back: ClaimEnvelopeVerdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, v);
+}
+
+#[test]
+fn verdict_serde_roundtrip_forbid() {
+    let v = ClaimEnvelopeVerdict::Forbid;
+    let json = serde_json::to_string(&v).unwrap();
+    assert_eq!(json, "\"forbid\"");
+    let back: ClaimEnvelopeVerdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, v);
+}
+
+#[test]
+fn contract_validate_succeeds_on_embedded() {
+    let contract = load_contract();
+    contract.validate().expect("embedded contract must validate without errors");
+}
+
+#[test]
+fn contract_claim_classes_count_is_five() {
+    let contract = load_contract();
+    assert_eq!(contract.claim_classes.len(), 5, "expected exactly 5 claim classes");
+}
+
+#[test]
+fn contract_consumer_channels_count_at_least_four() {
+    let contract = load_contract();
+    assert!(
+        contract.consumer_channels.len() >= 4,
+        "expected at least 4 consumer channels, got {}",
+        contract.consumer_channels.len()
+    );
+}
+
+#[test]
+fn contract_downgrade_rules_are_non_empty() {
+    let contract = load_contract();
+    assert!(
+        !contract.downgrade_rules.is_empty(),
+        "downgrade_rules must not be empty"
+    );
+}
+
+#[test]
+fn contract_inputs_are_non_empty() {
+    let contract = load_contract();
+    assert!(
+        !contract.contract_inputs.is_empty(),
+        "contract_inputs must not be empty"
+    );
+}
+
+#[test]
+fn all_claim_classes_have_non_empty_class_id() {
+    let contract = load_contract();
+    for class in &contract.claim_classes {
+        assert!(
+            !class.class_id.is_empty(),
+            "claim class has empty class_id"
+        );
+    }
+}
+
+#[test]
+fn all_claim_classes_have_non_empty_description() {
+    let contract = load_contract();
+    for class in &contract.claim_classes {
+        assert!(
+            !class.description.is_empty(),
+            "claim class {} has empty description",
+            class.class_id
+        );
+    }
+}
+
+#[test]
+fn all_consumer_channels_have_non_empty_channel_id() {
+    let contract = load_contract();
+    for channel in &contract.consumer_channels {
+        assert!(
+            !channel.channel_id.is_empty(),
+            "consumer channel has empty channel_id"
+        );
+    }
+}
+
+#[test]
+fn board_linkage_frontier_gap_bead_is_non_empty() {
+    let contract = load_contract();
+    assert!(
+        !contract.board_linkage.frontier_gap_bead.is_empty(),
+        "frontier_gap_bead must not be empty"
+    );
+}
+
+#[test]
+fn max_publishable_staleness_hours_is_168() {
+    assert_eq!(
+        claim_envelope_contract::MAX_PUBLISHABLE_STALENESS_HOURS,
+        168,
+        "MAX_PUBLISHABLE_STALENESS_HOURS must be 168 (one week)"
+    );
+}
+
+#[test]
+fn scenario_fields_comprehensive_check() {
+    let scenario = ClaimEnvelopeScenario {
+        scenario_id: "test_scenario".to_string(),
+        requested_class: ClaimEnvelopeTier::Target,
+        phrase_text: "This is a target claim.".to_string(),
+        declared_scope_complete: true,
+        declared_board_complete: false,
+        evidence_complete: true,
+        shipped_path: false,
+        frontier_gap_open: true,
+        stale_contract_hours: 42,
+        replay_command: "replay --test".to_string(),
+    };
+    assert_eq!(scenario.scenario_id, "test_scenario");
+    assert_eq!(scenario.requested_class, ClaimEnvelopeTier::Target);
+    assert_eq!(scenario.phrase_text, "This is a target claim.");
+    assert!(scenario.declared_scope_complete);
+    assert!(!scenario.declared_board_complete);
+    assert!(scenario.evidence_complete);
+    assert!(!scenario.shipped_path);
+    assert!(scenario.frontier_gap_open);
+    assert_eq!(scenario.stale_contract_hours, 42);
+    assert_eq!(scenario.replay_command, "replay --test");
+}
+
+#[test]
+fn contract_serde_roundtrip() {
+    let contract = load_contract();
+    let json = serde_json::to_string(&contract).unwrap();
+    let back: ClaimEnvelopeContract = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, contract);
+}
+
+#[test]
+fn fixture_has_non_empty_publication_scenarios() {
+    let fixture = load_fixture();
+    assert!(
+        !fixture.publication_scenarios.is_empty(),
+        "publication_scenarios must not be empty"
+    );
+}
+
+#[test]
+fn all_fixture_scenarios_have_non_empty_scenario_id() {
+    let fixture = load_fixture();
+    for scenario in &fixture.publication_scenarios {
+        assert!(
+            !scenario.scenario_id.is_empty(),
+            "fixture scenario has empty scenario_id"
+        );
+    }
+}
+
+#[test]
+fn all_downgrade_rules_have_non_empty_rule_id_and_rationale() {
+    let contract = load_contract();
+    for rule in &contract.downgrade_rules {
+        assert!(!rule.rule_id.is_empty(), "downgrade rule has empty rule_id");
+        assert!(
+            !rule.rationale.is_empty(),
+            "downgrade rule {} has empty rationale",
+            rule.rule_id
+        );
+    }
+}
+
+#[test]
+fn evaluate_target_tier_always_allows() {
+    let contract = load_contract();
+    let scenario = ClaimEnvelopeScenario {
+        scenario_id: "synth_target".to_string(),
+        requested_class: ClaimEnvelopeTier::Target,
+        phrase_text: "This is a target claim for the next milestone.".to_string(),
+        declared_scope_complete: false,
+        declared_board_complete: false,
+        evidence_complete: false,
+        shipped_path: false,
+        frontier_gap_open: true,
+        stale_contract_hours: 999,
+        replay_command: String::new(),
+    };
+    let verdict = contract.evaluate(&scenario);
+    assert_eq!(verdict, ClaimEnvelopeVerdict::AllowRequested);
+}
+
+#[test]
+fn evaluate_hypothesis_tier_always_allows() {
+    let contract = load_contract();
+    let scenario = ClaimEnvelopeScenario {
+        scenario_id: "synth_hypothesis".to_string(),
+        requested_class: ClaimEnvelopeTier::Hypothesis,
+        phrase_text: "This is a hypothesis about future performance.".to_string(),
+        declared_scope_complete: false,
+        declared_board_complete: false,
+        evidence_complete: false,
+        shipped_path: false,
+        frontier_gap_open: true,
+        stale_contract_hours: 999,
+        replay_command: String::new(),
+    };
+    let verdict = contract.evaluate(&scenario);
+    assert_eq!(verdict, ClaimEnvelopeVerdict::AllowRequested);
+}
+
+#[test]
+fn contract_required_structured_log_fields_non_empty() {
+    let contract = load_contract();
+    assert!(
+        !contract.required_structured_log_fields.is_empty(),
+        "required_structured_log_fields must not be empty"
+    );
+}
+
+#[test]
+fn contract_operator_verification_non_empty() {
+    let contract = load_contract();
+    assert!(
+        !contract.operator_verification.is_empty(),
+        "operator_verification must not be empty"
+    );
+}
+
+#[test]
+fn all_consumer_channels_have_non_empty_allowed_classes() {
+    let contract = load_contract();
+    for channel in &contract.consumer_channels {
+        assert!(
+            !channel.allowed_classes.is_empty(),
+            "consumer channel {} has empty allowed_classes",
+            channel.channel_id
+        );
+    }
+}
+
+#[test]
+fn universal_with_frontier_gap_downgrades_to_scoped() {
+    let contract = load_contract();
+    let scenario = ClaimEnvelopeScenario {
+        scenario_id: "synth_gap_open".to_string(),
+        requested_class: ClaimEnvelopeTier::PublishableUniversal,
+        phrase_text: "FrankenEngine beats V8 across the declared shipped board.".to_string(),
+        declared_scope_complete: true,
+        declared_board_complete: true,
+        evidence_complete: true,
+        shipped_path: true,
+        frontier_gap_open: true,
+        stale_contract_hours: 10,
+        replay_command: String::new(),
+    };
+    let verdict = contract.evaluate(&scenario);
+    assert_eq!(verdict, ClaimEnvelopeVerdict::DowngradeToScoped);
+}
+
+#[test]
+fn scoped_stale_contract_downgrades_to_hypothesis() {
+    let contract = load_contract();
+    let scenario = ClaimEnvelopeScenario {
+        scenario_id: "synth_scoped_stale".to_string(),
+        requested_class: ClaimEnvelopeTier::PublishableScoped,
+        phrase_text: "Observed gains on the declared board.".to_string(),
+        declared_scope_complete: true,
+        declared_board_complete: false,
+        evidence_complete: true,
+        shipped_path: true,
+        frontier_gap_open: false,
+        stale_contract_hours: 200,
+        replay_command: String::new(),
+    };
+    let verdict = contract.evaluate(&scenario);
+    assert_eq!(verdict, ClaimEnvelopeVerdict::DowngradeToHypothesis);
+}
+
+#[test]
+fn board_linkage_declared_board_dimensions_non_empty() {
+    let contract = load_contract();
+    assert!(
+        !contract.board_linkage.declared_board_dimensions.is_empty(),
+        "declared_board_dimensions must not be empty"
+    );
+}
+
+#[test]
+fn board_linkage_declared_board_families_non_empty() {
+    let contract = load_contract();
+    assert!(
+        !contract.board_linkage.declared_board_families.is_empty(),
+        "declared_board_families must not be empty"
+    );
+}
+
+#[test]
+fn contract_required_artifacts_non_empty() {
+    let contract = load_contract();
+    assert!(
+        !contract.required_artifacts.is_empty(),
+        "required_artifacts must not be empty"
+    );
+}
+
+#[test]
+fn claim_class_ids_are_unique() {
+    let contract = load_contract();
+    let mut seen = BTreeSet::new();
+    for class in &contract.claim_classes {
+        assert!(
+            seen.insert(class.class_id.as_str()),
+            "duplicate claim class id: {}",
+            class.class_id
+        );
+    }
+}

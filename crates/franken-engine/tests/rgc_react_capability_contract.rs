@@ -352,3 +352,443 @@ fn rgc_016a_capability_ids_are_unique_and_roundtrip_cleanly() {
         serde_json::from_str(&serialized).expect("deserialize contract");
     assert_eq!(contract, recovered);
 }
+
+// ── New enrichment tests ──────────────────────────────────────────────
+
+#[test]
+fn rgc_016a_serde_determinism_roundtrip() {
+    let contract = parse_contract();
+    let json_a = serde_json::to_string_pretty(&contract).expect("serialize a");
+    let recovered: ReactCapabilityContract =
+        serde_json::from_str(&json_a).expect("deserialize a");
+    let json_b = serde_json::to_string_pretty(&recovered).expect("serialize b");
+    assert_eq!(json_a, json_b, "serde roundtrip must be deterministic");
+}
+
+#[test]
+fn rgc_016a_capability_ids_are_non_empty_strings() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            !row.capability_id.trim().is_empty(),
+            "capability_id must be a non-empty string"
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_each_capability_has_non_empty_source_form() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            !row.source_form.trim().is_empty(),
+            "source_form must be non-empty for capability {}",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_each_capability_has_non_empty_runtime_mode() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            !row.runtime_mode.trim().is_empty(),
+            "runtime_mode must be non-empty for capability {}",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_each_capability_has_non_empty_entry_surface() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            !row.entry_surface.trim().is_empty(),
+            "entry_surface must be non-empty for capability {}",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_product_surfaces_have_non_empty_names() {
+    let contract = parse_contract();
+    for surface in &contract.product_surfaces {
+        assert!(
+            !surface.name.trim().is_empty(),
+            "product surface name must be non-empty for bead {}",
+            surface.surface_bead
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_product_surfaces_have_valid_ship_status() {
+    let contract = parse_contract();
+    let allowed: BTreeSet<&str> = ["required", "planned", "shipped", "deferred"]
+        .into_iter()
+        .collect();
+    for surface in &contract.product_surfaces {
+        assert!(
+            allowed.contains(surface.ship_status.as_str()),
+            "invalid ship_status '{}' for surface bead {}",
+            surface.ship_status,
+            surface.surface_bead
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_product_surface_count_minimum() {
+    let contract = parse_contract();
+    assert!(
+        contract.product_surfaces.len() >= 4,
+        "expected at least 4 product surfaces, found {}",
+        contract.product_surfaces.len()
+    );
+}
+
+#[test]
+fn rgc_016a_matrix_contract_ref_fields_are_non_empty() {
+    let contract = parse_contract();
+    let mcr = &contract.extends_matrix_contract;
+    assert!(!mcr.bead_id.trim().is_empty(), "matrix bead_id must be non-empty");
+    assert!(
+        !mcr.contract_doc.trim().is_empty(),
+        "matrix contract_doc must be non-empty"
+    );
+    assert!(
+        !mcr.contract_json.trim().is_empty(),
+        "matrix contract_json must be non-empty"
+    );
+    assert!(
+        !mcr.coverage_row_id.trim().is_empty(),
+        "matrix coverage_row_id must be non-empty"
+    );
+}
+
+#[test]
+fn rgc_016a_contract_track_fields_are_non_empty() {
+    let contract = parse_contract();
+    assert!(
+        !contract.track.id.trim().is_empty(),
+        "track id must be non-empty"
+    );
+    assert!(
+        !contract.track.name.trim().is_empty(),
+        "track name must be non-empty"
+    );
+}
+
+#[test]
+fn rgc_016a_operator_verification_has_at_least_three_commands() {
+    let contract = parse_contract();
+    assert!(
+        contract.operator_verification.len() >= 3,
+        "expected at least 3 operator verification commands, found {}",
+        contract.operator_verification.len()
+    );
+}
+
+#[test]
+fn rgc_016a_required_log_fields_include_all_mandatory() {
+    let contract = parse_contract();
+    let fields: BTreeSet<&str> = contract
+        .required_structured_log_fields
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mandatory = [
+        "schema_version",
+        "scenario_id",
+        "trace_id",
+        "decision_id",
+        "component",
+        "event",
+        "runtime_lane",
+        "seed",
+        "outcome",
+        "error_code",
+    ];
+    for field in mandatory {
+        assert!(fields.contains(field), "missing mandatory log field: {field}");
+    }
+}
+
+#[test]
+fn rgc_016a_verification_lanes_from_allowed_set() {
+    let contract = parse_contract();
+    let allowed: BTreeSet<&str> = [
+        "react_compile_contract",
+        "react_diagnostics_contract",
+        "react_ssr_parity",
+        "react_client_entry_contract",
+        "react_hydration_contract",
+    ]
+    .into_iter()
+    .collect();
+
+    for row in &contract.capability_rows {
+        assert!(
+            allowed.contains(row.verification_lane.as_str()),
+            "verification lane '{}' for capability {} is not in the allowed set",
+            row.verification_lane,
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_unsupported_rows_have_target_milestone() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        if row.support_status == "unsupported" || row.support_status == "deferred" {
+            assert!(
+                !row.unsupported_surface_policy
+                    .target_milestone
+                    .trim()
+                    .is_empty(),
+                "unsupported/deferred capability {} must have a target_milestone",
+                row.capability_id
+            );
+        }
+    }
+}
+
+#[test]
+fn rgc_016a_diagnostic_error_codes_follow_prefix_pattern() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        let code = &row.user_visible_diagnostic.error_code;
+        assert!(
+            code.starts_with("FE-RGC-016A-CAP-"),
+            "diagnostic error code '{}' for capability {} must start with FE-RGC-016A-CAP-",
+            code,
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_diagnostic_message_templates_are_non_empty() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            !row.user_visible_diagnostic.message_template.trim().is_empty(),
+            "diagnostic message_template must be non-empty for capability {}",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_required_artifacts_include_triad() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        for expected_suffix in ["run_manifest.json", "events.jsonl", "commands.txt"] {
+            assert!(
+                row.required_artifacts
+                    .iter()
+                    .any(|a| a.ends_with(expected_suffix)),
+                "capability {} missing required artifact suffix {}",
+                row.capability_id,
+                expected_suffix
+            );
+        }
+    }
+}
+
+#[test]
+fn rgc_016a_schema_version_matches_constant() {
+    let contract = parse_contract();
+    assert_eq!(
+        contract.schema_version, CONTRACT_SCHEMA_VERSION,
+        "contract schema version must match the expected constant"
+    );
+}
+
+#[test]
+fn rgc_016a_generated_at_utc_is_rfc3339_z() {
+    let contract = parse_contract();
+    let ts = &contract.generated_at_utc;
+    assert!(ts.ends_with('Z'), "timestamp must end with Z: {ts}");
+    assert!(ts.contains('T'), "timestamp must contain T separator: {ts}");
+    // Validate YYYY-MM-DDThh:mm:ssZ basic structure
+    let parts: Vec<&str> = ts.split('T').collect();
+    assert_eq!(parts.len(), 2, "timestamp must have exactly one T: {ts}");
+    let date_parts: Vec<&str> = parts[0].split('-').collect();
+    assert_eq!(date_parts.len(), 3, "date part must have 3 components: {ts}");
+    assert_eq!(date_parts[0].len(), 4, "year must be 4 digits: {ts}");
+    assert_eq!(date_parts[1].len(), 2, "month must be 2 digits: {ts}");
+    assert_eq!(date_parts[2].len(), 2, "day must be 2 digits: {ts}");
+}
+
+#[test]
+fn rgc_016a_contract_json_is_valid_json() {
+    let value: serde_json::Value =
+        serde_json::from_str(CONTRACT_JSON).expect("CONTRACT_JSON must be valid JSON");
+    assert!(value.is_object(), "top-level JSON must be an object");
+}
+
+#[test]
+fn rgc_016a_capability_row_count_minimum() {
+    let contract = parse_contract();
+    assert!(
+        contract.capability_rows.len() >= 10,
+        "expected at least 10 capability rows, found {}",
+        contract.capability_rows.len()
+    );
+}
+
+#[test]
+fn rgc_016a_capability_index_has_unique_keys() {
+    let contract = parse_contract();
+    let index = capability_index(&contract);
+    assert_eq!(
+        index.len(),
+        contract.capability_rows.len(),
+        "capability index length must match row count (no duplicates)"
+    );
+}
+
+#[test]
+fn rgc_016a_diagnostic_error_codes_are_unique() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for row in &contract.capability_rows {
+        assert!(
+            seen.insert(&row.user_visible_diagnostic.error_code),
+            "duplicate diagnostic error_code {}",
+            row.user_visible_diagnostic.error_code
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_diagnostic_error_codes_are_numerically_sequential() {
+    let contract = parse_contract();
+    let prefix = "FE-RGC-016A-CAP-";
+    let mut codes: Vec<u32> = contract
+        .capability_rows
+        .iter()
+        .map(|row| {
+            let suffix = row
+                .user_visible_diagnostic
+                .error_code
+                .strip_prefix(prefix)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "error code '{}' missing prefix {prefix}",
+                        row.user_visible_diagnostic.error_code
+                    )
+                });
+            suffix
+                .parse::<u32>()
+                .unwrap_or_else(|_| panic!("non-numeric suffix '{suffix}' in error code"))
+        })
+        .collect();
+    codes.sort();
+    for (i, code) in codes.iter().enumerate() {
+        assert_eq!(
+            *code,
+            (i as u32) + 1,
+            "error codes must be sequential starting at 1, gap at position {i}"
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_product_surface_beads_are_non_empty() {
+    let contract = parse_contract();
+    for surface in &contract.product_surfaces {
+        assert!(
+            !surface.surface_bead.trim().is_empty(),
+            "surface_bead must be non-empty"
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_owning_beads_start_with_project_prefix() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            row.owning_implementation_bead.starts_with("bd-"),
+            "owning_implementation_bead for {} must start with bd- prefix",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_parity_gate_beads_start_with_project_prefix() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            row.parity_gate_bead.starts_with("bd-"),
+            "parity_gate_bead for {} must start with bd- prefix",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_required_artifacts_count_per_row() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            row.required_artifacts.len() >= 4,
+            "capability {} must have at least 4 required artifacts, found {}",
+            row.capability_id,
+            row.required_artifacts.len()
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_diagnostic_surfaces_are_non_empty() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert!(
+            !row.user_visible_diagnostic
+                .diagnostic_surface
+                .trim()
+                .is_empty(),
+            "diagnostic_surface must be non-empty for capability {}",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_remediation_beads_are_consistent() {
+    let contract = parse_contract();
+    for row in &contract.capability_rows {
+        assert_eq!(
+            row.user_visible_diagnostic.remediation_bead,
+            row.unsupported_surface_policy.remediation_bead,
+            "diagnostic and policy remediation beads must match for capability {}",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
+fn rgc_016a_all_rows_reference_valid_product_surface_beads() {
+    let contract = parse_contract();
+    let surface_beads: BTreeSet<&str> = contract
+        .product_surfaces
+        .iter()
+        .map(|s| s.surface_bead.as_str())
+        .collect();
+    for row in &contract.capability_rows {
+        assert!(
+            surface_beads.contains(row.product_surface_bead.as_str()),
+            "capability {} references unknown product_surface_bead {}",
+            row.capability_id,
+            row.product_surface_bead
+        );
+    }
+}

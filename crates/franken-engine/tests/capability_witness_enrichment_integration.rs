@@ -47,7 +47,7 @@ fn lifecycle_state_display_all_distinct() {
 
 #[test]
 fn lifecycle_state_ordering_stable() {
-    let mut states = vec![
+    let mut states = [
         LifecycleState::Revoked,
         LifecycleState::Draft,
         LifecycleState::Active,
@@ -105,7 +105,7 @@ fn proof_kind_display_all_distinct() {
 
 #[test]
 fn proof_kind_ordering_stable() {
-    let mut kinds = vec![
+    let mut kinds = [
         ProofKind::InheritedFromPredecessor,
         ProofKind::StaticAnalysis,
         ProofKind::DynamicAblation,
@@ -475,7 +475,7 @@ fn serde_roundtrip_denial_record() {
 #[test]
 fn json_fields_confidence_interval() {
     let ci = ConfidenceInterval::from_trials(10, 8);
-    let v: serde_json::Value = serde_json::to_value(&ci).unwrap();
+    let v: serde_json::Value = serde_json::to_value(ci).unwrap();
     let obj = v.as_object().unwrap();
     for key in [
         "lower_millionths",

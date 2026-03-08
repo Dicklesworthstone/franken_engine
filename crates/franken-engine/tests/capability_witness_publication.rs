@@ -576,7 +576,7 @@ fn witness_publication_query_serde_roundtrip() {
     };
     let json = serde_json::to_string(&query).expect("serialize");
     let recovered: WitnessPublicationQuery = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(recovered.include_revoked, false);
+    assert!(!recovered.include_revoked);
     assert!(recovered.extension_id.is_some());
     assert!(recovered.epoch.is_some());
 }

@@ -276,7 +276,7 @@ fn grammar_completeness_summary_counts_are_consistent() {
         summary.family_count,
         (summary.supported_families
             + summary.partially_supported_families
-            + summary.unsupported_families) as u64
+            + summary.unsupported_families)
     );
 }
 

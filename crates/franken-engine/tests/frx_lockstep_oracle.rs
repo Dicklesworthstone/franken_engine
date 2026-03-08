@@ -526,7 +526,7 @@ fn lockstep_case_result_serde_roundtrip() {
     let json = serde_json::to_string(&case_result).expect("serialize");
     let recovered: FrxLockstepCaseResult = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(recovered.fixture_ref, case_result.fixture_ref);
-    assert_eq!(recovered.pass, false);
+    assert!(!recovered.pass);
     assert_eq!(
         recovered.divergence.as_ref().unwrap().class,
         FrxDivergenceClass::EventSequence

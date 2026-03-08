@@ -110,7 +110,7 @@ fn stopping_error_display_index_oob() {
 
 #[test]
 fn stopping_error_all_display_unique() {
-    let errs = vec![
+    let errs = [
         StoppingError::HorizonTooLarge { horizon: 1, max: 0 },
         StoppingError::InvalidThreshold { threshold: 0 },
         StoppingError::InvalidDiscount { discount: 0 },
@@ -501,7 +501,7 @@ fn gittins_index_stays_in_range() {
         gc.observe(0, true).unwrap();
     }
     let idx = gc.arms[0].gittins_index_millionths;
-    assert!(idx >= 0 && idx <= MILLION);
+    assert!((0..=MILLION).contains(&idx));
 }
 
 // ===========================================================================

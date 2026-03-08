@@ -78,8 +78,8 @@ fn schema_version_constants_are_nonempty() {
 
 #[test]
 fn default_thresholds_are_sane() {
-    assert!(DEFAULT_SUFFICIENT_RATIO_MILLIONTHS > DEFAULT_MARGINAL_RATIO_MILLIONTHS);
-    assert!(DEFAULT_MARGINAL_RATIO_MILLIONTHS > 0);
+    const { assert!(DEFAULT_SUFFICIENT_RATIO_MILLIONTHS > DEFAULT_MARGINAL_RATIO_MILLIONTHS) };
+    const { assert!(DEFAULT_MARGINAL_RATIO_MILLIONTHS > 0) };
 }
 
 // =========================================================================
@@ -120,7 +120,7 @@ fn ratio_with_zero_observation_interval() {
     let slow = profile("normal", 1_000_000, 1_000_000);
     let ratio = compute_timescale_ratio(&fast, &slow);
     // With zero observation, the ratio computation should handle gracefully
-    assert!(ratio.ratio_millionths > 0 || ratio.ratio_millionths == 0);
+    let _ = ratio.ratio_millionths; // u64 is always non-negative
 }
 
 #[test]

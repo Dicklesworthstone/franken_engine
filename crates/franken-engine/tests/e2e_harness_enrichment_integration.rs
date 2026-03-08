@@ -540,7 +540,7 @@ fn json_fields_replay_verification() {
 fn json_fields_replay_performance() {
     let r = run_minimal();
     let rp = evaluate_replay_performance(&r, 50);
-    let v: serde_json::Value = serde_json::to_value(&rp).unwrap();
+    let v: serde_json::Value = serde_json::to_value(rp).unwrap();
     let obj = v.as_object().unwrap();
     for key in [
         "virtual_duration_micros",

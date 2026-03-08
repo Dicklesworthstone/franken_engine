@@ -53,11 +53,11 @@ fn schema_version_nonempty() {
 
 #[test]
 fn default_thresholds_positive() {
-    assert!(DEFAULT_MIN_FIDELITY > 0);
-    assert!(DEFAULT_MAX_BLIND_SPOT_RATIO > 0);
-    assert!(DEFAULT_MAX_RECONSTRUCTION_AMBIGUITY > 0);
-    assert!(DEFAULT_MAX_TAIL_UNDERCOVERAGE > 0);
-    assert!(MIN_OBSERVATIONS_FOR_TEST > 0);
+    const { assert!(DEFAULT_MIN_FIDELITY > 0) };
+    const { assert!(DEFAULT_MAX_BLIND_SPOT_RATIO > 0) };
+    const { assert!(DEFAULT_MAX_RECONSTRUCTION_AMBIGUITY > 0) };
+    const { assert!(DEFAULT_MAX_TAIL_UNDERCOVERAGE > 0) };
+    const { assert!(MIN_OBSERVATIONS_FOR_TEST > 0) };
 }
 
 // ===========================================================================

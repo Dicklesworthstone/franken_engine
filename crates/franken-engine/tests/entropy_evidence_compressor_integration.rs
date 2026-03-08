@@ -120,7 +120,7 @@ fn error_display_kraft_violation() {
 
 #[test]
 fn error_all_displays_distinct() {
-    let variants = vec![
+    let variants = [
         EntropyError::AlphabetTooLarge {
             size: 300,
             max: 256,
@@ -469,7 +469,7 @@ fn coder_encode_large_stream() {
     let symbols: Vec<u32> = (0..500).map(|i| i % 4).collect();
     let compressed = coder.encode(&symbols).unwrap();
     assert_eq!(compressed.original_symbol_count, 500);
-    assert!(compressed.compressed_data.len() > 0);
+    assert!(!compressed.compressed_data.is_empty());
 }
 
 #[test]

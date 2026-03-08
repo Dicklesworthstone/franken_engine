@@ -129,7 +129,7 @@ fn split_ordering_is_declaration_order() {
 #[test]
 fn split_clone_and_copy_equality() {
     let s = BenchmarkSplit::DecisionContracts;
-    let cloned = s.clone();
+    let cloned = s;
     let copied = s;
     assert_eq!(s, cloned);
     assert_eq!(s, copied);
@@ -1070,8 +1070,10 @@ fn gate_passes_with_relaxed_thresholds() {
     assert!(!d_default.pass);
 
     // Now use relaxed thresholds
-    let mut t = BenchmarkSplitThresholds::default();
-    t.max_cx_throughput_regression_millionths = 500_000; // allow up to 50% regression
+    let mut t = BenchmarkSplitThresholds {
+        max_cx_throughput_regression_millionths: 500_000, // allow up to 50% regression
+        ..BenchmarkSplitThresholds::default()
+    };
     // Also need to relax previous-run regression limit for CxThreading
     t.max_previous_run_throughput_regression_millionths
         .insert(BenchmarkSplit::CxThreading, 500_000);
@@ -1099,8 +1101,10 @@ fn gate_with_strict_thresholds_catches_small_regression() {
     assert!(d_default.pass);
 
     // Strict threshold: 0 regression allowed
-    let mut t = BenchmarkSplitThresholds::default();
-    t.max_full_integration_throughput_regression_millionths = 0;
+    let t = BenchmarkSplitThresholds {
+        max_full_integration_throughput_regression_millionths: 0,
+        ..BenchmarkSplitThresholds::default()
+    };
     let d_strict = evaluate_control_plane_benchmark_split(&inp, &t);
     // With 960k -> 959k, the regression is (1000/1000000)*1000000 = 1000 ppm vs baseline,
     // but the full_integration check compares vs baseline throughput (1M) not previous full_integration

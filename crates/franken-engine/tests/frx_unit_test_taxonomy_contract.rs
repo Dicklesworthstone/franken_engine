@@ -750,9 +750,7 @@ fn fixture_registry_coverage_matrix_and_gaps() {
         Some(&1)
     );
     assert!(
-        matrix
-            .get(&(TestClass::Edge, TestSurface::Parser))
-            .is_none()
+        !matrix.contains_key(&(TestClass::Edge, TestSurface::Parser))
     );
 
     let gaps = registry.coverage_gaps();

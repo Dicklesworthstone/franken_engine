@@ -2333,7 +2333,7 @@ fn for_in_for_of_ir2_has_read_effect_for_iteration_ops() {
                 Ir1Op::ForOfInit | Ir1Op::ForOfNext { .. } | Ir1Op::IteratorClose { .. }
             )
         })
-        .map(|op| op.effect.clone())
+        .map(|op| op.effect)
         .collect();
     assert!(!iteration_effects.is_empty());
     for effect in &iteration_effects {

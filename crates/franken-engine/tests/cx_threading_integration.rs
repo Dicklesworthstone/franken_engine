@@ -55,14 +55,14 @@ fn advance_to_running(gw: &mut CxThreadedGateway<MockCx>) {
 
 #[test]
 fn constants_are_positive_and_ordered() {
-    assert!(HOSTCALL_BUDGET_COST_MS > 0);
-    assert!(POLICY_CHECK_BUDGET_COST_MS > 0);
-    assert!(LIFECYCLE_TRANSITION_BUDGET_COST_MS > 0);
-    assert!(TELEMETRY_EMIT_BUDGET_COST_MS > 0);
+    const { assert!(HOSTCALL_BUDGET_COST_MS > 0) };
+    const { assert!(POLICY_CHECK_BUDGET_COST_MS > 0) };
+    const { assert!(LIFECYCLE_TRANSITION_BUDGET_COST_MS > 0) };
+    const { assert!(TELEMETRY_EMIT_BUDGET_COST_MS > 0) };
     // Lifecycle transitions are the most expensive
-    assert!(LIFECYCLE_TRANSITION_BUDGET_COST_MS >= HOSTCALL_BUDGET_COST_MS);
-    assert!(LIFECYCLE_TRANSITION_BUDGET_COST_MS >= POLICY_CHECK_BUDGET_COST_MS);
-    assert!(LIFECYCLE_TRANSITION_BUDGET_COST_MS >= TELEMETRY_EMIT_BUDGET_COST_MS);
+    const { assert!(LIFECYCLE_TRANSITION_BUDGET_COST_MS >= HOSTCALL_BUDGET_COST_MS) };
+    const { assert!(LIFECYCLE_TRANSITION_BUDGET_COST_MS >= POLICY_CHECK_BUDGET_COST_MS) };
+    const { assert!(LIFECYCLE_TRANSITION_BUDGET_COST_MS >= TELEMETRY_EMIT_BUDGET_COST_MS) };
 }
 
 // ===========================================================================
@@ -1305,7 +1305,7 @@ fn lifecycle_self_transition_rejected() {
 fn effect_category_clone_and_copy() {
     let c = EffectCategory::Hostcall;
     let c2 = c;
-    let c3 = c.clone();
+    let c3 = c;
     assert_eq!(c, c2);
     assert_eq!(c, c3);
 }
@@ -1314,7 +1314,7 @@ fn effect_category_clone_and_copy() {
 fn lifecycle_phase_clone_and_copy() {
     let p = LifecyclePhase::Running;
     let p2 = p;
-    let p3 = p.clone();
+    let p3 = p;
     assert_eq!(p, p2);
     assert_eq!(p, p3);
 }
@@ -1323,7 +1323,7 @@ fn lifecycle_phase_clone_and_copy() {
 fn telemetry_level_clone_and_copy() {
     let l = TelemetryLevel::Warn;
     let l2 = l;
-    let l3 = l.clone();
+    let l3 = l;
     assert_eq!(l, l2);
     assert_eq!(l, l3);
 }

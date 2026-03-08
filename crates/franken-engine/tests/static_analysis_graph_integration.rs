@@ -938,7 +938,7 @@ fn detects_simple_cycle() {
         .unwrap();
     let cycles = g.detect_cycles();
     assert!(!cycles.is_empty());
-    assert!(g.cycles().len() > 0);
+    assert!(!g.cycles().is_empty());
 }
 
 #[test]

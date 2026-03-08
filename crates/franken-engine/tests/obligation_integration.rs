@@ -405,7 +405,7 @@ fn commit_unknown_operation_id_fails() {
 fn category_stats_empty_tracker() {
     let tracker = ObligationTracker::default();
     let stats = tracker.category_stats();
-    for (_category, stat) in stats {
+    for stat in stats.values() {
         assert_eq!(stat.started, 0);
         assert_eq!(stat.committed, 0);
         assert_eq!(stat.aborted, 0);
@@ -575,9 +575,9 @@ fn multiple_operations_independent_lifecycle() {
         tracker
             .begin_operation(
                 &mut cell,
-                &format!("op-{idx}"),
+                format!("op-{idx}"),
                 TwoPhaseCategory::ResourceAlloc,
-                &format!("operation {idx}"),
+                format!("operation {idx}"),
             )
             .expect("begin");
     }

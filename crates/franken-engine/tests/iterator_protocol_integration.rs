@@ -871,7 +871,7 @@ fn trace_serialization_is_deterministic_across_calls() {
 
 #[test]
 fn all_iteration_kinds_have_distinct_display() {
-    let kinds = vec![
+    let kinds = [
         IterationKind::ForOf,
         IterationKind::ForIn,
         IterationKind::Destructuring,
@@ -911,4 +911,447 @@ fn all_close_reasons_serde_round_trip() {
         // Display works
         let _d = reason.to_string();
     }
+}
+
+// ---------------------------------------------------------------------------
+// ForIn remaining_count and deletion edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn for_in_remaining_count_tracks_correctly() {
+    let obj = make_id("rc_obj");
+    let keys = vec!["a".into(), "b".into(), "c".into()];
+    let mut state = ForInEnumerationState::new(obj, keys);
+
+    assert_eq!(state.remaining_count(), 3);
+    assert_eq!(state.next_key(), Some("a".into()));
+    assert_eq!(state.remaining_count(), 2);
+    assert_eq!(state.next_key(), Some("b".into()));
+    assert_eq!(state.remaining_count(), 1);
+    assert_eq!(state.next_key(), Some("c".into()));
+    assert_eq!(state.remaining_count(), 0);
+    assert_eq!(state.next_key(), None);
+    assert!(state.is_done());
+}
+
+#[test]
+fn for_in_delete_nonexistent_key_is_noop() {
+    let obj = make_id("del_noop_obj");
+    let keys = vec!["x".into(), "y".into()];
+    let mut state = ForInEnumerationState::new(obj, keys);
+
+    // Deleting a key that doesn't exist shouldn't panic or affect iteration
+    state.mark_deleted("nonexistent");
+    assert_eq!(state.next_key(), Some("x".into()));
+    assert_eq!(state.next_key(), Some("y".into()));
+    assert_eq!(state.next_key(), None);
+}
+
+#[test]
+fn for_in_empty_keys_immediately_done() {
+    let obj = make_id("empty_keys_obj");
+    let keys: Vec<String> = vec![];
+    let mut state = ForInEnumerationState::new(obj, keys);
+
+    assert_eq!(state.remaining_count(), 0);
+    assert_eq!(state.next_key(), None);
+    assert!(state.is_done());
+}
+
+#[test]
+fn for_in_delete_all_remaining_keys() {
+    let obj = make_id("del_all_obj");
+    let keys = vec!["a".into(), "b".into(), "c".into()];
+    let mut state = ForInEnumerationState::new(obj, keys);
+
+    assert_eq!(state.next_key(), Some("a".into()));
+    state.mark_deleted("b");
+    state.mark_deleted("c");
+    assert_eq!(state.next_key(), None);
+    assert!(state.is_done());
+}
+
+#[test]
+fn for_in_delete_same_key_twice() {
+    let obj = make_id("del_twice_obj");
+    let keys = vec!["a".into(), "b".into()];
+    let mut state = ForInEnumerationState::new(obj, keys);
+
+    state.mark_deleted("b");
+    state.mark_deleted("b"); // Redundant, should be fine
+    assert_eq!(state.next_key(), Some("a".into()));
+    assert_eq!(state.next_key(), None);
+}
+
+// ---------------------------------------------------------------------------
+// IteratorSymbolKind well_known_symbol
+// ---------------------------------------------------------------------------
+
+#[test]
+fn iterator_symbol_kind_sync_well_known() {
+    let wks = IteratorSymbolKind::Iterator.well_known_symbol();
+    assert_eq!(wks, WellKnownSymbol::Iterator);
+}
+
+#[test]
+fn iterator_symbol_kind_async_well_known() {
+    let wks = IteratorSymbolKind::AsyncIterator.well_known_symbol();
+    assert_eq!(wks, WellKnownSymbol::AsyncIterator);
+}
+
+// ---------------------------------------------------------------------------
+// IteratorResult edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn iterator_result_done_has_undefined_value() {
+    let r = IteratorResult::done();
+    assert!(r.done);
+    assert_eq!(r.value, IteratorValue::Undefined);
+}
+
+#[test]
+fn iterator_result_done_with_preserves_return_value() {
+    let r = IteratorResult::done_with(IteratorValue::String("final".into()));
+    assert!(r.done);
+    assert_eq!(r.value, IteratorValue::String("final".into()));
+}
+
+#[test]
+fn iterator_result_value_is_not_done() {
+    let r = IteratorResult::value(IteratorValue::Integer(42));
+    assert!(!r.done);
+    assert_eq!(r.value, IteratorValue::Integer(42));
+}
+
+// ---------------------------------------------------------------------------
+// All IterationErrorKind display coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_iteration_error_kinds_have_distinct_display() {
+    let kinds = [
+        IterationErrorKind::NotIterable,
+        IterationErrorKind::IteratorMethodNotObject,
+        IterationErrorKind::NextNotCallable,
+        IterationErrorKind::NextResultNotObject,
+        IterationErrorKind::DoneNotBoolean,
+        IterationErrorKind::UserException,
+    ];
+    let displays: Vec<String> = kinds.iter().map(|k| k.to_string()).collect();
+    for (i, d1) in displays.iter().enumerate() {
+        for (j, d2) in displays.iter().enumerate() {
+            if i != j {
+                assert_ne!(d1, d2, "error kinds {i} and {j} have same display");
+            }
+        }
+    }
+}
+
+#[test]
+fn all_iteration_error_kinds_serde_roundtrip() {
+    let kinds = [
+        IterationErrorKind::NotIterable,
+        IterationErrorKind::IteratorMethodNotObject,
+        IterationErrorKind::NextNotCallable,
+        IterationErrorKind::NextResultNotObject,
+        IterationErrorKind::DoneNotBoolean,
+        IterationErrorKind::UserException,
+    ];
+    for kind in &kinds {
+        let json = serde_json::to_string(kind).expect("serialize");
+        let parsed: IterationErrorKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*kind, parsed);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Error construction: next_not_callable and next_result_not_object
+// ---------------------------------------------------------------------------
+
+#[test]
+fn error_next_not_callable_construction() {
+    let rec = make_id("err_nnc");
+    let err = IteratorProtocolError::next_not_callable(rec.clone());
+    assert_eq!(err.kind, IterationErrorKind::NextNotCallable);
+    assert_eq!(err.record_id, Some(rec));
+    assert!(err.step_index.is_none());
+}
+
+#[test]
+fn error_next_result_not_object_construction() {
+    let rec = make_id("err_nrno");
+    let err = IteratorProtocolError::next_result_not_object(rec.clone(), 5);
+    assert_eq!(err.kind, IterationErrorKind::NextResultNotObject);
+    assert_eq!(err.record_id, Some(rec));
+    assert_eq!(err.step_index, Some(5));
+}
+
+// ---------------------------------------------------------------------------
+// Validate with nested array and object ref
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validate_nested_array_result() {
+    let nested = IteratorValue::Array(vec![
+        IteratorValue::Integer(1),
+        IteratorValue::Array(vec![IteratorValue::Boolean(true)]),
+    ]);
+    let result = IteratorResult::value(nested);
+    assert!(validate_iterator_result(&result).is_ok());
+}
+
+#[test]
+fn validate_object_ref_result() {
+    let result = IteratorResult::value(IteratorValue::ObjectRef(make_id("vobj")));
+    assert!(validate_iterator_result(&result).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// IterationCompletion all variants serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn iteration_completion_all_variants_serde() {
+    let completions = vec![
+        IterationCompletion::Normal,
+        IterationCompletion::NotIterable,
+        IterationCompletion::InvalidResult,
+        IterationCompletion::CloseThrew,
+        IterationCompletion::Abrupt {
+            error_kind: IterationErrorKind::NotIterable,
+        },
+        IterationCompletion::Abrupt {
+            error_kind: IterationErrorKind::NextNotCallable,
+        },
+        IterationCompletion::Abrupt {
+            error_kind: IterationErrorKind::DoneNotBoolean,
+        },
+        IterationCompletion::Abrupt {
+            error_kind: IterationErrorKind::UserException,
+        },
+    ];
+    for comp in &completions {
+        let json = serde_json::to_string(comp).expect("serialize");
+        let parsed: IterationCompletion = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*comp, parsed);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IterationOperation all variants serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn iteration_operation_get_iterator_serde() {
+    let op = IterationOperation::GetIterator {
+        symbol: IteratorSymbolKind::Iterator,
+        iterable_ref: make_id("op_iter"),
+    };
+    let json = serde_json::to_string(&op).expect("serialize");
+    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(op, parsed);
+}
+
+#[test]
+fn iteration_operation_next_serde() {
+    let op = IterationOperation::IteratorNext {
+        result: IteratorResult::value(IteratorValue::Integer(99)),
+    };
+    let json = serde_json::to_string(&op).expect("serialize");
+    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(op, parsed);
+}
+
+#[test]
+fn iteration_operation_complete_serde() {
+    let op = IterationOperation::IteratorComplete { done: true };
+    let json = serde_json::to_string(&op).expect("serialize");
+    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(op, parsed);
+}
+
+#[test]
+fn iteration_operation_value_serde() {
+    let op = IterationOperation::IteratorValue {
+        value: IteratorValue::String("test".into()),
+    };
+    let json = serde_json::to_string(&op).expect("serialize");
+    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(op, parsed);
+}
+
+#[test]
+fn iteration_operation_close_all_reasons_serde() {
+    for reason in [
+        CloseReason::Break,
+        CloseReason::Return,
+        CloseReason::Throw,
+        CloseReason::DestructuringExhausted,
+    ] {
+        let op = IterationOperation::IteratorClose {
+            reason: reason.clone(),
+            return_called: true,
+        };
+        let json = serde_json::to_string(&op).expect("serialize");
+        let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(op, parsed);
+    }
+}
+
+#[test]
+fn iteration_operation_enumerate_serde() {
+    let op = IterationOperation::EnumerateProperties {
+        object_ref: make_id("enum_serde_obj"),
+        keys: vec!["a".into(), "b".into()],
+    };
+    let json = serde_json::to_string(&op).expect("serialize");
+    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(op, parsed);
+}
+
+// ---------------------------------------------------------------------------
+// Async iterator get event
+// ---------------------------------------------------------------------------
+
+#[test]
+fn async_get_iterator_event_uses_async_symbol() {
+    let rec = make_id("async_rec");
+    let iterable = make_id("async_iter");
+    let event = make_get_iterator_event(
+        rec,
+        0,
+        IteratorSymbolKind::AsyncIterator,
+        iterable.clone(),
+    );
+    if let IterationOperation::GetIterator {
+        symbol,
+        iterable_ref,
+    } = &event.operation
+    {
+        assert_eq!(*symbol, IteratorSymbolKind::AsyncIterator);
+        assert_eq!(*iterable_ref, iterable);
+    } else {
+        panic!("expected GetIterator operation");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-abrupt trace counting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multi_abrupt_trace_counts_all_abrupt_completions() {
+    let record_id = make_id("multi_abrupt_rec");
+    let mut trace = IterationTrace::new(
+        make_id("multi_abrupt_trace"),
+        record_id.clone(),
+        IterationKind::ForOf,
+    );
+
+    // One normal event
+    trace.record_event(make_next_event(
+        record_id.clone(),
+        0,
+        IteratorResult::value(IteratorValue::Integer(1)),
+    ));
+
+    // Two abrupt events
+    trace.record_event(make_abrupt_event(
+        record_id.clone(),
+        1,
+        IterationOperation::IteratorNext {
+            result: IteratorResult::done(),
+        },
+        IterationErrorKind::NextResultNotObject,
+    ));
+    trace.record_event(make_abrupt_event(
+        record_id.clone(),
+        2,
+        IterationOperation::IteratorClose {
+            reason: CloseReason::Throw,
+            return_called: false,
+        },
+        IterationErrorKind::UserException,
+    ));
+
+    let summary = render_iteration_summary(&trace);
+    assert!(summary.contains("abrupt_completions: 2"));
+    assert!(summary.contains("values_produced: 1"));
+}
+
+// ---------------------------------------------------------------------------
+// Schema constants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schema_version_is_stable() {
+    assert_eq!(
+        ITERATOR_PROTOCOL_SCHEMA_VERSION,
+        "franken-engine.iterator-protocol.v1"
+    );
+}
+
+#[test]
+fn bead_id_is_stable() {
+    assert_eq!(ITERATOR_PROTOCOL_BEAD_ID, "bd-1lsy.4.8.1");
+}
+
+// ---------------------------------------------------------------------------
+// IteratorRecord step tracking
+// ---------------------------------------------------------------------------
+
+#[test]
+fn iterator_record_default_fields() {
+    let rec = IteratorRecord {
+        record_id: make_id("step_rec"),
+        iterator_ref: make_id("step_iter"),
+        next_method_ref: make_id("step_next"),
+        done: false,
+        kind: IterationKind::ForOf,
+        step_count: 0,
+    };
+    assert!(!rec.done);
+    assert_eq!(rec.step_count, 0);
+    assert_eq!(rec.kind, IterationKind::ForOf);
+}
+
+#[test]
+fn iterator_record_async_kind() {
+    let rec = IteratorRecord {
+        record_id: make_id("async_step_rec"),
+        iterator_ref: make_id("async_step_iter"),
+        next_method_ref: make_id("async_step_next"),
+        done: false,
+        kind: IterationKind::YieldDelegate,
+        step_count: 42,
+    };
+    let json = serde_json::to_string(&rec).expect("serialize");
+    let parsed: IteratorRecord = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(rec, parsed);
+    assert_eq!(parsed.step_count, 42);
+}
+
+// ---------------------------------------------------------------------------
+// ForIn serde with deletions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn for_in_state_with_deletions_serde_roundtrip() {
+    let obj = make_id("serde_del_obj");
+    let keys = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+    let mut state = ForInEnumerationState::new(obj, keys);
+
+    state.next_key(); // consume "a"
+    state.mark_deleted("c");
+
+    let json = serde_json::to_string(&state).expect("serialize");
+    let parsed: ForInEnumerationState = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(state, parsed);
+    // Verify the deserialized state continues correctly
+    let mut parsed_state = parsed;
+    assert_eq!(parsed_state.next_key(), Some("b".into()));
+    // "c" was deleted
+    assert_eq!(parsed_state.next_key(), Some("d".into()));
+    assert_eq!(parsed_state.next_key(), None);
 }

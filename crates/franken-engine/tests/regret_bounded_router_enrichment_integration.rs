@@ -511,7 +511,7 @@ fn router_error_is_std_error() {
 
 #[test]
 fn regime_kind_ordering_stable() {
-    let mut kinds = vec![
+    let mut kinds = [
         RegimeKind::Adversarial,
         RegimeKind::Unknown,
         RegimeKind::Stochastic,

@@ -612,8 +612,10 @@ fn new_rejects_duplicate_threat_ids() {
 
 #[test]
 fn new_rejects_zero_alpha() {
-    let mut config = TailGateConfig::default();
-    config.cvar_alpha_millionths = 0;
+    let config = TailGateConfig {
+        cvar_alpha_millionths: 0,
+        ..TailGateConfig::default()
+    };
     let threats = vec![make_threat(
         "t1",
         ThreatCategory::CapabilityEscalation,
@@ -625,8 +627,10 @@ fn new_rejects_zero_alpha() {
 
 #[test]
 fn new_rejects_alpha_above_million() {
-    let mut config = TailGateConfig::default();
-    config.cvar_alpha_millionths = MILLION + 1;
+    let config = TailGateConfig {
+        cvar_alpha_millionths: MILLION + 1,
+        ..TailGateConfig::default()
+    };
     let threats = vec![make_threat(
         "t1",
         ThreatCategory::CapabilityEscalation,
@@ -638,8 +642,10 @@ fn new_rejects_alpha_above_million() {
 
 #[test]
 fn new_rejects_negative_budget() {
-    let mut config = TailGateConfig::default();
-    config.tail_budget_millionths = -1;
+    let config = TailGateConfig {
+        tail_budget_millionths: -1,
+        ..TailGateConfig::default()
+    };
     let threats = vec![make_threat(
         "t1",
         ThreatCategory::CapabilityEscalation,
@@ -808,8 +814,10 @@ fn evaluate_fail_playbook_has_4_steps() {
 
 #[test]
 fn evaluate_fail_no_playbook_when_disabled() {
-    let mut config = TailGateConfig::default();
-    config.generate_rollback_playbook = false;
+    let config = TailGateConfig {
+        generate_rollback_playbook: false,
+        ..TailGateConfig::default()
+    };
     let threats = vec![make_threat(
         "t1",
         ThreatCategory::CapabilityEscalation,
@@ -854,8 +862,10 @@ fn evaluate_risk_ledger_accumulates_across_evaluations() {
 
 #[test]
 fn evaluate_no_risk_ledger_when_disabled() {
-    let mut config = TailGateConfig::default();
-    config.record_risk_ledger = false;
+    let config = TailGateConfig {
+        record_risk_ledger: false,
+        ..TailGateConfig::default()
+    };
     let threats = vec![make_threat(
         "t1",
         ThreatCategory::CapabilityEscalation,
@@ -1115,7 +1125,7 @@ fn continuation_cliff_atlas_contract_doc_mentions_fail_closed_missing_neighborho
     let path = repo_root().join("docs/RGC_CONTINUATION_CLIFF_ATLAS_V1.md");
     let doc = std::fs::read_to_string(path).expect("contract doc should exist");
     assert!(doc.contains("missing_neighborhood"));
-    assert!(doc.contains("fail closed"));
+    assert!(doc.contains("fail-closed"));
     assert!(doc.contains("./scripts/run_rgc_continuation_cliff_atlas_suite.sh ci"));
 }
 

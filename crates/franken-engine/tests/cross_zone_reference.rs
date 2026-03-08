@@ -415,7 +415,7 @@ fn authority_reference_across_different_zones_is_always_denied() {
                     from,
                     to,
                     ReferenceType::Authority,
-                    &format!("trace-auth-{from}-{to}"),
+                    format!("trace-auth-{from}-{to}"),
                 ),
             )
             .expect_err(&format!("authority from {from} to {to} must be denied"));

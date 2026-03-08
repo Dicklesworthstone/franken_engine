@@ -392,7 +392,7 @@ fn decision_always_covers_all_five_splits() {
     let splits: BTreeSet<_> = decision
         .evaluations
         .iter()
-        .map(|e| e.split.clone())
+        .map(|e| e.split)
         .collect();
     for expected_split in [
         BenchmarkSplit::Baseline,

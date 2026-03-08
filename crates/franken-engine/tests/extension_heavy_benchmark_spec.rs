@@ -439,7 +439,7 @@ fn scale_profile_matrix_has_monotonically_increasing_extension_counts() {
             .iter()
             .find(|r| r[0] == *profile_name)
             .unwrap_or_else(|| panic!("missing profile {profile_name}"));
-        let count_str = row[1].trim().replace(',', "").replace('_', "");
+        let count_str = row[1].trim().replace([',', '_'], "");
         let count: u64 = count_str.parse().unwrap_or_else(|_| {
             panic!("extension count for {profile_name} must be numeric: '{count_str}'")
         });

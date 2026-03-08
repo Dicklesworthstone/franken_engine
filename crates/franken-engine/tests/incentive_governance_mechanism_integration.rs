@@ -60,12 +60,12 @@ fn schema_version_nonempty() {
 
 #[test]
 fn default_publisher_bond_positive() {
-    assert!(DEFAULT_PUBLISHER_BOND > 0);
+    const { assert!(DEFAULT_PUBLISHER_BOND > 0) };
 }
 
 #[test]
 fn default_challenge_window_positive() {
-    assert!(DEFAULT_CHALLENGE_WINDOW_EPOCHS > 0);
+    const { assert!(DEFAULT_CHALLENGE_WINDOW_EPOCHS > 0) };
 }
 
 // ===========================================================================

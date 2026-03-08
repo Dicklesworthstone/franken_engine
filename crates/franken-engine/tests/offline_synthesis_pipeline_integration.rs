@@ -522,7 +522,7 @@ fn stage_witness_serde() {
 #[test]
 fn synthesis_error_empty_spec() {
     let err = SynthesisError::EmptySpec;
-    assert!(err.to_string().contains("mpty") || err.to_string().len() > 0);
+    assert!(err.to_string().contains("mpty") || !err.to_string().is_empty());
 }
 
 #[test]

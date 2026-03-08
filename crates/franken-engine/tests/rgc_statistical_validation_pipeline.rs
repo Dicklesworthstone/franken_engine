@@ -199,9 +199,11 @@ fn rgc_702_failure_scenarios_cover_core_fail_closed_paths() {
 
 #[test]
 fn rgc_702_pipeline_flags_regression_failure() {
-    let mut policy = StatisticalValidationPolicy::default();
-    policy.warmup_drop_samples = 0;
-    policy.min_samples_after_filter = 5;
+    let mut policy = StatisticalValidationPolicy {
+        warmup_drop_samples: 0,
+        min_samples_after_filter: 5,
+        ..StatisticalValidationPolicy::default()
+    };
     policy.outlier_policy.min_retained_samples = 5;
     policy.thresholds.warning_regression_millionths = 10_000;
     policy.thresholds.fail_regression_millionths = 20_000;
@@ -327,9 +329,11 @@ fn statistical_validation_policy_serde_roundtrip() {
 
 #[test]
 fn pipeline_with_no_regression_allows_promotion() {
-    let mut policy = StatisticalValidationPolicy::default();
-    policy.warmup_drop_samples = 0;
-    policy.min_samples_after_filter = 5;
+    let mut policy = StatisticalValidationPolicy {
+        warmup_drop_samples: 0,
+        min_samples_after_filter: 5,
+        ..StatisticalValidationPolicy::default()
+    };
     policy.outlier_policy.min_retained_samples = 5;
 
     let input = StatisticalValidationInput::new(
@@ -352,9 +356,11 @@ fn pipeline_with_no_regression_allows_promotion() {
 
 #[test]
 fn pipeline_evaluation_is_deterministic() {
-    let mut policy = StatisticalValidationPolicy::default();
-    policy.warmup_drop_samples = 0;
-    policy.min_samples_after_filter = 5;
+    let mut policy = StatisticalValidationPolicy {
+        warmup_drop_samples: 0,
+        min_samples_after_filter: 5,
+        ..StatisticalValidationPolicy::default()
+    };
     policy.outlier_policy.min_retained_samples = 5;
 
     let input = StatisticalValidationInput::new(
@@ -414,7 +420,7 @@ fn contract_deterministic_double_parse() {
 #[test]
 fn statistical_validation_policy_default_is_constructible() {
     let policy = StatisticalValidationPolicy::default();
-    assert!(policy.min_samples_after_filter > 0 || policy.warmup_drop_samples == 0 || true);
+    assert!(policy.min_samples_after_filter > 0 || policy.warmup_drop_samples == 0);
 }
 
 #[test]
@@ -449,9 +455,11 @@ fn sample_workload_has_both_baseline_and_candidate_samples() {
 
 #[test]
 fn pipeline_report_logs_are_nonempty_for_regression() {
-    let mut policy = StatisticalValidationPolicy::default();
-    policy.warmup_drop_samples = 0;
-    policy.min_samples_after_filter = 5;
+    let mut policy = StatisticalValidationPolicy {
+        warmup_drop_samples: 0,
+        min_samples_after_filter: 5,
+        ..StatisticalValidationPolicy::default()
+    };
     policy.outlier_policy.min_retained_samples = 5;
 
     let input = StatisticalValidationInput::new(

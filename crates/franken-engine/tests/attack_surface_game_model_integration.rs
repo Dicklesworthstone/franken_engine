@@ -486,8 +486,8 @@ fn generate_report_empty() {
 #[test]
 fn generate_report_deterministic() {
     let model = build_simple_model();
-    let r1 = generate_report(&[model.clone()], &epoch());
-    let r2 = generate_report(&[model], &epoch());
+    let r1 = generate_report(std::slice::from_ref(&model), &epoch());
+    let r2 = generate_report(std::slice::from_ref(&model), &epoch());
     assert_eq!(r1.report_hash, r2.report_hash);
 }
 

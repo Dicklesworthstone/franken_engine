@@ -138,7 +138,7 @@ fn violation_kind_serde_roundtrip_all_variants() {
 fn violation_kind_clone_and_copy() {
     let k = ViolationKind::MissingCxParameter;
     let k2 = k; // Copy
-    let k3 = k.clone(); // Clone
+    let k3 = k; // Copy
     assert_eq!(k, k2);
     assert_eq!(k2, k3);
 }

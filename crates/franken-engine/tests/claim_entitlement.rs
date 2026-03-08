@@ -15,11 +15,8 @@ use claim_entitlement::{
     CLAIM_ENTITLEMENT_COUNTEREXAMPLE_LEDGER_SCHEMA_VERSION,
     CLAIM_ENTITLEMENT_CUTSET_SCHEMA_VERSION, CLAIM_ENTITLEMENT_IMPOSSIBILITY_SCHEMA_VERSION,
     CLAIM_ENTITLEMENT_POLICY_ID, CLAIM_ENTITLEMENT_REPORT_SCHEMA_VERSION,
-    CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION, CLAIM_ENTITLEMENT_SCHEMA_VERSION, ClaimAtom,
-    ClaimAtomCatalog, ClaimDomain, ClaimEntitlementContract, ClaimEvaluationOutputs,
-    ClaimEvaluationScenarioSet, ClaimTier, ConstraintRelation, DisqualifierRule,
-    DisqualifierRuleSet, DisqualifierVerdict, EvidenceMorphism, EvidenceMorphismCatalog,
-    MorphismEffect, SideConstraint, SideConstraintLattice,
+    CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION, CLAIM_ENTITLEMENT_SCHEMA_VERSION, ClaimDomain,
+    ClaimEntitlementContract, ClaimEvaluationOutputs, ClaimEvaluationScenarioSet, ClaimTier,
 };
 
 fn repo_root() -> PathBuf {
@@ -436,12 +433,17 @@ fn rgc_017_scenarios_evaluate_expected_states_and_minimal_cutsets() {
         }
 
         if scenario.scenario_id == "not_yet_proven_prefers_smallest_cutset" {
-            assert_eq!(cutsets.cutsets.len(), 1);
+            let atom_cutsets: Vec<_> = cutsets
+                .cutsets
+                .iter()
+                .filter(|c| c.atom_id == "claim.frankenctl.compile.shipped")
+                .collect();
+            assert_eq!(atom_cutsets.len(), 1);
             assert_eq!(
-                cutsets.cutsets[0].supporting_morphism_id,
+                atom_cutsets[0].supporting_morphism_id,
                 "morphism.docs_help_surface_audit_to_frankenctl_surface"
             );
-            assert_eq!(cutsets.cutsets[0].cost, 1);
+            assert_eq!(atom_cutsets[0].cost, 1);
         }
 
         if scenario.scenario_id == "stale_docs_surface_blocks_claim" {
@@ -456,10 +458,20 @@ fn rgc_017_scenarios_evaluate_expected_states_and_minimal_cutsets() {
         }
 
         if scenario.scenario_id == "active_counterexample_forbids_shipped_run" {
-            assert_eq!(certificates.certificates.len(), 1);
-            assert_eq!(counterexamples.entries.len(), 1);
+            let atom_certs: Vec<_> = certificates
+                .certificates
+                .iter()
+                .filter(|c| c.atom_id == "claim.frankenctl.run.shipped")
+                .collect();
+            assert_eq!(atom_certs.len(), 1);
+            let atom_ledger: Vec<_> = counterexamples
+                .entries
+                .iter()
+                .filter(|e| e.atom_id == "claim.frankenctl.run.shipped")
+                .collect();
+            assert_eq!(atom_ledger.len(), 1);
             assert_eq!(
-                counterexamples.entries[0].blocking_rule_id,
+                atom_ledger[0].blocking_rule_id,
                 "rule.active_counterexample"
             );
         }

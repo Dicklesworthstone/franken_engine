@@ -1292,6 +1292,6 @@ fn full_attestation_fallback_lifecycle() {
 
 #[test]
 fn default_ring_buffer_capacity_is_reasonable() {
-    assert!(TEST_RING_BUFFER_CAPACITY >= 64);
-    assert!(TEST_RING_BUFFER_CAPACITY <= 4096);
+    const { assert!(TEST_RING_BUFFER_CAPACITY >= 64) };
+    const { assert!(TEST_RING_BUFFER_CAPACITY <= 4096) };
 }

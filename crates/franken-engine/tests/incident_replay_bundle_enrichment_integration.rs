@@ -374,7 +374,7 @@ fn serde_roundtrip_category_summary() {
 #[test]
 fn json_fields_bundle_format_version() {
     let v = BundleFormatVersion { major: 1, minor: 0 };
-    let val: serde_json::Value = serde_json::to_value(&v).unwrap();
+    let val: serde_json::Value = serde_json::to_value(v).unwrap();
     let obj = val.as_object().unwrap();
     for key in ["major", "minor"] {
         assert!(
@@ -508,7 +508,7 @@ fn merkle_root_empty() {
 #[test]
 fn merkle_root_single_leaf() {
     let leaf = ContentHash::compute(b"hello");
-    let root = compute_merkle_root(&[leaf.clone()]);
+    let root = compute_merkle_root(std::slice::from_ref(&leaf));
     assert_eq!(root, leaf);
 }
 
@@ -573,7 +573,7 @@ fn merkle_proof_invalid_index() {
 
 #[test]
 fn bundle_artifact_kind_ordering_stable() {
-    let mut kinds = vec![
+    let mut kinds = [
         BundleArtifactKind::PolicySnapshot,
         BundleArtifactKind::Trace,
         BundleArtifactKind::NondeterminismLog,
@@ -589,7 +589,7 @@ fn bundle_artifact_kind_ordering_stable() {
 
 #[test]
 fn verification_category_ordering_stable() {
-    let mut cats = vec![
+    let mut cats = [
         VerificationCategory::Compatibility,
         VerificationCategory::Integrity,
         VerificationCategory::Replay,

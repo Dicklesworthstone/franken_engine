@@ -20,6 +20,7 @@ labels_root="${SECURITY_CONFORMANCE_LABELS_ROOT:-crates/franken-engine/tests/sec
 observations_jsonl="${SECURITY_CONFORMANCE_OBSERVATIONS_JSONL:-}"
 policy_snapshot_hash="${SECURITY_CONFORMANCE_POLICY_SNAPSHOT_HASH:-}"
 allow_small_corpus="${SECURITY_CONFORMANCE_ALLOW_SMALL_CORPUS:-1}"
+fail_on_gate_failure="${SECURITY_CONFORMANCE_FAIL_ON_GATE_FAILURE:-1}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 rch_ready_attempts="${RCH_READY_ATTEMPTS:-12}"
 rch_ready_sleep_seconds="${RCH_READY_SLEEP_SECONDS:-2}"
@@ -178,6 +179,8 @@ declare -a step_logs=()
 failed_command=""
 manifest_written=false
 evidence_path=""
+gate_outcome=""
+gate_failure_reasons_json="[]"
 
 command_log_name() {
   local command_text="$1"
@@ -327,6 +330,9 @@ build_runner_args() {
   if [[ "$allow_small_corpus" == "1" ]]; then
     runner_args+=(--allow-small-corpus)
   fi
+  if [[ "$fail_on_gate_failure" == "1" ]]; then
+    runner_args+=(--fail-on-gate-failure)
+  fi
   if [[ "${#extra_runner_args[@]}" -gt 0 ]]; then
     runner_args+=("${extra_runner_args[@]}")
   fi
@@ -362,9 +368,19 @@ resolve_evidence_path() {
   return 1
 }
 
+security_summary_outcome() {
+  local summary_path="$1"
+  jq -r 'select(.event == "summary") | .outcome' "$summary_path" | tail -n1
+}
+
+security_summary_failure_reasons_json() {
+  local summary_path="$1"
+  jq -c 'select(.event == "summary") | (.gate_failure_reasons // [])' "$summary_path" | tail -n1
+}
+
 run_mode() {
   local selected_mode="${1:-$mode}"
-  local runner_command runner_remote_exit_code
+  local runner_command runner_remote_exit_code run_status gate_failure_reasons_pretty
 
   case "$selected_mode" in
     check)
@@ -392,18 +408,33 @@ run_mode() {
       : >"$runner_stdout_path"
       build_runner_args
       runner_command="cargo run -p frankenengine-engine --bin franken_security_conformance_runner -- $(render_runner_args)"
-      run_step_capture "$runner_command" "$runner_stdout_path" \
-        cargo run -p frankenengine-engine --bin franken_security_conformance_runner -- "${runner_args[@]}"
+      run_status=0
+      run_step_core "$runner_command" 0 "$runner_stdout_path" \
+        cargo run -p frankenengine-engine --bin franken_security_conformance_runner -- "${runner_args[@]}" || run_status=$?
       # Defensively re-check remote exit from captured log so timeout exits are
       # reported deterministically even if earlier step parsing misses it.
       runner_remote_exit_code="$(rch_remote_exit_code "$runner_stdout_path" || true)"
+      if ! resolve_evidence_path; then
+        failed_command="${runner_command} (missing-or-unresolvable-evidence-path)"
+        return 1
+      fi
+      gate_outcome="$(security_summary_outcome "$evidence_path" || true)"
+      gate_failure_reasons_json="$(security_summary_failure_reasons_json "$evidence_path" || echo '[]')"
+      if [[ -z "$gate_outcome" ]]; then
+        failed_command="${runner_command} (missing-summary-outcome)"
+        return 1
+      fi
+      if [[ "$gate_outcome" != "pass" ]]; then
+        gate_failure_reasons_pretty="$(printf '%s' "$gate_failure_reasons_json" | jq -r 'join("; ")')"
+        failed_command="${runner_command} (gate-outcome=${gate_outcome}${gate_failure_reasons_pretty:+, reasons=${gate_failure_reasons_pretty}})"
+        return 1
+      fi
       if [[ -n "$runner_remote_exit_code" && "$runner_remote_exit_code" != "0" ]]; then
         failed_command="${runner_command} (remote-exit=${runner_remote_exit_code}, expected=0)"
         return 1
       fi
-      if ! resolve_evidence_path; then
-        failed_command="${runner_command} (missing-or-unresolvable-evidence-path)"
-        return 1
+      if [[ "$run_status" -ne 0 ]]; then
+        return "$run_status"
       fi
       ;;
     ci)
@@ -515,6 +546,7 @@ write_manifest() {
     --argjson allow_small_corpus "$allow_small_corpus" \
     --arg runner_output_root "$runner_output_root" \
     --arg evidence_path "$evidence_path" \
+    --arg gate_outcome "$gate_outcome" \
     --arg trace_id "$trace_id" \
     --arg decision_id "$decision_id" \
     --arg policy_id "$policy_id" \
@@ -525,6 +557,7 @@ write_manifest() {
     --argjson dirty_worktree "$dirty_worktree" \
     --argjson commands "$commands_json" \
     --argjson artifacts "$artifacts_json" \
+    --argjson gate_failure_reasons "$gate_failure_reasons_json" \
     --argjson operator_verification "$operator_json" \
     --argjson failed_command "$failed_command_json" \
     --arg error_code "$error_code" \
@@ -541,6 +574,8 @@ write_manifest() {
       allow_small_corpus: $allow_small_corpus,
       runner_output_root: $runner_output_root,
       evidence_path: $evidence_path,
+      gate_outcome: (if $gate_outcome == "" then null else $gate_outcome end),
+      gate_failure_reasons: $gate_failure_reasons,
       trace_id: $trace_id,
       decision_id: $decision_id,
       policy_id: $policy_id,

@@ -265,6 +265,56 @@ fn runner_writes_summary_and_workload_evidence_lines() {
 }
 
 #[test]
+fn runner_can_fail_closed_after_emitting_red_evidence() {
+    let fixture = build_fixture();
+    let output = runner_command(&fixture)
+        .arg("--allow-small-corpus")
+        .arg("--fail-on-gate-failure")
+        .output()
+        .expect("run security conformance runner");
+    assert!(
+        !output.status.success(),
+        "runner unexpectedly succeeded:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let evidence_path = normalize_path(parse_evidence_path(&stdout));
+    assert!(
+        evidence_path.exists(),
+        "missing evidence after fail-closed run: {}",
+        evidence_path.display()
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("security conformance gate failed"),
+        "stderr missing fail-closed message:\n{stderr}"
+    );
+
+    let evidence_text = fs::read_to_string(&evidence_path).expect("read evidence");
+    let summary: Value = serde_json::from_str(
+        evidence_text
+            .lines()
+            .next()
+            .expect("summary line present in evidence"),
+    )
+    .expect("parse summary line");
+    assert_eq!(summary["event"], "summary");
+    assert_eq!(summary["outcome"], "fail");
+    assert!(
+        summary["gate_failure_reasons"]
+            .as_array()
+            .expect("gate failure reasons array")
+            .iter()
+            .any(|reason| reason.as_str().unwrap_or_default().contains("TPR")),
+        "expected TPR-related failure reasons in summary: {:?}",
+        summary["gate_failure_reasons"]
+    );
+}
+
+#[test]
 fn runner_fails_without_allow_small_corpus_flag() {
     let fixture = build_fixture();
     let output = runner_command(&fixture)

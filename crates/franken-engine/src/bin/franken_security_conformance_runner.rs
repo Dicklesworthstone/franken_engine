@@ -19,6 +19,7 @@ struct CliArgs {
     output_root: PathBuf,
     policy_snapshot_hash: String,
     allow_small_corpus: bool,
+    fail_on_gate_failure: bool,
 }
 
 fn default_labels_root() -> PathBuf {
@@ -35,6 +36,7 @@ fn parse_args() -> Result<CliArgs, String> {
     let mut output_root = default_output_root();
     let mut policy_snapshot_hash = digest_hex(b"security-conformance-policy-v1");
     let mut allow_small_corpus = false;
+    let mut fail_on_gate_failure = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -65,8 +67,11 @@ fn parse_args() -> Result<CliArgs, String> {
             "--allow-small-corpus" => {
                 allow_small_corpus = true;
             }
+            "--fail-on-gate-failure" => {
+                fail_on_gate_failure = true;
+            }
             "--help" | "-h" => {
-                return Err("usage: franken_security_conformance_runner [--labels-root <path>] [--observations-jsonl <path>] [--output-root <path>] [--policy-snapshot-hash <hex>] [--allow-small-corpus]".to_string());
+                return Err("usage: franken_security_conformance_runner [--labels-root <path>] [--observations-jsonl <path>] [--output-root <path>] [--policy-snapshot-hash <hex>] [--allow-small-corpus] [--fail-on-gate-failure]".to_string());
             }
             other => {
                 return Err(format!("unknown argument: {other}"));
@@ -80,6 +85,7 @@ fn parse_args() -> Result<CliArgs, String> {
         output_root,
         policy_snapshot_hash,
         allow_small_corpus,
+        fail_on_gate_failure,
     })
 }
 
@@ -329,6 +335,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         for reason in &summary.gate_failure_reasons {
             println!("security gate_failure_reason={reason}");
         }
+    }
+
+    if args.fail_on_gate_failure && !summary.gate_pass {
+        let detail = if summary.gate_failure_reasons.is_empty() {
+            "gate outcome was fail".to_string()
+        } else {
+            summary.gate_failure_reasons.join("; ")
+        };
+        return Err(format!("security conformance gate failed: {detail}").into());
     }
 
     Ok(())

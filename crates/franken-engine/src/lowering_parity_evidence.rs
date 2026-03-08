@@ -17,12 +17,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::lowering_gap_inventory::{
-    lowering_gap_inventory, LoweringGapStatus,
-};
-use crate::parser_gap_inventory::{
-    parser_gap_inventory, ParserGapRemediationStatus,
-};
+use crate::lowering_gap_inventory::{LoweringGapStatus, lowering_gap_inventory};
+use crate::parser_gap_inventory::{ParserGapRemediationStatus, parser_gap_inventory};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,8 +31,7 @@ pub const PARITY_EVIDENCE_MANIFEST_SCHEMA_VERSION: &str =
 pub const PARITY_EVIDENCE_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.lowering-parity-evidence.event.v1";
 pub const PARITY_EVIDENCE_COMPONENT: &str = "lowering_parity_evidence";
-pub const PARITY_EVIDENCE_POLICY_ID: &str =
-    "franken-engine.lowering-parity-evidence.policy.v1";
+pub const PARITY_EVIDENCE_POLICY_ID: &str = "franken-engine.lowering-parity-evidence.policy.v1";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,10 +236,7 @@ pub fn parity_evidence_inventory() -> ParityEvidenceInventory {
             (ls.status, ls.status.as_str().to_string())
         } else {
             // No matching lowering site => parser leads lowering
-            (
-                LoweringGapStatus::OpenPlaceholder,
-                "missing".to_string(),
-            )
+            (LoweringGapStatus::OpenPlaceholder, "missing".to_string())
         };
 
         let verdict = compute_verdict(parser_site.remediation_status, lowering_status);
@@ -309,7 +301,9 @@ fn generate_events(inventory: &ParityEvidenceInventory) -> Vec<ParityEvidenceEve
             verdict: Some(finding.verdict.as_str().to_string()),
             detail: Some(format!(
                 "parser={}, lowering={}, verdict={}",
-                finding.parser_status, finding.lowering_status, finding.verdict.as_str()
+                finding.parser_status,
+                finding.lowering_status,
+                finding.verdict.as_str()
             )),
         });
     }
@@ -347,11 +341,10 @@ pub fn write_parity_evidence_bundle(
     fs::create_dir_all(out_dir)?;
 
     let inventory = parity_evidence_inventory();
-    let inventory_json =
-        serde_json::to_string_pretty(&inventory).map_err(|e| {
-            std::io::Error::other(e.to_string())
-        })?;
-    let inventory_hash = crate::hash_tiers::ContentHash::compute(inventory_json.as_bytes()).to_hex();
+    let inventory_json = serde_json::to_string_pretty(&inventory)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let inventory_hash =
+        crate::hash_tiers::ContentHash::compute(inventory_json.as_bytes()).to_hex();
 
     let inventory_path = out_dir.join("parity_evidence_inventory.json");
     fs::write(&inventory_path, &inventory_json)?;
@@ -392,10 +385,7 @@ pub fn write_parity_evidence_bundle(
     let events_path = out_dir.join("events.jsonl");
     let events_jsonl: String = events
         .iter()
-        .map(|e| {
-            serde_json::to_string(e)
-                .unwrap_or_else(|_| "{}".to_string())
-        })
+        .map(|e| serde_json::to_string(e).unwrap_or_else(|_| "{}".to_string()))
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(&events_path, &events_jsonl)?;
@@ -468,11 +458,7 @@ mod tests {
     #[test]
     fn zero_open_gaps() {
         let inventory = parity_evidence_inventory();
-        assert_eq!(
-            inventory.open_gap_count(),
-            0,
-            "no open gaps should exist"
-        );
+        assert_eq!(inventory.open_gap_count(), 0, "no open gaps should exist");
     }
 
     #[test]
@@ -597,8 +583,7 @@ mod tests {
             "--out-dir".to_string(),
             out_dir.display().to_string(),
         ];
-        let artifacts =
-            write_parity_evidence_bundle(&out_dir, &commands).expect("write artifacts");
+        let artifacts = write_parity_evidence_bundle(&out_dir, &commands).expect("write artifacts");
         assert!(artifacts.inventory_path.exists());
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.events_path.exists());

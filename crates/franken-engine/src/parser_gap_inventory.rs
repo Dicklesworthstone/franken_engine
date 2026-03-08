@@ -130,9 +130,7 @@ impl ParserGapSiteId {
             | Self::NewExpressionCallPlaceholder
             | Self::TemplateLiteralRawPlaceholder
             | Self::BinaryNonArithmeticAddPlaceholder
-            | Self::NonIdentifierAssignmentNopPlaceholder => {
-                ParserGapRemediationStatus::Resolved
-            }
+            | Self::NonIdentifierAssignmentNopPlaceholder => ParserGapRemediationStatus::Resolved,
         }
     }
 

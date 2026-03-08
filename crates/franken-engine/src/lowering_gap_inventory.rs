@@ -705,11 +705,7 @@ mod tests {
             descriptor.emitted_ir_shape,
             "ir3.instruction.typed_binary_op"
         );
-        assert!(
-            descriptor
-                .user_visible_divergence
-                .contains("resolved")
-        );
+        assert!(descriptor.user_visible_divergence.contains("resolved"));
         assert_eq!(
             descriptor.regression_test_hint,
             "lower_non_arithmetic_binary_currently_collapses_to_add_placeholder"

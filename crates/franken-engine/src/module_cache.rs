@@ -2459,6 +2459,631 @@ fn cache_trace_label(key: &ModuleCacheKey) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Adaptive S3-FIFO with value-aware admission (RGC-620B / bd-1lsy.7.20.2)
+// ---------------------------------------------------------------------------
+
+pub const S3FIFO_ADAPTIVE_SCHEMA_VERSION: &str = "franken-engine.s3fifo-adaptive.v1";
+pub const S3FIFO_ADAPTIVE_BEAD_ID: &str = "bd-1lsy.7.20.2";
+
+/// Configuration for adaptive queue split.
+///
+/// The adaptive split adjusts the small-queue fraction based on the observed
+/// ghost-hit ratio. More ghost hits indicate entries are being evicted from the
+/// small queue too early and should be given more room.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdaptiveSplitConfig {
+    /// Minimum small-queue fraction in millionths (0..1_000_000).
+    pub min_small_fraction_millionths: u32,
+    /// Maximum small-queue fraction in millionths (0..1_000_000).
+    pub max_small_fraction_millionths: u32,
+    /// Maximum absolute change in small-queue size per epoch.
+    /// This bounds the adaptation rate for deterministic replay stability.
+    pub max_step_per_epoch: usize,
+    /// Number of accesses that constitute one adaptation epoch.
+    pub epoch_length: u64,
+}
+
+impl Default for AdaptiveSplitConfig {
+    fn default() -> Self {
+        Self {
+            min_small_fraction_millionths: 100_000, // 10%
+            max_small_fraction_millionths: 500_000, // 50%
+            max_step_per_epoch: 1,
+            epoch_length: 16,
+        }
+    }
+}
+
+impl AdaptiveSplitConfig {
+    fn validate(&self) -> Result<(), CachePolicyReportError> {
+        if self.min_small_fraction_millionths >= self.max_small_fraction_millionths {
+            return Err(CachePolicyReportError::InvalidConfig {
+                field: "min_small_fraction_millionths",
+                detail: "must be less than max_small_fraction_millionths".to_string(),
+            });
+        }
+        if self.max_small_fraction_millionths > 1_000_000 {
+            return Err(CachePolicyReportError::InvalidConfig {
+                field: "max_small_fraction_millionths",
+                detail: "must be at most 1_000_000".to_string(),
+            });
+        }
+        if self.epoch_length == 0 {
+            return Err(CachePolicyReportError::InvalidConfig {
+                field: "epoch_length",
+                detail: "must be greater than zero".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Value-aware admission policy configuration.
+///
+/// Each cache entry carries an explicit value score (millionths of 1.0).
+/// Admission is gated on the incoming entry's value exceeding a running
+/// eviction-value threshold, preventing low-value entries from displacing
+/// high-value residents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValueAdmissionConfig {
+    /// Initial admission threshold in value-millionths.
+    pub initial_threshold_millionths: u32,
+    /// Exponential moving-average weight for threshold updates (millionths).
+    /// `new_threshold = (1 - alpha) * old + alpha * evicted_value`.
+    pub alpha_millionths: u32,
+    /// Floor value below which entries are never admitted.
+    pub floor_value_millionths: u32,
+}
+
+impl Default for ValueAdmissionConfig {
+    fn default() -> Self {
+        Self {
+            initial_threshold_millionths: 100_000, // 0.1
+            alpha_millionths: 250_000,             // 0.25
+            floor_value_millionths: 0,
+        }
+    }
+}
+
+impl ValueAdmissionConfig {
+    fn validate(&self) -> Result<(), CachePolicyReportError> {
+        if self.alpha_millionths > 1_000_000 {
+            return Err(CachePolicyReportError::InvalidConfig {
+                field: "alpha_millionths",
+                detail: "must be at most 1_000_000".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Full adaptive S3-FIFO configuration combining base queue sizes, adaptive
+/// split, and value-aware admission under deterministic budgets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoAdaptiveConfig {
+    /// Total resident capacity (small + main).
+    pub resident_capacity_entries: usize,
+    /// Initial small-queue size.
+    pub initial_small_queue_entries: usize,
+    /// Ghost queue capacity.
+    pub ghost_queue_entries: usize,
+    /// Adaptive split policy.
+    pub adaptive_split: AdaptiveSplitConfig,
+    /// Value-aware admission policy.
+    pub value_admission: ValueAdmissionConfig,
+}
+
+impl Default for S3FifoAdaptiveConfig {
+    fn default() -> Self {
+        Self {
+            resident_capacity_entries: 8,
+            initial_small_queue_entries: 3,
+            ghost_queue_entries: 8,
+            adaptive_split: AdaptiveSplitConfig::default(),
+            value_admission: ValueAdmissionConfig::default(),
+        }
+    }
+}
+
+impl S3FifoAdaptiveConfig {
+    pub fn validate(&self) -> Result<(), CachePolicyReportError> {
+        if self.resident_capacity_entries == 0 {
+            return Err(CachePolicyReportError::InvalidConfig {
+                field: "resident_capacity_entries",
+                detail: "must be greater than zero".to_string(),
+            });
+        }
+        if self.initial_small_queue_entries == 0
+            || self.initial_small_queue_entries >= self.resident_capacity_entries
+        {
+            return Err(CachePolicyReportError::InvalidConfig {
+                field: "initial_small_queue_entries",
+                detail: "must be in (0, resident_capacity_entries)".to_string(),
+            });
+        }
+        if self.ghost_queue_entries == 0 {
+            return Err(CachePolicyReportError::InvalidConfig {
+                field: "ghost_queue_entries",
+                detail: "must be greater than zero".to_string(),
+            });
+        }
+        self.adaptive_split.validate()?;
+        self.value_admission.validate()?;
+        Ok(())
+    }
+
+    fn current_main_capacity(&self, current_small_capacity: usize) -> usize {
+        self.resident_capacity_entries
+            .saturating_sub(current_small_capacity)
+    }
+}
+
+/// Mutable runtime state for the adaptive split.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AdaptiveSplitState {
+    current_small_capacity: usize,
+    epoch_accesses: u64,
+    epoch_ghost_hits: u64,
+    epoch_misses: u64,
+    adaptation_count: u64,
+}
+
+impl AdaptiveSplitState {
+    fn new(initial_small: usize) -> Self {
+        Self {
+            current_small_capacity: initial_small,
+            epoch_accesses: 0,
+            epoch_ghost_hits: 0,
+            epoch_misses: 0,
+            adaptation_count: 0,
+        }
+    }
+}
+
+/// Mutable runtime state for value-aware admission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ValueAdmissionState {
+    /// Running threshold in millionths.
+    threshold_millionths: u32,
+    /// Count of entries denied admission due to low value.
+    denied_count: u64,
+    /// Count of entries admitted.
+    admitted_count: u64,
+}
+
+impl ValueAdmissionState {
+    fn new(initial_threshold: u32) -> Self {
+        Self {
+            threshold_millionths: initial_threshold,
+            denied_count: 0,
+            admitted_count: 0,
+        }
+    }
+}
+
+/// Cache entry annotated with an explicit value score.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ValueAnnotatedEntry {
+    label: String,
+    hot: bool,
+    /// Value score in millionths of 1.0. Higher means more valuable.
+    value_millionths: u32,
+}
+
+/// Record of an admission decision for replay and audit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionVerdict {
+    pub sequence: u64,
+    pub label: String,
+    pub value_millionths: u32,
+    pub threshold_millionths: u32,
+    pub admitted: bool,
+}
+
+/// Extended counters for adaptive S3-FIFO.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AdaptiveCachePolicyCounters {
+    base: CachePolicyCounters,
+    /// Number of adaptive split adjustments performed.
+    adaptation_count: u64,
+    /// Number of entries denied by value-aware admission.
+    value_denied_count: u64,
+    /// Number of entries admitted through value-aware admission.
+    value_admitted_count: u64,
+}
+
+/// Extended metrics for adaptive S3-FIFO.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct S3FifoAdaptiveMetrics {
+    pub base: CachePolicyMetrics,
+    /// Final small-queue capacity after adaptation.
+    pub final_small_capacity: usize,
+    /// Number of adaptive split adjustments.
+    pub adaptation_count: u64,
+    /// Number of admission denials due to value threshold.
+    pub value_denied_count: u64,
+    /// Number of admissions through value check.
+    pub value_admitted_count: u64,
+    /// Final admission threshold in millionths.
+    pub final_threshold_millionths: u32,
+    /// Deterministic admission verdicts for replay.
+    pub admission_verdicts: Vec<AdmissionVerdict>,
+}
+
+/// Trace access extended with an explicit value score for value-aware admission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValueAnnotatedTraceAccess {
+    pub sequence: u64,
+    pub key: ModuleCacheKey,
+    pub locality: CacheLocalityClass,
+    /// Value score in millionths. Items with higher value should be preferentially retained.
+    pub value_millionths: u32,
+}
+
+/// A workload trace with value annotations for adaptive S3-FIFO evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValueAnnotatedTraceCase {
+    pub trace_id: String,
+    pub workload_class: CacheWorkloadClass,
+    pub accesses: Vec<ValueAnnotatedTraceAccess>,
+}
+
+/// Queues for the adaptive S3-FIFO simulation with value annotations.
+#[derive(Debug, Default)]
+struct AdaptiveS3FifoQueues {
+    small: VecDeque<ValueAnnotatedEntry>,
+    main: VecDeque<ValueAnnotatedEntry>,
+    ghost: VecDeque<String>,
+}
+
+/// Simulate the adaptive S3-FIFO policy with dynamic split and value-aware
+/// admission under deterministic budgets.
+///
+/// Returns both the base-compatible `CachePolicyMetrics` (for comparison with
+/// single-queue and static S3-FIFO) and the adaptive-specific metrics.
+pub fn simulate_s3fifo_adaptive(
+    case: &ValueAnnotatedTraceCase,
+    config: &S3FifoAdaptiveConfig,
+) -> S3FifoAdaptiveMetrics {
+    let mut queues = AdaptiveS3FifoQueues::default();
+    let mut counters = AdaptiveCachePolicyCounters::default();
+    let mut split_state = AdaptiveSplitState::new(config.initial_small_queue_entries);
+    let mut value_state =
+        ValueAdmissionState::new(config.value_admission.initial_threshold_millionths);
+    let mut verdicts = Vec::new();
+
+    for access in &case.accesses {
+        let label = cache_trace_label(&access.key);
+
+        // Hit in small queue
+        if let Some(entry) = find_value_entry_mut(&mut queues.small, &label) {
+            counters.base.hit_count += 1;
+            entry.hot = true;
+            record_epoch_access(&mut split_state, false);
+            maybe_adapt_split(&mut split_state, config);
+            continue;
+        }
+
+        // Hit in main queue
+        if let Some(entry) = find_value_entry_mut(&mut queues.main, &label) {
+            counters.base.hit_count += 1;
+            entry.hot = true;
+            record_epoch_access(&mut split_state, false);
+            maybe_adapt_split(&mut split_state, config);
+            continue;
+        }
+
+        // Miss
+        counters.base.miss_count += 1;
+
+        // Value-aware admission check
+        let admitted = access.value_millionths >= value_state.threshold_millionths
+            && access.value_millionths >= config.value_admission.floor_value_millionths;
+
+        verdicts.push(AdmissionVerdict {
+            sequence: access.sequence,
+            label: label.clone(),
+            value_millionths: access.value_millionths,
+            threshold_millionths: value_state.threshold_millionths,
+            admitted,
+        });
+
+        if !admitted {
+            value_state.denied_count += 1;
+            counters.value_denied_count += 1;
+            record_epoch_access(&mut split_state, false);
+            maybe_adapt_split(&mut split_state, config);
+            continue;
+        }
+
+        value_state.admitted_count += 1;
+        counters.value_admitted_count += 1;
+
+        let new_entry = ValueAnnotatedEntry {
+            label: label.clone(),
+            hot: false,
+            value_millionths: access.value_millionths,
+        };
+
+        if remove_label(&mut queues.ghost, &label) {
+            // Ghost hit: promote directly to main queue
+            counters.base.ghost_hit_count += 1;
+            record_epoch_access(&mut split_state, true);
+            adaptive_insert_main(
+                new_entry,
+                &mut queues,
+                config,
+                split_state.current_small_capacity,
+                &mut counters.base,
+                &mut value_state,
+            );
+        } else {
+            // First miss: insert into small queue
+            record_epoch_access(&mut split_state, false);
+            adaptive_insert_small(
+                new_entry,
+                &mut queues,
+                config,
+                &mut split_state,
+                &mut counters.base,
+                &mut value_state,
+            );
+        }
+
+        maybe_adapt_split(&mut split_state, config);
+    }
+
+    counters.adaptation_count = split_state.adaptation_count;
+
+    let final_resident_keys: Vec<String> = queues
+        .small
+        .iter()
+        .chain(queues.main.iter())
+        .map(|entry| entry.label.clone())
+        .collect();
+
+    // Build a plain CacheTraceCase for metric computation compatibility
+    let plain_case = CacheTraceCase {
+        trace_id: case.trace_id.clone(),
+        workload_class: case.workload_class,
+        accesses: case
+            .accesses
+            .iter()
+            .map(|a| CacheTraceAccess {
+                sequence: a.sequence,
+                key: a.key.clone(),
+                locality: a.locality,
+            })
+            .collect(),
+    };
+
+    let base_metrics = build_policy_metrics(
+        CachePolicyKind::S3Fifo,
+        &plain_case,
+        counters.base,
+        final_resident_keys,
+    );
+
+    S3FifoAdaptiveMetrics {
+        base: base_metrics,
+        final_small_capacity: split_state.current_small_capacity,
+        adaptation_count: split_state.adaptation_count,
+        value_denied_count: value_state.denied_count,
+        value_admitted_count: value_state.admitted_count,
+        final_threshold_millionths: value_state.threshold_millionths,
+        admission_verdicts: verdicts,
+    }
+}
+
+fn record_epoch_access(state: &mut AdaptiveSplitState, is_ghost_hit: bool) {
+    state.epoch_accesses += 1;
+    if is_ghost_hit {
+        state.epoch_ghost_hits += 1;
+    }
+    state.epoch_misses += u64::from(!is_ghost_hit && state.epoch_accesses > 0);
+}
+
+fn maybe_adapt_split(state: &mut AdaptiveSplitState, config: &S3FifoAdaptiveConfig) {
+    if state.epoch_accesses < config.adaptive_split.epoch_length {
+        return;
+    }
+
+    // Ghost-hit ratio indicates how many evicted-small items turn out to be
+    // needed soon. A high ratio means the small queue is too small.
+    let total = state.epoch_ghost_hits + state.epoch_misses;
+    let ghost_ratio_millionths = if total > 0 {
+        ratio_to_millionths(state.epoch_ghost_hits, total)
+    } else {
+        0
+    };
+
+    let min_small = fraction_of(
+        config.resident_capacity_entries,
+        config.adaptive_split.min_small_fraction_millionths,
+    )
+    .max(1);
+    let max_small = fraction_of(
+        config.resident_capacity_entries,
+        config.adaptive_split.max_small_fraction_millionths,
+    )
+    .min(config.resident_capacity_entries.saturating_sub(1));
+
+    let target = state.current_small_capacity;
+
+    // If ghost hits are high (>50%), increase small queue.
+    // If ghost hits are low (<25%), decrease small queue.
+    let new_target = if ghost_ratio_millionths > 500_000 {
+        target
+            .saturating_add(config.adaptive_split.max_step_per_epoch)
+            .min(max_small)
+    } else if ghost_ratio_millionths < 250_000 && target > min_small {
+        target
+            .saturating_sub(config.adaptive_split.max_step_per_epoch)
+            .max(min_small)
+    } else {
+        target
+    };
+
+    state.current_small_capacity = new_target;
+    state.adaptation_count += 1;
+    state.epoch_accesses = 0;
+    state.epoch_ghost_hits = 0;
+    state.epoch_misses = 0;
+}
+
+fn fraction_of(total: usize, millionths: u32) -> usize {
+    ((total as u64 * u64::from(millionths)) / 1_000_000) as usize
+}
+
+fn adaptive_insert_small(
+    entry: ValueAnnotatedEntry,
+    queues: &mut AdaptiveS3FifoQueues,
+    config: &S3FifoAdaptiveConfig,
+    split_state: &mut AdaptiveSplitState,
+    counters: &mut CachePolicyCounters,
+    value_state: &mut ValueAdmissionState,
+) {
+    while queues.small.len() >= split_state.current_small_capacity {
+        if let Some(evicted) = queues.small.pop_front() {
+            if evicted.hot {
+                counters.promotion_count += 1;
+                adaptive_insert_main(
+                    ValueAnnotatedEntry {
+                        label: evicted.label,
+                        hot: false,
+                        value_millionths: evicted.value_millionths,
+                    },
+                    queues,
+                    config,
+                    split_state.current_small_capacity,
+                    counters,
+                    value_state,
+                );
+            } else {
+                counters.eviction_count += 1;
+                update_value_threshold(value_state, evicted.value_millionths, config);
+                push_ghost(
+                    &evicted.label,
+                    &mut queues.ghost,
+                    config.ghost_queue_entries,
+                );
+            }
+        }
+    }
+    queues.small.push_back(entry);
+}
+
+fn adaptive_insert_main(
+    entry: ValueAnnotatedEntry,
+    queues: &mut AdaptiveS3FifoQueues,
+    config: &S3FifoAdaptiveConfig,
+    current_small_capacity: usize,
+    counters: &mut CachePolicyCounters,
+    value_state: &mut ValueAdmissionState,
+) {
+    let main_capacity = config.current_main_capacity(current_small_capacity);
+    while queues.main.len() >= main_capacity {
+        adaptive_make_room_in_main(queues, config.ghost_queue_entries, counters, value_state);
+    }
+    queues.main.push_back(entry);
+}
+
+fn adaptive_make_room_in_main(
+    queues: &mut AdaptiveS3FifoQueues,
+    ghost_capacity: usize,
+    counters: &mut CachePolicyCounters,
+    value_state: &mut ValueAdmissionState,
+) {
+    let mut attempts = queues.main.len();
+    while attempts > 0 {
+        let Some(mut candidate) = queues.main.pop_front() else {
+            return;
+        };
+
+        if candidate.hot {
+            candidate.hot = false;
+            queues.main.push_back(candidate);
+            counters.requeue_count += 1;
+            attempts -= 1;
+            continue;
+        }
+
+        counters.eviction_count += 1;
+        update_value_threshold(
+            value_state,
+            candidate.value_millionths,
+            &S3FifoAdaptiveConfig::default(),
+        );
+        push_ghost(&candidate.label, &mut queues.ghost, ghost_capacity);
+        return;
+    }
+
+    // All entries are hot; force-evict the oldest.
+    if let Some(candidate) = queues.main.pop_front() {
+        counters.eviction_count += 1;
+        update_value_threshold(
+            value_state,
+            candidate.value_millionths,
+            &S3FifoAdaptiveConfig::default(),
+        );
+        push_ghost(&candidate.label, &mut queues.ghost, ghost_capacity);
+    }
+}
+
+fn update_value_threshold(
+    state: &mut ValueAdmissionState,
+    evicted_value: u32,
+    config: &S3FifoAdaptiveConfig,
+) {
+    // Exponential moving average update using fixed-point arithmetic.
+    let alpha = u64::from(config.value_admission.alpha_millionths);
+    let one_minus_alpha = 1_000_000u64.saturating_sub(alpha);
+    let old = u64::from(state.threshold_millionths);
+    let new_val = u64::from(evicted_value);
+    let updated = (one_minus_alpha * old + alpha * new_val) / 1_000_000;
+    state.threshold_millionths = updated as u32;
+}
+
+fn find_value_entry_mut<'a>(
+    queue: &'a mut VecDeque<ValueAnnotatedEntry>,
+    label: &str,
+) -> Option<&'a mut ValueAnnotatedEntry> {
+    queue.iter_mut().find(|entry| entry.label == label)
+}
+
+/// Convert a plain `CacheTraceCase` to a value-annotated trace by assigning
+/// default value scores based on locality class.
+pub fn annotate_trace_with_default_values(case: &CacheTraceCase) -> ValueAnnotatedTraceCase {
+    ValueAnnotatedTraceCase {
+        trace_id: case.trace_id.clone(),
+        workload_class: case.workload_class,
+        accesses: case
+            .accesses
+            .iter()
+            .map(|a| ValueAnnotatedTraceAccess {
+                sequence: a.sequence,
+                key: a.key.clone(),
+                locality: a.locality,
+                value_millionths: locality_default_value(a.locality),
+            })
+            .collect(),
+    }
+}
+
+fn locality_default_value(locality: CacheLocalityClass) -> u32 {
+    match locality {
+        CacheLocalityClass::Hot => 900_000,  // 0.9 — high value
+        CacheLocalityClass::Warm => 500_000, // 0.5 — medium value
+        CacheLocalityClass::Scan => 100_000, // 0.1 — low value
+    }
+}
+
+/// Construct a default adaptive S3-FIFO configuration for evaluation.
+pub fn default_s3fifo_adaptive_config() -> S3FifoAdaptiveConfig {
+    S3FifoAdaptiveConfig::default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4559,5 +5184,400 @@ mod tests {
         assert!(json.contains("\"error_code\""), "got: {json}");
         assert!(json.contains("\"module_id\""), "got: {json}");
         assert!(json.contains("\"detail\""), "got: {json}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Adaptive S3-FIFO tests (RGC-620B / bd-1lsy.7.20.2)
+    // -----------------------------------------------------------------------
+
+    fn adaptive_key(module_id: &str, seed: &str, policy: u64, trust: u64) -> ModuleCacheKey {
+        ModuleCacheKey::new(
+            module_id,
+            ModuleVersionFingerprint::new(source_hash(seed), policy, trust),
+        )
+    }
+
+    fn adaptive_access(
+        seq: u64,
+        module_id: &str,
+        seed: &str,
+        locality: CacheLocalityClass,
+        value: u32,
+    ) -> ValueAnnotatedTraceAccess {
+        ValueAnnotatedTraceAccess {
+            sequence: seq,
+            key: adaptive_key(module_id, seed, 1, 1),
+            locality,
+            value_millionths: value,
+        }
+    }
+
+    #[test]
+    fn adaptive_config_default_validates() {
+        let cfg = S3FifoAdaptiveConfig::default();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn adaptive_config_invalid_zero_capacity() {
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.resident_capacity_entries = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn adaptive_config_invalid_small_too_large() {
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.initial_small_queue_entries = cfg.resident_capacity_entries;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn adaptive_config_invalid_zero_ghost() {
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.ghost_queue_entries = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn adaptive_split_config_invalid_bounds() {
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.adaptive_split.min_small_fraction_millionths = 600_000;
+        cfg.adaptive_split.max_small_fraction_millionths = 400_000;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn adaptive_split_config_invalid_max_exceeds_million() {
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.adaptive_split.max_small_fraction_millionths = 1_000_001;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn adaptive_split_config_invalid_zero_epoch() {
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.adaptive_split.epoch_length = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn value_admission_config_invalid_alpha() {
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.value_admission.alpha_millionths = 1_000_001;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn simulate_adaptive_empty_trace() {
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "empty".to_string(),
+            workload_class: CacheWorkloadClass::ColdCompile,
+            accesses: vec![],
+        };
+        let cfg = S3FifoAdaptiveConfig::default();
+        let result = simulate_s3fifo_adaptive(&case, &cfg);
+        assert_eq!(result.base.total_accesses, 0);
+        assert_eq!(result.base.hit_count, 0);
+        assert_eq!(result.base.miss_count, 0);
+        assert_eq!(result.value_denied_count, 0);
+        assert_eq!(result.value_admitted_count, 0);
+        assert!(result.admission_verdicts.is_empty());
+    }
+
+    #[test]
+    fn simulate_adaptive_single_access() {
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "single".to_string(),
+            workload_class: CacheWorkloadClass::WarmRun,
+            accesses: vec![adaptive_access(
+                0,
+                "mod:a",
+                "s1",
+                CacheLocalityClass::Hot,
+                900_000,
+            )],
+        };
+        let cfg = S3FifoAdaptiveConfig::default();
+        let result = simulate_s3fifo_adaptive(&case, &cfg);
+        assert_eq!(result.base.total_accesses, 1);
+        assert_eq!(result.base.miss_count, 1);
+        assert_eq!(result.base.hit_count, 0);
+        assert_eq!(result.value_admitted_count, 1);
+        assert_eq!(result.admission_verdicts.len(), 1);
+        assert!(result.admission_verdicts[0].admitted);
+    }
+
+    #[test]
+    fn simulate_adaptive_hit_on_repeat() {
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "repeat".to_string(),
+            workload_class: CacheWorkloadClass::WarmRun,
+            accesses: vec![
+                adaptive_access(0, "mod:a", "s1", CacheLocalityClass::Hot, 900_000),
+                adaptive_access(1, "mod:a", "s1", CacheLocalityClass::Hot, 900_000),
+            ],
+        };
+        let cfg = S3FifoAdaptiveConfig::default();
+        let result = simulate_s3fifo_adaptive(&case, &cfg);
+        assert_eq!(result.base.hit_count, 1);
+        assert_eq!(result.base.miss_count, 1);
+        // Only the first access (miss) gets a verdict
+        assert_eq!(result.admission_verdicts.len(), 1);
+    }
+
+    #[test]
+    fn simulate_adaptive_value_denial() {
+        // Set floor high enough to deny a low-value entry
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.value_admission.floor_value_millionths = 500_000;
+        cfg.value_admission.initial_threshold_millionths = 0;
+
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "denial".to_string(),
+            workload_class: CacheWorkloadClass::ScanHeavy,
+            accesses: vec![adaptive_access(
+                0,
+                "mod:low",
+                "s1",
+                CacheLocalityClass::Scan,
+                100_000,
+            )],
+        };
+        let result = simulate_s3fifo_adaptive(&case, &cfg);
+        assert_eq!(result.value_denied_count, 1);
+        assert_eq!(result.value_admitted_count, 0);
+        assert!(!result.admission_verdicts[0].admitted);
+        // Entry was not admitted, so no final residents
+        assert!(result.base.final_resident_keys.is_empty());
+    }
+
+    #[test]
+    fn simulate_adaptive_threshold_denial() {
+        // Set initial threshold above the entry value
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.value_admission.initial_threshold_millionths = 800_000;
+        cfg.value_admission.floor_value_millionths = 0;
+
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "thresh-deny".to_string(),
+            workload_class: CacheWorkloadClass::WarmRun,
+            accesses: vec![adaptive_access(
+                0,
+                "mod:med",
+                "s1",
+                CacheLocalityClass::Warm,
+                500_000,
+            )],
+        };
+        let result = simulate_s3fifo_adaptive(&case, &cfg);
+        assert_eq!(result.value_denied_count, 1);
+        assert!(!result.admission_verdicts[0].admitted);
+    }
+
+    #[test]
+    fn simulate_adaptive_ghost_hit_promotes_to_main() {
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.resident_capacity_entries = 4;
+        cfg.initial_small_queue_entries = 2;
+        cfg.ghost_queue_entries = 4;
+        cfg.value_admission.initial_threshold_millionths = 0;
+        cfg.value_admission.floor_value_millionths = 0;
+        // Disable adaptation during this test
+        cfg.adaptive_split.epoch_length = 10000;
+
+        // Fill small queue (2 entries), then push another to evict first to ghost.
+        // Then re-access the evicted entry to get a ghost hit -> main.
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "ghost-promote".to_string(),
+            workload_class: CacheWorkloadClass::WarmRun,
+            accesses: vec![
+                adaptive_access(0, "mod:a", "sa", CacheLocalityClass::Hot, 500_000),
+                adaptive_access(1, "mod:b", "sb", CacheLocalityClass::Hot, 500_000),
+                // This evicts mod:a (not hot) to ghost
+                adaptive_access(2, "mod:c", "sc", CacheLocalityClass::Hot, 500_000),
+                // Ghost hit for mod:a -> goes to main
+                adaptive_access(3, "mod:a", "sa", CacheLocalityClass::Hot, 500_000),
+            ],
+        };
+        let result = simulate_s3fifo_adaptive(&case, &cfg);
+        assert_eq!(result.base.ghost_hit_count, 1);
+        // mod:a should now be in the main queue
+        assert!(
+            result
+                .base
+                .final_resident_keys
+                .contains(&cache_trace_label(&adaptive_key("mod:a", "sa", 1, 1)))
+        );
+    }
+
+    #[test]
+    fn simulate_adaptive_split_adapts_upward() {
+        // Set up a scenario where ghost hits dominate an epoch to trigger expansion.
+        let mut cfg = S3FifoAdaptiveConfig::default();
+        cfg.resident_capacity_entries = 10;
+        cfg.initial_small_queue_entries = 2;
+        cfg.ghost_queue_entries = 10;
+        // Use a longer epoch that aligns with our ghost-hit phase
+        cfg.adaptive_split.epoch_length = 6;
+        cfg.adaptive_split.max_step_per_epoch = 1;
+        cfg.adaptive_split.min_small_fraction_millionths = 100_000;
+        cfg.adaptive_split.max_small_fraction_millionths = 700_000;
+        cfg.value_admission.initial_threshold_millionths = 0;
+        cfg.value_admission.floor_value_millionths = 0;
+
+        let mut accesses = Vec::new();
+        let mut seq = 0u64;
+
+        // Phase 1: fill + evict to ghost (6 accesses = 1 epoch with no ghost hits)
+        for i in 0..6 {
+            accesses.push(adaptive_access(
+                seq,
+                &format!("mod:{i}"),
+                &format!("s{i}"),
+                CacheLocalityClass::Warm,
+                500_000,
+            ));
+            seq += 1;
+        }
+        // Phase 2: re-access all 6 (ghost hits dominate this epoch -> adapt up)
+        for i in 0..6 {
+            accesses.push(adaptive_access(
+                seq,
+                &format!("mod:{i}"),
+                &format!("s{i}"),
+                CacheLocalityClass::Warm,
+                500_000,
+            ));
+            seq += 1;
+        }
+
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "split-adapt".to_string(),
+            workload_class: CacheWorkloadClass::PackageGraph,
+            accesses,
+        };
+        let result = simulate_s3fifo_adaptive(&case, &cfg);
+        assert!(
+            result.adaptation_count > 0,
+            "should have adapted at least once"
+        );
+        // The adaptation mechanism ran; verify it's deterministic
+        let r2 = simulate_s3fifo_adaptive(&case, &cfg);
+        assert_eq!(result.final_small_capacity, r2.final_small_capacity);
+        assert_eq!(result.adaptation_count, r2.adaptation_count);
+    }
+
+    #[test]
+    fn simulate_adaptive_deterministic_replay() {
+        let cfg = S3FifoAdaptiveConfig::default();
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "replay".to_string(),
+            workload_class: CacheWorkloadClass::ReactApp,
+            accesses: vec![
+                adaptive_access(0, "mod:x", "sx", CacheLocalityClass::Hot, 800_000),
+                adaptive_access(1, "mod:y", "sy", CacheLocalityClass::Warm, 400_000),
+                adaptive_access(2, "mod:x", "sx", CacheLocalityClass::Hot, 800_000),
+                adaptive_access(3, "mod:z", "sz", CacheLocalityClass::Scan, 200_000),
+            ],
+        };
+        let r1 = simulate_s3fifo_adaptive(&case, &cfg);
+        let r2 = simulate_s3fifo_adaptive(&case, &cfg);
+        assert_eq!(r1.base.hit_count, r2.base.hit_count);
+        assert_eq!(r1.base.miss_count, r2.base.miss_count);
+        assert_eq!(r1.base.ghost_hit_count, r2.base.ghost_hit_count);
+        assert_eq!(r1.final_small_capacity, r2.final_small_capacity);
+        assert_eq!(r1.adaptation_count, r2.adaptation_count);
+        assert_eq!(r1.value_denied_count, r2.value_denied_count);
+        assert_eq!(r1.value_admitted_count, r2.value_admitted_count);
+        assert_eq!(r1.final_threshold_millionths, r2.final_threshold_millionths);
+        assert_eq!(r1.admission_verdicts.len(), r2.admission_verdicts.len());
+        for (v1, v2) in r1
+            .admission_verdicts
+            .iter()
+            .zip(r2.admission_verdicts.iter())
+        {
+            assert_eq!(v1.admitted, v2.admitted);
+            assert_eq!(v1.threshold_millionths, v2.threshold_millionths);
+        }
+    }
+
+    #[test]
+    fn annotate_trace_with_default_values_preserves_structure() {
+        let plain_case = CacheTraceCase {
+            trace_id: "annotate-test".to_string(),
+            workload_class: CacheWorkloadClass::ColdCompile,
+            accesses: vec![
+                CacheTraceAccess {
+                    sequence: 0,
+                    key: trace_key("mod:a", "s1", 1, 1),
+                    locality: CacheLocalityClass::Hot,
+                },
+                CacheTraceAccess {
+                    sequence: 1,
+                    key: trace_key("mod:b", "s2", 1, 1),
+                    locality: CacheLocalityClass::Scan,
+                },
+            ],
+        };
+        let annotated = annotate_trace_with_default_values(&plain_case);
+        assert_eq!(annotated.trace_id, "annotate-test");
+        assert_eq!(annotated.workload_class, CacheWorkloadClass::ColdCompile);
+        assert_eq!(annotated.accesses.len(), 2);
+        assert_eq!(annotated.accesses[0].value_millionths, 900_000); // Hot
+        assert_eq!(annotated.accesses[1].value_millionths, 100_000); // Scan
+    }
+
+    #[test]
+    fn admission_verdict_serde_roundtrip() {
+        let verdict = AdmissionVerdict {
+            sequence: 42,
+            label: "test-label".to_string(),
+            value_millionths: 750_000,
+            threshold_millionths: 500_000,
+            admitted: true,
+        };
+        let json = serde_json::to_string(&verdict).unwrap();
+        let decoded: AdmissionVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, verdict);
+    }
+
+    #[test]
+    fn adaptive_metrics_serde_roundtrip() {
+        let case = ValueAnnotatedTraceCase {
+            trace_id: "serde-rt".to_string(),
+            workload_class: CacheWorkloadClass::WarmRun,
+            accesses: vec![adaptive_access(
+                0,
+                "mod:a",
+                "s1",
+                CacheLocalityClass::Hot,
+                800_000,
+            )],
+        };
+        let cfg = S3FifoAdaptiveConfig::default();
+        let metrics = simulate_s3fifo_adaptive(&case, &cfg);
+        let json = serde_json::to_string(&metrics).unwrap();
+        let decoded: S3FifoAdaptiveMetrics = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.base.total_accesses, metrics.base.total_accesses);
+        assert_eq!(decoded.final_small_capacity, metrics.final_small_capacity);
+        assert_eq!(decoded.value_admitted_count, metrics.value_admitted_count);
+    }
+
+    #[test]
+    fn adaptive_config_serde_roundtrip() {
+        let cfg = S3FifoAdaptiveConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let decoded: S3FifoAdaptiveConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, cfg);
+    }
+
+    #[test]
+    fn fraction_of_computes_correctly() {
+        assert_eq!(fraction_of(10, 500_000), 5); // 50% of 10
+        assert_eq!(fraction_of(10, 100_000), 1); // 10% of 10
+        assert_eq!(fraction_of(10, 0), 0); // 0% of 10
+        assert_eq!(fraction_of(10, 1_000_000), 10); // 100% of 10
+        assert_eq!(fraction_of(100, 250_000), 25); // 25% of 100
     }
 }

@@ -15,15 +15,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::module_cache::{
-    CacheContext, CacheError, CacheErrorCode, CacheEvent, CacheInsertRequest, CacheLocalityClass,
-    CachePolicyBaselineReport, CachePolicyReportError, CacheResult, CacheSnapshot,
-    CacheTraceAccess, CacheTraceCase, CacheTraceCorpusManifest, CacheWorkloadClass, ModuleCache,
-    ModuleCacheEntry, ModuleCacheKey, ModuleVersionFingerprint,
+    AdaptiveSplitConfig, AdmissionVerdict, CacheContext, CacheError, CacheErrorCode, CacheEvent,
+    CacheInsertRequest, CacheLocalityClass, CachePolicyBaselineReport, CachePolicyReportError,
+    CacheResult, CacheSnapshot, CacheTraceAccess, CacheTraceCase, CacheTraceCorpusManifest,
+    CacheWorkloadClass, ModuleCache, ModuleCacheEntry, ModuleCacheKey, ModuleVersionFingerprint,
+    S3FIFO_ADAPTIVE_BEAD_ID, S3FIFO_ADAPTIVE_SCHEMA_VERSION,
     S3FIFO_BASELINE_CONTRACT_SCHEMA_VERSION, S3FIFO_BASELINE_RUN_MANIFEST_SCHEMA_VERSION,
-    S3FifoAdoptionWedgeContract, S3FifoBaselineArtifactContext,
-    S3FifoBaselineComparatorContractFixture, S3FifoConfig, SingleQueueFifoConfig,
-    default_s3fifo_baseline_contract_fixture, emit_default_s3fifo_baseline_bundle,
-    evaluate_s3fifo_baseline,
+    S3FifoAdaptiveConfig, S3FifoAdaptiveMetrics, S3FifoAdoptionWedgeContract,
+    S3FifoBaselineArtifactContext, S3FifoBaselineComparatorContractFixture, S3FifoConfig,
+    SingleQueueFifoConfig, ValueAdmissionConfig, ValueAnnotatedTraceAccess,
+    ValueAnnotatedTraceCase, annotate_trace_with_default_values,
+    default_s3fifo_adaptive_config, default_s3fifo_baseline_contract_fixture,
+    emit_default_s3fifo_baseline_bundle, evaluate_s3fifo_baseline, simulate_s3fifo_adaptive,
 };
 
 // ---------------------------------------------------------------------------
@@ -1470,4 +1473,479 @@ fn s3fifo_baseline_cli_writes_bundle() {
     );
 
     let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive S3-FIFO integration tests (RGC-620B / bd-1lsy.7.20.2)
+// ---------------------------------------------------------------------------
+
+fn adaptive_key(module_id: &str, seed: &str) -> ModuleCacheKey {
+    ModuleCacheKey::new(module_id, fp(seed, 1, 1))
+}
+
+fn val_access(
+    seq: u64,
+    module_id: &str,
+    seed: &str,
+    locality: CacheLocalityClass,
+    value: u32,
+) -> ValueAnnotatedTraceAccess {
+    ValueAnnotatedTraceAccess {
+        sequence: seq,
+        key: adaptive_key(module_id, seed),
+        locality,
+        value_millionths: value,
+    }
+}
+
+#[test]
+fn adaptive_schema_version_and_bead_id_are_nonempty() {
+    assert!(!S3FIFO_ADAPTIVE_SCHEMA_VERSION.is_empty());
+    assert!(!S3FIFO_ADAPTIVE_BEAD_ID.is_empty());
+    assert!(S3FIFO_ADAPTIVE_BEAD_ID.starts_with("bd-"));
+}
+
+#[test]
+fn adaptive_config_default_round_trip() {
+    let cfg = default_s3fifo_adaptive_config();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let decoded: S3FifoAdaptiveConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, cfg);
+}
+
+#[test]
+fn adaptive_config_validate_ok() {
+    let cfg = default_s3fifo_adaptive_config();
+    assert!(cfg.validate().is_ok());
+}
+
+#[test]
+fn adaptive_config_validate_zero_resident_capacity() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.resident_capacity_entries = 0;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn adaptive_config_validate_small_equals_capacity() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.initial_small_queue_entries = cfg.resident_capacity_entries;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn adaptive_config_validate_zero_ghost() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.ghost_queue_entries = 0;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn adaptive_split_config_validate_min_gte_max() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.adaptive_split.min_small_fraction_millionths = 500_000;
+    cfg.adaptive_split.max_small_fraction_millionths = 400_000;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn adaptive_split_config_validate_max_above_million() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.adaptive_split.max_small_fraction_millionths = 1_000_001;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn adaptive_split_config_validate_zero_epoch() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.adaptive_split.epoch_length = 0;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn value_admission_config_validate_alpha_above_million() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.value_admission.alpha_millionths = 1_000_001;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn simulate_adaptive_empty_trace_returns_zero_counters() {
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-empty".to_string(),
+        workload_class: CacheWorkloadClass::ColdCompile,
+        accesses: vec![],
+    };
+    let cfg = default_s3fifo_adaptive_config();
+    let result = simulate_s3fifo_adaptive(&case, &cfg);
+    assert_eq!(result.base.total_accesses, 0);
+    assert_eq!(result.base.hit_count, 0);
+    assert_eq!(result.base.miss_count, 0);
+    assert_eq!(result.value_denied_count, 0);
+    assert_eq!(result.value_admitted_count, 0);
+    assert!(result.admission_verdicts.is_empty());
+    assert!(result.base.final_resident_keys.is_empty());
+}
+
+#[test]
+fn simulate_adaptive_single_insert_and_hit() {
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-single".to_string(),
+        workload_class: CacheWorkloadClass::WarmRun,
+        accesses: vec![
+            val_access(0, "mod:x", "sx", CacheLocalityClass::Hot, 800_000),
+            val_access(1, "mod:x", "sx", CacheLocalityClass::Hot, 800_000),
+        ],
+    };
+    let cfg = default_s3fifo_adaptive_config();
+    let result = simulate_s3fifo_adaptive(&case, &cfg);
+    assert_eq!(result.base.miss_count, 1);
+    assert_eq!(result.base.hit_count, 1);
+    assert_eq!(result.value_admitted_count, 1);
+    assert_eq!(result.admission_verdicts.len(), 1);
+    assert!(result.admission_verdicts[0].admitted);
+}
+
+#[test]
+fn simulate_adaptive_value_denial_blocks_insertion() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.value_admission.floor_value_millionths = 600_000;
+    cfg.value_admission.initial_threshold_millionths = 0;
+
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-deny".to_string(),
+        workload_class: CacheWorkloadClass::ScanHeavy,
+        accesses: vec![val_access(
+            0,
+            "mod:low",
+            "sl",
+            CacheLocalityClass::Scan,
+            100_000,
+        )],
+    };
+    let result = simulate_s3fifo_adaptive(&case, &cfg);
+    assert_eq!(result.value_denied_count, 1);
+    assert_eq!(result.value_admitted_count, 0);
+    assert!(!result.admission_verdicts[0].admitted);
+    assert!(result.base.final_resident_keys.is_empty());
+}
+
+#[test]
+fn simulate_adaptive_threshold_denial() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.value_admission.initial_threshold_millionths = 900_000;
+    cfg.value_admission.floor_value_millionths = 0;
+
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-thresh".to_string(),
+        workload_class: CacheWorkloadClass::WarmRun,
+        accesses: vec![val_access(
+            0,
+            "mod:med",
+            "sm",
+            CacheLocalityClass::Warm,
+            500_000,
+        )],
+    };
+    let result = simulate_s3fifo_adaptive(&case, &cfg);
+    assert_eq!(result.value_denied_count, 1);
+    assert!(!result.admission_verdicts[0].admitted);
+}
+
+#[test]
+fn simulate_adaptive_ghost_hit_goes_to_main() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.resident_capacity_entries = 4;
+    cfg.initial_small_queue_entries = 2;
+    cfg.ghost_queue_entries = 4;
+    cfg.value_admission.initial_threshold_millionths = 0;
+    cfg.value_admission.floor_value_millionths = 0;
+    cfg.adaptive_split.epoch_length = 10000;
+
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-ghost".to_string(),
+        workload_class: CacheWorkloadClass::WarmRun,
+        accesses: vec![
+            val_access(0, "mod:a", "sa", CacheLocalityClass::Warm, 500_000),
+            val_access(1, "mod:b", "sb", CacheLocalityClass::Warm, 500_000),
+            val_access(2, "mod:c", "sc", CacheLocalityClass::Warm, 500_000),
+            val_access(3, "mod:a", "sa", CacheLocalityClass::Warm, 500_000),
+        ],
+    };
+    let result = simulate_s3fifo_adaptive(&case, &cfg);
+    assert_eq!(result.base.ghost_hit_count, 1);
+}
+
+#[test]
+fn simulate_adaptive_deterministic_across_runs() {
+    let cfg = default_s3fifo_adaptive_config();
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-determ".to_string(),
+        workload_class: CacheWorkloadClass::ReactApp,
+        accesses: vec![
+            val_access(0, "mod:a", "sa", CacheLocalityClass::Hot, 900_000),
+            val_access(1, "mod:b", "sb", CacheLocalityClass::Warm, 500_000),
+            val_access(2, "mod:a", "sa", CacheLocalityClass::Hot, 900_000),
+            val_access(3, "mod:c", "sc", CacheLocalityClass::Scan, 200_000),
+            val_access(4, "mod:d", "sd", CacheLocalityClass::Hot, 800_000),
+        ],
+    };
+    let r1 = simulate_s3fifo_adaptive(&case, &cfg);
+    let r2 = simulate_s3fifo_adaptive(&case, &cfg);
+    assert_eq!(r1.base.hit_count, r2.base.hit_count);
+    assert_eq!(r1.base.miss_count, r2.base.miss_count);
+    assert_eq!(r1.base.ghost_hit_count, r2.base.ghost_hit_count);
+    assert_eq!(r1.final_small_capacity, r2.final_small_capacity);
+    assert_eq!(r1.adaptation_count, r2.adaptation_count);
+    assert_eq!(r1.value_denied_count, r2.value_denied_count);
+    assert_eq!(r1.value_admitted_count, r2.value_admitted_count);
+    assert_eq!(r1.final_threshold_millionths, r2.final_threshold_millionths);
+    assert_eq!(r1.base.final_resident_keys, r2.base.final_resident_keys);
+}
+
+#[test]
+fn annotate_trace_assigns_locality_values() {
+    let plain = CacheTraceCase {
+        trace_id: "int-annotate".to_string(),
+        workload_class: CacheWorkloadClass::PackageGraph,
+        accesses: vec![
+            CacheTraceAccess {
+                sequence: 0,
+                key: adaptive_key("mod:h", "sh"),
+                locality: CacheLocalityClass::Hot,
+            },
+            CacheTraceAccess {
+                sequence: 1,
+                key: adaptive_key("mod:w", "sw"),
+                locality: CacheLocalityClass::Warm,
+            },
+            CacheTraceAccess {
+                sequence: 2,
+                key: adaptive_key("mod:s", "ss"),
+                locality: CacheLocalityClass::Scan,
+            },
+        ],
+    };
+    let annotated = annotate_trace_with_default_values(&plain);
+    assert_eq!(annotated.accesses[0].value_millionths, 900_000);
+    assert_eq!(annotated.accesses[1].value_millionths, 500_000);
+    assert_eq!(annotated.accesses[2].value_millionths, 100_000);
+    assert_eq!(annotated.trace_id, "int-annotate");
+}
+
+#[test]
+fn annotated_trace_through_adaptive_simulation() {
+    let plain = CacheTraceCase {
+        trace_id: "int-pipe".to_string(),
+        workload_class: CacheWorkloadClass::ColdCompile,
+        accesses: vec![
+            CacheTraceAccess {
+                sequence: 0,
+                key: adaptive_key("mod:a", "sa"),
+                locality: CacheLocalityClass::Hot,
+            },
+            CacheTraceAccess {
+                sequence: 1,
+                key: adaptive_key("mod:b", "sb"),
+                locality: CacheLocalityClass::Scan,
+            },
+            CacheTraceAccess {
+                sequence: 2,
+                key: adaptive_key("mod:a", "sa"),
+                locality: CacheLocalityClass::Hot,
+            },
+        ],
+    };
+    let annotated = annotate_trace_with_default_values(&plain);
+    let cfg = default_s3fifo_adaptive_config();
+    let result = simulate_s3fifo_adaptive(&annotated, &cfg);
+    assert_eq!(result.base.total_accesses, 3);
+    assert_eq!(result.base.hit_count, 1);
+    assert_eq!(result.base.miss_count, 2);
+}
+
+#[test]
+fn admission_verdict_serde_round_trip() {
+    let verdict = AdmissionVerdict {
+        sequence: 99,
+        label: "mod:test:hash:1:1".to_string(),
+        value_millionths: 750_000,
+        threshold_millionths: 400_000,
+        admitted: true,
+    };
+    let json = serde_json::to_string(&verdict).unwrap();
+    let decoded: AdmissionVerdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, verdict);
+}
+
+#[test]
+fn adaptive_metrics_serde_round_trip() {
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-serde".to_string(),
+        workload_class: CacheWorkloadClass::WarmRun,
+        accesses: vec![
+            val_access(0, "mod:a", "sa", CacheLocalityClass::Hot, 800_000),
+            val_access(1, "mod:b", "sb", CacheLocalityClass::Warm, 500_000),
+        ],
+    };
+    let cfg = default_s3fifo_adaptive_config();
+    let metrics = simulate_s3fifo_adaptive(&case, &cfg);
+    let json = serde_json::to_string(&metrics).unwrap();
+    let decoded: S3FifoAdaptiveMetrics = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.base.total_accesses, metrics.base.total_accesses);
+    assert_eq!(decoded.final_small_capacity, metrics.final_small_capacity);
+    assert_eq!(decoded.adaptation_count, metrics.adaptation_count);
+    assert_eq!(decoded.value_denied_count, metrics.value_denied_count);
+}
+
+#[test]
+fn adaptive_config_all_fields_present_in_json() {
+    let cfg = default_s3fifo_adaptive_config();
+    let json = serde_json::to_string(&cfg).unwrap();
+    assert!(json.contains("resident_capacity_entries"));
+    assert!(json.contains("initial_small_queue_entries"));
+    assert!(json.contains("ghost_queue_entries"));
+    assert!(json.contains("adaptive_split"));
+    assert!(json.contains("value_admission"));
+    assert!(json.contains("min_small_fraction_millionths"));
+    assert!(json.contains("max_small_fraction_millionths"));
+    assert!(json.contains("epoch_length"));
+    assert!(json.contains("alpha_millionths"));
+    assert!(json.contains("floor_value_millionths"));
+}
+
+#[test]
+fn adaptive_simulation_with_high_value_entries_retained() {
+    let mut cfg = default_s3fifo_adaptive_config();
+    cfg.resident_capacity_entries = 3;
+    cfg.initial_small_queue_entries = 2;
+    cfg.ghost_queue_entries = 4;
+    cfg.value_admission.initial_threshold_millionths = 300_000;
+    cfg.value_admission.floor_value_millionths = 0;
+    cfg.adaptive_split.epoch_length = 10000;
+
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-high-val".to_string(),
+        workload_class: CacheWorkloadClass::WarmRun,
+        accesses: vec![
+            val_access(0, "mod:high", "sh", CacheLocalityClass::Hot, 900_000),
+            val_access(1, "mod:med", "sm", CacheLocalityClass::Warm, 500_000),
+            val_access(2, "mod:low", "sl", CacheLocalityClass::Scan, 100_000),
+        ],
+    };
+    let result = simulate_s3fifo_adaptive(&case, &cfg);
+    assert_eq!(result.value_admitted_count, 2);
+    assert_eq!(result.value_denied_count, 1);
+    assert_eq!(result.base.final_resident_keys.len(), 2);
+}
+
+#[test]
+fn value_annotated_trace_access_serde_round_trip() {
+    let access = ValueAnnotatedTraceAccess {
+        sequence: 42,
+        key: adaptive_key("mod:serde", "ss"),
+        locality: CacheLocalityClass::Hot,
+        value_millionths: 750_000,
+    };
+    let json = serde_json::to_string(&access).unwrap();
+    let decoded: ValueAnnotatedTraceAccess = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.sequence, 42);
+    assert_eq!(decoded.value_millionths, 750_000);
+}
+
+#[test]
+fn value_annotated_trace_case_serde_round_trip() {
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "serde-case".to_string(),
+        workload_class: CacheWorkloadClass::ReactApp,
+        accesses: vec![val_access(
+            0,
+            "mod:a",
+            "sa",
+            CacheLocalityClass::Hot,
+            900_000,
+        )],
+    };
+    let json = serde_json::to_string(&case).unwrap();
+    let decoded: ValueAnnotatedTraceCase = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.trace_id, "serde-case");
+    assert_eq!(decoded.workload_class, CacheWorkloadClass::ReactApp);
+    assert_eq!(decoded.accesses.len(), 1);
+}
+
+#[test]
+fn adaptive_simulation_mixed_workload_produces_metrics() {
+    let cfg = default_s3fifo_adaptive_config();
+    let mut accesses = Vec::new();
+    for i in 0..20u64 {
+        let locality = match i % 3 {
+            0 => CacheLocalityClass::Hot,
+            1 => CacheLocalityClass::Warm,
+            _ => CacheLocalityClass::Scan,
+        };
+        let value = match locality {
+            CacheLocalityClass::Hot => 900_000,
+            CacheLocalityClass::Warm => 500_000,
+            CacheLocalityClass::Scan => 100_000,
+        };
+        accesses.push(val_access(
+            i,
+            &format!("mod:{}", i % 5),
+            &format!("s{}", i % 5),
+            locality,
+            value,
+        ));
+    }
+
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "int-mixed".to_string(),
+        workload_class: CacheWorkloadClass::PackageGraph,
+        accesses,
+    };
+    let result = simulate_s3fifo_adaptive(&case, &cfg);
+    assert_eq!(result.base.total_accesses, 20);
+    assert!(result.base.hit_count + result.base.miss_count == 20);
+    assert!(result.value_admitted_count + result.value_denied_count <= result.base.miss_count);
+}
+
+#[test]
+fn adaptive_split_config_debug_nonempty() {
+    let cfg = AdaptiveSplitConfig::default();
+    assert!(!format!("{cfg:?}").is_empty());
+}
+
+#[test]
+fn value_admission_config_debug_nonempty() {
+    let cfg = ValueAdmissionConfig::default();
+    assert!(!format!("{cfg:?}").is_empty());
+}
+
+#[test]
+fn s3fifo_adaptive_config_debug_nonempty() {
+    let cfg = S3FifoAdaptiveConfig::default();
+    assert!(!format!("{cfg:?}").is_empty());
+}
+
+#[test]
+fn admission_verdict_debug_nonempty() {
+    let v = AdmissionVerdict {
+        sequence: 0,
+        label: "x".to_string(),
+        value_millionths: 0,
+        threshold_millionths: 0,
+        admitted: false,
+    };
+    assert!(!format!("{v:?}").is_empty());
+}
+
+#[test]
+fn s3fifo_adaptive_metrics_debug_nonempty() {
+    let case = ValueAnnotatedTraceCase {
+        trace_id: "dbg".to_string(),
+        workload_class: CacheWorkloadClass::WarmRun,
+        accesses: vec![],
+    };
+    let cfg = default_s3fifo_adaptive_config();
+    let m = simulate_s3fifo_adaptive(&case, &cfg);
+    assert!(!format!("{m:?}").is_empty());
 }

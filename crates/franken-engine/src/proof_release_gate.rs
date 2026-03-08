@@ -73,8 +73,7 @@ impl OptimizationProofArtifact {
             && self
                 .fallback_receipt_id
                 .as_ref()
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false)
+                .is_some_and(|s| !s.trim().is_empty())
     }
 
     fn canonical_value(&self) -> CanonicalValue {
@@ -1643,7 +1642,7 @@ mod tests {
 
     #[test]
     fn enrichment_gate_failure_code_ord_total_ordering() {
-        let mut codes = vec![
+        let mut codes = [
             GateFailureCode::LoggingArtifactsUncorrelated,
             GateFailureCode::MissingProofArtifact,
             GateFailureCode::ArchiveNotContentAddressed,

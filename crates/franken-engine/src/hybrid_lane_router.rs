@@ -33,7 +33,7 @@ pub enum LaneChoice {
 }
 
 impl LaneChoice {
-    pub const ALL: [LaneChoice; 2] = [LaneChoice::Js, LaneChoice::Wasm];
+    pub const ALL: [Self; 2] = [Self::Js, Self::Wasm];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -1858,7 +1858,7 @@ mod tests {
             compatibility_errors: 0,
         };
         let r = compute_reward(&obs, 0);
-        assert!(r >= 0 && r <= MILLION);
+        assert!((0..=MILLION).contains(&r));
     }
 
     #[test]

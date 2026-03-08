@@ -1648,7 +1648,7 @@ mod tests {
 
     #[test]
     fn optimization_class_all_variants_serde_distinct() {
-        let variants = vec![
+        let variants = [
             OptimizationClass::Superinstruction,
             OptimizationClass::TraceSpecialization,
             OptimizationClass::LayoutSpecialization,
@@ -1669,7 +1669,7 @@ mod tests {
 
     #[test]
     fn activation_stage_all_variants_serde_distinct() {
-        let variants = vec![
+        let variants = [
             ActivationStage::Shadow,
             ActivationStage::Canary,
             ActivationStage::Ramp,
@@ -1690,7 +1690,7 @@ mod tests {
 
     #[test]
     fn equivalence_verdict_all_variants_serde_distinct() {
-        let variants = vec![
+        let variants = [
             EquivalenceVerdict::Equivalent,
             EquivalenceVerdict::NonEquivalent {
                 reason: "mismatch".to_string(),
@@ -1714,7 +1714,7 @@ mod tests {
 
     #[test]
     fn trace_comparison_methodology_all_variants_serde_distinct() {
-        let variants = vec![
+        let variants = [
             TraceComparisonMethodology::DeterministicReplay,
             TraceComparisonMethodology::SymbolicEquivalence,
             TraceComparisonMethodology::StatisticalCorpus { corpus_size: 100 },
@@ -1734,7 +1734,7 @@ mod tests {
 
     #[test]
     fn signer_role_all_variants_serde_distinct() {
-        let variants = vec![
+        let variants = [
             SignerRole::OptimizerSubsystem,
             SignerRole::PolicyPlane,
             SignerRole::AttestationCell,
@@ -1754,7 +1754,7 @@ mod tests {
 
     #[test]
     fn optimization_class_debug_distinct() {
-        let variants = vec![
+        let variants = [
             OptimizationClass::Superinstruction,
             OptimizationClass::TraceSpecialization,
             OptimizationClass::LayoutSpecialization,
@@ -1773,7 +1773,7 @@ mod tests {
 
     #[test]
     fn activation_stage_debug_distinct() {
-        let variants = vec![
+        let variants = [
             ActivationStage::Shadow,
             ActivationStage::Canary,
             ActivationStage::Ramp,

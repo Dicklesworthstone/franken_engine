@@ -1140,7 +1140,7 @@ mod tests {
 
     #[test]
     fn contract_error_implements_std_error() {
-        let variants: Vec<Box<dyn std::error::Error>> = vec![
+        let variants: [Box<dyn std::error::Error>; 7] = [
             Box::new(ContractError::EmptyContractId),
             Box::new(ContractError::InvalidHypothesis {
                 reason: "empty".into(),
@@ -1302,7 +1302,7 @@ mod tests {
 
     #[test]
     fn contract_error_all_variants_serde_roundtrip() {
-        let errors = vec![
+        let errors = [
             ContractError::EmptyContractId,
             ContractError::InvalidHypothesis {
                 reason: "test reason".into(),
@@ -1502,7 +1502,7 @@ mod tests {
     #[test]
     fn contract_version_clone_equality() {
         let v = ContractVersion { major: 2, minor: 5 };
-        let cloned = v.clone();
+        let cloned = v;
         assert_eq!(v, cloned);
         assert_eq!(v.major, 2);
         assert_eq!(v.minor, 5);
@@ -1791,10 +1791,9 @@ mod tests {
         rb.dimension_caps
             .insert(RiskDimension::OperationalBurden, 999_999);
         assert!(
-            cloned
+            !cloned
                 .dimension_caps
-                .get(&RiskDimension::OperationalBurden)
-                .is_none()
+                .contains_key(&RiskDimension::OperationalBurden)
         );
     }
 
@@ -2063,7 +2062,7 @@ mod tests {
 
     #[test]
     fn enrich_contract_error_display_all_distinct() {
-        let errors = vec![
+        let errors = [
             ContractError::EmptyContractId,
             ContractError::InvalidHypothesis {
                 reason: "r1".into(),

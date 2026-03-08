@@ -1340,14 +1340,14 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
             let receipt_content_hash = hex::encode(ContentHash::compute(&receipt_bytes).as_bytes());
 
             let record = ReplacementReceiptRecord {
-                receipt_id: receipt_id.clone(),
+                receipt_id,
                 slot_id: receipt.slot_id.clone(),
                 replacement_kind,
                 old_cell_digest: receipt.old_cell_digest.clone(),
                 new_cell_digest: receipt.new_cell_digest.clone(),
                 promotion_timestamp_ns: receipt.timestamp_ns,
                 epoch: receipt.epoch,
-                receipt_content_hash: receipt_content_hash.clone(),
+                receipt_content_hash,
                 receipt: receipt.clone(),
             };
 
@@ -1497,7 +1497,7 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                 timestamp_ns: input.timestamp_ns,
                 rollback_token_used: input.rollback_token_used.clone(),
                 linked_replacement_receipt_id: input.linked_replacement_receipt_id.clone(),
-                receipt_content_hash: receipt_content_hash.clone(),
+                receipt_content_hash,
             };
 
             let key =
@@ -3855,7 +3855,7 @@ mod tests {
     #[test]
     fn compute_merkle_root_single_entry_equals_leaf() {
         let h = ContentHash::compute(b"sole-entry");
-        let root = compute_merkle_root(&[h.clone()]);
+        let root = compute_merkle_root(std::slice::from_ref(&h));
         assert_eq!(root, merkle_leaf(&h));
     }
 

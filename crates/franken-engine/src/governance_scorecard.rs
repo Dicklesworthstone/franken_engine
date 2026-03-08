@@ -732,7 +732,7 @@ pub fn publish_governance_scorecard(
         scorecard_id: scorecard_id.clone(),
         generated_at_ns: request.generated_at_ns,
         outcome,
-        thresholds: thresholds.clone(),
+        thresholds,
         attested_receipt_coverage: attested_receipt_coverage.clone(),
         privacy_budget_health: privacy_budget_health.clone(),
         moonshot_governor: moonshot_governor.clone(),
@@ -1511,7 +1511,7 @@ mod tests {
 
     #[test]
     fn error_stable_codes() {
-        let cases: Vec<(GovernanceScorecardError, &str)> = vec![
+        let cases: [(GovernanceScorecardError, &str); 4] = [
             (
                 GovernanceScorecardError::InvalidInput {
                     field: "f".to_string(),
@@ -2258,7 +2258,7 @@ mod tests {
 
     #[test]
     fn governance_scorecard_error_std_error_trait() {
-        let errs: Vec<Box<dyn std::error::Error>> = vec![
+        let errs: [Box<dyn std::error::Error>; 4] = [
             Box::new(GovernanceScorecardError::InvalidInput {
                 field: "f".to_string(),
                 detail: "d".to_string(),
@@ -2301,7 +2301,7 @@ mod tests {
 
     #[test]
     fn stable_codes_all_distinct() {
-        let codes = vec![
+        let codes = [
             GovernanceScorecardError::InvalidInput {
                 field: "x".into(),
                 detail: "y".into(),

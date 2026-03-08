@@ -634,7 +634,7 @@ fn build_matrix_id(request: &OpportunityMatrixRequest) -> String {
         hasher.update(candidate.engineering_effort_hours_millionths.to_le_bytes());
     }
     let digest = hasher.finalize();
-    format!("opm-{:x}", digest)
+    format!("opm-{digest:x}")
 }
 
 fn make_event(
@@ -824,7 +824,7 @@ mod tests {
 
     #[test]
     fn derive_candidates_from_hotspots_emits_stable_ids() {
-        let hotspots = vec![
+        let hotspots = [
             HotspotProfileEntry {
                 module: "vm-core".to_string(),
                 function: "dispatch.loop".to_string(),
@@ -1156,7 +1156,7 @@ mod tests {
 
     #[test]
     fn derive_candidates_hotpath_weight_sums_correctly() {
-        let hotspots = vec![HotspotProfileEntry {
+        let hotspots = [HotspotProfileEntry {
             module: "a".into(),
             function: "f".into(),
             sample_count: 100,
@@ -1491,7 +1491,7 @@ mod tests {
 
     #[test]
     fn opportunity_matrix_error_display_distinct() {
-        let variants: Vec<OpportunityMatrixError> = vec![
+        let variants: [OpportunityMatrixError; 3] = [
             OpportunityMatrixError::InvalidRequest {
                 field: "x".into(),
                 detail: "y".into(),
@@ -1540,7 +1540,7 @@ mod tests {
 
     #[test]
     fn opportunity_matrix_error_debug_distinct() {
-        let variants: Vec<OpportunityMatrixError> = vec![
+        let variants: [OpportunityMatrixError; 3] = [
             OpportunityMatrixError::InvalidRequest {
                 field: "f".into(),
                 detail: "d".into(),
@@ -1841,7 +1841,7 @@ mod tests {
 
     #[test]
     fn opportunity_status_all_variants_serde_distinct() {
-        let variants = vec![
+        let variants = [
             OpportunityStatus::Selected,
             OpportunityStatus::RejectedLowScore,
             OpportunityStatus::RejectedSecurityClearance,

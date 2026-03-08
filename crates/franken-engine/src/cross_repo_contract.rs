@@ -1843,7 +1843,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_regression_class() {
         let a = RegressionClass::Performance;
-        let b = a.clone();
+        let b = a;
         assert_eq!(a, b);
     }
 
@@ -1869,7 +1869,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_field_type() {
         let a = FieldType::Array;
-        let b = a.clone();
+        let b = a;
         assert_eq!(a, b);
     }
 

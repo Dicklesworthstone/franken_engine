@@ -1132,7 +1132,7 @@ mod tests {
 
     #[test]
     fn test_assumption_category_ordering() {
-        let cats = vec![
+        let cats = [
             AssumptionCategory::Statistical,
             AssumptionCategory::Behavioral,
             AssumptionCategory::Resource,
@@ -1145,7 +1145,7 @@ mod tests {
 
     #[test]
     fn test_assumption_origin_ordering() {
-        let origins = vec![
+        let origins = [
             AssumptionOrigin::CompileTime,
             AssumptionOrigin::Runtime,
             AssumptionOrigin::PolicyInherited,
@@ -1157,7 +1157,7 @@ mod tests {
 
     #[test]
     fn test_violation_severity_ordering() {
-        let sevs = vec![
+        let sevs = [
             ViolationSeverity::Advisory,
             ViolationSeverity::Warning,
             ViolationSeverity::Critical,
@@ -1169,7 +1169,7 @@ mod tests {
 
     #[test]
     fn test_monitor_kind_ordering() {
-        let kinds = vec![
+        let kinds = [
             MonitorKind::Threshold,
             MonitorKind::Drift,
             MonitorKind::Coverage,
@@ -1246,7 +1246,7 @@ mod tests {
 
     #[test]
     fn test_serde_all_demotion_actions() {
-        let actions = vec![
+        let actions = [
             DemotionAction::EnterSafeMode {
                 reason: "test".into(),
             },
@@ -1360,7 +1360,7 @@ mod tests {
 
     #[test]
     fn ledger_error_serde_all_variants() {
-        let variants: Vec<LedgerError> = vec![
+        let variants: [LedgerError; 5] = [
             LedgerError::DuplicateAssumption("a1".into()),
             LedgerError::AssumptionNotFound("a2".into()),
             LedgerError::MonitorNotFound("m1".into()),
@@ -1380,7 +1380,7 @@ mod tests {
 
     #[test]
     fn ledger_error_display_distinct() {
-        let variants: Vec<LedgerError> = vec![
+        let variants: [LedgerError; 5] = [
             LedgerError::DuplicateAssumption("x".into()),
             LedgerError::AssumptionNotFound("x".into()),
             LedgerError::MonitorNotFound("x".into()),
@@ -1569,7 +1569,7 @@ mod tests {
 
     #[test]
     fn demotion_action_serde_variants_distinct() {
-        let variants = vec![
+        let variants = [
             DemotionAction::EnterSafeMode { reason: "r".into() },
             DemotionAction::DemoteLane {
                 lane_id: "l".into(),
@@ -1972,7 +1972,7 @@ mod tests {
 
     #[test]
     fn ledger_error_serde_all_variants_roundtrip() {
-        let variants = vec![
+        let variants = [
             LedgerError::DuplicateAssumption("a1".into()),
             LedgerError::AssumptionNotFound("a2".into()),
             LedgerError::MonitorNotFound("m1".into()),

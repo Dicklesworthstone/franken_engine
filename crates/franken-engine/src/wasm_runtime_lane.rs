@@ -665,10 +665,10 @@ impl WasmRuntimeLane {
         self.total_dom_ops += dom_ops_emitted as u64;
 
         // Determine mode
-        let mode_after = if !triggers.is_empty() {
-            WasmLaneMode::Degraded
-        } else {
+        let mode_after = if triggers.is_empty() {
             self.mode
+        } else {
+            WasmLaneMode::Degraded
         };
 
         if !triggers.is_empty() {
@@ -1483,7 +1483,7 @@ mod tests {
 
     #[test]
     fn safe_mode_reason_serde_roundtrip() {
-        let reasons = vec![
+        let reasons = [
             SafeModeReason::QueueOverflow {
                 queue_len: 100,
                 limit: 100,
@@ -1801,7 +1801,7 @@ mod tests {
 
     #[test]
     fn abi_dom_op_target_element_for_all_variants() {
-        let ops = vec![
+        let ops = [
             AbiDomOp::Create {
                 element_id: 1,
                 tag_index: 0,

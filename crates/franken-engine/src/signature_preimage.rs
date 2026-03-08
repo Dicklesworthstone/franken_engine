@@ -18,7 +18,7 @@
 //! and signature preimage contracts).
 
 use std::collections::BTreeMap;
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use serde::{Deserialize, Serialize};
 
@@ -93,7 +93,7 @@ impl VerificationKey {
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(VERIFICATION_KEY_LEN * 2);
         for byte in &self.0 {
-            s.push_str(&format!("{byte:02x}"));
+            write!(s, "{byte:02x}").unwrap();
         }
         s
     }
@@ -1117,7 +1117,7 @@ mod tests {
 
     #[test]
     fn signature_error_serialization_round_trip() {
-        let errors = vec![
+        let errors = [
             SignatureError::InvalidSigningKey,
             SignatureError::InvalidVerificationKey,
             SignatureError::NonCanonicalObject {
@@ -1178,7 +1178,7 @@ mod tests {
 
     #[test]
     fn signature_error_implements_std_error() {
-        let variants: Vec<Box<dyn std::error::Error>> = vec![
+        let variants: [Box<dyn std::error::Error>; 4] = [
             Box::new(SignatureError::NonCanonicalObject {
                 detail: "bad order".into(),
             }),
@@ -1417,7 +1417,7 @@ mod tests {
     #[test]
     fn enrichment_all_signature_error_displays_unique() {
         let vk = VerificationKey::from_bytes([0x77; VERIFICATION_KEY_LEN]);
-        let variants = vec![
+        let variants = [
             SignatureError::VerificationFailed {
                 signer: vk,
                 reason: "mismatch".to_string(),

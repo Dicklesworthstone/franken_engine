@@ -619,7 +619,7 @@ pub fn validate_corpus_manifest(
     if manifest.schema_version != SECURITY_CORPUS_MANIFEST_SCHEMA_VERSION {
         return Err(SecurityConformanceError::ManifestSchemaMismatch {
             expected: SECURITY_CORPUS_MANIFEST_SCHEMA_VERSION,
-            found: manifest.schema_version.clone(),
+            found: manifest.schema_version,
         });
     }
 
@@ -1916,8 +1916,8 @@ label_sha256 = "{bad_hash}"
             label_path: PathBuf::from("test"),
             label_hash: "testhash".to_string(),
         };
-        let h1 = corpus_manifest_hash(&[record.clone()]);
-        let h2 = corpus_manifest_hash(&[record]);
+        let h1 = corpus_manifest_hash(std::slice::from_ref(&record));
+        let h2 = corpus_manifest_hash(std::slice::from_ref(&record));
         assert_eq!(h1, h2);
         assert!(is_valid_sha256_hex(&h1));
     }

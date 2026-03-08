@@ -654,7 +654,7 @@ impl SwarmControlLoop {
         }
 
         // Simple cycle detection via iterative removal.
-        let mut remaining: BTreeSet<&str> = self.graph.keys().map(|s| s.as_str()).collect();
+        let mut remaining: BTreeSet<&str> = self.graph.keys().map(String::as_str).collect();
         let mut progress = true;
         while progress {
             progress = false;
@@ -996,10 +996,10 @@ mod tests {
             let deps: Vec<&str> = if i > 0 { vec![ids[i - 1]] } else { vec![] };
             let mut task = make_task(id, &deps);
             // Wire up dependents for the previous task.
-            if i > 0 {
-                if let Some(prev) = ctrl.graph.get_mut(ids[i - 1]) {
-                    prev.dependents.insert(id.to_string());
-                }
+            if i > 0
+                && let Some(prev) = ctrl.graph.get_mut(ids[i - 1])
+            {
+                prev.dependents.insert(id.to_string());
             }
             task.dependents = if i + 1 < ids.len() {
                 let mut s = BTreeSet::new();

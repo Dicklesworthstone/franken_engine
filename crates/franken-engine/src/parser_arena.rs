@@ -1817,7 +1817,7 @@ mod tests {
     fn enrichment_arena_budget_kind_copy_clone_eq() {
         let a = ArenaBudgetKind::Spans;
         let b = a; // Copy
-        let c = a.clone();
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(b, c);
     }
@@ -1825,7 +1825,7 @@ mod tests {
     #[test]
     fn enrichment_arena_budget_json_field_names() {
         let budget = ArenaBudget::default();
-        let json: serde_json::Value = serde_json::to_value(&budget).unwrap();
+        let json: serde_json::Value = serde_json::to_value(budget).unwrap();
         assert!(json.get("max_nodes").is_some());
         assert!(json.get("max_expressions").is_some());
         assert!(json.get("max_spans").is_some());

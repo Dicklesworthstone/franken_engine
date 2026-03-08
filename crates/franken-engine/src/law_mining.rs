@@ -843,6 +843,7 @@ fn accumulate_counterexample(
             .or_insert_with(|| {
                 CandidateAccumulator::new(CandidateKind::NormalForm, normal_form_statement)
             });
+        let this_policy_ids = policy_ids.clone();
         normal_form.policy_ids.extend(policy_ids);
         normal_form
             .formal_properties
@@ -851,11 +852,10 @@ fn accumulate_counterexample(
         normal_form.condition_keys.extend(conditions);
         normal_form.merge_shapes.insert(shape.clone());
         normal_form.saw_counterexample = true;
-        let normal_form_policy_ids = normal_form.policy_ids.iter().cloned().collect::<Vec<_>>();
         normal_form.add_provenance(LawProvenanceSource {
             source_kind: ProvenanceSourceKind::Counterexample,
             source_id,
-            policy_ids: normal_form_policy_ids,
+            policy_ids: this_policy_ids,
             formal_properties: vec![counterexample.property_violated],
             decision_types: Vec::new(),
             support_summary: format!("merge-shape candidate from {}", shape),

@@ -510,12 +510,15 @@ impl ClaimEntitlementContract {
             .iter()
             .map(|morphism| morphism.morphism_id.as_str())
             .collect::<BTreeSet<_>>();
-        let evidence_kinds = self
+        let mut evidence_kinds: BTreeSet<&str> = self
             .evidence_morphism_catalog
             .morphisms
             .iter()
             .map(|morphism| morphism.evidence_kind.as_str())
-            .collect::<BTreeSet<_>>();
+            .collect();
+        for rule in &self.disqualifier_rules.rules {
+            evidence_kinds.insert(rule.evidence_kind.as_str());
+        }
         let constraint_ids = self
             .side_constraint_lattice
             .constraints
@@ -575,21 +578,21 @@ impl ClaimEntitlementContract {
                         scenario.scenario_id, expected.atom_id
                     ));
                 }
-                if let Some(morphism_id) = expected.minimal_morphism_id.as_deref() {
-                    if !morphism_ids.contains(morphism_id) {
-                        errors.push(format!(
-                            "scenario `{}` references unknown expected morphism `{}`",
-                            scenario.scenario_id, morphism_id
-                        ));
-                    }
+                if let Some(morphism_id) = expected.minimal_morphism_id.as_deref()
+                    && !morphism_ids.contains(morphism_id)
+                {
+                    errors.push(format!(
+                        "scenario `{}` references unknown expected morphism `{}`",
+                        scenario.scenario_id, morphism_id
+                    ));
                 }
-                if let Some(rule_id) = expected.impossible_rule_id.as_deref() {
-                    if !rule_lookup.contains_key(rule_id) {
-                        errors.push(format!(
-                            "scenario `{}` references unknown expected rule `{}`",
-                            scenario.scenario_id, rule_id
-                        ));
-                    }
+                if let Some(rule_id) = expected.impossible_rule_id.as_deref()
+                    && !rule_lookup.contains_key(rule_id)
+                {
+                    errors.push(format!(
+                        "scenario `{}` references unknown expected rule `{}`",
+                        scenario.scenario_id, rule_id
+                    ));
                 }
             }
         }

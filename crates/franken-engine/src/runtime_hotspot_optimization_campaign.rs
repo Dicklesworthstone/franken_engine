@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn weight_constants_are_positive_and_equal() {
-        assert!(SCHEDULER_WEIGHT > 0);
+        const { assert!(SCHEDULER_WEIGHT > 0) };
         assert_eq!(SCHEDULER_WEIGHT, DOM_COMMIT_WEIGHT);
         assert_eq!(DOM_COMMIT_WEIGHT, ROUTER_WEIGHT);
         assert_eq!(ROUTER_WEIGHT, JS_WASM_WEIGHT);

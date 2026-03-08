@@ -199,11 +199,10 @@ impl ParsedVersion {
     }
 
     fn format(&self) -> String {
-        if let Some(pre) = &self.prerelease {
-            format!("{}.{}.{}-{pre}", self.major, self.minor, self.patch)
-        } else {
-            format!("{}.{}.{}", self.major, self.minor, self.patch)
-        }
+        self.prerelease.as_ref().map_or_else(
+            || format!("{}.{}.{}", self.major, self.minor, self.patch),
+            |pre| format!("{}.{}.{}-{pre}", self.major, self.minor, self.patch),
+        )
     }
 }
 
@@ -954,7 +953,7 @@ mod tests {
 
     #[test]
     fn parse_tags_basic() {
-        let tags = vec!["v1.0.0".into(), "v2.0.0-beta".into()];
+        let tags = ["v1.0.0".into(), "v2.0.0-beta".into()];
         let parsed = parse_versions_from_tags(&tags);
         assert_eq!(parsed.len(), 2);
     }
@@ -967,7 +966,7 @@ mod tests {
 
     #[test]
     fn parse_tags_deduplicates() {
-        let tags = vec!["v1.0.0".into(), "v1.0.0".into()];
+        let tags = ["v1.0.0".into(), "v1.0.0".into()];
         let parsed = parse_versions_from_tags(&tags);
         assert_eq!(parsed.len(), 1);
     }
@@ -1063,7 +1062,7 @@ mod tests {
 
     #[test]
     fn version_matrix_error_is_std_error() {
-        let errors: Vec<Box<dyn Error>> = vec![
+        let errors: [Box<dyn Error>; 2] = [
             Box::new(VersionMatrixError::MissingCurrentVersion {
                 repo: "engine".into(),
             }),
@@ -1284,7 +1283,7 @@ mod tests {
 
     #[test]
     fn enrichment_error_display_variants_all_unique() {
-        let errors = vec![
+        let errors = [
             VersionMatrixError::MissingCurrentVersion {
                 repo: "alpha".into(),
             },
@@ -1478,13 +1477,13 @@ mod tests {
 
     #[test]
     fn enrichment_matrix_lane_kind_ord_deterministic() {
-        let mut kinds = vec![
+        let mut kinds = [
             MatrixLaneKind::Pinned,
             MatrixLaneKind::Next,
             MatrixLaneKind::Current,
             MatrixLaneKind::Previous,
         ];
-        let mut kinds2 = kinds.clone();
+        let mut kinds2 = kinds;
         kinds.sort();
         kinds2.sort();
         assert_eq!(kinds, kinds2);

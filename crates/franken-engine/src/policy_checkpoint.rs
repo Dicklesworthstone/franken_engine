@@ -1025,7 +1025,7 @@ mod tests {
 
     #[test]
     fn policy_type_serialization_round_trip() {
-        let types = vec![
+        let types = [
             PolicyType::RuntimeExecution,
             PolicyType::CapabilityLattice,
             PolicyType::ExtensionTrust,
@@ -1041,7 +1041,7 @@ mod tests {
 
     #[test]
     fn checkpoint_error_serialization_round_trip() {
-        let errors = vec![
+        let errors = [
             CheckpointError::GenesisMustHaveNoPredecessor,
             CheckpointError::MissingPredecessor,
             CheckpointError::EmptyPolicyHeads,
@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn checkpoint_error_is_std_error() {
-        let errors: Vec<Box<dyn std::error::Error>> = vec![
+        let errors: [Box<dyn std::error::Error>; 4] = [
             Box::new(CheckpointError::GenesisMustHaveNoPredecessor),
             Box::new(CheckpointError::MissingPredecessor),
             Box::new(CheckpointError::EmptyPolicyHeads),
@@ -1353,7 +1353,7 @@ mod tests {
 
     #[test]
     fn checkpoint_event_all_types_serde_roundtrip() {
-        let events = vec![
+        let events = [
             CheckpointEvent {
                 event_type: CheckpointEventType::GenesisCreated,
                 checkpoint_seq: 0,
@@ -1583,7 +1583,7 @@ mod tests {
         )
         .unwrap();
 
-        let errors = vec![
+        let errors = [
             CheckpointError::ChainLinkageBroken {
                 expected: id1,
                 actual: id2,
@@ -1744,7 +1744,7 @@ mod tests {
 
     #[test]
     fn checkpoint_event_type_serde_roundtrip() {
-        let types = vec![
+        let types = [
             CheckpointEventType::GenesisCreated,
             CheckpointEventType::ChainCheckpointCreated { prev_seq: 7 },
             CheckpointEventType::QuorumVerified {
@@ -2117,7 +2117,7 @@ mod tests {
     #[test]
     fn chain_large_sequence_gap() {
         let sk = make_sk(1);
-        let genesis = build_genesis(&[sk.clone()]);
+        let genesis = build_genesis(std::slice::from_ref(&sk));
         let cp = CheckpointBuilder::after(
             &genesis,
             1_000_000,
@@ -2206,7 +2206,7 @@ mod tests {
             "test-zone",
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
-        .build(&[sk.clone()])
+        .build(std::slice::from_ref(&sk))
         .unwrap();
 
         let cp2 = CheckpointBuilder::genesis(
@@ -2230,7 +2230,7 @@ mod tests {
             "test-zone",
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
-        .build(&[sk.clone()])
+        .build(std::slice::from_ref(&sk))
         .unwrap();
 
         let cp2 = CheckpointBuilder::genesis(
@@ -2254,7 +2254,7 @@ mod tests {
             "test-zone",
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
-        .build(&[sk.clone()])
+        .build(std::slice::from_ref(&sk))
         .unwrap();
 
         let cp2 = CheckpointBuilder::genesis(
@@ -2280,7 +2280,7 @@ mod tests {
     #[test]
     fn chain_checkpoint_prev_is_not_null_in_json() {
         let sk = make_sk(1);
-        let genesis = build_genesis(&[sk.clone()]);
+        let genesis = build_genesis(std::slice::from_ref(&sk));
         let cp1 = CheckpointBuilder::after(
             &genesis,
             1,
@@ -2376,7 +2376,7 @@ mod tests {
     #[test]
     fn chain_checkpoint_with_epoch_advance() {
         let sk = make_sk(1);
-        let genesis = build_genesis(&[sk.clone()]);
+        let genesis = build_genesis(std::slice::from_ref(&sk));
         let cp1 = CheckpointBuilder::after(
             &genesis,
             1,

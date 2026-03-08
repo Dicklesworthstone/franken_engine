@@ -2982,7 +2982,7 @@ mod tests {
         let args = vec![
             JsValue::Int(3 * FP_SCALE),
             JsValue::Int(7 * FP_SCALE),
-            JsValue::Int(1 * FP_SCALE),
+            JsValue::Int(FP_SCALE),
         ];
         assert_eq!(
             exec_math(BuiltinId::MathMax, &args).unwrap(),
@@ -2990,7 +2990,7 @@ mod tests {
         );
         assert_eq!(
             exec_math(BuiltinId::MathMin, &args).unwrap(),
-            JsValue::Int(1 * FP_SCALE)
+            JsValue::Int(FP_SCALE)
         );
     }
 
@@ -3105,7 +3105,7 @@ mod tests {
                 &[JsValue::Str("xyz".into())]
             )
             .unwrap(),
-            JsValue::Int(-1 * FP_SCALE)
+            JsValue::Int(-FP_SCALE)
         );
     }
 
@@ -3124,7 +3124,7 @@ mod tests {
             exec_string_method(
                 BuiltinId::StringPrototypeSlice,
                 "hello",
-                &[JsValue::Int(1 * FP_SCALE), JsValue::Int(3 * FP_SCALE)]
+                &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)]
             )
             .unwrap(),
             JsValue::Str("el".into())
@@ -3201,7 +3201,7 @@ mod tests {
             exec_string_method(
                 BuiltinId::StringPrototypeRepeat,
                 "x",
-                &[JsValue::Int(-1 * FP_SCALE)]
+                &[JsValue::Int(-FP_SCALE)]
             )
             .is_err()
         );
@@ -3394,7 +3394,7 @@ mod tests {
             exec_string_method(
                 BuiltinId::StringPrototypeSubstring,
                 "hello",
-                &[JsValue::Int(3 * FP_SCALE), JsValue::Int(1 * FP_SCALE)]
+                &[JsValue::Int(3 * FP_SCALE), JsValue::Int(FP_SCALE)]
             )
             .unwrap(),
             JsValue::Str("el".into())
@@ -3452,7 +3452,7 @@ mod tests {
 
     #[test]
     fn test_math_sqrt_negative() {
-        assert!(exec_math(BuiltinId::MathSqrt, &[JsValue::Int(-1 * FP_SCALE)]).is_err());
+        assert!(exec_math(BuiltinId::MathSqrt, &[JsValue::Int(-FP_SCALE)]).is_err());
     }
 
     #[test]
@@ -3471,7 +3471,7 @@ mod tests {
 
     #[test]
     fn test_math_log_negative() {
-        assert!(exec_math(BuiltinId::MathLog, &[JsValue::Int(-1 * FP_SCALE)]).is_err());
+        assert!(exec_math(BuiltinId::MathLog, &[JsValue::Int(-FP_SCALE)]).is_err());
     }
 
     #[test]
@@ -3775,7 +3775,7 @@ mod tests {
                 &[JsValue::Int(20 * FP_SCALE)]
             )
             .unwrap(),
-            ArrayMethodResult::Value(JsValue::Int(1 * FP_SCALE))
+            ArrayMethodResult::Value(JsValue::Int(FP_SCALE))
         );
         assert_eq!(
             exec_array_method(
@@ -3784,7 +3784,7 @@ mod tests {
                 &[JsValue::Int(99 * FP_SCALE)]
             )
             .unwrap(),
-            ArrayMethodResult::Value(JsValue::Int(-1 * FP_SCALE))
+            ArrayMethodResult::Value(JsValue::Int(-FP_SCALE))
         );
     }
 
@@ -3858,7 +3858,7 @@ mod tests {
     #[test]
     fn test_array_reverse() {
         let elements = vec![
-            JsValue::Int(1 * FP_SCALE),
+            JsValue::Int(FP_SCALE),
             JsValue::Int(2 * FP_SCALE),
             JsValue::Int(3 * FP_SCALE),
         ];
@@ -3867,7 +3867,7 @@ mod tests {
             ArrayMethodResult::NewArray(vec![
                 JsValue::Int(3 * FP_SCALE),
                 JsValue::Int(2 * FP_SCALE),
-                JsValue::Int(1 * FP_SCALE),
+                JsValue::Int(FP_SCALE),
             ])
         );
     }
@@ -3884,7 +3884,7 @@ mod tests {
             exec_array_method(
                 BuiltinId::ArrayPrototypeSlice,
                 &elements,
-                &[JsValue::Int(1 * FP_SCALE), JsValue::Int(3 * FP_SCALE)]
+                &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)]
             )
             .unwrap(),
             ArrayMethodResult::NewArray(vec![
@@ -3918,7 +3918,7 @@ mod tests {
     #[test]
     fn test_array_fill() {
         let elements = vec![
-            JsValue::Int(1 * FP_SCALE),
+            JsValue::Int(FP_SCALE),
             JsValue::Int(2 * FP_SCALE),
             JsValue::Int(3 * FP_SCALE),
             JsValue::Int(4 * FP_SCALE),
@@ -3929,13 +3929,13 @@ mod tests {
                 &elements,
                 &[
                     JsValue::Int(0),
-                    JsValue::Int(1 * FP_SCALE),
+                    JsValue::Int(FP_SCALE),
                     JsValue::Int(3 * FP_SCALE)
                 ]
             )
             .unwrap(),
             ArrayMethodResult::NewArray(vec![
-                JsValue::Int(1 * FP_SCALE),
+                JsValue::Int(FP_SCALE),
                 JsValue::Int(0),
                 JsValue::Int(0),
                 JsValue::Int(4 * FP_SCALE),
@@ -3945,7 +3945,7 @@ mod tests {
 
     #[test]
     fn test_array_concat() {
-        let elements = vec![JsValue::Int(1 * FP_SCALE)];
+        let elements = vec![JsValue::Int(FP_SCALE)];
         assert_eq!(
             exec_array_method(
                 BuiltinId::ArrayPrototypeConcat,
@@ -3954,7 +3954,7 @@ mod tests {
             )
             .unwrap(),
             ArrayMethodResult::NewArray(vec![
-                JsValue::Int(1 * FP_SCALE),
+                JsValue::Int(FP_SCALE),
                 JsValue::Int(2 * FP_SCALE),
                 JsValue::Int(3 * FP_SCALE),
             ])
@@ -4361,7 +4361,7 @@ mod tests {
     fn test_object_is_different() {
         let result = exec_object_static(
             BuiltinId::ObjectIs,
-            &[JsValue::Int(1 * FP_SCALE), JsValue::Int(2 * FP_SCALE)],
+            &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
         )
         .unwrap();
         assert_eq!(result, JsValue::Bool(false));
@@ -4392,7 +4392,7 @@ mod tests {
 
     #[test]
     fn test_math_sqrt_negative_error() {
-        let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(-1 * FP_SCALE)]);
+        let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(-FP_SCALE)]);
         assert!(result.is_err());
     }
 

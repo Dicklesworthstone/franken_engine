@@ -414,7 +414,7 @@ impl DecisionMarkerStream {
         let payload_hash = ContentHash::compute(payload_material.as_bytes());
         let redacted_payload = RedactedPayload {
             redacted_summary: input.payload_summary,
-            payload_hash: payload_hash.clone(),
+            payload_hash,
             redaction_applied: true,
         };
 
@@ -1071,7 +1071,7 @@ mod tests {
     #[test]
     fn all_decision_types_produce_valid_markers() {
         let mut stream = make_stream();
-        let types = vec![
+        let types = [
             DecisionType::SecurityAction {
                 action: SecurityActionKind::Quarantine,
             },
@@ -1507,7 +1507,7 @@ mod tests {
 
     #[test]
     fn chain_integrity_error_serialization_round_trip() {
-        let errors = vec![
+        let errors = [
             ChainIntegrityError::EmptyStream,
             ChainIntegrityError::NonMonotonicId {
                 marker_id: 5,
@@ -1836,7 +1836,7 @@ mod tests {
 
     #[test]
     fn decision_type_serde_all_variants() {
-        let variants = vec![
+        let variants = [
             DecisionType::SecurityAction {
                 action: SecurityActionKind::Quarantine,
             },
@@ -1993,7 +1993,7 @@ mod tests {
     fn chain_integrity_error_all_variants_serde_distinct() {
         let zero = ContentHash([0u8; 32]);
         let one = ContentHash([1u8; 32]);
-        let variants = vec![
+        let variants = [
             ChainIntegrityError::MarkerHashMismatch {
                 marker_id: 1,
                 expected: zero.clone(),

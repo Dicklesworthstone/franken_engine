@@ -1510,7 +1510,7 @@ mod tests {
 
     #[test]
     fn error_codes_stable() {
-        let errors = vec![
+        let errors = [
             ParityTrackerError::FeatureNotFound {
                 feature_id: "x".to_string(),
             },
@@ -1726,7 +1726,7 @@ mod tests {
 
     #[test]
     fn parity_tracker_error_serde_all_variants() {
-        let errors: Vec<ParityTrackerError> = vec![
+        let errors: [ParityTrackerError; 8] = [
             ParityTrackerError::FeatureNotFound {
                 feature_id: "f".to_string(),
             },
@@ -1861,7 +1861,7 @@ mod tests {
 
     #[test]
     fn parity_tracker_error_display_all_non_empty() {
-        let errors: Vec<ParityTrackerError> = vec![
+        let errors: [ParityTrackerError; 8] = [
             ParityTrackerError::FeatureNotFound {
                 feature_id: "f".to_string(),
             },
@@ -2010,7 +2010,7 @@ mod tests {
 
     #[test]
     fn parity_tracker_error_debug_all_distinct() {
-        let errors = vec![
+        let errors = [
             ParityTrackerError::FeatureNotFound {
                 feature_id: "f".into(),
             },
@@ -2061,7 +2061,7 @@ mod tests {
 
     #[test]
     fn parity_tracker_error_serde_all_variants_distinct() {
-        let errors = vec![
+        let errors = [
             ParityTrackerError::FeatureNotFound {
                 feature_id: "f".into(),
             },

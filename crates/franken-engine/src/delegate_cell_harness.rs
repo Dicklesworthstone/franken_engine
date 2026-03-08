@@ -1468,7 +1468,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_cell_lifecycle() {
         let a = CellLifecycle::Quarantined;
-        let b = a.clone();
+        let b = a;
         assert_eq!(a, b);
     }
 

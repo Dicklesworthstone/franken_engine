@@ -1411,7 +1411,7 @@ mod tests {
 
     #[test]
     fn error_display_all_variants() {
-        let cases = vec![
+        let cases = [
             (
                 CoevolutionError::EmptyStrategies {
                     player: PlayerRole::Attacker,
@@ -1809,7 +1809,7 @@ mod tests {
 
     #[test]
     fn exploit_class_serde_variant_distinct() {
-        let variants = vec![
+        let variants = [
             ExploitClass::CapabilityEscalation,
             ExploitClass::PolicyBypass,
             ExploitClass::ResourceExhaustion,
@@ -2186,7 +2186,7 @@ mod tests {
 
     #[test]
     fn coevolution_error_serde_variant_distinct() {
-        let variants: Vec<CoevolutionError> = vec![
+        let variants: [CoevolutionError; 7] = [
             CoevolutionError::EmptyStrategies {
                 player: PlayerRole::Attacker,
             },
@@ -2212,7 +2212,7 @@ mod tests {
 
     #[test]
     fn coevolution_error_debug_distinct() {
-        let variants: Vec<CoevolutionError> = vec![
+        let variants: [CoevolutionError; 7] = [
             CoevolutionError::EmptyStrategies {
                 player: PlayerRole::Attacker,
             },

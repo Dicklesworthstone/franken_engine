@@ -511,7 +511,7 @@ impl PauseTracker {
 
     /// Per-extension pause count.
     pub fn extension_count(&self, extension_id: &str) -> usize {
-        self.per_extension.get(extension_id).map_or(0, |v| v.len())
+        self.per_extension.get(extension_id).map_or(0, Vec::len)
     }
 
     /// Total bytes reclaimed across all recorded pauses.
@@ -1253,7 +1253,7 @@ mod tests {
     fn tracker_serde_preserves_percentile_computation() {
         let mut tracker = PauseTracker::new(PauseBudget::new(10000, 20000, 50000));
         for i in 1..=20 {
-            tracker.record(&make_event(i, "ext-a", i * 100, i as u64, i * 10));
+            tracker.record(&make_event(i, "ext-a", i * 100, i, i * 10));
         }
 
         let json = serde_json::to_string(&tracker).unwrap();

@@ -1107,7 +1107,7 @@ mod tests {
 
     #[test]
     fn accountant_error_implements_std_error() {
-        let variants: Vec<Box<dyn std::error::Error>> = vec![
+        let variants: [Box<dyn std::error::Error>; 4] = [
             Box::new(AccountantError::BudgetExhausted {
                 dimension: "epsilon".into(),
                 epsilon_remaining: 0,
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn error_display_all_variants_unique() {
-        let variants: Vec<AccountantError> = vec![
+        let variants: [AccountantError; 4] = [
             AccountantError::BudgetExhausted {
                 dimension: "epoch".into(),
                 epsilon_remaining: 0,
@@ -1409,10 +1409,10 @@ mod tests {
                 50_000,
                 5_000,
                 &format!("ep{epoch}-op"),
-                epoch as u64 * 1_000_000_000,
+                epoch * 1_000_000_000,
             )
             .unwrap();
-            acc.advance_epoch(SecurityEpoch::from_raw(epoch), epoch as u64 * 5_000_000_000)
+            acc.advance_epoch(SecurityEpoch::from_raw(epoch), epoch * 5_000_000_000)
                 .unwrap();
         }
         assert_eq!(acc.epoch_summaries().len(), 4); // epochs 1-4 closed
@@ -1583,7 +1583,7 @@ mod tests {
 
     #[test]
     fn accountant_error_serde_roundtrip_all_variants() {
-        let errors = vec![
+        let errors = [
             AccountantError::BudgetExhausted {
                 dimension: "epoch".into(),
                 epsilon_remaining: -50,
@@ -1609,7 +1609,7 @@ mod tests {
 
     #[test]
     fn accountant_error_display_all_unique() {
-        let errors = vec![
+        let errors = [
             AccountantError::BudgetExhausted {
                 dimension: "epoch".into(),
                 epsilon_remaining: 0,

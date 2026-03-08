@@ -550,7 +550,7 @@ impl AttestationStore {
         self.emit_event(
             AttestationEventType::Registered {
                 attestation_id: att_id.clone(),
-                principal: principal.clone(),
+                principal,
             },
             trace_id,
         );
@@ -1819,7 +1819,7 @@ mod tests {
     #[test]
     fn enrichment_attestation_nonce_clone_eq() {
         let n = AttestationNonce::from_counter(7);
-        let cloned = n.clone();
+        let cloned = n;
         assert_eq!(n, cloned);
         assert_eq!(n.as_u64(), cloned.as_u64());
     }

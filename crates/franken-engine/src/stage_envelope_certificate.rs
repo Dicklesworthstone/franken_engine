@@ -729,11 +729,9 @@ fn check_percentile(
 ) {
     if observed_ns > budget_ns {
         let overshoot_ns = observed_ns - budget_ns;
-        let overshoot_fraction = if budget_ns > 0 {
-            overshoot_ns * 1_000_000 / budget_ns
-        } else {
-            1_000_000 // 100% overshoot if budget is zero
-        };
+        let overshoot_fraction = (overshoot_ns * 1_000_000)
+            .checked_div(budget_ns)
+            .unwrap_or(1_000_000); // 100% overshoot if budget is zero
         violations.push(PercentileViolation {
             percentile,
             observed_ns,

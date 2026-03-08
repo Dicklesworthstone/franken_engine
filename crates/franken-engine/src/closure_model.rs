@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn env_value_serde_roundtrip() {
-        let values = vec![
+        let values = [
             EnvValue::Undefined,
             EnvValue::Null,
             EnvValue::Bool(true),
@@ -1232,7 +1232,7 @@ mod tests {
 
     #[test]
     fn is_var_scope_classification() {
-        let cases = vec![
+        let cases = [
             (ScopeKind::Global, true),
             (ScopeKind::Module, true),
             (ScopeKind::Function, true),
@@ -1377,7 +1377,7 @@ mod tests {
 
     #[test]
     fn scope_error_serde_roundtrip_all_variants() {
-        let variants: Vec<ScopeError> = vec![
+        let variants: [ScopeError; 5] = [
             ScopeError::TemporalDeadZone { name: "x".into() },
             ScopeError::ConstAssignment { name: "PI".into() },
             ScopeError::UndeclaredVariable { name: "y".into() },
@@ -1662,16 +1662,16 @@ mod tests {
 
     #[test]
     fn enrichment_closure_handle_ord_determinism() {
-        let handles = vec![
+        let handles = [
             ClosureHandle(5),
             ClosureHandle(2),
             ClosureHandle(9),
             ClosureHandle(0),
             ClosureHandle(7),
         ];
-        let mut sorted_a = handles.clone();
+        let mut sorted_a = handles;
         sorted_a.sort();
-        let mut sorted_b = handles.clone();
+        let mut sorted_b = handles;
         sorted_b.sort();
         assert_eq!(sorted_a, sorted_b, "Ord must be deterministic across sorts");
         // Verify the actual ordering is by inner u32.
@@ -1744,7 +1744,7 @@ mod tests {
 
     #[test]
     fn serde_env_value_variants_distinct_json() {
-        let variants = vec![
+        let variants = [
             EnvValue::Undefined,
             EnvValue::Null,
             EnvValue::Bool(true),
@@ -1767,7 +1767,7 @@ mod tests {
 
     #[test]
     fn serde_environment_kind_variants_distinct_json() {
-        let variants = vec![
+        let variants = [
             EnvironmentKind::Declarative,
             EnvironmentKind::Object,
             EnvironmentKind::Global,
@@ -1787,7 +1787,7 @@ mod tests {
 
     #[test]
     fn serde_scope_error_variants_distinct_json() {
-        let variants = vec![
+        let variants = [
             ScopeError::TemporalDeadZone { name: "a".into() },
             ScopeError::ConstAssignment { name: "a".into() },
             ScopeError::UndeclaredVariable { name: "a".into() },
@@ -1817,7 +1817,7 @@ mod tests {
 
     #[test]
     fn debug_env_value_variants_distinct() {
-        let variants: Vec<EnvValue> = vec![
+        let variants: [EnvValue; 8] = [
             EnvValue::Undefined,
             EnvValue::Null,
             EnvValue::Bool(false),
@@ -1838,7 +1838,7 @@ mod tests {
 
     #[test]
     fn debug_environment_kind_variants_distinct() {
-        let variants = vec![
+        let variants = [
             EnvironmentKind::Declarative,
             EnvironmentKind::Object,
             EnvironmentKind::Global,
@@ -1856,7 +1856,7 @@ mod tests {
 
     #[test]
     fn debug_scope_error_variants_distinct() {
-        let variants = vec![
+        let variants = [
             ScopeError::TemporalDeadZone { name: "n".into() },
             ScopeError::ConstAssignment { name: "n".into() },
             ScopeError::UndeclaredVariable { name: "n".into() },
@@ -2029,7 +2029,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_environment_kind_all_variants() {
-        let variants = vec![
+        let variants = [
             EnvironmentKind::Declarative,
             EnvironmentKind::Object,
             EnvironmentKind::Global,
@@ -2252,16 +2252,16 @@ mod tests {
 
     #[test]
     fn ord_determinism_environment_handle() {
-        let handles = vec![
+        let handles = [
             EnvironmentHandle(10),
             EnvironmentHandle(3),
             EnvironmentHandle(7),
             EnvironmentHandle(0),
             EnvironmentHandle(5),
         ];
-        let mut sorted_a = handles.clone();
+        let mut sorted_a = handles;
         sorted_a.sort();
-        let mut sorted_b = handles.clone();
+        let mut sorted_b = handles;
         sorted_b.sort();
         assert_eq!(sorted_a, sorted_b);
         assert_eq!(sorted_a[0], EnvironmentHandle(0));

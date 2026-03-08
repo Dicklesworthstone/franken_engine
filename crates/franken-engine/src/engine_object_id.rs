@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn id_error_serialization_round_trip() {
-        let errors = vec![
+        let errors = [
             IdError::EmptyCanonicalBytes,
             IdError::InvalidHexLength {
                 expected: 64,
@@ -927,7 +927,7 @@ mod tests {
         let schema = SchemaId::from_definition(b"test-schema");
         let id1 = derive_id(ObjectDomain::PolicyObject, "zone", &schema, b"a").unwrap();
         let id2 = derive_id(ObjectDomain::PolicyObject, "zone", &schema, b"b").unwrap();
-        let variants: Vec<Box<dyn std::error::Error>> = vec![
+        let variants: [Box<dyn std::error::Error>; 5] = [
             Box::new(IdError::EmptyCanonicalBytes),
             Box::new(IdError::IdMismatch {
                 expected: id1,
@@ -1089,7 +1089,7 @@ mod tests {
 
     #[test]
     fn id_error_clone_equality() {
-        let errors = vec![
+        let errors = [
             IdError::EmptyCanonicalBytes,
             IdError::NonCanonicalInput {
                 reason: "bad".into(),
@@ -1158,7 +1158,7 @@ mod tests {
     #[test]
     fn derive_id_long_content() {
         let schema = test_schema_id();
-        let content = vec![0x42u8; 10_000];
+        let content = [0x42u8; 10_000];
         let id = derive_id(ObjectDomain::EvidenceRecord, "z", &schema, &content).unwrap();
         assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
     }
@@ -1255,7 +1255,7 @@ mod tests {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"a").unwrap();
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"b").unwrap();
-        let errors = vec![
+        let errors = [
             IdError::EmptyCanonicalBytes,
             IdError::IdMismatch {
                 expected: id_a,
@@ -1301,7 +1301,7 @@ mod tests {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"p").unwrap();
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"q").unwrap();
-        let errors = vec![
+        let errors = [
             IdError::EmptyCanonicalBytes,
             IdError::IdMismatch {
                 expected: id_a,
@@ -1431,7 +1431,7 @@ mod tests {
     #[test]
     fn derive_id_all_zero_content() {
         let schema = test_schema_id();
-        let content = vec![0u8; 32];
+        let content = [0u8; 32];
         let id = derive_id(ObjectDomain::KeyBundle, "z", &schema, &content).unwrap();
         assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
     }
@@ -1439,7 +1439,7 @@ mod tests {
     #[test]
     fn derive_id_all_0xff_content() {
         let schema = test_schema_id();
-        let content = vec![0xffu8; 32];
+        let content = [0xffu8; 32];
         let id = derive_id(ObjectDomain::SignedManifest, "z", &schema, &content).unwrap();
         assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
     }
@@ -1652,7 +1652,7 @@ mod tests {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"a").unwrap();
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"b").unwrap();
-        let errors = vec![
+        let errors = [
             IdError::EmptyCanonicalBytes,
             IdError::IdMismatch {
                 expected: id_a,

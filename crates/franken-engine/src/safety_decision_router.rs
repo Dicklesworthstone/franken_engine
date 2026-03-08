@@ -510,7 +510,7 @@ impl SafetyDecisionRouter {
                 budget_consumed_ms: 0,
                 sequence_number: self.decision_count,
             };
-            self.results.push(result.clone());
+            self.results.push(result);
             return Err(SafetyRouterError::BudgetExhausted {
                 action: request.action,
                 requested_ms: SAFETY_DECISION_BUDGET_COST_MS,
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn safety_verdict_serde_roundtrip_batch2() {
-        let verdicts = vec![
+        let verdicts = [
             SafetyVerdict::Allow,
             SafetyVerdict::Deny {
                 reason: "x".to_string(),
@@ -1275,7 +1275,7 @@ mod tests {
 
     #[test]
     fn safety_router_error_serde_roundtrip() {
-        let errors = vec![
+        let errors = [
             SafetyRouterError::BudgetExhausted {
                 action: SafetyAction::BudgetOverride,
                 requested_ms: 2,
@@ -1435,7 +1435,7 @@ mod tests {
 
     #[test]
     fn safety_verdict_display_all_unique() {
-        let verdicts = vec![
+        let verdicts = [
             SafetyVerdict::Allow,
             SafetyVerdict::Deny {
                 reason: "x".to_string(),
@@ -1461,7 +1461,7 @@ mod tests {
 
     #[test]
     fn safety_router_error_display_all_unique() {
-        let errors = vec![
+        let errors = [
             SafetyRouterError::BudgetExhausted {
                 action: SafetyAction::BudgetOverride,
                 requested_ms: 2,
@@ -1489,7 +1489,7 @@ mod tests {
 
     #[test]
     fn safety_router_error_implements_std_error() {
-        let variants: Vec<Box<dyn std::error::Error>> = vec![
+        let variants: [Box<dyn std::error::Error>; 2] = [
             Box::new(SafetyRouterError::BudgetExhausted {
                 action: SafetyAction::ExtensionQuarantine,
                 requested_ms: 2,
@@ -1607,7 +1607,7 @@ mod tests {
 
     #[test]
     fn safety_verdict_serde_roundtrip() {
-        let verdicts = vec![
+        let verdicts = [
             SafetyVerdict::Allow,
             SafetyVerdict::Deny {
                 reason: "bad".into(),
@@ -1625,7 +1625,7 @@ mod tests {
 
     #[test]
     fn router_error_serde_roundtrip() {
-        let errors = vec![
+        let errors = [
             SafetyRouterError::BudgetExhausted {
                 action: SafetyAction::ForcedTermination,
                 requested_ms: 100,
@@ -1649,7 +1649,7 @@ mod tests {
 
     #[test]
     fn router_error_display_all_distinct() {
-        let errors = vec![
+        let errors = [
             SafetyRouterError::BudgetExhausted {
                 action: SafetyAction::ForcedTermination,
                 requested_ms: 100,
@@ -1907,7 +1907,7 @@ mod tests {
     #[test]
     fn safety_router_error_source_is_none() {
         use std::error::Error;
-        let errors: Vec<SafetyRouterError> = vec![
+        let errors: [SafetyRouterError; 3] = [
             SafetyRouterError::BudgetExhausted {
                 action: SafetyAction::ExtensionQuarantine,
                 requested_ms: 2,

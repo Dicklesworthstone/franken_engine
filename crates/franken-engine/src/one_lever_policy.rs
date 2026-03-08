@@ -389,11 +389,14 @@ fn normalize_opt_field(field: &mut Option<String>) {
 fn classify_changed_path(path: &str) -> Option<LeverCategory> {
     let lower = path.to_ascii_lowercase();
 
+    let ext = std::path::Path::new(&lower)
+        .extension()
+        .and_then(|e| e.to_str());
     if lower.starts_with("docs/")
         || lower.starts_with("artifacts/")
         || lower.starts_with(".beads/")
         || lower.starts_with(".github/workflows/")
-        || lower.ends_with(".md")
+        || ext == Some("md")
         || lower.ends_with("/readme")
         || lower.contains("/tests/")
         || lower.starts_with("scripts/check_")
@@ -442,12 +445,7 @@ fn classify_changed_path(path: &str) -> Option<LeverCategory> {
         return Some(LeverCategory::Security);
     }
 
-    if lower.ends_with(".toml")
-        || lower.ends_with(".json")
-        || lower.ends_with(".yaml")
-        || lower.ends_with(".yml")
-        || lower.ends_with(".ron")
-    {
+    if matches!(ext, Some("toml") | Some("json") | Some("yaml") | Some("yml") | Some("ron")) {
         return Some(LeverCategory::Config);
     }
 
@@ -1131,7 +1129,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_lever_category() {
         let a = LeverCategory::Security;
-        let b = a.clone();
+        let b = a;
         assert_eq!(a, b);
     }
 

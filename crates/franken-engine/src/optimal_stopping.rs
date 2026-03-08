@@ -1185,7 +1185,7 @@ mod tests {
 
     #[test]
     fn stopping_error_display_all_unique() {
-        let errors: Vec<StoppingError> = vec![
+        let errors: [StoppingError; 5] = [
             StoppingError::InvalidThreshold { threshold: 0 },
             StoppingError::InvalidDiscount { discount: 0 },
             StoppingError::EmptyObservations,
@@ -1338,7 +1338,7 @@ mod tests {
 
     #[test]
     fn enrichment_stopping_error_display_unique_with_distinct_params() {
-        let errors = vec![
+        let errors = [
             StoppingError::HorizonTooLarge {
                 horizon: 99,
                 max: 50,
@@ -1388,7 +1388,7 @@ mod tests {
     #[test]
     fn enrichment_stopping_decision_ord_total() {
         // Continue < Stop, verify Ord consistency with PartialOrd
-        let mut v = vec![
+        let mut v = [
             StoppingDecision::Stop,
             StoppingDecision::Continue,
             StoppingDecision::Stop,
@@ -1401,7 +1401,7 @@ mod tests {
 
     #[test]
     fn enrichment_clone_eq_stopping_error_all_variants() {
-        let variants = vec![
+        let variants = [
             StoppingError::HorizonTooLarge {
                 horizon: 50_000,
                 max: 10_000,
@@ -1425,7 +1425,7 @@ mod tests {
 
     #[test]
     fn enrichment_serde_roundtrip_stopping_error_all_variants() {
-        let variants = vec![
+        let variants = [
             StoppingError::HorizonTooLarge {
                 horizon: 20_000,
                 max: 10_000,

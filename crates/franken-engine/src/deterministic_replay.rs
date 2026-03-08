@@ -877,10 +877,10 @@ impl IncidentBundleBuilder {
 
 /// Simple deterministic hash (FNV-1a) for content hashing.
 fn compute_simple_hash(data: &[u8]) -> String {
-    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
     format!("{hash:016x}")
 }
@@ -1282,7 +1282,7 @@ mod tests {
 
     #[test]
     fn failover_reason_variants_serde() {
-        let reasons = vec![
+        let reasons = [
             FailoverReason::BudgetExhausted {
                 metric: "signals".to_string(),
                 value: 100,
@@ -1706,7 +1706,7 @@ mod tests {
 
     #[test]
     fn replay_error_serde_all_variants() {
-        let errors = vec![
+        let errors = [
             ReplayError::TraceExhausted {
                 cursor: 3,
                 total: 10,
@@ -1747,7 +1747,7 @@ mod tests {
 
     #[test]
     fn failover_error_serde_roundtrip() {
-        let errors = vec![
+        let errors = [
             FailoverError::MaxFailoversExceeded {
                 count: 11,
                 limit: 10,
@@ -2607,7 +2607,7 @@ mod tests {
 
     #[test]
     fn replay_error_all_variants_debug_distinct() {
-        let errs: Vec<ReplayError> = vec![
+        let errs: [ReplayError; 4] = [
             ReplayError::TraceExhausted {
                 cursor: 0,
                 total: 0,
@@ -2632,7 +2632,7 @@ mod tests {
 
     #[test]
     fn failover_reason_debug_distinct() {
-        let reasons = vec![
+        let reasons = [
             FailoverReason::BudgetExhausted {
                 metric: "m".into(),
                 value: 1,
@@ -2754,7 +2754,7 @@ mod tests {
     #[test]
     fn failover_records_all_reason_types() {
         let mut fc = FailoverController::new(FailoverStrategy::RetryThenBaseline, 100);
-        let reasons = vec![
+        let reasons = [
             FailoverReason::BudgetExhausted {
                 metric: "mem".into(),
                 value: 100,

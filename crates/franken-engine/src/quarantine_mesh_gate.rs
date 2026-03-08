@@ -433,7 +433,7 @@ impl QuarantineMeshGateRunner {
         criteria.push(CriterionResult {
             name: "isolation_invariant".to_string(),
             passed: isolation_ok,
-            detail: format!("peer_state={:?}", peer_state),
+            detail: format!("peer_state={peer_state:?}"),
         });
 
         // Criterion 4: Recovery after fault clearance.
@@ -451,7 +451,7 @@ impl QuarantineMeshGateRunner {
         criteria.push(CriterionResult {
             name: "recovery_or_forensic".to_string(),
             passed: recovery_ok,
-            detail: format!("final_state={:?}", final_state),
+            detail: format!("final_state={final_state:?}"),
         });
 
         let all_passed = criteria.iter().all(|c| c.passed);
@@ -1358,7 +1358,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_fault_type() {
         let a = FaultType::ByzantineBehavior;
-        let b = a.clone();
+        let b = a;
         assert_eq!(a, b);
     }
 

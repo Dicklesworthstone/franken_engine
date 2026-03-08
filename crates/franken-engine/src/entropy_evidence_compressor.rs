@@ -1134,7 +1134,7 @@ mod tests {
 
     #[test]
     fn entropy_error_display_all_variants() {
-        let displays: std::collections::BTreeSet<String> = vec![
+        let displays: std::collections::BTreeSet<String> = [
             EntropyError::AlphabetTooLarge {
                 size: 300,
                 max: 256,
@@ -1157,7 +1157,7 @@ mod tests {
 
     #[test]
     fn entropy_error_implements_std_error() {
-        let errors: Vec<Box<dyn std::error::Error>> = vec![
+        let errors: [Box<dyn std::error::Error>; 6] = [
             Box::new(EntropyError::EmptyInput),
             Box::new(EntropyError::AlphabetTooLarge { size: 1, max: 0 }),
             Box::new(EntropyError::UnknownSymbol { symbol: 0 }),
@@ -1176,7 +1176,7 @@ mod tests {
 
     #[test]
     fn entropy_error_serde_all_variants() {
-        let errors = vec![
+        let errors = [
             EntropyError::AlphabetTooLarge {
                 size: 300,
                 max: 256,
@@ -1431,7 +1431,7 @@ mod tests {
 
     #[test]
     fn enrichment_display_uniqueness_entropy_error() {
-        let variants = vec![
+        let variants = [
             EntropyError::AlphabetTooLarge { size: 1, max: 0 },
             EntropyError::EmptyInput,
             EntropyError::UnknownSymbol { symbol: 1 },
@@ -1467,7 +1467,7 @@ mod tests {
     #[test]
     fn enrichment_error_source_returns_none() {
         use std::error::Error;
-        let variants: Vec<EntropyError> = vec![
+        let variants: [EntropyError; 6] = [
             EntropyError::AlphabetTooLarge {
                 size: 300,
                 max: 256,
@@ -1493,7 +1493,7 @@ mod tests {
 
     #[test]
     fn debug_distinct_entropy_error_variants() {
-        let variants: Vec<EntropyError> = vec![
+        let variants: [EntropyError; 6] = [
             EntropyError::AlphabetTooLarge {
                 size: 512,
                 max: 256,
@@ -1733,7 +1733,7 @@ mod tests {
 
     #[test]
     fn serde_variant_distinctness_entropy_error() {
-        let variants = vec![
+        let variants = [
             EntropyError::AlphabetTooLarge {
                 size: 300,
                 max: 256,
@@ -2205,7 +2205,7 @@ mod tests {
             est.observe(1);
         }
         let coder = ArithmeticCoder::from_estimator(&est).unwrap();
-        let symbols = vec![0u32, 1, 0, 1, 0, 1];
+        let symbols = [0u32, 1, 0, 1, 0, 1];
         let ce1 = coder.encode(&symbols).unwrap();
         let ce2 = coder.encode(&symbols).unwrap();
         assert_eq!(ce1.content_hash, ce2.content_hash);

@@ -534,10 +534,9 @@ impl SignaturePreimage for FlowEnvelope {
         // Fallback quality.
         map.insert(
             "fallback_quality".to_string(),
-            match &self.fallback_quality {
-                Some(q) => CanonicalValue::String(q.to_string()),
-                None => CanonicalValue::Null,
-            },
+            self.fallback_quality.as_ref().map_or(CanonicalValue::Null, |q| {
+                CanonicalValue::String(q.to_string())
+            }),
         );
 
         // Is fallback.
@@ -1189,7 +1188,7 @@ mod tests {
 
     #[test]
     fn envelope_error_serde_roundtrip() {
-        let errors = vec![
+        let errors = [
             EnvelopeError::EmptyExtensionId,
             EnvelopeError::EmptyUpperBound,
             EnvelopeError::OverlappingFlows { overlap_count: 3 },
@@ -1713,7 +1712,7 @@ mod tests {
 
     #[test]
     fn envelope_error_implements_std_error() {
-        let variants: Vec<Box<dyn std::error::Error>> = vec![
+        let variants: [Box<dyn std::error::Error>; 6] = [
             Box::new(EnvelopeError::EmptyExtensionId),
             Box::new(EnvelopeError::EmptyUpperBound),
             Box::new(EnvelopeError::OverlappingFlows { overlap_count: 3 }),
@@ -1860,7 +1859,7 @@ mod tests {
 
     #[test]
     fn envelope_error_debug_distinct() {
-        let errors: Vec<EnvelopeError> = vec![
+        let errors: [EnvelopeError; 7] = [
             EnvelopeError::EmptyExtensionId,
             EnvelopeError::EmptyUpperBound,
             EnvelopeError::OverlappingFlows { overlap_count: 2 },
@@ -1928,7 +1927,7 @@ mod tests {
 
     #[test]
     fn envelope_error_all_variants_serialize_distinctly() {
-        let errors: Vec<EnvelopeError> = vec![
+        let errors: [EnvelopeError; 7] = [
             EnvelopeError::EmptyExtensionId,
             EnvelopeError::EmptyUpperBound,
             EnvelopeError::OverlappingFlows { overlap_count: 1 },
@@ -2277,7 +2276,7 @@ mod tests {
 
     #[test]
     fn all_error_codes_unique() {
-        let errors = vec![
+        let errors = [
             EnvelopeError::EmptyExtensionId,
             EnvelopeError::EmptyUpperBound,
             EnvelopeError::OverlappingFlows { overlap_count: 1 },

@@ -1325,7 +1325,7 @@ mod tests {
     #[test]
     fn run_recovery_strict_mode() {
         let config = RecoveryConfig::default(); // strict
-        let errors = vec![simple_error()];
+        let errors = [simple_error()];
         let ledger = run_recovery(&errors, 100, &config);
         assert_eq!(ledger.outcome, RecoveryOutcome::StrictFailed);
         assert!(ledger.attempts.is_empty());
@@ -1334,7 +1334,7 @@ mod tests {
     #[test]
     fn run_recovery_diagnostic_simple_error() {
         let config = diagnostic_config();
-        let errors = vec![simple_error()];
+        let errors = [simple_error()];
         let ledger = run_recovery(&errors, 100, &config);
         assert_eq!(ledger.outcome, RecoveryOutcome::Recovered);
         assert_eq!(ledger.attempts.len(), 1);
@@ -1345,7 +1345,7 @@ mod tests {
     #[test]
     fn run_recovery_diagnostic_unrecoverable() {
         let config = diagnostic_config();
-        let errors = vec![unrecoverable_error()];
+        let errors = [unrecoverable_error()];
         let ledger = run_recovery(&errors, 100, &config);
         // Should fail strict due to no candidates.
         assert!(!ledger.attempts.is_empty());
@@ -1354,7 +1354,7 @@ mod tests {
     #[test]
     fn run_recovery_diagnostic_ambiguous() {
         let config = diagnostic_config();
-        let errors = vec![ambiguous_error()];
+        let errors = [ambiguous_error()];
         let ledger = run_recovery(&errors, 100, &config);
         assert_eq!(ledger.attempts.len(), 1);
     }
@@ -1366,7 +1366,7 @@ mod tests {
             max_attempts: 2,
             ..RecoveryConfig::default()
         };
-        let errors = vec![simple_error(), simple_error(), simple_error()];
+        let errors = [simple_error(), simple_error(), simple_error()];
         let ledger = run_recovery(&errors, 100, &config);
         assert_eq!(ledger.outcome, RecoveryOutcome::BudgetExhausted);
         assert_eq!(ledger.attempts.len(), 2);
@@ -1379,7 +1379,7 @@ mod tests {
             confidence_threshold_millionths: 999_000, // very high threshold
             ..RecoveryConfig::default()
         };
-        let errors = vec![ambiguous_error()];
+        let errors = [ambiguous_error()];
         let ledger = run_recovery(&errors, 100, &config);
         // High threshold should force strict fail for ambiguous.
         assert!(!ledger.attempts.is_empty());
@@ -1390,7 +1390,7 @@ mod tests {
     #[test]
     fn run_recovery_deterministic() {
         let config = diagnostic_config();
-        let errors = vec![simple_error()];
+        let errors = [simple_error()];
         let l1 = run_recovery(&errors, 100, &config);
         let l2 = run_recovery(&errors, 100, &config);
         assert_eq!(l1.outcome, l2.outcome);
@@ -1400,7 +1400,7 @@ mod tests {
     #[test]
     fn run_recovery_repair_diff_hash_present() {
         let config = diagnostic_config();
-        let errors = vec![simple_error()];
+        let errors = [simple_error()];
         let ledger = run_recovery(&errors, 100, &config);
         assert!(ledger.repair_diff_hash.is_some());
     }
@@ -1408,7 +1408,7 @@ mod tests {
     #[test]
     fn run_recovery_multiple_errors_mixed() {
         let config = diagnostic_config();
-        let errors = vec![simple_error(), ambiguous_error(), unrecoverable_error()];
+        let errors = [simple_error(), ambiguous_error(), unrecoverable_error()];
         let ledger = run_recovery(&errors, 100, &config);
         assert_eq!(ledger.attempts.len(), 3);
         assert!(ledger.total_edits > 0);
@@ -1417,7 +1417,7 @@ mod tests {
     #[test]
     fn decision_ledger_serde_roundtrip() {
         let config = diagnostic_config();
-        let errors = vec![simple_error()];
+        let errors = [simple_error()];
         let ledger = run_recovery(&errors, 100, &config);
         let json = serde_json::to_string(&ledger).unwrap();
         let back: DecisionLedger = serde_json::from_str(&json).unwrap();
@@ -1499,7 +1499,7 @@ mod tests {
     #[test]
     fn attempt_has_rejected_actions() {
         let config = diagnostic_config();
-        let errors = vec![simple_error()];
+        let errors = [simple_error()];
         let ledger = run_recovery(&errors, 100, &config);
         assert_eq!(ledger.attempts[0].rejected_actions.len(), 2);
     }
@@ -1507,7 +1507,7 @@ mod tests {
     #[test]
     fn attempt_expected_losses_consistent() {
         let config = diagnostic_config();
-        let errors = vec![simple_error()];
+        let errors = [simple_error()];
         let ledger = run_recovery(&errors, 100, &config);
         let attempt = &ledger.attempts[0];
         // The selected action should have the minimum expected loss.
@@ -1787,7 +1787,7 @@ mod tests {
     #[test]
     fn repair_edit_serde_variants_distinct() {
         use std::collections::BTreeSet;
-        let variants = vec![
+        let variants = [
             RepairEdit::Insert {
                 offset: 0,
                 token_text: ";".into(),
@@ -1947,7 +1947,7 @@ mod tests {
 
     #[test]
     fn repair_edit_display_all_variants() {
-        let edits = vec![
+        let edits = [
             RepairEdit::Insert {
                 offset: 10,
                 token_text: ";".into(),
@@ -2171,7 +2171,7 @@ mod tests {
 
     #[test]
     fn repair_edit_serde_roundtrip_all_variants() {
-        let variants = vec![
+        let variants = [
             RepairEdit::Insert {
                 offset: 10,
                 token_text: "semicolon".into(),

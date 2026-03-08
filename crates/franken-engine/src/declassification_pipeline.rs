@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn policy_eval_result_serde_roundtrip() {
-        let results = vec![
+        let results = [
             PolicyEvalResult::RouteApproved {
                 route_id: "r1".to_string(),
                 conditions_met: vec!["c1".to_string()],
@@ -983,7 +983,7 @@ mod tests {
 
     #[test]
     fn pipeline_error_serde_roundtrip() {
-        let errors = vec![
+        let errors = [
             PipelineError::FlowAlreadyLegal {
                 source: Label::Public,
                 sink: Label::Internal,
@@ -1241,7 +1241,7 @@ mod tests {
 
     #[test]
     fn pipeline_error_display_all_variants() {
-        let variants: Vec<PipelineError> = vec![
+        let variants: [PipelineError; 7] = [
             PipelineError::FlowAlreadyLegal {
                 source: Label::Public,
                 sink: Label::Internal,
@@ -1323,7 +1323,7 @@ mod tests {
     #[test]
     fn pipeline_error_display_uniqueness_btreeset() {
         use std::collections::BTreeSet;
-        let variants: Vec<PipelineError> = vec![
+        let variants: [PipelineError; 7] = [
             PipelineError::FlowAlreadyLegal {
                 source: Label::Public,
                 sink: Label::Internal,
@@ -1525,7 +1525,7 @@ mod tests {
 
     #[test]
     fn pipeline_error_serde_all_variants() {
-        let variants: Vec<PipelineError> = vec![
+        let variants: [PipelineError; 6] = [
             PipelineError::FlowAlreadyLegal {
                 source: Label::Public,
                 sink: Label::Internal,
@@ -1647,7 +1647,7 @@ mod tests {
     #[test]
     fn policy_eval_result_debug_distinctness() {
         use std::collections::BTreeSet;
-        let variants = vec![
+        let variants = [
             PolicyEvalResult::RouteApproved {
                 route_id: "r1".into(),
                 conditions_met: vec!["c".into()],
@@ -1668,7 +1668,7 @@ mod tests {
     #[test]
     fn pipeline_error_debug_distinctness() {
         use std::collections::BTreeSet;
-        let variants: Vec<PipelineError> = vec![
+        let variants: [PipelineError; 7] = [
             PipelineError::FlowAlreadyLegal {
                 source: Label::Public,
                 sink: Label::Internal,
@@ -1713,7 +1713,7 @@ mod tests {
     #[test]
     fn pipeline_error_serde_variant_distinctness() {
         use std::collections::BTreeSet;
-        let variants: Vec<PipelineError> = vec![
+        let variants: [PipelineError; 7] = [
             PipelineError::FlowAlreadyLegal {
                 source: Label::Public,
                 sink: Label::Internal,
@@ -2334,7 +2334,7 @@ mod tests {
 
     #[test]
     fn pipeline_error_validation_serde_all_ifc_variants() {
-        let ifc_errors = vec![
+        let ifc_errors = [
             IfcValidationError::FullClaimHasUncoveredFlows {
                 claim_id: "c1".into(),
                 uncovered_count: 42,
@@ -2461,7 +2461,7 @@ mod tests {
 
     #[test]
     fn pipeline_error_debug_nonempty_all() {
-        let variants: Vec<PipelineError> = vec![
+        let variants: [PipelineError; 7] = [
             PipelineError::FlowAlreadyLegal {
                 source: Label::Public,
                 sink: Label::Internal,

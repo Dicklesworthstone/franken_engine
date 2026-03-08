@@ -664,7 +664,7 @@ impl GovernanceAuditLedger {
             .entries
             .iter()
             .filter(|entry| {
-                entry.timestamp_ns >= start_time_ns && entry.timestamp_ns <= end_time_ns
+                (start_time_ns..=end_time_ns).contains(&entry.timestamp_ns)
             })
             .collect();
         let total = filtered.len();
@@ -1509,7 +1509,7 @@ mod tests {
 
     #[test]
     fn governance_ledger_error_display_all_variants() {
-        let errors: Vec<GovernanceLedgerError> = vec![
+        let errors: [GovernanceLedgerError; 9] = [
             GovernanceLedgerError::InvalidConfig {
                 reason: "bad".to_string(),
             },
@@ -1540,7 +1540,7 @@ mod tests {
 
     #[test]
     fn governance_ledger_error_codes_are_unique() {
-        let errors: Vec<GovernanceLedgerError> = vec![
+        let errors: [GovernanceLedgerError; 9] = [
             GovernanceLedgerError::InvalidConfig {
                 reason: "".to_string(),
             },
@@ -1680,7 +1680,7 @@ mod tests {
 
     #[test]
     fn governance_ledger_error_serde_roundtrip() {
-        let errors: Vec<GovernanceLedgerError> = vec![
+        let errors: [GovernanceLedgerError; 3] = [
             GovernanceLedgerError::InvalidConfig {
                 reason: "bad".to_string(),
             },
@@ -2091,7 +2091,7 @@ mod tests {
 
     #[test]
     fn enrichment_error_display_strings_all_unique() {
-        let errors: Vec<GovernanceLedgerError> = vec![
+        let errors: [GovernanceLedgerError; 9] = [
             GovernanceLedgerError::InvalidConfig {
                 reason: "x".to_string(),
             },
@@ -2141,7 +2141,7 @@ mod tests {
     #[test]
     fn enrichment_governance_decision_type_ord_and_error_source() {
         // Verify Ord derivation works for GovernanceDecisionType
-        let mut types = vec![
+        let mut types = [
             GovernanceDecisionType::Override,
             GovernanceDecisionType::Promote,
             GovernanceDecisionType::Kill,

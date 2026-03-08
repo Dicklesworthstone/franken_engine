@@ -9,14 +9,17 @@ use frankenengine_metamorphic::relation::MetamorphicRelation;
 use frankenengine_metamorphic::relations::CatalogBackedRelation;
 use frankenengine_metamorphic::runner::{
     MinimizerConfig, RunContext, campaign_triage_report_for_suite, evidence_entries_for_suite,
-    generator_choice_stream_schema_for_suite, minimized_property_counterexamples_for_suite,
-    property_generator_catalog_for_suite, relation_log_events_for_suite,
-    repro_governance_actions_from_triage, run_suite, seed_manifest_for_suite,
-    seed_transcript_entries_for_suite, shrinker_verdict_report_for_suite,
-    write_campaign_triage_report_json, write_evidence_jsonl,
-    write_generator_choice_stream_schema_json, write_minimized_property_counterexamples_jsonl,
-    write_property_generator_catalog_json, write_repro_governance_actions_json,
-    write_seed_manifest_json, write_seed_transcript_jsonl, write_shrinker_verdict_report_json,
+    generator_choice_stream_schema_for_suite, hdd_reducer_report_for_suite,
+    minimized_property_counterexamples_for_suite, minimized_structured_repros_for_suite,
+    property_generator_catalog_for_suite, reduction_stability_matrix_for_suite,
+    relation_log_events_for_suite, repro_governance_actions_from_triage, run_suite,
+    seed_manifest_for_suite, seed_transcript_entries_for_suite, shrinker_verdict_report_for_suite,
+    structured_reduction_operator_catalog_for_suite, write_campaign_triage_report_json,
+    write_evidence_jsonl, write_generator_choice_stream_schema_json, write_hdd_reducer_report_json,
+    write_minimized_property_counterexamples_jsonl, write_minimized_structured_repros_jsonl,
+    write_property_generator_catalog_json, write_reduction_stability_matrix_json,
+    write_repro_governance_actions_json, write_seed_manifest_json, write_seed_transcript_jsonl,
+    write_shrinker_verdict_report_json, write_structured_reduction_operator_catalog_json,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -37,6 +40,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         PathBuf::from("artifacts/metamorphic/shrinker_verdict_report.json");
     let mut minimized_counterexamples_path =
         PathBuf::from("artifacts/metamorphic/minimized_property_counterexamples.jsonl");
+    let mut hdd_reducer_report_path =
+        PathBuf::from("artifacts/metamorphic/hdd_reducer_report.json");
+    let mut structured_reduction_operator_catalog_path =
+        PathBuf::from("artifacts/metamorphic/structured_reduction_operator_catalog.json");
+    let mut minimized_structured_repros_path =
+        PathBuf::from("artifacts/metamorphic/minimized_structured_repros.jsonl");
+    let mut reduction_stability_matrix_path =
+        PathBuf::from("artifacts/metamorphic/reduction_stability_matrix.json");
     let mut triage_report_path = PathBuf::from("artifacts/metamorphic/triage_report.json");
     let mut governance_actions_path =
         PathBuf::from("artifacts/metamorphic/repro_governance_actions.json");
@@ -125,6 +136,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
                 minimized_counterexamples_path = PathBuf::from(value);
             }
+            "--hdd-reducer-report" => {
+                let Some(value) = args.next() else {
+                    return Err("missing value for --hdd-reducer-report".into());
+                };
+                hdd_reducer_report_path = PathBuf::from(value);
+            }
+            "--structured-reduction-operator-catalog" => {
+                let Some(value) = args.next() else {
+                    return Err("missing value for --structured-reduction-operator-catalog".into());
+                };
+                structured_reduction_operator_catalog_path = PathBuf::from(value);
+            }
+            "--minimized-structured-repros" => {
+                let Some(value) = args.next() else {
+                    return Err("missing value for --minimized-structured-repros".into());
+                };
+                minimized_structured_repros_path = PathBuf::from(value);
+            }
+            "--reduction-stability-matrix" => {
+                let Some(value) = args.next() else {
+                    return Err("missing value for --reduction-stability-matrix".into());
+                };
+                reduction_stability_matrix_path = PathBuf::from(value);
+            }
             "--triage-report" => {
                 let Some(value) = args.next() else {
                     return Err("missing value for --triage-report".into());
@@ -195,6 +230,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(parent) = minimized_counterexamples_path.parent() {
         fs::create_dir_all(parent)?;
     }
+    if let Some(parent) = hdd_reducer_report_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = structured_reduction_operator_catalog_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = minimized_structured_repros_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = reduction_stability_matrix_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     if let Some(parent) = triage_report_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -251,13 +298,31 @@ fn main() -> Result<(), Box<dyn Error>> {
         &minimized_counterexamples_path,
         &minimized_counterexamples,
     )?;
+    let hdd_reducer_report = hdd_reducer_report_for_suite(&suite);
+    write_hdd_reducer_report_json(&hdd_reducer_report_path, &hdd_reducer_report)?;
+    let structured_reduction_operator_catalog =
+        structured_reduction_operator_catalog_for_suite(&suite);
+    write_structured_reduction_operator_catalog_json(
+        &structured_reduction_operator_catalog_path,
+        &structured_reduction_operator_catalog,
+    )?;
+    let minimized_structured_repros = minimized_structured_repros_for_suite(&suite);
+    write_minimized_structured_repros_jsonl(
+        &minimized_structured_repros_path,
+        &minimized_structured_repros,
+    )?;
+    let reduction_stability_matrix = reduction_stability_matrix_for_suite(&suite);
+    write_reduction_stability_matrix_json(
+        &reduction_stability_matrix_path,
+        &reduction_stability_matrix,
+    )?;
     let triage_report = campaign_triage_report_for_suite(&suite, &replay_command);
     write_campaign_triage_report_json(&triage_report_path, &triage_report)?;
     let governance_actions = repro_governance_actions_from_triage(&triage_report);
     write_repro_governance_actions_json(&governance_actions_path, &governance_actions)?;
 
     println!(
-        "metamorphic suite relations={} total_pairs={} violations={} evidence={} events={} seed_transcript={} seed_manifest={} property_generator_catalog={} generator_choice_stream_schema={} shrinker_verdict_report={} minimized_property_counterexamples={} triage_report={} governance_actions={} failures_dir={}",
+        "metamorphic suite relations={} total_pairs={} violations={} evidence={} events={} seed_transcript={} seed_manifest={} property_generator_catalog={} generator_choice_stream_schema={} shrinker_verdict_report={} minimized_property_counterexamples={} hdd_reducer_report={} structured_reduction_operator_catalog={} minimized_structured_repros={} reduction_stability_matrix={} triage_report={} governance_actions={} failures_dir={}",
         suite.relation_executions.len(),
         suite.total_pairs,
         suite.total_violations,
@@ -269,6 +334,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         generator_choice_stream_schema_path.display(),
         shrinker_verdict_report_path.display(),
         minimized_counterexamples_path.display(),
+        hdd_reducer_report_path.display(),
+        structured_reduction_operator_catalog_path.display(),
+        minimized_structured_repros_path.display(),
+        reduction_stability_matrix_path.display(),
         triage_report_path.display(),
         governance_actions_path.display(),
         failures_dir.display()

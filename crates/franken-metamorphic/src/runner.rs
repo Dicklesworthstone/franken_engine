@@ -84,6 +84,42 @@ struct FailureMinimization {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StructuredReductionOperator {
+    pub operator_id: String,
+    pub stage: String,
+    pub target: String,
+    pub description: String,
+    pub deterministic: bool,
+    pub preserves_validity: bool,
+    pub consumer_routes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StructuredReductionOperatorCatalogReport {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub relation_catalog_hash: String,
+    pub operator_count: usize,
+    pub operators: Vec<StructuredReductionOperator>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReductionStabilityCheck {
+    pub first_run_size_metric: usize,
+    pub second_run_size_metric: usize,
+    pub first_run_ast_metric: usize,
+    pub second_run_ast_metric: usize,
+    pub first_run_choice_count: usize,
+    pub second_run_choice_count: usize,
+    pub operators_match: bool,
+    pub replayable_choice_stream_match: bool,
+    pub stable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureArtifact {
     pub relation_id: String,
     pub seed: u64,
@@ -100,8 +136,11 @@ pub struct FailureRecord {
     pub pair_index: u32,
     pub seed: u64,
     pub generator_id: String,
+    pub structured_repro_id: String,
+    pub structured_repro_routes: Vec<String>,
     pub divergence_detail: String,
     pub minimized: bool,
+    pub failure_preserved: bool,
     pub minimized_pair: GeneratedPair,
     pub original_size_metric: usize,
     pub minimized_size_metric: usize,
@@ -110,8 +149,10 @@ pub struct FailureRecord {
     pub original_choice_count: usize,
     pub minimized_choice_count: usize,
     pub shrink_strategy: String,
+    pub structured_reduction_operator_ids: Vec<String>,
     pub choice_stream_reduced: bool,
     pub ddmin_reduced: bool,
+    pub reduction_stability: ReductionStabilityCheck,
     pub replayable_choice_stream: Option<ChoiceStream>,
     pub shrink_verdicts: Vec<ShrinkAttemptVerdict>,
     pub failure_file: Option<String>,
@@ -231,6 +272,100 @@ pub struct MinimizedPropertyCounterexample {
     pub choice_stream_reduced: bool,
     pub ddmin_reduced: bool,
     pub failure_file: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MinimizedStructuredRepro {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub relation_id: String,
+    pub pair_index: u32,
+    pub seed: u64,
+    pub generator_id: String,
+    pub structured_repro_id: String,
+    pub divergence_detail: String,
+    pub original_pair: GeneratedPair,
+    pub minimized_pair: GeneratedPair,
+    pub property_contract: PropertyContract,
+    pub operator_ids: Vec<String>,
+    pub routes: Vec<String>,
+    pub original_size_metric: usize,
+    pub minimized_size_metric: usize,
+    pub original_ast_metric: usize,
+    pub minimized_ast_metric: usize,
+    pub minimized_choice_count: usize,
+    pub reduction_stable: bool,
+    pub failure_file: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HddReducerEntry {
+    pub relation_id: String,
+    pub pair_index: u32,
+    pub seed: u64,
+    pub generator_id: String,
+    pub structured_repro_id: String,
+    pub divergence_detail: String,
+    pub operator_ids: Vec<String>,
+    pub routes: Vec<String>,
+    pub original_size_metric: usize,
+    pub minimized_size_metric: usize,
+    pub original_ast_metric: usize,
+    pub minimized_ast_metric: usize,
+    pub minimized_choice_count: usize,
+    pub choice_stream_reduced: bool,
+    pub ddmin_reduced: bool,
+    pub reduction_stable: bool,
+    pub failure_preserved: bool,
+    pub replayable_choice_stream: bool,
+    pub failure_file: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HddReducerReport {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub relation_catalog_hash: String,
+    pub total_failures: usize,
+    pub changed_failures: usize,
+    pub stable_failures: usize,
+    pub entries: Vec<HddReducerEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReductionStabilityEntry {
+    pub relation_id: String,
+    pub pair_index: u32,
+    pub seed: u64,
+    pub generator_id: String,
+    pub structured_repro_id: String,
+    pub first_run_size_metric: usize,
+    pub second_run_size_metric: usize,
+    pub first_run_ast_metric: usize,
+    pub second_run_ast_metric: usize,
+    pub first_run_choice_count: usize,
+    pub second_run_choice_count: usize,
+    pub operators_match: bool,
+    pub replayable_choice_stream_match: bool,
+    pub stable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReductionStabilityMatrixReport {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub relation_catalog_hash: String,
+    pub total_failures: usize,
+    pub stable_failures: usize,
+    pub entries: Vec<ReductionStabilityEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -553,6 +688,111 @@ impl RelationEvidenceEntry {
     }
 }
 
+fn structured_reduction_routes() -> Vec<String> {
+    vec![
+        "parity".to_string(),
+        "law_mining".to_string(),
+        "docs".to_string(),
+        "frontier_hole".to_string(),
+    ]
+}
+
+fn structured_reduction_operator_catalog() -> Vec<StructuredReductionOperator> {
+    let consumer_routes = structured_reduction_routes();
+    vec![
+        StructuredReductionOperator {
+            operator_id: "choice_stream_replay".to_string(),
+            stage: "choice_stream".to_string(),
+            target: "pair".to_string(),
+            description:
+                "Reduce recorded generator choices and replay the pair while preserving divergence."
+                    .to_string(),
+            deterministic: true,
+            preserves_validity: true,
+            consumer_routes: consumer_routes.clone(),
+        },
+        StructuredReductionOperator {
+            operator_id: "hierarchical_ddmin".to_string(),
+            stage: "ddmin".to_string(),
+            target: "pair".to_string(),
+            description:
+                "Apply ordered token, character, and trim passes to minimize a structured pair."
+                    .to_string(),
+            deterministic: true,
+            preserves_validity: true,
+            consumer_routes,
+        },
+    ]
+}
+
+fn structured_reduction_operator_ids_from_minimization(
+    minimization: &FailureMinimization,
+) -> Vec<String> {
+    let mut operator_ids = Vec::new();
+    if minimization.choice_stream_reduced {
+        operator_ids.push("choice_stream_replay".to_string());
+    }
+    if minimization.ddmin_reduced {
+        operator_ids.push("hierarchical_ddmin".to_string());
+    }
+    operator_ids
+}
+
+fn stable_structured_repro_id(
+    relation_id: &str,
+    seed: u64,
+    pair_index: u32,
+    divergence_detail: &str,
+    minimized_pair: &GeneratedPair,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(relation_id.as_bytes());
+    hasher.update(seed.to_le_bytes());
+    hasher.update(pair_index.to_le_bytes());
+    hasher.update(divergence_detail.as_bytes());
+    hasher.update(minimized_pair.input_source.as_bytes());
+    hasher.update(minimized_pair.variant_source.as_bytes());
+    format!("sr-{}", &hex::encode(hasher.finalize())[..16])
+}
+
+fn reduction_stability_check(
+    relation: &dyn MetamorphicRelation,
+    outcome: &RelationRunOutcome,
+    config: MinimizerConfig,
+    first: &FailureMinimization,
+) -> ReductionStabilityCheck {
+    let second = minimize_failure_outcome(relation, outcome, config);
+    let first_choice_count = first.replayable_choice_stream.as_ref().map_or(
+        outcome.choice_stream.choice_count(),
+        ChoiceStream::choice_count,
+    );
+    let second_choice_count = second.replayable_choice_stream.as_ref().map_or(
+        outcome.choice_stream.choice_count(),
+        ChoiceStream::choice_count,
+    );
+    let first_operators = structured_reduction_operator_ids_from_minimization(first);
+    let second_operators = structured_reduction_operator_ids_from_minimization(&second);
+    let replayable_choice_stream_match =
+        first.replayable_choice_stream == second.replayable_choice_stream;
+    let operators_match = first_operators == second_operators;
+    let stable = first.final_pair == second.final_pair
+        && first_choice_count == second_choice_count
+        && replayable_choice_stream_match
+        && operators_match;
+
+    ReductionStabilityCheck {
+        first_run_size_metric: first.final_pair.size_metric(),
+        second_run_size_metric: second.final_pair.size_metric(),
+        first_run_ast_metric: first.final_pair.ast_node_metric(),
+        second_run_ast_metric: second.final_pair.ast_node_metric(),
+        first_run_choice_count: first_choice_count,
+        second_run_choice_count: second_choice_count,
+        operators_match,
+        replayable_choice_stream_match,
+        stable,
+    }
+}
+
 pub fn run_relation_with_budget(
     relation: &dyn MetamorphicRelation,
     context: &RunContext,
@@ -584,14 +824,26 @@ pub fn run_relation_with_budget(
         if !outcome.equivalence.is_equivalent() {
             violations_found = violations_found.saturating_add(1);
             let minimization = minimize_failure_outcome(relation, &outcome, minimizer);
+            let structured_reduction_operator_ids =
+                structured_reduction_operator_ids_from_minimization(&minimization);
+            let reduction_stability =
+                reduction_stability_check(relation, &outcome, minimizer, &minimization);
             let minimized_pair = minimization.final_pair;
             let minimized = minimized_pair.size_metric() < outcome.pair.size_metric();
+            let failure_preserved = !relation.oracle(&minimized_pair).is_equivalent();
             let pair_size = minimized_pair.ast_node_metric();
             let divergence_detail = outcome
                 .equivalence
                 .detail()
                 .unwrap_or("unknown divergence")
                 .to_string();
+            let structured_repro_id = stable_structured_repro_id(
+                &relation.spec().id,
+                run_seed,
+                offset,
+                &divergence_detail,
+                &minimized_pair,
+            );
             min_failure_size = Some(match min_failure_size {
                 Some(existing) => existing.min(pair_size),
                 None => pair_size,
@@ -620,8 +872,11 @@ pub fn run_relation_with_budget(
                 pair_index: offset,
                 seed: run_seed,
                 generator_id: outcome.generator_id.clone(),
+                structured_repro_id,
+                structured_repro_routes: structured_reduction_routes(),
                 divergence_detail,
                 minimized,
+                failure_preserved,
                 minimized_pair: minimized_pair.clone(),
                 original_size_metric: outcome.pair.size_metric(),
                 minimized_size_metric: minimized_pair.size_metric(),
@@ -633,8 +888,10 @@ pub fn run_relation_with_budget(
                     ChoiceStream::choice_count,
                 ),
                 shrink_strategy: outcome.property_contract.shrink_strategy.clone(),
+                structured_reduction_operator_ids,
                 choice_stream_reduced: minimization.choice_stream_reduced,
                 ddmin_reduced: minimization.ddmin_reduced,
+                reduction_stability,
                 replayable_choice_stream: minimization.replayable_choice_stream,
                 shrink_verdicts: minimization.verdicts,
                 failure_file,
@@ -976,6 +1233,32 @@ pub fn write_generator_choice_stream_schema_json(
     fs::write(path, payload)
 }
 
+pub fn structured_reduction_operator_catalog_for_suite(
+    suite: &SuiteExecution,
+) -> StructuredReductionOperatorCatalogReport {
+    let operators = structured_reduction_operator_catalog();
+    StructuredReductionOperatorCatalogReport {
+        schema_version: "franken-engine.metamorphic.structured-reduction-operator-catalog.v1"
+            .to_string(),
+        trace_id: suite.trace_id.clone(),
+        decision_id: suite.decision_id.clone(),
+        policy_id: suite.policy_id.clone(),
+        component: suite.component.clone(),
+        relation_catalog_hash: suite.relation_catalog_hash.clone(),
+        operator_count: operators.len(),
+        operators,
+    }
+}
+
+pub fn write_structured_reduction_operator_catalog_json(
+    path: &Path,
+    catalog: &StructuredReductionOperatorCatalogReport,
+) -> std::io::Result<()> {
+    let payload = serde_json::to_vec_pretty(catalog)
+        .expect("structured reduction operator catalog serialization should succeed");
+    fs::write(path, payload)
+}
+
 pub fn minimized_property_counterexamples_for_suite(
     suite: &SuiteExecution,
 ) -> Vec<MinimizedPropertyCounterexample> {
@@ -1021,6 +1304,58 @@ pub fn write_minimized_property_counterexamples_jsonl(
     for counterexample in counterexamples {
         let json = serde_json::to_string(counterexample)
             .expect("minimized property counterexample serialization should succeed");
+        lines.push_str(&json);
+        lines.push('\n');
+    }
+    fs::write(path, lines)
+}
+
+pub fn minimized_structured_repros_for_suite(
+    suite: &SuiteExecution,
+) -> Vec<MinimizedStructuredRepro> {
+    suite
+        .relation_executions
+        .iter()
+        .flat_map(|execution| {
+            execution.failure_records.iter().filter_map(move |failure| {
+                let outcome = execution.outcomes.get(failure.pair_index as usize)?;
+                Some(MinimizedStructuredRepro {
+                    trace_id: suite.trace_id.clone(),
+                    decision_id: suite.decision_id.clone(),
+                    policy_id: suite.policy_id.clone(),
+                    component: suite.component.clone(),
+                    relation_id: execution.relation_id.clone(),
+                    pair_index: failure.pair_index,
+                    seed: failure.seed,
+                    generator_id: failure.generator_id.clone(),
+                    structured_repro_id: failure.structured_repro_id.clone(),
+                    divergence_detail: failure.divergence_detail.clone(),
+                    original_pair: outcome.pair.clone(),
+                    minimized_pair: failure.minimized_pair.clone(),
+                    property_contract: outcome.property_contract.clone(),
+                    operator_ids: failure.structured_reduction_operator_ids.clone(),
+                    routes: failure.structured_repro_routes.clone(),
+                    original_size_metric: failure.original_size_metric,
+                    minimized_size_metric: failure.minimized_size_metric,
+                    original_ast_metric: failure.original_ast_metric,
+                    minimized_ast_metric: failure.minimized_ast_metric,
+                    minimized_choice_count: failure.minimized_choice_count,
+                    reduction_stable: failure.reduction_stability.stable,
+                    failure_file: failure.failure_file.clone(),
+                })
+            })
+        })
+        .collect()
+}
+
+pub fn write_minimized_structured_repros_jsonl(
+    path: &Path,
+    repros: &[MinimizedStructuredRepro],
+) -> std::io::Result<()> {
+    let mut lines = String::new();
+    for repro in repros {
+        let json = serde_json::to_string(repro)
+            .expect("minimized structured repro serialization should succeed");
         lines.push_str(&json);
         lines.push('\n');
     }
@@ -1091,6 +1426,120 @@ pub fn write_shrinker_verdict_report_json(
     fs::write(path, payload)
 }
 
+pub fn hdd_reducer_report_for_suite(suite: &SuiteExecution) -> HddReducerReport {
+    let entries = suite
+        .relation_executions
+        .iter()
+        .flat_map(|execution| {
+            execution
+                .failure_records
+                .iter()
+                .map(|failure| HddReducerEntry {
+                    relation_id: execution.relation_id.clone(),
+                    pair_index: failure.pair_index,
+                    seed: failure.seed,
+                    generator_id: failure.generator_id.clone(),
+                    structured_repro_id: failure.structured_repro_id.clone(),
+                    divergence_detail: failure.divergence_detail.clone(),
+                    operator_ids: failure.structured_reduction_operator_ids.clone(),
+                    routes: failure.structured_repro_routes.clone(),
+                    original_size_metric: failure.original_size_metric,
+                    minimized_size_metric: failure.minimized_size_metric,
+                    original_ast_metric: failure.original_ast_metric,
+                    minimized_ast_metric: failure.minimized_ast_metric,
+                    minimized_choice_count: failure.minimized_choice_count,
+                    choice_stream_reduced: failure.choice_stream_reduced,
+                    ddmin_reduced: failure.ddmin_reduced,
+                    reduction_stable: failure.reduction_stability.stable,
+                    failure_preserved: failure.failure_preserved,
+                    replayable_choice_stream: failure.replayable_choice_stream.is_some(),
+                    failure_file: failure.failure_file.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+
+    HddReducerReport {
+        schema_version: "franken-engine.metamorphic.hdd-reducer-report.v1".to_string(),
+        trace_id: suite.trace_id.clone(),
+        decision_id: suite.decision_id.clone(),
+        policy_id: suite.policy_id.clone(),
+        component: suite.component.clone(),
+        relation_catalog_hash: suite.relation_catalog_hash.clone(),
+        total_failures: entries.len(),
+        changed_failures: entries
+            .iter()
+            .filter(|entry| entry.minimized_size_metric < entry.original_size_metric)
+            .count(),
+        stable_failures: entries
+            .iter()
+            .filter(|entry| entry.reduction_stable)
+            .count(),
+        entries,
+    }
+}
+
+pub fn write_hdd_reducer_report_json(
+    path: &Path,
+    report: &HddReducerReport,
+) -> std::io::Result<()> {
+    let payload =
+        serde_json::to_vec_pretty(report).expect("hdd reducer report serialization should succeed");
+    fs::write(path, payload)
+}
+
+pub fn reduction_stability_matrix_for_suite(
+    suite: &SuiteExecution,
+) -> ReductionStabilityMatrixReport {
+    let entries = suite
+        .relation_executions
+        .iter()
+        .flat_map(|execution| {
+            execution
+                .failure_records
+                .iter()
+                .map(|failure| ReductionStabilityEntry {
+                    relation_id: execution.relation_id.clone(),
+                    pair_index: failure.pair_index,
+                    seed: failure.seed,
+                    generator_id: failure.generator_id.clone(),
+                    structured_repro_id: failure.structured_repro_id.clone(),
+                    first_run_size_metric: failure.reduction_stability.first_run_size_metric,
+                    second_run_size_metric: failure.reduction_stability.second_run_size_metric,
+                    first_run_ast_metric: failure.reduction_stability.first_run_ast_metric,
+                    second_run_ast_metric: failure.reduction_stability.second_run_ast_metric,
+                    first_run_choice_count: failure.reduction_stability.first_run_choice_count,
+                    second_run_choice_count: failure.reduction_stability.second_run_choice_count,
+                    operators_match: failure.reduction_stability.operators_match,
+                    replayable_choice_stream_match: failure
+                        .reduction_stability
+                        .replayable_choice_stream_match,
+                    stable: failure.reduction_stability.stable,
+                })
+        })
+        .collect::<Vec<_>>();
+
+    ReductionStabilityMatrixReport {
+        schema_version: "franken-engine.metamorphic.reduction-stability-matrix.v1".to_string(),
+        trace_id: suite.trace_id.clone(),
+        decision_id: suite.decision_id.clone(),
+        policy_id: suite.policy_id.clone(),
+        component: suite.component.clone(),
+        relation_catalog_hash: suite.relation_catalog_hash.clone(),
+        total_failures: entries.len(),
+        stable_failures: entries.iter().filter(|entry| entry.stable).count(),
+        entries,
+    }
+}
+
+pub fn write_reduction_stability_matrix_json(
+    path: &Path,
+    report: &ReductionStabilityMatrixReport,
+) -> std::io::Result<()> {
+    let payload = serde_json::to_vec_pretty(report)
+        .expect("reduction stability matrix serialization should succeed");
+    fs::write(path, payload)
+}
+
 pub fn campaign_triage_report_for_suite(
     suite: &SuiteExecution,
     replay_command: &str,
@@ -1129,7 +1578,7 @@ pub fn campaign_triage_report_for_suite(
                     priority: severity.as_priority().to_string(),
                     owner_assignment,
                     divergence_detail: failure.divergence_detail.clone(),
-                    minimized_reproduction_id: failure.failure_file.clone(),
+                    minimized_reproduction_id: Some(failure.structured_repro_id.clone()),
                     deterministic_evidence_link,
                     replay_command: replay_command.to_string(),
                 }
@@ -2108,11 +2557,13 @@ mod tests {
     use super::{
         FindingClass, FindingSeverity, MinimizerConfig, RelationEvidenceEntry, RunContext,
         campaign_triage_report_for_suite, evidence_entries_for_suite,
-        generator_choice_stream_schema_for_suite, minimize_failure_pair,
-        minimized_property_counterexamples_for_suite, property_generator_catalog_for_suite,
-        relation_log_events_for_suite, repro_governance_actions_from_triage,
-        run_relation_with_budget, run_suite, seed_manifest_for_suite,
-        seed_transcript_entries_for_suite, shrinker_verdict_report_for_suite,
+        generator_choice_stream_schema_for_suite, hdd_reducer_report_for_suite,
+        minimize_failure_pair, minimized_property_counterexamples_for_suite,
+        minimized_structured_repros_for_suite, property_generator_catalog_for_suite,
+        reduction_stability_matrix_for_suite, relation_log_events_for_suite,
+        repro_governance_actions_from_triage, run_relation_with_budget, run_suite,
+        seed_manifest_for_suite, seed_transcript_entries_for_suite,
+        shrinker_verdict_report_for_suite, structured_reduction_operator_catalog_for_suite,
     };
 
     struct AlwaysPassRelation {
@@ -2623,6 +3074,80 @@ mod tests {
         assert_eq!(
             counterexamples[0].property_contract.expected_equivalence,
             "equivalent"
+        );
+
+        let operator_catalog = structured_reduction_operator_catalog_for_suite(&suite);
+        assert_eq!(operator_catalog.operator_count, 2);
+        assert!(
+            operator_catalog
+                .operators
+                .iter()
+                .any(|operator| operator.operator_id == "hierarchical_ddmin")
+        );
+
+        let hdd_report = hdd_reducer_report_for_suite(&suite);
+        assert_eq!(hdd_report.total_failures, 1);
+        assert_eq!(hdd_report.changed_failures, 1);
+        assert_eq!(hdd_report.stable_failures, 1);
+        assert_eq!(
+            hdd_report.entries[0].routes,
+            vec!["parity", "law_mining", "docs", "frontier_hole"]
+        );
+
+        let structured_repros = minimized_structured_repros_for_suite(&suite);
+        assert_eq!(structured_repros.len(), 1);
+        assert!(structured_repros[0].structured_repro_id.starts_with("sr-"));
+        assert!(structured_repros[0].reduction_stable);
+
+        let stability_matrix = reduction_stability_matrix_for_suite(&suite);
+        assert_eq!(stability_matrix.total_failures, 1);
+        assert_eq!(stability_matrix.stable_failures, 1);
+        assert!(stability_matrix.entries[0].stable);
+    }
+
+    #[test]
+    fn structured_repro_ids_and_routes_are_stable_for_identical_suite_inputs() {
+        let relation = SyntheticViolationRelation {
+            spec: RelationSpec {
+                id: "stable_structured_repro_relation".to_string(),
+                subsystem: Subsystem::Parser,
+                description: "stable structured repro".to_string(),
+                oracle: OracleKind::AstEquality,
+                budget_pairs: 1,
+                enabled: true,
+            },
+        };
+        let context = test_context();
+        let relation_refs: Vec<&dyn MetamorphicRelation> = vec![&relation];
+
+        let first = run_suite(
+            &relation_refs,
+            &context,
+            Some(1),
+            None,
+            MinimizerConfig::default(),
+        )
+        .expect("first suite should run");
+        let second = run_suite(
+            &relation_refs,
+            &context,
+            Some(1),
+            None,
+            MinimizerConfig::default(),
+        )
+        .expect("second suite should run");
+
+        assert_eq!(
+            minimized_structured_repros_for_suite(&first),
+            minimized_structured_repros_for_suite(&second)
+        );
+        assert_eq!(
+            reduction_stability_matrix_for_suite(&first),
+            reduction_stability_matrix_for_suite(&second)
+        );
+        assert_eq!(
+            hdd_reducer_report_for_suite(&first),
+            hdd_reducer_report_for_suite(&second)
         );
     }
 

@@ -554,6 +554,49 @@ fn frankenctl_dash_h_shows_help() {
 }
 
 #[test]
+fn frankenctl_subcommand_help_paths_show_usage() {
+    let cases: [(&[&str], &str); 12] = [
+        (&["compile", "--help"], "compile usage:"),
+        (&["run", "--help"], "run usage:"),
+        (&["doctor", "--help"], "doctor usage:"),
+        (&["verify", "--help"], "verify usage:"),
+        (
+            &["verify", "compile-artifact", "--help"],
+            "verify compile-artifact usage:",
+        ),
+        (&["verify", "receipt", "--help"], "verify receipt usage:"),
+        (&["benchmark", "--help"], "benchmark usage:"),
+        (&["benchmark", "run", "--help"], "benchmark run usage:"),
+        (&["benchmark", "score", "--help"], "benchmark score usage:"),
+        (
+            &["benchmark", "verify", "--help"],
+            "benchmark verify usage:",
+        ),
+        (&["replay", "--help"], "replay usage:"),
+        (&["replay", "run", "--help"], "replay run usage:"),
+    ];
+
+    for (args, expected) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args(args)
+            .output()
+            .expect("subcommand help should execute");
+        assert!(
+            output.status.success(),
+            "help invocation {:?} failed with stderr={}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+        assert!(
+            stdout.contains(expected),
+            "help invocation {:?} should contain `{expected}`, got stdout={stdout}",
+            args
+        );
+    }
+}
+
+#[test]
 fn frankenctl_unknown_command_fails() {
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .arg("nonexistent-command")

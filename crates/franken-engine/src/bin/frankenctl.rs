@@ -59,12 +59,48 @@ const CODE_BUNDLE_REMOTE_EXEC: &str = "FE-TPV-BUNDLE-0004";
 enum CommandSpec {
     Version,
     Help,
+    HelpTopic(HelpTopic),
     Compile(CompileArgs),
     Run(RunArgs),
     Doctor(Box<DoctorArgs>),
     Verify(VerifyArgs),
     Benchmark(BenchmarkArgs),
     Replay(ReplayArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HelpTopic {
+    Compile,
+    Run,
+    Doctor,
+    Verify,
+    VerifyCompileArtifact,
+    VerifyReceipt,
+    Benchmark,
+    BenchmarkRun,
+    BenchmarkScore,
+    BenchmarkVerify,
+    Replay,
+    ReplayRun,
+}
+
+impl HelpTopic {
+    fn render(self) -> String {
+        match self {
+            Self::Compile => compile_usage(),
+            Self::Run => run_usage(),
+            Self::Doctor => doctor_usage(),
+            Self::Verify => verify_usage(),
+            Self::VerifyCompileArtifact => verify_compile_artifact_usage(),
+            Self::VerifyReceipt => verify_receipt_usage(),
+            Self::Benchmark => benchmark_usage(),
+            Self::BenchmarkRun => benchmark_run_usage(),
+            Self::BenchmarkScore => benchmark_score_usage(),
+            Self::BenchmarkVerify => benchmark_verify_usage(),
+            Self::Replay => replay_usage(),
+            Self::ReplayRun => replay_run_usage(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +369,10 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
             println!("{}", usage());
             Ok(0)
         }
+        CommandSpec::HelpTopic(topic) => {
+            println!("{}", topic.render());
+            Ok(0)
+        }
         CommandSpec::Compile(args) => execute_compile(args),
         CommandSpec::Run(args) => execute_run(args),
         CommandSpec::Doctor(args) => execute_doctor(*args),
@@ -358,17 +398,21 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::Help),
         "version" => Ok(CommandSpec::Version),
-        "compile" => parse_compile_args(&args[1..]).map(CommandSpec::Compile),
-        "run" => parse_run_args(&args[1..]).map(CommandSpec::Run),
-        "doctor" => parse_doctor_args(&args[1..]).map(|args| CommandSpec::Doctor(Box::new(args))),
-        "verify" => parse_verify_args(&args[1..]).map(CommandSpec::Verify),
-        "benchmark" => parse_benchmark_args(&args[1..]).map(CommandSpec::Benchmark),
-        "replay" => parse_replay_args(&args[1..]).map(CommandSpec::Replay),
+        "compile" => parse_compile_command(&args[1..]),
+        "run" => parse_run_command(&args[1..]),
+        "doctor" => parse_doctor_command(&args[1..]),
+        "verify" => parse_verify_command(&args[1..]),
+        "benchmark" => parse_benchmark_command(&args[1..]),
+        "replay" => parse_replay_command(&args[1..]),
         other => Err(format!("unknown command `{other}`\n\n{}", usage())),
     }
 }
 
-fn parse_compile_args(args: &[String]) -> Result<CompileArgs, String> {
+fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Compile));
+    }
+
     let mut input: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut goal = ParseGoal::Script;
@@ -385,7 +429,6 @@ fn parse_compile_args(args: &[String]) -> Result<CompileArgs, String> {
             "--trace-id" => trace_id = next_arg(args, &mut index, "--trace-id")?,
             "--decision-id" => decision_id = next_arg(args, &mut index, "--decision-id")?,
             "--policy-id" => policy_id = next_arg(args, &mut index, "--policy-id")?,
-            "--help" | "-h" => return Ok(default_compile_help()),
             flag => return Err(format!("unknown compile flag `{flag}`")),
         }
         index += 1;
@@ -394,28 +437,21 @@ fn parse_compile_args(args: &[String]) -> Result<CompileArgs, String> {
     let input = input.ok_or_else(|| "compile requires --input <path>".to_string())?;
     let out = out.ok_or_else(|| "compile requires --out <path>".to_string())?;
 
-    Ok(CompileArgs {
+    Ok(CommandSpec::Compile(CompileArgs {
         input,
         out,
         parse_goal: goal,
         trace_id,
         decision_id,
         policy_id,
-    })
+    }))
 }
 
-fn default_compile_help() -> CompileArgs {
-    CompileArgs {
-        input: PathBuf::from(""),
-        out: PathBuf::from(""),
-        parse_goal: ParseGoal::Script,
-        trace_id: String::new(),
-        decision_id: String::new(),
-        policy_id: String::new(),
+fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Run));
     }
-}
 
-fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     let mut input: Option<PathBuf> = None;
     let mut extension_id: Option<String> = None;
     let mut goal = ParseGoal::Script;
@@ -433,15 +469,19 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
         index += 1;
     }
 
-    Ok(RunArgs {
+    Ok(CommandSpec::Run(RunArgs {
         input: input.ok_or_else(|| "run requires --input <path>".to_string())?,
         extension_id: extension_id.ok_or_else(|| "run requires --extension-id <id>".to_string())?,
         parse_goal: goal,
         out,
-    })
+    }))
 }
 
-fn parse_doctor_args(args: &[String]) -> Result<DoctorArgs, String> {
+fn parse_doctor_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Doctor));
+    }
+
     let mut input: Option<PathBuf> = None;
     let mut summary = false;
     let mut out_dir: Option<PathBuf> = None;
@@ -520,7 +560,7 @@ fn parse_doctor_args(args: &[String]) -> Result<DoctorArgs, String> {
         index += 1;
     }
 
-    Ok(DoctorArgs {
+    Ok(CommandSpec::Doctor(Box::new(DoctorArgs {
         input: input.ok_or_else(|| "doctor requires --input <runtime_input.json>".to_string())?,
         summary,
         out_dir,
@@ -533,84 +573,92 @@ fn parse_doctor_args(args: &[String]) -> Result<DoctorArgs, String> {
         platform_signals,
         filter,
         redact_keys,
-    })
+    })))
 }
 
-fn parse_verify_args(args: &[String]) -> Result<VerifyArgs, String> {
+fn parse_verify_command(args: &[String]) -> Result<CommandSpec, String> {
     if args.is_empty() {
         return Err("verify requires a subcommand: compile-artifact | receipt".to_string());
     }
     match args[0].as_str() {
-        "compile-artifact" => {
-            let mut input: Option<PathBuf> = None;
-            let mut index = 1usize;
-            while index < args.len() {
-                match args[index].as_str() {
-                    "--input" => {
-                        input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?))
-                    }
-                    flag => return Err(format!("unknown verify compile-artifact flag `{flag}`")),
-                }
-                index += 1;
-            }
-            Ok(VerifyArgs::CompileArtifact {
-                input: input.ok_or_else(|| {
-                    "verify compile-artifact requires --input <artifact.json>".to_string()
-                })?,
-            })
-        }
-        "receipt" => {
-            let mut input: Option<PathBuf> = None;
-            let mut receipt_id: Option<String> = None;
-            let mut summary = false;
-            let mut index = 1usize;
-            while index < args.len() {
-                match args[index].as_str() {
-                    "--input" => {
-                        input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?))
-                    }
-                    "--receipt-id" => {
-                        receipt_id = Some(next_arg(args, &mut index, "--receipt-id")?)
-                    }
-                    "--summary" => summary = true,
-                    flag => return Err(format!("unknown verify receipt flag `{flag}`")),
-                }
-                index += 1;
-            }
-            Ok(VerifyArgs::Receipt {
-                input: input.ok_or_else(|| "verify receipt requires --input <path>".to_string())?,
-                receipt_id: receipt_id
-                    .ok_or_else(|| "verify receipt requires --receipt-id <id>".to_string())?,
-                summary,
-            })
-        }
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Verify)),
+        "compile-artifact" => parse_verify_compile_artifact_command(&args[1..]),
+        "receipt" => parse_verify_receipt_command(&args[1..]),
         other => Err(format!(
             "unknown verify subcommand `{other}` (expected compile-artifact | receipt)"
         )),
     }
 }
 
-fn parse_benchmark_args(args: &[String]) -> Result<BenchmarkArgs, String> {
+fn parse_verify_compile_artifact_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::VerifyCompileArtifact));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            flag => return Err(format!("unknown verify compile-artifact flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::Verify(VerifyArgs::CompileArtifact {
+        input: input.ok_or_else(|| {
+            "verify compile-artifact requires --input <artifact.json>".to_string()
+        })?,
+    }))
+}
+
+fn parse_verify_receipt_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::VerifyReceipt));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut receipt_id: Option<String> = None;
+    let mut summary = false;
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--receipt-id" => receipt_id = Some(next_arg(args, &mut index, "--receipt-id")?),
+            "--summary" => summary = true,
+            flag => return Err(format!("unknown verify receipt flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::Verify(VerifyArgs::Receipt {
+        input: input.ok_or_else(|| "verify receipt requires --input <path>".to_string())?,
+        receipt_id: receipt_id
+            .ok_or_else(|| "verify receipt requires --receipt-id <id>".to_string())?,
+        summary,
+    }))
+}
+
+fn parse_benchmark_command(args: &[String]) -> Result<CommandSpec, String> {
     if args.is_empty() {
         return Err("benchmark requires a subcommand: run | score | verify".to_string());
     }
     match args[0].as_str() {
-        "run" => parse_benchmark_run_args(&args[1..]).map(|run| BenchmarkArgs {
-            mode: BenchmarkMode::Run(run),
-        }),
-        "score" => parse_benchmark_score_args(&args[1..]).map(|score| BenchmarkArgs {
-            mode: BenchmarkMode::Score(score),
-        }),
-        "verify" => parse_benchmark_verify_args(&args[1..]).map(|verify| BenchmarkArgs {
-            mode: BenchmarkMode::Verify(verify),
-        }),
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Benchmark)),
+        "run" => parse_benchmark_run_command(&args[1..]),
+        "score" => parse_benchmark_score_command(&args[1..]),
+        "verify" => parse_benchmark_verify_command(&args[1..]),
         other => Err(format!(
             "unknown benchmark subcommand `{other}` (expected run | score | verify)"
         )),
     }
 }
 
-fn parse_benchmark_run_args(args: &[String]) -> Result<BenchmarkRunArgs, String> {
+fn parse_benchmark_run_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::BenchmarkRun));
+    }
+
     let mut run_id = default_run_id("benchmark");
     let mut run_date = "1970-01-01".to_string();
     let mut seed = 42_u64;
@@ -645,17 +693,23 @@ fn parse_benchmark_run_args(args: &[String]) -> Result<BenchmarkRunArgs, String>
         families = BenchmarkFamily::all().to_vec();
     }
 
-    Ok(BenchmarkRunArgs {
-        run_id,
-        run_date,
-        seed,
-        out_dir,
-        profiles,
-        families,
-    })
+    Ok(CommandSpec::Benchmark(BenchmarkArgs {
+        mode: BenchmarkMode::Run(BenchmarkRunArgs {
+            run_id,
+            run_date,
+            seed,
+            out_dir,
+            profiles,
+            families,
+        }),
+    }))
 }
 
-fn parse_benchmark_score_args(args: &[String]) -> Result<BenchmarkScoreArgs, String> {
+fn parse_benchmark_score_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::BenchmarkScore));
+    }
+
     let mut input: Option<PathBuf> = None;
     let mut trace_id = "trace-frankenctl-benchmark-score".to_string();
     let mut decision_id = "decision-frankenctl-benchmark-score".to_string();
@@ -675,16 +729,22 @@ fn parse_benchmark_score_args(args: &[String]) -> Result<BenchmarkScoreArgs, Str
         index += 1;
     }
 
-    Ok(BenchmarkScoreArgs {
-        input: input.ok_or_else(|| "benchmark score requires --input <path>".to_string())?,
-        trace_id,
-        decision_id,
-        policy_id,
-        output,
-    })
+    Ok(CommandSpec::Benchmark(BenchmarkArgs {
+        mode: BenchmarkMode::Score(BenchmarkScoreArgs {
+            input: input.ok_or_else(|| "benchmark score requires --input <path>".to_string())?,
+            trace_id,
+            decision_id,
+            policy_id,
+            output,
+        }),
+    }))
 }
 
-fn parse_benchmark_verify_args(args: &[String]) -> Result<BenchmarkVerifyArgs, String> {
+fn parse_benchmark_verify_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::BenchmarkVerify));
+    }
+
     let mut bundle: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut summary = false;
@@ -700,23 +760,39 @@ fn parse_benchmark_verify_args(args: &[String]) -> Result<BenchmarkVerifyArgs, S
         index += 1;
     }
 
-    Ok(BenchmarkVerifyArgs {
-        bundle: bundle.ok_or_else(|| "benchmark verify requires --bundle <dir>".to_string())?,
-        output,
-        summary,
-    })
+    Ok(CommandSpec::Benchmark(BenchmarkArgs {
+        mode: BenchmarkMode::Verify(BenchmarkVerifyArgs {
+            bundle: bundle.ok_or_else(|| "benchmark verify requires --bundle <dir>".to_string())?,
+            output,
+            summary,
+        }),
+    }))
 }
 
-fn parse_replay_args(args: &[String]) -> Result<ReplayArgs, String> {
-    if args.first().map(|value| value.as_str()) != Some("run") {
+fn parse_replay_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
         return Err("replay requires subcommand `run`".to_string());
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Replay)),
+        "run" => parse_replay_run_command(&args[1..]),
+        other => Err(format!(
+            "unknown replay subcommand `{other}` (expected run)"
+        )),
+    }
+}
+
+fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ReplayRun));
     }
 
     let mut trace: Option<PathBuf> = None;
     let mut mode = ReplayMode::Strict;
     let mut out: Option<PathBuf> = None;
 
-    let mut index = 1usize;
+    let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
             "--trace" => trace = Some(PathBuf::from(next_arg(args, &mut index, "--trace")?)),
@@ -727,19 +803,19 @@ fn parse_replay_args(args: &[String]) -> Result<ReplayArgs, String> {
         index += 1;
     }
 
-    Ok(ReplayArgs {
+    Ok(CommandSpec::Replay(ReplayArgs {
         trace: trace.ok_or_else(|| "replay run requires --trace <path>".to_string())?,
         mode,
         out,
-    })
+    }))
+}
+
+fn has_help_flag(args: &[String]) -> bool {
+    args.iter()
+        .any(|value| matches!(value.as_str(), "--help" | "-h"))
 }
 
 fn execute_compile(args: CompileArgs) -> Result<i32, String> {
-    if args.input.as_os_str().is_empty() && args.out.as_os_str().is_empty() {
-        println!("{}", compile_usage());
-        return Ok(0);
-    }
-
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
     let source_label = args.input.display().to_string();
@@ -1821,6 +1897,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
     match command {
         CommandSpec::Version => "version",
         CommandSpec::Help => "help",
+        CommandSpec::HelpTopic(_) => "help",
         CommandSpec::Compile(_) => "compile",
         CommandSpec::Run(_) => "run",
         CommandSpec::Doctor(_) => "doctor",
@@ -1861,6 +1938,107 @@ fn compile_usage() -> String {
     .join("\n")
 }
 
+fn run_usage() -> String {
+    [
+        "run usage:",
+        "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+    ]
+    .join("\n")
+}
+
+fn doctor_usage() -> String {
+    [
+        "doctor usage:",
+        "  frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir <path>]",
+        "      [--workload-id <id>] [--package-name <name>] [--target-platform <value>]...",
+        "      [--signals <signals.json>] [--advisories <signals_or_bundle.json>]",
+        "      [--scenario-report <compatibility_scenario_report.json>] [--platform-signals <signals.json>]",
+        "      [--extension-id <id>] [--trace-id <id>] [--start-ns <u64>] [--end-ns <u64>]",
+        "      [--severity info|warning|critical] [--decision-type <snake_case_decision_type>]",
+        "      [--redact-key <key_fragment>]...",
+    ]
+    .join("\n")
+}
+
+fn verify_usage() -> String {
+    [
+        "verify usage:",
+        "  frankenctl verify compile-artifact --input <artifact.json>",
+        "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary]",
+    ]
+    .join("\n")
+}
+
+fn verify_compile_artifact_usage() -> String {
+    [
+        "verify compile-artifact usage:",
+        "  frankenctl verify compile-artifact --input <artifact.json>",
+    ]
+    .join("\n")
+}
+
+fn verify_receipt_usage() -> String {
+    [
+        "verify receipt usage:",
+        "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary]",
+    ]
+    .join("\n")
+}
+
+fn benchmark_usage() -> String {
+    [
+        "benchmark usage:",
+        "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
+        "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
+        "  frankenctl benchmark score --input <publication_gate_input.json>",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <results.json>]",
+        "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
+    ]
+    .join("\n")
+}
+
+fn benchmark_run_usage() -> String {
+    [
+        "benchmark run usage:",
+        "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
+        "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
+    ]
+    .join("\n")
+}
+
+fn benchmark_score_usage() -> String {
+    [
+        "benchmark score usage:",
+        "  frankenctl benchmark score --input <publication_gate_input.json>",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <results.json>]",
+    ]
+    .join("\n")
+}
+
+fn benchmark_verify_usage() -> String {
+    [
+        "benchmark verify usage:",
+        "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
+    ]
+    .join("\n")
+}
+
+fn replay_usage() -> String {
+    [
+        "replay usage:",
+        "  frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]",
+    ]
+    .join("\n")
+}
+
+fn replay_run_usage() -> String {
+    [
+        "replay run usage:",
+        "  frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]",
+    ]
+    .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1892,6 +2070,47 @@ mod tests {
             }
             other => panic!("expected compile command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_run_help_command() {
+        let args = vec!["run".to_string(), "--help".to_string()];
+        let parsed = parse_command(&args).expect("run --help should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::Run));
+    }
+
+    #[test]
+    fn parse_verify_help_commands() {
+        let top_level = vec!["verify".to_string(), "--help".to_string()];
+        let parsed = parse_command(&top_level).expect("verify --help should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::Verify));
+
+        let receipt = vec![
+            "verify".to_string(),
+            "receipt".to_string(),
+            "--help".to_string(),
+        ];
+        let parsed = parse_command(&receipt).expect("verify receipt --help should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::VerifyReceipt));
+    }
+
+    #[test]
+    fn parse_benchmark_and_replay_help_commands() {
+        let benchmark = vec![
+            "benchmark".to_string(),
+            "run".to_string(),
+            "--help".to_string(),
+        ];
+        let parsed = parse_command(&benchmark).expect("benchmark run --help should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::BenchmarkRun));
+
+        let replay = vec![
+            "replay".to_string(),
+            "run".to_string(),
+            "--help".to_string(),
+        ];
+        let parsed = parse_command(&replay).expect("replay run --help should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReplayRun));
     }
 
     #[test]

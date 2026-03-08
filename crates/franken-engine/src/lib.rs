@@ -164,6 +164,7 @@ pub mod parser_api_stability;
 pub mod parser_arena;
 pub mod parser_error_recovery;
 pub mod parser_evidence_indexer;
+pub mod parser_frontier_evidence;
 pub mod parser_gap_inventory;
 pub mod parser_multi_engine_harness;
 pub mod parser_oracle;

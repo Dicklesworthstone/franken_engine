@@ -1051,4 +1051,204 @@ mod tests {
                 .contains(&"module-cache-snapshot".to_string())
         );
     }
+
+    // ── schema constants ────────────────────────────────────────────
+
+    #[test]
+    fn schema_constants_start_with_franken_engine() {
+        assert!(super::SAFETY_CASE_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(super::STARVATION_REPORT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(super::LOOM_COVERAGE_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(super::ROLLOUT_GUARD_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(super::TRACE_IDS_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(super::RUN_MANIFEST_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(DOCS_CONTRACT_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn bead_and_predecessor_are_distinct() {
+        assert_ne!(super::BEAD_ID, super::PREDECESSOR_BEAD_ID);
+        assert!(!super::BEAD_ID.is_empty());
+        assert!(!super::PREDECESSOR_BEAD_ID.is_empty());
+    }
+
+    // ── enum serde round-trips ──────────────────────────────────────
+
+    #[test]
+    fn guard_evidence_verdict_serde_round_trip() {
+        for v in [
+            GuardEvidenceVerdict::Pass,
+            GuardEvidenceVerdict::Missing,
+            GuardEvidenceVerdict::Fail,
+        ] {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, back);
+        }
+    }
+
+    // ── accepted_candidates ─────────────────────────────────────────
+
+    #[test]
+    fn accepted_candidates_returns_three() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        assert_eq!(candidates.len(), 3);
+    }
+
+    #[test]
+    fn accepted_candidates_are_sorted_by_id() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let ids: Vec<_> = candidates.iter().map(|c| c.candidate_id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+    }
+
+    #[test]
+    fn all_accepted_candidates_have_accept_disposition() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        for candidate in &candidates {
+            assert_eq!(
+                candidate.disposition,
+                frankenengine_engine::seqlock_candidate_inventory::CandidateDisposition::Accept,
+                "candidate {} should be accepted",
+                candidate.candidate_id
+            );
+        }
+    }
+
+    // ── starvation microbench ───────────────────────────────────────
+
+    #[test]
+    fn all_candidates_pass_starvation_microbench() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        for candidate in &candidates {
+            let report = run_starvation_microbench(candidate);
+            assert_eq!(
+                report.verdict,
+                GuardEvidenceVerdict::Pass,
+                "starvation failed for {}",
+                candidate.candidate_id
+            );
+            assert_eq!(report.observations.len(), 3);
+        }
+    }
+
+    #[test]
+    fn starvation_microbench_fallback_reads_match_burst_writes() {
+        let candidate = accepted_candidates("2026-03-06T00:00:00Z")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let report = run_starvation_microbench(&candidate);
+        assert_eq!(report.telemetry.fallback_reads, report.burst_writes as u64);
+        assert_eq!(report.telemetry.fast_path_reads, report.burst_writes as u64);
+    }
+
+    // ── model check missing ─────────────────────────────────────────
+
+    #[test]
+    fn model_check_missing_for_all_candidates() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        for candidate in &candidates {
+            let row = build_missing_model_check_row(candidate);
+            assert_eq!(row.verdict, GuardEvidenceVerdict::Missing);
+            assert_eq!(row.loom_schedule_count, 0);
+            assert!(!row.manual_schedule_cases.is_empty());
+        }
+    }
+
+    // ── safety case logic ───────────────────────────────────────────
+
+    #[test]
+    fn safety_case_disallows_rollout_when_model_check_missing() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        for candidate in &candidates {
+            let starvation = run_starvation_microbench(candidate);
+            let model_check = build_missing_model_check_row(candidate);
+            let safety = build_safety_case_row(candidate, &starvation, &model_check);
+            assert!(!safety.rollout_allowed);
+            assert!(safety.disable_reasons.contains(&"model_check_evidence_missing".to_string()));
+        }
+    }
+
+    // ── required_artifact_names ─────────────────────────────────────
+
+    #[test]
+    fn required_artifact_names_are_unique_and_sorted() {
+        let names = super::required_artifact_names();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+        let deduped: std::collections::BTreeSet<_> = names.iter().collect();
+        assert_eq!(deduped.len(), names.len());
+    }
+
+    #[test]
+    fn required_artifact_names_include_core_files() {
+        let names = super::required_artifact_names();
+        assert!(names.contains(&"seqlock_safety_case.json".to_string()));
+        assert!(names.contains(&"seqlock_rollout_guard.json".to_string()));
+        assert!(names.contains(&"starvation_microbench_report.json".to_string()));
+        assert!(names.contains(&"manifest.json".to_string()));
+    }
+
+    // ── render_summary ──────────────────────────────────────────────
+
+    #[test]
+    fn render_summary_contains_header_and_sections() {
+        let artifact_dir = temp_dir("summary-sections");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        context.command_invocation = "test".to_string();
+        let bundle = emit_default_rollout_bundle(&context).expect("bundle");
+        let summary = render_summary(&bundle.safety_case, &bundle.rollout_guard);
+        assert!(summary.contains("# Seqlock Rollout Guard Summary"));
+        assert!(summary.contains("## Enabled"));
+        assert!(summary.contains("## Disabled"));
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+    }
+
+    // ── docs fixture properties ─────────────────────────────────────
+
+    #[test]
+    fn docs_fixture_disabled_candidates_are_sorted() {
+        let fixture = build_docs_contract_fixture();
+        let mut sorted = fixture.default_disabled_candidates.clone();
+        sorted.sort();
+        assert_eq!(fixture.default_disabled_candidates, sorted);
+    }
+
+    #[test]
+    fn docs_fixture_required_artifacts_are_non_empty() {
+        let fixture = build_docs_contract_fixture();
+        assert!(!fixture.required_artifacts.is_empty());
+    }
+
+    // ── serde round-trips ───────────────────────────────────────────
+
+    #[test]
+    fn candidate_rollout_input_serde_round_trip() {
+        let input = super::CandidateRolloutInput {
+            candidate_id: "test".to_string(),
+            surface_name: "surface".to_string(),
+            module_path: "crate::test".to_string(),
+            incumbent_baseline: "rwlock".to_string(),
+            disposition: frankenengine_engine::seqlock_candidate_inventory::CandidateDisposition::Accept,
+            retry_budget_policy: frankenengine_engine::seqlock_fastpath::RetryBudgetPolicy::new(3, 1),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        let back: super::CandidateRolloutInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(input, back);
+    }
+
+    #[test]
+    fn artifact_context_defaults_are_reasonable() {
+        let ctx = ArtifactContext::new("/tmp/test-rollout");
+        assert!(ctx.run_id.starts_with("run-seqlock_rollout_guard-"));
+        assert!(!ctx.trace_id.is_empty());
+        assert!(!ctx.decision_id.is_empty());
+        assert!(!ctx.policy_id.is_empty());
+    }
 }

@@ -839,6 +839,162 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_constants_are_non_empty() {
+        assert!(!ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_TRACE_IDS_SCHEMA_VERSION.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_COMPONENT.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_POLICY_ID.is_empty());
+        assert!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT > 0);
+    }
+
+    #[test]
+    fn zero_placeholder_subsystem_all_has_four_variants() {
+        assert_eq!(ZeroPlaceholderSubsystem::ALL.len(), 4);
+    }
+
+    #[test]
+    fn zero_placeholder_subsystem_serde_round_trip() {
+        for subsystem in ZeroPlaceholderSubsystem::ALL {
+            let json = serde_json::to_string(&subsystem).unwrap();
+            let back: ZeroPlaceholderSubsystem = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, subsystem);
+            assert!(!subsystem.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn zero_placeholder_status_serde_round_trip() {
+        for status in [
+            ZeroPlaceholderStatus::OpenPlaceholder,
+            ZeroPlaceholderStatus::FailClosed,
+            ZeroPlaceholderStatus::Resolved,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let back: ZeroPlaceholderStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, status);
+            assert!(!status.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn zero_placeholder_severity_serde_round_trip() {
+        for severity in [
+            ZeroPlaceholderSeverity::High,
+            ZeroPlaceholderSeverity::Medium,
+            ZeroPlaceholderSeverity::Low,
+        ] {
+            let json = serde_json::to_string(&severity).unwrap();
+            let back: ZeroPlaceholderSeverity = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, severity);
+            assert!(!severity.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn severity_maps_correctly_from_status() {
+        assert_eq!(
+            severity_for_status(ZeroPlaceholderStatus::OpenPlaceholder),
+            ZeroPlaceholderSeverity::High
+        );
+        assert_eq!(
+            severity_for_status(ZeroPlaceholderStatus::FailClosed),
+            ZeroPlaceholderSeverity::Medium
+        );
+        assert_eq!(
+            severity_for_status(ZeroPlaceholderStatus::Resolved),
+            ZeroPlaceholderSeverity::Low
+        );
+    }
+
+    #[test]
+    fn finding_ids_are_unique() {
+        let inventory = zero_placeholder_scan_inventory();
+        let ids: std::collections::BTreeSet<&str> = inventory
+            .findings
+            .iter()
+            .map(|finding| finding.finding_id.as_str())
+            .collect();
+        assert_eq!(ids.len(), inventory.findings.len());
+    }
+
+    #[test]
+    fn subsystem_summaries_cover_all_subsystems() {
+        let inventory = zero_placeholder_scan_inventory();
+        let summaries = inventory.subsystem_summaries();
+        assert_eq!(summaries.len(), ZeroPlaceholderSubsystem::ALL.len());
+
+        let total_from_summaries: u64 = summaries.iter().map(|s| s.finding_count).sum();
+        assert_eq!(total_from_summaries as usize, inventory.findings.len());
+
+        for summary in &summaries {
+            assert_eq!(
+                summary.finding_count,
+                summary.open_placeholder_finding_count
+                    + summary.fail_closed_finding_count
+                    + summary.resolved_finding_count
+            );
+        }
+    }
+
+    #[test]
+    fn zero_placeholder_finding_serde_round_trip() {
+        let finding = ZeroPlaceholderFinding {
+            finding_id: "test::finding".to_string(),
+            subsystem: ZeroPlaceholderSubsystem::Runtime,
+            status: ZeroPlaceholderStatus::OpenPlaceholder,
+            severity: ZeroPlaceholderSeverity::High,
+            owner: "test_owner".to_string(),
+            owner_bead_id: "bd-test".to_string(),
+            subject_area: "test.area".to_string(),
+            source_reference: "src/test.rs".to_string(),
+            observed_behavior: "observed".to_string(),
+            required_behavior: "required".to_string(),
+            diagnostic_code: Some("FE-TEST-0001".to_string()),
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        let back: ZeroPlaceholderFinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, finding);
+    }
+
+    #[test]
+    fn zero_placeholder_scan_event_serde_round_trip() {
+        let event = ZeroPlaceholderScanEvent {
+            schema_version: ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-1".to_string(),
+            decision_id: "decision-1".to_string(),
+            policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            event: "finding_recorded".to_string(),
+            outcome: "open_placeholder".to_string(),
+            subsystem: Some(ZeroPlaceholderSubsystem::Parser),
+            finding_id: Some("parser::test".to_string()),
+            detail: Some("test detail".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ZeroPlaceholderScanEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_reports_all_mismatches() {
+        let contract = DocsHelpSurfaceAuditContract {
+            policy_id: "test-policy".to_string(),
+            required_help_fragments: vec!["required_help".to_string()],
+            banned_help_fragments: vec![],
+            required_readme_fragments: vec!["required_readme".to_string()],
+            banned_readme_fragments: vec!["banned_readme".to_string()],
+        };
+        let (status, _, detail) =
+            evaluate_cli_docs_truth_guard(&contract, "banned_readme present", "no match");
+        assert_eq!(status, ZeroPlaceholderStatus::FailClosed);
+        assert!(detail.contains("missing README fragment"));
+        assert!(detail.contains("banned README fragment present"));
+        assert!(detail.contains("missing help fragment"));
+    }
+
+    #[test]
     fn zero_placeholder_inventory_aggregates_all_subsystems() {
         let inventory = zero_placeholder_scan_inventory();
         assert_eq!(

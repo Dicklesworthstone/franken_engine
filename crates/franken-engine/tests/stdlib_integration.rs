@@ -2041,6 +2041,53 @@ fn heap_map_internal_reads_fail_closed_on_inherited_hidden_slots() {
 }
 
 #[test]
+fn heap_array_internal_reads_fail_closed_on_inherited_element_slots() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let array = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap();
+
+    heap.delete_property(array, &PropertyKey::from("0")).unwrap();
+    heap.define_property(
+        env.prototypes.array_prototype,
+        PropertyKey::from("0"),
+        PropertyDescriptor::data(JsValue::Int(99 * FP_SCALE)),
+    )
+    .unwrap();
+
+    let err = read_array_elements(&heap, array).unwrap_err();
+    assert!(matches!(err, StdlibError::TypeError(msg) if msg.contains("own data property")));
+}
+
+#[test]
+fn heap_map_internal_reads_fail_closed_on_inherited_entry_slots() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let map = alloc_map_instance(
+        &mut heap,
+        env.prototypes.map_prototype,
+        &[(JsValue::Str("alpha".into()), JsValue::Int(FP_SCALE))],
+    )
+    .unwrap();
+
+    heap.delete_property(map, &PropertyKey::from("[[MapValue]]:0"))
+        .unwrap();
+    heap.define_property(
+        env.prototypes.map_prototype,
+        PropertyKey::from("[[MapValue]]:0"),
+        PropertyDescriptor::data(JsValue::Int(99 * FP_SCALE)),
+    )
+    .unwrap();
+
+    let err = read_map_entries(&heap, map).unwrap_err();
+    assert!(matches!(err, StdlibError::TypeError(msg) if msg.contains("own data property")));
+}
+
+#[test]
 fn heap_set_internal_reads_fail_closed_on_inherited_hidden_slots() {
     let mut heap = ObjectHeap::new();
     let env = install_stdlib(&mut heap);
@@ -2059,6 +2106,30 @@ fn heap_set_internal_reads_fail_closed_on_inherited_hidden_slots() {
         PropertyDescriptor::data(JsValue::Int(FP_SCALE)),
     )
     .unwrap();
+    heap.define_property(
+        env.prototypes.set_prototype,
+        PropertyKey::from("[[SetValue]]:0"),
+        PropertyDescriptor::data(JsValue::Int(99 * FP_SCALE)),
+    )
+    .unwrap();
+
+    let err = read_set_values(&heap, set).unwrap_err();
+    assert!(matches!(err, StdlibError::TypeError(msg) if msg.contains("own data property")));
+}
+
+#[test]
+fn heap_set_internal_reads_fail_closed_on_inherited_value_slots() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let set = alloc_set_instance(
+        &mut heap,
+        env.prototypes.set_prototype,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap();
+
+    heap.delete_property(set, &PropertyKey::from("[[SetValue]]:0"))
+        .unwrap();
     heap.define_property(
         env.prototypes.set_prototype,
         PropertyKey::from("[[SetValue]]:0"),

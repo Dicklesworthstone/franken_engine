@@ -1822,6 +1822,184 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_constants_are_non_empty() {
+        assert!(!BEAD_ID.is_empty());
+        assert!(!PREDECESSOR_BEAD_ID.is_empty());
+        assert!(!COMPONENT.is_empty());
+        assert!(!INVENTORY_SCHEMA_VERSION.is_empty());
+        assert!(!RETRY_SAFETY_SCHEMA_VERSION.is_empty());
+        assert!(!BASELINE_COMPARATOR_SCHEMA_VERSION.is_empty());
+        assert!(!READER_WRITER_CONTRACT_SCHEMA_VERSION.is_empty());
+        assert!(!RETRY_BUDGET_POLICY_SCHEMA_VERSION.is_empty());
+        assert!(!INCUMBENT_FALLBACK_MATRIX_SCHEMA_VERSION.is_empty());
+        assert!(!TRACE_IDS_SCHEMA_VERSION.is_empty());
+        assert!(!RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!CONTRACT_SCHEMA_VERSION.is_empty());
+        assert_ne!(BEAD_ID, PREDECESSOR_BEAD_ID);
+    }
+
+    #[test]
+    fn candidate_disposition_serde_round_trip() {
+        for disposition in [
+            CandidateDisposition::Accept,
+            CandidateDisposition::Conditional,
+            CandidateDisposition::Reject,
+        ] {
+            let json = serde_json::to_string(&disposition).unwrap();
+            let back: CandidateDisposition = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, disposition);
+        }
+    }
+
+    #[test]
+    fn surface_area_serde_round_trip() {
+        for area in [
+            SurfaceArea::GovernanceState,
+            SurfaceArea::OfflineArtifact,
+            SurfaceArea::OperatorProjection,
+            SurfaceArea::PolicyState,
+            SurfaceArea::RuntimeMetadata,
+            SurfaceArea::Telemetry,
+        ] {
+            let json = serde_json::to_string(&area).unwrap();
+            let back: SurfaceArea = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, area);
+        }
+    }
+
+    #[test]
+    fn baseline_strategy_serde_round_trip() {
+        for strategy in [
+            BaselineStrategy::CloneSnapshot,
+            BaselineStrategy::ExternalJoinProjection,
+            BaselineStrategy::ImmutableValueObject,
+            BaselineStrategy::MutableSnapshotSideEffect,
+            BaselineStrategy::OfflineSummary,
+            BaselineStrategy::QueryAppendOnly,
+        ] {
+            let json = serde_json::to_string(&strategy).unwrap();
+            let back: BaselineStrategy = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, strategy);
+        }
+    }
+
+    #[test]
+    fn tearing_risk_serde_round_trip() {
+        for risk in [
+            TearingRisk::None,
+            TearingRisk::Low,
+            TearingRisk::Medium,
+            TearingRisk::High,
+        ] {
+            let json = serde_json::to_string(&risk).unwrap();
+            let back: TearingRisk = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, risk);
+        }
+    }
+
+    #[test]
+    fn write_profile_serde_round_trip() {
+        for profile in [
+            WriteProfile::Rare,
+            WriteProfile::Moderate,
+            WriteProfile::Bursty,
+            WriteProfile::HotPath,
+        ] {
+            let json = serde_json::to_string(&profile).unwrap();
+            let back: WriteProfile = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, profile);
+        }
+    }
+
+    #[test]
+    fn fallback_reason_serde_round_trip() {
+        for reason in [
+            FallbackReason::UnsupportedCandidate,
+            FallbackReason::WriterActive,
+            FallbackReason::RetryBudgetExhausted,
+            FallbackReason::ExternalJoinBoundary,
+            FallbackReason::ImmutableValueObject,
+            FallbackReason::HotPathWritePressure,
+            FallbackReason::NonRetrySafeRead,
+        ] {
+            let json = serde_json::to_string(&reason).unwrap();
+            let back: FallbackReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, reason);
+        }
+    }
+
+    #[test]
+    fn candidate_ids_are_unique() {
+        let inventory = default_candidate_inventory("2026-03-06T00:00:00Z");
+        let ids: std::collections::BTreeSet<&str> = inventory
+            .candidates
+            .iter()
+            .map(|c| c.candidate_id.as_str())
+            .collect();
+        assert_eq!(ids.len(), inventory.candidates.len());
+    }
+
+    #[test]
+    fn candidate_counts_default_is_zero() {
+        let counts = CandidateCounts::default();
+        assert_eq!(counts.accept, 0);
+        assert_eq!(counts.conditional, 0);
+        assert_eq!(counts.reject, 0);
+    }
+
+    #[test]
+    fn artifact_context_defaults() {
+        let ctx = ArtifactContext::new("/tmp/test");
+        assert_eq!(ctx.artifact_dir, PathBuf::from("/tmp/test"));
+        assert!(ctx.run_id.starts_with("run-"));
+        assert_eq!(ctx.trace_id, "trace.rgc.621b");
+        assert_eq!(ctx.decision_id, "decision.rgc.621b");
+        assert_eq!(ctx.policy_id, "policy.rgc.621b");
+        assert_eq!(ctx.source_commit, "unknown");
+    }
+
+    #[test]
+    fn render_summary_contains_expected_sections() {
+        let inventory = default_candidate_inventory("2026-03-06T00:00:00Z");
+        let summary = render_summary(&inventory);
+        assert!(summary.contains("# Seqlock Candidate Inventory Summary"));
+        assert!(summary.contains("## Accepted"));
+        assert!(summary.contains("## Conditional"));
+        assert!(summary.contains("## Rejected"));
+        assert!(summary.contains(&format!("bead_id: `{}`", BEAD_ID)));
+        assert!(summary.contains(&format!("component: `{}`", COMPONENT)));
+    }
+
+    #[test]
+    fn candidate_inventory_entry_serde_round_trip() {
+        let entry = CandidateInventoryEntry {
+            candidate_id: "test-candidate".to_string(),
+            surface_name: "Test surface".to_string(),
+            module_path: "src/test.rs".to_string(),
+            api_path: "test::api".to_string(),
+            surface_area: SurfaceArea::Telemetry,
+            baseline_path: "test baseline".to_string(),
+            incumbent_baseline: "existing".to_string(),
+            baseline_strategy: BaselineStrategy::CloneSnapshot,
+            disposition: CandidateDisposition::Accept,
+            shared_mutable_state: true,
+            read_side_effect_free: true,
+            retry_safe_read: true,
+            requires_atomic_multi_structure_view: false,
+            requires_external_input_join: false,
+            immutable_value_object: false,
+            write_profile: WriteProfile::Moderate,
+            tearing_risk: TearingRisk::Low,
+            classification_rationale: vec!["reason 1".to_string()],
+            exact_fallback_conditions: vec!["condition 1".to_string()],
+            notes: vec!["note 1".to_string()],
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: CandidateInventoryEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, entry);
+    }
+
+    #[test]
     fn default_inventory_counts_are_stable() {
         let inventory = default_candidate_inventory("2026-03-06T00:00:00Z");
         assert_eq!(inventory.counts.accept, 3);

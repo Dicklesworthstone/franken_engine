@@ -1297,4 +1297,182 @@ mod tests {
 
         let _ = fs::remove_dir_all(&artifact_dir);
     }
+
+    // ── schema constants ────────────────────────────────────────────
+
+    #[test]
+    fn schema_constants_start_with_franken_engine() {
+        assert!(CONTRACT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(RECEIPT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(ROLLBACK_PLAN_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(TRACE_IDS_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(RUN_MANIFEST_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(DOCS_CONTRACT_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn bead_and_component_are_non_empty() {
+        assert!(!BEAD_ID.is_empty());
+        assert!(!COMPONENT.is_empty());
+    }
+
+    // ── error codes ─────────────────────────────────────────────────
+
+    #[test]
+    fn error_codes_are_distinct() {
+        let codes = [
+            PersistentCacheContractError::MissingEntry {
+                module_id: String::new(),
+                cache_key_id: String::new(),
+            }
+            .error_code(),
+            PersistentCacheContractError::ReceiptFieldMismatch {
+                field: "x",
+                expected: String::new(),
+                actual: String::new(),
+            }
+            .error_code(),
+            PersistentCacheContractError::RollbackTargetMissing {
+                receipt_id: String::new(),
+            }
+            .error_code(),
+            PersistentCacheContractError::EmptyRollbackCriteria.error_code(),
+        ];
+        let unique: std::collections::BTreeSet<_> = codes.iter().collect();
+        assert_eq!(unique.len(), codes.len());
+    }
+
+    #[test]
+    fn error_display_includes_error_code() {
+        let err = PersistentCacheContractError::MissingEntry {
+            module_id: "mod:test".to_string(),
+            cache_key_id: "sha256:abc".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("FE-PCACHE-0001"));
+        assert!(msg.contains("mod:test"));
+    }
+
+    #[test]
+    fn empty_rollback_criteria_rejected() {
+        let plan = CacheRollbackPlan {
+            schema_version: ROLLBACK_PLAN_SCHEMA_VERSION.to_string(),
+            trigger: "manual".to_string(),
+            rollback_receipt_id: "r1".to_string(),
+            rollback_cache_key_id: "key1".to_string(),
+            criteria: vec![],
+            fail_closed: false,
+        };
+        let err = apply_rollback_plan(&plan, &[]).unwrap_err();
+        assert_eq!(err.error_code(), "FE-PCACHE-0004");
+    }
+
+    // ── cache_key_id properties ─────────────────────────────────────
+
+    #[test]
+    fn cache_key_id_differs_for_different_sources() {
+        let fp1 = ModuleVersionFingerprint::new(ContentHash::compute(b"src-a"), 1, 1);
+        let fp2 = ModuleVersionFingerprint::new(ContentHash::compute(b"src-b"), 1, 1);
+        let m1 = PersistentCacheKeyMaterial::from_fingerprint(
+            "mod:a", &fp1, ContentHash::compute(b"cfg"), ContentHash::compute(b"deps"),
+            "lower_ir3", "profile", "0.1.0",
+        );
+        let m2 = PersistentCacheKeyMaterial::from_fingerprint(
+            "mod:a", &fp2, ContentHash::compute(b"cfg"), ContentHash::compute(b"deps"),
+            "lower_ir3", "profile", "0.1.0",
+        );
+        assert_ne!(m1.cache_key_id(), m2.cache_key_id());
+    }
+
+    #[test]
+    fn cache_key_id_is_hex_sha256() {
+        let fp = ModuleVersionFingerprint::new(ContentHash::compute(b"source"), 1, 1);
+        let material = PersistentCacheKeyMaterial::from_fingerprint(
+            "mod:test", &fp, ContentHash::compute(b"cfg"), ContentHash::compute(b"deps"),
+            "lower_ir3", "profile", "0.1.0",
+        );
+        let key = material.cache_key_id();
+        assert!(key.starts_with("sha256:"));
+        assert_eq!(key.len(), 7 + 64); // "sha256:" + 64 hex chars
+    }
+
+    // ── serde round-trips ───────────────────────────────────────────
+
+    #[test]
+    fn persistent_cache_receipt_serde_round_trip() {
+        let receipt = PersistentCacheReceipt {
+            schema_version: RECEIPT_SCHEMA_VERSION.to_string(),
+            receipt_id: "r-1".to_string(),
+            cache_key_id: "sha256:abc".to_string(),
+            module_id: "mod:test".to_string(),
+            source_hash: "sha256:def".to_string(),
+            policy_version: 1,
+            trust_revision: 1,
+            artifact_hash: "sha256:ghi".to_string(),
+            snapshot_state_hash: "sha256:jkl".to_string(),
+            resolved_specifier: "/test.js".to_string(),
+            trace_id: "trace-1".to_string(),
+            decision_id: "decision-1".to_string(),
+            policy_id: "policy-1".to_string(),
+            consumers: vec!["product".to_string()],
+            rollback_target_receipt_id: None,
+        };
+        let json = serde_json::to_string(&receipt).unwrap();
+        let back: PersistentCacheReceipt = serde_json::from_str(&json).unwrap();
+        assert_eq!(receipt, back);
+    }
+
+    #[test]
+    fn cache_rollback_plan_serde_round_trip() {
+        let plan = CacheRollbackPlan {
+            schema_version: ROLLBACK_PLAN_SCHEMA_VERSION.to_string(),
+            trigger: "test".to_string(),
+            rollback_receipt_id: "r-1".to_string(),
+            rollback_cache_key_id: "sha256:abc".to_string(),
+            criteria: vec!["test criterion".to_string()],
+            fail_closed: true,
+        };
+        let json = serde_json::to_string(&plan).unwrap();
+        let back: CacheRollbackPlan = serde_json::from_str(&json).unwrap();
+        assert_eq!(plan, back);
+    }
+
+    // ── render_summary ──────────────────────────────────────────────
+
+    #[test]
+    fn render_summary_contains_header() {
+        let context = ArtifactContext::new("/tmp/render-test");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        let summary = render_summary(&evaluated.contract);
+        assert!(summary.contains("# Persistent Cache Contract Summary"));
+        assert!(summary.contains("## Consumer Routes"));
+        assert!(summary.contains("## Scenario Outcomes"));
+    }
+
+    // ── docs fixture ────────────────────────────────────────────────
+
+    #[test]
+    fn docs_fixture_scenario_ids_are_non_empty() {
+        let fixture = build_docs_contract_fixture();
+        assert!(!fixture.scenario_ids.is_empty());
+        for id in &fixture.scenario_ids {
+            assert!(!id.is_empty());
+        }
+    }
+
+    #[test]
+    fn docs_fixture_consumers_are_known() {
+        let fixture = build_docs_contract_fixture();
+        assert!(fixture.consumers.contains(&"product".to_string()));
+        assert!(fixture.consumers.contains(&"benchmark".to_string()));
+        assert!(fixture.consumers.contains(&"replay".to_string()));
+    }
+
+    #[test]
+    fn artifact_context_defaults_are_reasonable() {
+        let ctx = ArtifactContext::new("/tmp/test-pcache");
+        assert!(ctx.run_id.starts_with("run-persistent_cache_contract-"));
+        assert!(!ctx.trace_id.is_empty());
+        assert!(!ctx.command_invocation.is_empty());
+    }
 }

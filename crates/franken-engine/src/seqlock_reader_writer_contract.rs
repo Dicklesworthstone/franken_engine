@@ -941,4 +941,179 @@ mod tests {
         assert_eq!(actual.schema_version, DOCS_CONTRACT_SCHEMA_VERSION);
         assert_eq!(actual, expected);
     }
+
+    // ── schema constants ────────────────────────────────────────────
+
+    #[test]
+    fn schema_constants_start_with_franken_engine() {
+        assert!(CONTRACT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(RETRY_POLICY_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(FALLBACK_MATRIX_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(TRACE_IDS_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(RUN_MANIFEST_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(DOCS_CONTRACT_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn bead_and_component_are_non_empty() {
+        assert!(!BEAD_ID.is_empty());
+        assert!(!COMPONENT.is_empty());
+    }
+
+    // ── accepted_candidate_rows logic ───────────────────────────────
+
+    #[test]
+    fn candidate_rows_are_sorted_by_id() {
+        let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
+        let ids: Vec<_> = rows.iter().map(|r| r.candidate_id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+    }
+
+    #[test]
+    fn candidate_rows_have_non_empty_api_fields() {
+        let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
+        for row in &rows {
+            assert!(!row.read_api.is_empty(), "read_api empty for {}", row.candidate_id);
+            assert!(!row.write_api.is_empty(), "write_api empty for {}", row.candidate_id);
+            assert!(!row.module_path.is_empty());
+            assert!(!row.surface_name.is_empty());
+            assert!(!row.incumbent_baseline.is_empty());
+        }
+    }
+
+    #[test]
+    fn candidate_rows_have_telemetry_fields() {
+        let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
+        for row in &rows {
+            assert!(row.telemetry_fields.contains(&"total_reads".to_string()));
+            assert!(row.telemetry_fields.contains(&"fast_path_reads".to_string()));
+            assert!(row.telemetry_fields.contains(&"writes".to_string()));
+        }
+    }
+
+    #[test]
+    fn candidate_rows_have_valid_retry_policies() {
+        let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
+        for row in &rows {
+            assert!(row.retry_budget_policy.max_retries >= 1);
+            assert!(row.retry_budget_policy.max_writer_pressure_observations >= 1);
+        }
+    }
+
+    // ── render_summary ──────────────────────────────────────────────
+
+    #[test]
+    fn render_summary_contains_all_candidates() {
+        let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
+        let contract = ReaderWriterContractArtifact {
+            schema_version: CONTRACT_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            component: COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            contract_hash: "abcdef".to_string(),
+            accepted_candidates: rows,
+            observed_telemetry: vec![],
+        };
+        let summary = render_summary(&contract);
+        assert!(summary.contains("module-cache-snapshot"));
+        assert!(summary.contains("governance-ledger-head-view"));
+        assert!(summary.contains("guardplane-calibration-snapshot"));
+        assert!(summary.contains("Candidate Policies"));
+    }
+
+    // ── required_artifact_names ─────────────────────────────────────
+
+    #[test]
+    fn required_artifact_names_are_unique_and_sorted() {
+        let names = required_artifact_names();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+        let deduped: std::collections::BTreeSet<_> = names.iter().collect();
+        assert_eq!(deduped.len(), names.len());
+    }
+
+    #[test]
+    fn required_artifact_names_include_core_files() {
+        let names = required_artifact_names();
+        assert!(names.contains(&"seqlock_reader_writer_contract.json".to_string()));
+        assert!(names.contains(&"retry_budget_policy.json".to_string()));
+        assert!(names.contains(&"incumbent_fallback_matrix.json".to_string()));
+        assert!(names.contains(&"manifest.json".to_string()));
+        assert!(names.contains(&"events.jsonl".to_string()));
+    }
+
+    // ── serde round-trips ───────────────────────────────────────────
+
+    #[test]
+    fn contract_candidate_row_serde_round_trip() {
+        let row = ContractCandidateRow {
+            candidate_id: "test-candidate".to_string(),
+            surface_name: "test-surface".to_string(),
+            module_path: "crate::test".to_string(),
+            read_api: "Test::read".to_string(),
+            write_api: "Test::write".to_string(),
+            incumbent_baseline: "rwlock".to_string(),
+            retry_budget_policy: RetryBudgetPolicy::new(3, 2),
+            exact_fallback_conditions: vec!["uninitialized".to_string()],
+            telemetry_fields: vec!["total_reads".to_string()],
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        let back: ContractCandidateRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(row, back);
+    }
+
+    #[test]
+    fn observed_telemetry_row_serde_round_trip() {
+        let row = ObservedTelemetryRow {
+            candidate_id: "test".to_string(),
+            total_reads: 10,
+            fast_path_reads: 7,
+            fallback_reads: 3,
+            total_retries: 1,
+            writer_pressure_observations: 1,
+            writes: 5,
+            latest_read_source: "fast_path".to_string(),
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        let back: ObservedTelemetryRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(row, back);
+    }
+
+    #[test]
+    fn trace_ids_artifact_serde_round_trip() {
+        let artifact = TraceIdsArtifact {
+            schema_version: TRACE_IDS_SCHEMA_VERSION.to_string(),
+            trace_ids: vec!["trace-1".to_string()],
+            decision_id: "decision-1".to_string(),
+            policy_id: "policy-1".to_string(),
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn artifact_context_has_expected_defaults() {
+        let ctx = ArtifactContext::new("/tmp/test");
+        assert!(ctx.run_id.starts_with("run-seqlock_reader_writer_contract-"));
+        assert!(ctx.trace_id.starts_with("trace."));
+        assert!(ctx.decision_id.starts_with("decision."));
+        assert!(ctx.policy_id.starts_with("policy."));
+        assert!(!ctx.generated_at_utc.is_empty());
+        assert!(!ctx.command_invocation.is_empty());
+    }
+
+    #[test]
+    fn docs_contract_fixture_has_all_candidates() {
+        let fixture = build_docs_contract_fixture();
+        assert_eq!(fixture.bead_id, BEAD_ID);
+        assert_eq!(fixture.candidate_policies.len(), 3);
+        let ids: Vec<_> = fixture.candidate_policies.iter().map(|p| p.candidate_id.as_str()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+    }
 }

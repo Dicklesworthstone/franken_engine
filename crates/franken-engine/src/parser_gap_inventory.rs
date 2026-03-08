@@ -858,6 +858,226 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_constants_are_non_empty() {
+        assert!(!UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION.is_empty());
+        assert!(!PARSER_GAP_INVENTORY_SCHEMA_VERSION.is_empty());
+        assert!(!PARSER_GAP_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!PARSER_GAP_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!PARSER_GAP_COMPONENT.is_empty());
+        assert!(!PARSER_GAP_POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn parser_gap_stage_serde_round_trip() {
+        for stage in [ParserGapStage::Ir0ToIr1, ParserGapStage::Ir1ToIr3] {
+            let json = serde_json::to_string(&stage).unwrap();
+            let back: ParserGapStage = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, stage);
+            assert!(!stage.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn parser_gap_remediation_status_serde_round_trip() {
+        for status in [
+            ParserGapRemediationStatus::FailClosed,
+            ParserGapRemediationStatus::OpenPlaceholder,
+            ParserGapRemediationStatus::Resolved,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let back: ParserGapRemediationStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, status);
+            assert!(!status.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_all_has_six_variants() {
+        assert_eq!(ParserGapSiteId::ALL.len(), 6);
+    }
+
+    #[test]
+    fn parser_gap_site_id_stage_distribution() {
+        let ir0_count = ParserGapSiteId::ALL
+            .iter()
+            .filter(|site| site.stage() == ParserGapStage::Ir0ToIr1)
+            .count();
+        let ir3_count = ParserGapSiteId::ALL
+            .iter()
+            .filter(|site| site.stage() == ParserGapStage::Ir1ToIr3)
+            .count();
+        assert_eq!(ir0_count, 5);
+        assert_eq!(ir3_count, 1);
+    }
+
+    #[test]
+    fn parser_gap_site_id_all_resolved() {
+        for site in ParserGapSiteId::ALL {
+            assert_eq!(site.remediation_status(), ParserGapRemediationStatus::Resolved);
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_owner_is_always_lowering_pipeline() {
+        for site in ParserGapSiteId::ALL {
+            assert_eq!(site.owner(), "lowering_pipeline");
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_feature_families_are_distinct() {
+        let families: std::collections::BTreeSet<&str> = ParserGapSiteId::ALL
+            .iter()
+            .map(|site| site.feature_family())
+            .collect();
+        assert_eq!(families.len(), ParserGapSiteId::ALL.len());
+    }
+
+    #[test]
+    fn parser_gap_site_id_serde_round_trip() {
+        for site in ParserGapSiteId::ALL {
+            let json = serde_json::to_string(&site).unwrap();
+            let back: ParserGapSiteId = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, site);
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_blocking_workloads_non_empty() {
+        for site in ParserGapSiteId::ALL {
+            assert!(
+                !site.blocking_workloads().is_empty(),
+                "site {:?} should have blocking workloads",
+                site,
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_descriptor_from_site_populates_all_fields() {
+        let desc = ParserGapSiteDescriptor::from_site(ParserGapSiteId::ForInStatementPlaceholder);
+        assert_eq!(desc.site_id, "lower_ir0_to_ir1.for_in_placeholder");
+        assert_eq!(desc.stage, ParserGapStage::Ir0ToIr1);
+        assert_eq!(desc.remediation_status, ParserGapRemediationStatus::Resolved);
+        assert_eq!(desc.owner, "lowering_pipeline");
+        assert_eq!(desc.feature_family, "for_in_statement");
+        assert_eq!(desc.api_surface, "lower_ir0_to_ir1");
+        assert!(!desc.syntax_shape.is_empty());
+        assert!(!desc.observed_fallback_behavior.is_empty());
+        assert!(!desc.required_fail_closed_contract.is_empty());
+        assert_eq!(desc.desired_diagnostic_code, "FE-PARSER-GAP-FOR-IN-0001");
+        assert_eq!(desc.blocking_workloads.len(), 2);
+        assert!(!desc.source_reference.is_empty());
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostic_display_with_span() {
+        let diag = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::ForOfStatementPlaceholder,
+            "test_source",
+            Some(span()),
+        );
+        let display = format!("{diag}");
+        assert!(display.contains("FE-PARSER-GAP-FOR-OF-0001"));
+        assert!(display.contains("test_source"));
+        assert!(display.contains("at 2:4"));
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostic_display_without_span() {
+        let diag = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::NewExpressionCallPlaceholder,
+            "no_span",
+            None,
+        );
+        let display = format!("{diag}");
+        assert!(display.contains("FE-PARSER-GAP-NEW-0001"));
+        assert!(display.contains("no_span"));
+        assert!(!display.contains("at "));
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostic_canonical_hash_is_deterministic() {
+        let diag1 = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::TemplateLiteralRawPlaceholder,
+            "src",
+            Some(span()),
+        );
+        let diag2 = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::TemplateLiteralRawPlaceholder,
+            "src",
+            Some(span()),
+        );
+        assert_eq!(diag1.canonical_hash(), diag2.canonical_hash());
+        assert!(diag1.canonical_hash().len() > 20);
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostic_canonical_value_has_expected_keys() {
+        let diag = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::BinaryNonArithmeticAddPlaceholder,
+            "test",
+            None,
+        );
+        let cv = diag.canonical_value();
+        if let crate::deterministic_serde::CanonicalValue::Map(map) = &cv {
+            assert!(map.contains_key("schema_version"));
+            assert!(map.contains_key("site_id"));
+            assert!(map.contains_key("stage"));
+            assert!(map.contains_key("owner"));
+            assert!(map.contains_key("feature_family"));
+            assert!(map.contains_key("api_surface"));
+            assert_eq!(map.len(), 16);
+        } else {
+            panic!("canonical_value should be a Map");
+        }
+    }
+
+    #[test]
+    fn parser_gap_inventory_event_serde_round_trip() {
+        let event = ParserGapInventoryEvent {
+            schema_version: PARSER_GAP_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-1".to_string(),
+            decision_id: "decision-1".to_string(),
+            policy_id: PARSER_GAP_POLICY_ID.to_string(),
+            component: PARSER_GAP_COMPONENT.to_string(),
+            event: "gap_site_recorded".to_string(),
+            outcome: "resolved".to_string(),
+            site_id: Some("test_site".to_string()),
+            diagnostic_code: Some("FE-TEST-0001".to_string()),
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ParserGapInventoryEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn parser_gap_inventory_run_manifest_serde_round_trip() {
+        let manifest = ParserGapInventoryRunManifest {
+            schema_version: PARSER_GAP_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+            component: PARSER_GAP_COMPONENT.to_string(),
+            trace_id: "trace-test".to_string(),
+            decision_id: "decision-test".to_string(),
+            policy_id: PARSER_GAP_POLICY_ID.to_string(),
+            inventory_hash: "abc123".to_string(),
+            site_count: 6,
+            fail_closed_site_count: 0,
+            open_placeholder_site_count: 0,
+            diagnostic_schema_version: UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION.to_string(),
+            artifact_paths: ParserGapInventoryArtifactPaths {
+                parser_gap_inventory: "inventory.json".to_string(),
+                run_manifest: "manifest.json".to_string(),
+                events_jsonl: "events.jsonl".to_string(),
+                commands_txt: "commands.txt".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: ParserGapInventoryRunManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, manifest);
+    }
+
+    #[test]
     fn parser_gap_inventory_has_unique_site_ids_and_codes() {
         let inventory = parser_gap_inventory();
         let site_ids: std::collections::BTreeSet<&str> = inventory

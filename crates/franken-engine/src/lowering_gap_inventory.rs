@@ -672,6 +672,149 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_constants_are_non_empty() {
+        assert!(!LOWERING_GAP_INVENTORY_SCHEMA_VERSION.is_empty());
+        assert!(!LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!LOWERING_GAP_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!LOWERING_GAP_COMPONENT.is_empty());
+        assert!(!LOWERING_GAP_POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn lowering_gap_stage_serde_round_trip() {
+        for stage in [LoweringGapStage::Ir0ToIr1, LoweringGapStage::Ir1ToIr3] {
+            let json = serde_json::to_string(&stage).unwrap();
+            let back: LoweringGapStage = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, stage);
+            assert!(!stage.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn lowering_gap_status_serde_round_trip() {
+        for status in [
+            LoweringGapStatus::FailClosed,
+            LoweringGapStatus::OpenPlaceholder,
+            LoweringGapStatus::Resolved,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let back: LoweringGapStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, status);
+            assert!(!status.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn lowering_gap_site_id_all_has_six_variants() {
+        assert_eq!(LoweringGapSiteId::ALL.len(), 6);
+    }
+
+    #[test]
+    fn lowering_gap_site_id_all_resolved() {
+        for site in LoweringGapSiteId::ALL {
+            assert_eq!(site.status(), LoweringGapStatus::Resolved);
+        }
+    }
+
+    #[test]
+    fn lowering_gap_site_id_owner_is_always_lowering_pipeline() {
+        for site in LoweringGapSiteId::ALL {
+            assert_eq!(site.owner(), "lowering_pipeline");
+        }
+    }
+
+    #[test]
+    fn lowering_gap_site_id_serde_round_trip() {
+        for site in LoweringGapSiteId::ALL {
+            let json = serde_json::to_string(&site).unwrap();
+            let back: LoweringGapSiteId = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, site);
+        }
+    }
+
+    #[test]
+    fn lowering_gap_site_id_ast_node_families_are_distinct() {
+        let families: std::collections::BTreeSet<&str> = LoweringGapSiteId::ALL
+            .iter()
+            .map(|site| site.ast_node_family())
+            .collect();
+        assert_eq!(families.len(), LoweringGapSiteId::ALL.len());
+    }
+
+    #[test]
+    fn lowering_gap_site_id_emitted_ir_shapes_non_empty() {
+        for site in LoweringGapSiteId::ALL {
+            assert!(!site.emitted_ir_shape().is_empty());
+            assert!(!site.execution_consequence().is_empty());
+            assert!(!site.user_visible_divergence().is_empty());
+            assert!(!site.target_replacement_strategy().is_empty());
+            assert!(!site.source_reference().is_empty());
+            assert!(!site.regression_test_hint().is_empty());
+        }
+    }
+
+    #[test]
+    fn lowering_gap_site_descriptor_from_site_populates_all_fields() {
+        let desc =
+            LoweringGapSiteDescriptor::from_site(LoweringGapSiteId::ForOfStatementPlaceholder);
+        assert_eq!(desc.site_id, "lower_ir0_to_ir1.for_of_placeholder");
+        assert_eq!(desc.diagnostic_code, "FE-PARSER-GAP-FOR-OF-0001");
+        assert_eq!(desc.stage, LoweringGapStage::Ir0ToIr1);
+        assert_eq!(desc.status, LoweringGapStatus::Resolved);
+        assert_eq!(desc.owner, "lowering_pipeline");
+        assert_eq!(desc.ast_node_family, "statement.for_of");
+        assert!(desc.parser_ready_syntax);
+        assert!(!desc.execution_ready_semantics);
+        assert!(!desc.emitted_ir_shape.is_empty());
+        assert!(!desc.regression_test_hint.is_empty());
+    }
+
+    #[test]
+    fn lowering_gap_inventory_event_serde_round_trip() {
+        let event = LoweringGapInventoryEvent {
+            schema_version: LOWERING_GAP_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-1".to_string(),
+            decision_id: "decision-1".to_string(),
+            policy_id: LOWERING_GAP_POLICY_ID.to_string(),
+            component: LOWERING_GAP_COMPONENT.to_string(),
+            event: "gap_site_recorded".to_string(),
+            outcome: "resolved".to_string(),
+            site_id: Some("test_site".to_string()),
+            diagnostic_code: Some("FE-TEST-0001".to_string()),
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: LoweringGapInventoryEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn lowering_gap_inventory_run_manifest_serde_round_trip() {
+        let manifest = LoweringGapInventoryRunManifest {
+            schema_version: LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+            component: LOWERING_GAP_COMPONENT.to_string(),
+            trace_id: "trace-test".to_string(),
+            decision_id: "decision-test".to_string(),
+            policy_id: LOWERING_GAP_POLICY_ID.to_string(),
+            inventory_hash: "abc123".to_string(),
+            site_count: 6,
+            fail_closed_site_count: 0,
+            open_placeholder_site_count: 0,
+            parser_ready_site_count: 6,
+            execution_ready_site_count: 0,
+            artifact_paths: LoweringGapInventoryArtifactPaths {
+                lowering_gap_inventory: "inventory.json".to_string(),
+                run_manifest: "manifest.json".to_string(),
+                events_jsonl: "events.jsonl".to_string(),
+                commands_txt: "commands.txt".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: LoweringGapInventoryRunManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, manifest);
+    }
+
+    #[test]
     fn lowering_gap_site_ids_and_diagnostic_codes_are_unique() {
         let mut site_ids = std::collections::BTreeSet::new();
         let mut diagnostic_codes = std::collections::BTreeSet::new();

@@ -10,9 +10,9 @@ use frankenengine_engine::zero_placeholder_scan::{
     ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, ZERO_PLACEHOLDER_SCAN_POLICY_ID,
     ZERO_PLACEHOLDER_SCAN_RUN_MANIFEST_SCHEMA_VERSION, ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION,
     ZERO_PLACEHOLDER_SCAN_TRACE_IDS_SCHEMA_VERSION, ZeroPlaceholderFinding,
-    ZeroPlaceholderInventory, ZeroPlaceholderScanRunManifest,
-    ZeroPlaceholderScanTraceIds, ZeroPlaceholderSeverity, ZeroPlaceholderStatus,
-    ZeroPlaceholderSubsystem, ZeroPlaceholderSubsystemSummary,
+    ZeroPlaceholderInventory, ZeroPlaceholderScanRunManifest, ZeroPlaceholderScanTraceIds,
+    ZeroPlaceholderSeverity, ZeroPlaceholderStatus, ZeroPlaceholderSubsystem,
+    ZeroPlaceholderSubsystemSummary,
 };
 
 fn unique_temp_dir(label: &str) -> PathBuf {
@@ -297,9 +297,21 @@ fn all_findings_have_nonempty_fields() {
     let inventory = zscan::zero_placeholder_scan_inventory();
     for finding in &inventory.findings {
         assert!(!finding.finding_id.is_empty(), "empty finding_id");
-        assert!(!finding.owner.is_empty(), "empty owner in {}", finding.finding_id);
-        assert!(!finding.owner_bead_id.is_empty(), "empty bead_id in {}", finding.finding_id);
-        assert!(!finding.subject_area.is_empty(), "empty subject_area in {}", finding.finding_id);
+        assert!(
+            !finding.owner.is_empty(),
+            "empty owner in {}",
+            finding.finding_id
+        );
+        assert!(
+            !finding.owner_bead_id.is_empty(),
+            "empty bead_id in {}",
+            finding.finding_id
+        );
+        assert!(
+            !finding.subject_area.is_empty(),
+            "empty subject_area in {}",
+            finding.finding_id
+        );
         assert!(
             !finding.source_reference.is_empty(),
             "empty source_reference in {}",
@@ -428,7 +440,12 @@ fn write_bundle_inventory_hash_is_64_hex_chars() {
     let commands = vec!["test".to_string()];
     let artifacts = zscan::write_zero_placeholder_scan_bundle(&out_dir, &commands).expect("write");
     assert_eq!(artifacts.inventory_hash.len(), 64);
-    assert!(artifacts.inventory_hash.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(
+        artifacts
+            .inventory_hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+    );
 }
 
 #[test]
@@ -455,8 +472,7 @@ fn write_bundle_events_have_start_and_end_bookends() {
     let events_text = fs::read_to_string(&artifacts.events_path).expect("read events");
     let lines: Vec<&str> = events_text.lines().collect();
     let first: serde_json::Value = serde_json::from_str(lines[0]).expect("first event");
-    let last: serde_json::Value =
-        serde_json::from_str(lines[lines.len() - 1]).expect("last event");
+    let last: serde_json::Value = serde_json::from_str(lines[lines.len() - 1]).expect("last event");
     assert_eq!(first["event"].as_str().unwrap(), "inventory_started");
     assert_eq!(last["event"].as_str().unwrap(), "inventory_completed");
 }
@@ -555,10 +571,12 @@ fn write_bundle_artifact_paths_are_relative() {
     let artifacts = zscan::write_zero_placeholder_scan_bundle(&out_dir, &commands).expect("write");
     let manifest: ZeroPlaceholderScanRunManifest =
         serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).unwrap()).expect("parse");
-    assert!(!manifest
-        .artifact_paths
-        .zero_placeholder_inventory
-        .contains('/'));
+    assert!(
+        !manifest
+            .artifact_paths
+            .zero_placeholder_inventory
+            .contains('/')
+    );
     assert!(!manifest.artifact_paths.trace_ids.contains('/'));
     assert!(!manifest.artifact_paths.run_manifest.contains('/'));
     assert!(!manifest.artifact_paths.events_jsonl.contains('/'));

@@ -716,8 +716,7 @@ mod tests {
     #[test]
     fn missing_matrix_dimension_rejected() {
         let mut art = load_fixture();
-        art.matrix_dimensions
-            .retain(|d| d != "workload_family");
+        art.matrix_dimensions.retain(|d| d != "workload_family");
         let err = validate_artifact(&art).unwrap_err();
         assert!(matches!(
             err,
@@ -777,8 +776,13 @@ mod tests {
     #[test]
     fn unknown_interference_rule_rejected() {
         let mut art = load_fixture();
-        if let Some(cell) = art.cells.iter_mut().find(|c| !c.interference_rule_ids.is_empty()) {
-            cell.interference_rule_ids.push("nonexistent_rule".to_string());
+        if let Some(cell) = art
+            .cells
+            .iter_mut()
+            .find(|c| !c.interference_rule_ids.is_empty())
+        {
+            cell.interference_rule_ids
+                .push("nonexistent_rule".to_string());
             let err = validate_artifact(&art).unwrap_err();
             assert!(matches!(
                 err,
@@ -875,7 +879,10 @@ mod tests {
         for (family, related) in &index {
             for other in related {
                 let reverse = index.get(other).expect("symmetric entry must exist");
-                assert!(reverse.contains(family), "{family:?} not in reverse of {other:?}");
+                assert!(
+                    reverse.contains(family),
+                    "{family:?} not in reverse of {other:?}"
+                );
             }
         }
     }

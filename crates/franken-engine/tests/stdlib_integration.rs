@@ -4,12 +4,25 @@
 //! registry completeness, math/string/number/JSON method execution, determinism,
 //! serde round-trips, and error taxonomy coverage.
 
-use frankenengine_engine::object_model::{JsValue, ObjectHeap, PropertyKey, SymbolId};
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
+
+use frankenengine_engine::object_model::{
+    JsValue, ObjectHeap, PropertyDescriptor, PropertyKey, SymbolId,
+};
+use frankenengine_engine::rgc_test_harness::{
+    DeterministicTestContext, EventInput, HarnessLane, HarnessRunManifest, write_artifact_triad,
+};
 use frankenengine_engine::stdlib::{
-    ArrayMethodResult, BuiltinId, GlobalEnvironment, StdlibError, exec_array_method,
-    exec_boolean_method, exec_date_method, exec_error_constructor, exec_global_function, exec_math,
-    exec_number_method, exec_object_static, exec_string_method, exec_string_static,
-    exec_symbol_static, install_stdlib, json_parse, json_stringify,
+    ArrayMethodResult, BuiltinId, GlobalEnvironment, StdlibError, alloc_array_instance,
+    alloc_map_instance, alloc_set_instance, exec_array_method, exec_boolean_method,
+    exec_date_method, exec_error_constructor, exec_global_function, exec_heap_collection_method,
+    exec_math, exec_number_method, exec_object_static, exec_string_method, exec_string_static,
+    exec_symbol_static, install_stdlib, json_parse, json_stringify, read_array_elements,
+    read_map_entries, read_set_values,
 };
 
 const FP_SCALE: i64 = 1_000_000;
@@ -1701,4 +1714,505 @@ fn registry_entries_all_have_valid_names() {
             "builtin {id:?} should have a non-empty name"
         );
     }
+}
+
+#[derive(Debug, Serialize)]
+struct CollectionMutationScenarioReport {
+    bead_id: &'static str,
+    trace_ids: Vec<String>,
+    final_array: Vec<JsValue>,
+    final_map: Vec<(JsValue, JsValue)>,
+    final_set: Vec<JsValue>,
+}
+
+fn artifact_root(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should advance")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "franken_engine_{label}_{nanos}_{}",
+        std::process::id()
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Heap-backed collection mutation semantics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn heap_array_push_updates_alias_visible_state_and_trace() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let array = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+    let alias = array;
+
+    let result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypePush,
+        array,
+        &[JsValue::Int(3 * FP_SCALE), JsValue::Int(4 * FP_SCALE)],
+    )
+    .unwrap();
+
+    assert_eq!(result.value, JsValue::Int(4 * FP_SCALE));
+    assert_eq!(
+        read_array_elements(&heap, alias).unwrap(),
+        vec![
+            JsValue::Int(FP_SCALE),
+            JsValue::Int(2 * FP_SCALE),
+            JsValue::Int(3 * FP_SCALE),
+            JsValue::Int(4 * FP_SCALE),
+        ]
+    );
+    assert_eq!(
+        heap.get_property(alias, &PropertyKey::from("length"))
+            .unwrap(),
+        JsValue::Int(4 * FP_SCALE)
+    );
+    assert_eq!(result.trace.before_size, 2);
+    assert_eq!(result.trace.after_size, 4);
+    assert!(result.trace.trace_id.starts_with("trace-collection-"));
+    assert!(result.trace.mutated_keys.contains(&"2".to_string()));
+    assert!(result.trace.mutated_keys.contains(&"3".to_string()));
+    assert!(result.trace.mutated_keys.contains(&"length".to_string()));
+}
+
+#[test]
+fn heap_array_splice_returns_removed_array_and_preserves_order() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let array = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[
+            JsValue::Int(10 * FP_SCALE),
+            JsValue::Int(20 * FP_SCALE),
+            JsValue::Int(30 * FP_SCALE),
+            JsValue::Int(40 * FP_SCALE),
+        ],
+    )
+    .unwrap();
+
+    let result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypeSplice,
+        array,
+        &[
+            JsValue::Int(FP_SCALE),
+            JsValue::Int(2 * FP_SCALE),
+            JsValue::Int(99 * FP_SCALE),
+            JsValue::Int(100 * FP_SCALE),
+        ],
+    )
+    .unwrap();
+
+    let removed = match result.value {
+        JsValue::Object(handle) => handle,
+        other => panic!("expected removed array handle, got {other:?}"),
+    };
+    assert_eq!(
+        read_array_elements(&heap, array).unwrap(),
+        vec![
+            JsValue::Int(10 * FP_SCALE),
+            JsValue::Int(99 * FP_SCALE),
+            JsValue::Int(100 * FP_SCALE),
+            JsValue::Int(40 * FP_SCALE),
+        ]
+    );
+    assert_eq!(
+        read_array_elements(&heap, removed).unwrap(),
+        vec![JsValue::Int(20 * FP_SCALE), JsValue::Int(30 * FP_SCALE)]
+    );
+    assert_eq!(result.trace.before_size, 4);
+    assert_eq!(result.trace.after_size, 4);
+    assert!(result.trace.mutated_keys.contains(&"1".to_string()));
+    assert!(result.trace.mutated_keys.contains(&"2".to_string()));
+}
+
+#[test]
+fn heap_map_mutation_updates_observable_state_and_keeps_reads_pure() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let map = alloc_map_instance(
+        &mut heap,
+        env.prototypes.map_prototype,
+        &[(JsValue::Str("alpha".into()), JsValue::Int(FP_SCALE))],
+    )
+    .unwrap();
+
+    let set_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::MapPrototypeSet,
+        map,
+        &[JsValue::Str("beta".into()), JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(set_result.value, JsValue::Object(map));
+    assert_eq!(
+        read_map_entries(&heap, map).unwrap(),
+        vec![
+            (JsValue::Str("alpha".into()), JsValue::Int(FP_SCALE)),
+            (JsValue::Str("beta".into()), JsValue::Int(2 * FP_SCALE)),
+        ]
+    );
+    assert_eq!(
+        heap.get_property(map, &PropertyKey::from("size")).unwrap(),
+        JsValue::Int(2 * FP_SCALE)
+    );
+
+    let get_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::MapPrototypeGet,
+        map,
+        &[JsValue::Str("beta".into())],
+    )
+    .unwrap();
+    assert_eq!(get_result.value, JsValue::Int(2 * FP_SCALE));
+    assert!(get_result.trace.mutated_keys.is_empty());
+
+    let delete_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::MapPrototypeDelete,
+        map,
+        &[JsValue::Str("alpha".into())],
+    )
+    .unwrap();
+    assert_eq!(delete_result.value, JsValue::Bool(true));
+    assert_eq!(
+        read_map_entries(&heap, map).unwrap(),
+        vec![(JsValue::Str("beta".into()), JsValue::Int(2 * FP_SCALE))]
+    );
+
+    exec_heap_collection_method(&mut heap, BuiltinId::MapPrototypeClear, map, &[]).unwrap();
+    assert!(read_map_entries(&heap, map).unwrap().is_empty());
+    assert_eq!(
+        heap.get_property(map, &PropertyKey::from("size")).unwrap(),
+        JsValue::Int(0)
+    );
+}
+
+#[test]
+fn heap_set_mutation_preserves_uniqueness_and_alias_visibility() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let set = alloc_set_instance(
+        &mut heap,
+        env.prototypes.set_prototype,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap();
+
+    let duplicate = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::SetPrototypeAdd,
+        set,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(duplicate.value, JsValue::Object(set));
+    assert!(duplicate.trace.mutated_keys.is_empty());
+
+    let add_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::SetPrototypeAdd,
+        set,
+        &[JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(add_result.value, JsValue::Object(set));
+    assert_eq!(
+        read_set_values(&heap, set).unwrap(),
+        vec![JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)]
+    );
+
+    let has_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::SetPrototypeHas,
+        set,
+        &[JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(has_result.value, JsValue::Bool(true));
+    assert!(has_result.trace.mutated_keys.is_empty());
+
+    let delete_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::SetPrototypeDelete,
+        set,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(delete_result.value, JsValue::Bool(true));
+    assert_eq!(
+        read_set_values(&heap, set).unwrap(),
+        vec![JsValue::Int(2 * FP_SCALE)]
+    );
+    assert_eq!(
+        heap.get_property(set, &PropertyKey::from("size")).unwrap(),
+        JsValue::Int(FP_SCALE)
+    );
+}
+
+#[test]
+fn heap_collection_methods_reject_wrong_receiver_kind() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let plain = heap.alloc(Some(env.prototypes.object_prototype));
+    let err = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypePush,
+        plain,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap_err();
+    assert!(matches!(err, StdlibError::TypeError(msg) if msg.contains("Array")));
+}
+
+#[test]
+fn heap_array_internal_reads_fail_closed_on_inherited_slots() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let array = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap();
+
+    heap.delete_property(array, &PropertyKey::from("length"))
+        .unwrap();
+    heap.define_property(
+        env.prototypes.array_prototype,
+        PropertyKey::from("length"),
+        PropertyDescriptor::data(JsValue::Int(FP_SCALE)),
+    )
+    .unwrap();
+    heap.define_property(
+        env.prototypes.array_prototype,
+        PropertyKey::from("0"),
+        PropertyDescriptor::data(JsValue::Int(99 * FP_SCALE)),
+    )
+    .unwrap();
+
+    let err = read_array_elements(&heap, array).unwrap_err();
+    assert!(matches!(err, StdlibError::TypeError(msg) if msg.contains("own data property")));
+}
+
+#[test]
+fn heap_map_internal_reads_fail_closed_on_inherited_hidden_slots() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let map = alloc_map_instance(
+        &mut heap,
+        env.prototypes.map_prototype,
+        &[(JsValue::Str("alpha".into()), JsValue::Int(FP_SCALE))],
+    )
+    .unwrap();
+
+    heap.delete_property(map, &PropertyKey::from("[[MapNextIndex]]"))
+        .unwrap();
+    heap.define_property(
+        env.prototypes.map_prototype,
+        PropertyKey::from("[[MapNextIndex]]"),
+        PropertyDescriptor::data(JsValue::Int(FP_SCALE)),
+    )
+    .unwrap();
+    heap.define_property(
+        env.prototypes.map_prototype,
+        PropertyKey::from("[[MapKey]]:0"),
+        PropertyDescriptor::data(JsValue::Str("spoofed".into())),
+    )
+    .unwrap();
+    heap.define_property(
+        env.prototypes.map_prototype,
+        PropertyKey::from("[[MapValue]]:0"),
+        PropertyDescriptor::data(JsValue::Int(99 * FP_SCALE)),
+    )
+    .unwrap();
+
+    let err = read_map_entries(&heap, map).unwrap_err();
+    assert!(matches!(err, StdlibError::TypeError(msg) if msg.contains("own data property")));
+}
+
+#[test]
+fn heap_set_internal_reads_fail_closed_on_inherited_hidden_slots() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let set = alloc_set_instance(
+        &mut heap,
+        env.prototypes.set_prototype,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap();
+
+    heap.delete_property(set, &PropertyKey::from("[[SetNextIndex]]"))
+        .unwrap();
+    heap.define_property(
+        env.prototypes.set_prototype,
+        PropertyKey::from("[[SetNextIndex]]"),
+        PropertyDescriptor::data(JsValue::Int(FP_SCALE)),
+    )
+    .unwrap();
+    heap.define_property(
+        env.prototypes.set_prototype,
+        PropertyKey::from("[[SetValue]]:0"),
+        PropertyDescriptor::data(JsValue::Int(99 * FP_SCALE)),
+    )
+    .unwrap();
+
+    let err = read_set_values(&heap, set).unwrap_err();
+    assert!(matches!(err, StdlibError::TypeError(msg) if msg.contains("own data property")));
+}
+
+#[test]
+fn collection_mutation_scenario_emits_artifact_triad_and_reports() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+
+    let array = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+    let map = alloc_map_instance(
+        &mut heap,
+        env.prototypes.map_prototype,
+        &[(JsValue::Str("alpha".into()), JsValue::Int(FP_SCALE))],
+    )
+    .unwrap();
+    let set = alloc_set_instance(
+        &mut heap,
+        env.prototypes.set_prototype,
+        &[JsValue::Int(FP_SCALE)],
+    )
+    .unwrap();
+
+    let array_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypePush,
+        array,
+        &[JsValue::Int(3 * FP_SCALE)],
+    )
+    .unwrap();
+    let map_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::MapPrototypeSet,
+        map,
+        &[JsValue::Str("beta".into()), JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+    let set_result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::SetPrototypeAdd,
+        set,
+        &[JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+
+    let trace_ids = vec![
+        array_result.trace.trace_id.clone(),
+        map_result.trace.trace_id.clone(),
+        set_result.trace.trace_id.clone(),
+    ];
+
+    let context = DeterministicTestContext::new(
+        "bd-1lsy.4.9.2-collection-mutation",
+        "heap-backed-collection-fixture",
+        HarnessLane::E2e,
+        4_902,
+    );
+    let events = vec![
+        context.event(EventInput {
+            sequence: 1,
+            component: "stdlib",
+            event: "array_push",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 19,
+            timestamp_unix_ms: 1_700_000_004_902,
+        }),
+        context.event(EventInput {
+            sequence: 2,
+            component: "stdlib",
+            event: "map_set",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 23,
+            timestamp_unix_ms: 1_700_000_004_903,
+        }),
+        context.event(EventInput {
+            sequence: 3,
+            component: "stdlib",
+            event: "set_add",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 17,
+            timestamp_unix_ms: 1_700_000_004_904,
+        }),
+    ];
+    let commands = vec![
+        format!(
+            "exec_heap_collection_method {} trace_id={}",
+            array_result.trace.builtin, array_result.trace.trace_id
+        ),
+        format!(
+            "exec_heap_collection_method {} trace_id={}",
+            map_result.trace.builtin, map_result.trace.trace_id
+        ),
+        format!(
+            "exec_heap_collection_method {} trace_id={}",
+            set_result.trace.builtin, set_result.trace.trace_id
+        ),
+    ];
+    let run_id = context.default_run_id();
+    let manifest = HarnessRunManifest::from_context(
+        &context,
+        &run_id,
+        events.len(),
+        commands.len(),
+        "cargo test --test stdlib_integration collection_mutation_scenario_emits_artifact_triad_and_reports",
+        1_700_000_004_999,
+    );
+
+    let root = artifact_root("collection_mutation_semantics");
+    let triad = write_artifact_triad(&root, &manifest, &events, &commands).unwrap();
+    let trace_ids_path = triad.run_dir.join("trace_ids.json");
+    let report_path = triad
+        .run_dir
+        .join("bd-1lsy.4.9.2_collection_mutation_report.json");
+    let report = CollectionMutationScenarioReport {
+        bead_id: "bd-1lsy.4.9.2",
+        trace_ids: trace_ids.clone(),
+        final_array: read_array_elements(&heap, array).unwrap(),
+        final_map: read_map_entries(&heap, map).unwrap(),
+        final_set: read_set_values(&heap, set).unwrap(),
+    };
+
+    fs::write(
+        &trace_ids_path,
+        serde_json::to_vec_pretty(&trace_ids).expect("trace ids json"),
+    )
+    .expect("write trace ids");
+    fs::write(
+        &report_path,
+        serde_json::to_vec_pretty(&report).expect("report json"),
+    )
+    .expect("write report");
+
+    assert!(triad.manifest_path.exists());
+    assert!(triad.events_path.exists());
+    assert!(triad.commands_path.exists());
+    assert!(trace_ids_path.exists());
+    assert!(report_path.exists());
+
+    let report_text = fs::read_to_string(&report_path).expect("read report");
+    assert!(report_text.contains("bd-1lsy.4.9.2"));
+    assert!(report_text.contains("trace-collection-"));
 }

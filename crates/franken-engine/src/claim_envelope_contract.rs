@@ -545,13 +545,17 @@ mod tests {
     #[test]
     fn embedded_contract_validates() {
         let contract = ClaimEnvelopeContract::from_embedded_json();
-        contract.validate().expect("embedded contract should validate");
+        contract
+            .validate()
+            .expect("embedded contract should validate");
     }
 
     #[test]
     fn minimal_contract_validates() {
         let contract = minimal_contract();
-        contract.validate().expect("minimal contract should validate");
+        contract
+            .validate()
+            .expect("minimal contract should validate");
     }
 
     #[test]
@@ -651,97 +655,111 @@ mod tests {
     fn evaluate_frontier_always_allowed() {
         let contract = minimal_contract();
         let scenario = scenario_all_ready(ClaimEnvelopeTier::FrontierObjective, "frontier goal");
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::AllowRequested);
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
     }
 
     #[test]
     fn evaluate_target_always_allowed() {
         let contract = minimal_contract();
         let scenario = scenario_all_ready(ClaimEnvelopeTier::Target, "target goal");
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::AllowRequested);
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
     }
 
     #[test]
     fn evaluate_hypothesis_always_allowed() {
         let contract = minimal_contract();
         let scenario = scenario_all_ready(ClaimEnvelopeTier::Hypothesis, "hypothesis");
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::AllowRequested);
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
     }
 
     #[test]
     fn evaluate_universal_allowed_when_all_ready() {
         let contract = minimal_contract();
-        let scenario = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableUniversal,
-            "universal claim",
+        let scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
         );
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::AllowRequested);
     }
 
     #[test]
     fn evaluate_universal_downgrades_to_scoped_when_board_incomplete() {
         let contract = minimal_contract();
-        let mut scenario = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableUniversal,
-            "universal claim",
-        );
+        let mut scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
         scenario.declared_board_complete = false;
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::DowngradeToScoped);
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToScoped
+        );
     }
 
     #[test]
     fn evaluate_universal_downgrades_to_scoped_when_frontier_gap_open() {
         let contract = minimal_contract();
-        let mut scenario = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableUniversal,
-            "universal claim",
-        );
+        let mut scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
         scenario.frontier_gap_open = true;
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::DowngradeToScoped);
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToScoped
+        );
     }
 
     #[test]
     fn evaluate_universal_downgrades_to_target_when_evidence_incomplete() {
         let contract = minimal_contract();
-        let mut scenario = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableUniversal,
-            "universal claim",
-        );
+        let mut scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
         scenario.evidence_complete = false;
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::DowngradeToTarget);
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToTarget
+        );
     }
 
     #[test]
     fn evaluate_universal_downgrades_to_hypothesis_when_stale() {
         let contract = minimal_contract();
-        let mut scenario = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableUniversal,
-            "universal claim",
-        );
+        let mut scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
         scenario.evidence_complete = false;
         scenario.stale_contract_hours = MAX_PUBLISHABLE_STALENESS_HOURS + 1;
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::DowngradeToHypothesis);
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToHypothesis
+        );
     }
 
     #[test]
     fn evaluate_scoped_allowed_when_ready() {
         let contract = minimal_contract();
-        let scenario = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableScoped,
-            "scoped claim",
+        let scenario = scenario_all_ready(ClaimEnvelopeTier::PublishableScoped, "scoped claim");
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
         );
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::AllowRequested);
     }
 
     #[test]
     fn evaluate_scoped_downgrades_to_target_when_not_shipped() {
         let contract = minimal_contract();
-        let mut scenario = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableScoped,
-            "scoped claim",
-        );
+        let mut scenario = scenario_all_ready(ClaimEnvelopeTier::PublishableScoped, "scoped claim");
         scenario.shipped_path = false;
-        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::DowngradeToTarget);
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToTarget
+        );
     }
 
     #[test]
@@ -756,9 +774,18 @@ mod tests {
 
     #[test]
     fn phrase_matching_is_case_insensitive() {
-        assert!(phrase_contains_required_term("Universal Claim", "universal"));
-        assert!(phrase_contains_required_term("UNIVERSAL CLAIM", "universal"));
-        assert!(phrase_contains_required_term("universal claim", "UNIVERSAL"));
+        assert!(phrase_contains_required_term(
+            "Universal Claim",
+            "universal"
+        ));
+        assert!(phrase_contains_required_term(
+            "UNIVERSAL CLAIM",
+            "universal"
+        ));
+        assert!(phrase_contains_required_term(
+            "universal claim",
+            "UNIVERSAL"
+        ));
     }
 
     #[test]
@@ -801,7 +828,8 @@ mod tests {
 
     #[test]
     fn scenario_serde_round_trip() {
-        let scenario = scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal test");
+        let scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal test");
         let json = serde_json::to_string(&scenario).expect("serialize");
         let restored: ClaimEnvelopeScenario = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(restored, scenario);
@@ -810,10 +838,8 @@ mod tests {
     #[test]
     fn evaluate_deterministic_across_runs() {
         let contract = minimal_contract();
-        let scenario = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableUniversal,
-            "universal claim",
-        );
+        let scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
         let v1 = contract.evaluate(&scenario);
         let v2 = contract.evaluate(&scenario);
         assert_eq!(v1, v2);
@@ -823,19 +849,19 @@ mod tests {
     fn staleness_boundary_at_168_hours() {
         let contract = minimal_contract();
 
-        let mut fresh = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableScoped,
-            "scoped claim",
-        );
+        let mut fresh = scenario_all_ready(ClaimEnvelopeTier::PublishableScoped, "scoped claim");
         fresh.stale_contract_hours = MAX_PUBLISHABLE_STALENESS_HOURS;
-        assert_eq!(contract.evaluate(&fresh), ClaimEnvelopeVerdict::AllowRequested);
-
-        let mut stale = scenario_all_ready(
-            ClaimEnvelopeTier::PublishableScoped,
-            "scoped claim",
+        assert_eq!(
+            contract.evaluate(&fresh),
+            ClaimEnvelopeVerdict::AllowRequested
         );
+
+        let mut stale = scenario_all_ready(ClaimEnvelopeTier::PublishableScoped, "scoped claim");
         stale.stale_contract_hours = MAX_PUBLISHABLE_STALENESS_HOURS + 1;
         stale.evidence_complete = false;
-        assert_eq!(contract.evaluate(&stale), ClaimEnvelopeVerdict::DowngradeToHypothesis);
+        assert_eq!(
+            contract.evaluate(&stale),
+            ClaimEnvelopeVerdict::DowngradeToHypothesis
+        );
     }
 }

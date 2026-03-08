@@ -1098,13 +1098,17 @@ mod tests {
     #[test]
     fn embedded_contract_validates() {
         let contract = ClaimEntitlementContract::from_embedded_json();
-        contract.validate().expect("embedded contract should validate");
+        contract
+            .validate()
+            .expect("embedded contract should validate");
     }
 
     #[test]
     fn minimal_contract_validates() {
         let contract = minimal_contract();
-        contract.validate().expect("minimal contract should validate");
+        contract
+            .validate()
+            .expect("minimal contract should validate");
     }
 
     #[test]
@@ -1129,7 +1133,11 @@ mod tests {
         let dup = contract.claim_atom_catalog.atoms[0].clone();
         contract.claim_atom_catalog.atoms.push(dup);
         let errors = contract.validate().expect_err("should fail");
-        assert!(errors.iter().any(|e| e.contains("duplicate") && e.contains("claim atom")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate") && e.contains("claim atom"))
+        );
     }
 
     #[test]
@@ -1199,7 +1207,11 @@ mod tests {
             .precedence_order
             .push("rule-dup".to_string());
         let errors = contract.validate().expect_err("should fail");
-        assert!(errors.iter().any(|e| e.contains("duplicate") && e.contains("precedence")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate") && e.contains("precedence"))
+        );
     }
 
     #[test]
@@ -1308,11 +1320,20 @@ mod tests {
     fn evaluate_entitled_scenario() {
         let contract = minimal_contract();
         let scenarios = minimal_scenario_set();
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
         let verdicts = &outputs.claim_entitlement_report.evaluated_scenarios[0].verdicts;
-        let shipped = verdicts.iter().find(|v| v.atom_id == "atom-shipped").unwrap();
+        let shipped = verdicts
+            .iter()
+            .find(|v| v.atom_id == "atom-shipped")
+            .unwrap();
         assert_eq!(shipped.state, ClaimVerdictState::Entitled);
-        assert!(shipped.supporting_morphism_ids.contains(&"morph-compat".to_string()));
+        assert!(
+            shipped
+                .supporting_morphism_ids
+                .contains(&"morph-compat".to_string())
+        );
     }
 
     #[test]
@@ -1330,9 +1351,14 @@ mod tests {
                 expected_outcomes: vec![],
             }],
         };
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
         let verdicts = &outputs.claim_entitlement_report.evaluated_scenarios[0].verdicts;
-        let shipped = verdicts.iter().find(|v| v.atom_id == "atom-shipped").unwrap();
+        let shipped = verdicts
+            .iter()
+            .find(|v| v.atom_id == "atom-shipped")
+            .unwrap();
         assert_eq!(shipped.state, ClaimVerdictState::NotYetProven);
     }
 
@@ -1355,9 +1381,14 @@ mod tests {
                 expected_outcomes: vec![],
             }],
         };
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
         let verdicts = &outputs.claim_entitlement_report.evaluated_scenarios[0].verdicts;
-        let shipped = verdicts.iter().find(|v| v.atom_id == "atom-shipped").unwrap();
+        let shipped = verdicts
+            .iter()
+            .find(|v| v.atom_id == "atom-shipped")
+            .unwrap();
         assert_eq!(shipped.state, ClaimVerdictState::BlockedByMissingEvidence);
     }
 
@@ -1380,9 +1411,14 @@ mod tests {
                 expected_outcomes: vec![],
             }],
         };
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
         let verdicts = &outputs.claim_entitlement_report.evaluated_scenarios[0].verdicts;
-        let shipped = verdicts.iter().find(|v| v.atom_id == "atom-shipped").unwrap();
+        let shipped = verdicts
+            .iter()
+            .find(|v| v.atom_id == "atom-shipped")
+            .unwrap();
         assert_eq!(
             shipped.state,
             ClaimVerdictState::CurrentlyFalseUnderActiveCounterexample
@@ -1410,7 +1446,9 @@ mod tests {
                 expected_outcomes: vec![],
             }],
         };
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
         let certs = &outputs.impossibility_certificates.evaluated_scenarios[0].certificates;
         assert!(!certs.is_empty());
         assert_eq!(certs[0].blocking_rule_id, "rule-forbid");
@@ -1436,11 +1474,10 @@ mod tests {
                 expected_outcomes: vec![],
             }],
         };
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
-        let entries = &outputs
-            .claim_counterexample_ledger
-            .evaluated_scenarios[0]
-            .entries;
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        let entries = &outputs.claim_counterexample_ledger.evaluated_scenarios[0].entries;
         assert!(!entries.is_empty());
         assert_eq!(entries[0].blocking_rule_id, "rule-forbid");
     }
@@ -1464,12 +1501,17 @@ mod tests {
                 expected_outcomes: vec![],
             }],
         };
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
         let cutsets = &outputs.missing_evidence_cutsets.evaluated_scenarios[0].cutsets;
         let shipped_cutset = cutsets.iter().find(|c| c.atom_id == "atom-shipped");
         assert!(shipped_cutset.is_some());
         let cs = shipped_cutset.unwrap();
-        assert!(cs.missing_constraint_ids.contains(&"constraint-top".to_string()));
+        assert!(
+            cs.missing_constraint_ids
+                .contains(&"constraint-top".to_string())
+        );
     }
 
     #[test]
@@ -1515,7 +1557,9 @@ mod tests {
     fn evaluate_output_schema_versions_correct() {
         let contract = minimal_contract();
         let scenarios = minimal_scenario_set();
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
         assert_eq!(
             outputs.claim_entitlement_report.schema_version,
             CLAIM_ENTITLEMENT_REPORT_SCHEMA_VERSION
@@ -1619,8 +1663,7 @@ mod tests {
     fn contract_serde_round_trip() {
         let contract = minimal_contract();
         let json = serde_json::to_string(&contract).expect("serialize");
-        let restored: ClaimEntitlementContract =
-            serde_json::from_str(&json).expect("deserialize");
+        let restored: ClaimEntitlementContract = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(restored, contract);
     }
 
@@ -1628,7 +1671,9 @@ mod tests {
     fn evaluation_outputs_serde_round_trip() {
         let contract = minimal_contract();
         let scenarios = minimal_scenario_set();
-        let outputs = contract.evaluate_scenarios(&scenarios).expect("should succeed");
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
         let json = serde_json::to_string(&outputs).expect("serialize");
         let restored: ClaimEvaluationOutputs = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(restored, outputs);
@@ -1638,14 +1683,10 @@ mod tests {
     fn evaluate_deterministic_across_runs() {
         let contract = minimal_contract();
         let scenarios = minimal_scenario_set();
-        let out1 = serde_json::to_string(
-            &contract.evaluate_scenarios(&scenarios).expect("run 1"),
-        )
-        .unwrap();
-        let out2 = serde_json::to_string(
-            &contract.evaluate_scenarios(&scenarios).expect("run 2"),
-        )
-        .unwrap();
+        let out1 = serde_json::to_string(&contract.evaluate_scenarios(&scenarios).expect("run 1"))
+            .unwrap();
+        let out2 = serde_json::to_string(&contract.evaluate_scenarios(&scenarios).expect("run 2"))
+            .unwrap();
         assert_eq!(out1, out2);
     }
 

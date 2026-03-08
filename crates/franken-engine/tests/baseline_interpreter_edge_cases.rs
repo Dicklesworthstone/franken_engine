@@ -1221,3 +1221,149 @@ fn router_with_custom_configs() {
     let result = router.execute(&m, "t", None).unwrap();
     assert_eq!(result.result.value, Value::Int(42));
 }
+
+// ===========================================================================
+// New unary / nullish / delete instruction coverage
+// ===========================================================================
+
+#[test]
+fn value_nullish_and_typeof_helpers_cover_runtime_contract() {
+    assert!(Value::Undefined.is_nullish());
+    assert!(Value::Null.is_nullish());
+    assert!(!Value::Int(0).is_nullish());
+
+    assert_eq!(Value::Undefined.typeof_name(), "undefined");
+    assert_eq!(Value::Null.typeof_name(), "object");
+    assert_eq!(Value::Bool(true).typeof_name(), "boolean");
+    assert_eq!(Value::Int(1).typeof_name(), "number");
+    assert_eq!(Value::Str("x".into()).typeof_name(), "string");
+    assert_eq!(Value::Object(ObjectId(0)).typeof_name(), "object");
+    assert_eq!(Value::Function(0).typeof_name(), "function");
+}
+
+#[test]
+fn jump_if_nullish_branches_only_for_nullish_values() {
+    let taken = test_module(vec![
+        Ir3Instruction::LoadNull { dst: 1 },
+        Ir3Instruction::LoadInt { dst: 0, value: 10 },
+        Ir3Instruction::JumpIfNullish { cond: 1, target: 4 },
+        Ir3Instruction::LoadInt { dst: 0, value: 20 },
+        Ir3Instruction::Halt,
+    ]);
+    assert_eq!(quickjs_execute(&taken).unwrap().value, Value::Int(10));
+
+    let not_taken = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 1, value: 1 },
+        Ir3Instruction::LoadInt { dst: 0, value: 10 },
+        Ir3Instruction::JumpIfNullish { cond: 1, target: 4 },
+        Ir3Instruction::LoadInt { dst: 0, value: 20 },
+        Ir3Instruction::Halt,
+    ]);
+    assert_eq!(quickjs_execute(&not_taken).unwrap().value, Value::Int(20));
+}
+
+#[test]
+fn unary_instruction_variants_execute_with_deterministic_coercions() {
+    let m = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::UnaryPlus { dst: 2, src: 1 },
+            Ir3Instruction::UnaryNeg { dst: 3, src: 1 },
+            Ir3Instruction::BitNot { dst: 4, src: 1 },
+            Ir3Instruction::LogicalNot { dst: 5, src: 4 },
+            Ir3Instruction::TemplateLiteral {
+                parts: RegRange { start: 2, count: 4 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ],
+        vec!["7".into()],
+    );
+    let result = quickjs_execute(&m).unwrap();
+    assert_eq!(result.value, Value::Str("7-7-8false".into()));
+}
+
+#[test]
+fn void_instruction_returns_undefined_after_evaluating_input() {
+    let m = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 1, value: 99 },
+        Ir3Instruction::Void { dst: 0, src: 1 },
+        Ir3Instruction::Halt,
+    ]);
+    let result = quickjs_execute(&m).unwrap();
+    assert_eq!(result.value, Value::Undefined);
+}
+
+#[test]
+fn typeof_instruction_matches_js_null_and_number_labels() {
+    let number_case = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 1, value: 5 },
+        Ir3Instruction::TypeOf { dst: 0, src: 1 },
+        Ir3Instruction::Halt,
+    ]);
+    assert_eq!(
+        quickjs_execute(&number_case).unwrap().value,
+        Value::Str("number".into())
+    );
+
+    let null_case = test_module(vec![
+        Ir3Instruction::LoadNull { dst: 1 },
+        Ir3Instruction::TypeOf { dst: 0, src: 1 },
+        Ir3Instruction::Halt,
+    ]);
+    assert_eq!(
+        quickjs_execute(&null_case).unwrap().value,
+        Value::Str("object".into())
+    );
+}
+
+#[test]
+fn delete_property_returns_true_and_removes_key() {
+    let delete_result = test_module(vec![
+        Ir3Instruction::NewObject { dst: 0 },
+        Ir3Instruction::LoadInt { dst: 1, value: 7 },
+        Ir3Instruction::LoadInt { dst: 2, value: 42 },
+        Ir3Instruction::SetProperty {
+            obj: 0,
+            key: 1,
+            val: 2,
+        },
+        Ir3Instruction::DeleteProperty {
+            obj: 0,
+            key: 1,
+            dst: 3,
+        },
+        Ir3Instruction::Return { value: 3 },
+    ]);
+    assert_eq!(
+        quickjs_execute(&delete_result).unwrap().value,
+        Value::Bool(true)
+    );
+
+    let m = test_module(vec![
+        Ir3Instruction::NewObject { dst: 0 },
+        Ir3Instruction::LoadInt { dst: 1, value: 7 },
+        Ir3Instruction::LoadInt { dst: 2, value: 42 },
+        Ir3Instruction::SetProperty {
+            obj: 0,
+            key: 1,
+            val: 2,
+        },
+        Ir3Instruction::DeleteProperty {
+            obj: 0,
+            key: 1,
+            dst: 3,
+        },
+        Ir3Instruction::InOp {
+            dst: 4,
+            lhs: 1,
+            rhs: 0,
+        },
+        Ir3Instruction::Return { value: 4 },
+    ]);
+    let result = quickjs_execute(&m).unwrap();
+    assert_eq!(result.value, Value::Bool(false));
+}

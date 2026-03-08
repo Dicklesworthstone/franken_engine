@@ -10,9 +10,8 @@ use frankenengine_engine::claim_publication_gate::{
     ALL_SURFACES, AnnotatedVerdict, CLAIM_PUBLICATION_GATE_BEAD_ID,
     CLAIM_PUBLICATION_GATE_SCHEMA_VERSION, FrontierGapDisclosure, GateDecision,
     MAX_PUBLISHABLE_STALENESS_HOURS, PublicationGateError, PublicationGateEvaluation,
-    PublicationSurface, RiskSeverity,
-    SurfaceRoutingConfig, evaluate_publication_gate, render_publication_gate_summary,
-    route_verdict_to_surfaces,
+    PublicationSurface, RiskSeverity, SurfaceRoutingConfig, evaluate_publication_gate,
+    render_publication_gate_summary, route_verdict_to_surfaces,
 };
 
 // ---------------------------------------------------------------------------

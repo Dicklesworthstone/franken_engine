@@ -5,12 +5,12 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::ts_module_resolution::{
-    classify_resolution_drift, write_ts_resolution_artifacts, DeterministicTsModuleResolver,
-    TsModuleRequest, TsModuleResolutionConfig, TsModuleResolutionError,
-    TsModuleResolutionMode, TsModuleResolutionOutcome, TsPackageDefinition,
-    TsPackageExportTarget, TsRequestStyle, TsResolutionArtifactPaths, TsResolutionContext,
-    TsResolutionDriftClass, TsResolutionDriftReport, TsResolutionErrorCode,
-    TsResolutionRunManifest, TsResolutionTraceEvent,
+    DeterministicTsModuleResolver, TsModuleRequest, TsModuleResolutionConfig,
+    TsModuleResolutionError, TsModuleResolutionMode, TsModuleResolutionOutcome,
+    TsPackageDefinition, TsPackageExportTarget, TsRequestStyle, TsResolutionArtifactPaths,
+    TsResolutionContext, TsResolutionDriftClass, TsResolutionDriftReport, TsResolutionErrorCode,
+    TsResolutionRunManifest, TsResolutionTraceEvent, classify_resolution_drift,
+    write_ts_resolution_artifacts,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,7 +56,10 @@ fn unique_temp_dir(label: &str) -> std::path::PathBuf {
     ))
 }
 
-fn make_export_target(conditions: &[(&str, &str)], fallback: Option<&str>) -> TsPackageExportTarget {
+fn make_export_target(
+    conditions: &[(&str, &str)],
+    fallback: Option<&str>,
+) -> TsPackageExportTarget {
     let mut condition_targets = BTreeMap::new();
     for (k, v) in conditions {
         condition_targets.insert(k.to_string(), v.to_string());
@@ -123,8 +126,7 @@ fn resolution_context_fields_match() {
 
 #[test]
 fn module_request_builder_chain() {
-    let req = TsModuleRequest::new("./foo", TsRequestStyle::Import)
-        .with_referrer("/src/bar.ts");
+    let req = TsModuleRequest::new("./foo", TsRequestStyle::Import).with_referrer("/src/bar.ts");
     assert_eq!(req.specifier, "./foo");
     assert_eq!(req.referrer.as_deref(), Some("/src/bar.ts"));
     assert_eq!(req.style, TsRequestStyle::Import);
@@ -411,7 +413,10 @@ fn stable_codes_are_unique_and_prefixed() {
     let mut seen = BTreeSet::new();
     for code in &codes {
         let stable = code.stable_code();
-        assert!(stable.starts_with("FE-TSRES-"), "code should have FE-TSRES- prefix");
+        assert!(
+            stable.starts_with("FE-TSRES-"),
+            "code should have FE-TSRES- prefix"
+        );
         assert!(seen.insert(stable), "duplicate stable code: {stable}");
     }
     assert_eq!(seen.len(), 5);
@@ -595,14 +600,17 @@ fn resolve_package_with_import_condition() {
         &[("import", "./dist/esm.mjs"), ("require", "./dist/cjs.cjs")],
         None,
     );
-    let pkg = TsPackageDefinition::new("mylib", "/workspace/node_modules/mylib")
-        .with_export(".", target);
+    let pkg =
+        TsPackageDefinition::new("mylib", "/workspace/node_modules/mylib").with_export(".", target);
     resolver.register_package(pkg);
     resolver.register_file("/workspace/node_modules/mylib/dist/esm.mjs");
 
     let req = import_req("mylib");
     let outcome = resolver.resolve(&req, &ctx()).unwrap();
-    assert_eq!(outcome.resolved_path, "/workspace/node_modules/mylib/dist/esm.mjs");
+    assert_eq!(
+        outcome.resolved_path,
+        "/workspace/node_modules/mylib/dist/esm.mjs"
+    );
     assert_eq!(outcome.package_name.as_deref(), Some("mylib"));
     assert_eq!(outcome.selected_condition.as_deref(), Some("import"));
 }
@@ -614,14 +622,17 @@ fn resolve_package_with_require_condition() {
         &[("import", "./dist/esm.mjs"), ("require", "./dist/cjs.cjs")],
         None,
     );
-    let pkg = TsPackageDefinition::new("mylib", "/workspace/node_modules/mylib")
-        .with_export(".", target);
+    let pkg =
+        TsPackageDefinition::new("mylib", "/workspace/node_modules/mylib").with_export(".", target);
     resolver.register_package(pkg);
     resolver.register_file("/workspace/node_modules/mylib/dist/cjs.cjs");
 
     let req = require_req("mylib");
     let outcome = resolver.resolve(&req, &ctx()).unwrap();
-    assert_eq!(outcome.resolved_path, "/workspace/node_modules/mylib/dist/cjs.cjs");
+    assert_eq!(
+        outcome.resolved_path,
+        "/workspace/node_modules/mylib/dist/cjs.cjs"
+    );
     assert_eq!(outcome.selected_condition.as_deref(), Some("require"));
 }
 
@@ -636,15 +647,18 @@ fn resolve_package_fallback_when_no_conditions_match() {
 
     let req = import_req("fallback-lib");
     let outcome = resolver.resolve(&req, &ctx()).unwrap();
-    assert_eq!(outcome.resolved_path, "/workspace/nm/fallback-lib/lib/main.js");
+    assert_eq!(
+        outcome.resolved_path,
+        "/workspace/nm/fallback-lib/lib/main.js"
+    );
 }
 
 #[test]
 fn resolve_scoped_package() {
     let mut resolver = resolver_with_root("/workspace");
     let target = make_export_target(&[("import", "./index.mjs")], None);
-    let pkg = TsPackageDefinition::new("@org/utils", "/workspace/nm/@org/utils")
-        .with_export(".", target);
+    let pkg =
+        TsPackageDefinition::new("@org/utils", "/workspace/nm/@org/utils").with_export(".", target);
     resolver.register_package(pkg);
     resolver.register_file("/workspace/nm/@org/utils/index.mjs");
 
@@ -672,8 +686,7 @@ fn resolve_package_subpath_export() {
 fn package_no_matching_export_entry_returns_error() {
     let mut resolver = resolver_with_root("/workspace");
     let target = make_export_target(&[("import", "./main.mjs")], None);
-    let pkg = TsPackageDefinition::new("strict", "/workspace/nm/strict")
-        .with_export(".", target);
+    let pkg = TsPackageDefinition::new("strict", "/workspace/nm/strict").with_export(".", target);
     resolver.register_package(pkg);
 
     // Request a subpath that has no export entry
@@ -689,8 +702,7 @@ fn package_no_matching_condition_and_no_fallback_returns_error() {
     // import, types, default — so "types" WILL match for an import request.
     // Use a condition that does NOT match anything.
     let target = make_export_target(&[("node", "./dist/node.js")], None);
-    let pkg = TsPackageDefinition::new("strict2", "/workspace/nm/strict2")
-        .with_export(".", target);
+    let pkg = TsPackageDefinition::new("strict2", "/workspace/nm/strict2").with_export(".", target);
     resolver.register_package(pkg);
 
     let req = import_req("strict2");
@@ -742,7 +754,10 @@ fn path_alias_multiple_replacements_tries_both() {
 fn path_alias_more_specific_pattern_wins() {
     let mut paths = BTreeMap::new();
     paths.insert("@/*".to_string(), vec!["src/*".to_string()]);
-    paths.insert("@/components/*".to_string(), vec!["src/ui/components/*".to_string()]);
+    paths.insert(
+        "@/components/*".to_string(),
+        vec!["src/ui/components/*".to_string()],
+    );
     let mut resolver = DeterministicTsModuleResolver::new(TsModuleResolutionConfig {
         project_root: "/workspace".to_string(),
         paths,
@@ -752,7 +767,10 @@ fn path_alias_more_specific_pattern_wins() {
 
     let req = import_req("@/components/Button");
     let outcome = resolver.resolve(&req, &ctx()).unwrap();
-    assert_eq!(outcome.resolved_path, "/workspace/src/ui/components/Button.ts");
+    assert_eq!(
+        outcome.resolved_path,
+        "/workspace/src/ui/components/Button.ts"
+    );
 }
 
 // ===========================================================================
@@ -863,7 +881,13 @@ fn resolver_is_deterministic_across_repeated_resolves() {
     let req = import_req("./a").with_referrer("/workspace/src/main.ts");
 
     let results: Vec<_> = (0..10)
-        .map(|_| resolver.resolve(&req, &ctx()).unwrap().resolved_path.clone())
+        .map(|_| {
+            resolver
+                .resolve(&req, &ctx())
+                .unwrap()
+                .resolved_path
+                .clone()
+        })
         .collect();
 
     // All results must be identical
@@ -887,7 +911,13 @@ fn resolver_deterministic_with_multiple_path_aliases() {
 
     let req = import_req("@utils/math");
     let results: Vec<_> = (0..5)
-        .map(|_| resolver.resolve(&req, &ctx()).unwrap().resolved_path.clone())
+        .map(|_| {
+            resolver
+                .resolve(&req, &ctx())
+                .unwrap()
+                .resolved_path
+                .clone()
+        })
         .collect();
     let first = &results[0];
     for r in &results {
@@ -995,20 +1025,14 @@ fn drift_missing_target_subset() {
 
 #[test]
 fn drift_extra_target_superset() {
-    let report = classify_resolution_drift(
-        &["a".to_string()],
-        &["a".to_string(), "b".to_string()],
-    );
+    let report = classify_resolution_drift(&["a".to_string()], &["a".to_string(), "b".to_string()]);
     assert!(report.drift_detected);
     assert_eq!(report.class, TsResolutionDriftClass::ExtraTarget);
 }
 
 #[test]
 fn drift_full_mismatch_disjoint() {
-    let report = classify_resolution_drift(
-        &["alpha".to_string()],
-        &["beta".to_string()],
-    );
+    let report = classify_resolution_drift(&["alpha".to_string()], &["beta".to_string()]);
     assert!(report.drift_detected);
     assert_eq!(report.class, TsResolutionDriftClass::FullMismatch);
 }
@@ -1023,17 +1047,20 @@ fn drift_both_empty_is_no_drift() {
 #[test]
 fn drift_remediation_messages_nonempty_for_all_classes() {
     let tests: &[(&[&str], &[&str])] = &[
-        (&["a"], &["a"]),         // NoDrift
+        (&["a"], &["a"]),           // NoDrift
         (&["a", "b"], &["b", "a"]), // OrderMismatch
-        (&["a", "b"], &["a"]),    // MissingTarget
-        (&["a"], &["a", "b"]),    // ExtraTarget
-        (&["a"], &["b"]),         // FullMismatch
+        (&["a", "b"], &["a"]),      // MissingTarget
+        (&["a"], &["a", "b"]),      // ExtraTarget
+        (&["a"], &["b"]),           // FullMismatch
     ];
     for (reference, observed) in tests {
         let ref_vec: Vec<String> = reference.iter().map(|s| s.to_string()).collect();
         let obs_vec: Vec<String> = observed.iter().map(|s| s.to_string()).collect();
         let report = classify_resolution_drift(&ref_vec, &obs_vec);
-        assert!(!report.remediation.is_empty(), "remediation should be non-empty");
+        assert!(
+            !report.remediation.is_empty(),
+            "remediation should be non-empty"
+        );
     }
 }
 
@@ -1090,16 +1117,13 @@ fn write_artifacts_manifest_schema_version() {
     let dir = unique_temp_dir("schema_ver");
     let _ = fs::remove_dir_all(&dir);
     let drift = classify_resolution_drift(&[], &[]);
-    let manifest = write_ts_resolution_artifacts(
-        &dir,
-        "sv-test",
-        "2026-01-01T00:00:00Z",
-        &[],
-        &[],
-        &drift,
-    )
-    .unwrap();
-    assert_eq!(manifest.schema_version, "rgc.ts-module-resolution.parity.v1");
+    let manifest =
+        write_ts_resolution_artifacts(&dir, "sv-test", "2026-01-01T00:00:00Z", &[], &[], &drift)
+            .unwrap();
+    assert_eq!(
+        manifest.schema_version,
+        "rgc.ts-module-resolution.parity.v1"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1213,8 +1237,7 @@ fn deeply_nested_relative_resolution() {
 fn multiple_parent_traversals_in_specifier() {
     let mut resolver = resolver_with_root("/workspace");
     resolver.register_file("/workspace/src/shared/util.ts");
-    let req = import_req("../../shared/util")
-        .with_referrer("/workspace/src/deep/nested/main.ts");
+    let req = import_req("../../shared/util").with_referrer("/workspace/src/deep/nested/main.ts");
     let outcome = resolver.resolve(&req, &ctx()).unwrap();
     assert_eq!(outcome.resolved_path, "/workspace/src/shared/util.ts");
 }

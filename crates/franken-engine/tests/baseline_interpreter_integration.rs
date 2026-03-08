@@ -63,6 +63,14 @@ fn v8_run(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
     V8Lane::new().execute(module, "integ-trace")
 }
 
+fn assert_both_lanes_value(module: &Ir3Module, expected: Value, label: &str) {
+    let qjs = qjs_run(module).unwrap();
+    assert_eq!(qjs.value, expected.clone(), "quickjs mismatch for {label}");
+
+    let v8 = v8_run(module).unwrap();
+    assert_eq!(v8.value, expected, "v8 mismatch for {label}");
+}
+
 // ============================================================================
 // 1. Value — constructors, truthiness, type_name, Display, Ord, serde
 // ============================================================================
@@ -1449,4 +1457,242 @@ fn lane_router_default_eq_new() {
     let rn = n.execute(&m, "t2", None).unwrap();
     assert_eq!(rd.result.value, rn.result.value);
     assert_eq!(rd.lane, rn.lane);
+}
+
+// ============================================================================
+// 31. Extended operator semantics
+// ============================================================================
+
+#[test]
+fn arithmetic_extension_ops_execute_across_lanes() {
+    let cases = vec![
+        (
+            "mod",
+            test_module(vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 11 },
+                Ir3Instruction::LoadInt { dst: 1, value: 4 },
+                Ir3Instruction::Mod {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ]),
+            Value::Int(3),
+        ),
+        (
+            "exp",
+            test_module(vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 3 },
+                Ir3Instruction::LoadInt { dst: 1, value: 4 },
+                Ir3Instruction::Exp {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ]),
+            Value::Int(81),
+        ),
+        (
+            "bitand",
+            test_module(vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 6 },
+                Ir3Instruction::LoadInt { dst: 1, value: 3 },
+                Ir3Instruction::BitAnd {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ]),
+            Value::Int(2),
+        ),
+        (
+            "ushr",
+            test_module(vec![
+                Ir3Instruction::LoadInt { dst: 0, value: -1 },
+                Ir3Instruction::LoadInt { dst: 1, value: 1 },
+                Ir3Instruction::Ushr {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ]),
+            Value::Int(2_147_483_647),
+        ),
+    ];
+
+    for (label, module, expected) in cases {
+        assert_both_lanes_value(&module, expected, label);
+    }
+}
+
+#[test]
+fn comparison_and_equality_ops_execute_across_lanes() {
+    let cases = vec![
+        (
+            "lt_numeric_string",
+            test_module_with_pool(
+                vec![
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: 9 },
+                    Ir3Instruction::Lt {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    Ir3Instruction::Return { value: 2 },
+                ],
+                vec!["5".into()],
+            ),
+            Value::Bool(true),
+        ),
+        (
+            "gt_strings",
+            test_module_with_pool(
+                vec![
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::Gt {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    Ir3Instruction::Return { value: 2 },
+                ],
+                vec!["beta".into(), "alpha".into()],
+            ),
+            Value::Bool(true),
+        ),
+        (
+            "abstract_eq_numeric_string",
+            test_module_with_pool(
+                vec![
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: 7 },
+                    Ir3Instruction::Eq {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    Ir3Instruction::Return { value: 2 },
+                ],
+                vec!["7".into()],
+            ),
+            Value::Bool(true),
+        ),
+        (
+            "strict_eq_numeric_string",
+            test_module_with_pool(
+                vec![
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: 7 },
+                    Ir3Instruction::StrictEq {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    Ir3Instruction::Return { value: 2 },
+                ],
+                vec!["7".into()],
+            ),
+            Value::Bool(false),
+        ),
+        (
+            "null_eq_undefined",
+            test_module(vec![
+                Ir3Instruction::LoadNull { dst: 0 },
+                Ir3Instruction::LoadUndefined { dst: 1 },
+                Ir3Instruction::Eq {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ]),
+            Value::Bool(true),
+        ),
+        (
+            "strict_not_eq_null_undefined",
+            test_module(vec![
+                Ir3Instruction::LoadNull { dst: 0 },
+                Ir3Instruction::LoadUndefined { dst: 1 },
+                Ir3Instruction::StrictNotEq {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ]),
+            Value::Bool(true),
+        ),
+    ];
+
+    for (label, module, expected) in cases {
+        assert_both_lanes_value(&module, expected, label);
+    }
+}
+
+#[test]
+fn in_operator_checks_membership_across_lanes() {
+    let m = test_module_with_pool(
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadInt { dst: 1, value: 7 },
+            Ir3Instruction::LoadInt { dst: 2, value: 42 },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::InOp {
+                dst: 3,
+                lhs: 1,
+                rhs: 0,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec![],
+    );
+    assert_both_lanes_value(&m, Value::Bool(true), "in_operator");
+}
+
+#[test]
+fn instanceof_requires_function_rhs() {
+    let m = test_module(vec![
+        Ir3Instruction::NewObject { dst: 0 },
+        Ir3Instruction::LoadInt { dst: 1, value: 5 },
+        Ir3Instruction::InstanceOf {
+            dst: 2,
+            lhs: 0,
+            rhs: 1,
+        },
+        Ir3Instruction::Return { value: 2 },
+    ]);
+
+    assert!(matches!(
+        qjs_run(&m).unwrap_err(),
+        InterpreterError::TypeError { .. }
+    ));
+    assert!(matches!(
+        v8_run(&m).unwrap_err(),
+        InterpreterError::TypeError { .. }
+    ));
 }

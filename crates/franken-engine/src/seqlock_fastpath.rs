@@ -544,8 +544,7 @@ mod tests {
 
     #[test]
     fn clone_preserves_policy() {
-        let fast_path =
-            SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(7, 3));
+        let fast_path = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(7, 3));
         let cloned = fast_path.clone();
         assert_eq!(cloned.policy(), RetryBudgetPolicy::new(7, 3));
     }

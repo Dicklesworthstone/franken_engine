@@ -303,8 +303,7 @@ fn descriptor_serde_roundtrip() {
 fn bundle_write_creates_all_expected_files() {
     let out_dir = unique_temp_dir("bundle-write");
     let commands = vec!["test-command".to_string()];
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     assert!(artifacts.inventory_path.exists());
     assert!(artifacts.run_manifest_path.exists());
     assert!(artifacts.events_path.exists());
@@ -315,8 +314,7 @@ fn bundle_write_creates_all_expected_files() {
 fn bundle_inventory_is_valid_json() {
     let out_dir = unique_temp_dir("bundle-inventory-json");
     let commands = vec!["check".to_string()];
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let bytes = fs::read(&artifacts.inventory_path).expect("read");
     let inventory: LoweringGapInventory = serde_json::from_slice(&bytes).expect("parse json");
     assert_eq!(inventory.sites.len(), 6);
@@ -326,8 +324,7 @@ fn bundle_inventory_is_valid_json() {
 fn bundle_manifest_has_correct_counts() {
     let out_dir = unique_temp_dir("bundle-manifest-counts");
     let commands = vec!["verify".to_string()];
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let bytes = fs::read(&artifacts.run_manifest_path).expect("read");
     let manifest: LoweringGapInventoryRunManifest =
         serde_json::from_slice(&bytes).expect("parse json");
@@ -342,8 +339,7 @@ fn bundle_manifest_has_correct_counts() {
 fn bundle_events_has_correct_line_count() {
     let out_dir = unique_temp_dir("bundle-events-count");
     let commands = vec!["run".to_string()];
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let events = fs::read_to_string(&artifacts.events_path).expect("read");
     // 1 started + 6 gap_site_recorded + 1 completed = 8
     assert_eq!(events.lines().count(), 8);
@@ -353,12 +349,10 @@ fn bundle_events_has_correct_line_count() {
 fn bundle_events_first_line_is_inventory_started() {
     let out_dir = unique_temp_dir("bundle-events-started");
     let commands = vec!["init".to_string()];
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let events = fs::read_to_string(&artifacts.events_path).expect("read");
     let first_line = events.lines().next().expect("has first line");
-    let event: LoweringGapInventoryEvent =
-        serde_json::from_str(first_line).expect("parse event");
+    let event: LoweringGapInventoryEvent = serde_json::from_str(first_line).expect("parse event");
     assert_eq!(event.event, "inventory_started");
     assert_eq!(event.outcome, "started");
 }
@@ -367,12 +361,10 @@ fn bundle_events_first_line_is_inventory_started() {
 fn bundle_events_last_line_is_inventory_completed() {
     let out_dir = unique_temp_dir("bundle-events-completed");
     let commands = vec!["finalize".to_string()];
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let events = fs::read_to_string(&artifacts.events_path).expect("read");
     let last_line = events.lines().last().expect("has last line");
-    let event: LoweringGapInventoryEvent =
-        serde_json::from_str(last_line).expect("parse event");
+    let event: LoweringGapInventoryEvent = serde_json::from_str(last_line).expect("parse event");
     assert_eq!(event.event, "inventory_completed");
     assert_eq!(event.outcome, "completed");
 }
@@ -385,8 +377,7 @@ fn bundle_commands_captures_provided_command_lines() {
         "--out-dir".to_string(),
         "/some/path".to_string(),
     ];
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let commands_txt = fs::read_to_string(&artifacts.commands_path).expect("read");
     assert!(commands_txt.contains("franken_lowering_gap_inventory"));
     assert!(commands_txt.contains("--out-dir"));
@@ -406,10 +397,8 @@ fn bundle_hash_is_deterministic_across_writes() {
     let out_dir1 = unique_temp_dir("bundle-hash-1");
     let out_dir2 = unique_temp_dir("bundle-hash-2");
     let commands = vec!["determinism-check".to_string()];
-    let a1 =
-        write_lowering_gap_inventory_bundle(&out_dir1, &commands).expect("write first");
-    let a2 =
-        write_lowering_gap_inventory_bundle(&out_dir2, &commands).expect("write second");
+    let a1 = write_lowering_gap_inventory_bundle(&out_dir1, &commands).expect("write first");
+    let a2 = write_lowering_gap_inventory_bundle(&out_dir2, &commands).expect("write second");
     assert_eq!(a1.inventory_hash, a2.inventory_hash);
 }
 
@@ -417,8 +406,7 @@ fn bundle_hash_is_deterministic_across_writes() {
 fn bundle_site_count_matches_inventory() {
     let out_dir = unique_temp_dir("bundle-site-count");
     let commands = vec!["count".to_string()];
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     assert_eq!(artifacts.site_count, 6);
 }
 
@@ -519,8 +507,7 @@ fn all_owners_are_lowering_pipeline() {
 fn all_source_references_point_to_lowering_pipeline() {
     for site in LoweringGapSiteId::ALL {
         assert!(
-            site.source_reference()
-                .contains("lowering_pipeline.rs"),
+            site.source_reference().contains("lowering_pipeline.rs"),
             "source reference for {:?} should point to lowering_pipeline.rs",
             site
         );

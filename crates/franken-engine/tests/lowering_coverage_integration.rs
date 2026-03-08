@@ -1625,6 +1625,44 @@ fn lowering_binary_logical_operators() {
 }
 
 #[test]
+fn lowering_binary_logical_operators_use_short_circuit_control_flow() {
+    for (operator, label) in [
+        (BinaryOperator::LogicalAnd, "logical and"),
+        (BinaryOperator::LogicalOr, "logical or"),
+        (BinaryOperator::NullishCoalescing, "nullish coalescing"),
+    ] {
+        let ir0 = make_ir0(
+            ParseGoal::Script,
+            vec![make_expr_stmt(Expression::Binary {
+                operator,
+                left: Box::new(Expression::Identifier("lhs".to_string())),
+                right: Box::new(Expression::Identifier("rhs".to_string())),
+            })],
+        );
+        let ir1 = lower_ir0_to_ir1(&ir0).unwrap();
+        assert!(
+            ir1.module.ops.iter().any(|op| match operator {
+                BinaryOperator::LogicalAnd => matches!(op, Ir1Op::JumpIfTruthy { .. }),
+                BinaryOperator::LogicalOr => matches!(op, Ir1Op::JumpIfFalsyConsume { .. }),
+                BinaryOperator::NullishCoalescing => {
+                    matches!(op, Ir1Op::JumpIfNullish { .. })
+                }
+                _ => false,
+            }),
+            "{label} should lower through explicit short-circuit control flow"
+        );
+        assert!(
+            !ir1
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::BinaryOp { operator } if matches!(operator, BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr | BinaryOperator::NullishCoalescing))),
+            "{label} should not survive as a plain BinaryOp in IR1"
+        );
+    }
+}
+
+#[test]
 fn lowering_unary_expression() {
     let ir0 = make_ir0(
         ParseGoal::Script,
@@ -1655,6 +1693,7 @@ fn lowering_unary_operators_all_variants() {
         (UnaryOperator::LogicalNot, "logical_not"),
         (UnaryOperator::Typeof, "typeof"),
         (UnaryOperator::Void, "void"),
+        (UnaryOperator::UnaryPlus, "unary_plus"),
     ] {
         let ir0 = make_ir0(
             ParseGoal::Script,
@@ -1665,6 +1704,77 @@ fn lowering_unary_operators_all_variants() {
         );
         let output = run_full(&ir0);
         assert_eq!(output.witnesses.len(), 3, "failed for {label}");
+    }
+}
+
+#[test]
+fn lowering_delete_member_expression_emits_delete_property() {
+    let ir0 = make_ir0(
+        ParseGoal::Script,
+        vec![make_expr_stmt(Expression::Unary {
+            operator: UnaryOperator::Delete,
+            argument: Box::new(Expression::Member {
+                object: Box::new(Expression::Identifier("obj".to_string())),
+                property: Box::new(Expression::Identifier("prop".to_string())),
+                computed: false,
+            }),
+        })],
+    );
+    let ir1 = lower_ir0_to_ir1(&ir0).unwrap();
+    assert!(
+        ir1.module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::DeleteProperty { .. })),
+        "delete member should lower through DeleteProperty"
+    );
+}
+
+#[test]
+fn lowering_logical_compound_identifier_assignment_uses_short_circuit_ops() {
+    for (operator, label) in [
+        (AssignmentOperator::LogicalAndAssign, "&&="),
+        (AssignmentOperator::LogicalOrAssign, "||="),
+        (AssignmentOperator::NullishCoalescingAssign, "??="),
+    ] {
+        let ir0 = make_ir0(
+            ParseGoal::Script,
+            vec![make_expr_stmt(Expression::Assignment {
+                operator,
+                left: Box::new(Expression::Identifier("value".to_string())),
+                right: Box::new(Expression::NumericLiteral(1)),
+            })],
+        );
+        let ir1 = lower_ir0_to_ir1(&ir0).unwrap();
+        assert!(
+            ir1.module.ops.iter().any(|op| match operator {
+                AssignmentOperator::LogicalAndAssign => {
+                    matches!(op, Ir1Op::JumpIfTruthy { .. })
+                }
+                AssignmentOperator::LogicalOrAssign => {
+                    matches!(op, Ir1Op::JumpIfFalsyConsume { .. })
+                }
+                AssignmentOperator::NullishCoalescingAssign => {
+                    matches!(op, Ir1Op::JumpIfNullish { .. })
+                }
+                _ => false,
+            }),
+            "{label} should lower through short-circuit branch ops"
+        );
+        assert!(
+            !ir1.module.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::AssignOp {
+                        operator: AssignmentOperator::LogicalAndAssign
+                            | AssignmentOperator::LogicalOrAssign
+                            | AssignmentOperator::NullishCoalescingAssign,
+                        ..
+                    }
+                )
+            }),
+            "{label} should not survive as a logical AssignOp"
+        );
     }
 }
 

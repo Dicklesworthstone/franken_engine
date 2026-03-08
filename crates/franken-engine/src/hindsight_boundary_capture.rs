@@ -1597,9 +1597,7 @@ mod tests {
             .collect(),
             escalation_reason: None,
         };
-        let error = session
-            .capture_boundary(request)
-            .expect_err("empty field");
+        let error = session.capture_boundary(request).expect_err("empty field");
         assert!(matches!(
             error,
             BoundaryCaptureError::EmptyField {
@@ -1647,7 +1645,9 @@ mod tests {
         session
             .capture_scheduling_decision(&context, "ready", "task-1", "ordering-digest", None)
             .expect("capture");
-        let plans = session.minimal_replay_plans().expect("no escalation needed");
+        let plans = session
+            .minimal_replay_plans()
+            .expect("no escalation needed");
         assert_eq!(plans.len(), 1);
     }
 

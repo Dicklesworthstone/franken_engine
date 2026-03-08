@@ -331,6 +331,14 @@ fn chunk_plan_boundaries_aligned_to_newlines() {
 }
 
 #[test]
+fn chunk_plan_sparse_utf8_boundary_falls_back_to_single_chunk() {
+    let source = format!("{}\n", "é".repeat(6));
+    let plan = parallel_parser::compute_chunk_plan(source.as_bytes(), 3);
+    assert_eq!(plan.worker_count, 1);
+    assert_eq!(plan.chunks, vec![(0, source.len() as u64)]);
+}
+
+#[test]
 fn chunk_plan_one_byte_input() {
     let plan = parallel_parser::compute_chunk_plan(b"x", 4);
     assert!(!plan.chunks.is_empty());
@@ -900,6 +908,29 @@ fn parity_check_passes_on_parallel_parse() {
         assert!(pr.parity_ok, "parity check should pass");
         assert_eq!(pr.mismatch_index, None, "no mismatch expected");
     }
+}
+
+#[test]
+fn parse_utf8_sparse_boundary_matches_serial_without_forced_parity() {
+    let source = format!("{}\n", "é".repeat(6));
+    let serial_config = ParallelConfig {
+        min_parallel_bytes: 1,
+        max_workers: 1,
+        always_check_parity: false,
+        ..default_config()
+    };
+    let parallel_config = ParallelConfig {
+        min_parallel_bytes: 1,
+        max_workers: 3,
+        always_check_parity: false,
+        ..default_config()
+    };
+
+    let serial_output = parallel_parser::parse(&make_input(&source, &serial_config)).unwrap();
+    let parallel_output = parallel_parser::parse(&make_input(&source, &parallel_config)).unwrap();
+
+    assert_eq!(parallel_output.output_hash, serial_output.output_hash);
+    assert_eq!(parallel_output.tokens, serial_output.tokens);
 }
 
 // =======================================================================

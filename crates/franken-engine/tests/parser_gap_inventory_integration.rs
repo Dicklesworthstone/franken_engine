@@ -237,7 +237,10 @@ fn unsupported_syntax_diagnostic_from_site_has_correct_fields() {
     assert_eq!(diag.diagnostic_code, "FE-PARSER-GAP-NEW-0001");
     assert_eq!(diag.source_label, "test-source");
     assert_eq!(diag.span, Some(span));
-    assert_eq!(diag.site_id, ParserGapSiteId::NewExpressionCallPlaceholder.as_str());
+    assert_eq!(
+        diag.site_id,
+        ParserGapSiteId::NewExpressionCallPlaceholder.as_str()
+    );
     assert_eq!(diag.stage, ParserGapStage::Ir0ToIr1);
 }
 
@@ -341,8 +344,7 @@ fn unsupported_syntax_diagnostic_parse_diagnostic_envelope_roundtrip() {
 fn inventory_serde_roundtrip() {
     let inventory = parser_gap_inventory();
     let json = serde_json::to_string(&inventory).expect("serialize");
-    let deserialized: ParserGapInventory =
-        serde_json::from_str(&json).expect("deserialize");
+    let deserialized: ParserGapInventory = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(inventory, deserialized);
 }
 
@@ -350,8 +352,7 @@ fn inventory_serde_roundtrip() {
 fn site_id_serde_roundtrip() {
     for site in ParserGapSiteId::ALL {
         let json = serde_json::to_string(&site).expect("serialize");
-        let deserialized: ParserGapSiteId =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: ParserGapSiteId = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(site, deserialized);
     }
 }
@@ -401,8 +402,7 @@ fn unsupported_syntax_diagnostic_serde_roundtrip() {
 fn bundle_write_creates_all_expected_files() {
     let out_dir = unique_temp_dir("bundle-write");
     let commands = vec!["test-command".to_string()];
-    let artifacts =
-        write_parser_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_parser_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     assert!(artifacts.inventory_path.exists());
     assert!(artifacts.run_manifest_path.exists());
     assert!(artifacts.events_path.exists());
@@ -413,8 +413,7 @@ fn bundle_write_creates_all_expected_files() {
 fn bundle_inventory_is_valid_json() {
     let out_dir = unique_temp_dir("bundle-inv-json");
     let commands = vec!["check".to_string()];
-    let artifacts =
-        write_parser_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_parser_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let bytes = fs::read(&artifacts.inventory_path).expect("read");
     let inventory: ParserGapInventory = serde_json::from_slice(&bytes).expect("parse");
     assert_eq!(inventory.sites.len(), 6);
@@ -424,11 +423,9 @@ fn bundle_inventory_is_valid_json() {
 fn bundle_manifest_has_correct_counts() {
     let out_dir = unique_temp_dir("bundle-manifest");
     let commands = vec!["verify".to_string()];
-    let artifacts =
-        write_parser_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_parser_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let bytes = fs::read(&artifacts.run_manifest_path).expect("read");
-    let manifest: ParserGapInventoryRunManifest =
-        serde_json::from_slice(&bytes).expect("parse");
+    let manifest: ParserGapInventoryRunManifest = serde_json::from_slice(&bytes).expect("parse");
     assert_eq!(manifest.site_count, 6);
     assert_eq!(manifest.fail_closed_site_count, 0);
     assert_eq!(manifest.open_placeholder_site_count, 0);
@@ -438,8 +435,7 @@ fn bundle_manifest_has_correct_counts() {
 fn bundle_events_has_correct_structure() {
     let out_dir = unique_temp_dir("bundle-events");
     let commands = vec!["run".to_string()];
-    let artifacts =
-        write_parser_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let artifacts = write_parser_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let events_str = fs::read_to_string(&artifacts.events_path).expect("read");
     // 1 started + 6 recorded + 1 completed = 8
     assert_eq!(events_str.lines().count(), 8);
@@ -540,8 +536,5 @@ fn remediation_status_as_str_values() {
         ParserGapRemediationStatus::OpenPlaceholder.as_str(),
         "open_placeholder"
     );
-    assert_eq!(
-        ParserGapRemediationStatus::Resolved.as_str(),
-        "resolved"
-    );
+    assert_eq!(ParserGapRemediationStatus::Resolved.as_str(), "resolved");
 }

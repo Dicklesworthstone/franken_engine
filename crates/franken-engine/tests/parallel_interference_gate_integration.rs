@@ -673,6 +673,14 @@ fn flake_rate_single_run_mismatched() {
 }
 
 #[test]
+fn flake_rate_excess_mismatches_clamp_to_full_rate() {
+    let fr = FlakeRate::compute(5, 10, 0);
+    assert_eq!(fr.mismatched_runs, 5);
+    assert_eq!(fr.rate_millionths, 1_000_000);
+    assert!(!fr.within_threshold);
+}
+
+#[test]
 fn flake_rate_serde_roundtrip() {
     let fr = FlakeRate::compute(50, 5, 200_000);
     let json = serde_json::to_string(&fr).unwrap();

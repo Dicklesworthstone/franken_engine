@@ -1403,6 +1403,9 @@ mod tests {
     use super::*;
 
     use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::counterexample_synthesizer::{
         ConcreteScenario, SynthesisOutcome, SynthesisStrategy, SynthesizedCounterexample,
@@ -1640,5 +1643,73 @@ mod tests {
         );
         let catalog = LawMiningCatalog::from_sources(19, &[counterexample], &[evidence]);
         assert!(catalog.validate().is_valid);
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after unix epoch")
+            .as_nanos();
+        path.push(format!("franken-law-mining-{label}-{nonce}"));
+        fs::create_dir_all(&path).expect("temp dir");
+        path
+    }
+
+    #[test]
+    fn default_bundle_writes_required_artifacts() {
+        let artifact_dir = temp_dir("bundle");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.command_invocation = "law-mining-test".to_string();
+
+        let report = emit_default_law_mining_bundle(&context).expect("bundle should write");
+
+        for path in [
+            &report.candidate_law_catalog_path,
+            &report.invariant_seed_ledger_path,
+            &report.normal_form_hypotheses_path,
+            &report.provenance_index_path,
+            &report.scope_hypotheses_path,
+            &report.trace_ids_path,
+            &report.run_manifest_path,
+            &report.events_path,
+            &report.commands_path,
+            &report.env_path,
+            &report.artifact_index_path,
+            &report.repro_lock_path,
+            &report.summary_path,
+        ] {
+            assert!(path.exists(), "missing artifact {}", path.display());
+        }
+
+        let manifest: LawMiningRunManifest = serde_json::from_slice(
+            &fs::read(&report.run_manifest_path).expect("read run manifest"),
+        )
+        .expect("decode run manifest");
+        assert_eq!(
+            manifest.schema_version,
+            LAW_MINING_RUN_MANIFEST_SCHEMA_VERSION
+        );
+        assert_eq!(manifest.bead_id, LAW_MINING_BEAD_ID);
+        assert!(
+            manifest
+                .artifact_hashes
+                .iter()
+                .any(|artifact| artifact.path == "candidate_law_catalog.json")
+        );
+    }
+
+    #[test]
+    fn render_summary_mentions_top_candidate() {
+        let fixture = default_fixture();
+        let catalog = LawMiningCatalog::from_sources(
+            fixture.generated_epoch,
+            &fixture.counterexamples,
+            &fixture.evidence_entries,
+        );
+        let summary = render_summary(&catalog);
+        assert!(summary.contains("# Law Mining Summary"));
+        assert!(summary.contains("## Top Candidate"));
+        assert!(summary.contains("candidate_id:"));
     }
 }

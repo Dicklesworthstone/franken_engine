@@ -9,12 +9,20 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/var/tmp/rch_target_franken_engine_parser_parallel_interference}"
 artifact_root="${PARSER_PARALLEL_INTERFERENCE_ARTIFACT_ROOT:-artifacts/parser_parallel_interference}"
 scenario_id="${PARSER_PARALLEL_INTERFERENCE_SCENARIO:-psrp-05-4-2}"
 arch_profile="${PARSER_PARALLEL_INTERFERENCE_ARCH_PROFILE:-${PARSER_FRONTIER_RUST_HOST}}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
+rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-${rch_timeout_seconds}}}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+default_target_dir_root="${PARSER_PARALLEL_INTERFERENCE_TARGET_DIR_ROOT:-/var/tmp/rch_target_franken_engine_parser_parallel_interference}"
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  target_dir="${CARGO_TARGET_DIR}"
+  target_dir_strategy="explicit-env"
+else
+  target_dir="${default_target_dir_root}/${timestamp}-pid$$"
+  target_dir_strategy="run-scoped-default"
+fi
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
@@ -34,11 +42,18 @@ if ! command -v rch >/dev/null 2>&1; then
 fi
 
 run_rch() {
-  timeout "${rch_timeout_seconds}" \
+  RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
+    RCH_BUILD_TIMEOUT_SECONDS="${rch_build_timeout_sec}" \
+    timeout "${rch_timeout_seconds}" \
     rch exec -- env \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
     "$@"
+}
+
+rch_strip_ansi() {
+  local input="$1"
+  sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' "$input"
 }
 
 rch_reject_local_fallback() {
@@ -52,7 +67,9 @@ rch_reject_local_fallback() {
 rch_last_remote_exit_code() {
   local log_path="$1"
   local exit_line
-  exit_line="$(grep -Eo 'Remote command finished: exit=[0-9]+' "$log_path" | tail -n 1 || true)"
+  exit_line="$(
+    rch_strip_ansi "$log_path" | grep -Eo 'Remote command finished: exit=[0-9]+' | tail -n 1 || true
+  )"
   if [[ -z "$exit_line" ]]; then
     echo ""
     return
@@ -60,20 +77,35 @@ rch_last_remote_exit_code() {
   echo "${exit_line##*=}"
 }
 
+rch_reported_timeout_seconds() {
+  local log_path="$1"
+  local timeout_value
+  timeout_value="$(
+    rch_strip_ansi "$log_path" | sed -nE 's/.*timeout_secs: ([0-9]+).*/\1/p' | tail -n 1
+  )"
+  if [[ -z "$timeout_value" ]]; then
+    echo ""
+    return
+  fi
+  echo "$timeout_value"
+}
+
 rch_has_recoverable_artifact_timeout() {
   local log_path="$1"
-  grep -Eiq 'artifact retrieval timed out|artifact transfer timed out|timed out waiting for artifacts|failed to retrieve artifacts|failed to download artifacts' "$log_path"
+  rch_strip_ansi "$log_path" \
+    | grep -Eiq 'artifact retrieval timed out|artifact transfer timed out|timed out waiting for artifacts|failed to retrieve artifacts|failed to download artifacts'
 }
 
 rch_has_remote_compile_failure() {
   local log_path="$1"
-  sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' "$log_path" \
+  rch_strip_ansi "$log_path" \
     | grep -Eiq '(^|[^[:alnum:]_])error(\[[A-Z0-9]+\])?([^[:alnum:]_]|$)|could not compile `|aborting due to [0-9]+ previous errors?'
 }
 
 rch_reject_artifact_retrieval_failure() {
   local log_path="$1"
-  if grep -Eiq 'Artifact retrieval failed|Failed to retrieve artifacts:|rsync artifact retrieval failed|rsync error: .*code 23' "$log_path"; then
+  if rch_strip_ansi "$log_path" \
+    | grep -Eiq 'Artifact retrieval failed|Failed to retrieve artifacts:|rsync artifact retrieval failed|rsync error: .*code 23'; then
     echo "rch artifact retrieval failed; refusing to mark heavy command as successful" >&2
     return 1
   fi
@@ -88,6 +120,8 @@ run_step() {
   local command_text="$1"
   local log_path
   local run_rch_status=0
+  local remote_exit_code=""
+  local reported_timeout=""
   local step_index
   shift
 
@@ -99,10 +133,16 @@ run_step() {
   echo "==> $command_text"
 
   run_rch "$@" > >(tee "$log_path") 2>&1 || run_rch_status=$?
+  remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
+  reported_timeout="$(rch_reported_timeout_seconds "$log_path")"
 
   if [[ "$run_rch_status" -ne 0 ]]; then
-    local remote_exit_code
-    remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
+    if [[ "$rch_build_timeout_sec" =~ ^[0-9]+$ && "$reported_timeout" =~ ^[0-9]+$ ]] &&
+      (( reported_timeout < rch_build_timeout_sec )); then
+      echo "rch reported timeout_secs=${reported_timeout} but requested build timeout is ${rch_build_timeout_sec}" | tee -a "$log_path"
+      failed_command="${command_text} (rch-timeout-mismatch-${reported_timeout}-lt-${rch_build_timeout_sec})"
+      return 1
+    fi
     if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
     elif [[ "$run_rch_status" -eq 124 ]]; then
@@ -121,6 +161,13 @@ run_step() {
     fi
   fi
 
+  if [[ "$rch_build_timeout_sec" =~ ^[0-9]+$ && "$reported_timeout" =~ ^[0-9]+$ ]] &&
+    (( reported_timeout < rch_build_timeout_sec )); then
+    echo "rch reported timeout_secs=${reported_timeout} but requested build timeout is ${rch_build_timeout_sec}" | tee -a "$log_path"
+    failed_command="${command_text} (rch-timeout-mismatch-${reported_timeout}-lt-${rch_build_timeout_sec})"
+    return 1
+  fi
+
   if ! rch_reject_local_fallback "$log_path"; then
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
@@ -128,6 +175,17 @@ run_step() {
 
   if ! rch_reject_artifact_retrieval_failure "$log_path"; then
     failed_command="${command_text} (rch-artifact-retrieval-failed)"
+    return 1
+  fi
+
+  if [[ -z "$remote_exit_code" ]]; then
+    echo "rch output missing remote exit marker; failing closed" | tee -a "$log_path"
+    failed_command="${command_text} (missing-remote-exit-marker)"
+    return 1
+  fi
+
+  if [[ "$remote_exit_code" != "0" ]]; then
+    failed_command="${command_text} (remote-exit-${remote_exit_code})"
     return 1
   fi
 }
@@ -163,25 +221,25 @@ run_mode() {
   case "$mode" in
     check)
       run_step \
-        "cargo check -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration" \
-        cargo check -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration
+        "cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run" \
+        cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
       ;;
     test)
       run_test_lane
       ;;
     clippy)
       run_step \
-        "cargo clippy -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration -- -D warnings" \
-        cargo clippy -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration -- -D warnings
+        "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run" \
+        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
       ;;
     ci)
       run_step \
-        "cargo check -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration" \
-        cargo check -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration
+        "cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run" \
+        cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
       run_test_lane
       run_step \
-        "cargo clippy -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration -- -D warnings" \
-        cargo clippy -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration -- -D warnings
+        "env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run" \
+        env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --lib --test parallel_interference_gate_integration --test parallel_parser_integration --no-run
       ;;
     *)
       echo "usage: $0 [check|test|clippy|ci]" >&2
@@ -230,6 +288,8 @@ write_manifest() {
     echo "  \"mode\": \"${mode}\"," 
     echo "  \"toolchain\": \"${toolchain}\"," 
     echo "  \"rch_exec_timeout_seconds\": ${rch_timeout_seconds},"
+    echo "  \"rch_build_timeout_seconds\": ${rch_build_timeout_sec},"
+    echo "  \"cargo_target_dir_strategy\": \"${target_dir_strategy}\","
     echo "  \"cargo_target_dir\": \"${target_dir}\"," 
     echo "  \"trace_id\": \"${trace_id}\"," 
     echo "  \"decision_id\": \"${decision_id}\"," 

@@ -406,7 +406,7 @@ security_stdout_failure_reasons_json() {
 run_mode() {
   local selected_mode="${1:-$mode}"
   local runner_command runner_remote_exit_code run_status gate_failure_reasons_pretty
-  local evidence_resolution_status
+  local evidence_resolution_note evidence_resolution_status
 
   case "$selected_mode" in
     check)
@@ -463,9 +463,13 @@ run_mode() {
         failed_command="${runner_command} (missing-summary-outcome)"
         return 1
       fi
+      evidence_resolution_note=""
+      if [[ "$evidence_resolution_status" -eq 2 ]]; then
+        evidence_resolution_note=", evidence-not-retrieved"
+      fi
       if [[ "$gate_outcome" != "pass" ]]; then
         gate_failure_reasons_pretty="$(printf '%s' "$gate_failure_reasons_json" | jq -r 'join("; ")')"
-        failed_command="${runner_command} (gate-outcome=${gate_outcome}${gate_failure_reasons_pretty:+, reasons=${gate_failure_reasons_pretty}}${evidence_resolution_status:+, evidence-not-retrieved})"
+        failed_command="${runner_command} (gate-outcome=${gate_outcome}${gate_failure_reasons_pretty:+, reasons=${gate_failure_reasons_pretty}}${evidence_resolution_note})"
         return 1
       fi
       if [[ "$evidence_resolution_status" -eq 2 ]]; then

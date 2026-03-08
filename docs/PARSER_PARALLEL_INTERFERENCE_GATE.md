@@ -74,10 +74,26 @@ Artifacts are emitted under:
 
 The manifest includes deterministic environment fingerprinting and a one-command
 replay entry suitable for PSRP-07.2 and PSRP-08.2 consumption.
+Unless the caller explicitly sets `CARGO_TARGET_DIR`, the gate now uses a
+run-scoped default target directory rooted at
+`/var/tmp/rch_target_franken_engine_parser_parallel_interference/` so concurrent
+`rch` jobs do not block indefinitely on a shared build-directory lock. The
+manifest records both `cargo_target_dir` and `cargo_target_dir_strategy`.
+Compile-only preflight for `check` mode now uses `cargo test --no-run`, and the
+lint lane uses `clippy-driver` through the same no-run test compilation path.
+That keeps the gate on `rch`'s longer test-timeout surface instead of the
+shorter build/check timeout bucket.
 
 `rch` execution is fail-closed for this gate: if daemon/toolchain errors trigger
 local fallback signatures, the run is marked failed with
 `rch-local-fallback-detected` command attribution.
+The runner also fails closed when `rch` logs a non-zero remote exit marker even
+if the outer shell command itself returned success, preventing silent
+continuation after remote worker failures.
+Timeout-policy drift is treated as blocker evidence: if the logged
+`timeout_secs` value is lower than the requested build timeout, the manifest
+records an `rch-timeout-mismatch-*` failure instead of continuing to later
+steps.
 Timeout paths preserve failure provenance: when remote compiler diagnostics are
 present before timeout, the manifest marks the failed command as
 `rch-timeout-after-remote-compile-failure` instead of a generic timeout.

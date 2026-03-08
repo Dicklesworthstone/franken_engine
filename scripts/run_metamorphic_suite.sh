@@ -25,6 +25,10 @@ property_generator_catalog_path="$run_dir/property_generator_catalog.json"
 generator_choice_stream_schema_path="$run_dir/generator_choice_stream_schema.json"
 shrinker_verdict_report_path="$run_dir/shrinker_verdict_report.json"
 minimized_counterexamples_path="$run_dir/minimized_property_counterexamples.jsonl"
+hdd_reducer_report_path="$run_dir/hdd_reducer_report.json"
+structured_reduction_operator_catalog_path="$run_dir/structured_reduction_operator_catalog.json"
+minimized_structured_repros_path="$run_dir/minimized_structured_repros.jsonl"
+reduction_stability_matrix_path="$run_dir/reduction_stability_matrix.json"
 triage_report_path="$run_dir/triage_report.json"
 governance_actions_path="$run_dir/repro_governance_actions.json"
 trace_ids_path="$run_dir/trace_ids.json"
@@ -40,6 +44,10 @@ runner_property_generator_catalog_path="$runner_run_dir/property_generator_catal
 runner_generator_choice_stream_schema_path="$runner_run_dir/generator_choice_stream_schema.json"
 runner_shrinker_verdict_report_path="$runner_run_dir/shrinker_verdict_report.json"
 runner_minimized_counterexamples_path="$runner_run_dir/minimized_property_counterexamples.jsonl"
+runner_hdd_reducer_report_path="$runner_run_dir/hdd_reducer_report.json"
+runner_structured_reduction_operator_catalog_path="$runner_run_dir/structured_reduction_operator_catalog.json"
+runner_minimized_structured_repros_path="$runner_run_dir/minimized_structured_repros.jsonl"
+runner_reduction_stability_matrix_path="$runner_run_dir/reduction_stability_matrix.json"
 runner_triage_report_path="$runner_run_dir/triage_report.json"
 runner_governance_actions_path="$runner_run_dir/repro_governance_actions.json"
 runner_failures_dir="$runner_run_dir/failures"
@@ -152,7 +160,7 @@ run_step() {
 
 run_metamorphic_runner_step() {
   local step_log_path="${run_dir}/step_$(printf '%03d' "$step_log_index").log"
-  local command_text="cargo run -p frankenengine-metamorphic --bin run_metamorphic_suite -- --pairs=$pairs --seed=$seed --trace-id=$trace_id --decision-id=$decision_id --policy-id=$policy_id --evidence=$evidence_path --events=$relation_events_path --seed-transcript=$seed_transcript_path --seed-manifest=$seed_manifest_path --property-generator-catalog=$property_generator_catalog_path --generator-choice-stream-schema=$generator_choice_stream_schema_path --shrinker-verdict-report=$shrinker_verdict_report_path --minimized-counterexamples=$minimized_counterexamples_path --triage-report=$triage_report_path --governance-actions=$governance_actions_path --failures-dir=$failures_dir${relation_command_suffix}"
+  local command_text="cargo run -p frankenengine-metamorphic --bin run_metamorphic_suite -- --pairs=$pairs --seed=$seed --trace-id=$trace_id --decision-id=$decision_id --policy-id=$policy_id --evidence=$evidence_path --events=$relation_events_path --seed-transcript=$seed_transcript_path --seed-manifest=$seed_manifest_path --property-generator-catalog=$property_generator_catalog_path --generator-choice-stream-schema=$generator_choice_stream_schema_path --shrinker-verdict-report=$shrinker_verdict_report_path --minimized-counterexamples=$minimized_counterexamples_path --hdd-reducer-report=$hdd_reducer_report_path --structured-reduction-operator-catalog=$structured_reduction_operator_catalog_path --minimized-structured-repros=$minimized_structured_repros_path --reduction-stability-matrix=$reduction_stability_matrix_path --triage-report=$triage_report_path --governance-actions=$governance_actions_path --failures-dir=$failures_dir${relation_command_suffix}"
   local rc
   local runner_command remote_script
   local -a runner_args=(
@@ -170,6 +178,10 @@ run_metamorphic_runner_step() {
     --generator-choice-stream-schema "$generator_choice_stream_schema_path"
     --shrinker-verdict-report "$shrinker_verdict_report_path"
     --minimized-counterexamples "$minimized_counterexamples_path"
+    --hdd-reducer-report "$hdd_reducer_report_path"
+    --structured-reduction-operator-catalog "$structured_reduction_operator_catalog_path"
+    --minimized-structured-repros "$minimized_structured_repros_path"
+    --reduction-stability-matrix "$reduction_stability_matrix_path"
     --triage-report "$triage_report_path"
     --governance-actions "$governance_actions_path"
     --failures-dir "$failures_dir"
@@ -326,6 +338,10 @@ write_manifest() {
     echo "    \"generator_choice_stream_schema\": \"${generator_choice_stream_schema_path}\"," 
     echo "    \"shrinker_verdict_report\": \"${shrinker_verdict_report_path}\"," 
     echo "    \"minimized_property_counterexamples\": \"${minimized_counterexamples_path}\"," 
+    echo "    \"hdd_reducer_report\": \"${hdd_reducer_report_path}\"," 
+    echo "    \"structured_reduction_operator_catalog\": \"${structured_reduction_operator_catalog_path}\"," 
+    echo "    \"minimized_structured_repros\": \"${minimized_structured_repros_path}\"," 
+    echo "    \"reduction_stability_matrix\": \"${reduction_stability_matrix_path}\"," 
     echo "    \"triage_report\": \"${triage_report_path}\"," 
     echo "    \"governance_actions\": \"${governance_actions_path}\"," 
     echo "    \"trace_ids\": \"${trace_ids_path}\"," 
@@ -346,6 +362,10 @@ write_manifest() {
     echo "    \"cat ${generator_choice_stream_schema_path}\"," 
     echo "    \"cat ${shrinker_verdict_report_path}\"," 
     echo "    \"cat ${minimized_counterexamples_path}\"," 
+    echo "    \"cat ${hdd_reducer_report_path}\"," 
+    echo "    \"cat ${structured_reduction_operator_catalog_path}\"," 
+    echo "    \"cat ${minimized_structured_repros_path}\"," 
+    echo "    \"cat ${reduction_stability_matrix_path}\"," 
     echo "    \"cat ${triage_report_path}\"," 
     echo "    \"cat ${governance_actions_path}\"," 
     echo "    \"cat ${trace_ids_path}\"," 
@@ -520,6 +540,10 @@ write_repro_lock() {
     emit_repro_output "$generator_choice_stream_schema_path" "generator_choice_stream_schema" true
     emit_repro_output "$shrinker_verdict_report_path" "shrinker_verdict_report" true
     emit_repro_output "$minimized_counterexamples_path" "minimized_property_counterexamples" true
+    emit_repro_output "$hdd_reducer_report_path" "hdd_reducer_report" true
+    emit_repro_output "$structured_reduction_operator_catalog_path" "structured_reduction_operator_catalog" true
+    emit_repro_output "$minimized_structured_repros_path" "minimized_structured_repros" true
+    emit_repro_output "$reduction_stability_matrix_path" "reduction_stability_matrix" true
     emit_repro_output "$triage_report_path" "triage_report" true
     emit_repro_output "$governance_actions_path" "repro_governance_actions" true
     emit_repro_output "$trace_ids_path" "trace_ids" true
@@ -650,6 +674,22 @@ write_bundle_manifest() {
     echo '    {'
     echo "      \"path\": \"${minimized_counterexamples_path}\","
     echo "      \"sha256\": $(file_sha256_json "$minimized_counterexamples_path")"
+    echo '    },'
+    echo '    {'
+    echo "      \"path\": \"${hdd_reducer_report_path}\","
+    echo "      \"sha256\": $(file_sha256_json "$hdd_reducer_report_path")"
+    echo '    },'
+    echo '    {'
+    echo "      \"path\": \"${structured_reduction_operator_catalog_path}\","
+    echo "      \"sha256\": $(file_sha256_json "$structured_reduction_operator_catalog_path")"
+    echo '    },'
+    echo '    {'
+    echo "      \"path\": \"${minimized_structured_repros_path}\","
+    echo "      \"sha256\": $(file_sha256_json "$minimized_structured_repros_path")"
+    echo '    },'
+    echo '    {'
+    echo "      \"path\": \"${reduction_stability_matrix_path}\","
+    echo "      \"sha256\": $(file_sha256_json "$reduction_stability_matrix_path")"
     echo '    }'
     echo '  ],'
     echo '  "canonicalization": {'
@@ -685,6 +725,10 @@ hydrate_local_metamorphic_artifacts() {
     "$runner_generator_choice_stream_schema_path"
     "$runner_shrinker_verdict_report_path"
     "$runner_minimized_counterexamples_path"
+    "$runner_hdd_reducer_report_path"
+    "$runner_structured_reduction_operator_catalog_path"
+    "$runner_minimized_structured_repros_path"
+    "$runner_reduction_stability_matrix_path"
     "$runner_triage_report_path"
     "$runner_governance_actions_path"
   )
@@ -697,6 +741,10 @@ hydrate_local_metamorphic_artifacts() {
     "$generator_choice_stream_schema_path"
     "$shrinker_verdict_report_path"
     "$minimized_counterexamples_path"
+    "$hdd_reducer_report_path"
+    "$structured_reduction_operator_catalog_path"
+    "$minimized_structured_repros_path"
+    "$reduction_stability_matrix_path"
     "$triage_report_path"
     "$governance_actions_path"
   )
@@ -730,6 +778,10 @@ metamorphic_artifacts_complete() {
     "$generator_choice_stream_schema_path" \
     "$shrinker_verdict_report_path" \
     "$minimized_counterexamples_path" \
+    "$hdd_reducer_report_path" \
+    "$structured_reduction_operator_catalog_path" \
+    "$minimized_structured_repros_path" \
+    "$reduction_stability_matrix_path" \
     "$triage_report_path" \
     "$governance_actions_path"; do
     if [[ ! -f "$required" ]]; then
@@ -774,6 +826,10 @@ sync_metamorphic_artifacts_from_remote() {
     "$runner_generator_choice_stream_schema_path"
     "$runner_shrinker_verdict_report_path"
     "$runner_minimized_counterexamples_path"
+    "$runner_hdd_reducer_report_path"
+    "$runner_structured_reduction_operator_catalog_path"
+    "$runner_minimized_structured_repros_path"
+    "$runner_reduction_stability_matrix_path"
     "$runner_triage_report_path"
     "$runner_governance_actions_path"
   )
@@ -786,6 +842,10 @@ sync_metamorphic_artifacts_from_remote() {
     "$generator_choice_stream_schema_path"
     "$shrinker_verdict_report_path"
     "$minimized_counterexamples_path"
+    "$hdd_reducer_report_path"
+    "$structured_reduction_operator_catalog_path"
+    "$minimized_structured_repros_path"
+    "$reduction_stability_matrix_path"
     "$triage_report_path"
     "$governance_actions_path"
   )

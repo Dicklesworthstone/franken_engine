@@ -374,11 +374,7 @@ pub struct IterationTrace {
 
 impl IterationTrace {
     /// Create a new empty trace for an iteration session.
-    pub fn new(
-        trace_id: EngineObjectId,
-        record_id: EngineObjectId,
-        kind: IterationKind,
-    ) -> Self {
+    pub fn new(trace_id: EngineObjectId, record_id: EngineObjectId, kind: IterationKind) -> Self {
         Self {
             schema_version: ITERATOR_PROTOCOL_SCHEMA_VERSION.to_string(),
             bead_id: ITERATOR_PROTOCOL_BEAD_ID.to_string(),
@@ -394,10 +390,10 @@ impl IterationTrace {
     /// Record an event and update trace state.
     pub fn record_event(&mut self, event: IterationEvent) {
         // Count produced values (non-done IteratorNext results)
-        if let IterationOperation::IteratorNext { ref result } = event.operation {
-            if !result.done {
-                self.values_produced += 1;
-            }
+        if let IterationOperation::IteratorNext { ref result } = event.operation
+            && !result.done
+        {
+            self.values_produced += 1;
         }
         // Mark completed on done or close
         match &event.operation {
@@ -647,10 +643,10 @@ pub fn make_abrupt_event(
 pub fn collect_spread_values(trace: &IterationTrace) -> Vec<IteratorValue> {
     let mut values = Vec::new();
     for event in &trace.events {
-        if let IterationOperation::IteratorNext { result } = &event.operation {
-            if !result.done {
-                values.push(result.value.clone());
-            }
+        if let IterationOperation::IteratorNext { result } = &event.operation
+            && !result.done
+        {
+            values.push(result.value.clone());
         }
     }
     values
@@ -766,18 +762,12 @@ mod tests {
 
     #[test]
     fn iterator_value_display_fixed_point() {
-        assert_eq!(
-            IteratorValue::FixedPoint(3_141_592).to_string(),
-            "3.141592"
-        );
+        assert_eq!(IteratorValue::FixedPoint(3_141_592).to_string(), "3.141592");
     }
 
     #[test]
     fn iterator_value_display_array() {
-        let arr = IteratorValue::Array(vec![
-            IteratorValue::Integer(1),
-            IteratorValue::Integer(2),
-        ]);
+        let arr = IteratorValue::Array(vec![IteratorValue::Integer(1), IteratorValue::Integer(2)]);
         assert_eq!(arr.to_string(), "[1, 2]");
     }
 
@@ -937,8 +927,7 @@ mod tests {
     #[test]
     fn trace_completes_on_close() {
         let record_id = test_id("r3");
-        let mut trace =
-            IterationTrace::new(test_id("t3"), record_id.clone(), IterationKind::ForOf);
+        let mut trace = IterationTrace::new(test_id("t3"), record_id.clone(), IterationKind::ForOf);
 
         trace.record_event(make_next_event(
             record_id.clone(),
@@ -956,8 +945,12 @@ mod tests {
     fn get_iterator_event() {
         let id = test_id("r4");
         let iterable = test_id("iter1");
-        let event =
-            make_get_iterator_event(id.clone(), 0, IteratorSymbolKind::Iterator, iterable.clone());
+        let event = make_get_iterator_event(
+            id.clone(),
+            0,
+            IteratorSymbolKind::Iterator,
+            iterable.clone(),
+        );
         assert_eq!(event.record_id, id);
         assert_eq!(event.step_index, 0);
         assert!(matches!(
@@ -1063,11 +1056,8 @@ mod tests {
     #[test]
     fn collect_spread_values_from_trace() {
         let record_id = test_id("r7");
-        let mut trace = IterationTrace::new(
-            test_id("t7"),
-            record_id.clone(),
-            IterationKind::ArraySpread,
-        );
+        let mut trace =
+            IterationTrace::new(test_id("t7"), record_id.clone(), IterationKind::ArraySpread);
         trace.record_event(make_next_event(
             record_id.clone(),
             0,
@@ -1089,11 +1079,8 @@ mod tests {
     #[test]
     fn collect_spread_values_empty_iterable() {
         let record_id = test_id("r8");
-        let mut trace = IterationTrace::new(
-            test_id("t8"),
-            record_id.clone(),
-            IterationKind::ArraySpread,
-        );
+        let mut trace =
+            IterationTrace::new(test_id("t8"), record_id.clone(), IterationKind::ArraySpread);
         trace.record_event(make_next_event(record_id, 0, IteratorResult::done()));
 
         let values = collect_spread_values(&trace);
@@ -1145,7 +1132,12 @@ mod tests {
     fn iteration_event_serde_round_trip() {
         let id = test_id("r10");
         let events = vec![
-            make_get_iterator_event(id.clone(), 0, IteratorSymbolKind::AsyncIterator, test_id("ai")),
+            make_get_iterator_event(
+                id.clone(),
+                0,
+                IteratorSymbolKind::AsyncIterator,
+                test_id("ai"),
+            ),
             make_next_event(id.clone(), 1, IteratorResult::value(IteratorValue::Null)),
             make_close_event(id.clone(), 2, CloseReason::Throw, false),
             make_enumerate_event(id.clone(), 3, test_id("obj10"), vec!["key".into()]),
@@ -1169,10 +1161,8 @@ mod tests {
 
     #[test]
     fn for_in_state_serde_round_trip() {
-        let mut state = ForInEnumerationState::new(
-            test_id("obj11"),
-            vec!["a".into(), "b".into(), "c".into()],
-        );
+        let mut state =
+            ForInEnumerationState::new(test_id("obj11"), vec!["a".into(), "b".into(), "c".into()]);
         state.next_key();
         state.mark_deleted("c");
 
@@ -1307,11 +1297,626 @@ mod tests {
 
     #[test]
     fn fixed_point_negative() {
-        assert_eq!(IteratorValue::FixedPoint(-1_500_000).to_string(), "-1.500000");
+        assert_eq!(
+            IteratorValue::FixedPoint(-1_500_000).to_string(),
+            "-1.500000"
+        );
     }
 
     #[test]
     fn fixed_point_small_fraction() {
         assert_eq!(IteratorValue::FixedPoint(1).to_string(), "0.000001");
+    }
+
+    // -- ForInEnumerationState edge cases --
+
+    #[test]
+    fn for_in_marking_already_consumed_key_has_no_effect() {
+        let obj = test_id("obj_consumed");
+        let keys = vec!["a".into(), "b".into(), "c".into()];
+        let mut state = ForInEnumerationState::new(obj, keys);
+        assert_eq!(state.next_key(), Some("a".into()));
+        // Mark "a" deleted after it was already consumed — has no effect
+        state.mark_deleted("a");
+        assert_eq!(state.next_key(), Some("b".into()));
+        assert_eq!(state.next_key(), Some("c".into()));
+        assert_eq!(state.next_key(), None);
+    }
+
+    #[test]
+    fn for_in_marking_nonexistent_key_is_silent() {
+        let obj = test_id("obj_nokey");
+        let keys = vec!["x".into()];
+        let mut state = ForInEnumerationState::new(obj, keys);
+        state.mark_deleted("zzz"); // Key doesn't exist — no panic
+        assert_eq!(state.next_key(), Some("x".into()));
+        assert_eq!(state.next_key(), None);
+    }
+
+    #[test]
+    fn for_in_next_key_after_done_returns_none() {
+        let obj = test_id("obj_after_done");
+        let keys = vec!["a".into()];
+        let mut state = ForInEnumerationState::new(obj, keys);
+        assert_eq!(state.next_key(), Some("a".into()));
+        assert_eq!(state.next_key(), None);
+        assert!(state.is_done());
+        // Calling again after done still returns None
+        assert_eq!(state.next_key(), None);
+        assert!(state.is_done());
+    }
+
+    #[test]
+    fn for_in_mark_all_keys_deleted_yields_none() {
+        let obj = test_id("obj_all_del");
+        let keys = vec!["a".into(), "b".into()];
+        let mut state = ForInEnumerationState::new(obj, keys);
+        state.mark_deleted("a");
+        state.mark_deleted("b");
+        assert_eq!(state.next_key(), None);
+        assert!(state.is_done());
+    }
+
+    #[test]
+    fn for_in_remaining_count_excludes_consumed() {
+        let obj = test_id("obj_rem");
+        let keys = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        let mut state = ForInEnumerationState::new(obj, keys);
+        assert_eq!(state.remaining_count(), 4);
+        state.next_key();
+        state.next_key();
+        assert_eq!(state.remaining_count(), 2);
+        // Note: remaining_count doesn't account for deleted keys
+        state.mark_deleted("d");
+        assert_eq!(state.remaining_count(), 2); // Still 2 positionally
+    }
+
+    // -- IterationTrace edge cases --
+
+    #[test]
+    fn trace_multiple_close_events_keeps_completed() {
+        let record_id = test_id("r_multi_close");
+        let mut trace = IterationTrace::new(
+            test_id("t_multi_close"),
+            record_id.clone(),
+            IterationKind::ForOf,
+        );
+        trace.record_event(make_close_event(
+            record_id.clone(),
+            0,
+            CloseReason::Break,
+            true,
+        ));
+        assert!(trace.completed);
+        // Second close should not panic or change completed
+        trace.record_event(make_close_event(record_id, 1, CloseReason::Throw, false));
+        assert!(trace.completed);
+        assert_eq!(trace.events.len(), 2);
+    }
+
+    #[test]
+    fn trace_events_after_done_still_recorded() {
+        let record_id = test_id("r_after_done");
+        let mut trace = IterationTrace::new(
+            test_id("t_after_done"),
+            record_id.clone(),
+            IterationKind::ForOf,
+        );
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            0,
+            IteratorResult::done(),
+        ));
+        assert!(trace.completed);
+        // Events after done are still appended (for replay fidelity)
+        trace.record_event(make_next_event(
+            record_id,
+            1,
+            IteratorResult::value(IteratorValue::Integer(99)),
+        ));
+        assert_eq!(trace.events.len(), 2);
+        assert_eq!(trace.values_produced, 1);
+    }
+
+    #[test]
+    fn trace_only_abrupt_events() {
+        let record_id = test_id("r_abrupt_only");
+        let mut trace = IterationTrace::new(
+            test_id("t_abrupt_only"),
+            record_id.clone(),
+            IterationKind::Destructuring,
+        );
+        trace.record_event(make_abrupt_event(
+            record_id,
+            0,
+            IterationOperation::GetIterator {
+                symbol: IteratorSymbolKind::Iterator,
+                iterable_ref: test_id("not_iterable"),
+            },
+            IterationErrorKind::NotIterable,
+        ));
+        assert!(!trace.completed);
+        assert_eq!(trace.values_produced, 0);
+        assert_eq!(trace.events.len(), 1);
+    }
+
+    #[test]
+    fn trace_for_in_kind_records_enumeration() {
+        let record_id = test_id("r_forin");
+        let mut trace =
+            IterationTrace::new(test_id("t_forin"), record_id.clone(), IterationKind::ForIn);
+        trace.record_event(make_enumerate_event(
+            record_id.clone(),
+            0,
+            test_id("obj_forin"),
+            vec!["x".into(), "y".into()],
+        ));
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            1,
+            IteratorResult::value(IteratorValue::String("x".into())),
+        ));
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            2,
+            IteratorResult::value(IteratorValue::String("y".into())),
+        ));
+        trace.record_event(make_next_event(record_id, 3, IteratorResult::done()));
+        assert!(trace.completed);
+        assert_eq!(trace.values_produced, 2);
+        assert_eq!(trace.kind, IterationKind::ForIn);
+    }
+
+    // -- IteratorProtocolError additional constructors --
+
+    #[test]
+    fn error_display_includes_kind_and_message() {
+        let err = IteratorProtocolError::iterator_method_not_object("Map");
+        let display = err.to_string();
+        assert!(display.contains("iterator_method_not_object"));
+        assert!(display.contains("Map"));
+        assert!(display.contains("did not return an object"));
+    }
+
+    #[test]
+    fn error_next_not_callable_has_record_id() {
+        let id = test_id("rec_callable");
+        let err = IteratorProtocolError::next_not_callable(id.clone());
+        assert_eq!(err.record_id, Some(id));
+        assert!(err.step_index.is_none());
+        assert!(err.message.contains("not a function"));
+    }
+
+    // -- IterationCompletion serde --
+
+    #[test]
+    fn iteration_completion_normal_serde() {
+        let comp = IterationCompletion::Normal;
+        let json = serde_json::to_string(&comp).expect("serialize");
+        let deser: IterationCompletion = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(comp, deser);
+    }
+
+    #[test]
+    fn iteration_completion_not_iterable_serde() {
+        let comp = IterationCompletion::NotIterable;
+        let json = serde_json::to_string(&comp).expect("serialize");
+        let deser: IterationCompletion = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(comp, deser);
+    }
+
+    #[test]
+    fn iteration_completion_close_threw_serde() {
+        let comp = IterationCompletion::CloseThrew;
+        let json = serde_json::to_string(&comp).expect("serialize");
+        let deser: IterationCompletion = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(comp, deser);
+    }
+
+    #[test]
+    fn iteration_completion_abrupt_serde() {
+        let comp = IterationCompletion::Abrupt {
+            error_kind: IterationErrorKind::DoneNotBoolean,
+        };
+        let json = serde_json::to_string(&comp).expect("serialize");
+        let deser: IterationCompletion = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(comp, deser);
+    }
+
+    // -- IteratorValue all-variant serde --
+
+    #[test]
+    fn iterator_value_all_variants_serde() {
+        let variants = vec![
+            IteratorValue::Undefined,
+            IteratorValue::Null,
+            IteratorValue::Boolean(true),
+            IteratorValue::Boolean(false),
+            IteratorValue::Integer(0),
+            IteratorValue::Integer(i64::MAX),
+            IteratorValue::Integer(i64::MIN),
+            IteratorValue::String(String::new()),
+            IteratorValue::String("hello world".into()),
+            IteratorValue::FixedPoint(0),
+            IteratorValue::FixedPoint(1_000_000),
+            IteratorValue::FixedPoint(-999_999),
+            IteratorValue::ObjectRef(test_id("obj_serde")),
+            IteratorValue::Array(vec![]),
+            IteratorValue::Array(vec![
+                IteratorValue::Integer(1),
+                IteratorValue::Array(vec![IteratorValue::Null]),
+            ]),
+        ];
+        for val in &variants {
+            let json = serde_json::to_string(val).expect("serialize");
+            let deser: IteratorValue = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*val, deser, "round-trip failed for {val:?}");
+        }
+    }
+
+    // -- IterationOperation serde --
+
+    #[test]
+    fn iteration_operation_complete_serde() {
+        let op = IterationOperation::IteratorComplete { done: true };
+        let json = serde_json::to_string(&op).expect("serialize");
+        let deser: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(op, deser);
+    }
+
+    #[test]
+    fn iteration_operation_value_serde() {
+        let op = IterationOperation::IteratorValue {
+            value: IteratorValue::String("extracted".into()),
+        };
+        let json = serde_json::to_string(&op).expect("serialize");
+        let deser: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(op, deser);
+    }
+
+    // -- Full protocol simulation tests --
+
+    #[test]
+    fn simulate_for_of_with_break() {
+        let record_id = test_id("sim_for_of_break");
+        let iterable_id = test_id("sim_iterable");
+        let mut trace = IterationTrace::new(
+            test_id("sim_trace"),
+            record_id.clone(),
+            IterationKind::ForOf,
+        );
+
+        // Step 0: GetIterator
+        trace.record_event(make_get_iterator_event(
+            record_id.clone(),
+            0,
+            IteratorSymbolKind::Iterator,
+            iterable_id,
+        ));
+
+        // Step 1: First next() -> value 10
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            1,
+            IteratorResult::value(IteratorValue::Integer(10)),
+        ));
+
+        // Step 2: Second next() -> value 20
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            2,
+            IteratorResult::value(IteratorValue::Integer(20)),
+        ));
+
+        // Step 3: Break — close iterator
+        trace.record_event(make_close_event(record_id, 3, CloseReason::Break, true));
+
+        assert!(trace.completed);
+        assert_eq!(trace.values_produced, 2);
+        assert_eq!(trace.events.len(), 4);
+
+        let spread = collect_spread_values(&trace);
+        assert_eq!(spread.len(), 2);
+        assert_eq!(spread[0], IteratorValue::Integer(10));
+        assert_eq!(spread[1], IteratorValue::Integer(20));
+    }
+
+    #[test]
+    fn simulate_destructuring_partial_consume() {
+        let record_id = test_id("sim_destruct");
+        let iterable_id = test_id("sim_arr");
+        let mut trace = IterationTrace::new(
+            test_id("sim_trace_d"),
+            record_id.clone(),
+            IterationKind::Destructuring,
+        );
+
+        trace.record_event(make_get_iterator_event(
+            record_id.clone(),
+            0,
+            IteratorSymbolKind::Iterator,
+            iterable_id,
+        ));
+
+        // Consume only 2 of 5 elements
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            1,
+            IteratorResult::value(IteratorValue::Integer(1)),
+        ));
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            2,
+            IteratorResult::value(IteratorValue::Integer(2)),
+        ));
+
+        // Close: destructuring exhausted
+        trace.record_event(make_close_event(
+            record_id,
+            3,
+            CloseReason::DestructuringExhausted,
+            true,
+        ));
+
+        assert!(trace.completed);
+        assert_eq!(trace.values_produced, 2);
+    }
+
+    #[test]
+    fn simulate_call_spread_empty_iterable() {
+        let record_id = test_id("sim_call_spread");
+        let iterable_id = test_id("sim_empty");
+        let mut trace = IterationTrace::new(
+            test_id("sim_trace_cs"),
+            record_id.clone(),
+            IterationKind::CallSpread,
+        );
+
+        trace.record_event(make_get_iterator_event(
+            record_id.clone(),
+            0,
+            IteratorSymbolKind::Iterator,
+            iterable_id,
+        ));
+        trace.record_event(make_next_event(record_id, 1, IteratorResult::done()));
+
+        assert!(trace.completed);
+        assert_eq!(trace.values_produced, 0);
+        assert!(collect_spread_values(&trace).is_empty());
+    }
+
+    #[test]
+    fn simulate_not_iterable_error() {
+        let record_id = test_id("sim_not_iter");
+        let not_iterable = test_id("sim_number");
+        let mut trace = IterationTrace::new(
+            test_id("sim_trace_err"),
+            record_id.clone(),
+            IterationKind::ForOf,
+        );
+
+        trace.record_event(make_abrupt_event(
+            record_id,
+            0,
+            IterationOperation::GetIterator {
+                symbol: IteratorSymbolKind::Iterator,
+                iterable_ref: not_iterable,
+            },
+            IterationErrorKind::NotIterable,
+        ));
+
+        assert!(!trace.completed);
+        assert_eq!(trace.values_produced, 0);
+        assert_eq!(trace.events.len(), 1);
+        assert!(matches!(
+            trace.events[0].completion,
+            IterationCompletion::Abrupt {
+                error_kind: IterationErrorKind::NotIterable
+            }
+        ));
+    }
+
+    // -- Determinism tests --
+
+    #[test]
+    fn trace_serde_is_deterministic() {
+        let record_id = test_id("det_r");
+        let mut trace =
+            IterationTrace::new(test_id("det_t"), record_id.clone(), IterationKind::ForOf);
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            0,
+            IteratorResult::value(IteratorValue::Integer(42)),
+        ));
+        trace.record_event(make_next_event(record_id, 1, IteratorResult::done()));
+
+        let json1 = serde_json::to_string(&trace).expect("serialize 1");
+        let json2 = serde_json::to_string(&trace).expect("serialize 2");
+        assert_eq!(json1, json2, "serialization must be deterministic");
+    }
+
+    #[test]
+    fn for_in_state_serde_is_deterministic() {
+        let mut state = ForInEnumerationState::new(
+            test_id("det_obj"),
+            vec!["b".into(), "a".into(), "c".into()],
+        );
+        state.mark_deleted("a");
+        state.next_key();
+
+        let json1 = serde_json::to_string(&state).expect("serialize 1");
+        let json2 = serde_json::to_string(&state).expect("serialize 2");
+        assert_eq!(json1, json2, "serialization must be deterministic");
+    }
+
+    // -- IterationErrorKind display coverage --
+
+    #[test]
+    fn iteration_error_kind_all_variants_display() {
+        let variants = [
+            (IterationErrorKind::NotIterable, "not_iterable"),
+            (
+                IterationErrorKind::IteratorMethodNotObject,
+                "iterator_method_not_object",
+            ),
+            (IterationErrorKind::NextNotCallable, "next_not_callable"),
+            (
+                IterationErrorKind::NextResultNotObject,
+                "next_result_not_object",
+            ),
+            (IterationErrorKind::DoneNotBoolean, "done_not_boolean"),
+            (IterationErrorKind::UserException, "user_exception"),
+        ];
+        for (kind, expected) in &variants {
+            assert_eq!(kind.to_string(), *expected);
+        }
+    }
+
+    // -- IteratorSymbolKind full coverage --
+
+    #[test]
+    fn iterator_symbol_kind_async_property_key() {
+        let key = IteratorSymbolKind::AsyncIterator.property_key();
+        assert_eq!(key, WellKnownSymbol::AsyncIterator.key());
+    }
+
+    #[test]
+    fn iterator_symbol_kind_symbol_ids() {
+        let sync_id = IteratorSymbolKind::Iterator.symbol_id();
+        let async_id = IteratorSymbolKind::AsyncIterator.symbol_id();
+        assert_ne!(sync_id, async_id);
+    }
+
+    // -- Render summary edge cases --
+
+    #[test]
+    fn render_summary_empty_trace() {
+        let trace =
+            IterationTrace::new(test_id("empty_t"), test_id("empty_r"), IterationKind::ForOf);
+        let summary = render_iteration_summary(&trace);
+        assert!(summary.contains("events: 0"));
+        assert!(summary.contains("values_produced: 0"));
+        assert!(summary.contains("completed: false"));
+        assert!(!summary.contains("abrupt_completions"));
+    }
+
+    #[test]
+    fn render_summary_mixed_completions() {
+        let record_id = test_id("mixed_r");
+        let mut trace =
+            IterationTrace::new(test_id("mixed_t"), record_id.clone(), IterationKind::ForOf);
+
+        // Normal event
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            0,
+            IteratorResult::value(IteratorValue::Integer(1)),
+        ));
+        // Abrupt event
+        trace.record_event(make_abrupt_event(
+            record_id.clone(),
+            1,
+            IterationOperation::IteratorNext {
+                result: IteratorResult::done(),
+            },
+            IterationErrorKind::NextResultNotObject,
+        ));
+        // Another abrupt
+        trace.record_event(make_abrupt_event(
+            record_id,
+            2,
+            IterationOperation::IteratorClose {
+                reason: CloseReason::Throw,
+                return_called: false,
+            },
+            IterationErrorKind::UserException,
+        ));
+
+        let summary = render_iteration_summary(&trace);
+        assert!(summary.contains("abrupt_completions: 2"));
+        assert!(summary.contains("values_produced: 1"));
+    }
+
+    // -- IteratorResult done_with variant --
+
+    #[test]
+    fn iterator_result_done_with_preserves_value() {
+        let result = IteratorResult::done_with(IteratorValue::Integer(42));
+        assert!(result.done);
+        assert_eq!(result.value, IteratorValue::Integer(42));
+        let json = serde_json::to_string(&result).expect("serialize");
+        let deser: IteratorResult = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(result, deser);
+    }
+
+    // -- IterationOperation close serde --
+
+    #[test]
+    fn iteration_operation_close_all_reasons_serde() {
+        let reasons = [
+            CloseReason::Break,
+            CloseReason::Return,
+            CloseReason::Throw,
+            CloseReason::DestructuringExhausted,
+        ];
+        for reason in &reasons {
+            let op = IterationOperation::IteratorClose {
+                reason: reason.clone(),
+                return_called: true,
+            };
+            let json = serde_json::to_string(&op).expect("serialize");
+            let deser: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(op, deser, "round-trip failed for {reason}");
+        }
+    }
+
+    // -- Collect spread with mixed events --
+
+    #[test]
+    fn collect_spread_ignores_non_next_events() {
+        let record_id = test_id("spread_mix");
+        let mut trace = IterationTrace::new(
+            test_id("spread_trace"),
+            record_id.clone(),
+            IterationKind::ArraySpread,
+        );
+
+        // GetIterator (not a next event)
+        trace.record_event(make_get_iterator_event(
+            record_id.clone(),
+            0,
+            IteratorSymbolKind::Iterator,
+            test_id("spread_iterable"),
+        ));
+
+        // Next value
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            1,
+            IteratorResult::value(IteratorValue::Integer(100)),
+        ));
+
+        // Enumerate event (for-in style, should be ignored by spread collector)
+        trace.record_event(make_enumerate_event(
+            record_id.clone(),
+            2,
+            test_id("spread_obj"),
+            vec!["k".into()],
+        ));
+
+        // Another next value
+        trace.record_event(make_next_event(
+            record_id.clone(),
+            3,
+            IteratorResult::value(IteratorValue::Integer(200)),
+        ));
+
+        // Done
+        trace.record_event(make_next_event(record_id, 4, IteratorResult::done()));
+
+        let values = collect_spread_values(&trace);
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0], IteratorValue::Integer(100));
+        assert_eq!(values[1], IteratorValue::Integer(200));
     }
 }

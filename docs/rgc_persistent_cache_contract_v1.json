@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.rgc-persistent-cache-docs.v1",
+  "bead_id": "bd-1lsy.7.10.1",
+  "required_artifacts": [
+    "commands.txt",
+    "env.json",
+    "events.jsonl",
+    "manifest.json",
+    "persistent_cache_contract.json",
+    "repro.lock",
+    "run_manifest.json",
+    "summary.md",
+    "trace_ids.json"
+  ],
+  "key_fields": [
+    "module_id",
+    "source_hash",
+    "policy_version",
+    "trust_revision",
+    "config_fingerprint",
+    "dependency_graph_hash",
+    "transform_profile",
+    "runtime_mode",
+    "engine_version_marker"
+  ],
+  "consumers": [
+    "product",
+    "benchmark",
+    "replay"
+  ],
+  "scenario_ids": [
+    "cache_hit",
+    "cache_miss",
+    "source_invalidation",
+    "receipt_corruption",
+    "rollback_plan"
+  ]
+}

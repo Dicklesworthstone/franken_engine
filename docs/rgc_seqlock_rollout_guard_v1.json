@@ -1,0 +1,23 @@
+{
+  "schema_version": "franken-engine.rgc-seqlock-rollout-guard-docs.v1",
+  "bead_id": "bd-1lsy.7.21.3",
+  "default_disabled_candidates": [
+    "governance-ledger-head-view",
+    "guardplane-calibration-snapshot",
+    "module-cache-snapshot"
+  ],
+  "required_artifacts": [
+    "commands.txt",
+    "env.json",
+    "events.jsonl",
+    "loom_schedule_coverage_report.json",
+    "manifest.json",
+    "repro.lock",
+    "run_manifest.json",
+    "seqlock_rollout_guard.json",
+    "seqlock_safety_case.json",
+    "starvation_microbench_report.json",
+    "summary.md",
+    "trace_ids.json"
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": "franken-engine.rgc-seqlock-reader-writer-contract-docs.v1",
+  "bead_id": "bd-1lsy.7.21.2",
+  "required_artifacts": [
+    "commands.txt",
+    "env.json",
+    "events.jsonl",
+    "incumbent_fallback_matrix.json",
+    "manifest.json",
+    "repro.lock",
+    "retry_budget_policy.json",
+    "run_manifest.json",
+    "seqlock_reader_writer_contract.json",
+    "summary.md",
+    "trace_ids.json"
+  ],
+  "candidate_policies": [
+    {
+      "candidate_id": "governance-ledger-head-view",
+      "max_retries": 4,
+      "max_writer_pressure_observations": 1
+    },
+    {
+      "candidate_id": "guardplane-calibration-snapshot",
+      "max_retries": 3,
+      "max_writer_pressure_observations": 1
+    },
+    {
+      "candidate_id": "module-cache-snapshot",
+      "max_retries": 2,
+      "max_writer_pressure_observations": 2
+    }
+  ]
+}

@@ -17,8 +17,11 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-use crate::object_model::{JsValue, ObjectHandle, ObjectHeap, PropertyKey, SymbolId};
+use crate::object_model::{
+    JsValue, ObjectHandle, ObjectHeap, PropertyDescriptor, PropertyKey, SymbolId,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1183,6 +1186,743 @@ pub enum ArrayMethodResult {
     Value(JsValue),
     /// A new array to be allocated on the heap (slice, concat, reverse, etc.).
     NewArray(Vec<JsValue>),
+}
+
+const ARRAY_LENGTH_PROP: &str = "length";
+const MAP_SIZE_PROP: &str = "size";
+const SET_SIZE_PROP: &str = "size";
+const MAP_NEXT_INDEX_PROP: &str = "[[MapNextIndex]]";
+const SET_NEXT_INDEX_PROP: &str = "[[SetNextIndex]]";
+const MAP_KEY_PREFIX: &str = "[[MapKey]]:";
+const MAP_VALUE_PREFIX: &str = "[[MapValue]]:";
+const SET_VALUE_PREFIX: &str = "[[SetValue]]:";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectionKind {
+    Array,
+    Map,
+    Set,
+}
+
+impl CollectionKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Array => "array",
+            Self::Map => "map",
+            Self::Set => "set",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionMutationEvent {
+    pub step: u32,
+    pub action: String,
+    pub key: Option<String>,
+    pub value: Option<JsValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionMutationTrace {
+    pub trace_id: String,
+    pub builtin: String,
+    pub collection_kind: CollectionKind,
+    pub target: ObjectHandle,
+    pub before_size: usize,
+    pub after_size: usize,
+    pub mutated_keys: Vec<String>,
+    pub events: Vec<CollectionMutationEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeapCollectionMethodResult {
+    pub value: JsValue,
+    pub trace: CollectionMutationTrace,
+}
+
+pub fn alloc_array_instance(
+    heap: &mut ObjectHeap,
+    prototype: ObjectHandle,
+    elements: &[JsValue],
+) -> Result<ObjectHandle, StdlibError> {
+    let handle = heap.alloc(Some(prototype));
+    set_class_tag(heap, handle, "Array");
+    write_array_snapshot(heap, handle, elements)?;
+    Ok(handle)
+}
+
+pub fn alloc_map_instance(
+    heap: &mut ObjectHeap,
+    prototype: ObjectHandle,
+    entries: &[(JsValue, JsValue)],
+) -> Result<ObjectHandle, StdlibError> {
+    let handle = heap.alloc(Some(prototype));
+    set_class_tag(heap, handle, "Map");
+    write_map_entries_snapshot(heap, handle, entries)?;
+    Ok(handle)
+}
+
+pub fn alloc_set_instance(
+    heap: &mut ObjectHeap,
+    prototype: ObjectHandle,
+    values: &[JsValue],
+) -> Result<ObjectHandle, StdlibError> {
+    let handle = heap.alloc(Some(prototype));
+    set_class_tag(heap, handle, "Set");
+    write_set_values_snapshot(heap, handle, values)?;
+    Ok(handle)
+}
+
+pub fn read_array_elements(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+) -> Result<Vec<JsValue>, StdlibError> {
+    require_collection_kind(heap, handle, CollectionKind::Array)?;
+    let len = get_count_property(heap, handle, ARRAY_LENGTH_PROP)?;
+    let mut elements = Vec::with_capacity(len);
+    for index in 0..len {
+        elements.push(get_required_own_data_property(
+            heap,
+            handle,
+            &index.to_string(),
+        )?);
+    }
+    Ok(elements)
+}
+
+pub fn read_map_entries(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+) -> Result<Vec<(JsValue, JsValue)>, StdlibError> {
+    require_collection_kind(heap, handle, CollectionKind::Map)?;
+    let len = get_count_property(heap, handle, MAP_NEXT_INDEX_PROP)?;
+    let mut entries = Vec::with_capacity(len);
+    for index in 0..len {
+        let key = get_required_own_data_property(heap, handle, &map_key_slot(index))?;
+        let value = get_required_own_data_property(heap, handle, &map_value_slot(index))?;
+        entries.push((key, value));
+    }
+    Ok(entries)
+}
+
+pub fn read_set_values(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+) -> Result<Vec<JsValue>, StdlibError> {
+    require_collection_kind(heap, handle, CollectionKind::Set)?;
+    let len = get_count_property(heap, handle, SET_NEXT_INDEX_PROP)?;
+    let mut values = Vec::with_capacity(len);
+    for index in 0..len {
+        values.push(get_required_own_data_property(
+            heap,
+            handle,
+            &set_value_slot(index),
+        )?);
+    }
+    Ok(values)
+}
+
+pub fn exec_heap_collection_method(
+    heap: &mut ObjectHeap,
+    builtin: BuiltinId,
+    this_handle: ObjectHandle,
+    args: &[JsValue],
+) -> Result<HeapCollectionMethodResult, StdlibError> {
+    match builtin {
+        BuiltinId::ArrayPrototypePush
+        | BuiltinId::ArrayPrototypePop
+        | BuiltinId::ArrayPrototypeShift
+        | BuiltinId::ArrayPrototypeUnshift
+        | BuiltinId::ArrayPrototypeSplice
+        | BuiltinId::ArrayPrototypeReverse
+        | BuiltinId::ArrayPrototypeFill => exec_heap_array_method(heap, builtin, this_handle, args),
+        BuiltinId::MapPrototypeGet
+        | BuiltinId::MapPrototypeSet
+        | BuiltinId::MapPrototypeHas
+        | BuiltinId::MapPrototypeDelete
+        | BuiltinId::MapPrototypeClear
+        | BuiltinId::MapPrototypeSize => exec_heap_map_method(heap, builtin, this_handle, args),
+        BuiltinId::SetPrototypeAdd
+        | BuiltinId::SetPrototypeHas
+        | BuiltinId::SetPrototypeDelete
+        | BuiltinId::SetPrototypeClear
+        | BuiltinId::SetPrototypeSize => exec_heap_set_method(heap, builtin, this_handle, args),
+        _ => Err(StdlibError::TypeError(format!(
+            "{} is not a heap-backed collection method",
+            builtin.name()
+        ))),
+    }
+}
+
+fn exec_heap_array_method(
+    heap: &mut ObjectHeap,
+    builtin: BuiltinId,
+    this_handle: ObjectHandle,
+    args: &[JsValue],
+) -> Result<HeapCollectionMethodResult, StdlibError> {
+    let before = read_array_elements(heap, this_handle)?;
+    let mut after = before.clone();
+    let value = match builtin {
+        BuiltinId::ArrayPrototypePush => {
+            after.extend_from_slice(args);
+            JsValue::Int(after.len() as i64 * FP_SCALE)
+        }
+        BuiltinId::ArrayPrototypePop => after.pop().unwrap_or(JsValue::Undefined),
+        BuiltinId::ArrayPrototypeShift => {
+            if after.is_empty() {
+                JsValue::Undefined
+            } else {
+                after.remove(0)
+            }
+        }
+        BuiltinId::ArrayPrototypeUnshift => {
+            let mut combined = args.to_vec();
+            combined.extend(after);
+            after = combined;
+            JsValue::Int(after.len() as i64 * FP_SCALE)
+        }
+        BuiltinId::ArrayPrototypeSplice => {
+            let len = after.len() as i64;
+            let start = match args.first() {
+                Some(arg) => resolve_array_index(
+                    coerce_to_int("Array.prototype.splice", arg)? / FP_SCALE,
+                    len,
+                ) as usize,
+                None => 0,
+            };
+            let delete_count = match args.get(1) {
+                Some(arg) => {
+                    (coerce_to_int("Array.prototype.splice", arg)? / FP_SCALE).max(0) as usize
+                }
+                None => after.len().saturating_sub(start),
+            };
+            let actual_delete = delete_count.min(after.len().saturating_sub(start));
+            let inserts = if args.len() > 2 {
+                args[2..].to_vec()
+            } else {
+                Vec::new()
+            };
+            let removed: Vec<JsValue> = after
+                .splice(start..start + actual_delete, inserts)
+                .collect();
+            let prototype = heap
+                .get_prototype_of(this_handle)
+                .map_err(object_error)?
+                .ok_or_else(|| {
+                    StdlibError::TypeError(
+                        "Array.prototype.splice receiver is missing an array prototype".into(),
+                    )
+                })?;
+            let removed_handle = alloc_array_instance(heap, prototype, &removed)?;
+            JsValue::Object(removed_handle)
+        }
+        BuiltinId::ArrayPrototypeReverse => {
+            after.reverse();
+            JsValue::Object(this_handle)
+        }
+        BuiltinId::ArrayPrototypeFill => {
+            let fill_value = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let len = after.len() as i64;
+            let start = match args.get(1) {
+                Some(arg) => {
+                    resolve_array_index(coerce_to_int("Array.prototype.fill", arg)? / FP_SCALE, len)
+                        as usize
+                }
+                None => 0,
+            };
+            let end = match args.get(2) {
+                Some(arg) => {
+                    resolve_array_index(coerce_to_int("Array.prototype.fill", arg)? / FP_SCALE, len)
+                        as usize
+                }
+                None => after.len(),
+            };
+            let fill_end = end.min(after.len());
+            for item in after.iter_mut().take(fill_end).skip(start) {
+                *item = fill_value.clone();
+            }
+            JsValue::Object(this_handle)
+        }
+        _ => unreachable!("array dispatch is filtered above"),
+    };
+
+    if before != after {
+        write_array_snapshot(heap, this_handle, &after)?;
+    }
+    let (mutated_keys, events) = diff_value_vectors(&before, &after, "", "length");
+    Ok(HeapCollectionMethodResult {
+        value,
+        trace: build_collection_trace(
+            builtin,
+            CollectionKind::Array,
+            this_handle,
+            before.len(),
+            after.len(),
+            mutated_keys,
+            events,
+        ),
+    })
+}
+
+fn exec_heap_map_method(
+    heap: &mut ObjectHeap,
+    builtin: BuiltinId,
+    this_handle: ObjectHandle,
+    args: &[JsValue],
+) -> Result<HeapCollectionMethodResult, StdlibError> {
+    let before = read_map_entries(heap, this_handle)?;
+    let mut after = before.clone();
+    let value = match builtin {
+        BuiltinId::MapPrototypeGet => {
+            let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+            after
+                .iter()
+                .find(|(entry_key, _)| same_value(entry_key, &key))
+                .map(|(_, value)| value.clone())
+                .unwrap_or(JsValue::Undefined)
+        }
+        BuiltinId::MapPrototypeHas => {
+            let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+            JsValue::Bool(
+                after
+                    .iter()
+                    .any(|(entry_key, _)| same_value(entry_key, &key)),
+            )
+        }
+        BuiltinId::MapPrototypeSize => JsValue::Int(after.len() as i64 * FP_SCALE),
+        BuiltinId::MapPrototypeSet => {
+            let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let new_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            if let Some((_, value)) = after
+                .iter_mut()
+                .find(|(entry_key, _)| same_value(entry_key, &key))
+            {
+                *value = new_value;
+            } else {
+                after.push((key, new_value));
+            }
+            JsValue::Object(this_handle)
+        }
+        BuiltinId::MapPrototypeDelete => {
+            let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Some(index) = after
+                .iter()
+                .position(|(entry_key, _)| same_value(entry_key, &key))
+            {
+                after.remove(index);
+                JsValue::Bool(true)
+            } else {
+                JsValue::Bool(false)
+            }
+        }
+        BuiltinId::MapPrototypeClear => {
+            after.clear();
+            JsValue::Undefined
+        }
+        _ => unreachable!("map dispatch is filtered above"),
+    };
+
+    if before != after {
+        write_map_entries_snapshot(heap, this_handle, &after)?;
+    }
+    let (mutated_keys, events) = diff_map_entries(&before, &after);
+    Ok(HeapCollectionMethodResult {
+        value,
+        trace: build_collection_trace(
+            builtin,
+            CollectionKind::Map,
+            this_handle,
+            before.len(),
+            after.len(),
+            mutated_keys,
+            events,
+        ),
+    })
+}
+
+fn exec_heap_set_method(
+    heap: &mut ObjectHeap,
+    builtin: BuiltinId,
+    this_handle: ObjectHandle,
+    args: &[JsValue],
+) -> Result<HeapCollectionMethodResult, StdlibError> {
+    let before = read_set_values(heap, this_handle)?;
+    let mut after = before.clone();
+    let value = match builtin {
+        BuiltinId::SetPrototypeHas => {
+            let search = args.first().cloned().unwrap_or(JsValue::Undefined);
+            JsValue::Bool(after.iter().any(|value| same_value(value, &search)))
+        }
+        BuiltinId::SetPrototypeSize => JsValue::Int(after.len() as i64 * FP_SCALE),
+        BuiltinId::SetPrototypeAdd => {
+            let candidate = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if !after.iter().any(|value| same_value(value, &candidate)) {
+                after.push(candidate);
+            }
+            JsValue::Object(this_handle)
+        }
+        BuiltinId::SetPrototypeDelete => {
+            let search = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Some(index) = after.iter().position(|value| same_value(value, &search)) {
+                after.remove(index);
+                JsValue::Bool(true)
+            } else {
+                JsValue::Bool(false)
+            }
+        }
+        BuiltinId::SetPrototypeClear => {
+            after.clear();
+            JsValue::Undefined
+        }
+        _ => unreachable!("set dispatch is filtered above"),
+    };
+
+    if before != after {
+        write_set_values_snapshot(heap, this_handle, &after)?;
+    }
+    let (mutated_keys, events) = diff_value_vectors(&before, &after, "value[", "size");
+    Ok(HeapCollectionMethodResult {
+        value,
+        trace: build_collection_trace(
+            builtin,
+            CollectionKind::Set,
+            this_handle,
+            before.len(),
+            after.len(),
+            mutated_keys,
+            events,
+        ),
+    })
+}
+
+fn write_array_snapshot(
+    heap: &mut ObjectHeap,
+    handle: ObjectHandle,
+    elements: &[JsValue],
+) -> Result<(), StdlibError> {
+    let old_len = get_optional_count_property(heap, handle, ARRAY_LENGTH_PROP)?;
+    for index in 0..old_len {
+        heap.delete_property(handle, &PropertyKey::from(index.to_string()))
+            .map_err(object_error)?;
+    }
+    for (index, value) in elements.iter().enumerate() {
+        heap.set_property(handle, PropertyKey::from(index.to_string()), value.clone())
+            .map_err(object_error)?;
+    }
+    define_hidden_property(
+        heap,
+        handle,
+        ARRAY_LENGTH_PROP,
+        count_js_value(elements.len()),
+    )?;
+    Ok(())
+}
+
+fn write_map_entries_snapshot(
+    heap: &mut ObjectHeap,
+    handle: ObjectHandle,
+    entries: &[(JsValue, JsValue)],
+) -> Result<(), StdlibError> {
+    let old_len = get_optional_count_property(heap, handle, MAP_NEXT_INDEX_PROP)?;
+    for index in 0..old_len {
+        heap.delete_property(handle, &PropertyKey::from(map_key_slot(index)))
+            .map_err(object_error)?;
+        heap.delete_property(handle, &PropertyKey::from(map_value_slot(index)))
+            .map_err(object_error)?;
+    }
+    for (index, (key, value)) in entries.iter().enumerate() {
+        define_hidden_property(heap, handle, &map_key_slot(index), key.clone())?;
+        define_hidden_property(heap, handle, &map_value_slot(index), value.clone())?;
+    }
+    define_hidden_property(heap, handle, MAP_SIZE_PROP, count_js_value(entries.len()))?;
+    define_hidden_property(
+        heap,
+        handle,
+        MAP_NEXT_INDEX_PROP,
+        count_js_value(entries.len()),
+    )?;
+    Ok(())
+}
+
+fn write_set_values_snapshot(
+    heap: &mut ObjectHeap,
+    handle: ObjectHandle,
+    values: &[JsValue],
+) -> Result<(), StdlibError> {
+    let old_len = get_optional_count_property(heap, handle, SET_NEXT_INDEX_PROP)?;
+    for index in 0..old_len {
+        heap.delete_property(handle, &PropertyKey::from(set_value_slot(index)))
+            .map_err(object_error)?;
+    }
+    for (index, value) in values.iter().enumerate() {
+        define_hidden_property(heap, handle, &set_value_slot(index), value.clone())?;
+    }
+    define_hidden_property(heap, handle, SET_SIZE_PROP, count_js_value(values.len()))?;
+    define_hidden_property(
+        heap,
+        handle,
+        SET_NEXT_INDEX_PROP,
+        count_js_value(values.len()),
+    )?;
+    Ok(())
+}
+
+fn require_collection_kind(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+    expected: CollectionKind,
+) -> Result<(), StdlibError> {
+    let object = heap.get(handle).map_err(object_error)?;
+    let ordinary = object.as_ordinary().ok_or_else(|| {
+        StdlibError::TypeError(format!(
+            "{} receiver must be an ordinary object",
+            expected.as_str()
+        ))
+    })?;
+    let actual = ordinary.class_tag.as_deref().unwrap_or("<untyped>");
+    if actual
+        == match expected {
+            CollectionKind::Array => "Array",
+            CollectionKind::Map => "Map",
+            CollectionKind::Set => "Set",
+        }
+    {
+        Ok(())
+    } else {
+        Err(StdlibError::TypeError(format!(
+            "{} receiver must be a {}, got {actual}",
+            expected.as_str(),
+            match expected {
+                CollectionKind::Array => "Array",
+                CollectionKind::Map => "Map",
+                CollectionKind::Set => "Set",
+            }
+        )))
+    }
+}
+
+fn define_hidden_property(
+    heap: &mut ObjectHeap,
+    handle: ObjectHandle,
+    name: &str,
+    value: JsValue,
+) -> Result<(), StdlibError> {
+    let defined = heap
+        .define_property(
+            handle,
+            PropertyKey::from(name),
+            PropertyDescriptor::Data {
+                value,
+                writable: true,
+                enumerable: false,
+                configurable: true,
+            },
+        )
+        .map_err(object_error)?;
+    if defined {
+        Ok(())
+    } else {
+        Err(StdlibError::TypeError(format!(
+            "failed to define hidden property `{name}`"
+        )))
+    }
+}
+
+fn get_count_property(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+    name: &str,
+) -> Result<usize, StdlibError> {
+    let value = get_required_own_data_property(heap, handle, name)?;
+    count_from_value(name, value)
+}
+
+fn get_required_own_data_property(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+    name: &str,
+) -> Result<JsValue, StdlibError> {
+    match heap
+        .get_own_property_descriptor(handle, &PropertyKey::from(name))
+        .map_err(object_error)?
+    {
+        Some(PropertyDescriptor::Data { value, .. }) => Ok(value),
+        Some(PropertyDescriptor::Accessor { .. }) => Err(StdlibError::TypeError(format!(
+            "{name} must be an own data property"
+        ))),
+        None => Err(StdlibError::TypeError(format!(
+            "{name} must be an own data property"
+        ))),
+    }
+}
+
+fn get_optional_count_property(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+    name: &str,
+) -> Result<usize, StdlibError> {
+    match heap
+        .get_own_property_descriptor(handle, &PropertyKey::from(name))
+        .map_err(object_error)?
+    {
+        Some(PropertyDescriptor::Data { value, .. }) => count_from_value(name, value),
+        Some(PropertyDescriptor::Accessor { .. }) => Err(StdlibError::TypeError(format!(
+            "{name} must be a data property"
+        ))),
+        None => Ok(0),
+    }
+}
+
+fn count_from_value(name: &str, value: JsValue) -> Result<usize, StdlibError> {
+    match value {
+        JsValue::Int(raw) if raw >= 0 && raw % FP_SCALE == 0 => Ok((raw / FP_SCALE) as usize),
+        other => Err(StdlibError::TypeError(format!(
+            "{name} must be a non-negative integer count, got {}",
+            other.type_name()
+        ))),
+    }
+}
+
+fn count_js_value(count: usize) -> JsValue {
+    JsValue::Int(count as i64 * FP_SCALE)
+}
+
+fn map_key_slot(index: usize) -> String {
+    format!("{MAP_KEY_PREFIX}{index}")
+}
+
+fn map_value_slot(index: usize) -> String {
+    format!("{MAP_VALUE_PREFIX}{index}")
+}
+
+fn set_value_slot(index: usize) -> String {
+    format!("{SET_VALUE_PREFIX}{index}")
+}
+
+fn diff_value_vectors(
+    before: &[JsValue],
+    after: &[JsValue],
+    prefix: &str,
+    count_key: &str,
+) -> (Vec<String>, Vec<CollectionMutationEvent>) {
+    let mut mutated_keys = Vec::new();
+    let mut events = Vec::new();
+    let max_len = before.len().max(after.len());
+    for index in 0..max_len {
+        let before_value = before.get(index);
+        let after_value = after.get(index);
+        if before_value == after_value {
+            continue;
+        }
+        let key = if prefix.is_empty() {
+            index.to_string()
+        } else {
+            format!("{prefix}{index}]")
+        };
+        let action = match (before_value, after_value) {
+            (None, Some(_)) => "insert",
+            (Some(_), None) => "delete",
+            _ => "write",
+        };
+        mutated_keys.push(key.clone());
+        events.push(CollectionMutationEvent {
+            step: events.len() as u32 + 1,
+            action: action.to_string(),
+            key: Some(key),
+            value: after_value.cloned(),
+        });
+    }
+    if before.len() != after.len() {
+        mutated_keys.push(count_key.to_string());
+        events.push(CollectionMutationEvent {
+            step: events.len() as u32 + 1,
+            action: "set_count".into(),
+            key: Some(count_key.to_string()),
+            value: Some(count_js_value(after.len())),
+        });
+    }
+    (mutated_keys, events)
+}
+
+fn diff_map_entries(
+    before: &[(JsValue, JsValue)],
+    after: &[(JsValue, JsValue)],
+) -> (Vec<String>, Vec<CollectionMutationEvent>) {
+    let mut mutated_keys = Vec::new();
+    let mut events = Vec::new();
+    let max_len = before.len().max(after.len());
+    for index in 0..max_len {
+        let before_entry = before.get(index);
+        let after_entry = after.get(index);
+        if before_entry == after_entry {
+            continue;
+        }
+        let entry_key = match after_entry {
+            Some((key, _)) => format!("entry[{index}]={key}"),
+            None => format!("entry[{index}]"),
+        };
+        let action = match (before_entry, after_entry) {
+            (None, Some(_)) => "insert",
+            (Some(_), None) => "delete",
+            _ => "write",
+        };
+        mutated_keys.push(entry_key.clone());
+        events.push(CollectionMutationEvent {
+            step: events.len() as u32 + 1,
+            action: action.to_string(),
+            key: Some(entry_key),
+            value: after_entry.map(|(_, value)| value.clone()),
+        });
+    }
+    if before.len() != after.len() {
+        mutated_keys.push("size".into());
+        events.push(CollectionMutationEvent {
+            step: events.len() as u32 + 1,
+            action: "set_count".into(),
+            key: Some("size".into()),
+            value: Some(count_js_value(after.len())),
+        });
+    }
+    (mutated_keys, events)
+}
+
+fn build_collection_trace(
+    builtin: BuiltinId,
+    collection_kind: CollectionKind,
+    target: ObjectHandle,
+    before_size: usize,
+    after_size: usize,
+    mutated_keys: Vec<String>,
+    events: Vec<CollectionMutationEvent>,
+) -> CollectionMutationTrace {
+    let seed = serde_json::to_string(&events).unwrap_or_default();
+    let digest = hex::encode(Sha256::digest(
+        format!(
+            "{}|{}|{}|{}|{}|{}",
+            builtin.name(),
+            collection_kind.as_str(),
+            target.0,
+            before_size,
+            after_size,
+            seed
+        )
+        .as_bytes(),
+    ));
+    CollectionMutationTrace {
+        trace_id: format!("trace-collection-{}", &digest[..16]),
+        builtin: builtin.name().to_string(),
+        collection_kind,
+        target,
+        before_size,
+        after_size,
+        mutated_keys,
+        events,
+    }
+}
+
+fn object_error(err: crate::object_model::ObjectError) -> StdlibError {
+    StdlibError::ObjectError(err.to_string())
 }
 
 /// Execute a pure String prototype method.

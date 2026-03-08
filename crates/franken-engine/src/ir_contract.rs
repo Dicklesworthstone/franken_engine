@@ -361,6 +361,27 @@ impl Ir1PropertyKey {
     }
 }
 
+/// Why an iterator is being closed (replay-visible).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IteratorCloseReason {
+    /// Normal loop exit via `break`.
+    Break,
+    /// Early return from the enclosing function.
+    Return,
+    /// Exception thrown inside the loop body.
+    Throw,
+}
+
+impl IteratorCloseReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Break => "break",
+            Self::Return => "return",
+            Self::Throw => "throw",
+        }
+    }
+}
+
 /// IR1 operation — semantically resolved, position-independent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ir1Op {
@@ -419,6 +440,27 @@ pub enum Ir1Op {
     EndTry,
     /// Pop/discard top-of-stack value.
     Pop,
+    /// Initialize a for..in enumeration: pop object from stack, push internal
+    /// enumerator state that yields string-typed property keys.
+    ForInInit,
+    /// Advance a for..in enumerator: pop enumerator, push {next_key, done}
+    /// pair.  If done, pushes `undefined` key and jumps to `done_label`.
+    ForInNext { done_label: u32 },
+    /// Initialize a for..of iteration: pop iterable from stack, call
+    /// `[Symbol.iterator]()`, push the resulting iterator record.
+    ForOfInit,
+    /// Advance a for..of iterator: pop iterator record, call `.next()`, push
+    /// {value, done} pair.  If done, pushes `undefined` value and jumps to
+    /// `done_label`.
+    ForOfNext { done_label: u32 },
+    /// Close an iterator (for..of abrupt completion path): pop iterator record,
+    /// call `.return()` if the method exists.  `reason` is a replay-visible tag.
+    IteratorClose { reason: IteratorCloseReason },
+    /// Construct (new): pop callee + N args, invoke as constructor, push result.
+    Construct { arg_count: u32 },
+    /// Template literal: concatenate N quasis with N-1 expressions.
+    /// Pops 2*N - 1 values: quasi[0], expr[0], quasi[1], ..., quasi[N-1].
+    TemplateLiteral { quasi_count: u32 },
 }
 
 impl Ir1Op {
@@ -625,6 +667,68 @@ impl Ir1Op {
             }
             Self::Pop => {
                 map.insert("op".to_string(), CanonicalValue::String("pop".to_string()));
+            }
+            Self::ForInInit => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("for_in_init".to_string()),
+                );
+            }
+            Self::ForInNext { done_label } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("for_in_next".to_string()),
+                );
+                map.insert(
+                    "done_label".to_string(),
+                    CanonicalValue::U64(u64::from(*done_label)),
+                );
+            }
+            Self::ForOfInit => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("for_of_init".to_string()),
+                );
+            }
+            Self::ForOfNext { done_label } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("for_of_next".to_string()),
+                );
+                map.insert(
+                    "done_label".to_string(),
+                    CanonicalValue::U64(u64::from(*done_label)),
+                );
+            }
+            Self::IteratorClose { reason } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("iterator_close".to_string()),
+                );
+                map.insert(
+                    "reason".to_string(),
+                    CanonicalValue::String(reason.as_str().to_string()),
+                );
+            }
+            Self::Construct { arg_count } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("construct".to_string()),
+                );
+                map.insert(
+                    "arg_count".to_string(),
+                    CanonicalValue::U64(u64::from(*arg_count)),
+                );
+            }
+            Self::TemplateLiteral { quasi_count } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("template_literal".to_string()),
+                );
+                map.insert(
+                    "quasi_count".to_string(),
+                    CanonicalValue::U64(u64::from(*quasi_count)),
+                );
             }
         }
         CanonicalValue::Map(map)
@@ -955,6 +1059,48 @@ pub enum Ir3Instruction {
     Mul { dst: Reg, lhs: Reg, rhs: Reg },
     /// Arithmetic: dst = lhs / rhs.
     Div { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Arithmetic: dst = lhs % rhs.
+    Mod { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Arithmetic: dst = lhs ** rhs.
+    Exp { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Comparison: dst = lhs < rhs.
+    Lt { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Comparison: dst = lhs <= rhs.
+    Lte { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Comparison: dst = lhs > rhs.
+    Gt { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Comparison: dst = lhs >= rhs.
+    Gte { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Equality: dst = (lhs == rhs) (abstract).
+    Eq { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Equality: dst = (lhs === rhs) (strict).
+    StrictEq { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Inequality: dst = (lhs != rhs) (abstract).
+    NotEq { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Inequality: dst = (lhs !== rhs) (strict).
+    StrictNotEq { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Bitwise: dst = lhs & rhs.
+    BitAnd { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Bitwise: dst = lhs | rhs.
+    BitOr { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Bitwise: dst = lhs ^ rhs.
+    BitXor { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Shift: dst = lhs << rhs.
+    Shl { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Shift: dst = lhs >> rhs (signed).
+    Shr { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Shift: dst = lhs >>> rhs (unsigned).
+    Ushr { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Relational: dst = (lhs instanceof rhs).
+    InstanceOf { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Relational: dst = (lhs in rhs).
+    InOp { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Construct: dst = new callee(...args).
+    Construct {
+        callee: Reg,
+        args: RegRange,
+        dst: Reg,
+    },
     /// Copy register.
     Move { dst: Reg, src: Reg },
     /// Unconditional jump.
@@ -1142,6 +1288,120 @@ impl Ir3Instruction {
             }
             Self::Halt => {
                 map.insert("op".to_string(), CanonicalValue::String("halt".to_string()));
+            }
+            Self::Mod { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("mod".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Exp { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("exp".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Lt { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("lt".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Lte { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("lte".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Gt { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("gt".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Gte { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("gte".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Eq { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("eq".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::StrictEq { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("strict_eq".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::NotEq { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("not_eq".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::StrictNotEq { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("strict_not_eq".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::BitAnd { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("bit_and".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::BitOr { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("bit_or".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::BitXor { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("bit_xor".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Shl { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("shl".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Shr { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("shr".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Ushr { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("ushr".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::InstanceOf { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("instance_of".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::InOp { dst, lhs, rhs } => {
+                map.insert("op".to_string(), CanonicalValue::String("in_op".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
+                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::Construct { callee, args, dst } => {
+                map.insert("op".to_string(), CanonicalValue::String("construct".to_string()));
+                map.insert("callee".to_string(), CanonicalValue::U64(u64::from(*callee)));
+                map.insert("args".to_string(), args.canonical_value());
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }
         }
         CanonicalValue::Map(map)
@@ -3218,6 +3478,19 @@ mod tests {
             },
             Ir1Op::Await,
             Ir1Op::Nop,
+            Ir1Op::ForInInit,
+            Ir1Op::ForInNext { done_label: 10 },
+            Ir1Op::ForOfInit,
+            Ir1Op::ForOfNext { done_label: 20 },
+            Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Break,
+            },
+            Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Return,
+            },
+            Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Throw,
+            },
         ];
         for op in &ops {
             let json = serde_json::to_string(op).unwrap();

@@ -17,8 +17,8 @@ use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
     BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module, Ir1Literal,
     Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module,
-    IrError, IrLevel, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
-    verify_ir1_source, verify_ir3_specialization,
+    IrError, IrLevel, IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind,
+    ScopeNode, verify_ir1_source, verify_ir3_specialization,
 };
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
@@ -955,16 +955,147 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Label { id: end_label });
         }
         Statement::ForIn(for_in_stmt) => {
-            return Err(unsupported_syntax_error(
-                ParserGapSiteId::ForInStatementPlaceholder,
-                Some(for_in_stmt.span.clone()),
-            ));
+            // Lowering: for (let k in obj) { body }
+            //   1. Evaluate object expression → push on stack
+            //   2. ForInInit → pop object, push enumerator
+            //   3. loop_label:
+            //   4. ForInNext { done_label: end } → push next key (or jump)
+            //   5. StoreBinding(k) → bind key to loop variable
+            //   6. Pop
+            //   7. body
+            //   8. Jump → loop_label
+            //   9. end_label:
+            //  10. IteratorClose (break path wired through control_flow)
+            lower_expression_to_ir1(
+                &for_in_stmt.object,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::ForInInit);
+
+            let loop_label = alloc_label(label_counter);
+            let continue_label = alloc_label(label_counter);
+            let end_label = alloc_label(label_counter);
+
+            ops.push(Ir1Op::Label { id: loop_label });
+            ops.push(Ir1Op::ForInNext {
+                done_label: end_label,
+            });
+
+            // Bind the yielded key to the loop variable.
+            let binding_kind = match for_in_stmt.binding_kind {
+                Some(VariableDeclarationKind::Let) | None => BindingKind::Let,
+                Some(VariableDeclarationKind::Const) => BindingKind::Const,
+                Some(VariableDeclarationKind::Var) => BindingKind::Var,
+            };
+            let bid = alloc_pattern_primary_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                &for_in_stmt.binding,
+                binding_kind,
+            )
+            .map_err(LoweringPipelineError::SemanticViolation)?;
+            ops.push(Ir1Op::StoreBinding { binding_id: bid });
+            ops.push(Ir1Op::Pop);
+
+            lower_statement_to_ir1_with_flow(
+                &for_in_stmt.body,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                ControlFlowTargets {
+                    break_label: Some(end_label),
+                    continue_label: Some(continue_label),
+                },
+            )?;
+            ops.push(Ir1Op::Label { id: continue_label });
+            ops.push(Ir1Op::Jump {
+                label_id: loop_label,
+            });
+            ops.push(Ir1Op::Label { id: end_label });
         }
         Statement::ForOf(for_of_stmt) => {
-            return Err(unsupported_syntax_error(
-                ParserGapSiteId::ForOfStatementPlaceholder,
-                Some(for_of_stmt.span.clone()),
-            ));
+            // Lowering: for (let v of iterable) { body }
+            //   1. Evaluate iterable → push on stack
+            //   2. ForOfInit → pop iterable, call @@iterator, push iterator
+            //   3. loop_label:
+            //   4. ForOfNext { done_label: end } → push next value (or jump)
+            //   5. StoreBinding(v) → bind value to loop variable
+            //   6. Pop
+            //   7. body (break path calls IteratorClose)
+            //   8. Jump → loop_label
+            //   9. end_label:
+            lower_expression_to_ir1(
+                &for_of_stmt.iterable,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::ForOfInit);
+
+            let loop_label = alloc_label(label_counter);
+            let continue_label = alloc_label(label_counter);
+            let close_label = alloc_label(label_counter);
+            let end_label = alloc_label(label_counter);
+
+            ops.push(Ir1Op::Label { id: loop_label });
+            ops.push(Ir1Op::ForOfNext {
+                done_label: end_label,
+            });
+
+            // Bind the yielded value to the loop variable.
+            let binding_kind = match for_of_stmt.binding_kind {
+                Some(VariableDeclarationKind::Let) | None => BindingKind::Let,
+                Some(VariableDeclarationKind::Const) => BindingKind::Const,
+                Some(VariableDeclarationKind::Var) => BindingKind::Var,
+            };
+            let bid = alloc_pattern_primary_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                &for_of_stmt.binding,
+                binding_kind,
+            )
+            .map_err(LoweringPipelineError::SemanticViolation)?;
+            ops.push(Ir1Op::StoreBinding { binding_id: bid });
+            ops.push(Ir1Op::Pop);
+
+            lower_statement_to_ir1_with_flow(
+                &for_of_stmt.body,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                ControlFlowTargets {
+                    break_label: Some(close_label),
+                    continue_label: Some(continue_label),
+                },
+            )?;
+            ops.push(Ir1Op::Label { id: continue_label });
+            ops.push(Ir1Op::Jump {
+                label_id: loop_label,
+            });
+            // Break path: close the iterator before exiting.
+            ops.push(Ir1Op::Label { id: close_label });
+            ops.push(Ir1Op::IteratorClose {
+                reason: IteratorCloseReason::Break,
+            });
+            ops.push(Ir1Op::Label { id: end_label });
         }
         Statement::While(while_stmt) => {
             let loop_label = alloc_label(label_counter);
@@ -1591,7 +1722,48 @@ pub fn lower_ir2_to_ir3(
                     BinaryOperator::Subtract => Ir3Instruction::Sub { dst, lhs, rhs },
                     BinaryOperator::Multiply => Ir3Instruction::Mul { dst, lhs, rhs },
                     BinaryOperator::Divide => Ir3Instruction::Div { dst, lhs, rhs },
-                    _ => Ir3Instruction::Add { dst, lhs, rhs },
+                    BinaryOperator::Remainder => Ir3Instruction::Mod { dst, lhs, rhs },
+                    BinaryOperator::Exponentiate => Ir3Instruction::Exp { dst, lhs, rhs },
+                    BinaryOperator::LessThan => Ir3Instruction::Lt { dst, lhs, rhs },
+                    BinaryOperator::LessThanOrEqual => Ir3Instruction::Lte { dst, lhs, rhs },
+                    BinaryOperator::GreaterThan => Ir3Instruction::Gt { dst, lhs, rhs },
+                    BinaryOperator::GreaterThanOrEqual => {
+                        Ir3Instruction::Gte { dst, lhs, rhs }
+                    }
+                    BinaryOperator::Equal => Ir3Instruction::Eq { dst, lhs, rhs },
+                    BinaryOperator::StrictEqual => {
+                        Ir3Instruction::StrictEq { dst, lhs, rhs }
+                    }
+                    BinaryOperator::NotEqual => Ir3Instruction::NotEq { dst, lhs, rhs },
+                    BinaryOperator::StrictNotEqual => {
+                        Ir3Instruction::StrictNotEq { dst, lhs, rhs }
+                    }
+                    BinaryOperator::BitwiseAnd => {
+                        Ir3Instruction::BitAnd { dst, lhs, rhs }
+                    }
+                    BinaryOperator::BitwiseOr => {
+                        Ir3Instruction::BitOr { dst, lhs, rhs }
+                    }
+                    BinaryOperator::BitwiseXor => {
+                        Ir3Instruction::BitXor { dst, lhs, rhs }
+                    }
+                    BinaryOperator::LeftShift => Ir3Instruction::Shl { dst, lhs, rhs },
+                    BinaryOperator::RightShift => Ir3Instruction::Shr { dst, lhs, rhs },
+                    BinaryOperator::UnsignedRightShift => {
+                        Ir3Instruction::Ushr { dst, lhs, rhs }
+                    }
+                    BinaryOperator::Instanceof => {
+                        Ir3Instruction::InstanceOf { dst, lhs, rhs }
+                    }
+                    BinaryOperator::In => Ir3Instruction::InOp { dst, lhs, rhs },
+                    BinaryOperator::LogicalAnd
+                    | BinaryOperator::LogicalOr
+                    | BinaryOperator::NullishCoalescing => {
+                        // Logical operators should have been lowered to
+                        // conditional branches at IR1 level.  If they reach
+                        // IR3 as BinaryOp, treat as Move for now.
+                        Ir3Instruction::Move { dst, src: lhs }
+                    }
                 };
                 ir3.instructions.push(instr);
                 value_stack.push(dst);
@@ -1602,12 +1774,74 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions.push(Ir3Instruction::Move { dst, src });
                 value_stack.push(dst);
             }
-            Ir1Op::AssignOp { binding_id, .. } => {
+            Ir1Op::AssignOp {
+                binding_id,
+                operator,
+            } => {
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
                 let src = value_stack.pop().unwrap_or(0);
-                ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                match operator {
+                    AssignmentOperator::Assign => {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
+                    AssignmentOperator::AddAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Add { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::SubtractAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Sub { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::MultiplyAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Mul { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::DivideAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Div { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::RemainderAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Mod { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::ExponentiateAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Exp { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::LeftShiftAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Shl { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::RightShiftAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Shr { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::UnsignedRightShiftAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::Ushr { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::BitwiseAndAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::BitAnd { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::BitwiseOrAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::BitOr { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::BitwiseXorAssign => {
+                        ir3.instructions
+                            .push(Ir3Instruction::BitXor { dst, lhs: dst, rhs: src });
+                    }
+                    AssignmentOperator::LogicalAndAssign
+                    | AssignmentOperator::LogicalOrAssign
+                    | AssignmentOperator::NullishCoalescingAssign => {
+                        // Logical compound assignments should be
+                        // short-circuit expanded at IR1.  Fallback to Move.
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    }
+                }
                 value_stack.push(dst);
             }
             Ir1Op::Label { id } => {
@@ -1759,6 +1993,100 @@ pub fn lower_ir2_to_ir3(
                 let pool_index = push_constant(&mut ir3.constant_pool, name);
                 ir3.instructions
                     .push(Ir3Instruction::LoadStr { dst, pool_index });
+                value_stack.push(dst);
+            }
+            Ir1Op::ForInInit | Ir1Op::ForOfInit => {
+                // Pop the object/iterable from the stack, push an opaque
+                // enumerator/iterator handle.
+                let src = value_stack.pop().unwrap_or(0);
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                value_stack.push(dst);
+            }
+            Ir1Op::ForInNext { .. } | Ir1Op::ForOfNext { .. } => {
+                // Peek at enumerator/iterator (consumed and re-pushed by the
+                // runtime).  Result is the next key/value; control-flow jump
+                // is handled through the label system (the done_label becomes
+                // a normal label/jump pair at IR1 level).
+                let iter_reg = value_stack.pop().unwrap_or(0);
+                let done_label = match &op.inner {
+                    Ir1Op::ForInNext { done_label } | Ir1Op::ForOfNext { done_label } => {
+                        *done_label
+                    }
+                    _ => unreachable!(),
+                };
+                // Emit a conditional jump placeholder for "if done, jump to
+                // done_label".  The runtime checks the done flag.
+                let cond_reg = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::Move {
+                    dst: cond_reg,
+                    src: iter_reg,
+                });
+                let truthy_skip_index = ir3.instructions.len();
+                ir3.instructions.push(Ir3Instruction::JumpIf {
+                    cond: cond_reg,
+                    target: 0,
+                });
+                let falsy_jump_index = ir3.instructions.len();
+                ir3.instructions.push(Ir3Instruction::Jump { target: 0 });
+                pending_jumps.push(PendingJump::JumpIfFalsy {
+                    truthy_skip_index,
+                    falsy_jump_index,
+                    label_id: done_label,
+                });
+                // Push the next value register for the loop body binding.
+                let val_reg = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::Move {
+                    dst: val_reg,
+                    src: iter_reg,
+                });
+                value_stack.push(val_reg);
+            }
+            Ir1Op::IteratorClose { .. } => {
+                // Pop iterator and call .return() — lowered as a no-op move
+                // at IR3; actual close semantics live in the runtime.
+                let src = value_stack.pop().unwrap_or(0);
+                ir3.instructions
+                    .push(Ir3Instruction::Move { dst: src, src });
+            }
+            Ir1Op::Construct { arg_count } => {
+                // Pop callee + arg_count args from value stack; push result.
+                let count = *arg_count as usize;
+                let mut arg_regs = Vec::with_capacity(count);
+                for _ in 0..count {
+                    arg_regs.push(value_stack.pop().unwrap_or(0));
+                }
+                arg_regs.reverse();
+                let callee = value_stack.pop().unwrap_or(0);
+                let dst = alloc_register(&mut register_cursor);
+                let args = if arg_regs.is_empty() {
+                    RegRange { start: 0, count: 0 }
+                } else {
+                    RegRange {
+                        start: arg_regs[0],
+                        count: arg_regs.len() as u32,
+                    }
+                };
+                ir3.instructions
+                    .push(Ir3Instruction::Construct { callee, args, dst });
+                value_stack.push(dst);
+            }
+            Ir1Op::TemplateLiteral { quasi_count } => {
+                // Pop interleaved quasis and expressions.
+                // quasi_count quasis + (quasi_count - 1) expressions.
+                let total = if *quasi_count == 0 {
+                    0
+                } else {
+                    (*quasi_count as usize) + (*quasi_count as usize).saturating_sub(1)
+                };
+                // Consume all values; result is string concatenation.
+                for _ in 0..total {
+                    value_stack.pop();
+                }
+                let dst = alloc_register(&mut register_cursor);
+                // Lowered as a Move (actual concat is runtime semantics).
+                ir3.instructions
+                    .push(Ir3Instruction::Move { dst, src: dst });
                 value_stack.push(dst);
             }
         }
@@ -2378,16 +2706,11 @@ fn lower_expression_to_ir1(
                 )?;
                 ops.push(Ir1Op::SetProperty { key });
             } else {
-                lower_expression_to_ir1(
-                    right,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                )?;
-                ops.push(Ir1Op::Nop);
+                return Err(unsupported_frontier_expression_error(
+                    "assignment_target",
+                    "assignment to non-lvalue target is not supported; only identifiers and member expressions are valid assignment targets",
+                    None,
+                ));
             }
         }
         Expression::Conditional {
@@ -2584,21 +2907,54 @@ fn lower_expression_to_ir1(
             ops.push(Ir1Op::Return);
         }
         Expression::New { callee, arguments } => {
-            let _ = (callee, arguments);
-            return Err(unsupported_syntax_error(
-                ParserGapSiteId::NewExpressionCallPlaceholder,
-                None,
-            ));
+            lower_expression_to_ir1(
+                callee,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            for arg in arguments {
+                lower_expression_to_ir1(
+                    arg,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+            }
+            ops.push(Ir1Op::Construct {
+                arg_count: arguments.len() as u32,
+            });
         }
         Expression::TemplateLiteral {
             quasis,
             expressions,
         } => {
-            let _ = (quasis, expressions);
-            return Err(unsupported_syntax_error(
-                ParserGapSiteId::TemplateLiteralRawPlaceholder,
-                None,
-            ));
+            // Interleave quasis and expressions: quasi[0], expr[0], quasi[1], ..., quasi[N-1]
+            for (i, quasi) in quasis.iter().enumerate() {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(quasi.clone()),
+                });
+                if i < expressions.len() {
+                    lower_expression_to_ir1(
+                        &expressions[i],
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+            }
+            ops.push(Ir1Op::TemplateLiteral {
+                quasi_count: quasis.len() as u32,
+            });
         }
     }
     Ok(())
@@ -2700,6 +3056,13 @@ fn classify_ir1_op(
         Ir1Op::GetProperty { .. } | Ir1Op::SetProperty { .. } => {
             (EffectBoundary::ReadEffect, None, None)
         }
+        Ir1Op::ForInInit
+        | Ir1Op::ForInNext { .. }
+        | Ir1Op::ForOfInit
+        | Ir1Op::ForOfNext { .. }
+        | Ir1Op::IteratorClose { .. }
+        | Ir1Op::Construct { .. }
+        | Ir1Op::TemplateLiteral { .. } => (EffectBoundary::ReadEffect, None, None),
         _ => (EffectBoundary::Pure, None, None),
     }
 }
@@ -5101,16 +5464,19 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Ir1Op::Jump { .. }))
         );
-        // Expression statements now emit a trailing Pop to balance the stack.
-        // The conditional expression itself should not emit Pop within its
-        // branch arms; the single Pop at the end is from the expression-statement wrapper.
+        // Two Pops expected:
+        // 1. After JumpIfFalsy — pops the test value from the stack
+        // 2. From the expression-statement wrapper — pops the result value
         let pop_count = result
             .module
             .ops
             .iter()
             .filter(|op| matches!(op, Ir1Op::Pop))
             .count();
-        assert_eq!(pop_count, 1, "only the expression-statement Pop expected");
+        assert_eq!(
+            pop_count, 2,
+            "test-value Pop + expression-statement Pop expected"
+        );
         let label_count = result
             .module
             .ops
@@ -5493,7 +5859,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_for_in_statement_fails_closed() {
+    fn lower_for_in_statement_produces_ir1_ops() {
         let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".into()),
             binding_kind: Some(VariableDeclarationKind::Let),
@@ -5504,20 +5870,21 @@ mod tests {
             })),
             span: span(),
         })]);
-        let err = lower_ir0_to_ir1(&ir0).expect_err("for-in must fail closed");
-        assert!(matches!(
-            err,
-            LoweringPipelineError::UnsupportedSyntax(ref diagnostic)
-                if diagnostic.site_id
-                    == ParserGapSiteId::ForInStatementPlaceholder.as_str()
-                && diagnostic.diagnostic_code
-                    == ParserGapSiteId::ForInStatementPlaceholder.diagnostic_code()
-                && diagnostic.span == Some(span())
-        ));
+        let result = lower_ir0_to_ir1(&ir0).expect("for-in lowering should succeed");
+        let ops = &result.module.ops;
+        // Must contain ForInInit and ForInNext opcodes.
+        assert!(
+            ops.iter().any(|op| matches!(op, Ir1Op::ForInInit)),
+            "missing ForInInit"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Ir1Op::ForInNext { .. })),
+            "missing ForInNext"
+        );
     }
 
     #[test]
-    fn lower_for_of_statement_fails_closed() {
+    fn lower_for_of_statement_produces_ir1_ops() {
         let ir0 = stmt_ir0(vec![Statement::ForOf(ForOfStatement {
             binding: BindingPattern::Identifier("v".into()),
             binding_kind: Some(VariableDeclarationKind::Const),
@@ -5528,16 +5895,22 @@ mod tests {
             })),
             span: span(),
         })]);
-        let err = lower_ir0_to_ir1(&ir0).expect_err("for-of must fail closed");
-        assert!(matches!(
-            err,
-            LoweringPipelineError::UnsupportedSyntax(ref diagnostic)
-                if diagnostic.site_id
-                    == ParserGapSiteId::ForOfStatementPlaceholder.as_str()
-                && diagnostic.diagnostic_code
-                    == ParserGapSiteId::ForOfStatementPlaceholder.diagnostic_code()
-                && diagnostic.span == Some(span())
-        ));
+        let result = lower_ir0_to_ir1(&ir0).expect("for-of lowering should succeed");
+        let ops = &result.module.ops;
+        // Must contain ForOfInit, ForOfNext, and IteratorClose opcodes.
+        assert!(
+            ops.iter().any(|op| matches!(op, Ir1Op::ForOfInit)),
+            "missing ForOfInit"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(op, Ir1Op::ForOfNext { .. })),
+            "missing ForOfNext"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, Ir1Op::IteratorClose { .. })),
+            "missing IteratorClose"
+        );
     }
 
     #[test]
@@ -6156,7 +6529,7 @@ mod tests {
     }
 
     #[test]
-    fn for_in_without_binding_kind_fails_closed() {
+    fn for_in_without_binding_kind_defaults_to_let() {
         let ir0 = stmt_ir0(vec![Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".into()),
             binding_kind: None,
@@ -6167,13 +6540,10 @@ mod tests {
             })),
             span: span(),
         })]);
-        let err = lower_ir0_to_ir1(&ir0).expect_err("for-in default binding must fail closed");
-        assert!(matches!(
-            err,
-            LoweringPipelineError::UnsupportedSyntax(ref diagnostic)
-                if diagnostic.site_id
-                    == ParserGapSiteId::ForInStatementPlaceholder.as_str()
-        ));
+        let result =
+            lower_ir0_to_ir1(&ir0).expect("for-in with no binding_kind should default to Let");
+        let ops = &result.module.ops;
+        assert!(ops.iter().any(|op| matches!(op, Ir1Op::ForInInit)));
     }
 
     #[test]

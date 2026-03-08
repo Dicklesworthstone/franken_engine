@@ -37,6 +37,7 @@ pub mod checkpoint_frontier;
 pub mod claim_atom_lattice;
 pub mod claim_entitlement;
 pub mod claim_envelope_contract;
+pub mod claim_publication_gate;
 pub mod closure_model;
 pub mod compiler_policy;
 pub mod conformance_catalog;
@@ -127,6 +128,7 @@ pub mod lab_runtime;
 pub mod law_mining;
 pub mod lease_tracker;
 pub mod lowering_gap_inventory;
+pub mod lowering_parity_evidence;
 pub mod lowering_pipeline;
 pub mod marker_stream;
 pub mod migration_compatibility;
@@ -279,6 +281,7 @@ pub mod universal_dominance_ratchet;
 pub mod version_matrix_lane;
 pub mod wasm_runtime_lane;
 pub mod wave_handoff_contract;
+pub mod zero_placeholder_scan;
 
 use std::{cmp::Ordering, error::Error, fmt};
 
@@ -1127,7 +1130,9 @@ fn patch_eval_completion_value(instructions: &mut [Ir3Instruction]) {
         }
     }
 
-    if let Some(src) = completion_reg && src != 0 {
+    if let Some(src) = completion_reg
+        && src != 0
+    {
         // Patch any Return instructions to use the completion register.
         for instr in instructions.iter_mut() {
             if let Ir3Instruction::Return { value } = instr {
@@ -1172,6 +1177,7 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::InstanceOf { dst, .. }
         | Ir3Instruction::InOp { dst, .. }
         | Ir3Instruction::Construct { dst, .. }
+        | Ir3Instruction::TemplateLiteral { dst, .. }
         | Ir3Instruction::Call { dst, .. }
         | Ir3Instruction::HostCall { dst, .. } => Some(*dst),
         _ => None,

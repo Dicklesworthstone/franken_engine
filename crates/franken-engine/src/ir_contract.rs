@@ -1129,6 +1129,9 @@ pub enum Ir3Instruction {
     NewObject { dst: Reg },
     /// Allocate a new array on the heap.
     NewArray { dst: Reg },
+    /// Template literal concatenation: dst = parts[0] + parts[1] + ... + parts[N-1].
+    /// Parts are interleaved quasi strings and expressions already loaded in registers.
+    TemplateLiteral { parts: RegRange, dst: Reg },
     /// Halt execution.
     Halt,
 }
@@ -1286,6 +1289,14 @@ impl Ir3Instruction {
                 );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }
+            Self::TemplateLiteral { parts, dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("template_literal".to_string()),
+                );
+                map.insert("parts".to_string(), parts.canonical_value());
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
             Self::Halt => {
                 map.insert("op".to_string(), CanonicalValue::String("halt".to_string()));
             }
@@ -1332,37 +1343,55 @@ impl Ir3Instruction {
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::StrictEq { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("strict_eq".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("strict_eq".to_string()),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::NotEq { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("not_eq".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("not_eq".to_string()),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::StrictNotEq { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("strict_not_eq".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("strict_not_eq".to_string()),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::BitAnd { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("bit_and".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("bit_and".to_string()),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::BitOr { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("bit_or".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("bit_or".to_string()),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::BitXor { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("bit_xor".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("bit_xor".to_string()),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
@@ -1386,20 +1415,32 @@ impl Ir3Instruction {
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::InstanceOf { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("instance_of".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("instance_of".to_string()),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::InOp { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("in_op".to_string()));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("in_op".to_string()),
+                );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
             }
             Self::Construct { callee, args, dst } => {
-                map.insert("op".to_string(), CanonicalValue::String("construct".to_string()));
-                map.insert("callee".to_string(), CanonicalValue::U64(u64::from(*callee)));
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("construct".to_string()),
+                );
+                map.insert(
+                    "callee".to_string(),
+                    CanonicalValue::U64(u64::from(*callee)),
+                );
                 map.insert("args".to_string(), args.canonical_value());
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }

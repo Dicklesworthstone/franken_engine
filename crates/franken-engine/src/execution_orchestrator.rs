@@ -862,6 +862,7 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::InstanceOf { .. } => "instance_of",
             crate::ir_contract::Ir3Instruction::InOp { .. } => "in_op",
             crate::ir_contract::Ir3Instruction::Construct { .. } => "construct",
+            crate::ir_contract::Ir3Instruction::TemplateLiteral { .. } => "template_literal",
             crate::ir_contract::Ir3Instruction::Halt => "halt",
         }
     }

@@ -161,6 +161,10 @@ struct CallFrame {
     /// Function table index (reserved for frame-level diagnostics).
     #[allow(dead_code)]
     function_index: Option<u32>,
+    /// For constructor calls (`new`): the `this` object allocated before
+    /// entering the constructor body. If the constructor returns a non-object,
+    /// this value is used as the result instead (ES2020 §9.2.2 step 13).
+    construct_this: Option<Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +528,7 @@ impl InterpreterCore {
                                 return_reg: dst,
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
+                                construct_this: None,
                             });
 
                             self.register_base += self.config.max_registers as usize;
@@ -555,7 +560,18 @@ impl InterpreterCore {
                     let return_val = self.read_reg(value)?;
                     if let Some(frame) = self.call_stack.pop() {
                         self.register_base = frame.register_base;
-                        self.write_reg(frame.return_reg, return_val)?;
+                        // ES2020 §9.2.2 step 13: if this is a constructor call
+                        // and the return value is not an object, use the
+                        // allocated `this` object instead.
+                        let effective_val = if let Some(this_obj) = frame.construct_this {
+                            match return_val {
+                                Value::Object(_) => return_val,
+                                _ => this_obj,
+                            }
+                        } else {
+                            return_val
+                        };
+                        self.write_reg(frame.return_reg, effective_val)?;
                         self.ip = frame.return_ip;
                     } else {
                         // Top-level return.
@@ -698,14 +714,89 @@ impl InterpreterCore {
                     self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
-                Ir3Instruction::InstanceOf { dst, .. }
-                | Ir3Instruction::InOp { dst, .. } => {
+                Ir3Instruction::InstanceOf { dst, .. } | Ir3Instruction::InOp { dst, .. } => {
                     self.write_reg(dst, Value::Bool(false))?;
                     self.ip += 1;
                 }
-                Ir3Instruction::Construct { dst, .. } => {
-                    let id = self.alloc_object();
-                    self.write_reg(dst, Value::Object(id))?;
+                Ir3Instruction::Construct { callee, args, dst } => {
+                    let callee_val = self.read_reg(callee)?;
+                    match callee_val {
+                        Value::Function(func_idx) => {
+                            let func =
+                                module.function_table.get(func_idx as usize).ok_or(
+                                    InterpreterError::FunctionNotFound {
+                                        index: func_idx,
+                                        table_size: module.function_table.len() as u32,
+                                    },
+                                )?;
+
+                            if self.call_stack.len() >= self.config.max_call_depth {
+                                return Err(InterpreterError::StackOverflow {
+                                    depth: self.call_stack.len(),
+                                    max: self.config.max_call_depth,
+                                });
+                            }
+
+                            // Allocate the `this` object for the constructor.
+                            let this_id = self.alloc_object();
+                            let this_val = Value::Object(this_id);
+
+                            let mut arg_vals = Vec::new();
+                            for i in 0..args.count.min(func.arity) {
+                                arg_vals.push(self.read_reg(args.start + i)?);
+                            }
+
+                            // Push constructor frame with `construct_this`.
+                            self.call_stack.push(CallFrame {
+                                return_ip: self.ip + 1,
+                                return_reg: dst,
+                                register_base: self.register_base,
+                                function_index: Some(func_idx),
+                                construct_this: Some(this_val.clone()),
+                            });
+
+                            self.register_base += self.config.max_registers as usize;
+                            let req_len =
+                                self.register_base + self.config.max_registers as usize;
+                            if req_len > self.registers.len() {
+                                self.registers.resize(req_len, Value::Undefined);
+                            } else {
+                                self.registers[self.register_base..req_len]
+                                    .fill(Value::Undefined);
+                            }
+
+                            // Register 0 = `this` for the constructor body.
+                            self.write_reg(0, this_val)?;
+                            // Arguments start at register 1.
+                            for (i, val) in arg_vals.into_iter().enumerate() {
+                                self.write_reg((i + 1) as u32, val)?;
+                            }
+
+                            self.ip = func.entry as usize;
+                        }
+                        _ => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "function".to_string(),
+                                got: callee_val.type_name().to_string(),
+                            });
+                        }
+                    }
+                }
+                Ir3Instruction::TemplateLiteral { parts, dst } => {
+                    let mut result = String::new();
+                    for i in 0..parts.count {
+                        let val = self.read_reg(parts.start + i)?;
+                        match val {
+                            Value::Str(s) => result.push_str(&s),
+                            Value::Int(n) => result.push_str(&n.to_string()),
+                            Value::Bool(b) => result.push_str(if b { "true" } else { "false" }),
+                            Value::Null => result.push_str("null"),
+                            Value::Undefined => result.push_str("undefined"),
+                            Value::Object(_) => result.push_str("[object Object]"),
+                            Value::Function(_) => result.push_str("function"),
+                        }
+                    }
+                    self.write_reg(dst, Value::Str(result))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Halt => {
@@ -3162,5 +3253,189 @@ mod tests {
             err,
             InterpreterError::RegisterOutOfBounds { register: 999, .. }
         ));
+    }
+
+    // -- Construct (new) tests -------------------------------------------
+
+    #[test]
+    fn construct_invokes_constructor_and_returns_this() {
+        // Constructor body: sets this.x = arg[0], then returns undefined.
+        // Since return is non-object, Construct should return the `this` object.
+        let m = test_module_with_functions(
+            vec![
+                // Main: r1 = 42
+                Ir3Instruction::LoadInt { dst: 1, value: 42 },
+                // Construct: r2 = new r0(r1)
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+                // Constructor at ip=3: this=r0, arg=r1
+                // r2 = "x"
+                Ir3Instruction::LoadStr { dst: 2, pool_index: 0 },
+                // this.x = r1
+                Ir3Instruction::SetProperty { obj: 0, key: 2, val: 1 },
+                // return undefined (non-object => this is used)
+                Ir3Instruction::LoadUndefined { dst: 3 },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            vec![Ir3FunctionDesc {
+                name: Some("Ctor".to_string()),
+                entry: 3,
+                arity: 2, // this + 1 arg
+                frame_size: 8,
+            }],
+        );
+        let mut mod_with_pool = m;
+        mod_with_pool.constant_pool = vec!["x".to_string()];
+        // Pre-load r0 with Function(0) via InterpreterCore
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[0] = Value::Function(0);
+        let result = core.execute(&mod_with_pool).unwrap();
+        // Should return an object (the constructed this)
+        assert!(matches!(result.value, Value::Object(_)));
+    }
+
+    #[test]
+    fn construct_type_error_on_non_function() {
+        let m = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::Construct {
+                callee: 0,
+                args: RegRange { start: 1, count: 0 },
+                dst: 1,
+            },
+        ]);
+        let err = quickjs_execute(&m).unwrap_err();
+        assert!(matches!(err, InterpreterError::TypeError { .. }));
+    }
+
+    #[test]
+    fn construct_returns_explicit_object_when_constructor_returns_object() {
+        // Constructor returns a different object, which should be used as the result.
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+                // Constructor at ip=2: allocate and return a new object
+                Ir3Instruction::NewObject { dst: 2 },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![Ir3FunctionDesc {
+                name: Some("Ctor".to_string()),
+                entry: 2,
+                arity: 1,
+                frame_size: 8,
+            }],
+        );
+        // Pre-load r0 with Function(0) via InterpreterCore
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[0] = Value::Function(0);
+        let result = core.execute(&m).unwrap();
+        assert!(matches!(result.value, Value::Object(_)));
+    }
+
+    // -- TemplateLiteral tests -------------------------------------------
+
+    #[test]
+    fn template_literal_concatenates_parts() {
+        // r0="hello ", r1="world", r2="!" => TemplateLiteral([r0,r1,r2]) => "hello world!"
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+                Ir3Instruction::LoadStr { dst: 1, pool_index: 1 },
+                Ir3Instruction::LoadStr { dst: 2, pool_index: 2 },
+                Ir3Instruction::TemplateLiteral {
+                    parts: RegRange { start: 0, count: 3 },
+                    dst: 3,
+                },
+                Ir3Instruction::Return { value: 3 },
+            ],
+            vec!["hello ".to_string(), "world".to_string(), "!".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Str("hello world!".to_string()));
+    }
+
+    #[test]
+    fn template_literal_coerces_non_string_parts() {
+        // r0="value: ", r1=42 => "value: 42"
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+                Ir3Instruction::LoadInt { dst: 1, value: 42 },
+                Ir3Instruction::TemplateLiteral {
+                    parts: RegRange { start: 0, count: 2 },
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec!["value: ".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Str("value: 42".to_string()));
+    }
+
+    #[test]
+    fn template_literal_handles_booleans_and_null() {
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+                Ir3Instruction::LoadBool { dst: 1, value: true },
+                Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
+                Ir3Instruction::LoadNull { dst: 3 },
+                Ir3Instruction::LoadStr { dst: 4, pool_index: 2 },
+                Ir3Instruction::TemplateLiteral {
+                    parts: RegRange { start: 0, count: 5 },
+                    dst: 5,
+                },
+                Ir3Instruction::Return { value: 5 },
+            ],
+            vec!["a=".to_string(), ",b=".to_string(), "!".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(
+            result.value,
+            Value::Str("a=true,b=null!".to_string())
+        );
+    }
+
+    #[test]
+    fn template_literal_single_part() {
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+                Ir3Instruction::TemplateLiteral {
+                    parts: RegRange { start: 0, count: 1 },
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec!["only".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Str("only".to_string()));
+    }
+
+    #[test]
+    fn template_literal_undefined_coercion() {
+        let m = test_module(vec![
+            Ir3Instruction::LoadUndefined { dst: 0 },
+            Ir3Instruction::TemplateLiteral {
+                parts: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::Return { value: 1 },
+        ]);
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Str("undefined".to_string()));
     }
 }

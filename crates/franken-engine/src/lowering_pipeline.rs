@@ -1728,34 +1728,18 @@ pub fn lower_ir2_to_ir3(
                     BinaryOperator::LessThan => Ir3Instruction::Lt { dst, lhs, rhs },
                     BinaryOperator::LessThanOrEqual => Ir3Instruction::Lte { dst, lhs, rhs },
                     BinaryOperator::GreaterThan => Ir3Instruction::Gt { dst, lhs, rhs },
-                    BinaryOperator::GreaterThanOrEqual => {
-                        Ir3Instruction::Gte { dst, lhs, rhs }
-                    }
+                    BinaryOperator::GreaterThanOrEqual => Ir3Instruction::Gte { dst, lhs, rhs },
                     BinaryOperator::Equal => Ir3Instruction::Eq { dst, lhs, rhs },
-                    BinaryOperator::StrictEqual => {
-                        Ir3Instruction::StrictEq { dst, lhs, rhs }
-                    }
+                    BinaryOperator::StrictEqual => Ir3Instruction::StrictEq { dst, lhs, rhs },
                     BinaryOperator::NotEqual => Ir3Instruction::NotEq { dst, lhs, rhs },
-                    BinaryOperator::StrictNotEqual => {
-                        Ir3Instruction::StrictNotEq { dst, lhs, rhs }
-                    }
-                    BinaryOperator::BitwiseAnd => {
-                        Ir3Instruction::BitAnd { dst, lhs, rhs }
-                    }
-                    BinaryOperator::BitwiseOr => {
-                        Ir3Instruction::BitOr { dst, lhs, rhs }
-                    }
-                    BinaryOperator::BitwiseXor => {
-                        Ir3Instruction::BitXor { dst, lhs, rhs }
-                    }
+                    BinaryOperator::StrictNotEqual => Ir3Instruction::StrictNotEq { dst, lhs, rhs },
+                    BinaryOperator::BitwiseAnd => Ir3Instruction::BitAnd { dst, lhs, rhs },
+                    BinaryOperator::BitwiseOr => Ir3Instruction::BitOr { dst, lhs, rhs },
+                    BinaryOperator::BitwiseXor => Ir3Instruction::BitXor { dst, lhs, rhs },
                     BinaryOperator::LeftShift => Ir3Instruction::Shl { dst, lhs, rhs },
                     BinaryOperator::RightShift => Ir3Instruction::Shr { dst, lhs, rhs },
-                    BinaryOperator::UnsignedRightShift => {
-                        Ir3Instruction::Ushr { dst, lhs, rhs }
-                    }
-                    BinaryOperator::Instanceof => {
-                        Ir3Instruction::InstanceOf { dst, lhs, rhs }
-                    }
+                    BinaryOperator::UnsignedRightShift => Ir3Instruction::Ushr { dst, lhs, rhs },
+                    BinaryOperator::Instanceof => Ir3Instruction::InstanceOf { dst, lhs, rhs },
                     BinaryOperator::In => Ir3Instruction::InOp { dst, lhs, rhs },
                     BinaryOperator::LogicalAnd
                     | BinaryOperator::LogicalOr
@@ -1788,52 +1772,88 @@ pub fn lower_ir2_to_ir3(
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     }
                     AssignmentOperator::AddAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Add { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Add {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::SubtractAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Sub { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Sub {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::MultiplyAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Mul { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Mul {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::DivideAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Div { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Div {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::RemainderAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Mod { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Mod {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::ExponentiateAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Exp { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Exp {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::LeftShiftAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Shl { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Shl {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::RightShiftAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Shr { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Shr {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::UnsignedRightShiftAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::Ushr { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::Ushr {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::BitwiseAndAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::BitAnd { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::BitAnd {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::BitwiseOrAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::BitOr { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::BitOr {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::BitwiseXorAssign => {
-                        ir3.instructions
-                            .push(Ir3Instruction::BitXor { dst, lhs: dst, rhs: src });
+                        ir3.instructions.push(Ir3Instruction::BitXor {
+                            dst,
+                            lhs: dst,
+                            rhs: src,
+                        });
                     }
                     AssignmentOperator::LogicalAndAssign
                     | AssignmentOperator::LogicalOrAssign
@@ -2080,14 +2100,25 @@ pub fn lower_ir2_to_ir3(
                 } else {
                     (*quasi_count as usize) + (*quasi_count as usize).saturating_sub(1)
                 };
-                // Consume all values; result is string concatenation.
+                // Pop part registers in reverse order and collect them.
+                let mut part_regs: Vec<u32> = Vec::with_capacity(total);
                 for _ in 0..total {
-                    value_stack.pop();
+                    part_regs.push(value_stack.pop().unwrap_or(0));
                 }
+                part_regs.reverse();
                 let dst = alloc_register(&mut register_cursor);
-                // Lowered as a Move (actual concat is runtime semantics).
-                ir3.instructions
-                    .push(Ir3Instruction::Move { dst, src: dst });
+                if part_regs.is_empty() {
+                    // Empty template literal => empty string.
+                    ir3.instructions
+                        .push(Ir3Instruction::Move { dst, src: dst });
+                } else {
+                    let parts = RegRange {
+                        start: part_regs[0],
+                        count: part_regs.len() as u32,
+                    };
+                    ir3.instructions
+                        .push(Ir3Instruction::TemplateLiteral { parts, dst });
+                }
                 value_stack.push(dst);
             }
         }
@@ -5689,7 +5720,13 @@ mod tests {
             arguments: vec![Expression::NumericLiteral(1)],
         });
         let result = lower_ir0_to_ir1(&ir0).expect("new expression should lower");
-        assert!(result.module.ops.iter().any(|op| matches!(op, Ir1Op::Construct { .. })));
+        assert!(
+            result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::Construct { .. }))
+        );
     }
 
     #[test]
@@ -5699,11 +5736,13 @@ mod tests {
             expressions: vec![Expression::Identifier("name".into())],
         });
         let result = lower_ir0_to_ir1(&ir0).expect("template literal should lower");
-        assert!(result
-            .module
-            .ops
-            .iter()
-            .any(|op| matches!(op, Ir1Op::TemplateLiteral { .. })));
+        assert!(
+            result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::TemplateLiteral { .. }))
+        );
     }
 
     #[test]

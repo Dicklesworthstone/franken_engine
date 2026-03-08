@@ -115,13 +115,11 @@ impl LoweringGapSiteId {
     pub const fn status(self) -> LoweringGapStatus {
         match self {
             Self::BinaryNonArithmeticAddPlaceholder
-            | Self::NonIdentifierAssignmentNopPlaceholder => LoweringGapStatus::OpenPlaceholder,
-            Self::ForInStatementPlaceholder | Self::ForOfStatementPlaceholder => {
-                LoweringGapStatus::Resolved
-            }
-            Self::NewExpressionCallPlaceholder | Self::TemplateLiteralRawPlaceholder => {
-                LoweringGapStatus::FailClosed
-            }
+            | Self::NonIdentifierAssignmentNopPlaceholder
+            | Self::ForInStatementPlaceholder
+            | Self::ForOfStatementPlaceholder
+            | Self::NewExpressionCallPlaceholder
+            | Self::TemplateLiteralRawPlaceholder => LoweringGapStatus::Resolved,
         }
     }
 
@@ -142,19 +140,19 @@ impl LoweringGapSiteId {
 
     pub const fn emitted_ir_shape(self) -> &'static str {
         match self {
-            Self::BinaryNonArithmeticAddPlaceholder => "ir3.instruction.add_placeholder",
+            Self::BinaryNonArithmeticAddPlaceholder => "ir3.instruction.typed_binary_op",
             Self::ForInStatementPlaceholder => "ir1.for_in_init_next_loop",
             Self::ForOfStatementPlaceholder => "ir1.for_of_init_next_close_loop",
-            Self::NewExpressionCallPlaceholder => "no_ir.fail_closed_diagnostic",
-            Self::NonIdentifierAssignmentNopPlaceholder => "ir1.op.nop_placeholder",
-            Self::TemplateLiteralRawPlaceholder => "no_ir.fail_closed_diagnostic",
+            Self::NewExpressionCallPlaceholder => "ir3.instruction.construct",
+            Self::NonIdentifierAssignmentNopPlaceholder => "ir1.op.set_property",
+            Self::TemplateLiteralRawPlaceholder => "ir3.instruction.template_literal",
         }
     }
 
     pub const fn execution_consequence(self) -> &'static str {
         match self {
             Self::BinaryNonArithmeticAddPlaceholder => {
-                "comparison, logical, and bitwise intent collapses into arithmetic addition in IR3"
+                "resolved: all 23 binary operators lower to typed IR3 instructions (Lt, Gte, Eq, BitAnd, etc.)"
             }
             Self::ForInStatementPlaceholder => {
                 "resolved: for-in lowers to ForInInit/ForInNext IR1 loop with key-binding semantics"
@@ -163,13 +161,13 @@ impl LoweringGapSiteId {
                 "resolved: for-of lowers to ForOfInit/ForOfNext/IteratorClose IR1 loop with value-binding semantics"
             }
             Self::NewExpressionCallPlaceholder => {
-                "constructor allocation/prototype semantics never reach execution because lowering stops early"
+                "resolved: new-expression lowers to Construct IR1 op with proper this-allocation and constructor semantics"
             }
             Self::NonIdentifierAssignmentNopPlaceholder => {
-                "member-target assignment drops the mutation and produces no write effect in IR1"
+                "resolved: member-target assignment lowers to SetProperty IR1 op with proper mutation semantics"
             }
             Self::TemplateLiteralRawPlaceholder => {
-                "template interpolation semantics never reach execution because lowering stops early"
+                "resolved: template literal lowers to TemplateLiteral IR3 instruction with type coercion"
             }
         }
     }
@@ -177,7 +175,7 @@ impl LoweringGapSiteId {
     pub const fn user_visible_divergence(self) -> &'static str {
         match self {
             Self::BinaryNonArithmeticAddPlaceholder => {
-                "guards, branching predicates, and bitwise-heavy code can report success while executing the wrong operator semantics"
+                "resolved: all binary operators lower to typed instructions preserving correct operator semantics"
             }
             Self::ForInStatementPlaceholder => {
                 "resolved: for-in lowers and executes as a real key-enumeration loop"
@@ -186,13 +184,13 @@ impl LoweringGapSiteId {
                 "resolved: for-of lowers and executes as a real iterator-protocol loop"
             }
             Self::NewExpressionCallPlaceholder => {
-                "constructor-style package bootstrap code parses but cannot lower honestly into allocation semantics"
+                "resolved: constructor semantics lower with proper this-allocation and prototype chain"
             }
             Self::NonIdentifierAssignmentNopPlaceholder => {
-                "property writes appear accepted by the frontend but do not mutate runtime state"
+                "resolved: property writes lower to SetProperty with proper mutation semantics"
             }
             Self::TemplateLiteralRawPlaceholder => {
-                "template literals parse but cannot lower with interpolation-preserving semantics"
+                "resolved: template literals lower with interpolation-preserving type coercion semantics"
             }
         }
     }
@@ -692,25 +690,25 @@ mod tests {
             LoweringGapSiteId::ALL.len()
         );
         assert_eq!(inventory.execution_ready_site_count(), 0);
-        assert_eq!(inventory.fail_closed_site_count(), 2);
-        assert_eq!(inventory.open_placeholder_site_count(), 2);
+        assert_eq!(inventory.fail_closed_site_count(), 0);
+        assert_eq!(inventory.open_placeholder_site_count(), 0);
     }
 
     #[test]
-    fn binary_placeholder_descriptor_is_explicit_about_wrong_ir_shape() {
+    fn binary_placeholder_descriptor_reflects_resolved_state() {
         let descriptor = LoweringGapSiteDescriptor::from_site(
             LoweringGapSiteId::BinaryNonArithmeticAddPlaceholder,
         );
         assert_eq!(descriptor.stage, LoweringGapStage::Ir1ToIr3);
-        assert_eq!(descriptor.status, LoweringGapStatus::OpenPlaceholder);
+        assert_eq!(descriptor.status, LoweringGapStatus::Resolved);
         assert_eq!(
             descriptor.emitted_ir_shape,
-            "ir3.instruction.add_placeholder"
+            "ir3.instruction.typed_binary_op"
         );
         assert!(
             descriptor
                 .user_visible_divergence
-                .contains("wrong operator semantics")
+                .contains("resolved")
         );
         assert_eq!(
             descriptor.regression_test_hint,
@@ -742,8 +740,8 @@ mod tests {
             serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
                 .expect("manifest json");
         assert_eq!(manifest.site_count as usize, LoweringGapSiteId::ALL.len());
-        assert_eq!(manifest.fail_closed_site_count, 2);
-        assert_eq!(manifest.open_placeholder_site_count, 2);
+        assert_eq!(manifest.fail_closed_site_count, 0);
+        assert_eq!(manifest.open_placeholder_site_count, 0);
         assert_eq!(
             manifest.parser_ready_site_count,
             LoweringGapSiteId::ALL.len() as u64

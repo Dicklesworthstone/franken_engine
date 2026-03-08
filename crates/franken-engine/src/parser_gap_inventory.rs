@@ -125,15 +125,13 @@ impl ParserGapSiteId {
 
     pub const fn remediation_status(self) -> ParserGapRemediationStatus {
         match self {
-            Self::ForInStatementPlaceholder | Self::ForOfStatementPlaceholder => {
-                ParserGapRemediationStatus::Resolved
-            }
-            Self::NewExpressionCallPlaceholder | Self::TemplateLiteralRawPlaceholder => {
-                ParserGapRemediationStatus::FailClosed
-            }
-            Self::BinaryNonArithmeticAddPlaceholder
+            Self::ForInStatementPlaceholder
+            | Self::ForOfStatementPlaceholder
+            | Self::NewExpressionCallPlaceholder
+            | Self::TemplateLiteralRawPlaceholder
+            | Self::BinaryNonArithmeticAddPlaceholder
             | Self::NonIdentifierAssignmentNopPlaceholder => {
-                ParserGapRemediationStatus::OpenPlaceholder
+                ParserGapRemediationStatus::Resolved
             }
         }
     }
@@ -876,8 +874,8 @@ mod tests {
             .collect();
         assert_eq!(site_ids.len(), ParserGapSiteId::ALL.len());
         assert_eq!(diagnostic_codes.len(), ParserGapSiteId::ALL.len());
-        assert_eq!(inventory.fail_closed_site_count(), 2);
-        assert_eq!(inventory.open_placeholder_site_count(), 2);
+        assert_eq!(inventory.fail_closed_site_count(), 0);
+        assert_eq!(inventory.open_placeholder_site_count(), 0);
     }
 
     #[test]
@@ -924,8 +922,8 @@ mod tests {
             serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
                 .expect("manifest json");
         assert_eq!(manifest.site_count as usize, ParserGapSiteId::ALL.len());
-        assert_eq!(manifest.fail_closed_site_count, 2);
-        assert_eq!(manifest.open_placeholder_site_count, 2);
+        assert_eq!(manifest.fail_closed_site_count, 0);
+        assert_eq!(manifest.open_placeholder_site_count, 0);
         assert_eq!(
             manifest.artifact_paths.parser_gap_inventory,
             "parser_gap_inventory.json"

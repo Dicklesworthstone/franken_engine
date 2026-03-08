@@ -833,14 +833,22 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::Sub { .. } => "sub",
             crate::ir_contract::Ir3Instruction::Mul { .. } => "mul",
             crate::ir_contract::Ir3Instruction::Div { .. } => "div",
+            crate::ir_contract::Ir3Instruction::UnaryNeg { .. } => "unary_neg",
+            crate::ir_contract::Ir3Instruction::UnaryPlus { .. } => "unary_plus",
+            crate::ir_contract::Ir3Instruction::LogicalNot { .. } => "logical_not",
+            crate::ir_contract::Ir3Instruction::BitNot { .. } => "bit_not",
+            crate::ir_contract::Ir3Instruction::TypeOf { .. } => "typeof",
+            crate::ir_contract::Ir3Instruction::Void { .. } => "void",
             crate::ir_contract::Ir3Instruction::Move { .. } => "move",
             crate::ir_contract::Ir3Instruction::Jump { .. } => "jump",
             crate::ir_contract::Ir3Instruction::JumpIf { .. } => "jump_if",
+            crate::ir_contract::Ir3Instruction::JumpIfNullish { .. } => "jump_if_nullish",
             crate::ir_contract::Ir3Instruction::Call { .. } => "call",
             crate::ir_contract::Ir3Instruction::Return { .. } => "return",
             crate::ir_contract::Ir3Instruction::HostCall { .. } => "host_call",
             crate::ir_contract::Ir3Instruction::GetProperty { .. } => "get_property",
             crate::ir_contract::Ir3Instruction::SetProperty { .. } => "set_property",
+            crate::ir_contract::Ir3Instruction::DeleteProperty { .. } => "delete_property",
             crate::ir_contract::Ir3Instruction::NewObject { .. } => "new_object",
             crate::ir_contract::Ir3Instruction::NewArray { .. } => "new_array",
             crate::ir_contract::Ir3Instruction::Mod { .. } => "mod",
@@ -892,7 +900,8 @@ impl ExecutionOrchestrator {
                     out.push(target);
                 }
             }
-            crate::ir_contract::Ir3Instruction::JumpIf { target, .. } => {
+            crate::ir_contract::Ir3Instruction::JumpIf { target, .. }
+            | crate::ir_contract::Ir3Instruction::JumpIfNullish { target, .. } => {
                 let target = *target as usize;
                 if next < instruction_count {
                     out.push(next);

@@ -418,12 +418,21 @@ pub enum Ir1Op {
     Jump { label_id: u32 },
     /// Jump if top-of-stack is falsy.
     JumpIfFalsy { label_id: u32 },
+    /// Jump if top-of-stack is falsy, consuming the condition value.
+    JumpIfFalsyConsume { label_id: u32 },
+    /// Jump if top-of-stack is truthy, consuming the condition value.
+    JumpIfTruthy { label_id: u32 },
+    /// Jump if top-of-stack is null or undefined, consuming the condition value.
+    JumpIfNullish { label_id: u32 },
     /// Object property read. Dynamic keys remain on top-of-stack; static keys
     /// are carried directly in the op.
     GetProperty { key: Ir1PropertyKey },
     /// Object property write. Value is always on top-of-stack; dynamic keys sit
     /// below it, while static keys are carried directly in the op.
     SetProperty { key: Ir1PropertyKey },
+    /// Delete an object property. Dynamic keys remain on top-of-stack; static
+    /// keys are carried directly in the op.
+    DeleteProperty { key: Ir1PropertyKey },
     /// Create a new array from top N elements.
     NewArray { count: u32 },
     /// Create a new object from top N key-value pairs.
@@ -598,6 +607,36 @@ impl Ir1Op {
                     CanonicalValue::U64(u64::from(*label_id)),
                 );
             }
+            Self::JumpIfFalsyConsume { label_id } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("jump_if_falsy_consume".to_string()),
+                );
+                map.insert(
+                    "label_id".to_string(),
+                    CanonicalValue::U64(u64::from(*label_id)),
+                );
+            }
+            Self::JumpIfTruthy { label_id } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("jump_if_truthy".to_string()),
+                );
+                map.insert(
+                    "label_id".to_string(),
+                    CanonicalValue::U64(u64::from(*label_id)),
+                );
+            }
+            Self::JumpIfNullish { label_id } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("jump_if_nullish".to_string()),
+                );
+                map.insert(
+                    "label_id".to_string(),
+                    CanonicalValue::U64(u64::from(*label_id)),
+                );
+            }
             Self::GetProperty { key } => {
                 map.insert(
                     "op".to_string(),
@@ -609,6 +648,13 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("set_property".to_string()),
+                );
+                map.insert("key".to_string(), key.canonical_value());
+            }
+            Self::DeleteProperty { key } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("delete_property".to_string()),
                 );
                 map.insert("key".to_string(), key.canonical_value());
             }
@@ -1063,6 +1109,18 @@ pub enum Ir3Instruction {
     Mod { dst: Reg, lhs: Reg, rhs: Reg },
     /// Arithmetic: dst = lhs ** rhs.
     Exp { dst: Reg, lhs: Reg, rhs: Reg },
+    /// Unary numeric negation: dst = -src.
+    UnaryNeg { dst: Reg, src: Reg },
+    /// Unary numeric coercion: dst = +src.
+    UnaryPlus { dst: Reg, src: Reg },
+    /// Logical negation: dst = !src.
+    LogicalNot { dst: Reg, src: Reg },
+    /// Bitwise negation: dst = ~src.
+    BitNot { dst: Reg, src: Reg },
+    /// Type query: dst = typeof src.
+    TypeOf { dst: Reg, src: Reg },
+    /// Void operator: dst = undefined.
+    Void { dst: Reg, src: Reg },
     /// Comparison: dst = lhs < rhs.
     Lt { dst: Reg, lhs: Reg, rhs: Reg },
     /// Comparison: dst = lhs <= rhs.
@@ -1107,6 +1165,8 @@ pub enum Ir3Instruction {
     Jump { target: InstrIndex },
     /// Conditional jump (jump if register is truthy).
     JumpIf { cond: Reg, target: InstrIndex },
+    /// Conditional jump (jump if register is null or undefined).
+    JumpIfNullish { cond: Reg, target: InstrIndex },
     /// Call a function value with args.
     Call {
         callee: Reg,
@@ -1125,6 +1185,8 @@ pub enum Ir3Instruction {
     GetProperty { obj: Reg, key: Reg, dst: Reg },
     /// Object property write: obj[key] = val.
     SetProperty { obj: Reg, key: Reg, val: Reg },
+    /// Object property deletion: delete obj[key].
+    DeleteProperty { obj: Reg, key: Reg, dst: Reg },
     /// Allocate a new object on the heap.
     NewObject { dst: Reg },
     /// Allocate a new array on the heap.
@@ -1228,6 +1290,17 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*target)),
                 );
             }
+            Self::JumpIfNullish { cond, target } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("jump_if_nullish".to_string()),
+                );
+                map.insert("cond".to_string(), CanonicalValue::U64(u64::from(*cond)));
+                map.insert(
+                    "target".to_string(),
+                    CanonicalValue::U64(u64::from(*target)),
+                );
+            }
             Self::Call { callee, args, dst } => {
                 map.insert("op".to_string(), CanonicalValue::String("call".to_string()));
                 map.insert("args".to_string(), args.canonical_value());
@@ -1275,6 +1348,15 @@ impl Ir3Instruction {
                 map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
                 map.insert("val".to_string(), CanonicalValue::U64(u64::from(*val)));
             }
+            Self::DeleteProperty { obj, key, dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("delete_property".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
+                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
+            }
             Self::NewObject { dst } => {
                 map.insert(
                     "op".to_string(),
@@ -1311,6 +1393,51 @@ impl Ir3Instruction {
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::UnaryNeg { dst, src } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("unary_neg".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+            }
+            Self::UnaryPlus { dst, src } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("unary_plus".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+            }
+            Self::LogicalNot { dst, src } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("logical_not".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+            }
+            Self::BitNot { dst, src } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("bit_not".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+            }
+            Self::TypeOf { dst, src } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("typeof".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+            }
+            Self::Void { dst, src } => {
+                map.insert("op".to_string(), CanonicalValue::String("void".to_string()));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
             }
             Self::Lt { dst, lhs, rhs } => {
                 map.insert("op".to_string(), CanonicalValue::String("lt".to_string()));
@@ -2590,9 +2717,16 @@ mod tests {
                 lhs: 1,
                 rhs: 2,
             },
+            Ir3Instruction::UnaryNeg { dst: 0, src: 1 },
+            Ir3Instruction::UnaryPlus { dst: 0, src: 1 },
+            Ir3Instruction::LogicalNot { dst: 0, src: 1 },
+            Ir3Instruction::BitNot { dst: 0, src: 1 },
+            Ir3Instruction::TypeOf { dst: 0, src: 1 },
+            Ir3Instruction::Void { dst: 0, src: 1 },
             Ir3Instruction::Move { dst: 0, src: 1 },
             Ir3Instruction::Jump { target: 0 },
             Ir3Instruction::JumpIf { cond: 0, target: 1 },
+            Ir3Instruction::JumpIfNullish { cond: 0, target: 1 },
             Ir3Instruction::Call {
                 callee: 0,
                 args: RegRange { start: 1, count: 2 },
@@ -2613,6 +2747,11 @@ mod tests {
                 obj: 0,
                 key: 1,
                 val: 2,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 0,
+                key: 1,
+                dst: 2,
             },
             Ir3Instruction::Halt,
         ];
@@ -3578,9 +3717,19 @@ mod tests {
                 lhs: 0,
                 rhs: 1,
             },
+            Ir3Instruction::UnaryNeg { dst: 5, src: 0 },
+            Ir3Instruction::UnaryPlus { dst: 5, src: 0 },
+            Ir3Instruction::LogicalNot { dst: 5, src: 0 },
+            Ir3Instruction::BitNot { dst: 5, src: 0 },
+            Ir3Instruction::TypeOf { dst: 5, src: 0 },
+            Ir3Instruction::Void { dst: 5, src: 0 },
             Ir3Instruction::Move { dst: 0, src: 1 },
             Ir3Instruction::Jump { target: 10 },
             Ir3Instruction::JumpIf {
+                cond: 0,
+                target: 11,
+            },
+            Ir3Instruction::JumpIfNullish {
                 cond: 0,
                 target: 11,
             },
@@ -3604,6 +3753,11 @@ mod tests {
                 obj: 0,
                 key: 1,
                 val: 2,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 0,
+                key: 1,
+                dst: 2,
             },
             Ir3Instruction::Halt,
         ];
@@ -3974,9 +4128,19 @@ mod tests {
                 },
                 "div",
             ),
+            (Ir3Instruction::UnaryNeg { dst: 0, src: 1 }, "unary_neg"),
+            (Ir3Instruction::UnaryPlus { dst: 0, src: 1 }, "unary_plus"),
+            (Ir3Instruction::LogicalNot { dst: 0, src: 1 }, "logical_not"),
+            (Ir3Instruction::BitNot { dst: 0, src: 1 }, "bit_not"),
+            (Ir3Instruction::TypeOf { dst: 0, src: 1 }, "typeof"),
+            (Ir3Instruction::Void { dst: 0, src: 1 }, "void"),
             (Ir3Instruction::Move { dst: 0, src: 1 }, "move"),
             (Ir3Instruction::Jump { target: 0 }, "jump"),
             (Ir3Instruction::JumpIf { cond: 0, target: 1 }, "jump_if"),
+            (
+                Ir3Instruction::JumpIfNullish { cond: 0, target: 1 },
+                "jump_if_nullish",
+            ),
             (
                 Ir3Instruction::Call {
                     callee: 0,
@@ -4009,6 +4173,14 @@ mod tests {
                     val: 2,
                 },
                 "set_property",
+            ),
+            (
+                Ir3Instruction::DeleteProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                "delete_property",
             ),
             (Ir3Instruction::Halt, "halt"),
         ];

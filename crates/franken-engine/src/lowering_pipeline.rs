@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    ParseGoal, SourceSpan, Statement, VariableDeclarationKind,
+    ParseGoal, SourceSpan, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -1546,6 +1546,10 @@ pub fn lower_ir2_to_ir3(
             instruction_index: usize,
             label_id: u32,
         },
+        Conditional {
+            instruction_index: usize,
+            label_id: u32,
+        },
         JumpIfFalsy {
             truthy_skip_index: usize,
             falsy_jump_index: usize,
@@ -1744,19 +1748,31 @@ pub fn lower_ir2_to_ir3(
                     BinaryOperator::LogicalAnd
                     | BinaryOperator::LogicalOr
                     | BinaryOperator::NullishCoalescing => {
-                        // Logical operators should have been lowered to
-                        // conditional branches at IR1 level.  If they reach
-                        // IR3 as BinaryOp, treat as Move for now.
-                        Ir3Instruction::Move { dst, src: lhs }
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "logical operators must be short-circuit lowered before IR3",
+                        });
                     }
                 };
                 ir3.instructions.push(instr);
                 value_stack.push(dst);
             }
-            Ir1Op::UnaryOp { .. } => {
+            Ir1Op::UnaryOp { operator } => {
                 let src = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                let instr = match operator {
+                    UnaryOperator::Negate => Ir3Instruction::UnaryNeg { dst, src },
+                    UnaryOperator::BitwiseNot => Ir3Instruction::BitNot { dst, src },
+                    UnaryOperator::LogicalNot => Ir3Instruction::LogicalNot { dst, src },
+                    UnaryOperator::Typeof => Ir3Instruction::TypeOf { dst, src },
+                    UnaryOperator::Void => Ir3Instruction::Void { dst, src },
+                    UnaryOperator::Delete => {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "delete must lower through delete_property or literal-true path before IR3",
+                        });
+                    }
+                    UnaryOperator::UnaryPlus => Ir3Instruction::UnaryPlus { dst, src },
+                };
+                ir3.instructions.push(instr);
                 value_stack.push(dst);
             }
             Ir1Op::AssignOp {
@@ -1858,9 +1874,9 @@ pub fn lower_ir2_to_ir3(
                     AssignmentOperator::LogicalAndAssign
                     | AssignmentOperator::LogicalOrAssign
                     | AssignmentOperator::NullishCoalescingAssign => {
-                        // Logical compound assignments should be
-                        // short-circuit expanded at IR1.  Fallback to Move.
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "logical compound assignments must be short-circuit lowered before IR3",
+                        });
                     }
                 }
                 value_stack.push(dst);
@@ -1898,6 +1914,39 @@ pub fn lower_ir2_to_ir3(
                     label_id: *label_id,
                 });
                 value_stack.push(cond);
+            }
+            Ir1Op::JumpIfFalsyConsume { label_id } => {
+                let cond = value_stack.pop().unwrap_or(0);
+                let truthy_skip_index = ir3.instructions.len();
+                ir3.instructions
+                    .push(Ir3Instruction::JumpIf { cond, target: 0 });
+                let falsy_jump_index = ir3.instructions.len();
+                ir3.instructions.push(Ir3Instruction::Jump { target: 0 });
+                pending_jumps.push(PendingJump::JumpIfFalsy {
+                    truthy_skip_index,
+                    falsy_jump_index,
+                    label_id: *label_id,
+                });
+            }
+            Ir1Op::JumpIfTruthy { label_id } => {
+                let cond = value_stack.pop().unwrap_or(0);
+                let instruction_index = ir3.instructions.len();
+                ir3.instructions
+                    .push(Ir3Instruction::JumpIf { cond, target: 0 });
+                pending_jumps.push(PendingJump::Conditional {
+                    instruction_index,
+                    label_id: *label_id,
+                });
+            }
+            Ir1Op::JumpIfNullish { label_id } => {
+                let cond = value_stack.pop().unwrap_or(0);
+                let instruction_index = ir3.instructions.len();
+                ir3.instructions
+                    .push(Ir3Instruction::JumpIfNullish { cond, target: 0 });
+                pending_jumps.push(PendingJump::Conditional {
+                    instruction_index,
+                    label_id: *label_id,
+                });
             }
             Ir1Op::GetProperty { key } => {
                 let (obj, key_reg) = match key {
@@ -1950,6 +1999,32 @@ pub fn lower_ir2_to_ir3(
                     val,
                 });
                 value_stack.push(val);
+            }
+            Ir1Op::DeleteProperty { key } => {
+                let (obj, key_reg) = match key {
+                    Ir1PropertyKey::Static(key) => {
+                        let obj = value_stack.pop().unwrap_or(0);
+                        let key_reg = alloc_register(&mut register_cursor);
+                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        ir3.instructions.push(Ir3Instruction::LoadStr {
+                            dst: key_reg,
+                            pool_index,
+                        });
+                        (obj, key_reg)
+                    }
+                    Ir1PropertyKey::Dynamic => {
+                        let key_reg = value_stack.pop().unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
+                        (obj, key_reg)
+                    }
+                };
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::DeleteProperty {
+                    obj,
+                    key: key_reg,
+                    dst,
+                });
+                value_stack.push(dst);
             }
             Ir1Op::NewArray { count } => {
                 let mut elements = Vec::new();
@@ -2137,6 +2212,33 @@ pub fn lower_ir2_to_ir3(
                 )?;
                 ir3.instructions[instruction_index] = Ir3Instruction::Jump { target };
             }
+            PendingJump::Conditional {
+                instruction_index,
+                label_id,
+            } => {
+                let target = *label_targets.get(&label_id).ok_or(
+                    LoweringPipelineError::InvariantViolation {
+                        detail: "lowered control-flow references missing label",
+                    },
+                )?;
+                match &mut ir3.instructions[instruction_index] {
+                    Ir3Instruction::JumpIf {
+                        target: jump_target,
+                        ..
+                    }
+                    | Ir3Instruction::JumpIfNullish {
+                        target: jump_target,
+                        ..
+                    } => {
+                        *jump_target = target;
+                    }
+                    _ => {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "conditional lowering emitted unexpected instruction shape",
+                        });
+                    }
+                }
+            }
             PendingJump::JumpIfFalsy {
                 truthy_skip_index,
                 falsy_jump_index,
@@ -2195,7 +2297,9 @@ pub fn lower_ir2_to_ir3(
         ir3.instructions
             .iter()
             .all(|instruction| match instruction {
-                Ir3Instruction::Jump { target } | Ir3Instruction::JumpIf { target, .. } => {
+                Ir3Instruction::Jump { target }
+                | Ir3Instruction::JumpIf { target, .. }
+                | Ir3Instruction::JumpIfNullish { target, .. } => {
                     (*target as usize) < instruction_len
                 }
                 _ => true,
@@ -2550,6 +2654,25 @@ fn alloc_binding(
     Ok(binding_id)
 }
 
+fn alloc_internal_binding(
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope: ScopeId,
+    purpose: &str,
+) -> Result<BindingId, LoweringPipelineError> {
+    let name = format!("<internal:{purpose}:{}>", *binding_index);
+    alloc_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope,
+        &name,
+        BindingKind::Let,
+    )
+    .map_err(LoweringPipelineError::SemanticViolation)
+}
+
 fn lower_expression_to_ir1(
     expression: &Expression,
     ops: &mut Vec<Ir1Op>,
@@ -2631,6 +2754,76 @@ fn lower_expression_to_ir1(
             left,
             right,
         } => {
+            if matches!(
+                operator,
+                BinaryOperator::LogicalAnd
+                    | BinaryOperator::LogicalOr
+                    | BinaryOperator::NullishCoalescing
+            ) {
+                let temp_binding = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "short_circuit",
+                )?;
+                let eval_rhs_label = alloc_label(label_counter);
+                let end_label = alloc_label(label_counter);
+
+                lower_expression_to_ir1(
+                    left,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: temp_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: temp_binding,
+                });
+
+                match operator {
+                    BinaryOperator::LogicalAnd => ops.push(Ir1Op::JumpIfTruthy {
+                        label_id: eval_rhs_label,
+                    }),
+                    BinaryOperator::LogicalOr => ops.push(Ir1Op::JumpIfFalsyConsume {
+                        label_id: eval_rhs_label,
+                    }),
+                    BinaryOperator::NullishCoalescing => ops.push(Ir1Op::JumpIfNullish {
+                        label_id: eval_rhs_label,
+                    }),
+                    _ => unreachable!(),
+                }
+
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+                ops.push(Ir1Op::Label { id: eval_rhs_label });
+                lower_expression_to_ir1(
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: temp_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Label { id: end_label });
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: temp_binding,
+                });
+                return Ok(());
+            }
+
             lower_expression_to_ir1(
                 left,
                 ops,
@@ -2656,6 +2849,53 @@ fn lower_expression_to_ir1(
         Expression::Unary {
             operator, argument, ..
         } => {
+            if *operator == UnaryOperator::Delete {
+                match argument.as_ref() {
+                    Expression::Member {
+                        object,
+                        property,
+                        computed,
+                    } => {
+                        lower_expression_to_ir1(
+                            object,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        let key = lower_member_property_key_to_ir1(
+                            property,
+                            *computed,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::DeleteProperty { key });
+                    }
+                    _ => {
+                        lower_expression_to_ir1(
+                            argument,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Boolean(true),
+                        });
+                    }
+                }
+                return Ok(());
+            }
+
             lower_expression_to_ir1(
                 argument,
                 ops,
@@ -2675,15 +2915,6 @@ fn lower_expression_to_ir1(
             right,
         } => {
             if let Expression::Identifier(name) = left.as_ref() {
-                lower_expression_to_ir1(
-                    right,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                )?;
                 let binding_id = if let Some(existing) = binding_lookup.get(name.as_str()) {
                     *existing
                 } else {
@@ -2698,6 +2929,67 @@ fn lower_expression_to_ir1(
                     binding_lookup.insert(name.clone(), id);
                     id
                 };
+
+                match operator {
+                    AssignmentOperator::LogicalAndAssign
+                    | AssignmentOperator::LogicalOrAssign
+                    | AssignmentOperator::NullishCoalescingAssign => {
+                        let eval_rhs_label = alloc_label(label_counter);
+                        let end_label = alloc_label(label_counter);
+
+                        ops.push(Ir1Op::LoadBinding { binding_id });
+                        match operator {
+                            AssignmentOperator::LogicalAndAssign => {
+                                ops.push(Ir1Op::JumpIfTruthy {
+                                    label_id: eval_rhs_label,
+                                });
+                            }
+                            AssignmentOperator::LogicalOrAssign => {
+                                ops.push(Ir1Op::JumpIfFalsyConsume {
+                                    label_id: eval_rhs_label,
+                                });
+                            }
+                            AssignmentOperator::NullishCoalescingAssign => {
+                                ops.push(Ir1Op::JumpIfNullish {
+                                    label_id: eval_rhs_label,
+                                });
+                            }
+                            _ => unreachable!(),
+                        }
+                        ops.push(Ir1Op::Jump {
+                            label_id: end_label,
+                        });
+                        ops.push(Ir1Op::Label { id: eval_rhs_label });
+                        lower_expression_to_ir1(
+                            right,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::AssignOp {
+                            binding_id,
+                            operator: AssignmentOperator::Assign,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::Label { id: end_label });
+                        ops.push(Ir1Op::LoadBinding { binding_id });
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+
+                lower_expression_to_ir1(
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
                 ops.push(Ir1Op::AssignOp {
                     binding_id,
                     operator: *operator,
@@ -2727,6 +3019,18 @@ fn lower_expression_to_ir1(
                     root_scope_id,
                     label_counter,
                 )?;
+                if matches!(
+                    operator,
+                    AssignmentOperator::LogicalAndAssign
+                        | AssignmentOperator::LogicalOrAssign
+                        | AssignmentOperator::NullishCoalescingAssign
+                ) {
+                    return Err(unsupported_frontier_expression_error(
+                        "logical_compound_member_assignment",
+                        "logical compound assignment for member expressions is not implemented; fail-closed frontier contract rejected the expression",
+                        None,
+                    ));
+                }
                 lower_expression_to_ir1(
                     right,
                     ops,
@@ -3085,7 +3389,7 @@ fn classify_ir1_op(
                 declassification_required: false,
             }),
         ),
-        Ir1Op::GetProperty { .. } | Ir1Op::SetProperty { .. } => {
+        Ir1Op::GetProperty { .. } | Ir1Op::SetProperty { .. } | Ir1Op::DeleteProperty { .. } => {
             (EffectBoundary::ReadEffect, None, None)
         }
         Ir1Op::ForInInit
@@ -3538,7 +3842,9 @@ mod tests {
             ir3.instructions
                 .iter()
                 .all(|instruction| match instruction {
-                    Ir3Instruction::Jump { target } | Ir3Instruction::JumpIf { target, .. } => {
+                    Ir3Instruction::Jump { target }
+                    | Ir3Instruction::JumpIf { target, .. }
+                    | Ir3Instruction::JumpIfNullish { target, .. } => {
                         *target != 0
                     }
                     _ => true,
@@ -3609,7 +3915,9 @@ mod tests {
                 .filter(|instruction| {
                     matches!(
                         instruction,
-                        Ir3Instruction::Jump { .. } | Ir3Instruction::JumpIf { .. }
+                        Ir3Instruction::Jump { .. }
+                            | Ir3Instruction::JumpIf { .. }
+                            | Ir3Instruction::JumpIfNullish { .. }
                     )
                 })
                 .count(),

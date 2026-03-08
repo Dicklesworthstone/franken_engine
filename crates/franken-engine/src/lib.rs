@@ -276,6 +276,7 @@ pub mod trust_economics;
 pub mod trust_zone;
 pub mod ts_module_resolution;
 pub mod ts_normalization;
+pub mod ts_normalization_evidence;
 pub mod unit_test_taxonomy;
 pub mod universal_dominance_ratchet;
 pub mod version_matrix_lane;
@@ -1156,8 +1157,15 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::Div { dst, .. }
         | Ir3Instruction::Mod { dst, .. }
         | Ir3Instruction::Exp { dst, .. }
+        | Ir3Instruction::UnaryNeg { dst, .. }
+        | Ir3Instruction::UnaryPlus { dst, .. }
+        | Ir3Instruction::LogicalNot { dst, .. }
+        | Ir3Instruction::BitNot { dst, .. }
+        | Ir3Instruction::TypeOf { dst, .. }
+        | Ir3Instruction::Void { dst, .. }
         | Ir3Instruction::Move { dst, .. }
         | Ir3Instruction::GetProperty { dst, .. }
+        | Ir3Instruction::DeleteProperty { dst, .. }
         | Ir3Instruction::NewObject { dst }
         | Ir3Instruction::NewArray { dst }
         | Ir3Instruction::Lt { dst, .. }

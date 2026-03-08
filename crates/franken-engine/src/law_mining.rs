@@ -6,16 +6,47 @@
 //! with explicit provenance, not accepted laws.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::counterexample_synthesizer::SynthesizedCounterexample;
-use crate::evidence_ledger::EvidenceEntry;
+use crate::counterexample_synthesizer::{
+    ConcreteScenario, MinimalityEvidence, SynthesisOutcome, SynthesisStrategy,
+    SynthesizedCounterexample,
+};
+use crate::engine_object_id::EngineObjectId;
+use crate::evidence_ledger::{
+    CandidateAction, ChosenAction, Constraint, DecisionType, EvidenceEntry, EvidenceEntryBuilder,
+    Witness,
+};
 use crate::hash_tiers::ContentHash;
-use crate::policy_theorem_compiler::FormalProperty;
+use crate::policy_theorem_compiler::{FormalProperty, PolicyId};
+use crate::security_epoch::SecurityEpoch;
 
 pub const LAW_MINING_SCHEMA_VERSION: &str = "franken-engine.law-mining.v1";
 pub const LAW_MINING_BEAD_ID: &str = "bd-1lsy.9.10";
+pub const LAW_MINING_COMPONENT: &str = "law_mining";
+pub const CANDIDATE_LAW_CATALOG_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.candidate-law-catalog.v1";
+pub const INVARIANT_SEED_LEDGER_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.invariant-seed-ledger.v1";
+pub const NORMAL_FORM_HYPOTHESES_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.normal-form-hypotheses.v1";
+pub const LAW_PROVENANCE_INDEX_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.provenance-index.v1";
+pub const CANDIDATE_SCOPE_HYPOTHESES_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.scope-hypotheses.v1";
+pub const LAW_MINING_TRACE_IDS_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.trace-ids.v1";
+pub const LAW_MINING_RUN_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.run-manifest.v1";
+pub const LAW_MINING_ENV_SCHEMA_VERSION: &str = "franken-engine.law-mining.env.v1";
+pub const LAW_MINING_ARTIFACT_INDEX_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.artifact-index.v1";
+pub const LAW_MINING_EVENT_STREAM_SCHEMA_VERSION: &str =
+    "franken-engine.law-mining.events.v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CandidateKind {
@@ -444,6 +475,167 @@ pub struct LawMiningValidation {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LawMiningFixture {
+    pub generated_epoch: u64,
+    pub counterexamples: Vec<SynthesizedCounterexample>,
+    pub evidence_entries: Vec<EvidenceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateLawCatalogArtifact {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub generated_epoch: u64,
+    pub catalog_hash: ContentHash,
+    pub candidates: Vec<LawCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvariantSeedLedgerArtifact {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub generated_epoch: u64,
+    pub catalog_hash: ContentHash,
+    pub invariant_seed_ledger: Vec<InvariantSeed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NormalFormHypothesesArtifact {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub generated_epoch: u64,
+    pub catalog_hash: ContentHash,
+    pub normal_form_hypotheses: Vec<NormalFormHypothesis>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LawProvenanceIndexArtifact {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub generated_epoch: u64,
+    pub catalog_hash: ContentHash,
+    pub provenance_index: Vec<LawProvenanceRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateScopeHypothesesArtifact {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub generated_epoch: u64,
+    pub catalog_hash: ContentHash,
+    pub scope_hypotheses: Vec<CandidateScopeHypothesis>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceIdsArtifact {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LawMiningEvent {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub event: String,
+    pub outcome: String,
+    pub error_code: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactHashRecord {
+    pub path: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LawMiningEnvArtifact {
+    pub schema_version: String,
+    pub run_id: String,
+    pub generated_at_utc: String,
+    pub source_commit: String,
+    pub toolchain: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LawMiningArtifactIndex {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub run_id: String,
+    pub artifacts: Vec<ArtifactHashRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LawMiningRunManifest {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub run_id: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub generated_at_utc: String,
+    pub source_commit: String,
+    pub toolchain: String,
+    pub generated_epoch: u64,
+    pub catalog_hash: ContentHash,
+    pub command_invocation: String,
+    pub artifact_hashes: Vec<ArtifactHashRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactContext {
+    pub artifact_dir: PathBuf,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub run_id: String,
+    pub generated_at_utc: String,
+    pub source_commit: String,
+    pub toolchain: String,
+    pub command_invocation: String,
+}
+
+impl ArtifactContext {
+    pub fn new(artifact_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            artifact_dir: artifact_dir.into(),
+            trace_id: "trace.rgc.810".to_string(),
+            decision_id: "decision.rgc.810".to_string(),
+            policy_id: "policy.rgc.810".to_string(),
+            run_id: "run-rgc-810".to_string(),
+            generated_at_utc: "1970-01-01T00:00:00Z".to_string(),
+            source_commit: "unknown".to_string(),
+            toolchain: "nightly".to_string(),
+            command_invocation: "cargo run -p frankenengine-engine --bin franken_law_mining -- --artifact-dir <path>".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleWriteReport {
+    pub artifact_dir: PathBuf,
+    pub candidate_law_catalog_path: PathBuf,
+    pub invariant_seed_ledger_path: PathBuf,
+    pub normal_form_hypotheses_path: PathBuf,
+    pub provenance_index_path: PathBuf,
+    pub scope_hypotheses_path: PathBuf,
+    pub trace_ids_path: PathBuf,
+    pub run_manifest_path: PathBuf,
+    pub events_path: PathBuf,
+    pub commands_path: PathBuf,
+    pub env_path: PathBuf,
+    pub artifact_index_path: PathBuf,
+    pub repro_lock_path: PathBuf,
+    pub summary_path: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 struct CandidateAccumulator {
     kind: CandidateKind,
@@ -752,6 +944,458 @@ fn push_strings(data: &mut Vec<u8>, values: &[String]) {
         data.extend_from_slice(value.as_bytes());
         data.push(0xff);
     }
+}
+
+pub fn default_fixture() -> LawMiningFixture {
+    LawMiningFixture {
+        generated_epoch: 27,
+        counterexamples: vec![
+            sample_counterexample_fixture(
+                0x41,
+                FormalProperty::MergeDeterminism,
+                &["fs.read", "net.send"],
+                &[("board", "declared"), ("runtime", "franken")],
+                &["alpha", "beta"],
+                "canonicalize merge ordering",
+            ),
+            sample_counterexample_fixture(
+                0x51,
+                FormalProperty::Monotonicity,
+                &["cache.lookup", "cache.store"],
+                &[("cache_lane", "main"), ("mode", "promotion")],
+                &["seed", "promote"],
+                "stabilize promotion boundary",
+            ),
+        ],
+        evidence_entries: vec![
+            sample_evidence_entry_fixture(
+                "trace-law-mining-fixture-a",
+                DecisionType::ContractEvaluation,
+                "policy-catalog",
+                &["schema-ready", "replayable"],
+                &["fixture", "posterior"],
+            ),
+            sample_evidence_entry_fixture(
+                "trace-law-mining-fixture-b",
+                DecisionType::SecurityAction,
+                "policy-guard",
+                &["epoch-green"],
+                &["counterexample", "constraint"],
+            ),
+        ],
+    }
+}
+
+pub fn emit_default_law_mining_bundle(context: &ArtifactContext) -> io::Result<BundleWriteReport> {
+    emit_law_mining_bundle(context, &default_fixture())
+}
+
+pub fn emit_law_mining_bundle(
+    context: &ArtifactContext,
+    fixture: &LawMiningFixture,
+) -> io::Result<BundleWriteReport> {
+    fs::create_dir_all(&context.artifact_dir)?;
+
+    let catalog = LawMiningCatalog::from_sources(
+        fixture.generated_epoch,
+        &fixture.counterexamples,
+        &fixture.evidence_entries,
+    );
+    let candidate_catalog = CandidateLawCatalogArtifact {
+        schema_version: CANDIDATE_LAW_CATALOG_SCHEMA_VERSION.to_string(),
+        bead_id: LAW_MINING_BEAD_ID.to_string(),
+        generated_epoch: fixture.generated_epoch,
+        catalog_hash: catalog.catalog_hash,
+        candidates: catalog.candidates.clone(),
+    };
+    let invariant_seed_ledger = InvariantSeedLedgerArtifact {
+        schema_version: INVARIANT_SEED_LEDGER_SCHEMA_VERSION.to_string(),
+        bead_id: LAW_MINING_BEAD_ID.to_string(),
+        generated_epoch: fixture.generated_epoch,
+        catalog_hash: catalog.catalog_hash,
+        invariant_seed_ledger: catalog.invariant_seed_ledger.clone(),
+    };
+    let normal_form_hypotheses = NormalFormHypothesesArtifact {
+        schema_version: NORMAL_FORM_HYPOTHESES_SCHEMA_VERSION.to_string(),
+        bead_id: LAW_MINING_BEAD_ID.to_string(),
+        generated_epoch: fixture.generated_epoch,
+        catalog_hash: catalog.catalog_hash,
+        normal_form_hypotheses: catalog.normal_form_hypotheses.clone(),
+    };
+    let provenance_index = LawProvenanceIndexArtifact {
+        schema_version: LAW_PROVENANCE_INDEX_SCHEMA_VERSION.to_string(),
+        bead_id: LAW_MINING_BEAD_ID.to_string(),
+        generated_epoch: fixture.generated_epoch,
+        catalog_hash: catalog.catalog_hash,
+        provenance_index: catalog.provenance_index.clone(),
+    };
+    let scope_hypotheses = CandidateScopeHypothesesArtifact {
+        schema_version: CANDIDATE_SCOPE_HYPOTHESES_SCHEMA_VERSION.to_string(),
+        bead_id: LAW_MINING_BEAD_ID.to_string(),
+        generated_epoch: fixture.generated_epoch,
+        catalog_hash: catalog.catalog_hash,
+        scope_hypotheses: catalog.scope_hypotheses.clone(),
+    };
+    let trace_ids = TraceIdsArtifact {
+        schema_version: LAW_MINING_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        run_id: context.run_id.clone(),
+    };
+    let events = vec![
+        LawMiningEvent {
+            schema_version: LAW_MINING_EVENT_STREAM_SCHEMA_VERSION.to_string(),
+            trace_id: context.trace_id.clone(),
+            decision_id: context.decision_id.clone(),
+            policy_id: context.policy_id.clone(),
+            component: LAW_MINING_COMPONENT.to_string(),
+            event: "catalog_mined".to_string(),
+            outcome: "pass".to_string(),
+            error_code: None,
+            detail: format!(
+                "catalog_hash={} candidates={} counterexamples={} evidence_entries={}",
+                catalog.catalog_hash.to_hex(),
+                catalog.candidates.len(),
+                fixture.counterexamples.len(),
+                fixture.evidence_entries.len()
+            ),
+        },
+        LawMiningEvent {
+            schema_version: LAW_MINING_EVENT_STREAM_SCHEMA_VERSION.to_string(),
+            trace_id: context.trace_id.clone(),
+            decision_id: context.decision_id.clone(),
+            policy_id: context.policy_id.clone(),
+            component: LAW_MINING_COMPONENT.to_string(),
+            event: "bundle_written".to_string(),
+            outcome: "pass".to_string(),
+            error_code: None,
+            detail: format!(
+                "invariants={} normal_forms={} scopes={}",
+                catalog.invariant_seed_ledger.len(),
+                catalog.normal_form_hypotheses.len(),
+                catalog.scope_hypotheses.len()
+            ),
+        },
+    ];
+    let env = LawMiningEnvArtifact {
+        schema_version: LAW_MINING_ENV_SCHEMA_VERSION.to_string(),
+        run_id: context.run_id.clone(),
+        generated_at_utc: context.generated_at_utc.clone(),
+        source_commit: context.source_commit.clone(),
+        toolchain: context.toolchain.clone(),
+    };
+
+    let mut artifact_hashes = Vec::new();
+    let candidate_law_catalog_path = write_json_artifact(
+        &context.artifact_dir,
+        "candidate_law_catalog.json",
+        &candidate_catalog,
+        &mut artifact_hashes,
+    )?;
+    let invariant_seed_ledger_path = write_json_artifact(
+        &context.artifact_dir,
+        "invariant_seed_ledger.json",
+        &invariant_seed_ledger,
+        &mut artifact_hashes,
+    )?;
+    let normal_form_hypotheses_path = write_json_artifact(
+        &context.artifact_dir,
+        "normal_form_hypotheses.json",
+        &normal_form_hypotheses,
+        &mut artifact_hashes,
+    )?;
+    let provenance_index_path = write_json_artifact(
+        &context.artifact_dir,
+        "law_provenance_index.json",
+        &provenance_index,
+        &mut artifact_hashes,
+    )?;
+    let scope_hypotheses_path = write_json_artifact(
+        &context.artifact_dir,
+        "candidate_scope_hypotheses.json",
+        &scope_hypotheses,
+        &mut artifact_hashes,
+    )?;
+    let trace_ids_path = write_json_artifact(
+        &context.artifact_dir,
+        "trace_ids.json",
+        &trace_ids,
+        &mut artifact_hashes,
+    )?;
+    let events_path = write_jsonl_artifact(
+        &context.artifact_dir,
+        "events.jsonl",
+        &events,
+        &mut artifact_hashes,
+    )?;
+    let commands_path = write_text_artifact(
+        &context.artifact_dir,
+        "commands.txt",
+        &format!("{}\n", context.command_invocation),
+        &mut artifact_hashes,
+    )?;
+    let env_path = write_json_artifact(
+        &context.artifact_dir,
+        "env.json",
+        &env,
+        &mut artifact_hashes,
+    )?;
+    let summary_path = write_text_artifact(
+        &context.artifact_dir,
+        "summary.md",
+        &render_summary(&catalog),
+        &mut artifact_hashes,
+    )?;
+    let repro_lock_path = write_text_artifact(
+        &context.artifact_dir,
+        "repro.lock",
+        &render_repro_lock(context, &catalog),
+        &mut artifact_hashes,
+    )?;
+
+    let artifact_index = LawMiningArtifactIndex {
+        schema_version: LAW_MINING_ARTIFACT_INDEX_SCHEMA_VERSION.to_string(),
+        bead_id: LAW_MINING_BEAD_ID.to_string(),
+        run_id: context.run_id.clone(),
+        artifacts: artifact_hashes.clone(),
+    };
+    let artifact_index_path = write_json_artifact(
+        &context.artifact_dir,
+        "manifest.json",
+        &artifact_index,
+        &mut artifact_hashes,
+    )?;
+
+    let run_manifest = LawMiningRunManifest {
+        schema_version: LAW_MINING_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+        bead_id: LAW_MINING_BEAD_ID.to_string(),
+        run_id: context.run_id.clone(),
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        generated_at_utc: context.generated_at_utc.clone(),
+        source_commit: context.source_commit.clone(),
+        toolchain: context.toolchain.clone(),
+        generated_epoch: fixture.generated_epoch,
+        catalog_hash: catalog.catalog_hash,
+        command_invocation: context.command_invocation.clone(),
+        artifact_hashes,
+    };
+    let run_manifest_path = write_json_artifact_without_index(
+        &context.artifact_dir,
+        "run_manifest.json",
+        &run_manifest,
+    )?;
+
+    Ok(BundleWriteReport {
+        artifact_dir: context.artifact_dir.clone(),
+        candidate_law_catalog_path,
+        invariant_seed_ledger_path,
+        normal_form_hypotheses_path,
+        provenance_index_path,
+        scope_hypotheses_path,
+        trace_ids_path,
+        run_manifest_path,
+        events_path,
+        commands_path,
+        env_path,
+        artifact_index_path,
+        repro_lock_path,
+        summary_path,
+    })
+}
+
+pub fn render_summary(catalog: &LawMiningCatalog) -> String {
+    let mut lines = vec![
+        "# Law Mining Summary".to_string(),
+        format!("bead_id: {}", catalog.bead_id),
+        format!("generated_epoch: {}", catalog.generated_epoch),
+        format!("catalog_hash: {}", catalog.catalog_hash.to_hex()),
+        format!("candidates: {}", catalog.candidates.len()),
+        format!(
+            "invariant_seeds: {}",
+            catalog.invariant_seed_ledger.len()
+        ),
+        format!(
+            "normal_form_hypotheses: {}",
+            catalog.normal_form_hypotheses.len()
+        ),
+        format!("provenance_records: {}", catalog.provenance_index.len()),
+        format!("scope_hypotheses: {}", catalog.scope_hypotheses.len()),
+    ];
+
+    if let Some(candidate) = catalog.candidates.first() {
+        lines.push(String::new());
+        lines.push("## Top Candidate".to_string());
+        lines.push(format!("candidate_id: {}", candidate.candidate_id));
+        lines.push(format!("kind: {:?}", candidate.kind));
+        lines.push(format!("rank_millionths: {}", candidate.rank_millionths));
+        lines.push(format!("statement: {}", candidate.statement));
+        lines.push(format!("rationale: {}", candidate.ranking_rationale));
+    }
+
+    lines.join("\n")
+}
+
+fn render_repro_lock(context: &ArtifactContext, catalog: &LawMiningCatalog) -> String {
+    [
+        "# law-mining repro lock",
+        &format!("run_id={}", context.run_id),
+        &format!("trace_id={}", context.trace_id),
+        &format!("decision_id={}", context.decision_id),
+        &format!("policy_id={}", context.policy_id),
+        &format!("catalog_hash={}", catalog.catalog_hash.to_hex()),
+        &format!("command={}", context.command_invocation),
+    ]
+    .join("\n")
+}
+
+fn sample_counterexample_fixture(
+    byte: u8,
+    property: FormalProperty,
+    capabilities: &[&str],
+    conditions: &[(&str, &str)],
+    merge_path: &[&str],
+    resolution_hint: &str,
+) -> SynthesizedCounterexample {
+    let mut condition_map = BTreeMap::new();
+    for (key, value) in conditions {
+        condition_map.insert((*key).to_string(), (*value).to_string());
+    }
+    SynthesizedCounterexample {
+        conflict_id: EngineObjectId([byte; 32]),
+        property_violated: property,
+        policy_ids: vec![PolicyId::new(format!("policy-{byte}"))],
+        merge_path: merge_path.iter().map(|item| (*item).to_string()).collect(),
+        concrete_scenario: ConcreteScenario {
+            subjects: BTreeSet::from([format!("subject-{byte}")]),
+            capabilities: capabilities
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect(),
+            conditions: condition_map,
+            merge_ordering: merge_path.iter().map(|item| (*item).to_string()).collect(),
+            input_state: BTreeMap::from([("mode".to_string(), "fixture".to_string())]),
+        },
+        expected_outcome: "stable".to_string(),
+        actual_outcome: "unstable".to_string(),
+        minimality_evidence: MinimalityEvidence {
+            rounds: 3,
+            elements_removed: 2,
+            starting_size: 6,
+            final_size: 4,
+            is_fixed_point: true,
+        },
+        strategy: SynthesisStrategy::TimeBounded,
+        outcome: SynthesisOutcome::Complete,
+        compute_time_ns: 9_000,
+        content_hash: ContentHash([byte; 32]),
+        epoch: SecurityEpoch::from_raw(byte as u64),
+        resolution_hint: resolution_hint.to_string(),
+    }
+}
+
+fn sample_evidence_entry_fixture(
+    trace_id: &str,
+    decision_type: DecisionType,
+    policy_id: &str,
+    constraint_ids: &[&str],
+    witness_types: &[&str],
+) -> EvidenceEntry {
+    let builder = EvidenceEntryBuilder::new(
+        trace_id,
+        format!("decision-{trace_id}"),
+        policy_id,
+        SecurityEpoch::from_raw(12),
+        decision_type,
+    )
+    .timestamp_ns(12_345)
+    .candidate(CandidateAction::new("allow", 10))
+    .chosen(ChosenAction {
+        action_name: "allow".to_string(),
+        expected_loss_millionths: 10,
+        rationale: "fixture".to_string(),
+    });
+
+    let builder = constraint_ids
+        .iter()
+        .fold(builder, |builder, constraint_id| {
+            builder.constraint(Constraint {
+                constraint_id: (*constraint_id).to_string(),
+                description: "fixture constraint".to_string(),
+                active: true,
+            })
+        });
+    let builder = witness_types.iter().fold(builder, |builder, witness_type| {
+        builder.witness(Witness {
+            witness_id: format!("witness-{witness_type}"),
+            witness_type: (*witness_type).to_string(),
+            value: "1".to_string(),
+        })
+    });
+    builder.build().expect("fixture evidence entry should build")
+}
+
+fn write_json_artifact<T: Serialize>(
+    artifact_dir: &Path,
+    file_name: &str,
+    value: &T,
+    artifact_hashes: &mut Vec<ArtifactHashRecord>,
+) -> io::Result<PathBuf> {
+    let path = write_json_artifact_without_index(artifact_dir, file_name, value)?;
+    let bytes = fs::read(&path)?;
+    artifact_hashes.push(ArtifactHashRecord {
+        path: file_name.to_string(),
+        sha256: ContentHash::compute(&bytes).to_hex(),
+    });
+    Ok(path)
+}
+
+fn write_json_artifact_without_index<T: Serialize>(
+    artifact_dir: &Path,
+    file_name: &str,
+    value: &T,
+) -> io::Result<PathBuf> {
+    let path = artifact_dir.join(file_name);
+    let bytes = serde_json::to_vec_pretty(value).map_err(io::Error::other)?;
+    fs::write(&path, bytes)?;
+    Ok(path)
+}
+
+fn write_jsonl_artifact<T: Serialize>(
+    artifact_dir: &Path,
+    file_name: &str,
+    values: &[T],
+    artifact_hashes: &mut Vec<ArtifactHashRecord>,
+) -> io::Result<PathBuf> {
+    let path = artifact_dir.join(file_name);
+    let mut buffer = String::new();
+    for value in values {
+        buffer.push_str(&serde_json::to_string(value).map_err(io::Error::other)?);
+        buffer.push('\n');
+    }
+    fs::write(&path, buffer.as_bytes())?;
+    artifact_hashes.push(ArtifactHashRecord {
+        path: file_name.to_string(),
+        sha256: ContentHash::compute(buffer.as_bytes()).to_hex(),
+    });
+    Ok(path)
+}
+
+fn write_text_artifact(
+    artifact_dir: &Path,
+    file_name: &str,
+    value: &str,
+    artifact_hashes: &mut Vec<ArtifactHashRecord>,
+) -> io::Result<PathBuf> {
+    let path = artifact_dir.join(file_name);
+    fs::write(&path, value.as_bytes())?;
+    artifact_hashes.push(ArtifactHashRecord {
+        path: file_name.to_string(),
+        sha256: ContentHash::compute(value.as_bytes()).to_hex(),
+    });
+    Ok(path)
 }
 
 #[cfg(test)]

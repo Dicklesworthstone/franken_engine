@@ -153,6 +153,14 @@ fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
         compile_json["artifact_path"].as_str(),
         artifact_path.to_str()
     );
+    assert_eq!(
+        compile_json["source_ingestion"]["source_language"].as_str(),
+        Some("javascript")
+    );
+    assert_eq!(
+        compile_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(false)
+    );
 
     let artifact_bytes = fs::read(&artifact_path).expect("compile artifact should exist");
     let artifact_json: serde_json::Value =
@@ -160,6 +168,14 @@ fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
     assert_eq!(
         artifact_json["schema_version"].as_str(),
         Some("franken-engine.frankenctl.compile-artifact.v1")
+    );
+    assert_eq!(
+        artifact_json["source_ingestion"]["source_language"].as_str(),
+        Some("javascript")
+    );
+    assert_eq!(
+        artifact_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(false)
     );
 
     let verify_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
@@ -186,6 +202,75 @@ fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
     );
     assert_eq!(verify_json["passed"].as_bool(), Some(true));
     assert_eq!(verify_json["errors"].as_array().map(Vec::len), Some(0));
+
+    let _ = fs::remove_file(source_path);
+    let _ = fs::remove_file(artifact_path);
+}
+
+#[test]
+fn frankenctl_compile_normalizes_typescript_input() {
+    let source_path = temp_path("frankenctl_compile_source_ts", "ts");
+    let artifact_path = temp_path("frankenctl_compile_artifact_ts", "json");
+    write_source(&source_path, "const answer: number = 40 + 2;\n");
+
+    let compile_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "compile",
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+            "--out",
+            artifact_path
+                .to_str()
+                .expect("artifact path should be valid utf8"),
+            "--goal",
+            "script",
+            "--trace-id",
+            "trace-cli-compile-ts",
+            "--decision-id",
+            "decision-cli-compile-ts",
+            "--policy-id",
+            "policy-cli-compile-ts",
+        ])
+        .output()
+        .expect("compile command should execute");
+
+    assert!(
+        compile_output.status.success(),
+        "compile failed with stderr={}",
+        String::from_utf8_lossy(&compile_output.stderr)
+    );
+    let compile_json = parse_stdout_json(&compile_output);
+    assert_eq!(
+        compile_json["source_ingestion"]["source_language"].as_str(),
+        Some("typescript")
+    );
+    assert_eq!(
+        compile_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        compile_json["source_ingestion"]["ts_decision_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+
+    let artifact_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&artifact_path).expect("artifact should exist"))
+            .expect("artifact should be valid json");
+    assert_eq!(
+        artifact_json["source_ingestion"]["source_language"].as_str(),
+        Some("typescript")
+    );
+    assert_eq!(
+        artifact_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(true)
+    );
+    assert_ne!(
+        artifact_json["source_ingestion"]["original_source_hash"],
+        artifact_json["source_ingestion"]["normalized_source_hash"]
+    );
 
     let _ = fs::remove_file(source_path);
     let _ = fs::remove_file(artifact_path);
@@ -229,6 +314,14 @@ fn frankenctl_run_writes_execution_report() {
     assert!(stdout_json["trace_id"].as_str().is_some());
     assert!(stdout_json["decision_id"].as_str().is_some());
     assert_eq!(
+        stdout_json["source_ingestion"]["source_language"].as_str(),
+        Some("javascript")
+    );
+    assert_eq!(
+        stdout_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
         stdout_json["lane"].as_str(),
         Some("baseline_deterministic_profile")
     );
@@ -249,6 +342,74 @@ fn frankenctl_run_writes_execution_report() {
     assert_eq!(
         report_json["lane_reason"].as_str(),
         Some("default_deterministic_profile")
+    );
+    assert_eq!(
+        report_json["source_ingestion"]["source_language"].as_str(),
+        Some("javascript")
+    );
+    assert_eq!(
+        report_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(false)
+    );
+
+    let _ = fs::remove_file(source_path);
+    let _ = fs::remove_file(report_path);
+}
+
+#[test]
+fn frankenctl_run_normalizes_inline_typescript_input() {
+    let source_path = temp_path("frankenctl_run_source_ts", "js");
+    let report_path = temp_path("frankenctl_run_report_ts", "json");
+    write_source(&source_path, "const value: number = 2 + 3;\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+            "--extension-id",
+            "ext-cli-run-ts",
+            "--out",
+            report_path
+                .to_str()
+                .expect("report path should be valid utf8"),
+        ])
+        .output()
+        .expect("run command should execute");
+
+    assert!(
+        output.status.success(),
+        "run failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["source_ingestion"]["source_language"].as_str(),
+        Some("typescript")
+    );
+    assert_eq!(
+        stdout_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        stdout_json["source_ingestion"]["ts_decision_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+
+    let report_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path).expect("run report should be written"))
+            .expect("report should parse as json");
+    assert_eq!(
+        report_json["source_ingestion"]["source_language"].as_str(),
+        Some("typescript")
+    );
+    assert_eq!(
+        report_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(true)
     );
 
     let _ = fs::remove_file(source_path);

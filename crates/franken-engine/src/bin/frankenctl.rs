@@ -18,6 +18,7 @@ use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngi
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
 };
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
@@ -41,6 +42,9 @@ use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
     render_report_summary, verify_benchmark_claim,
+};
+use frankenengine_engine::ts_normalization::{
+    SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -169,6 +173,8 @@ struct CompileArtifact {
     generated_unix_ns: u64,
     source_path: String,
     parse_goal: String,
+    #[serde(default)]
+    source_ingestion: SourceIngestionSummary,
     trace_id: String,
     decision_id: String,
     policy_id: String,
@@ -183,6 +189,7 @@ struct CompileCommandOutput {
     schema_version: String,
     artifact_path: String,
     parse_goal: String,
+    source_ingestion: SourceIngestionSummary,
     hashes: CompileArtifactHashes,
     lowering_event_count: usize,
     lowering_witness_count: usize,
@@ -194,6 +201,7 @@ struct RunCommandOutput {
     extension_id: String,
     trace_id: String,
     decision_id: String,
+    source_ingestion: SourceIngestionSummary,
     lane: String,
     lane_reason: String,
     containment_action: String,
@@ -734,13 +742,24 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
 
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
+    let source_label = args.input.display().to_string();
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        source.as_str(),
+        source_label.as_str(),
+        args.trace_id.as_str(),
+        args.decision_id.as_str(),
+        args.policy_id.as_str(),
+    )
+    .map_err(|error| format!("source ingestion failed for `{source_label}`: {error}"))?;
     let parser_options = ParserOptions::default();
     let parser = CanonicalEs2020Parser;
-    let (parse_result, parse_event_ir) =
-        parser.parse_with_event_ir(source.as_str(), args.parse_goal, &parser_options);
+    let (parse_result, parse_event_ir) = parser.parse_with_event_ir(
+        prepared.prepared_source.as_str(),
+        args.parse_goal,
+        &parser_options,
+    );
     let syntax_tree = parse_result.map_err(|error| format!("parse failed: {error}"))?;
 
-    let source_label = args.input.display().to_string();
     let ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
     let lowering = lower_ir0_to_ir3(
         &ir0,
@@ -765,6 +784,7 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
         generated_unix_ns: current_unix_ns(),
         source_path: source_label,
         parse_goal: args.parse_goal.as_str().to_string(),
+        source_ingestion: prepared.source_ingestion.clone(),
         trace_id: args.trace_id,
         decision_id: args.decision_id,
         policy_id: args.policy_id,
@@ -780,6 +800,7 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
         artifact_path: args.out.display().to_string(),
         parse_goal: artifact.parse_goal,
+        source_ingestion: artifact.source_ingestion.clone(),
         hashes,
         lowering_event_count: artifact.lowering.events.len(),
         lowering_witness_count: artifact.lowering.witnesses.len(),
@@ -791,13 +812,28 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
 fn execute_run(args: RunArgs) -> Result<i32, String> {
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
+    let source_label = args.input.display().to_string();
+    let (source_trace_id, source_decision_id, source_policy_id) =
+        cli_source_ingestion_ids("run", source.as_str());
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        source.as_str(),
+        source_label.as_str(),
+        source_trace_id.as_str(),
+        source_decision_id.as_str(),
+        source_policy_id.as_str(),
+    )
+    .map_err(|error| format!("source ingestion failed for `{source_label}`: {error}"))?;
+    let mut metadata = source_ingestion_metadata(&prepared.source_ingestion);
 
     let package = ExtensionPackage {
         extension_id: args.extension_id.clone(),
-        source,
+        source: prepared.prepared_source,
         capabilities: Vec::new(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        metadata: BTreeMap::new(),
+        metadata: {
+            metadata.insert("source_ingestion.source_path".to_string(), source_label);
+            metadata
+        },
     };
 
     let config = OrchestratorConfig {
@@ -814,6 +850,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         extension_id: result.extension_id,
         trace_id: result.trace_id,
         decision_id: result.decision_id,
+        source_ingestion: prepared.source_ingestion,
         lane: result.lane.to_string(),
         lane_reason: result.lane_reason.to_string(),
         containment_action: result.containment_action.to_string(),
@@ -1582,6 +1619,47 @@ fn next_arg(args: &[String], index: &mut usize, flag: &str) -> Result<String, St
 
 fn default_run_id(prefix: &str) -> String {
     format!("{prefix}-{}", current_unix_ns())
+}
+
+fn cli_source_ingestion_ids(command: &str, source: &str) -> (String, String, String) {
+    let source_hash = ContentHash::compute(source.as_bytes()).to_hex();
+    let trace_suffix = &source_hash[..16];
+    (
+        format!("frankenctl-{command}-source-{trace_suffix}"),
+        format!("frankenctl-{command}-decision-{trace_suffix}"),
+        format!("frankenctl-{command}.ts-ingestion.v1"),
+    )
+}
+
+fn source_ingestion_metadata(
+    source_ingestion: &SourceIngestionSummary,
+) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "source_ingestion.source_language".to_string(),
+        source_ingestion.source_language.as_str().to_string(),
+    );
+    metadata.insert(
+        "source_ingestion.normalization_applied".to_string(),
+        source_ingestion.normalization_applied.to_string(),
+    );
+    metadata.insert(
+        "source_ingestion.original_source_hash".to_string(),
+        source_ingestion.original_source_hash.clone(),
+    );
+    metadata.insert(
+        "source_ingestion.normalized_source_hash".to_string(),
+        source_ingestion.normalized_source_hash.clone(),
+    );
+    metadata.insert(
+        "source_ingestion.ts_decision_count".to_string(),
+        source_ingestion.ts_decision_count.to_string(),
+    );
+    metadata.insert(
+        "source_ingestion.ts_capability_intent_count".to_string(),
+        source_ingestion.ts_capability_intent_count.to_string(),
+    );
+    metadata
 }
 
 fn default_benchmark_out_dir(run_id: &str) -> PathBuf {

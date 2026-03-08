@@ -280,6 +280,9 @@ use crate::hash_tiers::ContentHash;
 use crate::ir_contract::Ir0Module;
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineError, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions};
+use crate::ts_normalization::{
+    SourceIngestionSummary, classify_source_language, prepare_source_entry_for_public_entrypoints,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Canonical error classes for deterministic VM semantics.
@@ -836,6 +839,8 @@ pub struct EvalOutcome {
     pub engine: EngineKind,
     pub value: String,
     pub route_reason: RouteReason,
+    #[serde(default)]
+    pub source_ingestion: SourceIngestionSummary,
 }
 
 #[allow(clippy::result_large_err)]
@@ -856,15 +861,8 @@ impl JsEngine for QuickJsInspiredNativeEngine {
     }
 
     fn eval(&mut self, source: &str) -> EvalResult<EvalOutcome> {
-        let normalized = normalize_source(source)?;
-        let parse_goal = infer_parse_goal(normalized);
-        eval_with_lane(
-            normalized,
-            parse_goal,
-            LaneChoice::QuickJs,
-            RouteReason::DirectEngineInvocation,
-            "quickjs",
-        )
+        let prepared = prepare_eval_source(source, "quickjs")?;
+        self.eval_prepared(prepared, RouteReason::DirectEngineInvocation)
     }
 }
 
@@ -874,15 +872,30 @@ impl JsEngine for V8InspiredNativeEngine {
     }
 
     fn eval(&mut self, source: &str) -> EvalResult<EvalOutcome> {
-        let normalized = normalize_source(source)?;
-        let parse_goal = infer_parse_goal(normalized);
-        eval_with_lane(
-            normalized,
-            parse_goal,
-            LaneChoice::V8,
-            RouteReason::DirectEngineInvocation,
-            "v8",
-        )
+        let prepared = prepare_eval_source(source, "v8")?;
+        self.eval_prepared(prepared, RouteReason::DirectEngineInvocation)
+    }
+}
+
+impl QuickJsInspiredNativeEngine {
+    #[allow(clippy::result_large_err)]
+    fn eval_prepared(
+        &mut self,
+        prepared: PreparedEvalSource,
+        route_reason: RouteReason,
+    ) -> EvalResult<EvalOutcome> {
+        eval_with_lane(prepared, LaneChoice::QuickJs, route_reason)
+    }
+}
+
+impl V8InspiredNativeEngine {
+    #[allow(clippy::result_large_err)]
+    fn eval_prepared(
+        &mut self,
+        prepared: PreparedEvalSource,
+        route_reason: RouteReason,
+    ) -> EvalResult<EvalOutcome> {
+        eval_with_lane(prepared, LaneChoice::V8, route_reason)
     }
 }
 
@@ -904,17 +917,17 @@ impl Default for HybridRouter {
 impl HybridRouter {
     #[allow(clippy::result_large_err)]
     pub fn eval(&mut self, source: &str) -> EvalResult<EvalOutcome> {
-        let normalized = normalize_source(source)?;
-        let route_reason = route_reason_for_source(normalized);
-        let mut outcome = match route_reason {
+        let prepared = prepare_eval_source(source, "hybrid")?;
+        let route_reason = route_reason_for_source(prepared.prepared_source.as_str());
+        match route_reason {
             RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => {
-                self.v8_lineage.eval(normalized)?
+                self.v8_lineage.eval_prepared(prepared, route_reason)
             }
-            RouteReason::DefaultQuickJsPath => self.quickjs_lineage.eval(normalized)?,
+            RouteReason::DefaultQuickJsPath => {
+                self.quickjs_lineage.eval_prepared(prepared, route_reason)
+            }
             RouteReason::DirectEngineInvocation => unreachable!("router never emits direct route"),
-        };
-        outcome.route_reason = route_reason;
-        Ok(outcome)
+        }
     }
 }
 
@@ -944,19 +957,63 @@ fn infer_parse_goal(source: &str) -> ParseGoal {
     }
 }
 
+struct PreparedEvalSource {
+    prepared_source: String,
+    parse_goal: ParseGoal,
+    source_ingestion: SourceIngestionSummary,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+}
+
+#[allow(clippy::result_large_err)]
+fn prepare_eval_source(source: &str, trace_scope: &str) -> EvalResult<PreparedEvalSource> {
+    let normalized = normalize_source(source)?;
+    let source_hash = ContentHash::compute(normalized.as_bytes()).to_hex();
+    let trace_suffix = &source_hash[..16];
+    let trace_id = format!("eval-{trace_scope}-{trace_suffix}");
+    let decision_id = format!("eval-decision-{trace_suffix}");
+    let policy_id = format!("eval-policy-{trace_scope}");
+    let source_label = match classify_source_language(None, normalized) {
+        crate::ts_normalization::SourceLanguage::JavaScript => "<eval>",
+        crate::ts_normalization::SourceLanguage::TypeScript => "<eval.ts>",
+    };
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        normalized,
+        source_label,
+        trace_id.as_str(),
+        decision_id.as_str(),
+        policy_id.as_str(),
+    )
+    .map_err(|error| {
+        let eval_error = EvalError::parse_failure(error.to_string());
+        let eval_error = annotate_error_stage(eval_error, "ts_normalization", None);
+        attach_eval_correlation(eval_error, trace_id.as_str(), decision_id.as_str(), policy_id.as_str())
+    })?;
+    let parse_goal = infer_parse_goal(prepared.prepared_source.as_str());
+
+    Ok(PreparedEvalSource {
+        prepared_source: prepared.prepared_source,
+        parse_goal,
+        source_ingestion: prepared.source_ingestion,
+        trace_id,
+        decision_id,
+        policy_id,
+    })
+}
+
 #[allow(clippy::result_large_err)]
 fn eval_with_lane(
-    source: &str,
-    parse_goal: ParseGoal,
+    prepared: PreparedEvalSource,
     lane: LaneChoice,
     route_reason: RouteReason,
-    trace_scope: &str,
 ) -> EvalResult<EvalOutcome> {
-    let value = eval_via_native_pipeline(source, parse_goal, lane, trace_scope)?;
+    let value = eval_via_native_pipeline(&prepared, lane)?;
     Ok(EvalOutcome {
         engine: engine_kind_for_lane(lane),
         value,
         route_reason,
+        source_ingestion: prepared.source_ingestion,
     })
 }
 
@@ -969,35 +1026,55 @@ fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
 
 #[allow(clippy::result_large_err)]
 fn eval_via_native_pipeline(
-    source: &str,
-    parse_goal: ParseGoal,
+    prepared: &PreparedEvalSource,
     lane: LaneChoice,
-    trace_scope: &str,
 ) -> EvalResult<String> {
-    let source_hash = ContentHash::compute(source.as_bytes()).to_hex();
-    let trace_suffix = &source_hash[..16];
-    let trace_id = format!("eval-{trace_scope}-{trace_suffix}");
-    let decision_id = format!("eval-decision-{trace_suffix}");
-    let policy_id = format!("eval-policy-{trace_scope}");
-
     let parser = CanonicalEs2020Parser;
     let syntax_tree = parser
-        .parse_with_options(source, parse_goal, &ParserOptions::default())
+        .parse_with_options(
+            prepared.prepared_source.as_str(),
+            prepared.parse_goal,
+            &ParserOptions::default(),
+        )
         .map_err(map_parse_error)
-        .map_err(|error| attach_eval_correlation(error, &trace_id, &decision_id, &policy_id))?;
+        .map_err(|error| {
+            attach_eval_correlation(
+                error,
+                prepared.trace_id.as_str(),
+                prepared.decision_id.as_str(),
+                prepared.policy_id.as_str(),
+            )
+        })?;
 
-    let lowering_context =
-        LoweringContext::new(trace_id.as_str(), decision_id.as_str(), policy_id.as_str());
+    let lowering_context = LoweringContext::new(
+        prepared.trace_id.as_str(),
+        prepared.decision_id.as_str(),
+        prepared.policy_id.as_str(),
+    );
     let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<eval>");
     let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_context)
         .map_err(map_lowering_error)
-        .map_err(|error| attach_eval_correlation(error, &trace_id, &decision_id, &policy_id))?;
+        .map_err(|error| {
+            attach_eval_correlation(
+                error,
+                prepared.trace_id.as_str(),
+                prepared.decision_id.as_str(),
+                prepared.policy_id.as_str(),
+            )
+        })?;
 
     let lane_router = LaneRouter::new();
     let routed = lane_router
-        .execute(&lowering_output.ir3, trace_id.as_str(), Some(lane))
+        .execute(&lowering_output.ir3, prepared.trace_id.as_str(), Some(lane))
         .map_err(map_interpreter_error)
-        .map_err(|error| attach_eval_correlation(error, &trace_id, &decision_id, &policy_id))?;
+        .map_err(|error| {
+            attach_eval_correlation(
+                error,
+                prepared.trace_id.as_str(),
+                prepared.decision_id.as_str(),
+                prepared.policy_id.as_str(),
+            )
+        })?;
 
     Ok(routed.result.value.to_string())
 }
@@ -1504,6 +1581,7 @@ mod tests {
             engine: EngineKind::V8InspiredNative,
             value: "42".to_string(),
             route_reason: RouteReason::ContainsAwaitKeyword,
+            source_ingestion: SourceIngestionSummary::default(),
         };
         let json = serde_json::to_string(&outcome).expect("serialize");
         let decoded: EvalOutcome = serde_json::from_str(&json).expect("deserialize");

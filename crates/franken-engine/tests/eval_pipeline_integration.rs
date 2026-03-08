@@ -19,6 +19,7 @@ use frankenengine_engine::ast::{
 use frankenengine_engine::baseline_interpreter::{LaneChoice, LaneRouter};
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::ts_normalization::SourceLanguage;
 use frankenengine_engine::{
     EngineKind, EvalError, EvalErrorCode, ExceptionBoundary, HybridRouter, JsEngine,
     QuickJsInspiredNativeEngine, RouteReason, V8InspiredNativeEngine,
@@ -104,6 +105,43 @@ fn v8_eval_executes_expression_instead_of_echoing_source() {
         .expect("v8 should execute expression");
     assert_eq!(outcome.engine, EngineKind::V8InspiredNative);
     assert_eq!(outcome.value, "beta");
+}
+
+#[test]
+fn quickjs_eval_normalizes_typescript_and_reports_source_ingestion() {
+    let mut engine = QuickJsInspiredNativeEngine;
+    let outcome = engine
+        .eval("42 as const")
+        .expect("quickjs should normalize typescript before execution");
+
+    assert_eq!(outcome.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(outcome.value, "42");
+    assert_eq!(
+        outcome.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(outcome.source_ingestion.normalization_applied);
+    assert!(outcome.source_ingestion.ts_decision_count > 0);
+    assert_ne!(
+        outcome.source_ingestion.original_source_hash,
+        outcome.source_ingestion.normalized_source_hash
+    );
+}
+
+#[test]
+fn hybrid_router_eval_normalizes_typescript_and_keeps_route_metadata() {
+    let mut router = HybridRouter::default();
+    let outcome = router
+        .eval("42 as const")
+        .expect("router should normalize typescript before routing");
+
+    assert_eq!(outcome.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(outcome.route_reason, RouteReason::DefaultQuickJsPath);
+    assert_eq!(
+        outcome.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(outcome.source_ingestion.normalization_applied);
 }
 
 #[test]

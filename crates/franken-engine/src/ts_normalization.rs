@@ -86,6 +86,54 @@ pub struct TsNormalizationOutput {
     pub events: Vec<NormalizationEvent>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceLanguage {
+    #[default]
+    JavaScript,
+    TypeScript,
+}
+
+impl SourceLanguage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::JavaScript => "javascript",
+            Self::TypeScript => "typescript",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceIngestionSummary {
+    pub source_language: SourceLanguage,
+    pub normalization_applied: bool,
+    pub original_source_hash: String,
+    pub normalized_source_hash: String,
+    pub ts_decision_count: usize,
+    pub ts_capability_intent_count: usize,
+}
+
+impl Default for SourceIngestionSummary {
+    fn default() -> Self {
+        Self {
+            source_language: SourceLanguage::JavaScript,
+            normalization_applied: false,
+            original_source_hash: String::new(),
+            normalized_source_hash: String::new(),
+            ts_decision_count: 0,
+            ts_capability_intent_count: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedSourceEntry {
+    pub source_label: String,
+    pub prepared_source: String,
+    pub source_ingestion: SourceIngestionSummary,
+    pub normalization_output: Option<TsNormalizationOutput>,
+}
+
 const TS_INGESTION_COMPONENT: &str = "ts_ingestion_lane";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,6 +278,59 @@ pub enum TsNormalizationError {
     UnsupportedSyntax { feature: &'static str },
     #[error("unsupported compiler option: {option}={value}")]
     UnsupportedCompilerOption { option: &'static str, value: String },
+}
+
+pub fn classify_source_language(source_label: Option<&str>, source: &str) -> SourceLanguage {
+    if source_label.is_some_and(source_label_has_typescript_extension) || source_looks_typescript(source)
+    {
+        SourceLanguage::TypeScript
+    } else {
+        SourceLanguage::JavaScript
+    }
+}
+
+pub fn prepare_source_entry_for_public_entrypoints(
+    source: &str,
+    source_label: &str,
+    trace_id: &str,
+    decision_id: &str,
+    policy_id: &str,
+) -> Result<PreparedSourceEntry, TsNormalizationError> {
+    let source_language = classify_source_language(Some(source_label), source);
+    let original_source_hash = sha256_hex(source);
+    match source_language {
+        SourceLanguage::JavaScript => Ok(PreparedSourceEntry {
+            source_label: source_label.to_string(),
+            prepared_source: source.to_string(),
+            source_ingestion: SourceIngestionSummary {
+                source_language,
+                normalization_applied: false,
+                original_source_hash: original_source_hash.clone(),
+                normalized_source_hash: original_source_hash,
+                ts_decision_count: 0,
+                ts_capability_intent_count: 0,
+            },
+            normalization_output: None,
+        }),
+        SourceLanguage::TypeScript => {
+            let normalization_output =
+                normalize_typescript_to_es2020(source, &TsNormalizationConfig::default(), trace_id, decision_id, policy_id)?;
+            let source_ingestion = SourceIngestionSummary {
+                source_language,
+                normalization_applied: true,
+                original_source_hash,
+                normalized_source_hash: normalization_output.witness.normalized_hash.clone(),
+                ts_decision_count: normalization_output.witness.decisions.len(),
+                ts_capability_intent_count: normalization_output.capability_intents.len(),
+            };
+            Ok(PreparedSourceEntry {
+                source_label: source_label.to_string(),
+                prepared_source: normalization_output.normalized_source.clone(),
+                source_ingestion,
+                normalization_output: Some(normalization_output),
+            })
+        }
+    }
 }
 
 pub fn normalize_typescript_to_es2020(
@@ -631,6 +732,80 @@ pub fn ingest_typescript_to_pipeline_artifacts_default(
 
 fn normalize_newlines(source: &str) -> String {
     source.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn source_label_has_typescript_extension(source_label: &str) -> bool {
+    let lower = source_label.trim().to_ascii_lowercase();
+    [".ts", ".tsx", ".mts", ".cts"]
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
+}
+
+fn source_looks_typescript(source: &str) -> bool {
+    if source.contains("import type ")
+        || source.contains(" as const")
+        || source.contains("!:")
+        || source.contains("interface ")
+        || source.contains("enum ")
+        || source.contains(" implements ")
+    {
+        return true;
+    }
+
+    source.lines().any(line_looks_like_typescript_construct)
+}
+
+fn line_looks_like_typescript_construct(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("type ") && trimmed.contains('=') {
+        return true;
+    }
+
+    looks_like_typed_variable_declaration(trimmed)
+}
+
+fn looks_like_typed_variable_declaration(line: &str) -> bool {
+    let rest = ["const ", "let ", "var "]
+        .iter()
+        .find_map(|prefix| line.strip_prefix(prefix));
+    let Some(rest) = rest else {
+        return false;
+    };
+
+    let mut chars = rest.chars().peekable();
+    let mut identifier = String::new();
+    while let Some(ch) = chars.peek().copied() {
+        if is_identifier_char(ch) {
+            identifier.push(ch);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if identifier.is_empty() {
+        return false;
+    }
+
+    while chars.peek().is_some_and(|ch| ch.is_ascii_whitespace()) {
+        chars.next();
+    }
+    if chars.next() != Some(':') {
+        return false;
+    }
+
+    let remainder = chars.collect::<String>();
+    let trimmed = remainder.trim_start();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let Some(eq_index) = trimmed.find('=') else {
+        return false;
+    };
+    let annotation = trimmed[..eq_index].trim();
+    !annotation.is_empty()
+        && annotation
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$' | '<' | '>' | '[' | ']' | '|' | '&' | '?' | ',' | '.' | ' '))
 }
 
 fn normalize_spacing(source: String) -> String {
@@ -2655,5 +2830,85 @@ abstract class Base { }"#;
         let json = serde_json::to_string(&d).unwrap();
         let back: NormalizationDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
+    }
+
+    #[test]
+    fn source_language_defaults_to_javascript() {
+        assert_eq!(SourceLanguage::default(), SourceLanguage::JavaScript);
+    }
+
+    #[test]
+    fn classify_source_language_uses_typescript_extension() {
+        assert_eq!(
+            classify_source_language(Some("src/main.ts"), "const value = 1;"),
+            SourceLanguage::TypeScript
+        );
+        assert_eq!(
+            classify_source_language(Some("src/App.tsx"), "const value = 1;"),
+            SourceLanguage::TypeScript
+        );
+    }
+
+    #[test]
+    fn classify_source_language_detects_inline_typescript_markers() {
+        assert_eq!(
+            classify_source_language(None, "const value: number = 1;"),
+            SourceLanguage::TypeScript
+        );
+        assert_eq!(
+            classify_source_language(None, "import type { Foo } from './foo';"),
+            SourceLanguage::TypeScript
+        );
+    }
+
+    #[test]
+    fn classify_source_language_keeps_plain_javascript_as_javascript() {
+        assert_eq!(
+            classify_source_language(None, "const value = { count: 1 };"),
+            SourceLanguage::JavaScript
+        );
+    }
+
+    #[test]
+    fn prepare_public_source_entry_skips_normalization_for_javascript() {
+        let prepared = prepare_source_entry_for_public_entrypoints(
+            "const value = 1;",
+            "fixture.js",
+            "trace-js",
+            "decision-js",
+            "policy-js",
+        )
+        .unwrap();
+
+        assert_eq!(prepared.source_ingestion.source_language, SourceLanguage::JavaScript);
+        assert!(!prepared.source_ingestion.normalization_applied);
+        assert_eq!(prepared.prepared_source, "const value = 1;");
+        assert!(prepared.normalization_output.is_none());
+        assert_eq!(
+            prepared.source_ingestion.original_source_hash,
+            prepared.source_ingestion.normalized_source_hash
+        );
+    }
+
+    #[test]
+    fn prepare_public_source_entry_normalizes_typescript_and_records_summary() {
+        let prepared = prepare_source_entry_for_public_entrypoints(
+            "const value: number = 1;",
+            "fixture.ts",
+            "trace-ts",
+            "decision-ts",
+            "policy-ts",
+        )
+        .unwrap();
+
+        assert_eq!(prepared.source_ingestion.source_language, SourceLanguage::TypeScript);
+        assert!(prepared.source_ingestion.normalization_applied);
+        assert_ne!(
+            prepared.source_ingestion.original_source_hash,
+            prepared.source_ingestion.normalized_source_hash
+        );
+        assert!(prepared.source_ingestion.ts_decision_count > 0);
+        assert!(prepared.normalization_output.is_some());
+        assert!(!prepared.prepared_source.contains(": number"));
     }
 }

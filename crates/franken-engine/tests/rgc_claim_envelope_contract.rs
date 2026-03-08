@@ -473,13 +473,19 @@ fn verdict_serde_roundtrip_forbid() {
 #[test]
 fn contract_validate_succeeds_on_embedded() {
     let contract = load_contract();
-    contract.validate().expect("embedded contract must validate without errors");
+    contract
+        .validate()
+        .expect("embedded contract must validate without errors");
 }
 
 #[test]
 fn contract_claim_classes_count_is_five() {
     let contract = load_contract();
-    assert_eq!(contract.claim_classes.len(), 5, "expected exactly 5 claim classes");
+    assert_eq!(
+        contract.claim_classes.len(),
+        5,
+        "expected exactly 5 claim classes"
+    );
 }
 
 #[test]
@@ -514,10 +520,7 @@ fn contract_inputs_are_non_empty() {
 fn all_claim_classes_have_non_empty_class_id() {
     let contract = load_contract();
     for class in &contract.claim_classes {
-        assert!(
-            !class.class_id.is_empty(),
-            "claim class has empty class_id"
-        );
+        assert!(!class.class_id.is_empty(), "claim class has empty class_id");
     }
 }
 

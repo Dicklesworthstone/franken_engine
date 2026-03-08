@@ -981,13 +981,37 @@ fn policy_with_max_min_steps_rejects_everything() {
         property_pool: vec!["v".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadConst { dst: r(3), const_index: 1 },
-            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
-            Instruction::LoadConst { dst: r(4), const_index: 2 },
-            Instruction::Sub { dst: r(3), lhs: r(3), rhs: r(4) },
-            Instruction::JumpIfFalse { condition: r(3), target: 9 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(4),
+                const_index: 2,
+            },
+            Instruction::Sub {
+                dst: r(3),
+                lhs: r(3),
+                rhs: r(4),
+            },
+            Instruction::JumpIfFalse {
+                condition: r(3),
+                target: 9,
+            },
             Instruction::Jump { target: 4 },
             Instruction::Return { src: r(2) },
         ],
@@ -1052,7 +1076,10 @@ fn profile_top_k_zero_normalized_to_one() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1070,9 +1097,19 @@ fn profile_top_k_large_captures_all_paths() {
         constants: vec![Value::Int(5), Value::Int(3)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1095,13 +1132,37 @@ fn selected_and_rejected_are_disjoint_by_ip() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadConst { dst: r(3), const_index: 1 },
-            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
-            Instruction::LoadConst { dst: r(4), const_index: 2 },
-            Instruction::Sub { dst: r(3), lhs: r(3), rhs: r(4) },
-            Instruction::JumpIfFalse { condition: r(3), target: 9 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(4),
+                const_index: 2,
+            },
+            Instruction::Sub {
+                dst: r(3),
+                lhs: r(3),
+                rhs: r(4),
+            },
+            Instruction::JumpIfFalse {
+                condition: r(3),
+                target: 9,
+            },
             Instruction::Jump { target: 4 },
             Instruction::Return { src: r(2) },
         ],
@@ -1143,7 +1204,10 @@ fn events_start_comes_before_complete() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1152,11 +1216,20 @@ fn events_start_comes_before_complete() {
     let report = vm.execute(&program).unwrap();
     let decision = evaluate_tier_up_eligibility(&report, &TierUpPolicy::default());
 
-    let start_idx = decision.events.iter().position(|e| e.event == "tier_up_started");
-    let end_idx = decision.events.iter().position(|e| e.event == "tier_up_completed");
+    let start_idx = decision
+        .events
+        .iter()
+        .position(|e| e.event == "tier_up_started");
+    let end_idx = decision
+        .events
+        .iter()
+        .position(|e| e.event == "tier_up_completed");
     assert!(start_idx.is_some(), "must have start event");
     assert!(end_idx.is_some(), "must have complete event");
-    assert!(start_idx.unwrap() < end_idx.unwrap(), "start must come before complete");
+    assert!(
+        start_idx.unwrap() < end_idx.unwrap(),
+        "start must come before complete"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1169,7 +1242,10 @@ fn decision_serde_is_deterministic() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1193,9 +1269,19 @@ fn eligible_without_cache_signal_when_not_required() {
         constants: vec![Value::Int(5), Value::Int(3)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1226,7 +1312,10 @@ fn profile_hash_differs_for_different_programs() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1234,9 +1323,19 @@ fn profile_hash_differs_for_different_programs() {
         constants: vec![Value::Int(1), Value::Int(2)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Mul { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Mul {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1276,13 +1375,37 @@ fn candidate_rationale_is_nonempty_when_eligible() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadConst { dst: r(3), const_index: 1 },
-            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
-            Instruction::LoadConst { dst: r(4), const_index: 2 },
-            Instruction::Sub { dst: r(3), lhs: r(3), rhs: r(4) },
-            Instruction::JumpIfFalse { condition: r(3), target: 9 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(4),
+                const_index: 2,
+            },
+            Instruction::Sub {
+                dst: r(3),
+                lhs: r(3),
+                rhs: r(4),
+            },
+            Instruction::JumpIfFalse {
+                condition: r(3),
+                target: 9,
+            },
             Instruction::Jump { target: 4 },
             Instruction::Return { src: r(2) },
         ],
@@ -1311,7 +1434,10 @@ fn rejection_reason_is_nonempty() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };

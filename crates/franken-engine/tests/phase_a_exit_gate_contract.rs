@@ -155,8 +155,7 @@ fn phase_a_gate_blocked_mode_emits_standard_artifact_triad() {
 
 fn read_gate_script() -> String {
     let path = repo_root().join("scripts/run_phase_a_exit_gate.sh");
-    fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("failed to read gate script: {err}"))
+    fs::read_to_string(&path).unwrap_or_else(|err| panic!("failed to read gate script: {err}"))
 }
 
 #[test]
@@ -371,15 +370,10 @@ fn phase_a_gate_blocked_manifest_keys_are_complete() {
     )
     .expect("parse manifest");
 
-    let required_keys: BTreeSet<&str> = [
-        "schema_version",
-        "component",
-        "bead_id",
-        "mode",
-        "outcome",
-    ]
-    .into_iter()
-    .collect();
+    let required_keys: BTreeSet<&str> =
+        ["schema_version", "component", "bead_id", "mode", "outcome"]
+            .into_iter()
+            .collect();
 
     let actual_keys: BTreeSet<&str> = manifest
         .as_object()

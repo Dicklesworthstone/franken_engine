@@ -630,8 +630,7 @@ fn serde_round_trip_morphism_effect_all_variants() {
     ];
     for variant in &variants {
         let json = serde_json::to_string(variant).expect("serialize MorphismEffect");
-        let back: MorphismEffect =
-            serde_json::from_str(&json).expect("deserialize MorphismEffect");
+        let back: MorphismEffect = serde_json::from_str(&json).expect("deserialize MorphismEffect");
         assert_eq!(*variant, back);
     }
 }
@@ -659,8 +658,7 @@ fn serde_round_trip_evidence_state_all_variants() {
     let variants = [EvidenceState::Fresh, EvidenceState::Stale];
     for variant in &variants {
         let json = serde_json::to_string(variant).expect("serialize EvidenceState");
-        let back: EvidenceState =
-            serde_json::from_str(&json).expect("deserialize EvidenceState");
+        let back: EvidenceState = serde_json::from_str(&json).expect("deserialize EvidenceState");
         assert_eq!(*variant, back);
     }
 }
@@ -926,9 +924,11 @@ fn validate_rejects_wrong_schema_version() {
     let mut contract = make_minimal_contract();
     contract.schema_version = "wrong-version".to_string();
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unexpected schema_version")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unexpected schema_version"))
+    );
 }
 
 #[test]
@@ -936,9 +936,11 @@ fn validate_rejects_wrong_track_id() {
     let mut contract = make_minimal_contract();
     contract.track.id = "RGC-999".to_string();
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unexpected track id")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unexpected track id"))
+    );
 }
 
 #[test]
@@ -956,9 +958,11 @@ fn validate_detects_duplicate_atom_ids() {
         owning_beads: Vec::new(),
     });
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("duplicate claim atom id")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("duplicate claim atom id"))
+    );
 }
 
 #[test]
@@ -978,9 +982,11 @@ fn validate_detects_duplicate_morphism_ids() {
             rationale: "dup".to_string(),
         });
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("duplicate evidence morphism id")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("duplicate evidence morphism id"))
+    );
 }
 
 #[test]
@@ -1000,9 +1006,11 @@ fn validate_detects_morphism_referencing_unknown_atom() {
             rationale: "orphan".to_string(),
         });
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("references unknown atom")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("references unknown atom"))
+    );
 }
 
 #[test]
@@ -1022,9 +1030,11 @@ fn validate_detects_morphism_referencing_unknown_constraint() {
             rationale: "bad".to_string(),
         });
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("references unknown side constraint")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("references unknown side constraint"))
+    );
 }
 
 #[test]
@@ -1044,9 +1054,11 @@ fn validate_detects_morphism_referencing_unknown_rule() {
             rationale: "bad".to_string(),
         });
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("references unknown disqualifier rule")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("references unknown disqualifier rule"))
+    );
 }
 
 #[test]
@@ -1061,20 +1073,25 @@ fn validate_detects_self_referential_cover_relation() {
             higher_constraint_id: "constraint.bottom".to_string(),
         });
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("self-referential")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("self-referential"))
+    );
 }
 
 #[test]
 fn validate_detects_lattice_cycle() {
     use claim_entitlement::{ConstraintRelation, SideConstraint};
     let mut contract = make_minimal_contract();
-    contract.side_constraint_lattice.constraints.push(SideConstraint {
-        constraint_id: "constraint.mid".to_string(),
-        constraint_class: "test".to_string(),
-        description: "mid".to_string(),
-    });
+    contract
+        .side_constraint_lattice
+        .constraints
+        .push(SideConstraint {
+            constraint_id: "constraint.mid".to_string(),
+            constraint_class: "test".to_string(),
+            description: "mid".to_string(),
+        });
     contract.side_constraint_lattice.cover_relations = vec![
         ConstraintRelation {
             lower_constraint_id: "constraint.bottom".to_string(),
@@ -1090,9 +1107,7 @@ fn validate_detects_lattice_cycle() {
         },
     ];
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("cycle")));
+    assert!(errors.iter().any(|error| error.contains("cycle")));
 }
 
 #[test]
@@ -1108,12 +1123,16 @@ fn validate_detects_duplicate_disqualifier_precedence() {
         verdict: DisqualifierVerdict::DowngradeToScoped,
         remediation: "dup".to_string(),
     });
-    contract.disqualifier_rules.precedence_order =
-        vec!["rule.test_forbid".to_string(), "rule.dup_precedence".to_string()];
+    contract.disqualifier_rules.precedence_order = vec![
+        "rule.test_forbid".to_string(),
+        "rule.dup_precedence".to_string(),
+    ];
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("duplicate disqualifier precedence")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("duplicate disqualifier precedence"))
+    );
 }
 
 #[test]
@@ -1133,9 +1152,11 @@ fn validate_detects_mismatched_precedence_order() {
     contract.disqualifier_rules.precedence_order =
         vec!["rule.second".to_string(), "rule.test_forbid".to_string()];
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("precedence_order does not match")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("precedence_order does not match"))
+    );
 }
 
 #[test]
@@ -1143,33 +1164,39 @@ fn validate_detects_missing_top_constraint() {
     let mut contract = make_minimal_contract();
     contract.side_constraint_lattice.top_constraint_id = "constraint.missing_top".to_string();
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("top constraint") && error.contains("missing")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("top constraint") && error.contains("missing"))
+    );
 }
 
 #[test]
 fn validate_detects_missing_bottom_constraint() {
     let mut contract = make_minimal_contract();
-    contract.side_constraint_lattice.bottom_constraint_id =
-        "constraint.missing_bottom".to_string();
+    contract.side_constraint_lattice.bottom_constraint_id = "constraint.missing_bottom".to_string();
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("bottom constraint") && error.contains("missing")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("bottom constraint") && error.contains("missing"))
+    );
 }
 
 #[test]
 fn validate_detects_missing_tier_coverage() {
     let mut contract = make_minimal_contract();
     // Remove all frontier_ambition atoms
-    contract.claim_atom_catalog.atoms.retain(|atom| {
-        atom.tier != claim_entitlement::ClaimTier::FrontierAmbition
-    });
+    contract
+        .claim_atom_catalog
+        .atoms
+        .retain(|atom| atom.tier != claim_entitlement::ClaimTier::FrontierAmbition);
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("missing frontier_ambition")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("missing frontier_ambition"))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1205,10 +1232,30 @@ fn evaluate_empty_scenarios_produces_empty_outputs() {
         scenarios: Vec::new(),
     };
     let outputs = contract.evaluate_scenarios(&scenarios).unwrap();
-    assert!(outputs.claim_entitlement_report.evaluated_scenarios.is_empty());
-    assert!(outputs.missing_evidence_cutsets.evaluated_scenarios.is_empty());
-    assert!(outputs.impossibility_certificates.evaluated_scenarios.is_empty());
-    assert!(outputs.claim_counterexample_ledger.evaluated_scenarios.is_empty());
+    assert!(
+        outputs
+            .claim_entitlement_report
+            .evaluated_scenarios
+            .is_empty()
+    );
+    assert!(
+        outputs
+            .missing_evidence_cutsets
+            .evaluated_scenarios
+            .is_empty()
+    );
+    assert!(
+        outputs
+            .impossibility_certificates
+            .evaluated_scenarios
+            .is_empty()
+    );
+    assert!(
+        outputs
+            .claim_counterexample_ledger
+            .evaluated_scenarios
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1267,9 +1314,11 @@ fn evaluate_scenario_fresh_evidence_with_constraints_yields_entitled() {
         verdict.state,
         claim_entitlement::ClaimVerdictState::Entitled
     );
-    assert!(verdict
-        .supporting_morphism_ids
-        .contains(&"morphism.test_support".to_string()));
+    assert!(
+        verdict
+            .supporting_morphism_ids
+            .contains(&"morphism.test_support".to_string())
+    );
 }
 
 #[test]
@@ -1355,10 +1404,7 @@ fn evaluate_scenario_stale_evidence_yields_blocked_by_missing() {
         .iter()
         .find(|v| v.atom_id == "claim.test.shipped")
         .unwrap();
-    assert_eq!(
-        verdict.state,
-        ClaimVerdictState::BlockedByMissingEvidence
-    );
+    assert_eq!(verdict.state, ClaimVerdictState::BlockedByMissingEvidence);
 }
 
 #[test]
@@ -1375,9 +1421,11 @@ fn evaluate_rejects_unknown_evidence_kind_in_scenario() {
         Vec::new(),
     );
     let errors = contract.evaluate_scenarios(&scenarios).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unknown evidence_kind")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unknown evidence_kind"))
+    );
 }
 
 #[test]
@@ -1394,9 +1442,7 @@ fn evaluate_rejects_unknown_rule_in_scenario() {
         Vec::new(),
     );
     let errors = contract.evaluate_scenarios(&scenarios).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unknown rule")));
+    assert!(errors.iter().any(|error| error.contains("unknown rule")));
 }
 
 #[test]
@@ -1409,9 +1455,11 @@ fn evaluate_rejects_unknown_constraint_in_scenario() {
         Vec::new(),
     );
     let errors = contract.evaluate_scenarios(&scenarios).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unknown satisfied constraint")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unknown satisfied constraint"))
+    );
 }
 
 #[test]
@@ -1429,9 +1477,11 @@ fn evaluate_rejects_unknown_atom_in_expected_outcomes() {
         }],
     );
     let errors = contract.evaluate_scenarios(&scenarios).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unknown expected atom")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unknown expected atom"))
+    );
 }
 
 #[test]
@@ -1455,9 +1505,11 @@ fn evaluate_rejects_duplicate_scenario_ids() {
             });
     }
     let errors = contract.evaluate_scenarios(&scenarios).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("duplicate scenario id")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("duplicate scenario id"))
+    );
 }
 
 #[test]
@@ -1469,9 +1521,11 @@ fn evaluate_rejects_wrong_scenario_schema_version() {
         scenarios: Vec::new(),
     };
     let errors = contract.evaluate_scenarios(&scenarios).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unexpected scenario schema_version")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unexpected scenario schema_version"))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1523,8 +1577,8 @@ fn schema_version_constants_are_non_empty_and_prefixed() {
 
 #[test]
 fn contract_json_constant_is_valid_json() {
-    let value: serde_json::Value =
-        serde_json::from_str(CLAIM_ENTITLEMENT_CONTRACT_JSON).expect("CONTRACT_JSON must be valid JSON");
+    let value: serde_json::Value = serde_json::from_str(CLAIM_ENTITLEMENT_CONTRACT_JSON)
+        .expect("CONTRACT_JSON must be valid JSON");
     assert!(value.is_object());
 }
 
@@ -1564,11 +1618,14 @@ fn cutset_cost_reflects_missing_evidence_plus_constraints_plus_rules() {
     use claim_entitlement::*;
     let mut contract = make_minimal_contract();
     // Add a second constraint that the morphism requires
-    contract.side_constraint_lattice.constraints.push(SideConstraint {
-        constraint_id: "constraint.extra".to_string(),
-        constraint_class: "test".to_string(),
-        description: "extra".to_string(),
-    });
+    contract
+        .side_constraint_lattice
+        .constraints
+        .push(SideConstraint {
+            constraint_id: "constraint.extra".to_string(),
+            constraint_class: "test".to_string(),
+            description: "extra".to_string(),
+        });
     contract.evidence_morphism_catalog.morphisms[0]
         .requires_side_constraints
         .push("constraint.extra".to_string());
@@ -1608,9 +1665,11 @@ fn evaluate_rejects_unknown_morphism_in_expected_outcomes() {
         }],
     );
     let errors = contract.evaluate_scenarios(&scenarios).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unknown expected morphism")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unknown expected morphism"))
+    );
 }
 
 #[test]
@@ -1628,7 +1687,9 @@ fn evaluate_rejects_unknown_rule_in_expected_outcomes() {
         }],
     );
     let errors = contract.evaluate_scenarios(&scenarios).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("unknown expected rule")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unknown expected rule"))
+    );
 }

@@ -389,11 +389,7 @@ fn decision_always_covers_all_five_splits() {
         &input(previous_snapshot(), candidate_snapshot(0, true)),
         &BenchmarkSplitThresholds::default(),
     );
-    let splits: BTreeSet<_> = decision
-        .evaluations
-        .iter()
-        .map(|e| e.split)
-        .collect();
+    let splits: BTreeSet<_> = decision.evaluations.iter().map(|e| e.split).collect();
     for expected_split in [
         BenchmarkSplit::Baseline,
         BenchmarkSplit::CxThreading,

@@ -5,11 +5,11 @@ use std::process::{self, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::lowering_gap_inventory::{
-    self as lgap, LoweringGapInventory, LoweringGapInventoryRunManifest, LoweringGapSiteDescriptor,
-    LoweringGapSiteId, LoweringGapStage, LoweringGapStatus,
-    LOWERING_GAP_COMPONENT, LOWERING_GAP_EVENT_SCHEMA_VERSION,
+    self as lgap, LOWERING_GAP_COMPONENT, LOWERING_GAP_EVENT_SCHEMA_VERSION,
     LOWERING_GAP_INVENTORY_SCHEMA_VERSION, LOWERING_GAP_POLICY_ID,
-    LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION,
+    LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION, LoweringGapInventory,
+    LoweringGapInventoryRunManifest, LoweringGapSiteDescriptor, LoweringGapSiteId,
+    LoweringGapStage, LoweringGapStatus,
 };
 
 fn unique_temp_dir(label: &str) -> PathBuf {
@@ -243,8 +243,7 @@ fn lowering_gap_cli_stdout_hash_is_64_hex_chars() {
         .expect("run lowering gap inventory binary");
     assert!(output.status.success());
 
-    let cli_json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("stdout json");
+    let cli_json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("stdout json");
     let hash = cli_json["inventory_hash"].as_str().expect("hash");
     assert_eq!(hash.len(), 64);
     assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
@@ -283,7 +282,11 @@ fn lowering_gap_inventory_execution_ready_count() {
 fn lowering_gap_site_ids_are_unique() {
     let mut seen = std::collections::BTreeSet::new();
     for site in LoweringGapSiteId::ALL {
-        assert!(seen.insert(site.as_str()), "duplicate site id: {}", site.as_str());
+        assert!(
+            seen.insert(site.as_str()),
+            "duplicate site id: {}",
+            site.as_str()
+        );
     }
 }
 
@@ -346,7 +349,8 @@ fn lowering_gap_descriptor_serde_roundtrip() {
     for site in LoweringGapSiteId::ALL {
         let desc = LoweringGapSiteDescriptor::from_site(site);
         let json = serde_json::to_string(&desc).expect("serialize");
-        let recovered: LoweringGapSiteDescriptor = serde_json::from_str(&json).expect("deserialize");
+        let recovered: LoweringGapSiteDescriptor =
+            serde_json::from_str(&json).expect("deserialize");
         assert_eq!(desc.site_id, recovered.site_id);
     }
 }

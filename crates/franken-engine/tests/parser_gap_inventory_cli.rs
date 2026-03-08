@@ -5,11 +5,10 @@ use std::process::{self, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::parser_gap_inventory::{
-    self as pgap, ParserGapInventory, ParserGapInventoryRunManifest,
-    ParserGapSiteDescriptor, ParserGapSiteId, ParserGapStage, ParserGapRemediationStatus,
-    PARSER_GAP_COMPONENT, PARSER_GAP_EVENT_SCHEMA_VERSION,
+    self as pgap, PARSER_GAP_COMPONENT, PARSER_GAP_EVENT_SCHEMA_VERSION,
     PARSER_GAP_INVENTORY_SCHEMA_VERSION, PARSER_GAP_POLICY_ID,
-    PARSER_GAP_RUN_MANIFEST_SCHEMA_VERSION,
+    PARSER_GAP_RUN_MANIFEST_SCHEMA_VERSION, ParserGapInventory, ParserGapInventoryRunManifest,
+    ParserGapRemediationStatus, ParserGapSiteDescriptor, ParserGapSiteId, ParserGapStage,
 };
 
 fn unique_temp_dir(label: &str) -> PathBuf {
@@ -240,8 +239,7 @@ fn parser_gap_cli_stdout_hash_is_64_hex() {
         .expect("run parser gap inventory binary");
     assert!(output.status.success());
 
-    let cli_json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("stdout json");
+    let cli_json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("stdout json");
     let hash = cli_json["inventory_hash"].as_str().expect("hash");
     assert_eq!(hash.len(), 64);
     assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
@@ -272,7 +270,11 @@ fn parser_gap_site_id_syntax_shape_nonempty() {
 fn parser_gap_site_ids_are_unique() {
     let mut seen = std::collections::BTreeSet::new();
     for site in ParserGapSiteId::ALL {
-        assert!(seen.insert(site.as_str()), "duplicate site id: {}", site.as_str());
+        assert!(
+            seen.insert(site.as_str()),
+            "duplicate site id: {}",
+            site.as_str()
+        );
     }
 }
 

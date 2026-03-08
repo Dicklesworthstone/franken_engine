@@ -581,9 +581,7 @@ fn multiple_importers_share_same_cell() {
 #[test]
 fn read_through_import_not_wired_fails() {
     let map = LiveBindingMap::new();
-    let err = map
-        .read_through_import("mod_b", "nonexistent")
-        .unwrap_err();
+    let err = map.read_through_import("mod_b", "nonexistent").unwrap_err();
     assert_eq!(
         err,
         LiveBindingError::ImportNotWired {
@@ -825,7 +823,8 @@ fn deterministic_operations_produce_same_result() {
             let name = format!("export_{i}");
             let cell = make_cell("mod_a", &name);
             let id = map.register_cell(cell);
-            map.initialize_millionths(&id, i as i64 * 1_000_000).unwrap();
+            map.initialize_millionths(&id, i as i64 * 1_000_000)
+                .unwrap();
         }
         map.register_namespace(make_namespace(
             "mod_a",
@@ -1123,10 +1122,7 @@ fn empty_string_binding() {
     let id = map.register_cell(cell);
 
     map.initialize_string(&id, String::new()).unwrap();
-    assert_eq!(
-        map.get_cell(&id).unwrap().value_string.as_deref(),
-        Some("")
-    );
+    assert_eq!(map.get_cell(&id).unwrap().value_string.as_deref(), Some(""));
 }
 
 // ---------------------------------------------------------------------------

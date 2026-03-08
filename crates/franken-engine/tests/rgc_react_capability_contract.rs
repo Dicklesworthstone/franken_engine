@@ -359,8 +359,7 @@ fn rgc_016a_capability_ids_are_unique_and_roundtrip_cleanly() {
 fn rgc_016a_serde_determinism_roundtrip() {
     let contract = parse_contract();
     let json_a = serde_json::to_string_pretty(&contract).expect("serialize a");
-    let recovered: ReactCapabilityContract =
-        serde_json::from_str(&json_a).expect("deserialize a");
+    let recovered: ReactCapabilityContract = serde_json::from_str(&json_a).expect("deserialize a");
     let json_b = serde_json::to_string_pretty(&recovered).expect("serialize b");
     assert_eq!(json_a, json_b, "serde roundtrip must be deterministic");
 }
@@ -454,7 +453,10 @@ fn rgc_016a_product_surface_count_minimum() {
 fn rgc_016a_matrix_contract_ref_fields_are_non_empty() {
     let contract = parse_contract();
     let mcr = &contract.extends_matrix_contract;
-    assert!(!mcr.bead_id.trim().is_empty(), "matrix bead_id must be non-empty");
+    assert!(
+        !mcr.bead_id.trim().is_empty(),
+        "matrix bead_id must be non-empty"
+    );
     assert!(
         !mcr.contract_doc.trim().is_empty(),
         "matrix contract_doc must be non-empty"
@@ -513,7 +515,10 @@ fn rgc_016a_required_log_fields_include_all_mandatory() {
         "error_code",
     ];
     for field in mandatory {
-        assert!(fields.contains(field), "missing mandatory log field: {field}");
+        assert!(
+            fields.contains(field),
+            "missing mandatory log field: {field}"
+        );
     }
 }
 
@@ -576,7 +581,10 @@ fn rgc_016a_diagnostic_message_templates_are_non_empty() {
     let contract = parse_contract();
     for row in &contract.capability_rows {
         assert!(
-            !row.user_visible_diagnostic.message_template.trim().is_empty(),
+            !row.user_visible_diagnostic
+                .message_template
+                .trim()
+                .is_empty(),
             "diagnostic message_template must be non-empty for capability {}",
             row.capability_id
         );
@@ -619,7 +627,11 @@ fn rgc_016a_generated_at_utc_is_rfc3339_z() {
     let parts: Vec<&str> = ts.split('T').collect();
     assert_eq!(parts.len(), 2, "timestamp must have exactly one T: {ts}");
     let date_parts: Vec<&str> = parts[0].split('-').collect();
-    assert_eq!(date_parts.len(), 3, "date part must have 3 components: {ts}");
+    assert_eq!(
+        date_parts.len(),
+        3,
+        "date part must have 3 components: {ts}"
+    );
     assert_eq!(date_parts[0].len(), 4, "year must be 4 digits: {ts}");
     assert_eq!(date_parts[1].len(), 2, "month must be 2 digits: {ts}");
     assert_eq!(date_parts[2].len(), 2, "day must be 2 digits: {ts}");

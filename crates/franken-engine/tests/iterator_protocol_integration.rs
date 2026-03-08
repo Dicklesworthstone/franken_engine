@@ -567,12 +567,7 @@ fn for_in_full_lifecycle_with_trace() {
     );
 
     // Record enumeration event
-    trace.record_event(make_enumerate_event(
-        record_id.clone(),
-        0,
-        obj,
-        keys,
-    ));
+    trace.record_event(make_enumerate_event(record_id.clone(), 0, obj, keys));
 
     // Iterate and record next events
     let mut step = 1u64;
@@ -1218,12 +1213,8 @@ fn iteration_operation_enumerate_serde() {
 fn async_get_iterator_event_uses_async_symbol() {
     let rec = make_id("async_rec");
     let iterable = make_id("async_iter");
-    let event = make_get_iterator_event(
-        rec,
-        0,
-        IteratorSymbolKind::AsyncIterator,
-        iterable.clone(),
-    );
+    let event =
+        make_get_iterator_event(rec, 0, IteratorSymbolKind::AsyncIterator, iterable.clone());
     if let IterationOperation::GetIterator {
         symbol,
         iterable_ref,

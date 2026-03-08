@@ -347,10 +347,9 @@ fn franken_law_mining_env_json_is_valid() {
 
     assert!(output.status.success());
 
-    let env_json: serde_json::Value = serde_json::from_slice(
-        &fs::read(artifact_dir.join("env.json")).expect("read env json"),
-    )
-    .expect("env json parse");
+    let env_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(artifact_dir.join("env.json")).expect("read env json"))
+            .expect("env json parse");
     assert!(env_json.is_object());
 }
 
@@ -604,10 +603,7 @@ fn franken_law_mining_custom_source_commit_in_manifest() {
         &fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
     )
     .expect("decode run manifest");
-    assert_eq!(
-        manifest["source_commit"].as_str(),
-        Some("custom123456")
-    );
+    assert_eq!(manifest["source_commit"].as_str(), Some("custom123456"));
 }
 
 #[test]
@@ -696,7 +692,10 @@ fn franken_law_mining_custom_decision_id_in_manifest() {
         &fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
     )
     .expect("decode run manifest");
-    assert_eq!(manifest["decision_id"].as_str(), Some("decision-custom-test"));
+    assert_eq!(
+        manifest["decision_id"].as_str(),
+        Some("decision-custom-test")
+    );
 }
 
 #[test]
@@ -785,7 +784,10 @@ fn franken_law_mining_custom_generated_at_utc_in_manifest() {
         &fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
     )
     .expect("decode run manifest");
-    assert_eq!(manifest["generated_at_utc"].as_str(), Some("2026-01-15T12:30:00Z"));
+    assert_eq!(
+        manifest["generated_at_utc"].as_str(),
+        Some("2026-01-15T12:30:00Z")
+    );
 }
 
 #[test]

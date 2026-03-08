@@ -3,12 +3,12 @@ use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::supremacy_cell_matrix::{
-    artifact_hash, build_interference_index, validate_artifact, ChangelogEntry, EntryMode,
-    InterferenceProfile, InterferenceRule, MeasurementFamily, SharedResource,
+    ChangelogEntry, EntryMode, InterferenceProfile, InterferenceRule, MeasurementFamily,
+    REQUIRED_BOARD_FAMILIES, REQUIRED_MATRIX_DIMENSIONS, SUPREMACY_CELL_MATRIX_COMPONENT,
+    SUPREMACY_CELL_MATRIX_LOG_SCHEMA_VERSION, SUPREMACY_CELL_MATRIX_SCHEMA_VERSION, SharedResource,
     SupremacyCellFamilySpec, SupremacyCellMatrixArtifact, SupremacyCellMatrixError,
     SupremacyCellSpec, TailAxis, TailDecompositionAxisSpec, WarmState, WorkloadFamily,
-    REQUIRED_BOARD_FAMILIES, REQUIRED_MATRIX_DIMENSIONS, SUPREMACY_CELL_MATRIX_COMPONENT,
-    SUPREMACY_CELL_MATRIX_LOG_SCHEMA_VERSION, SUPREMACY_CELL_MATRIX_SCHEMA_VERSION,
+    artifact_hash, build_interference_index, validate_artifact,
 };
 
 fn load_fixture() -> SupremacyCellMatrixArtifact {

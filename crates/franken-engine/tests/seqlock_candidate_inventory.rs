@@ -5,15 +5,14 @@ use std::fs;
 use std::path::PathBuf;
 
 use seqlock_candidate_inventory::{
-    ArtifactContext, BaselineStrategy, CONTRACT_SCHEMA_VERSION, CandidateDisposition,
-    FallbackReason, ReadInterference, ReadResolution, RetryBudgetPolicyRow, SimulatedSeqlock,
-    StructuredLogEvent, SurfaceArea, TearingRisk, WriteProfile, build_contract_fixture,
-    default_candidate_inventory, emit_default_inventory_bundle, render_summary,
-    SeqlockContractError, BEAD_ID, COMPONENT, INVENTORY_SCHEMA_VERSION,
-    RETRY_SAFETY_SCHEMA_VERSION, BASELINE_COMPARATOR_SCHEMA_VERSION,
+    ArtifactContext, BASELINE_COMPARATOR_SCHEMA_VERSION, BEAD_ID, BaselineStrategy, COMPONENT,
+    CONTRACT_SCHEMA_VERSION, CandidateDisposition, FallbackReason,
+    INCUMBENT_FALLBACK_MATRIX_SCHEMA_VERSION, INVENTORY_SCHEMA_VERSION, PREDECESSOR_BEAD_ID,
     READER_WRITER_CONTRACT_SCHEMA_VERSION, RETRY_BUDGET_POLICY_SCHEMA_VERSION,
-    INCUMBENT_FALLBACK_MATRIX_SCHEMA_VERSION, TRACE_IDS_SCHEMA_VERSION,
-    RUN_MANIFEST_SCHEMA_VERSION, PREDECESSOR_BEAD_ID,
+    RETRY_SAFETY_SCHEMA_VERSION, RUN_MANIFEST_SCHEMA_VERSION, ReadInterference, ReadResolution,
+    RetryBudgetPolicyRow, SeqlockContractError, SimulatedSeqlock, StructuredLogEvent, SurfaceArea,
+    TRACE_IDS_SCHEMA_VERSION, TearingRisk, WriteProfile, build_contract_fixture,
+    default_candidate_inventory, emit_default_inventory_bundle, render_summary,
 };
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -235,7 +234,10 @@ fn fallback_reason_serde_roundtrip() {
 
 #[test]
 fn read_resolution_serde_roundtrip() {
-    for variant in [ReadResolution::Optimistic, ReadResolution::IncumbentFallback] {
+    for variant in [
+        ReadResolution::Optimistic,
+        ReadResolution::IncumbentFallback,
+    ] {
         let json = serde_json::to_string(&variant).unwrap();
         let recovered: ReadResolution = serde_json::from_str(&json).unwrap();
         assert_eq!(variant, recovered);
@@ -337,10 +339,16 @@ fn simulated_seqlock_budget_exhausted_falls_back() {
     };
     let outcome = seqlock.read_with_interference(
         &policy,
-        &[ReadInterference::WriterActive, ReadInterference::WriterActive],
+        &[
+            ReadInterference::WriterActive,
+            ReadInterference::WriterActive,
+        ],
     );
     assert_eq!(outcome.resolution, ReadResolution::IncumbentFallback);
-    assert_eq!(outcome.fallback_reason, Some(FallbackReason::RetryBudgetExhausted));
+    assert_eq!(
+        outcome.fallback_reason,
+        Some(FallbackReason::RetryBudgetExhausted)
+    );
     assert_eq!(seqlock.fallback_reads(), 1);
 }
 
@@ -358,7 +366,10 @@ fn simulated_seqlock_rejected_disposition_falls_back_immediately() {
     };
     let outcome = seqlock.read_with_interference(&policy, &[ReadInterference::Stable]);
     assert_eq!(outcome.resolution, ReadResolution::IncumbentFallback);
-    assert_eq!(outcome.fallback_reason, Some(FallbackReason::UnsupportedCandidate));
+    assert_eq!(
+        outcome.fallback_reason,
+        Some(FallbackReason::UnsupportedCandidate)
+    );
 }
 
 #[test]
@@ -419,7 +430,10 @@ fn build_contract_fixture_bead_id_matches_constant() {
 fn build_contract_fixture_expectations_match_inventory() {
     let fixture = build_contract_fixture();
     let inventory = default_candidate_inventory("2026-03-06T00:00:00Z");
-    assert_eq!(fixture.candidate_expectations.len(), inventory.candidates.len());
+    assert_eq!(
+        fixture.candidate_expectations.len(),
+        inventory.candidates.len()
+    );
     for expectation in &fixture.candidate_expectations {
         let candidate = inventory
             .candidates

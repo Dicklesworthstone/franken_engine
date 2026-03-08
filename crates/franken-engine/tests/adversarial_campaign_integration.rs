@@ -900,8 +900,7 @@ fn generator_zero_campaigns_per_hour_rejected() {
         },
         0xBB,
     );
-    let err = result
-        .expect_err("should fail with zero campaigns_per_hour");
+    let err = result.expect_err("should fail with zero campaigns_per_hour");
     assert!(err.to_string().contains("campaigns_per_hour"));
 }
 

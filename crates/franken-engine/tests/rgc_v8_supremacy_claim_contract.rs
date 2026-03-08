@@ -713,12 +713,18 @@ publication_scenario_test!(
 
 #[test]
 fn phrase_class_parse_universal_dominance() {
-    assert_eq!(PhraseClass::parse("universal_dominance"), PhraseClass::UniversalDominance);
+    assert_eq!(
+        PhraseClass::parse("universal_dominance"),
+        PhraseClass::UniversalDominance
+    );
 }
 
 #[test]
 fn phrase_class_parse_scoped_observed() {
-    assert_eq!(PhraseClass::parse("scoped_observed"), PhraseClass::ScopedObserved);
+    assert_eq!(
+        PhraseClass::parse("scoped_observed"),
+        PhraseClass::ScopedObserved
+    );
 }
 
 #[test]
@@ -762,10 +768,22 @@ fn cell_status_parse_all_variants() {
 
 #[test]
 fn publication_verdict_parse_all_variants() {
-    assert_eq!(PublicationVerdict::parse("allow_universal"), PublicationVerdict::AllowUniversal);
-    assert_eq!(PublicationVerdict::parse("allow_scoped"), PublicationVerdict::AllowScoped);
-    assert_eq!(PublicationVerdict::parse("allow_qualified"), PublicationVerdict::AllowQualified);
-    assert_eq!(PublicationVerdict::parse("forbid"), PublicationVerdict::Forbid);
+    assert_eq!(
+        PublicationVerdict::parse("allow_universal"),
+        PublicationVerdict::AllowUniversal
+    );
+    assert_eq!(
+        PublicationVerdict::parse("allow_scoped"),
+        PublicationVerdict::AllowScoped
+    );
+    assert_eq!(
+        PublicationVerdict::parse("allow_qualified"),
+        PublicationVerdict::AllowQualified
+    );
+    assert_eq!(
+        PublicationVerdict::parse("forbid"),
+        PublicationVerdict::Forbid
+    );
 }
 
 #[test]
@@ -811,9 +829,16 @@ fn fnv1a64_empty_input_returns_offset_basis() {
 #[test]
 fn deterministic_id_format_prefix_hex() {
     let id = deterministic_id("trace", "scenario_a", PhraseClass::Target);
-    assert!(id.starts_with("trace-"), "id should start with prefix: {id}");
+    assert!(
+        id.starts_with("trace-"),
+        "id should start with prefix: {id}"
+    );
     let hex_part = &id["trace-".len()..];
-    assert_eq!(hex_part.len(), 16, "hex portion should be 16 chars: {hex_part}");
+    assert_eq!(
+        hex_part.len(),
+        16,
+        "hex portion should be 16 chars: {hex_part}"
+    );
     assert!(
         hex_part.chars().all(|c| c.is_ascii_hexdigit()),
         "hex portion must be hex digits: {hex_part}"
@@ -840,14 +865,26 @@ fn deterministic_id_different_phrase_class_different_output() {
 
 #[test]
 fn phrase_contains_required_term_case_insensitive() {
-    assert!(phrase_contains_required_term("We OBSERVED improvements", "observed"));
-    assert!(phrase_contains_required_term("Observed: better perf", "OBSERVED"));
+    assert!(phrase_contains_required_term(
+        "We OBSERVED improvements",
+        "observed"
+    ));
+    assert!(phrase_contains_required_term(
+        "Observed: better perf",
+        "OBSERVED"
+    ));
 }
 
 #[test]
 fn phrase_contains_required_term_matching_and_non_matching() {
-    assert!(phrase_contains_required_term("this is a hypothesis about perf", "hypothesis"));
-    assert!(!phrase_contains_required_term("this is a claim about perf", "hypothesis"));
+    assert!(phrase_contains_required_term(
+        "this is a hypothesis about perf",
+        "hypothesis"
+    ));
+    assert!(!phrase_contains_required_term(
+        "this is a claim about perf",
+        "hypothesis"
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -954,7 +991,10 @@ fn fixture_allowed_statistical_procedures_are_non_empty() {
             .is_empty(),
         "allowed_statistical_procedures must not be empty"
     );
-    for proc in &fixture.supremacy_claim_contract.allowed_statistical_procedures {
+    for proc in &fixture
+        .supremacy_claim_contract
+        .allowed_statistical_procedures
+    {
         assert!(!proc.trim().is_empty(), "procedure name must not be blank");
     }
 }

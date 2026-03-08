@@ -448,11 +448,8 @@ fn render_summary_nonempty_for_empty_catalog() {
 #[test]
 fn default_fixture_produces_valid_catalog() {
     let fixture = frankenengine_engine::law_mining::default_fixture();
-    let catalog = LawMiningCatalog::from_sources(
-        55,
-        &fixture.counterexamples,
-        &fixture.evidence_entries,
-    );
+    let catalog =
+        LawMiningCatalog::from_sources(55, &fixture.counterexamples, &fixture.evidence_entries);
     assert!(catalog.validate().is_valid);
 }
 

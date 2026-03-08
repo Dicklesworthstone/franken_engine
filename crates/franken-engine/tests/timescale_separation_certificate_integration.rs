@@ -8,17 +8,15 @@
 //! timescale-separation surface.
 
 use frankenengine_engine::timescale_separation_certificate::{
-    BifurcationDetectorConfig, BifurcationDetectorResult, BifurcationSignal,
-    BifurcationSignalKind, CertificateBundle, ControllerPairId,
-    ControllerTimescaleProfile, PairTelemetrySnapshot, RecommendedAction,
-    SeparationVerdict, SignalSeverity, StabilityAssessment, StabilityWitness,
-    TimescaleRatio, TimescaleSeparationCertificate,
-    BIFURCATION_DETECTOR_SCHEMA_VERSION, CERTIFICATE_BUNDLE_SCHEMA_VERSION,
-    DEFAULT_MARGINAL_RATIO_MILLIONTHS, DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
-    STABILITY_WITNESS_SCHEMA_VERSION, TIMESCALE_CERTIFICATE_BEAD_ID,
-    TIMESCALE_CERTIFICATE_SCHEMA_VERSION,
-    build_certificate_bundle, compute_timescale_ratio, detect_bifurcation_signals,
-    issue_separation_certificate, render_bundle_summary, render_detector_summary,
+    BIFURCATION_DETECTOR_SCHEMA_VERSION, BifurcationDetectorConfig, BifurcationDetectorResult,
+    BifurcationSignal, BifurcationSignalKind, CERTIFICATE_BUNDLE_SCHEMA_VERSION, CertificateBundle,
+    ControllerPairId, ControllerTimescaleProfile, DEFAULT_MARGINAL_RATIO_MILLIONTHS,
+    DEFAULT_SUFFICIENT_RATIO_MILLIONTHS, PairTelemetrySnapshot, RecommendedAction,
+    STABILITY_WITNESS_SCHEMA_VERSION, SeparationVerdict, SignalSeverity, StabilityAssessment,
+    StabilityWitness, TIMESCALE_CERTIFICATE_BEAD_ID, TIMESCALE_CERTIFICATE_SCHEMA_VERSION,
+    TimescaleRatio, TimescaleSeparationCertificate, build_certificate_bundle,
+    compute_timescale_ratio, detect_bifurcation_signals, issue_separation_certificate,
+    render_bundle_summary, render_detector_summary,
 };
 
 // =========================================================================
@@ -155,10 +153,7 @@ fn certificate_sufficient_separation() {
     assert_eq!(cert.certificate_id, "cert-1");
     assert_eq!(cert.issued_epoch, 42);
     assert_eq!(cert.evidence_ids.len(), 1);
-    assert_eq!(
-        cert.schema_version,
-        TIMESCALE_CERTIFICATE_SCHEMA_VERSION
-    );
+    assert_eq!(cert.schema_version, TIMESCALE_CERTIFICATE_SCHEMA_VERSION);
 }
 
 #[test]
@@ -167,9 +162,7 @@ fn certificate_marginal_separation() {
     let fast = profile("gc", 200_000, 200_000);
     let slow = profile("monitor", 1_000_000, 1_000_000);
     let config = default_config();
-    let cert = issue_separation_certificate(
-        &fast, &slow, &config, "cert-2", 0, vec![],
-    );
+    let cert = issue_separation_certificate(&fast, &slow, &config, "cert-2", 0, vec![]);
     assert_eq!(cert.verdict, SeparationVerdict::Marginal);
 }
 
@@ -179,9 +172,7 @@ fn certificate_insufficient_separation() {
     let fast = profile("gc", 200_000, 200_000);
     let slow = profile("monitor", 300_000, 300_000);
     let config = default_config();
-    let cert = issue_separation_certificate(
-        &fast, &slow, &config, "cert-3", 0, vec![],
-    );
+    let cert = issue_separation_certificate(&fast, &slow, &config, "cert-3", 0, vec![]);
     assert_eq!(cert.verdict, SeparationVerdict::Insufficient);
 }
 
@@ -190,9 +181,7 @@ fn certificate_contains_both_profiles() {
     let fast = profile("gc", 100_000, 200_000);
     let slow = profile("monitor", 1_000_000, 2_000_000);
     let config = default_config();
-    let cert = issue_separation_certificate(
-        &fast, &slow, &config, "cert-4", 0, vec![],
-    );
+    let cert = issue_separation_certificate(&fast, &slow, &config, "cert-4", 0, vec![]);
     assert_eq!(cert.fast_profile.controller_id, "gc");
     assert_eq!(cert.slow_profile.controller_id, "monitor");
 }
@@ -204,9 +193,7 @@ fn certificate_with_custom_thresholds() {
     let mut config = default_config();
     // Lower sufficient threshold to 4x
     config.sufficient_ratio_millionths = 4_000_000;
-    let cert = issue_separation_certificate(
-        &fast, &slow, &config, "cert-5", 0, vec![],
-    );
+    let cert = issue_separation_certificate(&fast, &slow, &config, "cert-5", 0, vec![]);
     assert_eq!(cert.verdict, SeparationVerdict::Sufficient);
     assert_eq!(cert.sufficient_threshold_millionths, 4_000_000);
 }
@@ -225,7 +212,10 @@ fn bundle_two_controllers() {
     let bundle = build_certificate_bundle(&profiles, &config, 0);
     assert_eq!(bundle.pair_count, 1);
     assert_eq!(bundle.certificates.len(), 1);
-    assert_eq!(bundle.sufficient_count + bundle.marginal_count + bundle.insufficient_count, 1);
+    assert_eq!(
+        bundle.sufficient_count + bundle.marginal_count + bundle.insufficient_count,
+        1
+    );
 }
 
 #[test]
@@ -258,8 +248,8 @@ fn bundle_four_controllers_produces_six_pairs() {
 fn bundle_overall_verdict_is_worst_case() {
     // Mix: one pair has insufficient separation
     let profiles = vec![
-        profile("a", 100_000, 100_000),     // fast
-        profile("b", 150_000, 150_000),     // close to a -> insufficient
+        profile("a", 100_000, 100_000),       // fast
+        profile("b", 150_000, 150_000),       // close to a -> insufficient
         profile("c", 10_000_000, 10_000_000), // well separated from both
     ];
     let config = default_config();
@@ -311,7 +301,12 @@ fn detect_timescale_convergence() {
     ];
     let result = detect_bifurcation_signals(&telemetry, &config, 2);
     assert!(!result.signals.is_empty());
-    assert!(result.signals.iter().any(|s| s.kind == BifurcationSignalKind::TimescaleConvergence));
+    assert!(
+        result
+            .signals
+            .iter()
+            .any(|s| s.kind == BifurcationSignalKind::TimescaleConvergence)
+    );
 }
 
 #[test]
@@ -323,7 +318,12 @@ fn detect_variance_divergence() {
         snapshot("a", "b", 10_000_000, 500_000, 500_000, 2),
     ];
     let result = detect_bifurcation_signals(&telemetry, &config, 3);
-    assert!(result.signals.iter().any(|s| s.kind == BifurcationSignalKind::VarianceDivergence));
+    assert!(
+        result
+            .signals
+            .iter()
+            .any(|s| s.kind == BifurcationSignalKind::VarianceDivergence)
+    );
 }
 
 #[test]
@@ -334,7 +334,12 @@ fn detect_gain_exceedance() {
         snapshot("a", "b", 10_000_000, 50_000, 1_500_000, 1),
     ];
     let result = detect_bifurcation_signals(&telemetry, &config, 2);
-    assert!(result.signals.iter().any(|s| s.kind == BifurcationSignalKind::GainExceedance));
+    assert!(
+        result
+            .signals
+            .iter()
+            .any(|s| s.kind == BifurcationSignalKind::GainExceedance)
+    );
 }
 
 #[test]
@@ -352,9 +357,7 @@ fn detect_multiple_signal_types() {
 #[test]
 fn detect_single_snapshot_produces_no_signal() {
     let config = default_config();
-    let telemetry = vec![
-        snapshot("a", "b", 2_000_000, 50_000, 500_000, 0),
-    ];
+    let telemetry = vec![snapshot("a", "b", 2_000_000, 50_000, 500_000, 0)];
     let result = detect_bifurcation_signals(&telemetry, &config, 1);
     // With a single snapshot, convergence and variance checks need >= 2 or >= 3 snapshots
     // Only gain exceedance can trigger on a single snapshot
@@ -392,8 +395,7 @@ fn assessment_escalates_with_critical_signal() {
     // Gain exceedance is critical -> ImmediateActionRequired
     assert!(matches!(
         result.assessment,
-        StabilityAssessment::InterventionRecommended
-        | StabilityAssessment::ImmediateActionRequired
+        StabilityAssessment::InterventionRecommended | StabilityAssessment::ImmediateActionRequired
     ));
 }
 
@@ -410,7 +412,11 @@ fn witnesses_created_for_critical_signals() {
     ];
     let result = detect_bifurcation_signals(&telemetry, &config, 2);
     // Critical signals should generate witnesses
-    if result.signals.iter().any(|s| s.severity == SignalSeverity::Critical) {
+    if result
+        .signals
+        .iter()
+        .any(|s| s.severity == SignalSeverity::Critical)
+    {
         assert!(!result.witnesses.is_empty());
     }
 }
@@ -439,11 +445,15 @@ fn certificate_serde_round_trip() {
     let slow = profile("monitor", 1_000_000, 2_000_000);
     let config = default_config();
     let cert = issue_separation_certificate(
-        &fast, &slow, &config, "cert-serde", 0, vec!["ev-1".to_string()],
+        &fast,
+        &slow,
+        &config,
+        "cert-serde",
+        0,
+        vec!["ev-1".to_string()],
     );
     let json = serde_json::to_string(&cert).expect("serialize");
-    let deser: TimescaleSeparationCertificate =
-        serde_json::from_str(&json).expect("deserialize");
+    let deser: TimescaleSeparationCertificate = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(cert, deser);
 }
 
@@ -471,8 +481,7 @@ fn detector_result_serde_round_trip() {
     ];
     let result = detect_bifurcation_signals(&telemetry, &config, 3);
     let json = serde_json::to_string(&result).expect("serialize");
-    let deser: BifurcationDetectorResult =
-        serde_json::from_str(&json).expect("deserialize");
+    let deser: BifurcationDetectorResult = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(result, deser);
 }
 
@@ -480,8 +489,7 @@ fn detector_result_serde_round_trip() {
 fn profile_serde_round_trip() {
     let p = profile("ctrl", 500_000, 750_000);
     let json = serde_json::to_string(&p).expect("serialize");
-    let deser: ControllerTimescaleProfile =
-        serde_json::from_str(&json).expect("deserialize");
+    let deser: ControllerTimescaleProfile = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(p, deser);
 }
 
@@ -542,8 +550,7 @@ fn witness_serde_round_trip() {
 fn config_serde_round_trip() {
     let config = default_config();
     let json = serde_json::to_string(&config).expect("serialize");
-    let deser: BifurcationDetectorConfig =
-        serde_json::from_str(&json).expect("deserialize");
+    let deser: BifurcationDetectorConfig = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(config, deser);
 }
 
@@ -551,8 +558,7 @@ fn config_serde_round_trip() {
 fn telemetry_snapshot_serde_round_trip() {
     let s = snapshot("a", "b", 5_000_000, 100_000, 800_000, 3);
     let json = serde_json::to_string(&s).expect("serialize");
-    let deser: PairTelemetrySnapshot =
-        serde_json::from_str(&json).expect("deserialize");
+    let deser: PairTelemetrySnapshot = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(s, deser);
 }
 
@@ -621,7 +627,10 @@ fn controller_pair_display() {
 fn separation_verdict_display() {
     assert_eq!(format!("{}", SeparationVerdict::Sufficient), "sufficient");
     assert_eq!(format!("{}", SeparationVerdict::Marginal), "marginal");
-    assert_eq!(format!("{}", SeparationVerdict::Insufficient), "insufficient");
+    assert_eq!(
+        format!("{}", SeparationVerdict::Insufficient),
+        "insufficient"
+    );
 }
 
 #[test]
@@ -751,9 +760,10 @@ fn multiple_pairs_in_telemetry() {
     ];
     let result = detect_bifurcation_signals(&telemetry, &config, 2);
     // a-b is stable, c-d shows convergence
-    assert!(result.signals.iter().any(|s|
-        s.pair.fast_controller == "c" && s.kind == BifurcationSignalKind::TimescaleConvergence
-    ));
+    assert!(
+        result.signals.iter().any(|s| s.pair.fast_controller == "c"
+            && s.kind == BifurcationSignalKind::TimescaleConvergence)
+    );
 }
 
 // =========================================================================
@@ -765,9 +775,7 @@ fn certificate_json_has_expected_fields() {
     let fast = profile("gc", 100_000, 200_000);
     let slow = profile("monitor", 1_000_000, 2_000_000);
     let config = default_config();
-    let cert = issue_separation_certificate(
-        &fast, &slow, &config, "cert-json", 0, vec![],
-    );
+    let cert = issue_separation_certificate(&fast, &slow, &config, "cert-json", 0, vec![]);
     let val: serde_json::Value = serde_json::to_value(&cert).expect("to_value");
     assert!(val.get("schema_version").is_some());
     assert!(val.get("bead_id").is_some());

@@ -370,13 +370,18 @@ fn default_v1_session_has_empty_log() {
 fn empty_session_renders_empty_jsonl() {
     let session = BoundaryCaptureSession::default_v1();
     let rendered = session.log().render_jsonl().expect("render succeeds");
-    assert!(rendered.is_empty(), "empty session should produce empty JSONL");
+    assert!(
+        rendered.is_empty(),
+        "empty session should produce empty JSONL"
+    );
 }
 
 #[test]
 fn empty_session_minimal_replay_plans_returns_empty_ok() {
     let session = BoundaryCaptureSession::default_v1();
-    let plans = session.minimal_replay_plans().expect("no captures, no errors");
+    let plans = session
+        .minimal_replay_plans()
+        .expect("no captures, no errors");
     assert!(plans.is_empty());
 }
 
@@ -558,8 +563,7 @@ fn contract_bead_id_is_stable() {
 
 #[test]
 fn contract_version_matches_json_artifact() {
-    let from_json: BoundaryCaptureContract =
-        serde_json::from_str(CONTRACT_JSON).expect("parse");
+    let from_json: BoundaryCaptureContract = serde_json::from_str(CONTRACT_JSON).expect("parse");
     let from_code = BoundaryCaptureContract::default_v1();
     assert_eq!(from_json.schema_version, from_code.schema_version);
     assert_eq!(from_json.bead_id, from_code.bead_id);
@@ -619,7 +623,10 @@ fn clock_read_capture_sets_correct_minimal_fields() {
         .capture_clock_read(&ctx, "wall", "realtime", 1234, None)
         .expect("capture");
     assert_eq!(record.minimal_fields.get("clock_id").unwrap(), "wall");
-    assert_eq!(record.minimal_fields.get("clock_domain").unwrap(), "realtime");
+    assert_eq!(
+        record.minimal_fields.get("clock_domain").unwrap(),
+        "realtime"
+    );
     assert_eq!(record.minimal_fields.get("observed_tick").unwrap(), "1234");
 }
 
@@ -652,7 +659,10 @@ fn hardware_surface_read_capture_records_surface_kind() {
     let record = session
         .capture_hardware_surface_read(&ctx, "tpm_quote", "meas-dig", "drv-dig", None)
         .expect("capture");
-    assert_eq!(record.minimal_fields.get("surface_kind").unwrap(), "tpm_quote");
+    assert_eq!(
+        record.minimal_fields.get("surface_kind").unwrap(),
+        "tpm_quote"
+    );
     assert_eq!(record.boundary_class, BoundaryClass::HardwareSurfaceRead);
 }
 
@@ -664,7 +674,10 @@ fn randomness_draw_capture_records_draw_index() {
         .capture_randomness_draw(&ctx, "chacha20", 7, "sample-dig", None)
         .expect("capture");
     assert_eq!(record.minimal_fields.get("draw_index").unwrap(), "7");
-    assert_eq!(record.minimal_fields.get("generator_id").unwrap(), "chacha20");
+    assert_eq!(
+        record.minimal_fields.get("generator_id").unwrap(),
+        "chacha20"
+    );
 }
 
 #[test]
@@ -675,7 +688,10 @@ fn escalation_on_clock_read_marks_needs_escalation() {
         .capture_clock_read(&ctx, "sys", "monotonic", 0, Some("clock-non-monotonic"))
         .expect("capture");
     assert_eq!(record.sufficiency, ReplaySufficiency::NeedsEscalation);
-    assert_eq!(record.escalation_reason.as_deref(), Some("clock-non-monotonic"));
+    assert_eq!(
+        record.escalation_reason.as_deref(),
+        Some("clock-non-monotonic")
+    );
 }
 
 #[test]

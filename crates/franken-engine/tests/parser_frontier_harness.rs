@@ -284,7 +284,11 @@ fn fixture_schema_version_follows_naming_convention() {
 fn fixture_contract_version_is_semver() {
     let fixture = load_fixture();
     let parts: Vec<&str> = fixture.contract_version.split('.').collect();
-    assert_eq!(parts.len(), 3, "contract_version must be semver (major.minor.patch)");
+    assert_eq!(
+        parts.len(),
+        3,
+        "contract_version must be semver (major.minor.patch)"
+    );
     for part in &parts {
         part.parse::<u32>()
             .unwrap_or_else(|_| panic!("semver component `{part}` is not a valid integer"));
@@ -561,7 +565,10 @@ fn script_references_all_required_artifacts() {
     let fixture = load_fixture();
     let script = load_script();
     for artifact in &fixture.required_artifacts {
-        let artifact_stem = artifact.trim_end_matches(".json").trim_end_matches(".jsonl").trim_end_matches(".txt");
+        let artifact_stem = artifact
+            .trim_end_matches(".json")
+            .trim_end_matches(".jsonl")
+            .trim_end_matches(".txt");
         assert!(
             script.contains(artifact_stem),
             "script does not reference artifact stem `{artifact_stem}` (from `{artifact}`)"
@@ -679,10 +686,18 @@ fn log_schema_validator_checks_all_required_event_keys() {
 #[test]
 fn log_schema_validator_rejects_sensitive_keys() {
     let validator = load_log_schema_validator();
-    for sensitive_pattern in ["password", "secret", "api_key", "private_key", "access_token"] {
+    for sensitive_pattern in [
+        "password",
+        "secret",
+        "api_key",
+        "private_key",
+        "access_token",
+    ] {
         assert!(
             validator.contains(sensitive_pattern)
-                || validator.to_lowercase().contains(&sensitive_pattern.replace('_', "[_-]?")),
+                || validator
+                    .to_lowercase()
+                    .contains(&sensitive_pattern.replace('_', "[_-]?")),
             "validator must check for sensitive pattern `{sensitive_pattern}`"
         );
     }
@@ -894,7 +909,13 @@ fn event_with_fail_outcome_has_non_null_error_code() {
 fn manifest_keys_include_essential_tracing_fields() {
     let fixture = load_fixture();
     let manifest_keys: BTreeSet<_> = fixture.required_manifest_keys.iter().cloned().collect();
-    for essential in ["trace_id", "decision_id", "policy_id", "schema_version", "bead_id"] {
+    for essential in [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "schema_version",
+        "bead_id",
+    ] {
         assert!(
             manifest_keys.contains(essential),
             "manifest keys must include `{essential}`"

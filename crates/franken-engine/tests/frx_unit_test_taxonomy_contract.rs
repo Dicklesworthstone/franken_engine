@@ -749,9 +749,7 @@ fn fixture_registry_coverage_matrix_and_gaps() {
         matrix.get(&(TestClass::Core, TestSurface::Runtime)),
         Some(&1)
     );
-    assert!(
-        !matrix.contains_key(&(TestClass::Edge, TestSurface::Parser))
-    );
+    assert!(!matrix.contains_key(&(TestClass::Edge, TestSurface::Parser)));
 
     let gaps = registry.coverage_gaps();
     // Should have gaps for everything except Core+Parser and Core+Runtime

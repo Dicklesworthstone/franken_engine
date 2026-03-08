@@ -363,8 +363,11 @@ fn module_cache_multiple_inserts_tracked_by_telemetry() {
     let ctx = CacheContext::new("trace-multi", "decision-multi", "policy-multi");
 
     for i in 0..3 {
-        let version =
-            ModuleVersionFingerprint::new(ContentHash::compute(format!("mod-{i}").as_bytes()), 1, 1);
+        let version = ModuleVersionFingerprint::new(
+            ContentHash::compute(format!("mod-{i}").as_bytes()),
+            1,
+            1,
+        );
         cache
             .insert(
                 CacheInsertRequest::new(

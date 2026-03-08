@@ -486,7 +486,9 @@ fn gate_runner_manifest_schema_version_is_non_empty() {
 fn required_artifacts_include_run_manifest_json() {
     let contract = parse_contract();
     assert!(
-        contract.required_artifacts.contains(&"run_manifest.json".to_owned()),
+        contract
+            .required_artifacts
+            .contains(&"run_manifest.json".to_owned()),
         "required_artifacts must include run_manifest.json"
     );
 }
@@ -495,7 +497,9 @@ fn required_artifacts_include_run_manifest_json() {
 fn required_artifacts_include_events_jsonl() {
     let contract = parse_contract();
     assert!(
-        contract.required_artifacts.contains(&"events.jsonl".to_owned()),
+        contract
+            .required_artifacts
+            .contains(&"events.jsonl".to_owned()),
         "required_artifacts must include events.jsonl"
     );
 }
@@ -504,7 +508,9 @@ fn required_artifacts_include_events_jsonl() {
 fn required_artifacts_include_commands_txt() {
     let contract = parse_contract();
     assert!(
-        contract.required_artifacts.contains(&"commands.txt".to_owned()),
+        contract
+            .required_artifacts
+            .contains(&"commands.txt".to_owned()),
         "required_artifacts must include commands.txt"
     );
 }
@@ -524,7 +530,9 @@ fn required_log_keys_include_trace_id() {
 fn required_log_keys_include_decision_id() {
     let contract = parse_contract();
     assert!(
-        contract.required_log_keys.contains(&"decision_id".to_owned()),
+        contract
+            .required_log_keys
+            .contains(&"decision_id".to_owned()),
         "required_log_keys must include decision_id"
     );
 }

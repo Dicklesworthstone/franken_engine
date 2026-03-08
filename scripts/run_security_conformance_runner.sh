@@ -355,17 +355,17 @@ resolve_evidence_path() {
     return 1
   fi
 
+  evidence_path="$parsed"
+
   if [[ -f "$parsed" ]]; then
-    evidence_path="$parsed"
     return 0
   fi
 
   if [[ -f "${root_dir}/${parsed}" ]]; then
-    evidence_path="$parsed"
     return 0
   fi
 
-  return 1
+  return 2
 }
 
 security_summary_outcome() {
@@ -378,9 +378,35 @@ security_summary_failure_reasons_json() {
   jq -c 'select(.event == "summary") | (.gate_failure_reasons // [])' "$summary_path" | tail -n1
 }
 
+security_stdout_outcome() {
+  local parsed
+
+  parsed="$(rch_strip_ansi "$runner_stdout_path" | sed -n 's/^security gate_pass=//p' | tail -n1 || true)"
+  case "$parsed" in
+    true)
+      printf 'pass\n'
+      return 0
+      ;;
+    false)
+      printf 'fail\n'
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+security_stdout_failure_reasons_json() {
+  rch_strip_ansi "$runner_stdout_path" \
+    | sed -n 's/^security gate_failure_reason=//p' \
+    | jq -R -s 'split("\n") | map(select(length > 0))'
+}
+
 run_mode() {
   local selected_mode="${1:-$mode}"
   local runner_command runner_remote_exit_code run_status gate_failure_reasons_pretty
+  local evidence_resolution_status
 
   case "$selected_mode" in
     check)
@@ -409,24 +435,41 @@ run_mode() {
       build_runner_args
       runner_command="cargo run -p frankenengine-engine --bin franken_security_conformance_runner -- $(render_runner_args)"
       run_status=0
+      evidence_resolution_status=0
       run_step_core "$runner_command" 0 "$runner_stdout_path" \
         cargo run -p frankenengine-engine --bin franken_security_conformance_runner -- "${runner_args[@]}" || run_status=$?
       # Defensively re-check remote exit from captured log so timeout exits are
       # reported deterministically even if earlier step parsing misses it.
       runner_remote_exit_code="$(rch_remote_exit_code "$runner_stdout_path" || true)"
-      if ! resolve_evidence_path; then
+      resolve_evidence_path || evidence_resolution_status=$?
+      if [[ "$evidence_resolution_status" -eq 1 ]]; then
+        if [[ "$run_status" -ne 0 || ( -n "$runner_remote_exit_code" && "$runner_remote_exit_code" != "0" ) ]]; then
+          if [[ -z "$failed_command" ]]; then
+            failed_command="${runner_command} (missing-or-unresolvable-evidence-path)"
+          fi
+          return 1
+        fi
         failed_command="${runner_command} (missing-or-unresolvable-evidence-path)"
         return 1
       fi
-      gate_outcome="$(security_summary_outcome "$evidence_path" || true)"
-      gate_failure_reasons_json="$(security_summary_failure_reasons_json "$evidence_path" || echo '[]')"
+      if [[ -f "$evidence_path" || -f "${root_dir}/${evidence_path}" ]]; then
+        gate_outcome="$(security_summary_outcome "$evidence_path" || true)"
+        gate_failure_reasons_json="$(security_summary_failure_reasons_json "$evidence_path" || echo '[]')"
+      else
+        gate_outcome="$(security_stdout_outcome || true)"
+        gate_failure_reasons_json="$(security_stdout_failure_reasons_json || echo '[]')"
+      fi
       if [[ -z "$gate_outcome" ]]; then
         failed_command="${runner_command} (missing-summary-outcome)"
         return 1
       fi
       if [[ "$gate_outcome" != "pass" ]]; then
         gate_failure_reasons_pretty="$(printf '%s' "$gate_failure_reasons_json" | jq -r 'join("; ")')"
-        failed_command="${runner_command} (gate-outcome=${gate_outcome}${gate_failure_reasons_pretty:+, reasons=${gate_failure_reasons_pretty}})"
+        failed_command="${runner_command} (gate-outcome=${gate_outcome}${gate_failure_reasons_pretty:+, reasons=${gate_failure_reasons_pretty}}${evidence_resolution_status:+, evidence-not-retrieved})"
+        return 1
+      fi
+      if [[ "$evidence_resolution_status" -eq 2 ]]; then
+        failed_command="${runner_command} (gate-outcome=pass, evidence-not-retrieved)"
         return 1
       fi
       if [[ -n "$runner_remote_exit_code" && "$runner_remote_exit_code" != "0" ]]; then

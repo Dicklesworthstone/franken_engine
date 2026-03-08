@@ -392,8 +392,8 @@ pub fn compute_chunk_plan(input: &[u8], max_workers: u32) -> ChunkPlan {
         };
     }
 
-    let worker_count = max_workers.min(len as u32);
-    let boundaries = collect_partition_boundaries(input);
+    let mut boundaries = collect_partition_boundaries(input);
+    boundaries.retain(|boundary| boundary.end < len);
     if boundaries.is_empty() {
         let chunks = vec![(0, len)];
         let plan_hash = compute_plan_hash(&chunks);
@@ -403,6 +403,7 @@ pub fn compute_chunk_plan(input: &[u8], max_workers: u32) -> ChunkPlan {
             worker_count: 1,
         };
     }
+    let worker_count = max_workers.min(len as u32).min(boundaries.len() as u32 + 1);
 
     let mut chunks = Vec::new();
     let mut start = 0u64;
@@ -421,8 +422,18 @@ pub fn compute_chunk_plan(input: &[u8], max_workers: u32) -> ChunkPlan {
         } else {
             let ideal = start + ((len - start) / remaining_chunks);
             let max_end = len.saturating_sub(remaining_chunks - 1);
-            let selected =
-                select_partition_end(&boundaries, start, ideal, max_end).unwrap_or(max_end);
+            let selected = match select_partition_end(&boundaries, start, ideal, max_end) {
+                Some(end) => end,
+                None => {
+                    let chunks = vec![(0, len)];
+                    let plan_hash = compute_plan_hash(&chunks);
+                    return ChunkPlan {
+                        chunks,
+                        plan_hash,
+                        worker_count: 1,
+                    };
+                }
+            };
             let end = selected.max(start + 1).min(max_end);
             chunks.push((start, end));
             start = end;
@@ -1731,7 +1742,10 @@ pub fn parse(input: &ParseInput<'_>) -> Result<ParseOutput, ParseError> {
     for chunk_index in replay_order {
         let (start, end) = chunk_plan.chunks[chunk_index as usize];
         let chunk_bytes = &bytes[start as usize..end as usize];
-        let chunk_str = std::str::from_utf8(chunk_bytes).unwrap_or("");
+        let chunk_str = std::str::from_utf8(chunk_bytes).map_err(|err| ParseError::LexerError {
+            chunk_index,
+            detail: format!("chunk split invalid UTF-8: {err}"),
+        })?;
         match simd_lexer::lex(chunk_str, &lexer_config) {
             Ok(output) => {
                 let elapsed_us = deterministic_chunk_elapsed_us(

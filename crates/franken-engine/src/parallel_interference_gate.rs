@@ -285,6 +285,7 @@ pub struct FlakeRate {
 impl FlakeRate {
     /// Compute flake rate from raw counts.
     pub fn compute(total_runs: u64, mismatched_runs: u64, threshold_millionths: u64) -> Self {
+        let mismatched_runs = mismatched_runs.min(total_runs);
         let rate_millionths = if total_runs > 0 {
             mismatched_runs
                 .checked_mul(1_000_000)
@@ -1950,9 +1951,11 @@ mod tests {
 
     #[test]
     fn flake_rate_mismatched_exceeds_total_clamped() {
-        // If mismatched > total, rate should still be 1_000_000.
+        // If mismatched > total, clamp to 100%.
         let fr = FlakeRate::compute(5, 10, 0);
-        assert!(fr.rate_millionths >= 1_000_000);
+        assert_eq!(fr.mismatched_runs, 5);
+        assert_eq!(fr.rate_millionths, 1_000_000);
+        assert!(!fr.within_threshold);
     }
 
     #[test]

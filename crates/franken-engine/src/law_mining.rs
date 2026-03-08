@@ -475,7 +475,7 @@ pub struct LawMiningValidation {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LawMiningFixture {
     pub generated_epoch: u64,
     pub counterexamples: Vec<SynthesizedCounterexample>,

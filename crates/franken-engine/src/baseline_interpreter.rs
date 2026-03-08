@@ -20,6 +20,7 @@
 //! Plan reference: Section 10.2 item 8, bd-2f8.
 //! Dependencies: bd-crp (parser), bd-1wa (IR contract), bd-20b (slot registry).
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -96,6 +97,10 @@ impl Value {
         }
     }
 
+    pub fn is_nullish(&self) -> bool {
+        matches!(self, Self::Undefined | Self::Null)
+    }
+
     /// Type name for error messages.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -105,6 +110,17 @@ impl Value {
             Self::Int(_) => "number",
             Self::Str(_) => "string",
             Self::Object(_) => "object",
+            Self::Function(_) => "function",
+        }
+    }
+
+    pub fn typeof_name(&self) -> &'static str {
+        match self {
+            Self::Undefined => "undefined",
+            Self::Null | Self::Object(_) => "object",
+            Self::Bool(_) => "boolean",
+            Self::Int(_) => "number",
+            Self::Str(_) => "string",
             Self::Function(_) => "function",
         }
     }
@@ -137,6 +153,8 @@ pub struct ObjectId(pub u32);
 pub struct HeapObject {
     /// Property storage (BTreeMap for deterministic ordering).
     pub properties: BTreeMap<String, Value>,
+    /// Constructor function index that allocated this object via `Construct`.
+    pub constructor_function: Option<u32>,
 }
 
 impl HeapObject {
@@ -499,6 +517,14 @@ impl InterpreterCore {
                         self.ip += 1;
                     }
                 }
+                Ir3Instruction::JumpIfNullish { cond, target } => {
+                    let val = self.read_reg(cond)?;
+                    if val.is_nullish() {
+                        self.ip = target as usize;
+                    } else {
+                        self.ip += 1;
+                    }
+                }
                 Ir3Instruction::Call { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
                     match callee_val {
@@ -622,11 +648,7 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let key_str = match &key_val {
-                        Value::Str(s) => s.clone(),
-                        Value::Int(n) => n.to_string(),
-                        _ => key_val.to_string(),
-                    };
+                    let key_str = Self::property_key(&key_val);
 
                     match obj_val {
                         Value::Object(oid) => {
@@ -654,11 +676,7 @@ impl InterpreterCore {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
-                    let key_str = match &key_val {
-                        Value::Str(s) => s.clone(),
-                        Value::Int(n) => n.to_string(),
-                        _ => key_val.to_string(),
-                    };
+                    let key_str = Self::property_key(&key_val);
 
                     match obj_val {
                         Value::Object(oid) => {
@@ -677,58 +695,163 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
+                Ir3Instruction::DeleteProperty { obj, key, dst } => {
+                    let obj_val = self.read_reg(obj)?;
+                    let key_val = self.read_reg(key)?;
+
+                    match obj_val {
+                        Value::Object(oid) => {
+                            let heap_obj = self
+                                .heap
+                                .get_mut(oid.0 as usize)
+                                .ok_or(InterpreterError::ObjectNotFound { id: oid.0 })?;
+                            heap_obj.properties.remove(&Self::property_key(&key_val));
+                            self.write_reg(dst, Value::Bool(true))?;
+                        }
+                        _ => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object".to_string(),
+                                got: obj_val.type_name().to_string(),
+                            });
+                        }
+                    }
+                    self.ip += 1;
+                }
                 Ir3Instruction::NewObject { dst } | Ir3Instruction::NewArray { dst } => {
                     let id = self.alloc_object();
                     self.write_reg(dst, Value::Object(id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Mod { dst, lhs, rhs } => {
-                    let result = self.eval_arith(lhs, rhs, "mod")?;
+                    let result = self.eval_mod(lhs, rhs)?;
                     self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Exp { dst, lhs, rhs } => {
-                    let result = self.eval_arith(lhs, rhs, "exp")?;
+                    let result = self.eval_exp(lhs, rhs)?;
                     self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
-                Ir3Instruction::Lt { dst, .. }
-                | Ir3Instruction::Lte { dst, .. }
-                | Ir3Instruction::Gt { dst, .. }
-                | Ir3Instruction::Gte { dst, .. }
-                | Ir3Instruction::Eq { dst, .. }
-                | Ir3Instruction::StrictEq { dst, .. }
-                | Ir3Instruction::NotEq { dst, .. }
-                | Ir3Instruction::StrictNotEq { dst, .. } => {
-                    // Comparison operations — stub as false for now.
-                    self.write_reg(dst, Value::Bool(false))?;
-                    self.ip += 1;
-                }
-                Ir3Instruction::BitAnd { dst, lhs, rhs }
-                | Ir3Instruction::BitOr { dst, lhs, rhs }
-                | Ir3Instruction::BitXor { dst, lhs, rhs }
-                | Ir3Instruction::Shl { dst, lhs, rhs }
-                | Ir3Instruction::Shr { dst, lhs, rhs }
-                | Ir3Instruction::Ushr { dst, lhs, rhs } => {
-                    let result = self.eval_arith(lhs, rhs, "bitop")?;
+                Ir3Instruction::UnaryNeg { dst, src } => {
+                    let result = self.eval_unary_neg(src)?;
                     self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
-                Ir3Instruction::InstanceOf { dst, .. } | Ir3Instruction::InOp { dst, .. } => {
-                    self.write_reg(dst, Value::Bool(false))?;
+                Ir3Instruction::UnaryPlus { dst, src } => {
+                    let result = self.eval_unary_plus(src)?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::LogicalNot { dst, src } => {
+                    let val = self.read_reg(src)?;
+                    self.write_reg(dst, Value::Bool(!val.is_truthy()))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::BitNot { dst, src } => {
+                    let result = self.eval_bit_not(src)?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::TypeOf { dst, src } => {
+                    let val = self.read_reg(src)?;
+                    self.write_reg(dst, Value::Str(val.typeof_name().to_string()))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Void { dst, src } => {
+                    let _ = self.read_reg(src)?;
+                    self.write_reg(dst, Value::Undefined)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Lt { dst, lhs, rhs } => {
+                    let result = self.eval_relational(lhs, rhs, "<")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Lte { dst, lhs, rhs } => {
+                    let result = self.eval_relational(lhs, rhs, "<=")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Gt { dst, lhs, rhs } => {
+                    let result = self.eval_relational(lhs, rhs, ">")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Gte { dst, lhs, rhs } => {
+                    let result = self.eval_relational(lhs, rhs, ">=")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Eq { dst, lhs, rhs } => {
+                    let result = self.eval_equality(lhs, rhs, false, false)?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::StrictEq { dst, lhs, rhs } => {
+                    let result = self.eval_equality(lhs, rhs, true, false)?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::NotEq { dst, lhs, rhs } => {
+                    let result = self.eval_equality(lhs, rhs, false, true)?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::StrictNotEq { dst, lhs, rhs } => {
+                    let result = self.eval_equality(lhs, rhs, true, true)?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::BitAnd { dst, lhs, rhs } => {
+                    let result = self.eval_bitwise(lhs, rhs, "&")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::BitOr { dst, lhs, rhs } => {
+                    let result = self.eval_bitwise(lhs, rhs, "|")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::BitXor { dst, lhs, rhs } => {
+                    let result = self.eval_bitwise(lhs, rhs, "^")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Shl { dst, lhs, rhs } => {
+                    let result = self.eval_bitwise(lhs, rhs, "<<")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Shr { dst, lhs, rhs } => {
+                    let result = self.eval_bitwise(lhs, rhs, ">>")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Ushr { dst, lhs, rhs } => {
+                    let result = self.eval_bitwise(lhs, rhs, ">>>")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::InstanceOf { dst, lhs, rhs } => {
+                    let result = self.eval_instanceof(lhs, rhs)?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::InOp { dst, lhs, rhs } => {
+                    let result = self.eval_in_operator(lhs, rhs)?;
+                    self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
                     match callee_val {
                         Value::Function(func_idx) => {
-                            let func =
-                                module.function_table.get(func_idx as usize).ok_or(
-                                    InterpreterError::FunctionNotFound {
-                                        index: func_idx,
-                                        table_size: module.function_table.len() as u32,
-                                    },
-                                )?;
+                            let func = module.function_table.get(func_idx as usize).ok_or(
+                                InterpreterError::FunctionNotFound {
+                                    index: func_idx,
+                                    table_size: module.function_table.len() as u32,
+                                },
+                            )?;
 
                             if self.call_stack.len() >= self.config.max_call_depth {
                                 return Err(InterpreterError::StackOverflow {
@@ -739,6 +862,9 @@ impl InterpreterCore {
 
                             // Allocate the `this` object for the constructor.
                             let this_id = self.alloc_object();
+                            if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
+                                this_obj.constructor_function = Some(func_idx);
+                            }
                             let this_val = Value::Object(this_id);
 
                             let mut arg_vals = Vec::new();
@@ -756,13 +882,11 @@ impl InterpreterCore {
                             });
 
                             self.register_base += self.config.max_registers as usize;
-                            let req_len =
-                                self.register_base + self.config.max_registers as usize;
+                            let req_len = self.register_base + self.config.max_registers as usize;
                             if req_len > self.registers.len() {
                                 self.registers.resize(req_len, Value::Undefined);
                             } else {
-                                self.registers[self.register_base..req_len]
-                                    .fill(Value::Undefined);
+                                self.registers[self.register_base..req_len].fill(Value::Undefined);
                             }
 
                             // Register 0 = `this` for the constructor body.
@@ -856,6 +980,227 @@ impl InterpreterCore {
                 expected: "number".to_string(),
                 got: format!("{} / {}", a.type_name(), b.type_name()),
             }),
+        }
+    }
+
+    fn eval_mod(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+        let a = self.read_reg(lhs)?;
+        let b = self.read_reg(rhs)?;
+        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} % {}", a.type_name(), b.type_name()),
+        })?;
+        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} % {}", a.type_name(), b.type_name()),
+        })?;
+        if y == 0 {
+            return Err(InterpreterError::DivisionByZero);
+        }
+        Ok(Value::Int(x.checked_rem(y).unwrap_or(0)))
+    }
+
+    fn eval_exp(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+        let a = self.read_reg(lhs)?;
+        let b = self.read_reg(rhs)?;
+        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} ** {}", a.type_name(), b.type_name()),
+        })?;
+        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} ** {}", a.type_name(), b.type_name()),
+        })?;
+        let exp = u32::try_from(y).map_err(|_| InterpreterError::TypeError {
+            expected: "non-negative exponent".to_string(),
+            got: y.to_string(),
+        })?;
+        Ok(Value::Int(x.wrapping_pow(exp)))
+    }
+
+    fn eval_unary_plus(&self, src: u32) -> Result<Value, InterpreterError> {
+        let value = self.read_reg(src)?;
+        let number = Self::coerce_to_number(&value).ok_or(InterpreterError::TypeError {
+            expected: "number-coercible primitive".to_string(),
+            got: value.type_name().to_string(),
+        })?;
+        Ok(Value::Int(number))
+    }
+
+    fn eval_unary_neg(&self, src: u32) -> Result<Value, InterpreterError> {
+        let value = self.read_reg(src)?;
+        let number = Self::coerce_to_number(&value).ok_or(InterpreterError::TypeError {
+            expected: "number-coercible primitive".to_string(),
+            got: value.type_name().to_string(),
+        })?;
+        Ok(Value::Int(number.wrapping_neg()))
+    }
+
+    fn eval_bit_not(&self, src: u32) -> Result<Value, InterpreterError> {
+        let value = self.read_reg(src)?;
+        let number = Self::coerce_to_number(&value).ok_or(InterpreterError::TypeError {
+            expected: "number-coercible primitive".to_string(),
+            got: value.type_name().to_string(),
+        })?;
+        Ok(Value::Int((!(number as i32)) as i64))
+    }
+
+    fn eval_relational(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
+        let a = self.read_reg(lhs)?;
+        let b = self.read_reg(rhs)?;
+        let ordering = if let (Value::Str(x), Value::Str(y)) = (&a, &b) {
+            Some(x.cmp(y))
+        } else {
+            let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+                expected: "comparable primitive".to_string(),
+                got: format!("{} {op} {}", a.type_name(), b.type_name()),
+            })?;
+            let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+                expected: "comparable primitive".to_string(),
+                got: format!("{} {op} {}", a.type_name(), b.type_name()),
+            })?;
+            Some(x.cmp(&y))
+        };
+
+        let result = match op {
+            "<" => matches!(ordering, Some(Ordering::Less)),
+            "<=" => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
+            ">" => matches!(ordering, Some(Ordering::Greater)),
+            ">=" => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
+            _ => unreachable!(),
+        };
+        Ok(Value::Bool(result))
+    }
+
+    fn eval_equality(
+        &self,
+        lhs: u32,
+        rhs: u32,
+        strict: bool,
+        negate: bool,
+    ) -> Result<Value, InterpreterError> {
+        let a = self.read_reg(lhs)?;
+        let b = self.read_reg(rhs)?;
+        let matches = if strict {
+            a == b
+        } else {
+            Self::abstract_eq_values(&a, &b)
+        };
+        Ok(Value::Bool(if negate { !matches } else { matches }))
+    }
+
+    fn eval_bitwise(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
+        let a = self.read_reg(lhs)?;
+        let b = self.read_reg(rhs)?;
+        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} {op} {}", a.type_name(), b.type_name()),
+        })?;
+        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} {op} {}", a.type_name(), b.type_name()),
+        })?;
+
+        let lhs32 = x as i32;
+        let rhs32 = y as i32;
+        let shift = (y as u32) & 31;
+        let result = match op {
+            "&" => (lhs32 & rhs32) as i64,
+            "|" => (lhs32 | rhs32) as i64,
+            "^" => (lhs32 ^ rhs32) as i64,
+            "<<" => lhs32.wrapping_shl(shift) as i64,
+            ">>" => lhs32.wrapping_shr(shift) as i64,
+            ">>>" => (x as u32).wrapping_shr(shift) as i64,
+            _ => unreachable!(),
+        };
+        Ok(Value::Int(result))
+    }
+
+    fn eval_instanceof(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+        let candidate = self.read_reg(lhs)?;
+        let constructor = self.read_reg(rhs)?;
+        let func_idx = match constructor {
+            Value::Function(func_idx) => func_idx,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "function".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+
+        let matches = match candidate {
+            Value::Object(object_id) => {
+                let heap_obj = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                heap_obj.constructor_function == Some(func_idx)
+            }
+            _ => false,
+        };
+        Ok(Value::Bool(matches))
+    }
+
+    fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+        let key = self.read_reg(lhs)?;
+        let target = self.read_reg(rhs)?;
+        match target {
+            Value::Object(object_id) => {
+                let heap_obj = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                Ok(Value::Bool(
+                    heap_obj.properties.contains_key(&Self::property_key(&key)),
+                ))
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn property_key(value: &Value) -> String {
+        match value {
+            Value::Str(s) => s.clone(),
+            Value::Int(n) => n.to_string(),
+            _ => value.to_string(),
+        }
+    }
+
+    fn coerce_to_number(value: &Value) -> Option<i64> {
+        match value {
+            Value::Int(n) => Some(*n),
+            Value::Bool(b) => Some(i64::from(*b)),
+            Value::Null => Some(0),
+            Value::Str(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    Some(0)
+                } else {
+                    trimmed.parse::<i64>().ok()
+                }
+            }
+            Value::Undefined | Value::Object(_) | Value::Function(_) => None,
+        }
+    }
+
+    fn abstract_eq_values(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Undefined, Value::Undefined)
+            | (Value::Null, Value::Null)
+            | (Value::Bool(_), Value::Bool(_))
+            | (Value::Int(_), Value::Int(_))
+            | (Value::Str(_), Value::Str(_))
+            | (Value::Object(_), Value::Object(_))
+            | (Value::Function(_), Value::Function(_)) => a == b,
+            (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
+            _ => match (Self::coerce_to_number(a), Self::coerce_to_number(b)) {
+                (Some(lhs), Some(rhs)) => lhs == rhs,
+                _ => false,
+            },
         }
     }
 
@@ -3274,9 +3619,16 @@ mod tests {
                 Ir3Instruction::Return { value: 2 },
                 // Constructor at ip=3: this=r0, arg=r1
                 // r2 = "x"
-                Ir3Instruction::LoadStr { dst: 2, pool_index: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
                 // this.x = r1
-                Ir3Instruction::SetProperty { obj: 0, key: 2, val: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 2,
+                    val: 1,
+                },
                 // return undefined (non-object => this is used)
                 Ir3Instruction::LoadUndefined { dst: 3 },
                 Ir3Instruction::Return { value: 3 },
@@ -3343,6 +3695,38 @@ mod tests {
         assert!(matches!(result.value, Value::Object(_)));
     }
 
+    #[test]
+    fn construct_tags_this_for_instanceof_checks() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::InstanceOf {
+                    dst: 2,
+                    lhs: 1,
+                    rhs: 0,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadUndefined { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                name: Some("Ctor".to_string()),
+                entry: 3,
+                arity: 1,
+                frame_size: 8,
+            }],
+        );
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[0] = Value::Function(0);
+        let result = core.execute(&m).unwrap();
+        assert_eq!(result.value, Value::Bool(true));
+    }
+
     // -- TemplateLiteral tests -------------------------------------------
 
     #[test]
@@ -3350,9 +3734,18 @@ mod tests {
         // r0="hello ", r1="world", r2="!" => TemplateLiteral([r0,r1,r2]) => "hello world!"
         let m = test_module_with_pool(
             vec![
-                Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-                Ir3Instruction::LoadStr { dst: 1, pool_index: 1 },
-                Ir3Instruction::LoadStr { dst: 2, pool_index: 2 },
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 1,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 2,
+                },
                 Ir3Instruction::TemplateLiteral {
                     parts: RegRange { start: 0, count: 3 },
                     dst: 3,
@@ -3370,7 +3763,10 @@ mod tests {
         // r0="value: ", r1=42 => "value: 42"
         let m = test_module_with_pool(
             vec![
-                Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
                 Ir3Instruction::LoadInt { dst: 1, value: 42 },
                 Ir3Instruction::TemplateLiteral {
                     parts: RegRange { start: 0, count: 2 },
@@ -3388,11 +3784,23 @@ mod tests {
     fn template_literal_handles_booleans_and_null() {
         let m = test_module_with_pool(
             vec![
-                Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-                Ir3Instruction::LoadBool { dst: 1, value: true },
-                Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadBool {
+                    dst: 1,
+                    value: true,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 1,
+                },
                 Ir3Instruction::LoadNull { dst: 3 },
-                Ir3Instruction::LoadStr { dst: 4, pool_index: 2 },
+                Ir3Instruction::LoadStr {
+                    dst: 4,
+                    pool_index: 2,
+                },
                 Ir3Instruction::TemplateLiteral {
                     parts: RegRange { start: 0, count: 5 },
                     dst: 5,
@@ -3402,17 +3810,17 @@ mod tests {
             vec!["a=".to_string(), ",b=".to_string(), "!".to_string()],
         );
         let result = quickjs_execute(&m).unwrap();
-        assert_eq!(
-            result.value,
-            Value::Str("a=true,b=null!".to_string())
-        );
+        assert_eq!(result.value, Value::Str("a=true,b=null!".to_string()));
     }
 
     #[test]
     fn template_literal_single_part() {
         let m = test_module_with_pool(
             vec![
-                Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
                 Ir3Instruction::TemplateLiteral {
                     parts: RegRange { start: 0, count: 1 },
                     dst: 1,

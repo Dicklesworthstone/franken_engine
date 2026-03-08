@@ -445,7 +445,10 @@ fn classify_changed_path(path: &str) -> Option<LeverCategory> {
         return Some(LeverCategory::Security);
     }
 
-    if matches!(ext, Some("toml") | Some("json") | Some("yaml") | Some("yml") | Some("ron")) {
+    if matches!(
+        ext,
+        Some("toml") | Some("json") | Some("yaml") | Some("yml") | Some("ron")
+    ) {
         return Some(LeverCategory::Config);
     }
 

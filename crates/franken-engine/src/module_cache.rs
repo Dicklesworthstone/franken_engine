@@ -5220,7 +5220,10 @@ mod tests {
 
     #[test]
     fn adaptive_config_invalid_zero_capacity() {
-        let cfg = S3FifoAdaptiveConfig { resident_capacity_entries: 0, ..Default::default() };
+        let cfg = S3FifoAdaptiveConfig {
+            resident_capacity_entries: 0,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
@@ -5233,7 +5236,10 @@ mod tests {
 
     #[test]
     fn adaptive_config_invalid_zero_ghost() {
-        let cfg = S3FifoAdaptiveConfig { ghost_queue_entries: 0, ..Default::default() };
+        let cfg = S3FifoAdaptiveConfig {
+            ghost_queue_entries: 0,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
@@ -5375,7 +5381,12 @@ mod tests {
 
     #[test]
     fn simulate_adaptive_ghost_hit_promotes_to_main() {
-        let mut cfg = S3FifoAdaptiveConfig { resident_capacity_entries: 4, initial_small_queue_entries: 2, ghost_queue_entries: 4, ..Default::default() };
+        let mut cfg = S3FifoAdaptiveConfig {
+            resident_capacity_entries: 4,
+            initial_small_queue_entries: 2,
+            ghost_queue_entries: 4,
+            ..Default::default()
+        };
         cfg.value_admission.initial_threshold_millionths = 0;
         cfg.value_admission.floor_value_millionths = 0;
         // Disable adaptation during this test
@@ -5409,7 +5420,12 @@ mod tests {
     #[test]
     fn simulate_adaptive_split_adapts_upward() {
         // Set up a scenario where ghost hits dominate an epoch to trigger expansion.
-        let mut cfg = S3FifoAdaptiveConfig { resident_capacity_entries: 10, initial_small_queue_entries: 2, ghost_queue_entries: 10, ..Default::default() };
+        let mut cfg = S3FifoAdaptiveConfig {
+            resident_capacity_entries: 10,
+            initial_small_queue_entries: 2,
+            ghost_queue_entries: 10,
+            ..Default::default()
+        };
         // Use a longer epoch that aligns with our ghost-hit phase
         cfg.adaptive_split.epoch_length = 6;
         cfg.adaptive_split.max_step_per_epoch = 1;

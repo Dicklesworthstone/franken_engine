@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::adversarial_campaign::GuardplaneCalibrationState;
+use crate::hash_tiers::ContentHash;
 use crate::module_cache::{
     CacheContext, CacheInsertRequest, ModuleCache, ModuleVersionFingerprint,
 };
@@ -21,7 +22,6 @@ use crate::seqlock_candidate_inventory::{
     CandidateDisposition, CandidateInventoryEntry, default_candidate_inventory,
 };
 use crate::seqlock_fastpath::{FastPathTelemetry, RetryBudgetPolicy};
-use crate::hash_tiers::ContentHash;
 
 pub const BEAD_ID: &str = "bd-1lsy.7.21.2";
 pub const COMPONENT: &str = "seqlock_reader_writer_contract";
@@ -218,7 +218,9 @@ pub fn build_docs_contract_fixture() -> DocsContractFixture {
         .map(|row| DocsCandidatePolicy {
             candidate_id: row.candidate_id.clone(),
             max_retries: row.retry_budget_policy.max_retries,
-            max_writer_pressure_observations: row.retry_budget_policy.max_writer_pressure_observations,
+            max_writer_pressure_observations: row
+                .retry_budget_policy
+                .max_writer_pressure_observations,
         })
         .collect::<Vec<_>>();
     candidate_policies.sort_by(|left, right| left.candidate_id.cmp(&right.candidate_id));
@@ -238,7 +240,10 @@ pub fn render_summary(contract: &ReaderWriterContractArtifact) -> String {
         format!("- bead_id: `{}`", BEAD_ID),
         format!("- component: `{}`", COMPONENT),
         format!("- generated_at_utc: `{}`", contract.generated_at_utc),
-        format!("- accepted_candidates: `{}`", contract.accepted_candidates.len()),
+        format!(
+            "- accepted_candidates: `{}`",
+            contract.accepted_candidates.len()
+        ),
         format!("- contract_hash: `{}`", contract.contract_hash),
         String::new(),
         "## Candidate Policies".to_string(),
@@ -297,7 +302,9 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> io::Result<Evaluated
         .map(|row| RetryBudgetPolicyRow {
             candidate_id: row.candidate_id.clone(),
             max_retries: row.retry_budget_policy.max_retries,
-            max_writer_pressure_observations: row.retry_budget_policy.max_writer_pressure_observations,
+            max_writer_pressure_observations: row
+                .retry_budget_policy
+                .max_writer_pressure_observations,
         })
         .collect::<Vec<_>>();
     let retry_policy = RetryBudgetPolicyArtifact {
@@ -620,7 +627,11 @@ fn contract_candidate_row(candidate: &CandidateInventoryEntry) -> ContractCandid
 
 fn sample_module_cache_fastpath() -> io::Result<ObservedTelemetryRow> {
     let mut cache = ModuleCache::default();
-    let context = CacheContext::new("trace.rgc.621b.module_cache", "decision.rgc.621b", "policy.rgc.621b");
+    let context = CacheContext::new(
+        "trace.rgc.621b.module_cache",
+        "decision.rgc.621b",
+        "policy.rgc.621b",
+    );
     let version = ModuleVersionFingerprint::new(ContentHash::compute(b"module-a"), 1, 1);
     cache
         .insert(
@@ -869,9 +880,18 @@ mod tests {
     fn accepted_candidate_rows_match_inventory_accepts() {
         let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
         assert_eq!(rows.len(), 3);
-        assert!(rows.iter().any(|row| row.candidate_id == "module-cache-snapshot"));
-        assert!(rows.iter().any(|row| row.candidate_id == "guardplane-calibration-snapshot"));
-        assert!(rows.iter().any(|row| row.candidate_id == "governance-ledger-head-view"));
+        assert!(
+            rows.iter()
+                .any(|row| row.candidate_id == "module-cache-snapshot")
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.candidate_id == "guardplane-calibration-snapshot")
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.candidate_id == "governance-ledger-head-view")
+        );
     }
 
     #[test]

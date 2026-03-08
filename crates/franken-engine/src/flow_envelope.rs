@@ -534,9 +534,11 @@ impl SignaturePreimage for FlowEnvelope {
         // Fallback quality.
         map.insert(
             "fallback_quality".to_string(),
-            self.fallback_quality.as_ref().map_or(CanonicalValue::Null, |q| {
-                CanonicalValue::String(q.to_string())
-            }),
+            self.fallback_quality
+                .as_ref()
+                .map_or(CanonicalValue::Null, |q| {
+                    CanonicalValue::String(q.to_string())
+                }),
         );
 
         // Is fallback.

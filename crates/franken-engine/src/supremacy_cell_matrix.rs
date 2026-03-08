@@ -437,10 +437,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use super::{
-        EntryMode, InterferenceProfile, MeasurementFamily, SupremacyCellMatrixArtifact,
-        SupremacyCellMatrixError, TailAxis, WorkloadFamily, artifact_hash, validate_artifact,
-    };
+    use super::*;
 
     fn load_fixture() -> SupremacyCellMatrixArtifact {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -534,5 +531,451 @@ mod tests {
             error,
             SupremacyCellMatrixError::UnknownTailAxis { .. }
         ));
+    }
+
+    // ── schema constants ────────────────────────────────────────────
+
+    #[test]
+    fn schema_version_starts_with_franken_engine() {
+        assert!(SUPREMACY_CELL_MATRIX_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(SUPREMACY_CELL_MATRIX_LOG_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn required_dimensions_are_non_empty_and_unique() {
+        let set: std::collections::BTreeSet<&str> =
+            REQUIRED_MATRIX_DIMENSIONS.iter().copied().collect();
+        assert_eq!(set.len(), REQUIRED_MATRIX_DIMENSIONS.len());
+        assert!(!REQUIRED_MATRIX_DIMENSIONS.is_empty());
+    }
+
+    #[test]
+    fn required_board_families_are_non_empty_and_unique() {
+        let set: std::collections::BTreeSet<WorkloadFamily> =
+            REQUIRED_BOARD_FAMILIES.iter().copied().collect();
+        assert_eq!(set.len(), REQUIRED_BOARD_FAMILIES.len());
+        assert_eq!(REQUIRED_BOARD_FAMILIES.len(), 12);
+    }
+
+    // ── enum serde round-trips ──────────────────────────────────────
+
+    #[test]
+    fn workload_family_serde_round_trip() {
+        let families = [
+            WorkloadFamily::ParseCompile,
+            WorkloadFamily::ColdStart,
+            WorkloadFamily::WarmThroughput,
+            WorkloadFamily::Async,
+            WorkloadFamily::ModuleGraphs,
+            WorkloadFamily::NpmCohorts,
+            WorkloadFamily::ReactCompile,
+            WorkloadFamily::ReactSsr,
+            WorkloadFamily::ReactClient,
+            WorkloadFamily::MixedPackage,
+            WorkloadFamily::TailLatency,
+            WorkloadFamily::MemoryPressure,
+        ];
+        for family in families {
+            let json = serde_json::to_string(&family).unwrap();
+            let back: WorkloadFamily = serde_json::from_str(&json).unwrap();
+            assert_eq!(family, back);
+        }
+    }
+
+    #[test]
+    fn measurement_family_serde_round_trip() {
+        for mf in [
+            MeasurementFamily::Latency,
+            MeasurementFamily::Throughput,
+            MeasurementFamily::Macro,
+            MeasurementFamily::Memory,
+            MeasurementFamily::TailLatency,
+        ] {
+            let json = serde_json::to_string(&mf).unwrap();
+            let back: MeasurementFamily = serde_json::from_str(&json).unwrap();
+            assert_eq!(mf, back);
+        }
+    }
+
+    #[test]
+    fn entry_mode_serde_round_trip() {
+        for em in [
+            EntryMode::Cli,
+            EntryMode::Library,
+            EntryMode::NativeReactCompile,
+            EntryMode::NativeReactSsr,
+            EntryMode::NativeReactClient,
+            EntryMode::MixedPackage,
+        ] {
+            let json = serde_json::to_string(&em).unwrap();
+            let back: EntryMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(em, back);
+        }
+    }
+
+    #[test]
+    fn warm_state_serde_round_trip() {
+        for ws in [WarmState::Cold, WarmState::Warm, WarmState::Mixed] {
+            let json = serde_json::to_string(&ws).unwrap();
+            let back: WarmState = serde_json::from_str(&json).unwrap();
+            assert_eq!(ws, back);
+        }
+    }
+
+    #[test]
+    fn interference_profile_serde_round_trip() {
+        for ip in [
+            InterferenceProfile::Isolated,
+            InterferenceProfile::SharedCache,
+            InterferenceProfile::SchedulerContention,
+            InterferenceProfile::MixedBoard,
+            InterferenceProfile::TailStress,
+            InterferenceProfile::MemoryContention,
+        ] {
+            let json = serde_json::to_string(&ip).unwrap();
+            let back: InterferenceProfile = serde_json::from_str(&json).unwrap();
+            assert_eq!(ip, back);
+        }
+    }
+
+    #[test]
+    fn shared_resource_serde_round_trip() {
+        for sr in [
+            SharedResource::FrontendCpu,
+            SharedResource::ArtifactCache,
+            SharedResource::ModuleCache,
+            SharedResource::SchedulerQueue,
+            SharedResource::MemoryBandwidth,
+            SharedResource::WorkerThreads,
+        ] {
+            let json = serde_json::to_string(&sr).unwrap();
+            let back: SharedResource = serde_json::from_str(&json).unwrap();
+            assert_eq!(sr, back);
+        }
+    }
+
+    #[test]
+    fn tail_axis_serde_round_trip() {
+        for ta in [
+            TailAxis::ParseNs,
+            TailAxis::CompileNs,
+            TailAxis::ModuleLoadNs,
+            TailAxis::QueueDelayNs,
+            TailAxis::RenderNs,
+            TailAxis::HydrationNs,
+            TailAxis::GcPauseNs,
+        ] {
+            let json = serde_json::to_string(&ta).unwrap();
+            let back: TailAxis = serde_json::from_str(&json).unwrap();
+            assert_eq!(ta, back);
+        }
+    }
+
+    // ── WorkloadFamily display / as_str ─────────────────────────────
+
+    #[test]
+    fn workload_family_display_matches_as_str() {
+        for wf in REQUIRED_BOARD_FAMILIES {
+            assert_eq!(format!("{wf}"), wf.as_str());
+        }
+    }
+
+    #[test]
+    fn workload_family_as_str_is_snake_case() {
+        for wf in REQUIRED_BOARD_FAMILIES {
+            let s = wf.as_str();
+            assert!(!s.is_empty());
+            assert!(s.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+        }
+    }
+
+    // ── validate_artifact error paths ───────────────────────────────
+
+    #[test]
+    fn invalid_schema_version_rejected() {
+        let mut art = load_fixture();
+        art.schema_version = "wrong".to_string();
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::InvalidSchemaVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn invalid_log_schema_version_rejected() {
+        let mut art = load_fixture();
+        art.log_schema_version = "wrong".to_string();
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::InvalidLogSchemaVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn missing_matrix_dimension_rejected() {
+        let mut art = load_fixture();
+        art.matrix_dimensions
+            .retain(|d| d != "workload_family");
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::MissingMatrixDimension { .. }
+        ));
+    }
+
+    #[test]
+    fn duplicate_family_rejected() {
+        let mut art = load_fixture();
+        let first = art.cell_families[0].clone();
+        art.cell_families.push(first);
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::DuplicateFamily { .. }
+        ));
+    }
+
+    #[test]
+    fn missing_required_family_rejected() {
+        let mut art = load_fixture();
+        art.cell_families
+            .retain(|f| f.family != WorkloadFamily::Async);
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::MissingFamily { .. }
+        ));
+    }
+
+    #[test]
+    fn duplicate_cell_id_rejected() {
+        let mut art = load_fixture();
+        let first = art.cells[0].clone();
+        art.cells.push(first);
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::DuplicateCellId { .. }
+        ));
+    }
+
+    #[test]
+    fn duplicate_interference_rule_rejected() {
+        let mut art = load_fixture();
+        if let Some(first) = art.interference_rules.first().cloned() {
+            art.interference_rules.push(first);
+            let err = validate_artifact(&art).unwrap_err();
+            assert!(matches!(
+                err,
+                SupremacyCellMatrixError::DuplicateInterferenceRule { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn unknown_interference_rule_rejected() {
+        let mut art = load_fixture();
+        if let Some(cell) = art.cells.iter_mut().find(|c| !c.interference_rule_ids.is_empty()) {
+            cell.interference_rule_ids.push("nonexistent_rule".to_string());
+            let err = validate_artifact(&art).unwrap_err();
+            assert!(matches!(
+                err,
+                SupremacyCellMatrixError::UnknownInterferenceRule { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn cold_start_warm_state_enforcement() {
+        let mut art = load_fixture();
+        let cell = art
+            .cells
+            .iter_mut()
+            .find(|c| c.family == WorkloadFamily::ColdStart)
+            .expect("cold start cell");
+        cell.warm_state = WarmState::Warm;
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::ColdStartMustBeCold { .. }
+        ));
+    }
+
+    #[test]
+    fn react_ssr_entry_mode_enforcement() {
+        let mut art = load_fixture();
+        let cell = art
+            .cells
+            .iter_mut()
+            .find(|c| c.family == WorkloadFamily::ReactSsr)
+            .expect("react ssr cell");
+        cell.entry_mode = EntryMode::Library;
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::ReactEntryModeMismatch {
+                expected: EntryMode::NativeReactSsr,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn react_client_entry_mode_enforcement() {
+        let mut art = load_fixture();
+        let cell = art
+            .cells
+            .iter_mut()
+            .find(|c| c.family == WorkloadFamily::ReactClient)
+            .expect("react client cell");
+        cell.entry_mode = EntryMode::Cli;
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::ReactEntryModeMismatch {
+                expected: EntryMode::NativeReactClient,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unknown_family_dimension_rejected() {
+        let mut art = load_fixture();
+        if let Some(fam) = art.cell_families.first_mut() {
+            fam.required_dimensions.push("bogus_dim".to_string());
+            let err = validate_artifact(&art).unwrap_err();
+            assert!(matches!(
+                err,
+                SupremacyCellMatrixError::UnknownFamilyDimension { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn missing_family_coverage_rejected() {
+        let mut art = load_fixture();
+        art.cells
+            .retain(|c| c.family != WorkloadFamily::MemoryPressure);
+        let err = validate_artifact(&art).unwrap_err();
+        assert!(matches!(
+            err,
+            SupremacyCellMatrixError::MissingFamilyCoverage { .. }
+        ));
+    }
+
+    // ── build_interference_index ────────────────────────────────────
+
+    #[test]
+    fn interference_index_is_symmetric() {
+        let art = load_fixture();
+        let index = build_interference_index(&art).unwrap();
+        for (family, related) in &index {
+            for other in related {
+                let reverse = index.get(other).expect("symmetric entry must exist");
+                assert!(reverse.contains(family), "{family:?} not in reverse of {other:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn interference_index_keys_are_subset_of_rule_families() {
+        let art = load_fixture();
+        let index = build_interference_index(&art).unwrap();
+        let rule_families: std::collections::BTreeSet<WorkloadFamily> = art
+            .interference_rules
+            .iter()
+            .flat_map(|r| [r.primary_family, r.concurrent_family])
+            .collect();
+        for family in index.keys() {
+            assert!(rule_families.contains(family));
+        }
+    }
+
+    // ── artifact_hash ───────────────────────────────────────────────
+
+    #[test]
+    fn artifact_hash_changes_with_content() {
+        let mut art = load_fixture();
+        let h1 = artifact_hash(&art).unwrap();
+        art.contract_version = "changed".to_string();
+        let h2 = artifact_hash(&art).unwrap();
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn artifact_hash_is_hex_encoded_sha256() {
+        let art = load_fixture();
+        let hash = artifact_hash(&art).unwrap();
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // ── serde round-trips for structs ───────────────────────────────
+
+    #[test]
+    fn artifact_serde_round_trip() {
+        let art = load_fixture();
+        let json = serde_json::to_string(&art).unwrap();
+        let back: SupremacyCellMatrixArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(art, back);
+    }
+
+    #[test]
+    fn changelog_entry_serde_round_trip() {
+        let entry = ChangelogEntry {
+            version: "1.0".to_string(),
+            rationale: "test".to_string(),
+            impact_assessment: "none".to_string(),
+            compatibility_notes: "n/a".to_string(),
+            changed_at_utc: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: ChangelogEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn error_display_messages_are_descriptive() {
+        let err = SupremacyCellMatrixError::InvalidSchemaVersion {
+            found: "bad".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("bad"));
+        assert!(msg.contains("schema version"));
+
+        let err2 = SupremacyCellMatrixError::DuplicateCellId {
+            cell_id: "dup".to_string(),
+        };
+        assert!(err2.to_string().contains("dup"));
+    }
+
+    // ── fixture structural checks ───────────────────────────────────
+
+    #[test]
+    fn fixture_has_all_twelve_families() {
+        let art = load_fixture();
+        let families: std::collections::BTreeSet<WorkloadFamily> =
+            art.cell_families.iter().map(|f| f.family).collect();
+        for wf in REQUIRED_BOARD_FAMILIES {
+            assert!(families.contains(wf), "missing family: {wf:?}");
+        }
+    }
+
+    #[test]
+    fn fixture_cell_ids_are_unique() {
+        let art = load_fixture();
+        let ids: std::collections::BTreeSet<&str> =
+            art.cells.iter().map(|c| c.cell_id.as_str()).collect();
+        assert_eq!(ids.len(), art.cells.len());
+    }
+
+    #[test]
+    fn fixture_required_artifacts_non_empty() {
+        let art = load_fixture();
+        assert!(!art.required_artifacts.is_empty());
+        assert!(!art.required_consumers.is_empty());
     }
 }

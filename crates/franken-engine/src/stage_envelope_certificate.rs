@@ -22,13 +22,10 @@ use serde::{Deserialize, Serialize};
 // Schema constants
 // ---------------------------------------------------------------------------
 
-pub const STAGE_ENVELOPE_SCHEMA_VERSION: &str =
-    "franken-engine.stage-envelope-certificate.v1";
+pub const STAGE_ENVELOPE_SCHEMA_VERSION: &str = "franken-engine.stage-envelope-certificate.v1";
 pub const STAGE_ENVELOPE_BEAD_ID: &str = "bd-1lsy.7.11.1";
-pub const VIOLATION_REPORT_SCHEMA_VERSION: &str =
-    "franken-engine.stage-violation-report.v1";
-pub const ENVELOPE_BUNDLE_SCHEMA_VERSION: &str =
-    "franken-engine.stage-envelope-bundle.v1";
+pub const VIOLATION_REPORT_SCHEMA_VERSION: &str = "franken-engine.stage-violation-report.v1";
+pub const ENVELOPE_BUNDLE_SCHEMA_VERSION: &str = "franken-engine.stage-envelope-bundle.v1";
 
 /// Default p99 budget per stage in nanoseconds (10 ms).
 pub const DEFAULT_P99_BUDGET_NS: u64 = 10_000_000;
@@ -42,9 +39,7 @@ pub const MIN_OBSERVATION_COUNT: u64 = 30;
 // ---------------------------------------------------------------------------
 
 /// Execution stages whose latency is individually budgeted.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionStage {
     /// Source → AST parsing.
@@ -95,9 +90,7 @@ impl fmt::Display for ExecutionStage {
 // ---------------------------------------------------------------------------
 
 /// Percentile tiers tracked for latency envelopes.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LatencyPercentile {
     /// Median (50th percentile).
@@ -167,81 +160,53 @@ impl StageLatencyEnvelope {
     pub fn default_for_stage(stage: ExecutionStage) -> Self {
         let (p50, p95, p99, p999, share) = match stage {
             ExecutionStage::Parse => (
-                500_000,     // 500 µs
-                2_000_000,   // 2 ms
-                5_000_000,   // 5 ms
-                15_000_000,  // 15 ms
-                150_000,     // 15%
+                500_000,    // 500 µs
+                2_000_000,  // 2 ms
+                5_000_000,  // 5 ms
+                15_000_000, // 15 ms
+                150_000,    // 15%
             ),
             ExecutionStage::Lower => (
-                200_000,     // 200 µs
-                1_000_000,   // 1 ms
-                3_000_000,   // 3 ms
-                10_000_000,  // 10 ms
-                100_000,     // 10%
+                200_000,    // 200 µs
+                1_000_000,  // 1 ms
+                3_000_000,  // 3 ms
+                10_000_000, // 10 ms
+                100_000,    // 10%
             ),
             ExecutionStage::CompileBaseline => (
-                300_000,
-                1_500_000,
-                4_000_000,
-                12_000_000,
-                120_000,     // 12%
+                300_000, 1_500_000, 4_000_000, 12_000_000, 120_000, // 12%
             ),
             ExecutionStage::CompileOptimized => (
-                1_000_000,   // 1 ms
-                5_000_000,   // 5 ms
-                15_000_000,  // 15 ms
-                50_000_000,  // 50 ms
-                200_000,     // 20%
+                1_000_000,  // 1 ms
+                5_000_000,  // 5 ms
+                15_000_000, // 15 ms
+                50_000_000, // 50 ms
+                200_000,    // 20%
             ),
             ExecutionStage::GcPause => (
-                500_000,
-                2_000_000,
-                10_000_000,
-                30_000_000,
-                150_000,     // 15%
+                500_000, 2_000_000, 10_000_000, 30_000_000, 150_000, // 15%
             ),
             ExecutionStage::ModuleLoad => (
-                100_000,
-                500_000,
-                2_000_000,
-                8_000_000,
-                80_000,      // 8%
+                100_000, 500_000, 2_000_000, 8_000_000, 80_000, // 8%
             ),
             ExecutionStage::SandboxInit => (
-                200_000,
-                1_000_000,
-                3_000_000,
-                10_000_000,
-                80_000,      // 8%
+                200_000, 1_000_000, 3_000_000, 10_000_000, 80_000, // 8%
             ),
             ExecutionStage::ExecutionQuantum => (
-                100_000,
-                500_000,
-                1_000_000,
-                5_000_000,
-                50_000,      // 5%
+                100_000, 500_000, 1_000_000, 5_000_000, 50_000, // 5%
             ),
             ExecutionStage::CacheLookup => (
-                50_000,
-                200_000,
-                500_000,
-                2_000_000,
-                30_000,      // 3%
+                50_000, 200_000, 500_000, 2_000_000, 30_000, // 3%
             ),
             ExecutionStage::AotLoad => (
-                100_000,
-                500_000,
-                2_000_000,
-                8_000_000,
-                70_000,      // 7%
+                100_000, 500_000, 2_000_000, 8_000_000, 70_000, // 7%
             ),
             ExecutionStage::Custom => (
                 1_000_000,
                 5_000_000,
                 DEFAULT_P99_BUDGET_NS,
                 DEFAULT_P999_BUDGET_NS,
-                100_000,     // 10%
+                100_000, // 10%
             ),
         };
 
@@ -287,9 +252,7 @@ pub struct StageLatencyObservation {
 // ---------------------------------------------------------------------------
 
 /// Verdict on whether a stage's observed latency complies with its envelope.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnvelopeVerdict {
     /// All percentiles are within their budgets.
@@ -418,9 +381,7 @@ pub struct ViolationReport {
 }
 
 /// Severity of a latency violation.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ViolationSeverity {
     /// Less than 10% overshoot.
@@ -446,9 +407,7 @@ impl fmt::Display for ViolationSeverity {
 }
 
 /// Recommended remediation for a latency violation.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemediationAction {
     /// Continue monitoring; violation is minor.
@@ -575,9 +534,7 @@ pub fn build_envelope_bundle(
         let cert_id = format!("stage-cert-{cert_seq}");
 
         if let Some(obs) = obs_map.get(&envelope.stage) {
-            let cert = issue_stage_certificate(
-                envelope, obs, &cert_id, epoch, Vec::new(),
-            );
+            let cert = issue_stage_certificate(envelope, obs, &cert_id, epoch, Vec::new());
             certificates.push(cert);
         }
         // If no observation for this envelope, skip (stage wasn't exercised)
@@ -610,10 +567,8 @@ pub fn build_envelope_bundle(
         EnvelopeVerdict::Compliant
     };
 
-    let total_budget_share_millionths: u64 = envelopes
-        .iter()
-        .map(|e| e.budget_share_millionths)
-        .sum();
+    let total_budget_share_millionths: u64 =
+        envelopes.iter().map(|e| e.budget_share_millionths).sum();
 
     EnvelopeBundle {
         schema_version: ENVELOPE_BUNDLE_SCHEMA_VERSION.to_string(),
@@ -742,16 +697,26 @@ fn check_percentile(
     }
 }
 
-fn is_near_limit(
-    observation: &StageLatencyObservation,
-    envelope: &StageLatencyEnvelope,
-) -> bool {
+fn is_near_limit(observation: &StageLatencyObservation, envelope: &StageLatencyEnvelope) -> bool {
     // "Near limit" = within 20% of budget (i.e., observed > 80% of budget)
     let threshold_fraction = 800_000u64; // 80% in millionths
-    is_near(observation.p50_ns, envelope.p50_budget_ns, threshold_fraction)
-        || is_near(observation.p95_ns, envelope.p95_budget_ns, threshold_fraction)
-        || is_near(observation.p99_ns, envelope.p99_budget_ns, threshold_fraction)
-        || is_near(observation.p999_ns, envelope.p999_budget_ns, threshold_fraction)
+    is_near(
+        observation.p50_ns,
+        envelope.p50_budget_ns,
+        threshold_fraction,
+    ) || is_near(
+        observation.p95_ns,
+        envelope.p95_budget_ns,
+        threshold_fraction,
+    ) || is_near(
+        observation.p99_ns,
+        envelope.p99_budget_ns,
+        threshold_fraction,
+    ) || is_near(
+        observation.p999_ns,
+        envelope.p999_budget_ns,
+        threshold_fraction,
+    )
 }
 
 fn is_near(observed: u64, budget: u64, threshold_fraction_millionths: u64) -> bool {
@@ -774,18 +739,11 @@ fn classify_severity(overshoot_fraction_millionths: u64) -> ViolationSeverity {
     }
 }
 
-fn recommend_remediation(
-    stage: ExecutionStage,
-    severity: &ViolationSeverity,
-) -> RemediationAction {
+fn recommend_remediation(stage: ExecutionStage, severity: &ViolationSeverity) -> RemediationAction {
     match (stage, severity) {
         (_, ViolationSeverity::Catastrophic) => RemediationAction::Downgrade,
-        (ExecutionStage::GcPause, ViolationSeverity::Severe) => {
-            RemediationAction::SplitStage
-        }
-        (ExecutionStage::CompileOptimized, _) => {
-            RemediationAction::DeferToBackground
-        }
+        (ExecutionStage::GcPause, ViolationSeverity::Severe) => RemediationAction::SplitStage,
+        (ExecutionStage::CompileOptimized, _) => RemediationAction::DeferToBackground,
         (ExecutionStage::Parse | ExecutionStage::Lower, ViolationSeverity::Severe) => {
             RemediationAction::ReduceWorkload
         }
@@ -888,8 +846,7 @@ mod tests {
         ];
         for stage in &stages {
             let json = serde_json::to_string(stage).expect("serialize");
-            let deser: ExecutionStage =
-                serde_json::from_str(&json).expect("deserialize");
+            let deser: ExecutionStage = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(*stage, deser);
         }
     }
@@ -933,8 +890,7 @@ mod tests {
             EnvelopeVerdict::InsufficientData,
         ] {
             let json = serde_json::to_string(v).expect("serialize");
-            let deser: EnvelopeVerdict =
-                serde_json::from_str(&json).expect("deserialize");
+            let deser: EnvelopeVerdict = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(*v, deser);
         }
     }
@@ -1017,16 +973,9 @@ mod tests {
     fn certificate_serde_round_trip() {
         let env = default_envelope(ExecutionStage::GcPause);
         let obs = compliant_observation(ExecutionStage::GcPause);
-        let cert = issue_stage_certificate(
-            &env,
-            &obs,
-            "serde-cert",
-            42,
-            vec!["ev-1".to_string()],
-        );
+        let cert = issue_stage_certificate(&env, &obs, "serde-cert", 42, vec!["ev-1".to_string()]);
         let json = serde_json::to_string(&cert).expect("serialize");
-        let deser: StageEnvelopeCertificate =
-            serde_json::from_str(&json).expect("deserialize");
+        let deser: StageEnvelopeCertificate = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(cert, deser);
     }
 
@@ -1034,10 +983,13 @@ mod tests {
 
     #[test]
     fn bundle_all_compliant() {
-        let stages = [ExecutionStage::Parse, ExecutionStage::Lower, ExecutionStage::GcPause];
+        let stages = [
+            ExecutionStage::Parse,
+            ExecutionStage::Lower,
+            ExecutionStage::GcPause,
+        ];
         let envelopes: Vec<_> = stages.iter().map(|s| default_envelope(*s)).collect();
-        let observations: Vec<_> =
-            stages.iter().map(|s| compliant_observation(*s)).collect();
+        let observations: Vec<_> = stages.iter().map(|s| compliant_observation(*s)).collect();
         let bundle = build_envelope_bundle(&envelopes, &observations, 0);
         assert_eq!(bundle.overall_verdict, EnvelopeVerdict::Compliant);
         assert_eq!(bundle.stage_count, 3);
@@ -1073,8 +1025,7 @@ mod tests {
         let observations = vec![compliant_observation(ExecutionStage::Parse)];
         let bundle = build_envelope_bundle(&envelopes, &observations, 0);
         let json = serde_json::to_string(&bundle).expect("serialize");
-        let deser: EnvelopeBundle =
-            serde_json::from_str(&json).expect("deserialize");
+        let deser: EnvelopeBundle = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(bundle, deser);
     }
 
@@ -1107,8 +1058,7 @@ mod tests {
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
         let report = generate_violation_report(&cert, "rpt-serde").unwrap();
         let json = serde_json::to_string(&report).expect("serialize");
-        let deser: ViolationReport =
-            serde_json::from_str(&json).expect("deserialize");
+        let deser: ViolationReport = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(report, deser);
     }
 
@@ -1143,7 +1093,10 @@ mod tests {
         assert_eq!(classify_severity(50_000), ViolationSeverity::Minor);
         assert_eq!(classify_severity(200_000), ViolationSeverity::Moderate);
         assert_eq!(classify_severity(800_000), ViolationSeverity::Severe);
-        assert_eq!(classify_severity(3_000_000), ViolationSeverity::Catastrophic);
+        assert_eq!(
+            classify_severity(3_000_000),
+            ViolationSeverity::Catastrophic
+        );
     }
 
     // -- Default envelopes --
@@ -1198,8 +1151,7 @@ mod tests {
     fn envelope_serde_round_trip() {
         let env = default_envelope(ExecutionStage::Parse);
         let json = serde_json::to_string(&env).expect("serialize");
-        let deser: StageLatencyEnvelope =
-            serde_json::from_str(&json).expect("deserialize");
+        let deser: StageLatencyEnvelope = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(env, deser);
     }
 
@@ -1208,7 +1160,12 @@ mod tests {
     #[test]
     fn violation_overshoot_calculation() {
         let mut violations = Vec::new();
-        check_percentile(LatencyPercentile::P99, 20_000_000, 10_000_000, &mut violations);
+        check_percentile(
+            LatencyPercentile::P99,
+            20_000_000,
+            10_000_000,
+            &mut violations,
+        );
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].overshoot_ns, 10_000_000);
         assert_eq!(violations[0].overshoot_fraction_millionths, 1_000_000); // 100%
@@ -1217,14 +1174,24 @@ mod tests {
     #[test]
     fn no_violation_when_within_budget() {
         let mut violations = Vec::new();
-        check_percentile(LatencyPercentile::P99, 5_000_000, 10_000_000, &mut violations);
+        check_percentile(
+            LatencyPercentile::P99,
+            5_000_000,
+            10_000_000,
+            &mut violations,
+        );
         assert!(violations.is_empty());
     }
 
     #[test]
     fn no_violation_at_exact_budget() {
         let mut violations = Vec::new();
-        check_percentile(LatencyPercentile::P99, 10_000_000, 10_000_000, &mut violations);
+        check_percentile(
+            LatencyPercentile::P99,
+            10_000_000,
+            10_000_000,
+            &mut violations,
+        );
         assert!(violations.is_empty());
     }
 
@@ -1245,7 +1212,10 @@ mod tests {
     #[test]
     fn compile_optimized_recommends_defer() {
         assert_eq!(
-            recommend_remediation(ExecutionStage::CompileOptimized, &ViolationSeverity::Moderate),
+            recommend_remediation(
+                ExecutionStage::CompileOptimized,
+                &ViolationSeverity::Moderate
+            ),
             RemediationAction::DeferToBackground
         );
     }

@@ -1468,4 +1468,227 @@ mod tests {
             }
         );
     }
+
+    // ── schema constants ────────────────────────────────────────────
+
+    #[test]
+    fn schema_constants_start_with_franken_engine() {
+        assert!(CONTRACT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(BOUNDARY_CATALOG_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(MINIMAL_REPLAY_INPUT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(BOUNDARY_REDACTION_MAP_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    // ── BoundaryClass enum ──────────────────────────────────────────
+
+    #[test]
+    fn boundary_class_all_has_nine_members() {
+        assert_eq!(BoundaryClass::ALL.len(), 9);
+    }
+
+    #[test]
+    fn boundary_class_as_str_is_snake_case() {
+        for class in &BoundaryClass::ALL {
+            let s = class.as_str();
+            assert!(!s.is_empty());
+            assert!(s.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+        }
+    }
+
+    #[test]
+    fn boundary_class_display_matches_as_str() {
+        for class in &BoundaryClass::ALL {
+            assert_eq!(format!("{class}"), class.as_str());
+        }
+    }
+
+    #[test]
+    fn boundary_class_serde_round_trip() {
+        for class in &BoundaryClass::ALL {
+            let json = serde_json::to_string(class).unwrap();
+            let back: BoundaryClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(*class, back);
+        }
+    }
+
+    // ── PrivacyClass / RedactionTreatment enums ─────────────────────
+
+    #[test]
+    fn privacy_class_serde_round_trip() {
+        for pc in [
+            PrivacyClass::PublicMetadata,
+            PrivacyClass::PathDigest,
+            PrivacyClass::SecretDigest,
+        ] {
+            let json = serde_json::to_string(&pc).unwrap();
+            let back: PrivacyClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(pc, back);
+        }
+    }
+
+    #[test]
+    fn redaction_treatment_serde_round_trip() {
+        for rt in [
+            RedactionTreatment::Plaintext,
+            RedactionTreatment::DigestOnly,
+            RedactionTreatment::Omit,
+        ] {
+            let json = serde_json::to_string(&rt).unwrap();
+            let back: RedactionTreatment = serde_json::from_str(&json).unwrap();
+            assert_eq!(rt, back);
+        }
+    }
+
+    #[test]
+    fn replay_sufficiency_serde_round_trip() {
+        for rs in [
+            ReplaySufficiency::Sufficient,
+            ReplaySufficiency::NeedsEscalation,
+        ] {
+            let json = serde_json::to_string(&rs).unwrap();
+            let back: ReplaySufficiency = serde_json::from_str(&json).unwrap();
+            assert_eq!(rs, back);
+        }
+    }
+
+    // ── error display ───────────────────────────────────────────────
+
+    #[test]
+    fn error_display_missing_boundary_rule() {
+        let err = BoundaryCaptureError::MissingBoundaryRule {
+            boundary_class: BoundaryClass::ClockRead,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("clock_read"));
+        assert!(msg.contains("missing boundary rule"));
+    }
+
+    #[test]
+    fn error_display_empty_field() {
+        let err = BoundaryCaptureError::EmptyField {
+            boundary_class: BoundaryClass::NetworkResponse,
+            field: "status_code".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("empty field"));
+        assert!(msg.contains("status_code"));
+    }
+
+    // ── empty field rejection ───────────────────────────────────────
+
+    #[test]
+    fn capture_rejects_empty_field_values() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-e", "decision-e", "policy-e", "clock", 1);
+        let request = BoundaryCaptureRequest {
+            trace_id: context.trace_id.to_string(),
+            decision_id: context.decision_id.to_string(),
+            policy_id: context.policy_id.to_string(),
+            component: context.component.to_string(),
+            boundary_class: BoundaryClass::ClockRead,
+            virtual_ts: 1,
+            minimal_fields: [
+                ("clock_id".to_string(), "  ".to_string()),
+                ("clock_domain".to_string(), "monotonic".to_string()),
+                ("observed_tick".to_string(), "10".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            escalation_reason: None,
+        };
+        let error = session
+            .capture_boundary(request)
+            .expect_err("empty field");
+        assert!(matches!(
+            error,
+            BoundaryCaptureError::EmptyField {
+                boundary_class: BoundaryClass::ClockRead,
+                ..
+            }
+        ));
+    }
+
+    // ── correlation key uniqueness ──────────────────────────────────
+
+    #[test]
+    fn correlation_keys_differ_for_different_sequences() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "c", 1);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 1, "t", "d", "c", 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_key_starts_with_bcorr_prefix() {
+        let key = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "c", 1);
+        assert!(key.starts_with("bcorr_"));
+    }
+
+    // ── redaction map coverage ──────────────────────────────────────
+
+    #[test]
+    fn every_rule_has_at_least_one_redaction_entry() {
+        let contract = BoundaryCaptureContract::default_v1();
+        for rule in &contract.boundary_catalog.rules {
+            assert!(
+                !rule.redaction_rules.is_empty(),
+                "rule for {:?} must have redaction entries",
+                rule.boundary_class
+            );
+        }
+    }
+
+    // ── minimal replay plan success ─────────────────────────────────
+
+    #[test]
+    fn minimal_replay_plan_succeeds_without_escalation() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-f", "decision-f", "policy-f", "scheduler", 1);
+        session
+            .capture_scheduling_decision(&context, "ready", "task-1", "ordering-digest", None)
+            .expect("capture");
+        let plans = session.minimal_replay_plans().expect("no escalation needed");
+        assert_eq!(plans.len(), 1);
+    }
+
+    // ── log sequence numbers ────────────────────────────────────────
+
+    #[test]
+    fn capture_records_have_monotonic_sequence_numbers() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        for i in 0..5_u64 {
+            let trace = format!("trace-{i}");
+            let decision = format!("decision-{i}");
+            let policy = format!("policy-{i}");
+            let context = BoundaryContext::new(&trace, &decision, &policy, "clock", i);
+            session
+                .capture_clock_read(&context, "mono", "monotonic", i, None)
+                .expect("capture");
+        }
+        let records = session.log().records();
+        assert_eq!(records.len(), 5);
+        for (i, record) in records.iter().enumerate() {
+            assert_eq!(record.sequence, i as u64);
+        }
+    }
+
+    // ── contract serde round-trip ───────────────────────────────────
+
+    #[test]
+    fn boundary_capture_contract_serde_round_trip() {
+        let contract = BoundaryCaptureContract::default_v1();
+        let json = serde_json::to_string(&contract).unwrap();
+        let back: BoundaryCaptureContract = serde_json::from_str(&json).unwrap();
+        assert_eq!(contract, back);
+    }
+
+    #[test]
+    fn boundary_context_stores_all_fields() {
+        let ctx = BoundaryContext::new("t1", "d1", "p1", "comp", 42);
+        assert_eq!(ctx.trace_id, "t1");
+        assert_eq!(ctx.decision_id, "d1");
+        assert_eq!(ctx.policy_id, "p1");
+        assert_eq!(ctx.component, "comp");
+        assert_eq!(ctx.virtual_ts, 42);
+    }
 }

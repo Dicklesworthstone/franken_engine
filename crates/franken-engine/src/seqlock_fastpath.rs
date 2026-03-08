@@ -333,4 +333,249 @@ mod tests {
         assert_eq!(fast_path, cloned);
         assert_eq!(cloned.policy(), RetryBudgetPolicy::new(2, 1));
     }
+
+    // ── RetryBudgetPolicy ───────────────────────────────────────────
+
+    #[test]
+    fn retry_budget_policy_serde_round_trip() {
+        let policy = RetryBudgetPolicy::new(5, 3);
+        let json = serde_json::to_string(&policy).unwrap();
+        let back: RetryBudgetPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(policy, back);
+    }
+
+    #[test]
+    fn retry_budget_policy_const_new() {
+        const P: RetryBudgetPolicy = RetryBudgetPolicy::new(10, 5);
+        assert_eq!(P.max_retries, 10);
+        assert_eq!(P.max_writer_pressure_observations, 5);
+    }
+
+    // ── enum serde ──────────────────────────────────────────────────
+
+    #[test]
+    fn fast_path_read_source_serde_round_trip() {
+        for source in [FastPathReadSource::FastPath, FastPathReadSource::Fallback] {
+            let json = serde_json::to_string(&source).unwrap();
+            let back: FastPathReadSource = serde_json::from_str(&json).unwrap();
+            assert_eq!(source, back);
+        }
+    }
+
+    #[test]
+    fn fast_path_fallback_reason_serde_round_trip() {
+        for reason in [
+            FastPathFallbackReason::RetryBudgetExceeded,
+            FastPathFallbackReason::Uninitialized,
+            FastPathFallbackReason::WriterPressure,
+        ] {
+            let json = serde_json::to_string(&reason).unwrap();
+            let back: FastPathFallbackReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(reason, back);
+        }
+    }
+
+    // ── FastPathReadResult serde ─────────────────────────────────────
+
+    #[test]
+    fn fast_path_read_result_serde_round_trip() {
+        let result = FastPathReadResult {
+            value: 42_u64,
+            source: FastPathReadSource::FastPath,
+            attempts: 1,
+            writer_pressure_observations: 0,
+            fallback_reason: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: FastPathReadResult<u64> = serde_json::from_str(&json).unwrap();
+        assert_eq!(result, back);
+    }
+
+    // ── FastPathTelemetry serde ──────────────────────────────────────
+
+    #[test]
+    fn fast_path_telemetry_serde_round_trip() {
+        let telemetry = FastPathTelemetry {
+            total_reads: 10,
+            fast_path_reads: 7,
+            fallback_reads: 3,
+            total_retries: 2,
+            writer_pressure_observations: 1,
+            retry_budget_fallbacks: 1,
+            uninitialized_fallbacks: 2,
+            writer_pressure_fallbacks: 0,
+            writes: 5,
+        };
+        let json = serde_json::to_string(&telemetry).unwrap();
+        let back: FastPathTelemetry = serde_json::from_str(&json).unwrap();
+        assert_eq!(telemetry, back);
+    }
+
+    // ── uninitialized reads ─────────────────────────────────────────
+
+    #[test]
+    fn uninitialized_fast_path_falls_back() {
+        let fast_path = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+        let result = fast_path.read_clone_or_else(|| 999_u64);
+
+        assert_eq!(result.value, 999);
+        assert_eq!(result.source, FastPathReadSource::Fallback);
+        assert_eq!(
+            result.fallback_reason,
+            Some(FastPathFallbackReason::Uninitialized)
+        );
+    }
+
+    #[test]
+    fn uninitialized_telemetry_counts_correctly() {
+        let fast_path = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+        let _ = fast_path.read_clone_or_else(|| 0);
+        let _ = fast_path.read_clone_or_else(|| 0);
+
+        let telemetry = fast_path.telemetry();
+        assert_eq!(telemetry.total_reads, 2);
+        assert_eq!(telemetry.uninitialized_fallbacks, 2);
+        assert_eq!(telemetry.fallback_reads, 2);
+        assert_eq!(telemetry.fast_path_reads, 0);
+        assert_eq!(telemetry.writes, 0);
+    }
+
+    // ── seed_if_uninitialized ───────────────────────────────────────
+
+    #[test]
+    fn seed_if_uninitialized_succeeds_on_first_call() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        assert!(!fast_path.is_initialized());
+        assert!(fast_path.seed_if_uninitialized(10_u64));
+        assert!(fast_path.is_initialized());
+    }
+
+    #[test]
+    fn seed_if_uninitialized_is_no_op_after_first_seed() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        assert!(fast_path.seed_if_uninitialized(10_u64));
+        assert!(!fast_path.seed_if_uninitialized(20_u64));
+
+        let result = fast_path.read_clone_or_else(|| 99);
+        assert_eq!(result.value, 10);
+    }
+
+    #[test]
+    fn seed_if_uninitialized_is_no_op_after_publish() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fast_path.publish(30_u64);
+        assert!(!fast_path.seed_if_uninitialized(40_u64));
+
+        let result = fast_path.read_clone_or_else(|| 99);
+        assert_eq!(result.value, 30);
+    }
+
+    #[test]
+    fn seed_does_not_count_as_write() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fast_path.seed_if_uninitialized(1_u64);
+        assert_eq!(fast_path.telemetry().writes, 0);
+    }
+
+    // ── publish ─────────────────────────────────────────────────────
+
+    #[test]
+    fn publish_overwrites_previous_value() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fast_path.publish(1_u64);
+        fast_path.publish(2_u64);
+        fast_path.publish(3_u64);
+
+        let result = fast_path.read_clone_or_else(|| 99);
+        assert_eq!(result.value, 3);
+        assert_eq!(fast_path.telemetry().writes, 3);
+    }
+
+    #[test]
+    fn publish_marks_initialized() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        assert!(!fast_path.is_initialized());
+        fast_path.publish(42_u64);
+        assert!(fast_path.is_initialized());
+    }
+
+    // ── telemetry accounting ────────────────────────────────────────
+
+    #[test]
+    fn fresh_telemetry_is_all_zeros() {
+        let fast_path = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+        let telemetry = fast_path.telemetry();
+        assert_eq!(telemetry.total_reads, 0);
+        assert_eq!(telemetry.fast_path_reads, 0);
+        assert_eq!(telemetry.fallback_reads, 0);
+        assert_eq!(telemetry.total_retries, 0);
+        assert_eq!(telemetry.writer_pressure_observations, 0);
+        assert_eq!(telemetry.retry_budget_fallbacks, 0);
+        assert_eq!(telemetry.uninitialized_fallbacks, 0);
+        assert_eq!(telemetry.writer_pressure_fallbacks, 0);
+        assert_eq!(telemetry.writes, 0);
+    }
+
+    #[test]
+    fn fast_path_read_increments_correct_counters() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fast_path.publish(10_u64);
+        let _ = fast_path.read_clone_or_else(|| 0);
+
+        let telemetry = fast_path.telemetry();
+        assert_eq!(telemetry.total_reads, 1);
+        assert_eq!(telemetry.fast_path_reads, 1);
+        assert_eq!(telemetry.fallback_reads, 0);
+    }
+
+    // ── clone resets runtime state ──────────────────────────────────
+
+    #[test]
+    fn clone_does_not_carry_published_value() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fast_path.publish(42_u64);
+        let cloned = fast_path.clone();
+
+        assert!(!cloned.is_initialized());
+        let result = cloned.read_clone_or_else(|| 99);
+        assert_eq!(result.value, 99);
+        assert_eq!(result.source, FastPathReadSource::Fallback);
+    }
+
+    #[test]
+    fn clone_preserves_policy() {
+        let fast_path =
+            SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(7, 3));
+        let cloned = fast_path.clone();
+        assert_eq!(cloned.policy(), RetryBudgetPolicy::new(7, 3));
+    }
+
+    // ── equality ────────────────────────────────────────────────────
+
+    #[test]
+    fn equality_based_on_policy_only() {
+        let a = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+        let b = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+        let c = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(3, 1));
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    // ── concurrent read after publish ───────────────────────────────
+
+    #[test]
+    fn multiple_reads_all_see_latest_publish() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+        fast_path.publish(100_u64);
+
+        for _ in 0..10 {
+            let result = fast_path.read_clone_or_else(|| 0);
+            assert_eq!(result.value, 100);
+            assert_eq!(result.source, FastPathReadSource::FastPath);
+        }
+
+        let telemetry = fast_path.telemetry();
+        assert_eq!(telemetry.total_reads, 10);
+        assert_eq!(telemetry.fast_path_reads, 10);
+    }
 }

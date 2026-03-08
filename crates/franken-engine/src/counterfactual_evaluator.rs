@@ -991,7 +991,10 @@ mod tests {
 
     #[test]
     fn new_rejects_zero_confidence() {
-        let cfg = EvaluatorConfig { confidence_millionths: 0, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            confidence_millionths: 0,
+            ..Default::default()
+        };
         let result = CounterfactualEvaluator::new(cfg, BaselinePolicy::default());
         assert_eq!(
             result.unwrap_err(),
@@ -1001,7 +1004,10 @@ mod tests {
 
     #[test]
     fn new_rejects_million_confidence() {
-        let cfg = EvaluatorConfig { confidence_millionths: MILLION, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            confidence_millionths: MILLION,
+            ..Default::default()
+        };
         let result = CounterfactualEvaluator::new(cfg, BaselinePolicy::default());
         assert_eq!(
             result.unwrap_err(),
@@ -1011,7 +1017,10 @@ mod tests {
 
     #[test]
     fn new_rejects_negative_threshold() {
-        let cfg = EvaluatorConfig { improvement_threshold_millionths: -1, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            improvement_threshold_millionths: -1,
+            ..Default::default()
+        };
         let result = CounterfactualEvaluator::new(cfg, BaselinePolicy::default());
         assert_eq!(
             result.unwrap_err(),
@@ -1093,7 +1102,10 @@ mod tests {
 
     #[test]
     fn ips_equal_propensities_yields_mean_reward() {
-        let cfg = EvaluatorConfig { estimator: EstimatorKind::Ips, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            estimator: EstimatorKind::Ips,
+            ..Default::default()
+        };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).unwrap();
         let batch = make_batch(100, 600_000, 500_000);
         let target = make_target(100, 500_000);
@@ -1108,7 +1120,10 @@ mod tests {
 
     #[test]
     fn ips_double_propensity_doubles_weight() {
-        let cfg = EvaluatorConfig { estimator: EstimatorKind::Ips, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            estimator: EstimatorKind::Ips,
+            ..Default::default()
+        };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).unwrap();
         // Logging at 250k, target at 500k → weight ≈ 2
         let batch = make_batch(100, 300_000, 250_000);
@@ -1124,7 +1139,10 @@ mod tests {
 
     #[test]
     fn ips_zero_target_propensity_yields_zero_effective_samples() {
-        let cfg = EvaluatorConfig { estimator: EstimatorKind::Ips, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            estimator: EstimatorKind::Ips,
+            ..Default::default()
+        };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).unwrap();
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 0); // Target never takes this action
@@ -1166,7 +1184,10 @@ mod tests {
 
     #[test]
     fn direct_method_averages_predictions() {
-        let cfg = EvaluatorConfig { estimator: EstimatorKind::DirectMethod, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            estimator: EstimatorKind::DirectMethod,
+            ..Default::default()
+        };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).unwrap();
         let batch = make_batch(10, 100_000, 500_000);
         let mut target = make_target(10, 500_000);
@@ -1177,7 +1198,10 @@ mod tests {
 
     #[test]
     fn direct_method_no_model_returns_zero() {
-        let cfg = EvaluatorConfig { estimator: EstimatorKind::DirectMethod, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            estimator: EstimatorKind::DirectMethod,
+            ..Default::default()
+        };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).unwrap();
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 500_000);
@@ -1231,7 +1255,11 @@ mod tests {
 
     #[test]
     fn safety_status_safe_when_improvement_clearly_positive() {
-        let cfg = EvaluatorConfig { estimator: EstimatorKind::Ips, improvement_threshold_millionths: 0, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            estimator: EstimatorKind::Ips,
+            improvement_threshold_millionths: 0,
+            ..Default::default()
+        };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).unwrap();
         // Target propensity 2x logging → weights 2x → estimate 2x rewards
         let batch = make_batch(1000, 300_000, 250_000);
@@ -1247,7 +1275,11 @@ mod tests {
 
     #[test]
     fn safety_status_unsafe_when_candidate_worse() {
-        let cfg = EvaluatorConfig { estimator: EstimatorKind::Ips, improvement_threshold_millionths: 500_000, ..Default::default() }; // Very high threshold
+        let cfg = EvaluatorConfig {
+            estimator: EstimatorKind::Ips,
+            improvement_threshold_millionths: 500_000,
+            ..Default::default()
+        }; // Very high threshold
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).unwrap();
         let batch = make_batch(100, 500_000, 500_000);
         let target = make_target(100, 500_000);
@@ -1278,7 +1310,10 @@ mod tests {
 
     #[test]
     fn regime_breakdown_disabled() {
-        let cfg = EvaluatorConfig { regime_breakdown: false, ..Default::default() };
+        let cfg = EvaluatorConfig {
+            regime_breakdown: false,
+            ..Default::default()
+        };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).unwrap();
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 500_000);

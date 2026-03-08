@@ -1625,7 +1625,10 @@ mod tests {
         let mut reg = BudgetRegistry::default();
         let default_time = reg.default_contract().global_time_cap_ns;
 
-        let custom = SynthesisBudgetContract { global_time_cap_ns: default_time + 999, ..Default::default() };
+        let custom = SynthesisBudgetContract {
+            global_time_cap_ns: default_time + 999,
+            ..Default::default()
+        };
         let ovr = BudgetOverride {
             extension_id: "ext-fast".into(),
             contract: custom,
@@ -1662,7 +1665,10 @@ mod tests {
 
     #[test]
     fn monitor_after_exhaustion_rejects_begin_phase() {
-        let mut contract = SynthesisBudgetContract { global_time_cap_ns: 10, ..Default::default() };
+        let mut contract = SynthesisBudgetContract {
+            global_time_cap_ns: 10,
+            ..Default::default()
+        };
         for phase_budget in contract.phase_budgets.values_mut() {
             phase_budget.time_cap_ns = 10;
         }
@@ -1676,7 +1682,12 @@ mod tests {
 
     #[test]
     fn monitor_utilization_returns_correct_ratios() {
-        let mut contract = SynthesisBudgetContract { global_time_cap_ns: 1_000, global_compute_cap: 100, global_depth_cap: 10, ..Default::default() };
+        let mut contract = SynthesisBudgetContract {
+            global_time_cap_ns: 1_000,
+            global_compute_cap: 100,
+            global_depth_cap: 10,
+            ..Default::default()
+        };
         for phase_budget in contract.phase_budgets.values_mut() {
             phase_budget.time_cap_ns = 1_000;
             phase_budget.compute_cap = 100;
@@ -1783,7 +1794,12 @@ mod tests {
 
     #[test]
     fn monitor_remaining_for_current_phase_decreases() {
-        let mut contract = SynthesisBudgetContract { global_time_cap_ns: 10_000, global_compute_cap: 1_000, global_depth_cap: 100, ..Default::default() };
+        let mut contract = SynthesisBudgetContract {
+            global_time_cap_ns: 10_000,
+            global_compute_cap: 1_000,
+            global_depth_cap: 100,
+            ..Default::default()
+        };
         contract.phase_budgets.insert(
             SynthesisPhase::StaticAnalysis,
             PhaseBudget {
@@ -1995,7 +2011,12 @@ mod tests {
 
     #[test]
     fn monitor_saturating_add_does_not_overflow() {
-        let contract = SynthesisBudgetContract { global_time_cap_ns: u64::MAX, global_compute_cap: u64::MAX, global_depth_cap: u64::MAX, ..Default::default() };
+        let contract = SynthesisBudgetContract {
+            global_time_cap_ns: u64::MAX,
+            global_compute_cap: u64::MAX,
+            global_depth_cap: u64::MAX,
+            ..Default::default()
+        };
         let mut m = BudgetMonitor::new(contract);
         m.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
         m.record_consumption(u64::MAX - 1, 0, 0).unwrap();

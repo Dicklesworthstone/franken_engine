@@ -2574,7 +2574,12 @@ mod tests {
         let trace = make_trace(vec![make_decision(0, "native", 500_000)]);
         let alt = make_alternate_policy("alt-1", "test");
         engine
-            .compare(std::slice::from_ref(&trace), std::slice::from_ref(&alt), &default_scope(), None)
+            .compare(
+                std::slice::from_ref(&trace),
+                std::slice::from_ref(&alt),
+                &default_scope(),
+                None,
+            )
             .unwrap();
         engine
             .compare(&[trace], &[alt], &default_scope(), None)

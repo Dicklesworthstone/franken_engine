@@ -663,9 +663,7 @@ impl GovernanceAuditLedger {
         let filtered: Vec<&GovernanceLedgerEntry> = self
             .entries
             .iter()
-            .filter(|entry| {
-                (start_time_ns..=end_time_ns).contains(&entry.timestamp_ns)
-            })
+            .filter(|entry| (start_time_ns..=end_time_ns).contains(&entry.timestamp_ns))
             .collect();
         let total = filtered.len();
         let override_count = filtered.iter().filter(|entry| entry.is_override).count();

@@ -2952,7 +2952,10 @@ mod tests {
 
     #[test]
     fn test_capability_gap_many_capabilities_witness_bounded() {
-        let config = ObstructionCertifierConfig { max_witness_components: 3, ..Default::default() };
+        let config = ObstructionCertifierConfig {
+            max_witness_components: 3,
+            ..Default::default()
+        };
         let c = ObstructionCertifier::with_config(config);
 
         let caps: Vec<String> = (0..10).map(|i| format!("cap{i}")).collect();
@@ -4440,7 +4443,10 @@ mod tests {
 
     #[test]
     fn suspense_boundary_many_children_witness_bounded() {
-        let config = ObstructionCertifierConfig { max_witness_components: 3, ..Default::default() };
+        let config = ObstructionCertifierConfig {
+            max_witness_components: 3,
+            ..Default::default()
+        };
         let c = ObstructionCertifier::with_config(config);
         let children: Vec<String> = (0..10).map(|i| format!("Child{i}")).collect();
         let v = make_violation(

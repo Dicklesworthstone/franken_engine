@@ -38,15 +38,13 @@ pub const LAW_PROVENANCE_INDEX_SCHEMA_VERSION: &str =
     "franken-engine.law-mining.provenance-index.v1";
 pub const CANDIDATE_SCOPE_HYPOTHESES_SCHEMA_VERSION: &str =
     "franken-engine.law-mining.scope-hypotheses.v1";
-pub const LAW_MINING_TRACE_IDS_SCHEMA_VERSION: &str =
-    "franken-engine.law-mining.trace-ids.v1";
+pub const LAW_MINING_TRACE_IDS_SCHEMA_VERSION: &str = "franken-engine.law-mining.trace-ids.v1";
 pub const LAW_MINING_RUN_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.law-mining.run-manifest.v1";
 pub const LAW_MINING_ENV_SCHEMA_VERSION: &str = "franken-engine.law-mining.env.v1";
 pub const LAW_MINING_ARTIFACT_INDEX_SCHEMA_VERSION: &str =
     "franken-engine.law-mining.artifact-index.v1";
-pub const LAW_MINING_EVENT_STREAM_SCHEMA_VERSION: &str =
-    "franken-engine.law-mining.events.v1";
+pub const LAW_MINING_EVENT_STREAM_SCHEMA_VERSION: &str = "franken-engine.law-mining.events.v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CandidateKind {
@@ -1001,39 +999,40 @@ pub fn emit_law_mining_bundle(
         &fixture.counterexamples,
         &fixture.evidence_entries,
     );
+    let catalog_hash = catalog.catalog_hash.clone();
     let candidate_catalog = CandidateLawCatalogArtifact {
         schema_version: CANDIDATE_LAW_CATALOG_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog.catalog_hash,
+        catalog_hash: catalog_hash.clone(),
         candidates: catalog.candidates.clone(),
     };
     let invariant_seed_ledger = InvariantSeedLedgerArtifact {
         schema_version: INVARIANT_SEED_LEDGER_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog.catalog_hash,
+        catalog_hash: catalog_hash.clone(),
         invariant_seed_ledger: catalog.invariant_seed_ledger.clone(),
     };
     let normal_form_hypotheses = NormalFormHypothesesArtifact {
         schema_version: NORMAL_FORM_HYPOTHESES_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog.catalog_hash,
+        catalog_hash: catalog_hash.clone(),
         normal_form_hypotheses: catalog.normal_form_hypotheses.clone(),
     };
     let provenance_index = LawProvenanceIndexArtifact {
         schema_version: LAW_PROVENANCE_INDEX_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog.catalog_hash,
+        catalog_hash: catalog_hash.clone(),
         provenance_index: catalog.provenance_index.clone(),
     };
     let scope_hypotheses = CandidateScopeHypothesesArtifact {
         schema_version: CANDIDATE_SCOPE_HYPOTHESES_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog.catalog_hash,
+        catalog_hash: catalog_hash.clone(),
         scope_hypotheses: catalog.scope_hypotheses.clone(),
     };
     let trace_ids = TraceIdsArtifact {
@@ -1055,7 +1054,7 @@ pub fn emit_law_mining_bundle(
             error_code: None,
             detail: format!(
                 "catalog_hash={} candidates={} counterexamples={} evidence_entries={}",
-                catalog.catalog_hash.to_hex(),
+                catalog_hash.to_hex(),
                 catalog.candidates.len(),
                 fixture.counterexamples.len(),
                 fixture.evidence_entries.len()
@@ -1213,10 +1212,7 @@ pub fn render_summary(catalog: &LawMiningCatalog) -> String {
         format!("generated_epoch: {}", catalog.generated_epoch),
         format!("catalog_hash: {}", catalog.catalog_hash.to_hex()),
         format!("candidates: {}", catalog.candidates.len()),
-        format!(
-            "invariant_seeds: {}",
-            catalog.invariant_seed_ledger.len()
-        ),
+        format!("invariant_seeds: {}", catalog.invariant_seed_ledger.len()),
         format!(
             "normal_form_hypotheses: {}",
             catalog.normal_form_hypotheses.len()
@@ -1334,7 +1330,9 @@ fn sample_evidence_entry_fixture(
             value: "1".to_string(),
         })
     });
-    builder.build().expect("fixture evidence entry should build")
+    builder
+        .build()
+        .expect("fixture evidence entry should build")
 }
 
 fn write_json_artifact<T: Serialize>(

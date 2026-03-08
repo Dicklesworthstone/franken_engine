@@ -1,0 +1,24 @@
+{
+  "schema_version": "franken-engine.law-mining.contract.v1",
+  "bead_id": "bd-1lsy.9.10",
+  "component": "law_mining",
+  "required_artifacts": [
+    "candidate_law_catalog.json",
+    "invariant_seed_ledger.json",
+    "normal_form_hypotheses.json",
+    "law_provenance_index.json",
+    "candidate_scope_hypotheses.json",
+    "trace_ids.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "env.json",
+    "manifest.json",
+    "repro.lock",
+    "summary.md"
+  ],
+  "runner_script": "./scripts/run_law_mining_suite.sh",
+  "replay_script": "./scripts/e2e/law_mining_replay.sh",
+  "binary": "franken_law_mining",
+  "default_artifact_root": "artifacts/law_mining"
+}

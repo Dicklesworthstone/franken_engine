@@ -1,0 +1,30 @@
+{
+  "schema_version": "franken-engine.law-mining.suite-run-manifest.v1",
+  "component": "law_mining",
+  "mode": "run",
+  "trace_id": "trace.rgc.810",
+  "decision_id": "decision.rgc.810",
+  "policy_id": "policy.rgc.810",
+  "toolchain": "nightly",
+  "cargo_target_dir": "/var/tmp/rch_target_franken_engine_law_mining_20260308T012956Z",
+  "git_commit": "9a1ec93e91fb3bb7ac778fc0ce8c737db5907dcb",
+  "dirty_worktree": true,
+  "generated_at_utc": "2026-03-08T01:29:56Z",
+  "outcome": "fail",
+  "commands": [
+    "cargo run -p frankenengine-engine --bin franken_law_mining -- --artifact-dir crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z --trace-id trace.rgc.810 --decision-id decision.rgc.810 --policy-id policy.rgc.810 --run-id run-law-mining-20260308T012956Z --generated-at-utc 2026-03-08T01:29:56Z --source-commit 9a1ec93e91fb3bb7ac778fc0ce8c737db5907dcb --toolchain nightly --summary"
+  ],
+  "artifacts": {
+    "suite_commands": "crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z/suite_commands.txt",
+    "candidate_law_catalog": "crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z/candidate_law_catalog.json",
+    "run_manifest": "crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z/run_manifest.json",
+    "summary": "crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z/summary.md",
+    "suite_manifest": "crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z/suite_run_manifest.json"
+  },
+  "operator_verification": [
+    "cat crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z/candidate_law_catalog.json",
+    "cat crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z/run_manifest.json",
+    "cat crates/franken-engine/tests/artifacts/law_mining_suite/20260308T012956Z/summary.md",
+    "./scripts/run_law_mining_suite.sh ci"
+  ]
+}

@@ -2023,3 +2023,320 @@ fn large_program_determinism() {
     assert_eq!(first.ir3.content_hash(), second.ir3.content_hash());
     assert_eq!(first.ir3.instructions.len(), second.ir3.instructions.len());
 }
+
+// ── for..in / for..of iteration lowering ────────────────────────────────────
+
+use frankenengine_engine::ast::{ForInStatement, ForOfStatement};
+use frankenengine_engine::ir_contract::IteratorCloseReason;
+
+fn for_in_ir0(binding_kind: Option<VariableDeclarationKind>) -> Ir0Module {
+    let tree = SyntaxTree {
+        goal: ParseGoal::Script,
+        body: vec![Statement::ForIn(ForInStatement {
+            binding: BindingPattern::Identifier("k".into()),
+            binding_kind,
+            object: Expression::Identifier("obj".into()),
+            body: Box::new(Statement::Expression(ExpressionStatement {
+                expression: Expression::Identifier("k".into()),
+                span: span(),
+            })),
+            span: span(),
+        })],
+        span: span(),
+    };
+    Ir0Module::from_syntax_tree(tree, "for_in_fixture.js")
+}
+
+fn for_of_ir0(binding_kind: Option<VariableDeclarationKind>) -> Ir0Module {
+    let tree = SyntaxTree {
+        goal: ParseGoal::Script,
+        body: vec![Statement::ForOf(ForOfStatement {
+            binding: BindingPattern::Identifier("v".into()),
+            binding_kind,
+            iterable: Expression::Identifier("arr".into()),
+            body: Box::new(Statement::Expression(ExpressionStatement {
+                expression: Expression::Identifier("v".into()),
+                span: span(),
+            })),
+            span: span(),
+        })],
+        span: span(),
+    };
+    Ir0Module::from_syntax_tree(tree, "for_of_fixture.js")
+}
+
+#[test]
+fn for_in_lowering_produces_for_in_init_and_next() {
+    let ir0 = for_in_ir0(Some(VariableDeclarationKind::Let));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-in lowering");
+    let ops = &result.module.ops;
+    assert!(ops.iter().any(|op| matches!(op, Ir1Op::ForInInit)));
+    assert!(ops.iter().any(|op| matches!(op, Ir1Op::ForInNext { .. })));
+}
+
+#[test]
+fn for_in_lowering_no_binding_kind_defaults_to_let() {
+    let ir0 = for_in_ir0(None);
+    let result = lower_ir0_to_ir1(&ir0).expect("for-in None binding_kind");
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ForInInit))
+    );
+}
+
+#[test]
+fn for_in_lowering_var_binding() {
+    let ir0 = for_in_ir0(Some(VariableDeclarationKind::Var));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-in var binding");
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ForInInit))
+    );
+}
+
+#[test]
+fn for_in_lowering_const_binding() {
+    let ir0 = for_in_ir0(Some(VariableDeclarationKind::Const));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-in const binding");
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ForInInit))
+    );
+}
+
+#[test]
+fn for_of_lowering_produces_for_of_init_next_and_close() {
+    let ir0 = for_of_ir0(Some(VariableDeclarationKind::Const));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-of lowering");
+    let ops = &result.module.ops;
+    assert!(ops.iter().any(|op| matches!(op, Ir1Op::ForOfInit)));
+    assert!(ops.iter().any(|op| matches!(op, Ir1Op::ForOfNext { .. })));
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Ir1Op::IteratorClose { .. }))
+    );
+}
+
+#[test]
+fn for_of_close_reason_is_break() {
+    let ir0 = for_of_ir0(Some(VariableDeclarationKind::Let));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-of break close");
+    let close_ops: Vec<_> = result
+        .module
+        .ops
+        .iter()
+        .filter_map(|op| {
+            if let Ir1Op::IteratorClose { reason } = op {
+                Some(*reason)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(close_ops, vec![IteratorCloseReason::Break]);
+}
+
+#[test]
+fn for_of_lowering_var_binding() {
+    let ir0 = for_of_ir0(Some(VariableDeclarationKind::Var));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-of var binding");
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ForOfInit))
+    );
+}
+
+#[test]
+fn for_of_lowering_no_binding_kind() {
+    let ir0 = for_of_ir0(None);
+    let result = lower_ir0_to_ir1(&ir0).expect("for-of None binding_kind");
+    assert!(
+        result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ForOfInit))
+    );
+}
+
+#[test]
+fn for_in_ir1_through_full_pipeline() {
+    let ir0 = for_in_ir0(Some(VariableDeclarationKind::Let));
+    let context = ctx();
+    let output = lower_ir0_to_ir3(&ir0, &context).expect("for-in full pipeline");
+    assert!(!output.ir3.instructions.is_empty());
+    assert!(matches!(
+        output.ir3.instructions.last(),
+        Some(Ir3Instruction::Halt)
+    ));
+}
+
+#[test]
+fn for_of_ir1_through_full_pipeline() {
+    let ir0 = for_of_ir0(Some(VariableDeclarationKind::Const));
+    let context = ctx();
+    let output = lower_ir0_to_ir3(&ir0, &context).expect("for-of full pipeline");
+    assert!(!output.ir3.instructions.is_empty());
+    assert!(matches!(
+        output.ir3.instructions.last(),
+        Some(Ir3Instruction::Halt)
+    ));
+}
+
+#[test]
+fn for_in_for_of_produce_different_ir1_ops() {
+    let for_in = lower_ir0_to_ir1(&for_in_ir0(Some(VariableDeclarationKind::Let))).expect("for-in");
+    let for_of = lower_ir0_to_ir1(&for_of_ir0(Some(VariableDeclarationKind::Let))).expect("for-of");
+    let in_has_for_in_init = for_in
+        .module
+        .ops
+        .iter()
+        .any(|op| matches!(op, Ir1Op::ForInInit));
+    let of_has_for_of_init = for_of
+        .module
+        .ops
+        .iter()
+        .any(|op| matches!(op, Ir1Op::ForOfInit));
+    assert!(in_has_for_in_init);
+    assert!(of_has_for_of_init);
+    // for-in should NOT have ForOfInit and vice versa.
+    assert!(
+        !for_in
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ForOfInit))
+    );
+    assert!(
+        !for_of
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ForInInit))
+    );
+}
+
+#[test]
+fn for_in_op_sequence_has_correct_structure() {
+    let ir0 = for_in_ir0(Some(VariableDeclarationKind::Let));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-in structure");
+    let ops = &result.module.ops;
+    // Verify the canonical ordering: ForInInit comes before ForInNext.
+    let init_pos = ops
+        .iter()
+        .position(|op| matches!(op, Ir1Op::ForInInit))
+        .expect("ForInInit");
+    let next_pos = ops
+        .iter()
+        .position(|op| matches!(op, Ir1Op::ForInNext { .. }))
+        .expect("ForInNext");
+    assert!(init_pos < next_pos, "ForInInit must precede ForInNext");
+}
+
+#[test]
+fn for_of_op_sequence_has_correct_structure() {
+    let ir0 = for_of_ir0(Some(VariableDeclarationKind::Let));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-of structure");
+    let ops = &result.module.ops;
+    // Verify: ForOfInit < ForOfNext < IteratorClose.
+    let init_pos = ops
+        .iter()
+        .position(|op| matches!(op, Ir1Op::ForOfInit))
+        .expect("ForOfInit");
+    let next_pos = ops
+        .iter()
+        .position(|op| matches!(op, Ir1Op::ForOfNext { .. }))
+        .expect("ForOfNext");
+    let close_pos = ops
+        .iter()
+        .position(|op| matches!(op, Ir1Op::IteratorClose { .. }))
+        .expect("IteratorClose");
+    assert!(init_pos < next_pos, "ForOfInit before ForOfNext");
+    assert!(next_pos < close_pos, "ForOfNext before IteratorClose");
+}
+
+#[test]
+fn for_in_pipeline_deterministic() {
+    let ir0 = for_in_ir0(Some(VariableDeclarationKind::Let));
+    let context = ctx();
+    let first = lower_ir0_to_ir3(&ir0, &context).expect("first");
+    let second = lower_ir0_to_ir3(&ir0, &context).expect("second");
+    assert_eq!(first.ir3.content_hash(), second.ir3.content_hash());
+}
+
+#[test]
+fn for_of_pipeline_deterministic() {
+    let ir0 = for_of_ir0(Some(VariableDeclarationKind::Const));
+    let context = ctx();
+    let first = lower_ir0_to_ir3(&ir0, &context).expect("first");
+    let second = lower_ir0_to_ir3(&ir0, &context).expect("second");
+    assert_eq!(first.ir3.content_hash(), second.ir3.content_hash());
+}
+
+#[test]
+fn for_in_ir1_serde_roundtrip() {
+    let ir0 = for_in_ir0(Some(VariableDeclarationKind::Let));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-in");
+    let json = serde_json::to_string(&result.module).expect("ser");
+    let restored: Ir1Module = serde_json::from_str(&json).expect("de");
+    assert_eq!(result.module.ops.len(), restored.ops.len());
+}
+
+#[test]
+fn for_of_ir1_serde_roundtrip() {
+    let ir0 = for_of_ir0(Some(VariableDeclarationKind::Const));
+    let result = lower_ir0_to_ir1(&ir0).expect("for-of");
+    let json = serde_json::to_string(&result.module).expect("ser");
+    let restored: Ir1Module = serde_json::from_str(&json).expect("de");
+    assert_eq!(result.module.ops.len(), restored.ops.len());
+}
+
+#[test]
+fn iterator_close_reason_serde_roundtrip() {
+    let reasons = vec![
+        IteratorCloseReason::Break,
+        IteratorCloseReason::Return,
+        IteratorCloseReason::Throw,
+    ];
+    for reason in &reasons {
+        let json = serde_json::to_string(reason).expect("ser");
+        let restored: IteratorCloseReason = serde_json::from_str(&json).expect("de");
+        assert_eq!(*reason, restored);
+    }
+}
+
+#[test]
+fn for_in_for_of_ir2_has_read_effect_for_iteration_ops() {
+    let ir0 = for_of_ir0(Some(VariableDeclarationKind::Let));
+    let ir1 = lower_ir0_to_ir1(&ir0).expect("ir1");
+    let ir2 = lower_ir1_to_ir2(&ir1.module).expect("ir2");
+    // All iteration ops should have ReadEffect classification.
+    let iteration_effects: Vec<_> = ir2
+        .module
+        .ops
+        .iter()
+        .filter(|op| {
+            matches!(
+                op.inner,
+                Ir1Op::ForOfInit | Ir1Op::ForOfNext { .. } | Ir1Op::IteratorClose { .. }
+            )
+        })
+        .map(|op| op.effect.clone())
+        .collect();
+    assert!(!iteration_effects.is_empty());
+    for effect in &iteration_effects {
+        assert_eq!(*effect, EffectBoundary::ReadEffect);
+    }
+}

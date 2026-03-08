@@ -24,9 +24,9 @@ use frankenengine_engine::module_cache::{
     S3FifoAdaptiveConfig, S3FifoAdaptiveMetrics, S3FifoAdoptionWedgeContract,
     S3FifoBaselineArtifactContext, S3FifoBaselineComparatorContractFixture, S3FifoConfig,
     SingleQueueFifoConfig, ValueAdmissionConfig, ValueAnnotatedTraceAccess,
-    ValueAnnotatedTraceCase, annotate_trace_with_default_values,
-    default_s3fifo_adaptive_config, default_s3fifo_baseline_contract_fixture,
-    emit_default_s3fifo_baseline_bundle, evaluate_s3fifo_baseline, simulate_s3fifo_adaptive,
+    ValueAnnotatedTraceCase, annotate_trace_with_default_values, default_s3fifo_adaptive_config,
+    default_s3fifo_baseline_contract_fixture, emit_default_s3fifo_baseline_bundle,
+    evaluate_s3fifo_baseline, simulate_s3fifo_adaptive,
 };
 
 // ---------------------------------------------------------------------------

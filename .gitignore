@@ -83,3 +83,9 @@ apply_fix.py
 fix_mut.py
 fix_mut2.py
 refactor_ternary.py
+
+# Remote compilation helper local config
+.rch/
+
+# Stray scratch files at root
+/tests_leak.rs

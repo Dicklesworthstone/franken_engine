@@ -666,6 +666,48 @@ impl InterpreterCore {
                     self.write_reg(dst, Value::Object(id))?;
                     self.ip += 1;
                 }
+                Ir3Instruction::Mod { dst, lhs, rhs } => {
+                    let result = self.eval_arith(lhs, rhs, "mod")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Exp { dst, lhs, rhs } => {
+                    let result = self.eval_arith(lhs, rhs, "exp")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Lt { dst, .. }
+                | Ir3Instruction::Lte { dst, .. }
+                | Ir3Instruction::Gt { dst, .. }
+                | Ir3Instruction::Gte { dst, .. }
+                | Ir3Instruction::Eq { dst, .. }
+                | Ir3Instruction::StrictEq { dst, .. }
+                | Ir3Instruction::NotEq { dst, .. }
+                | Ir3Instruction::StrictNotEq { dst, .. } => {
+                    // Comparison operations — stub as false for now.
+                    self.write_reg(dst, Value::Bool(false))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::BitAnd { dst, lhs, rhs }
+                | Ir3Instruction::BitOr { dst, lhs, rhs }
+                | Ir3Instruction::BitXor { dst, lhs, rhs }
+                | Ir3Instruction::Shl { dst, lhs, rhs }
+                | Ir3Instruction::Shr { dst, lhs, rhs }
+                | Ir3Instruction::Ushr { dst, lhs, rhs } => {
+                    let result = self.eval_arith(lhs, rhs, "bitop")?;
+                    self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::InstanceOf { dst, .. }
+                | Ir3Instruction::InOp { dst, .. } => {
+                    self.write_reg(dst, Value::Bool(false))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Construct { dst, .. } => {
+                    let id = self.alloc_object();
+                    self.write_reg(dst, Value::Object(id))?;
+                    self.ip += 1;
+                }
                 Ir3Instruction::Halt => {
                     return Err(InterpreterError::Halted);
                 }

@@ -34,6 +34,9 @@ pub mod causal_regret_evidence_gate;
 pub mod causal_replay;
 pub mod checkpoint;
 pub mod checkpoint_frontier;
+pub mod claim_atom_lattice;
+pub mod claim_entitlement;
+pub mod claim_envelope_contract;
 pub mod closure_model;
 pub mod compiler_policy;
 pub mod conformance_catalog;
@@ -133,6 +136,7 @@ pub mod milestone_release_test_evidence_integrator;
 pub mod mmr_proof;
 pub mod module_cache;
 pub mod module_compatibility_matrix;
+pub mod module_live_binding;
 pub mod module_resolver;
 pub mod monitor_scheduler;
 pub mod moonshot_contract;
@@ -163,6 +167,7 @@ pub mod parser_multi_engine_harness;
 pub mod parser_oracle;
 pub mod performance_regression_gate;
 pub mod performance_statistical_validation;
+pub mod persistent_cache_contract;
 pub mod phase_gate;
 pub mod plas_benchmark_bundle;
 pub mod plas_burn_in_gate;
@@ -225,6 +230,8 @@ pub mod semantic_twin;
 pub mod semantic_twin_state_space;
 pub mod seqlock_candidate_inventory;
 pub mod seqlock_fastpath;
+pub mod seqlock_reader_writer_contract;
+pub mod seqlock_rollout_guard;
 pub mod session_hostcall_channel;
 pub mod shadow_ablation_engine;
 pub mod sibling_integration_benchmark_gate;
@@ -281,7 +288,7 @@ use crate::baseline_interpreter::{
     LEGACY_V8_PROFILE_LABEL, LaneChoice, LaneRouter, THROUGHPUT_PROFILE_LABEL,
 };
 use crate::hash_tiers::ContentHash;
-use crate::ir_contract::Ir0Module;
+use crate::ir_contract::{Ir0Module, Ir3Instruction};
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineError, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions};
 use crate::ts_normalization::{
@@ -1069,9 +1076,16 @@ fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> 
             )
         })?;
 
+    // Eval completion semantics: the last expression statement's value should
+    // be the return value, but the lowering pipeline inserts Pop (no-op Move)
+    // after expression statements. Patch the IR3 so the completion value ends
+    // up in register 0 where the interpreter will read it.
+    let mut ir3 = lowering_output.ir3;
+    patch_eval_completion_value(&mut ir3.instructions);
+
     let lane_router = LaneRouter::new();
     let routed = lane_router
-        .execute(&lowering_output.ir3, prepared.trace_id.as_str(), Some(lane))
+        .execute(&ir3, prepared.trace_id.as_str(), Some(lane))
         .map_err(map_interpreter_error)
         .map_err(|error| {
             attach_eval_correlation(
@@ -1083,6 +1097,85 @@ fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> 
         })?;
 
     Ok(routed.result.value.to_string())
+}
+
+/// Patch IR3 instructions for eval completion semantics.
+///
+/// In JS, `eval("1 + 1;")` returns `2` — the completion value of the last
+/// expression statement. The lowering pipeline correctly inserts `Pop` (which
+/// becomes a self-`Move` in IR3) after expression statements, but for eval
+/// mode we need the last computed value to end up in register 0 so the
+/// interpreter returns it.
+///
+/// Strategy: scan backwards to find the last instruction that writes to a
+/// register other than 0 (the Pop no-op self-Move), then the instruction
+/// before it (the actual computation), and insert a `Move { dst: 0, src }`
+/// to copy the result into register 0.
+fn patch_eval_completion_value(instructions: &mut [Ir3Instruction]) {
+    // Find the register holding the last expression's value by scanning
+    // backwards past Pop no-ops, Return, and Halt.
+    let mut completion_reg = None;
+    for instr in instructions.iter().rev() {
+        match instr {
+            Ir3Instruction::Move { dst, src } if dst == src => continue,
+            Ir3Instruction::Halt => continue,
+            Ir3Instruction::Return { .. } => continue,
+            _ => {
+                completion_reg = ir3_destination_register(instr);
+                break;
+            }
+        }
+    }
+
+    if let Some(src) = completion_reg && src != 0 {
+        // Patch any Return instructions to use the completion register.
+        for instr in instructions.iter_mut() {
+            if let Ir3Instruction::Return { value } = instr {
+                *value = src;
+            }
+        }
+    }
+}
+
+/// Extract the destination register of an IR3 instruction, if any.
+fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
+    match instr {
+        Ir3Instruction::LoadInt { dst, .. }
+        | Ir3Instruction::LoadStr { dst, .. }
+        | Ir3Instruction::LoadBool { dst, .. }
+        | Ir3Instruction::LoadUndefined { dst }
+        | Ir3Instruction::LoadNull { dst }
+        | Ir3Instruction::Add { dst, .. }
+        | Ir3Instruction::Sub { dst, .. }
+        | Ir3Instruction::Mul { dst, .. }
+        | Ir3Instruction::Div { dst, .. }
+        | Ir3Instruction::Mod { dst, .. }
+        | Ir3Instruction::Exp { dst, .. }
+        | Ir3Instruction::Move { dst, .. }
+        | Ir3Instruction::GetProperty { dst, .. }
+        | Ir3Instruction::NewObject { dst }
+        | Ir3Instruction::NewArray { dst }
+        | Ir3Instruction::Lt { dst, .. }
+        | Ir3Instruction::Lte { dst, .. }
+        | Ir3Instruction::Gt { dst, .. }
+        | Ir3Instruction::Gte { dst, .. }
+        | Ir3Instruction::Eq { dst, .. }
+        | Ir3Instruction::StrictEq { dst, .. }
+        | Ir3Instruction::NotEq { dst, .. }
+        | Ir3Instruction::StrictNotEq { dst, .. }
+        | Ir3Instruction::BitAnd { dst, .. }
+        | Ir3Instruction::BitOr { dst, .. }
+        | Ir3Instruction::BitXor { dst, .. }
+        | Ir3Instruction::Shl { dst, .. }
+        | Ir3Instruction::Shr { dst, .. }
+        | Ir3Instruction::Ushr { dst, .. }
+        | Ir3Instruction::InstanceOf { dst, .. }
+        | Ir3Instruction::InOp { dst, .. }
+        | Ir3Instruction::Construct { dst, .. }
+        | Ir3Instruction::Call { dst, .. }
+        | Ir3Instruction::HostCall { dst, .. } => Some(*dst),
+        _ => None,
+    }
 }
 
 fn parse_error_location(error: &ParseError) -> Option<EvalSourceLocation> {
@@ -1159,6 +1252,13 @@ mod tests {
         let out = router.eval("1 + 1").expect("eval");
         assert_eq!(out.engine, EngineKind::QuickJsInspiredNative);
         assert_eq!(out.route_reason, RouteReason::DefaultQuickJsPath);
+    }
+
+    #[test]
+    fn eval_one_plus_one_returns_two() {
+        let mut router = HybridRouter::default();
+        let out = router.eval("1 + 1;").expect("eval should succeed");
+        assert_eq!(out.value, "2");
     }
 
     #[test]

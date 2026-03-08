@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ArrowBody, BinaryOperator, BindingPattern, ExportKind, Expression, ParseGoal, SourceSpan,
-    Statement, VariableDeclarationKind,
+    ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
+    ParseGoal, SourceSpan, Statement, VariableDeclarationKind,
 };
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -225,6 +225,7 @@ pub enum LoweringPipelineError {
     UnsupportedSyntax(Box<UnsupportedSyntaxDiagnostic>),
 }
 
+#[allow(dead_code)]
 fn unsupported_syntax_error(
     site: ParserGapSiteId,
     span: Option<SourceSpan>,
@@ -5682,37 +5683,27 @@ mod tests {
     }
 
     #[test]
-    fn lower_new_expression_fails_closed() {
+    fn lower_new_expression_emits_construct() {
         let ir0 = expr_ir0(Expression::New {
             callee: Box::new(Expression::Identifier("Foo".into())),
             arguments: vec![Expression::NumericLiteral(1)],
         });
-        let err = lower_ir0_to_ir1(&ir0).expect_err("new must fail closed");
-        assert!(matches!(
-            err,
-            LoweringPipelineError::UnsupportedSyntax(ref diagnostic)
-                if diagnostic.site_id
-                    == ParserGapSiteId::NewExpressionCallPlaceholder.as_str()
-                && diagnostic.diagnostic_code
-                    == ParserGapSiteId::NewExpressionCallPlaceholder.diagnostic_code()
-        ));
+        let result = lower_ir0_to_ir1(&ir0).expect("new expression should lower");
+        assert!(result.module.ops.iter().any(|op| matches!(op, Ir1Op::Construct { .. })));
     }
 
     #[test]
-    fn lower_template_literal_fails_closed() {
+    fn lower_template_literal_emits_template_op() {
         let ir0 = expr_ir0(Expression::TemplateLiteral {
             quasis: vec!["hello ".into(), " world".into()],
             expressions: vec![Expression::Identifier("name".into())],
         });
-        let err = lower_ir0_to_ir1(&ir0).expect_err("template literal must fail closed");
-        assert!(matches!(
-            err,
-            LoweringPipelineError::UnsupportedSyntax(ref diagnostic)
-                if diagnostic.site_id
-                    == ParserGapSiteId::TemplateLiteralRawPlaceholder.as_str()
-                && diagnostic.diagnostic_code
-                    == ParserGapSiteId::TemplateLiteralRawPlaceholder.diagnostic_code()
-        ));
+        let result = lower_ir0_to_ir1(&ir0).expect("template literal should lower");
+        assert!(result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::TemplateLiteral { .. })));
     }
 
     #[test]
@@ -5737,7 +5728,7 @@ mod tests {
     }
 
     #[test]
-    fn lower_non_arithmetic_binary_currently_collapses_to_add_placeholder() {
+    fn lower_non_arithmetic_binary_emits_typed_instruction() {
         let ir0 = expr_ir0(Expression::Binary {
             operator: BinaryOperator::LessThan,
             left: Box::new(Expression::NumericLiteral(1)),
@@ -5747,7 +5738,7 @@ mod tests {
         let output = lower_ir0_to_ir3(&ir0, &ctx).expect("comparison currently lowers");
         assert!(output.ir3.instructions.iter().any(|instruction| matches!(
             instruction,
-            crate::ir_contract::Ir3Instruction::Add { .. }
+            crate::ir_contract::Ir3Instruction::Lt { .. }
         )));
     }
 

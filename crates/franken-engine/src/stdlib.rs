@@ -1254,11 +1254,38 @@ pub enum StringRepresentationKind {
     RopeCandidate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StringObservationMode {
+    ScalarAlignedUtf16,
+    BoundarySensitiveUtf16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StringFastPathConsumer {
+    Runtime,
+    Optimizer,
+    Cache,
+}
+
+impl StringFastPathConsumer {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::Optimizer => "optimizer",
+            Self::Cache => "cache",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StringRepresentationReceipt {
     pub trace_id: String,
+    pub stable_hash: String,
     pub builtin: String,
     pub kind: StringRepresentationKind,
+    pub observation_mode: StringObservationMode,
     pub source_char_len: usize,
     pub result_char_len: usize,
     pub source_utf16_units: usize,
@@ -1270,6 +1297,7 @@ pub struct StringRepresentationReceipt {
     pub segment_count: usize,
     pub flatten_budget_code_units: usize,
     pub flatten_cost_code_units: usize,
+    pub view_eligible: bool,
     pub flatten_required: bool,
     pub flatten_budget_exhausted: bool,
 }
@@ -1279,6 +1307,80 @@ pub struct StringMethodResult {
     pub value: JsValue,
     pub receipt: Option<StringRepresentationReceipt>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StringFastPathEligibility {
+    pub trace_id: String,
+    pub builtin: String,
+    pub kind: StringRepresentationKind,
+    pub observation_mode: StringObservationMode,
+    pub view_eligible: bool,
+    pub runtime_eligible: bool,
+    pub optimizer_eligible: bool,
+    pub cache_eligible: bool,
+    pub stable_cache_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StringFastPathGateError {
+    MissingReceipt {
+        consumer: StringFastPathConsumer,
+    },
+    BoundarySensitiveUnicode {
+        consumer: StringFastPathConsumer,
+        builtin: String,
+        trace_id: String,
+    },
+    FlattenBudgetExceeded {
+        consumer: StringFastPathConsumer,
+        trace_id: String,
+    },
+    IneligibleRepresentation {
+        consumer: StringFastPathConsumer,
+        kind: StringRepresentationKind,
+        trace_id: String,
+    },
+}
+
+impl fmt::Display for StringFastPathGateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingReceipt { consumer } => {
+                write!(
+                    f,
+                    "{} fast-path receipt is required but missing",
+                    consumer.as_str()
+                )
+            }
+            Self::BoundarySensitiveUnicode {
+                consumer,
+                builtin,
+                trace_id,
+            } => write!(
+                f,
+                "{} fast-path rejected boundary-sensitive UTF-16 receipt for {} ({trace_id})",
+                consumer.as_str(),
+                builtin
+            ),
+            Self::FlattenBudgetExceeded { consumer, trace_id } => write!(
+                f,
+                "{} fast-path rejected flatten-budget-exhausted receipt ({trace_id})",
+                consumer.as_str()
+            ),
+            Self::IneligibleRepresentation {
+                consumer,
+                kind,
+                trace_id,
+            } => write!(
+                f,
+                "{} fast-path rejected {kind:?} representation ({trace_id})",
+                consumer.as_str()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StringFastPathGateError {}
 
 pub fn alloc_array_instance(
     heap: &mut ObjectHeap,
@@ -1973,20 +2075,36 @@ pub fn exec_string_method(
     match builtin {
         BuiltinId::StringPrototypeCharAt => {
             let idx = opt_int_arg(args, 0).unwrap_or(0) / FP_SCALE;
-            let ch = this.chars().nth(idx.max(0) as usize);
-            Ok(JsValue::Str(ch.map_or_else(String::new, |c| c.to_string())))
+            if idx < 0 {
+                return Ok(JsValue::Str(String::new()));
+            }
+            let code_units = utf16_code_units_vec(this);
+            match code_units.get(idx as usize) {
+                Some(unit) => Ok(JsValue::Str(utf16_materialize(
+                    std::slice::from_ref(unit),
+                    "String.prototype.charAt",
+                    &format!("at UTF-16 index {idx}"),
+                )?)),
+                None => Ok(JsValue::Str(String::new())),
+            }
         }
         BuiltinId::StringPrototypeCharCodeAt => {
             let idx = opt_int_arg(args, 0).unwrap_or(0) / FP_SCALE;
-            match this.chars().nth(idx.max(0) as usize) {
-                Some(c) => Ok(JsValue::Int(i64::from(c as u32) * FP_SCALE)),
+            if idx < 0 {
+                return Ok(JsValue::Int(0));
+            }
+            match utf16_code_units_vec(this).get(idx as usize) {
+                Some(unit) => Ok(JsValue::Int(i64::from(*unit) * FP_SCALE)),
                 None => Ok(JsValue::Int(0)), // NaN equivalent
             }
         }
         BuiltinId::StringPrototypeCodePointAt => {
             let idx = opt_int_arg(args, 0).unwrap_or(0) / FP_SCALE;
-            match this.chars().nth(idx.max(0) as usize) {
-                Some(c) => Ok(JsValue::Int(i64::from(c as u32) * FP_SCALE)),
+            if idx < 0 {
+                return Ok(JsValue::Undefined);
+            }
+            match utf16_code_point_at(this, idx as usize) {
+                Some(code_point) => Ok(JsValue::Int(i64::from(code_point) * FP_SCALE)),
                 None => Ok(JsValue::Undefined),
             }
         }
@@ -1996,11 +2114,14 @@ pub fn exec_string_method(
         }
         BuiltinId::StringPrototypeStartsWith => {
             let search = require_str("String.prototype.startsWith", args, 0)?;
-            let pos = opt_int_arg(args, 1).map(|n| (n / FP_SCALE).max(0) as usize);
-            let haystack = if let Some(p) = pos {
-                &this[this.char_indices().nth(p).map_or(this.len(), |(i, _)| i)..]
+            let utf16_len = utf16_code_units(this) as i64;
+            let pos = opt_int_arg(args, 1)
+                .map(|n| (n / FP_SCALE).clamp(0, utf16_len) as usize)
+                .unwrap_or(0);
+            let haystack = if search.is_empty() {
+                this.to_string()
             } else {
-                this
+                utf16_slice_lossless(this, pos, utf16_len as usize, "String.prototype.startsWith")?
             };
             Ok(JsValue::Bool(haystack.starts_with(search.as_str())))
         }
@@ -2012,8 +2133,8 @@ pub fn exec_string_method(
             let search = require_str("String.prototype.indexOf", args, 0)?;
             match this.find(search.as_str()) {
                 Some(byte_idx) => {
-                    let char_idx = this[..byte_idx].chars().count() as i64;
-                    Ok(JsValue::Int(char_idx * FP_SCALE))
+                    let utf16_idx = utf16_code_units(&this[..byte_idx]) as i64;
+                    Ok(JsValue::Int(utf16_idx * FP_SCALE))
                 }
                 None => Ok(JsValue::Int(-FP_SCALE)),
             }
@@ -2022,14 +2143,14 @@ pub fn exec_string_method(
             let search = require_str("String.prototype.lastIndexOf", args, 0)?;
             match this.rfind(search.as_str()) {
                 Some(byte_idx) => {
-                    let char_idx = this[..byte_idx].chars().count() as i64;
-                    Ok(JsValue::Int(char_idx * FP_SCALE))
+                    let utf16_idx = utf16_code_units(&this[..byte_idx]) as i64;
+                    Ok(JsValue::Int(utf16_idx * FP_SCALE))
                 }
                 None => Ok(JsValue::Int(-FP_SCALE)),
             }
         }
         BuiltinId::StringPrototypeSlice => {
-            let len = this.chars().count() as i64;
+            let len = utf16_code_units(this) as i64;
             let start = resolve_string_index(opt_int_arg(args, 0).unwrap_or(0) / FP_SCALE, len);
             let end = resolve_string_index(
                 opt_int_arg(args, 1).unwrap_or(len * FP_SCALE) / FP_SCALE,
@@ -2038,15 +2159,15 @@ pub fn exec_string_method(
             if start >= end {
                 return Ok(JsValue::Str(String::new()));
             }
-            let result: String = this
-                .chars()
-                .skip(start as usize)
-                .take((end - start) as usize)
-                .collect();
-            Ok(JsValue::Str(result))
+            Ok(JsValue::Str(utf16_slice_lossless(
+                this,
+                start as usize,
+                end as usize,
+                "String.prototype.slice",
+            )?))
         }
         BuiltinId::StringPrototypeSubstring => {
-            let len = this.chars().count() as i64;
+            let len = utf16_code_units(this) as i64;
             let mut a = (opt_int_arg(args, 0).unwrap_or(0) / FP_SCALE).clamp(0, len);
             let mut b = opt_int_arg(args, 1)
                 .map(|n| (n / FP_SCALE).clamp(0, len))
@@ -2054,12 +2175,12 @@ pub fn exec_string_method(
             if a > b {
                 std::mem::swap(&mut a, &mut b);
             }
-            let result: String = this
-                .chars()
-                .skip(a as usize)
-                .take((b - a) as usize)
-                .collect();
-            Ok(JsValue::Str(result))
+            Ok(JsValue::Str(utf16_slice_lossless(
+                this,
+                a as usize,
+                b as usize,
+                "String.prototype.substring",
+            )?))
         }
         BuiltinId::StringPrototypeTrim => Ok(JsValue::Str(this.trim().to_string())),
         BuiltinId::StringPrototypeTrimStart => Ok(JsValue::Str(this.trim_start().to_string())),
@@ -2067,12 +2188,24 @@ pub fn exec_string_method(
         BuiltinId::StringPrototypePadStart => {
             let target_len = require_int("String.prototype.padStart", args, 0)? / FP_SCALE;
             let pad_str = opt_str_arg(args, 1).unwrap_or_else(|| " ".into());
-            Ok(JsValue::Str(pad_string(this, target_len, &pad_str, true)))
+            Ok(JsValue::Str(pad_string(
+                this,
+                target_len,
+                &pad_str,
+                true,
+                "String.prototype.padStart",
+            )?))
         }
         BuiltinId::StringPrototypePadEnd => {
             let target_len = require_int("String.prototype.padEnd", args, 0)? / FP_SCALE;
             let pad_str = opt_str_arg(args, 1).unwrap_or_else(|| " ".into());
-            Ok(JsValue::Str(pad_string(this, target_len, &pad_str, false)))
+            Ok(JsValue::Str(pad_string(
+                this,
+                target_len,
+                &pad_str,
+                false,
+                "String.prototype.padEnd",
+            )?))
         }
         BuiltinId::StringPrototypeRepeat => {
             let count = require_int("String.prototype.repeat", args, 0)? / FP_SCALE;
@@ -2125,11 +2258,11 @@ pub fn exec_string_method(
         }
         BuiltinId::StringPrototypeSearch => {
             let search = require_str("String.prototype.search", args, 0)?;
-            // Simple substring search (no regex). Returns char index or -1.
+            // Simple substring search (no regex). Returns UTF-16 code-unit index or -1.
             match this.find(&*search) {
                 Some(byte_idx) => {
-                    let char_idx = this[..byte_idx].chars().count() as i64;
-                    Ok(JsValue::Int(char_idx * FP_SCALE))
+                    let utf16_idx = utf16_code_units(&this[..byte_idx]) as i64;
+                    Ok(JsValue::Int(utf16_idx * FP_SCALE))
                 }
                 None => Ok(JsValue::Int(-FP_SCALE)),
             }
@@ -2171,6 +2304,65 @@ pub fn exec_string_method_with_receipt(
         _ => None,
     };
     Ok(StringMethodResult { value, receipt })
+}
+
+pub fn derive_string_fast_path_eligibility(
+    receipt: &StringRepresentationReceipt,
+) -> StringFastPathEligibility {
+    let runtime_eligible = !receipt.flatten_budget_exhausted;
+    let optimizer_eligible = runtime_eligible
+        && receipt.observation_mode == StringObservationMode::ScalarAlignedUtf16
+        && !matches!(receipt.kind, StringRepresentationKind::RopeCandidate);
+    let cache_eligible = runtime_eligible;
+    StringFastPathEligibility {
+        trace_id: receipt.trace_id.clone(),
+        builtin: receipt.builtin.clone(),
+        kind: receipt.kind,
+        observation_mode: receipt.observation_mode,
+        view_eligible: receipt.view_eligible,
+        runtime_eligible,
+        optimizer_eligible,
+        cache_eligible,
+        stable_cache_key: format!("string-fast-path:{}:{}", receipt.builtin, receipt.stable_hash),
+    }
+}
+
+pub fn require_string_fast_path_eligibility(
+    consumer: StringFastPathConsumer,
+    receipt: Option<&StringRepresentationReceipt>,
+) -> Result<StringFastPathEligibility, StringFastPathGateError> {
+    let Some(receipt) = receipt else {
+        return Err(StringFastPathGateError::MissingReceipt { consumer });
+    };
+    if receipt.flatten_budget_exhausted {
+        return Err(StringFastPathGateError::FlattenBudgetExceeded {
+            consumer,
+            trace_id: receipt.trace_id.clone(),
+        });
+    }
+    if consumer == StringFastPathConsumer::Optimizer
+        && receipt.observation_mode == StringObservationMode::BoundarySensitiveUtf16
+    {
+        return Err(StringFastPathGateError::BoundarySensitiveUnicode {
+            consumer,
+            builtin: receipt.builtin.clone(),
+            trace_id: receipt.trace_id.clone(),
+        });
+    }
+    let eligibility = derive_string_fast_path_eligibility(receipt);
+    let allowed = match consumer {
+        StringFastPathConsumer::Runtime => eligibility.runtime_eligible,
+        StringFastPathConsumer::Optimizer => eligibility.optimizer_eligible,
+        StringFastPathConsumer::Cache => eligibility.cache_eligible,
+    };
+    if !allowed {
+        return Err(StringFastPathGateError::IneligibleRepresentation {
+            consumer,
+            kind: receipt.kind,
+            trace_id: receipt.trace_id.clone(),
+        });
+    }
+    Ok(eligibility)
 }
 
 /// Execute a pure Number method.

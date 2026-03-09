@@ -965,10 +965,6 @@ pub fn compute_async_evaluation_order(
 mod tests {
     use super::*;
 
-    fn js_undefined() -> JsValue {
-        JsValue::Undefined
-    }
-
     fn js_error(msg: &str) -> JsValue {
         JsValue::Str(msg.to_string())
     }
@@ -979,6 +975,7 @@ mod tests {
             namespaces: BTreeMap::new(),
             imports: Vec::new(),
             events: Vec::new(),
+            schema_version: "test".to_string(),
         }
     }
 

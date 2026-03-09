@@ -84,7 +84,7 @@ pub struct VersionSlots {
     pub derivation_notes: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VersionMatrixError {
     MissingCurrentVersion {
         repo: String,

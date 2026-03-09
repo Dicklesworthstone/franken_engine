@@ -632,28 +632,7 @@ impl SwarmControlLoop {
             }
         }
 
-        // Topological sort to detect cycles.
-        let mut in_degree: BTreeMap<&str, usize> = BTreeMap::new();
-        for (id, node) in &self.graph {
-            in_degree.entry(id.as_str()).or_insert(0);
-            for dep in &node.depends_on {
-                if self.graph.contains_key(dep) {
-                    *in_degree.entry(dep.as_str()).or_insert(0) += 0; // ensure dep exists
-                }
-            }
-        }
-        // Count incoming edges (how many things depend on each task).
-        for node in self.graph.values() {
-            for dep in &node.depends_on {
-                if let Some(count) = in_degree.get_mut(dep.as_str()) {
-                    // dep has node depending on it — but in_degree tracks
-                    // number of un-resolved dependencies for each task
-                    let _ = count;
-                }
-            }
-        }
-
-        // Simple cycle detection via iterative removal.
+        // Cycle detection via iterative removal.
         let mut remaining: BTreeSet<&str> = self.graph.keys().map(String::as_str).collect();
         let mut progress = true;
         while progress {

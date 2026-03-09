@@ -415,7 +415,7 @@ impl DecisionMarkerStream {
         let redacted_payload = RedactedPayload {
             redacted_summary: input.payload_summary,
             payload_hash,
-            redaction_applied: true,
+            redaction_applied: input.full_payload.is_some(),
         };
 
         // Build marker with placeholder hash, then compute real hash.

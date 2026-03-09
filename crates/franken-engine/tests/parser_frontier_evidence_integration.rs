@@ -2,7 +2,7 @@
 
 use frankenengine_engine::parser_frontier_evidence::{
     ActualParseOutcome, ExpectedParseOutcome, FrontierEvidenceArtifactPaths,
-    FrontierEvidenceBundleArtifacts, FrontierEvidenceEvent, FrontierEvidenceRunManifest,
+    FrontierEvidenceEvent, FrontierEvidenceRunManifest,
     FrontierSpecimen, FrontierSpecimenEvidence, FrontierVerdict, PARSER_FRONTIER_COMPONENT,
     PARSER_FRONTIER_EVENT_SCHEMA_VERSION, PARSER_FRONTIER_EVIDENCE_SCHEMA_VERSION,
     PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION, PARSER_FRONTIER_POLICY_ID,

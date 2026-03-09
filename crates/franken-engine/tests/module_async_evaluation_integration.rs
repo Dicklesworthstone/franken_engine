@@ -33,7 +33,7 @@ fn make_binding_id(module: &str, export: &str) -> BindingId {
 }
 
 fn make_binding_cell(module: &str, export: &str) -> BindingCell {
-    let mut cell = BindingCell::new(module, export, export, BindingType::Local);
+    let mut cell = BindingCell::new(module, export, export, BindingType::Direct);
     cell.state = BindingCellState::Initialized;
     cell
 }

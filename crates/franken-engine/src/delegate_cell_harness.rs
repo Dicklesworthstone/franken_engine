@@ -276,11 +276,12 @@ impl PerformanceMetrics {
             }
         }
         self.total_duration_ns = self.total_duration_ns.saturating_add(record.duration_ns);
-        if self.total_invocations == 1 {
+        if self.total_invocations == 1 && self.min_duration_ns == 0 {
+            // First record on a fresh (default-initialized) struct.
             self.min_duration_ns = record.duration_ns;
             self.max_duration_ns = record.duration_ns;
         } else {
-            if record.duration_ns < self.min_duration_ns {
+            if record.duration_ns < self.min_duration_ns || self.min_duration_ns == 0 {
                 self.min_duration_ns = record.duration_ns;
             }
             if record.duration_ns > self.max_duration_ns {

@@ -758,10 +758,10 @@ impl FlowEnvelopeSynthesizer {
             })
             .collect();
 
-        // 4. Compute confidence.
-        let n_trials = dynamic_result.required_flows.len() as u32
-            + dynamic_result.removable_flows.len() as u32;
-        let n_essential = dynamic_result.required_flows.len() as u32;
+        // 4. Compute confidence (ablation-only: excludes statically-safe flows).
+        let n_trials = static_result.removable_flows.len() as u32;
+        let n_essential =
+            (dynamic_result.required_flows.len() - static_result.required_flows.len()) as u32;
         let confidence = FlowConfidenceInterval {
             lower_millionths: if n_trials > 0 {
                 ((n_essential as i64) * 1_000_000) / (n_trials as i64)
@@ -2501,11 +2501,11 @@ mod tests {
             FlowEnvelopeSynthesizer::new("ext-conf", 30_000_000_000, SecurityEpoch::from_raw(1));
         let envelope = synth.synthesize(&upper, &oracle, "p", 0, "t").unwrap();
 
-        // 3 required (2 safe + 1 promoted), 1 removable → ratio = 3/4
-        assert_eq!(envelope.confidence.n_trials, 4);
-        assert_eq!(envelope.confidence.n_essential, 3);
-        // lower = 3_000_000 / 4 = 750_000
-        assert_eq!(envelope.confidence.lower_millionths, 750_000);
+        // 2 ablation trials (Confidential→Public, Secret→Internal), 1 essential
+        assert_eq!(envelope.confidence.n_trials, 2);
+        assert_eq!(envelope.confidence.n_essential, 1);
+        // lower = 1_000_000 / 2 = 500_000
+        assert_eq!(envelope.confidence.lower_millionths, 500_000);
     }
 
     #[test]

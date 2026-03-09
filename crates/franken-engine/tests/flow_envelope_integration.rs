@@ -1309,9 +1309,9 @@ fn synthesizer_confidence_reflects_pass_results() {
     let oracle = |_: &FlowRule| false;
     let envelope = synth.synthesize(&upper, &oracle, "p", 100, "t").unwrap();
 
-    // n_trials = required + removable, n_essential = required
-    assert_eq!(envelope.confidence.n_trials, 4); // 2 required + 2 removable
-    assert_eq!(envelope.confidence.n_essential, 2);
+    // n_trials = ablation trials only, n_essential = promoted by oracle
+    assert_eq!(envelope.confidence.n_trials, 2); // 2 removable flows tested
+    assert_eq!(envelope.confidence.n_essential, 0); // oracle returned false for all
     assert_eq!(envelope.confidence.upper_millionths, 1_000_000);
 }
 

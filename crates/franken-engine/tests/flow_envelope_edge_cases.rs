@@ -1309,10 +1309,10 @@ fn synthesize_confidence_computed() {
     let upper = test_upper_bound();
     let oracle = |_: &FlowRule| false;
     let envelope = synth.synthesize(&upper, &oracle, "p", 0, "t").unwrap();
-    // 2 required, 2 removable → n_trials = 4, n_essential = 2
-    assert_eq!(envelope.confidence.n_trials, 4);
-    assert_eq!(envelope.confidence.n_essential, 2);
-    assert_eq!(envelope.confidence.lower_millionths, 500_000);
+    // 2 ablation trials, 0 promoted → n_trials = 2, n_essential = 0
+    assert_eq!(envelope.confidence.n_trials, 2);
+    assert_eq!(envelope.confidence.n_essential, 0);
+    assert_eq!(envelope.confidence.lower_millionths, 0);
     assert_eq!(envelope.confidence.upper_millionths, 1_000_000);
 }
 
@@ -1323,9 +1323,9 @@ fn synthesize_confidence_all_essential() {
     let upper = test_upper_bound();
     let oracle = |_: &FlowRule| true;
     let envelope = synth.synthesize(&upper, &oracle, "p", 0, "t").unwrap();
-    // 4 required, 0 removable
-    assert_eq!(envelope.confidence.n_trials, 4);
-    assert_eq!(envelope.confidence.n_essential, 4);
+    // 2 ablation trials, 2 promoted → n_trials = 2, n_essential = 2
+    assert_eq!(envelope.confidence.n_trials, 2);
+    assert_eq!(envelope.confidence.n_essential, 2);
     assert_eq!(envelope.confidence.lower_millionths, 1_000_000);
 }
 

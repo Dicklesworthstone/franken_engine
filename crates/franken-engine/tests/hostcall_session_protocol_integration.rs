@@ -4,8 +4,8 @@
 //! typestate machine, key schedule, anti-replay ledger, degraded-mode policy,
 //! protocol errors, specimen families, and bundle writer.
 
-use frankenengine_engine::hostcall_session_protocol::*;
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
+use frankenengine_engine::hostcall_session_protocol::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -58,7 +58,10 @@ fn make_key_schedule(session_id: &str) -> SessionKeySchedule {
         test_hash(),
     );
     for purpose in KeyStagePurpose::ALL {
-        ks.record_stage(*purpose, ContentHash::compute(purpose.domain_label().as_bytes()));
+        ks.record_stage(
+            *purpose,
+            ContentHash::compute(purpose.domain_label().as_bytes()),
+        );
     }
     ks
 }
@@ -96,10 +99,7 @@ fn corpus_covers_all_families() {
     let families: std::collections::BTreeSet<HspSpecimenFamily> =
         corpus.iter().map(|s| s.family).collect();
     for fam in HspSpecimenFamily::ALL {
-        assert!(
-            families.contains(fam),
-            "family {fam} not covered in corpus"
-        );
+        assert!(families.contains(fam), "family {fam} not covered in corpus");
     }
 }
 
@@ -196,7 +196,10 @@ fn phase_tag_terminal_only_closed() {
 #[test]
 fn phase_tag_data_only_established_and_degraded() {
     for tag in SessionPhaseTag::ALL {
-        let expected = matches!(tag, SessionPhaseTag::Established | SessionPhaseTag::DegradedOpen);
+        let expected = matches!(
+            tag,
+            SessionPhaseTag::Established | SessionPhaseTag::DegradedOpen
+        );
         assert_eq!(tag.permits_data(), expected, "wrong for {tag}");
     }
 }
@@ -204,7 +207,14 @@ fn phase_tag_data_only_established_and_degraded() {
 #[test]
 fn phase_tag_display_roundtrip_stable() {
     let displays: Vec<String> = SessionPhaseTag::ALL.iter().map(|t| t.to_string()).collect();
-    let expected = vec!["uninit", "negotiating", "established", "degraded_open", "closing", "closed"];
+    let expected = vec![
+        "uninit",
+        "negotiating",
+        "established",
+        "degraded_open",
+        "closing",
+        "closed",
+    ];
     assert_eq!(displays, expected);
 }
 
@@ -245,7 +255,11 @@ fn transition_table_no_self_loops() {
 fn transition_table_no_exits_from_closed() {
     let table = valid_transitions();
     for t in &table {
-        assert_ne!(t.from, SessionPhaseTag::Closed, "transition from Closed found");
+        assert_ne!(
+            t.from,
+            SessionPhaseTag::Closed,
+            "transition from Closed found"
+        );
     }
 }
 
@@ -253,7 +267,9 @@ fn transition_table_no_exits_from_closed() {
 fn is_valid_transition_symmetric_with_table() {
     for from in SessionPhaseTag::ALL {
         for to in SessionPhaseTag::ALL {
-            let table_says = valid_transitions().iter().any(|t| t.from == *from && t.to == *to);
+            let table_says = valid_transitions()
+                .iter()
+                .any(|t| t.from == *from && t.to == *to);
             if *from == *to || *from == SessionPhaseTag::Closed {
                 assert!(!is_valid_transition(*from, *to));
             } else {
@@ -273,12 +289,19 @@ fn transition_trigger_display_all_variants() {
         TransitionTrigger::HandshakeInitiated,
         TransitionTrigger::HandshakeCompleted,
         TransitionTrigger::HandshakeRejected,
-        TransitionTrigger::SecurityDegradation { reason: "test".into() },
+        TransitionTrigger::SecurityDegradation {
+            reason: "test".into(),
+        },
         TransitionTrigger::DegradedRecovery,
         TransitionTrigger::CloseInitiated,
-        TransitionTrigger::SessionExpired { reason: "ttl".into() },
+        TransitionTrigger::SessionExpired {
+            reason: "ttl".into(),
+        },
         TransitionTrigger::DrainCompleted,
-        TransitionTrigger::ReplayThresholdBreached { drop_count: 5, window_ticks: 10 },
+        TransitionTrigger::ReplayThresholdBreached {
+            drop_count: 5,
+            window_ticks: 10,
+        },
     ];
     for t in &triggers {
         let s = t.to_string();
@@ -291,9 +314,16 @@ fn transition_trigger_serde_roundtrip() {
     let triggers = vec![
         TransitionTrigger::HandshakeInitiated,
         TransitionTrigger::HandshakeCompleted,
-        TransitionTrigger::SecurityDegradation { reason: "epoch".into() },
-        TransitionTrigger::SessionExpired { reason: "budget".into() },
-        TransitionTrigger::ReplayThresholdBreached { drop_count: 10, window_ticks: 100 },
+        TransitionTrigger::SecurityDegradation {
+            reason: "epoch".into(),
+        },
+        TransitionTrigger::SessionExpired {
+            reason: "budget".into(),
+        },
+        TransitionTrigger::ReplayThresholdBreached {
+            drop_count: 10,
+            window_ticks: 100,
+        },
     ];
     for t in &triggers {
         let json = serde_json::to_string(t).unwrap();
@@ -309,7 +339,11 @@ fn transition_trigger_serde_roundtrip() {
 #[test]
 fn key_schedule_new_incomplete() {
     let ks = SessionKeySchedule::new(
-        test_epoch(), "s".into(), "e".into(), "h".into(), test_hash(),
+        test_epoch(),
+        "s".into(),
+        "e".into(),
+        "h".into(),
+        test_hash(),
     );
     assert!(!ks.is_complete());
     assert!(ks.derived_stages.is_empty());
@@ -360,8 +394,10 @@ fn key_stage_purpose_all_has_four() {
 
 #[test]
 fn key_stage_purpose_domain_labels_unique() {
-    let labels: std::collections::BTreeSet<&str> =
-        KeyStagePurpose::ALL.iter().map(|p| p.domain_label()).collect();
+    let labels: std::collections::BTreeSet<&str> = KeyStagePurpose::ALL
+        .iter()
+        .map(|p| p.domain_label())
+        .collect();
     assert_eq!(labels.len(), 4);
 }
 
@@ -376,8 +412,14 @@ fn key_stage_purpose_domain_labels_prefixed() {
 fn key_stage_purpose_display() {
     assert_eq!(KeyStagePurpose::MasterSecret.to_string(), "master_secret");
     assert_eq!(KeyStagePurpose::DataPlaneMac.to_string(), "data_plane_mac");
-    assert_eq!(KeyStagePurpose::DataPlaneEncrypt.to_string(), "data_plane_encrypt");
-    assert_eq!(KeyStagePurpose::BackpressureSign.to_string(), "backpressure_sign");
+    assert_eq!(
+        KeyStagePurpose::DataPlaneEncrypt.to_string(),
+        "data_plane_encrypt"
+    );
+    assert_eq!(
+        KeyStagePurpose::BackpressureSign.to_string(),
+        "backpressure_sign"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +445,10 @@ fn ledger_rejects_replay() {
 fn ledger_monotonic_accepts() {
     let mut ledger = AntiReplayLedger::new("l1".into(), 64, 100);
     for seq in 1..=20 {
-        assert_eq!(ledger.check_and_record(seq, seq, None), ReplayVerdict::Accept);
+        assert_eq!(
+            ledger.check_and_record(seq, seq, None),
+            ReplayVerdict::Accept
+        );
     }
     assert_eq!(ledger.total_accepted(), 20);
 }
@@ -422,7 +467,10 @@ fn ledger_below_floor_rejected() {
     for seq in 1..=10 {
         ledger.check_and_record(seq, seq, None);
     }
-    assert_eq!(ledger.check_and_record(1, 11, None), ReplayVerdict::BelowFloor);
+    assert_eq!(
+        ledger.check_and_record(1, 11, None),
+        ReplayVerdict::BelowFloor
+    );
     assert_eq!(ledger.total_below_floor(), 1);
 }
 
@@ -430,7 +478,10 @@ fn ledger_below_floor_rejected() {
 fn ledger_above_ceiling_rejected() {
     let mut ledger = AntiReplayLedger::new("l1".into(), 4, 100);
     ledger.check_and_record(1, 1, None);
-    assert_eq!(ledger.check_and_record(100, 2, None), ReplayVerdict::AboveCeiling);
+    assert_eq!(
+        ledger.check_and_record(100, 2, None),
+        ReplayVerdict::AboveCeiling
+    );
 }
 
 #[test]
@@ -590,15 +641,30 @@ fn degraded_severity_ordering() {
 #[test]
 fn degraded_severity_display() {
     assert_eq!(DegradedSeverity::StaleKey.to_string(), "stale_key");
-    assert_eq!(DegradedSeverity::PartialMacFailure.to_string(), "partial_mac_failure");
-    assert_eq!(DegradedSeverity::IdentityCompromised.to_string(), "identity_compromised");
+    assert_eq!(
+        DegradedSeverity::PartialMacFailure.to_string(),
+        "partial_mac_failure"
+    );
+    assert_eq!(
+        DegradedSeverity::IdentityCompromised.to_string(),
+        "identity_compromised"
+    );
 }
 
 #[test]
 fn degraded_operation_kind_display() {
-    assert_eq!(DegradedOperationKind::ReadHostcall.to_string(), "read_hostcall");
-    assert_eq!(DegradedOperationKind::WriteHostcall.to_string(), "write_hostcall");
-    assert_eq!(DegradedOperationKind::LifecycleOperation.to_string(), "lifecycle_operation");
+    assert_eq!(
+        DegradedOperationKind::ReadHostcall.to_string(),
+        "read_hostcall"
+    );
+    assert_eq!(
+        DegradedOperationKind::WriteHostcall.to_string(),
+        "write_hostcall"
+    );
+    assert_eq!(
+        DegradedOperationKind::LifecycleOperation.to_string(),
+        "lifecycle_operation"
+    );
     assert_eq!(DegradedOperationKind::Close.to_string(), "close");
 }
 
@@ -720,10 +786,18 @@ fn state_initial_is_uninit() {
 fn state_full_happy_path() {
     let mut state = make_established_state();
     state
-        .transition(SessionPhaseTag::Closing, TransitionTrigger::CloseInitiated, 3)
+        .transition(
+            SessionPhaseTag::Closing,
+            TransitionTrigger::CloseInitiated,
+            3,
+        )
         .unwrap();
     state
-        .transition(SessionPhaseTag::Closed, TransitionTrigger::DrainCompleted, 4)
+        .transition(
+            SessionPhaseTag::Closed,
+            TransitionTrigger::DrainCompleted,
+            4,
+        )
         .unwrap();
     assert!(state.phase.is_terminal());
     assert_eq!(state.transition_history.len(), 4);
@@ -745,10 +819,18 @@ fn state_invalid_transition_rejected() {
 fn state_no_exit_from_closed() {
     let mut state = make_state();
     state
-        .transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1)
+        .transition(
+            SessionPhaseTag::Negotiating,
+            TransitionTrigger::HandshakeInitiated,
+            1,
+        )
         .unwrap();
     state
-        .transition(SessionPhaseTag::Closed, TransitionTrigger::HandshakeRejected, 2)
+        .transition(
+            SessionPhaseTag::Closed,
+            TransitionTrigger::HandshakeRejected,
+            2,
+        )
         .unwrap();
     let err = state.transition(
         SessionPhaseTag::Negotiating,
@@ -770,7 +852,11 @@ fn state_attach_complete_key_schedule() {
 fn state_reject_incomplete_key_schedule() {
     let mut state = make_state();
     let ks = SessionKeySchedule::new(
-        test_epoch(), "s".into(), "e".into(), "h".into(), test_hash(),
+        test_epoch(),
+        "s".into(),
+        "e".into(),
+        "h".into(),
+        test_hash(),
     );
     assert!(state.attach_key_schedule(ks).is_err());
 }
@@ -802,7 +888,11 @@ fn state_degraded_entry_and_recovery() {
     assert_eq!(state.degraded_entered_tick, Some(10));
 
     state
-        .transition(SessionPhaseTag::Established, TransitionTrigger::DegradedRecovery, 20)
+        .transition(
+            SessionPhaseTag::Established,
+            TransitionTrigger::DegradedRecovery,
+            20,
+        )
         .unwrap();
     assert_eq!(state.phase, SessionPhaseTag::Established);
     assert!(state.degraded_policy.is_none());
@@ -812,9 +902,21 @@ fn state_degraded_entry_and_recovery() {
 #[test]
 fn state_check_operation_established_allows_all() {
     let state = make_established_state();
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 10).is_ok());
-    assert!(state.check_operation(DegradedOperationKind::WriteHostcall, 10).is_ok());
-    assert!(state.check_operation(DegradedOperationKind::Close, 10).is_ok());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 10)
+            .is_ok()
+    );
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::WriteHostcall, 10)
+            .is_ok()
+    );
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::Close, 10)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -823,9 +925,21 @@ fn state_check_operation_degraded_identity_blocks_data() {
     state
         .enter_degraded(DegradedSeverity::IdentityCompromised, "bad".into(), 10)
         .unwrap();
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 11).is_err());
-    assert!(state.check_operation(DegradedOperationKind::WriteHostcall, 11).is_err());
-    assert!(state.check_operation(DegradedOperationKind::Close, 11).is_ok());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 11)
+            .is_err()
+    );
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::WriteHostcall, 11)
+            .is_err()
+    );
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::Close, 11)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -834,11 +948,19 @@ fn state_degraded_message_budget_exhaustion() {
     state
         .enter_degraded(DegradedSeverity::PartialMacFailure, "mac".into(), 10)
         .unwrap();
-    let limit = state.degraded_policy.as_ref().unwrap().max_degraded_messages;
+    let limit = state
+        .degraded_policy
+        .as_ref()
+        .unwrap()
+        .max_degraded_messages;
     for _ in 0..limit {
         state.record_degraded_message();
     }
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 11).is_err());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 11)
+            .is_err()
+    );
 }
 
 #[test]
@@ -848,8 +970,16 @@ fn state_degraded_time_budget_exhaustion() {
         .enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 100)
         .unwrap();
     let max_ticks = state.degraded_policy.as_ref().unwrap().max_degraded_ticks;
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks).is_ok());
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks + 1).is_err());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks)
+            .is_ok()
+    );
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks + 1)
+            .is_err()
+    );
 }
 
 #[test]
@@ -879,7 +1009,10 @@ fn state_transition_history_recorded() {
     assert_eq!(state.transition_history.len(), 2);
     assert_eq!(state.transition_history[0].from, SessionPhaseTag::Uninit);
     assert_eq!(state.transition_history[0].to, SessionPhaseTag::Negotiating);
-    assert_eq!(state.transition_history[1].from, SessionPhaseTag::Negotiating);
+    assert_eq!(
+        state.transition_history[1].from,
+        SessionPhaseTag::Negotiating
+    );
     assert_eq!(state.transition_history[1].to, SessionPhaseTag::Established);
 }
 
@@ -890,13 +1023,20 @@ fn state_serde_roundtrip() {
     let back: SessionProtocolState = serde_json::from_str(&json).unwrap();
     assert_eq!(state.phase, back.phase);
     assert_eq!(state.session_id, back.session_id);
-    assert_eq!(state.transition_history.len(), back.transition_history.len());
+    assert_eq!(
+        state.transition_history.len(),
+        back.transition_history.len()
+    );
 }
 
 #[test]
 fn state_check_operation_uninit_rejected() {
     let state = make_state();
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 1).is_err());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 1)
+            .is_err()
+    );
 }
 
 // ---------------------------------------------------------------------------

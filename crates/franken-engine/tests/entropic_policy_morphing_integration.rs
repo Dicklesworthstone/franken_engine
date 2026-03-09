@@ -5,13 +5,12 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::entropic_policy_morphing::{
-    self, EntropicPolicyMorpher, MorphingConfig, MorphingEvidenceInventory,
+    self, DEFAULT_TRANSITION_BUDGET, EntropicPolicyMorpher, FALLBACK_COOLDOWN_STEPS,
+    MAX_ENTROPY_MILLIONTHS, MAX_STEP_DISTANCE_MILLIONTHS, MIN_ENTROPY_MILLIONTHS,
+    MORPHING_COMPONENT, MORPHING_EVENT_SCHEMA_VERSION, MORPHING_MANIFEST_SCHEMA_VERSION,
+    MORPHING_POLICY_ID, MORPHING_SCHEMA_VERSION, MorphingConfig, MorphingEvidenceInventory,
     MorphingExpectedOutcome, MorphingOutcome, MorphingRejection, MorphingSpecimenFamily,
     MorphingVerdict, PolicyProfile, TransitionBudget,
-    DEFAULT_TRANSITION_BUDGET, FALLBACK_COOLDOWN_STEPS, MAX_ENTROPY_MILLIONTHS,
-    MAX_STEP_DISTANCE_MILLIONTHS, MIN_ENTROPY_MILLIONTHS, MORPHING_COMPONENT,
-    MORPHING_EVENT_SCHEMA_VERSION, MORPHING_MANIFEST_SCHEMA_VERSION, MORPHING_POLICY_ID,
-    MORPHING_SCHEMA_VERSION,
 };
 use frankenengine_engine::regime_detector::Regime;
 use frankenengine_engine::regime_signature_feature::RegimeLabel;
@@ -38,35 +37,50 @@ fn make_profiles() -> Vec<(Regime, PolicyProfile)> {
     normal.insert("sandbox_strictness".into(), 800_000);
     normal.insert("gc_aggressiveness".into(), 500_000);
     normal.insert("cache_budget".into(), 600_000);
-    result.push((Regime::Normal, PolicyProfile::for_regime("normal_profile", Regime::Normal, normal)));
+    result.push((
+        Regime::Normal,
+        PolicyProfile::for_regime("normal_profile", Regime::Normal, normal),
+    ));
 
     let mut elevated = BTreeMap::new();
     elevated.insert("exploration_rate".into(), 150_000);
     elevated.insert("sandbox_strictness".into(), 850_000);
     elevated.insert("gc_aggressiveness".into(), 550_000);
     elevated.insert("cache_budget".into(), 550_000);
-    result.push((Regime::Elevated, PolicyProfile::for_regime("elevated_profile", Regime::Elevated, elevated)));
+    result.push((
+        Regime::Elevated,
+        PolicyProfile::for_regime("elevated_profile", Regime::Elevated, elevated),
+    ));
 
     let mut attack = BTreeMap::new();
     attack.insert("exploration_rate".into(), 50_000);
     attack.insert("sandbox_strictness".into(), 950_000);
     attack.insert("gc_aggressiveness".into(), 700_000);
     attack.insert("cache_budget".into(), 300_000);
-    result.push((Regime::Attack, PolicyProfile::for_regime("attack_lockdown", Regime::Attack, attack)));
+    result.push((
+        Regime::Attack,
+        PolicyProfile::for_regime("attack_lockdown", Regime::Attack, attack),
+    ));
 
     let mut degraded = BTreeMap::new();
     degraded.insert("exploration_rate".into(), 100_000);
     degraded.insert("sandbox_strictness".into(), 700_000);
     degraded.insert("gc_aggressiveness".into(), 800_000);
     degraded.insert("cache_budget".into(), 400_000);
-    result.push((Regime::Degraded, PolicyProfile::for_regime("degraded_profile", Regime::Degraded, degraded)));
+    result.push((
+        Regime::Degraded,
+        PolicyProfile::for_regime("degraded_profile", Regime::Degraded, degraded),
+    ));
 
     let mut recovery = BTreeMap::new();
     recovery.insert("exploration_rate".into(), 180_000);
     recovery.insert("sandbox_strictness".into(), 820_000);
     recovery.insert("gc_aggressiveness".into(), 520_000);
     recovery.insert("cache_budget".into(), 580_000);
-    result.push((Regime::Recovery, PolicyProfile::for_regime("recovery_profile", Regime::Recovery, recovery)));
+    result.push((
+        Regime::Recovery,
+        PolicyProfile::for_regime("recovery_profile", Regime::Recovery, recovery),
+    ));
 
     result
 }
@@ -93,14 +107,22 @@ fn corpus_non_empty() {
 #[test]
 fn corpus_ids_unique() {
     let corpus = entropic_policy_morphing::morphing_corpus();
-    let ids: BTreeMap<&str, usize> = corpus.iter().enumerate().map(|(i, s)| (s.specimen_id.as_str(), i)).collect();
+    let ids: BTreeMap<&str, usize> = corpus
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.specimen_id.as_str(), i))
+        .collect();
     assert_eq!(ids.len(), corpus.len());
 }
 
 #[test]
 fn corpus_descriptions_non_empty() {
     for s in entropic_policy_morphing::morphing_corpus() {
-        assert!(!s.description.is_empty(), "empty description for {}", s.specimen_id);
+        assert!(
+            !s.description.is_empty(),
+            "empty description for {}",
+            s.specimen_id
+        );
     }
 }
 
@@ -195,7 +217,11 @@ fn evidence_hashes_deterministic() {
     let inv1 = entropic_policy_morphing::run_morphing_corpus();
     let inv2 = entropic_policy_morphing::run_morphing_corpus();
     for (a, b) in inv1.evidence.iter().zip(&inv2.evidence) {
-        assert_eq!(a.evidence_hash, b.evidence_hash, "specimen {}", a.specimen_id);
+        assert_eq!(
+            a.evidence_hash, b.evidence_hash,
+            "specimen {}",
+            a.specimen_id
+        );
     }
 }
 
@@ -305,7 +331,10 @@ fn profile_l1_distance_triangle_inequality() {
     let ab = a.l1_distance(b);
     let bc = b.l1_distance(c);
     let ac = a.l1_distance(c);
-    assert!(ac <= ab + bc, "triangle inequality violated: {ac} > {ab} + {bc}");
+    assert!(
+        ac <= ab + bc,
+        "triangle inequality violated: {ac} > {ab} + {bc}"
+    );
 }
 
 #[test]
@@ -770,9 +799,7 @@ fn bundle_writer_creates_four_files() {
 fn bundle_inventory_json_is_valid() {
     let dir = std::env::temp_dir().join("pearl_morphing_bundle_test_2");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = entropic_policy_morphing::write_morphing_evidence_bundle(
-        &dir, &[],
-    ).unwrap();
+    let artifacts = entropic_policy_morphing::write_morphing_evidence_bundle(&dir, &[]).unwrap();
     let json = std::fs::read_to_string(&artifacts.inventory_path).unwrap();
     let inv: MorphingEvidenceInventory = serde_json::from_str(&json).unwrap();
     assert!(inv.contract_satisfied());
@@ -783,9 +810,7 @@ fn bundle_inventory_json_is_valid() {
 fn bundle_manifest_has_correct_policy_id() {
     let dir = std::env::temp_dir().join("pearl_morphing_bundle_test_3");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = entropic_policy_morphing::write_morphing_evidence_bundle(
-        &dir, &[],
-    ).unwrap();
+    let artifacts = entropic_policy_morphing::write_morphing_evidence_bundle(&dir, &[]).unwrap();
     let json = std::fs::read_to_string(&artifacts.run_manifest_path).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(manifest["policy_id"].as_str().unwrap(), MORPHING_POLICY_ID);
@@ -796,9 +821,7 @@ fn bundle_manifest_has_correct_policy_id() {
 fn bundle_events_jsonl_has_start_and_end() {
     let dir = std::env::temp_dir().join("pearl_morphing_bundle_test_4");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = entropic_policy_morphing::write_morphing_evidence_bundle(
-        &dir, &[],
-    ).unwrap();
+    let artifacts = entropic_policy_morphing::write_morphing_evidence_bundle(&dir, &[]).unwrap();
     let content = std::fs::read_to_string(&artifacts.events_path).unwrap();
     let lines: Vec<&str> = content.lines().collect();
     assert!(lines.len() >= 2);

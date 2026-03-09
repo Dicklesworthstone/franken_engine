@@ -1027,13 +1027,14 @@ pub struct NativeAddonRunManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeAddonArtifactWriteRequest {
     pub run_id: String,
-    pub command_invocation: String,
+    pub command_transcript: Vec<String>,
     pub generated_at_unix_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeAddonArtifactBundle {
     pub run_dir: PathBuf,
+    pub step_logs_dir: PathBuf,
     pub run_manifest_path: PathBuf,
     pub events_path: PathBuf,
     pub commands_path: PathBuf,
@@ -1343,6 +1344,12 @@ impl NativeAddonMembrane {
             path: run_dir.display().to_string(),
             message: err.to_string(),
         })?;
+        let step_logs_dir = run_dir.join("step_logs");
+        fs::create_dir_all(&step_logs_dir).map_err(|err| NativeAddonArtifactWriteError {
+            code: NativeAddonArtifactWriteErrorCode::Io,
+            path: step_logs_dir.display().to_string(),
+            message: err.to_string(),
+        })?;
 
         let inventory = self.inventory_report(requests, profile);
         let mut events = Vec::with_capacity(requests.len());
@@ -1477,8 +1484,8 @@ impl NativeAddonMembrane {
         let fallback_receipts_path = run_dir.join("addon_fallback_receipts.json");
         let artifact_names = artifact_names();
         let run_dir_display = run_dir.display().to_string();
-        let commands = vec![
-            artifact_request.command_invocation.clone(),
+        let mut commands = artifact_request.command_transcript.clone();
+        commands.extend([
             format!("cat {}/run_manifest.json", run_dir_display),
             format!(
                 "jq '.' {}/native_addon_membrane_report.json",
@@ -1488,8 +1495,9 @@ impl NativeAddonMembrane {
                 "jq '.support_surface[]' {}/native_addon_inventory.json",
                 run_dir_display
             ),
+            format!("ls -1 {}/step_logs", run_dir_display),
             format!("cat {}/commands.txt", run_dir_display),
-        ];
+        ]);
         let run_manifest = NativeAddonRunManifest {
             schema_version: RUN_MANIFEST_SCHEMA_VERSION.to_string(),
             bead_id: BEAD_ID.to_string(),
@@ -1523,6 +1531,7 @@ impl NativeAddonMembrane {
 
         Ok(NativeAddonArtifactBundle {
             run_dir,
+            step_logs_dir,
             run_manifest_path,
             events_path,
             commands_path,
@@ -1830,6 +1839,7 @@ fn artifact_names() -> Vec<String> {
         "native_addon_membrane_report.json",
         "native_addon_support_surface.json",
         "run_manifest.json",
+        "step_logs/",
         "trace_ids.json",
     ]
     .into_iter()

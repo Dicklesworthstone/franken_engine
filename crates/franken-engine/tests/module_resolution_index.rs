@@ -512,8 +512,7 @@ fn serde_roundtrip_ts_resolution_index_fallback_reason_all_variants() {
     ];
     for variant in variants {
         let json = serde_json::to_string(&variant).unwrap();
-        let deserialized: TsResolutionIndexFallbackReason =
-            serde_json::from_str(&json).unwrap();
+        let deserialized: TsResolutionIndexFallbackReason = serde_json::from_str(&json).unwrap();
         assert_eq!(variant, deserialized);
     }
 }
@@ -537,7 +536,10 @@ fn resolve_with_require_style_picks_require_target() {
     let resolver = seeded_resolver();
     let request = TsModuleRequest::new("react", TsRequestStyle::Require);
     let outcome = resolver.resolve(&request, &context()).unwrap();
-    assert_eq!(outcome.resolved_path, "/repo/node_modules/react/dist/index.cjs");
+    assert_eq!(
+        outcome.resolved_path,
+        "/repo/node_modules/react/dist/index.cjs"
+    );
     assert_eq!(outcome.selected_condition.as_deref(), Some("require"));
 }
 
@@ -580,8 +582,8 @@ fn ts_module_request_creation_and_field_access() {
 
 #[test]
 fn ts_module_request_with_referrer() {
-    let req = TsModuleRequest::new("./utils", TsRequestStyle::Import)
-        .with_referrer("/repo/src/index.ts");
+    let req =
+        TsModuleRequest::new("./utils", TsRequestStyle::Import).with_referrer("/repo/src/index.ts");
     assert_eq!(req.referrer.as_deref(), Some("/repo/src/index.ts"));
 }
 
@@ -591,10 +593,7 @@ fn ts_module_request_with_referrer() {
 fn ts_package_definition_builder_chain() {
     let pkg = TsPackageDefinition::new("my-lib", "/repo/node_modules/my-lib")
         .with_export(".", export_target("import", "./dist/index.mjs"))
-        .with_export(
-            "./sub",
-            export_target("import", "./dist/sub.mjs"),
-        );
+        .with_export("./sub", export_target("import", "./dist/sub.mjs"));
     assert_eq!(pkg.package_name, "my-lib");
     assert_eq!(pkg.package_root, "/repo/node_modules/my-lib");
     assert_eq!(pkg.exports.len(), 2);
@@ -614,8 +613,7 @@ fn export_target_with_fallback_is_used() {
     let mut resolver = DeterministicTsModuleResolver::new(base_config());
     resolver.register_file("/repo/node_modules/fb-pkg/dist/fallback.js");
     resolver.register_package(
-        TsPackageDefinition::new("fb-pkg", "/repo/node_modules/fb-pkg")
-            .with_export(".", target),
+        TsPackageDefinition::new("fb-pkg", "/repo/node_modules/fb-pkg").with_export(".", target),
     );
 
     let outcome = resolver
@@ -624,7 +622,10 @@ fn export_target_with_fallback_is_used() {
             &context(),
         )
         .unwrap();
-    assert_eq!(outcome.resolved_path, "/repo/node_modules/fb-pkg/dist/fallback.js");
+    assert_eq!(
+        outcome.resolved_path,
+        "/repo/node_modules/fb-pkg/dist/fallback.js"
+    );
     assert_eq!(outcome.selected_condition.as_deref(), Some("fallback"));
 }
 
@@ -642,12 +643,7 @@ fn build_policy_max_salt_attempts_one_succeeds() {
     );
     // With only 1 attempt, mphf may or may not be found depending on hash.
     // Either way the bundle must be valid and contain the package.
-    assert!(
-        bundle
-            .export_map_hash_catalog
-            .package("react")
-            .is_some()
-    );
+    assert!(bundle.export_map_hash_catalog.package("react").is_some());
 }
 
 #[test]
@@ -768,7 +764,10 @@ fn multiple_packages_in_single_resolver() {
             &context(),
         )
         .unwrap();
-    assert_eq!(alpha_outcome.resolved_path, "/repo/node_modules/alpha/dist/index.mjs");
+    assert_eq!(
+        alpha_outcome.resolved_path,
+        "/repo/node_modules/alpha/dist/index.mjs"
+    );
 
     let beta_outcome = resolver
         .resolve(
@@ -776,7 +775,10 @@ fn multiple_packages_in_single_resolver() {
             &context(),
         )
         .unwrap();
-    assert_eq!(beta_outcome.resolved_path, "/repo/node_modules/beta/dist/main.mjs");
+    assert_eq!(
+        beta_outcome.resolved_path,
+        "/repo/node_modules/beta/dist/main.mjs"
+    );
 }
 
 // ── Mode enum serde rename ─────────────────────────────────────────────

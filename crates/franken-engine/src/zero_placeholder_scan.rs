@@ -1269,10 +1269,22 @@ mod tests {
         assert_eq!(default_parser, "bd-1lsy.9.5.1");
 
         // Known families map to specific bead IDs
-        assert_eq!(bead_id_for_parser_feature("for_in_statement"), "bd-1lsy.4.8");
-        assert_eq!(bead_id_for_parser_feature("for_of_statement"), "bd-1lsy.4.8");
-        assert_eq!(bead_id_for_parser_feature("new_expression"), "bd-1lsy.4.7.2");
-        assert_eq!(bead_id_for_parser_feature("template_literal"), "bd-1lsy.4.7.2");
+        assert_eq!(
+            bead_id_for_parser_feature("for_in_statement"),
+            "bd-1lsy.4.8"
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("for_of_statement"),
+            "bd-1lsy.4.8"
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("new_expression"),
+            "bd-1lsy.4.7.2"
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("template_literal"),
+            "bd-1lsy.4.7.2"
+        );
         assert_eq!(
             bead_id_for_parser_feature("binary_non_arithmetic_expression"),
             "bd-1lsy.4.7.3"
@@ -1286,8 +1298,14 @@ mod tests {
         let default_lowering = bead_id_for_lowering_family("unknown_node");
         assert_eq!(default_lowering, "bd-1lsy.9.5.1");
 
-        assert_eq!(bead_id_for_lowering_family("statement.for_in"), "bd-1lsy.4.8");
-        assert_eq!(bead_id_for_lowering_family("expression.new"), "bd-1lsy.4.7.2");
+        assert_eq!(
+            bead_id_for_lowering_family("statement.for_in"),
+            "bd-1lsy.4.8"
+        );
+        assert_eq!(
+            bead_id_for_lowering_family("expression.new"),
+            "bd-1lsy.4.7.2"
+        );
         assert_eq!(
             bead_id_for_lowering_family("expression.binary_non_arithmetic"),
             "bd-1lsy.4.7.3"

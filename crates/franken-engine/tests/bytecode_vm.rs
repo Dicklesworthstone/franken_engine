@@ -4,13 +4,29 @@
 //! semantics, value truthiness, serde round-trips, determinism, budget
 //! exhaustion, structured event coverage, and state hash stability.
 
+use std::{
+    env, fs,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use frankenengine_engine::bytecode_vm::{
     BytecodeVm, ExecutionReport, InlineCacheStats, Instruction, ObjectId, Program, Register, Value,
     VmError, VmEvent,
 };
+use frankenengine_engine::shape_transition_algebra::{
+    InvalidatedAssumptionKind, ShapeLatticeBundle, TransitionKind, emit_shape_lattice_bundle,
+};
 
 fn r(index: u16) -> Register {
     Register(index)
+}
+
+fn unique_artifact_dir(label: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after unix epoch")
+        .as_nanos();
+    env::temp_dir().join(format!("franken-bytecode-vm-{label}-{nanos}"))
 }
 
 fn sample_program() -> Program {
@@ -888,6 +904,66 @@ fn store_prop_overwrites_existing() {
 }
 
 #[test]
+fn shape_trace_exposes_add_and_property_cell_invalidation_receipts() {
+    let program = Program {
+        constants: vec![Value::Int(1), Value::Int(2)],
+        property_pool: vec!["x".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::Return { src: r(1) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-shape-events", 8, 32);
+    let report = vm.execute(&program).unwrap();
+
+    assert_eq!(report.shape_trace.len(), 2);
+    let add = &report.shape_trace[0];
+    assert_eq!(add.transition_kind, TransitionKind::AddProperty);
+    assert_eq!(add.property_key.as_deref(), Some("x"));
+    assert_eq!(add.property_cell_revision_before, None);
+    assert_eq!(add.property_cell_revision_after, Some(1));
+    assert_ne!(add.from_shape_id, add.to_shape_id);
+    assert!(
+        add.invalidation_receipt
+            .invalidated_assumptions
+            .contains(&InvalidatedAssumptionKind::ShapeGuard)
+    );
+
+    let overwrite = &report.shape_trace[1];
+    assert_eq!(overwrite.transition_kind, TransitionKind::PropertyCellWrite);
+    assert_eq!(overwrite.property_key.as_deref(), Some("x"));
+    assert_eq!(overwrite.from_shape_id, overwrite.to_shape_id);
+    assert_eq!(overwrite.property_cell_revision_before, Some(1));
+    assert_eq!(overwrite.property_cell_revision_after, Some(2));
+    assert_eq!(
+        overwrite.invalidation_receipt.invalidated_assumptions,
+        vec![InvalidatedAssumptionKind::PropertyCell]
+    );
+
+    assert_eq!(report.shape_lattice.shapes.len(), 2);
+    assert_eq!(report.shape_lattice.transitions.len(), 2);
+}
+
+#[test]
 fn property_index_out_of_bounds_on_store() {
     let program = Program {
         constants: vec![Value::Int(1)],
@@ -1143,6 +1219,76 @@ fn inline_cache_second_access_same_shape_is_hit() {
     assert_eq!(report.result, Value::Int(5));
     assert_eq!(report.cache_stats.misses, 1);
     assert_eq!(report.cache_stats.hits, 1); // second iteration is a hit
+}
+
+#[test]
+fn shape_lattice_bundle_writer_emits_required_artifacts() {
+    let program = Program {
+        constants: vec![Value::Int(10), Value::Int(20)],
+        property_pool: vec!["a".to_string(), "b".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 1,
+                value: r(1),
+            },
+            Instruction::Return { src: r(1) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-shape-bundle", 8, 32);
+    let report = vm.execute(&program).unwrap();
+    let artifact_dir = unique_artifact_dir("shape-bundle");
+    let bundle = ShapeLatticeBundle {
+        manifest: report.shape_lattice.clone(),
+        trace_events: report.shape_trace.clone(),
+        trace_ids: vec![report.trace_id.clone()],
+        decision_ids: vec!["decision.rgc.606a".to_string()],
+        policy_ids: vec!["policy.rgc.606a".to_string()],
+        commands: vec!["cargo test --test bytecode_vm".to_string()],
+    };
+    let emitted = emit_shape_lattice_bundle(&artifact_dir, &bundle).unwrap();
+
+    for path in [
+        &emitted.shape_lattice_manifest_path,
+        &emitted.run_manifest_path,
+        &emitted.events_path,
+        &emitted.commands_path,
+        &emitted.trace_ids_path,
+    ] {
+        assert!(
+            path.exists(),
+            "expected artifact {} to exist",
+            path.display()
+        );
+    }
+
+    let run_manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&emitted.run_manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        run_manifest["artifact_paths"]["shape_lattice_manifest"],
+        "shape_lattice_manifest.json"
+    );
+    assert_eq!(run_manifest["trace_ids"][0], "trace-shape-bundle");
+    let events = fs::read_to_string(&emitted.events_path).unwrap();
+    assert!(events.contains("\"transition_kind\":\"AddProperty\""));
+    let trace_ids: serde_json::Value =
+        serde_json::from_slice(&fs::read(&emitted.trace_ids_path).unwrap()).unwrap();
+    assert_eq!(trace_ids["decision_ids"][0], "decision.rgc.606a");
 }
 
 // ---------------------------------------------------------------------------

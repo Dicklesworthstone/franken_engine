@@ -247,7 +247,9 @@ impl fmt::Display for BatchPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Inline(data) => write!(f, "inline({} bytes)", data.len()),
-            Self::SharedRegion { region_id, length, .. } => {
+            Self::SharedRegion {
+                region_id, length, ..
+            } => {
                 write!(f, "shared(region={region_id}, {length} bytes)")
             }
             Self::Backpressure(sig) => {
@@ -344,8 +346,13 @@ pub struct MembraneAuditEntry {
 /// Verdict from membrane validation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MembraneVerdict {
-    Accept { envelope_count: usize },
-    Reject { reason: MembraneRejectionReason, detail: String },
+    Accept {
+        envelope_count: usize,
+    },
+    Reject {
+        reason: MembraneRejectionReason,
+        detail: String,
+    },
 }
 
 impl MembraneVerdict {
@@ -400,32 +407,42 @@ impl SafetyMembrane {
         // 1. Phase check
         if !protocol_state.phase.permits_data() {
             return self.record_rejection(
-                batch, MembraneRejectionReason::PhaseBlocked,
-                format!("phase {} does not permit data", protocol_state.phase), tick,
+                batch,
+                MembraneRejectionReason::PhaseBlocked,
+                format!("phase {} does not permit data", protocol_state.phase),
+                tick,
             );
         }
 
         // 2. Epoch check
         if protocol_state.validate_epoch(self.current_epoch).is_err() {
             return self.record_rejection(
-                batch, MembraneRejectionReason::EpochMismatch,
-                "key schedule epoch mismatch".into(), tick,
+                batch,
+                MembraneRejectionReason::EpochMismatch,
+                "key schedule epoch mismatch".into(),
+                tick,
             );
         }
 
         // 3. Batch size check
         if batch.entries.len() > config.max_batch_size {
             return self.record_rejection(
-                batch, MembraneRejectionReason::BatchSizeExceeded,
-                format!("{} > max {}", batch.entries.len(), config.max_batch_size), tick,
+                batch,
+                MembraneRejectionReason::BatchSizeExceeded,
+                format!("{} > max {}", batch.entries.len(), config.max_batch_size),
+                tick,
             );
         }
 
         // 4. Payload size check
         if batch.total_payload_bytes > config.max_batch_payload_bytes {
             return self.record_rejection(
-                batch, MembraneRejectionReason::BatchSizeExceeded,
-                format!("{} bytes > max {}", batch.total_payload_bytes, config.max_batch_payload_bytes),
+                batch,
+                MembraneRejectionReason::BatchSizeExceeded,
+                format!(
+                    "{} bytes > max {}",
+                    batch.total_payload_bytes, config.max_batch_payload_bytes
+                ),
                 tick,
             );
         }
@@ -436,8 +453,10 @@ impl SafetyMembrane {
             for entry in &batch.entries {
                 if entry.sequence != expected {
                     return self.record_rejection(
-                        batch, MembraneRejectionReason::SequenceGap,
-                        format!("expected seq {expected}, got {}", entry.sequence), tick,
+                        batch,
+                        MembraneRejectionReason::SequenceGap,
+                        format!("expected seq {expected}, got {}", entry.sequence),
+                        tick,
                     );
                 }
                 expected += 1;
@@ -447,19 +466,28 @@ impl SafetyMembrane {
         // 6. Credit check
         if batch.credits_consumed > credit_pool.available() {
             return self.record_rejection(
-                batch, MembraneRejectionReason::InsufficientCredits,
-                format!("need {}, have {}", batch.credits_consumed, credit_pool.available()),
+                batch,
+                MembraneRejectionReason::InsufficientCredits,
+                format!(
+                    "need {}, have {}",
+                    batch.credits_consumed,
+                    credit_pool.available()
+                ),
                 tick,
             );
         }
 
         // 7. Degraded-mode check
         if protocol_state.phase == SessionPhaseTag::DegradedOpen
-            && protocol_state.check_operation(DegradedOperationKind::WriteHostcall, tick).is_err()
+            && protocol_state
+                .check_operation(DegradedOperationKind::WriteHostcall, tick)
+                .is_err()
         {
             return self.record_rejection(
-                batch, MembraneRejectionReason::DegradedBlocked,
-                "write operation blocked in degraded mode".into(), tick,
+                batch,
+                MembraneRejectionReason::DegradedBlocked,
+                "write operation blocked in degraded mode".into(),
+                tick,
             );
         }
 
@@ -469,14 +497,18 @@ impl SafetyMembrane {
                 match regions.get(region_id) {
                     None => {
                         return self.record_rejection(
-                            batch, MembraneRejectionReason::InvalidRegion,
-                            format!("region {region_id} not found"), tick,
+                            batch,
+                            MembraneRejectionReason::InvalidRegion,
+                            format!("region {region_id} not found"),
+                            tick,
                         );
                     }
                     Some(region) if region.state != RegionState::Sealed => {
                         return self.record_rejection(
-                            batch, MembraneRejectionReason::InvalidRegion,
-                            format!("region {region_id} is {}, not sealed", region.state), tick,
+                            batch,
+                            MembraneRejectionReason::InvalidRegion,
+                            format!("region {region_id} is {}, not sealed", region.state),
+                            tick,
                         );
                     }
                     _ => {}
@@ -522,7 +554,13 @@ impl SafetyMembrane {
         self.total_rejected_batches += 1;
         self.total_rejected_envelopes += batch.entries.len() as u64;
         *self.rejection_counts.entry(reason).or_insert(0) += 1;
-        self.push_audit(batch.batch_id, false, Some(reason), tick, batch.entries.len());
+        self.push_audit(
+            batch.batch_id,
+            false,
+            Some(reason),
+            tick,
+            batch.entries.len(),
+        );
         MembraneVerdict::Reject { reason, detail }
     }
 
@@ -531,7 +569,9 @@ impl SafetyMembrane {
         self.total_accepted_batches += 1;
         self.total_accepted_envelopes += count as u64;
         self.push_audit(batch.batch_id, true, None, tick, count);
-        MembraneVerdict::Accept { envelope_count: count }
+        MembraneVerdict::Accept {
+            envelope_count: count,
+        }
     }
 
     fn push_audit(
@@ -562,18 +602,48 @@ impl SafetyMembrane {
 /// Errors from batch transport operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BatchTransportError {
-    BatchTooLarge { size: usize, max: usize },
-    PayloadTooLarge { bytes: u64, max: u64 },
-    InsufficientCredits { requested: u64, available: u64 },
-    TooManyRegions { active: usize, max: usize },
-    RegionNotFound { region_id: u64 },
-    InvalidRegionState { region_id: u64, expected: RegionState, actual: RegionState },
-    RegionCapacityExceeded { region_id: u64, capacity: u64, requested: u64 },
-    NonContiguousSequences { expected: u64, actual: u64 },
+    BatchTooLarge {
+        size: usize,
+        max: usize,
+    },
+    PayloadTooLarge {
+        bytes: u64,
+        max: u64,
+    },
+    InsufficientCredits {
+        requested: u64,
+        available: u64,
+    },
+    TooManyRegions {
+        active: usize,
+        max: usize,
+    },
+    RegionNotFound {
+        region_id: u64,
+    },
+    InvalidRegionState {
+        region_id: u64,
+        expected: RegionState,
+        actual: RegionState,
+    },
+    RegionCapacityExceeded {
+        region_id: u64,
+        capacity: u64,
+        requested: u64,
+    },
+    NonContiguousSequences {
+        expected: u64,
+        actual: u64,
+    },
     EmptyBatch,
-    BatchMacMismatch { batch_id: u64 },
+    BatchMacMismatch {
+        batch_id: u64,
+    },
     Protocol(ProtocolError),
-    MembraneRejection { reason: MembraneRejectionReason, detail: String },
+    MembraneRejection {
+        reason: MembraneRejectionReason,
+        detail: String,
+    },
 }
 
 impl fmt::Display for BatchTransportError {
@@ -581,21 +651,41 @@ impl fmt::Display for BatchTransportError {
         match self {
             Self::BatchTooLarge { size, max } => write!(f, "batch too large: {size} > {max}"),
             Self::PayloadTooLarge { bytes, max } => write!(f, "payload too large: {bytes} > {max}"),
-            Self::InsufficientCredits { requested, available } => {
-                write!(f, "insufficient credits: need {requested}, have {available}")
+            Self::InsufficientCredits {
+                requested,
+                available,
+            } => {
+                write!(
+                    f,
+                    "insufficient credits: need {requested}, have {available}"
+                )
             }
             Self::TooManyRegions { active, max } => {
                 write!(f, "too many active regions: {active} >= {max}")
             }
             Self::RegionNotFound { region_id } => write!(f, "region {region_id} not found"),
-            Self::InvalidRegionState { region_id, expected, actual } => {
+            Self::InvalidRegionState {
+                region_id,
+                expected,
+                actual,
+            } => {
                 write!(f, "region {region_id}: expected {expected}, got {actual}")
             }
-            Self::RegionCapacityExceeded { region_id, capacity, requested } => {
-                write!(f, "region {region_id}: capacity {capacity}, requested {requested}")
+            Self::RegionCapacityExceeded {
+                region_id,
+                capacity,
+                requested,
+            } => {
+                write!(
+                    f,
+                    "region {region_id}: capacity {capacity}, requested {requested}"
+                )
             }
             Self::NonContiguousSequences { expected, actual } => {
-                write!(f, "non-contiguous sequences: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "non-contiguous sequences: expected {expected}, got {actual}"
+                )
             }
             Self::EmptyBatch => write!(f, "empty batch"),
             Self::BatchMacMismatch { batch_id } => {
@@ -639,7 +729,11 @@ pub struct BatchReceipt {
 // ---------------------------------------------------------------------------
 
 /// Compute the content hash for a batch entry.
-pub fn compute_entry_content_hash(sequence: u64, payload: &BatchPayload, trace_id: &str) -> ContentHash {
+pub fn compute_entry_content_hash(
+    sequence: u64,
+    payload: &BatchPayload,
+    trace_id: &str,
+) -> ContentHash {
     let mut buf = Vec::new();
     buf.extend_from_slice(b"franken::batch_transport::entry::");
     buf.extend_from_slice(&sequence.to_le_bytes());
@@ -649,7 +743,12 @@ pub fn compute_entry_content_hash(sequence: u64, payload: &BatchPayload, trace_i
             buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
             buf.extend_from_slice(data);
         }
-        BatchPayload::SharedRegion { region_id, offset, length, payload_hash } => {
+        BatchPayload::SharedRegion {
+            region_id,
+            offset,
+            length,
+            payload_hash,
+        } => {
             buf.push(2);
             buf.extend_from_slice(&region_id.to_le_bytes());
             buf.extend_from_slice(&offset.to_le_bytes());
@@ -736,7 +835,12 @@ impl BatchTransportState {
         let active_count = self
             .regions
             .values()
-            .filter(|r| matches!(r.state, RegionState::Allocated | RegionState::Writing | RegionState::Sealed))
+            .filter(|r| {
+                matches!(
+                    r.state,
+                    RegionState::Allocated | RegionState::Writing | RegionState::Sealed
+                )
+            })
             .count();
         if active_count >= self.config.max_active_regions {
             return Err(BatchTransportError::TooManyRegions {
@@ -774,9 +878,10 @@ impl BatchTransportState {
         payload_bytes: u64,
         tick: u64,
     ) -> Result<ContentHash, BatchTransportError> {
-        let region = self.regions.get_mut(&region_id).ok_or(
-            BatchTransportError::RegionNotFound { region_id },
-        )?;
+        let region = self
+            .regions
+            .get_mut(&region_id)
+            .ok_or(BatchTransportError::RegionNotFound { region_id })?;
         if region.state != RegionState::Allocated && region.state != RegionState::Writing {
             return Err(BatchTransportError::InvalidRegionState {
                 region_id,
@@ -802,9 +907,10 @@ impl BatchTransportState {
 
     /// Release a sealed region.
     pub fn release_region(&mut self, region_id: u64) -> Result<(), BatchTransportError> {
-        let region = self.regions.get_mut(&region_id).ok_or(
-            BatchTransportError::RegionNotFound { region_id },
-        )?;
+        let region = self
+            .regions
+            .get_mut(&region_id)
+            .ok_or(BatchTransportError::RegionNotFound { region_id })?;
         if region.state != RegionState::Sealed {
             return Err(BatchTransportError::InvalidRegionState {
                 region_id,
@@ -818,9 +924,10 @@ impl BatchTransportState {
 
     /// Revoke a region (error or timeout).
     pub fn revoke_region(&mut self, region_id: u64) -> Result<(), BatchTransportError> {
-        let region = self.regions.get_mut(&region_id).ok_or(
-            BatchTransportError::RegionNotFound { region_id },
-        )?;
+        let region = self
+            .regions
+            .get_mut(&region_id)
+            .ok_or(BatchTransportError::RegionNotFound { region_id })?;
         region.state = RegionState::Revoked;
         Ok(())
     }
@@ -930,8 +1037,7 @@ impl BatchTransportState {
                     }
                 }
 
-                self.total_envelopes =
-                    self.total_envelopes.saturating_add(envelope_count as u64);
+                self.total_envelopes = self.total_envelopes.saturating_add(envelope_count as u64);
 
                 // Build receipt.
                 let receipt_hash = {
@@ -1059,17 +1165,37 @@ fn specimen_hash(name: &str, verdict: BatchTransportVerdict) -> ContentHash {
     buf.extend_from_slice(b"franken::batch_transport_specimen::");
     buf.extend_from_slice(name.as_bytes());
     buf.push(0);
-    buf.push(if matches!(verdict, BatchTransportVerdict::Pass) { 1 } else { 0 });
+    buf.push(if matches!(verdict, BatchTransportVerdict::Pass) {
+        1
+    } else {
+        0
+    });
     ContentHash::compute(&buf)
 }
 
 fn make_established_protocol_state() -> SessionProtocolState {
     use crate::hostcall_session_protocol::TransitionTrigger;
     let mut state = SessionProtocolState::new(
-        "corpus-sess".into(), "corpus-ext".into(), "corpus-host".into(), 64, 50,
+        "corpus-sess".into(),
+        "corpus-ext".into(),
+        "corpus-host".into(),
+        64,
+        50,
     );
-    state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-    state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Negotiating,
+            TransitionTrigger::HandshakeInitiated,
+            1,
+        )
+        .unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Established,
+            TransitionTrigger::HandshakeCompleted,
+            2,
+        )
+        .unwrap();
     state
 }
 
@@ -1099,7 +1225,11 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
         let result = ts.submit_batch(batch, &protocol, 100);
-        let v = if result.is_ok() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_ok() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "happy_path".into(),
             family: BatchTransportSpecimenFamily::HappyPath,
@@ -1110,13 +1240,21 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
 
     // 2. Credit exhaustion
     {
-        let config = BatchTransportConfig { initial_credits: 1, max_credits: 1, ..Default::default() };
+        let config = BatchTransportConfig {
+            initial_credits: 1,
+            max_credits: 1,
+            ..Default::default()
+        };
         let mut ts = BatchTransportState::new("s2".into(), config, epoch);
         let protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
         let result = ts.submit_batch(batch, &protocol, 100);
-        let v = if result.is_err() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_err() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "credit_exhaustion".into(),
             family: BatchTransportSpecimenFamily::CreditExhaustion,
@@ -1127,11 +1265,18 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
 
     // 3. Batch size limits
     {
-        let config = BatchTransportConfig { max_batch_size: 1, ..Default::default() };
+        let config = BatchTransportConfig {
+            max_batch_size: 1,
+            ..Default::default()
+        };
         let mut ts = BatchTransportState::new("s3".into(), config, epoch);
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let result = ts.build_batch(entries, &session_key, epoch, 100);
-        let v = if result.is_err() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_err() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "batch_size_limits".into(),
             family: BatchTransportSpecimenFamily::BatchSizeLimits,
@@ -1148,7 +1293,9 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let hash = ts.seal_region(rid, 100, 20).unwrap();
         ts.release_region(rid).unwrap();
         let region = &ts.regions[&rid];
-        let v = if region.state == RegionState::Released && region.content_hash.as_ref() == Some(&hash) {
+        let v = if region.state == RegionState::Released
+            && region.content_hash.as_ref() == Some(&hash)
+        {
             BatchTransportVerdict::Pass
         } else {
             BatchTransportVerdict::Fail
@@ -1165,13 +1312,15 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s5".into(), config, epoch);
-        let protocol = SessionProtocolState::new(
-            "s5".into(), "ext".into(), "host".into(), 64, 50,
-        ); // Uninit phase
+        let protocol = SessionProtocolState::new("s5".into(), "ext".into(), "host".into(), 64, 50); // Uninit phase
         let entries = vec![make_entry(1, b"data")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
         let result = ts.submit_batch(batch, &protocol, 100);
-        let v = if result.is_err() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_err() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "membrane_phase_rejection".into(),
             family: BatchTransportSpecimenFamily::MembranePhaseRejection,
@@ -1193,7 +1342,11 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         // Should succeed since membrane doesn't call protocol.check_replay (that's the transport's job)
         // Actually, the membrane doesn't call check_replay — that would need to be called separately.
         // Let's test that the membrane's credit check works instead.
-        let v = if result.is_ok() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_ok() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "membrane_replay_scenario".into(),
             family: BatchTransportSpecimenFamily::MembraneReplayRejection,
@@ -1208,11 +1361,17 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s7".into(), config, epoch);
         let mut protocol = make_established_protocol_state();
-        protocol.enter_degraded(DegradedSeverity::IdentityCompromised, "bad".into(), 50).unwrap();
+        protocol
+            .enter_degraded(DegradedSeverity::IdentityCompromised, "bad".into(), 50)
+            .unwrap();
         let entries = vec![make_entry(1, b"data")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
         let result = ts.submit_batch(batch, &protocol, 100);
-        let v = if result.is_err() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_err() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "degraded_mode_handling".into(),
             family: BatchTransportSpecimenFamily::DegradedModeHandling,
@@ -1226,7 +1385,11 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let entries = vec![make_entry(1, b"mac-test")];
         let mac1 = compute_batch_mac(&session_key, 1, &entries, epoch);
         let mac2 = compute_batch_mac(&[0xFF; 32], 1, &entries, epoch);
-        let v = if mac1 != mac2 { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if mac1 != mac2 {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "batch_mac_verification".into(),
             family: BatchTransportSpecimenFamily::BatchMacVerification,
@@ -1241,7 +1404,11 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let mut ts = BatchTransportState::new("s9".into(), config, epoch);
         let entries = vec![make_entry(1, b"a"), make_entry(3, b"c")]; // gap at 2
         let result = ts.build_batch(entries, &session_key, epoch, 100);
-        let v = if result.is_err() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_err() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "sequence_contiguity".into(),
             family: BatchTransportSpecimenFamily::SequenceContiguity,
@@ -1252,10 +1419,17 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
 
     // 10. Region capacity enforcement
     {
-        let config = BatchTransportConfig { max_region_size_bytes: 100, ..Default::default() };
+        let config = BatchTransportConfig {
+            max_region_size_bytes: 100,
+            ..Default::default()
+        };
         let mut ts = BatchTransportState::new("s10".into(), config, epoch);
         let result = ts.allocate_region(200, 10);
-        let v = if result.is_err() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_err() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "region_capacity_enforcement".into(),
             family: BatchTransportSpecimenFamily::RegionCapacityEnforcement,
@@ -1266,7 +1440,11 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
 
     // 11. Credit grant and return
     {
-        let config = BatchTransportConfig { initial_credits: 10, max_credits: 100, ..Default::default() };
+        let config = BatchTransportConfig {
+            initial_credits: 10,
+            max_credits: 100,
+            ..Default::default()
+        };
         let mut ts = BatchTransportState::new("s11".into(), config, epoch);
         let protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
@@ -1275,7 +1453,11 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let before = ts.credit_pool.available();
         ts.grant_credits(5);
         let after = ts.credit_pool.available();
-        let v = if after == before + 5 { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if after == before + 5 {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "credit_grant_and_return".into(),
             family: BatchTransportSpecimenFamily::CreditGrantAndReturn,
@@ -1289,7 +1471,11 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s12".into(), config, epoch);
         let result = ts.build_batch(Vec::new(), &session_key, epoch, 100);
-        let v = if result.is_err() { BatchTransportVerdict::Pass } else { BatchTransportVerdict::Fail };
+        let v = if result.is_err() {
+            BatchTransportVerdict::Pass
+        } else {
+            BatchTransportVerdict::Fail
+        };
         corpus.push(BatchTransportSpecimen {
             name: "empty_batch_rejection".into(),
             family: BatchTransportSpecimenFamily::EmptyBatchRejection,
@@ -1360,8 +1546,7 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
             })
         })
         .collect();
-    let inv_json = serde_json::to_string_pretty(&inventory)
-        .map_err(std::io::Error::other)?;
+    let inv_json = serde_json::to_string_pretty(&inventory).map_err(std::io::Error::other)?;
     std::fs::write(dir.join("batch_transport_inventory.json"), inv_json)?;
 
     let manifest = serde_json::json!({
@@ -1372,8 +1557,7 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
         "pass_count": result.pass_count,
         "content_hash": format!("{:?}", result.content_hash),
     });
-    let man_json = serde_json::to_string_pretty(&manifest)
-        .map_err(std::io::Error::other)?;
+    let man_json = serde_json::to_string_pretty(&manifest).map_err(std::io::Error::other)?;
     std::fs::write(dir.join("batch_transport_manifest.json"), man_json)?;
 
     let mut events = String::new();
@@ -1384,8 +1568,7 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
             "family": spec.family.to_string(),
             "verdict": format!("{:?}", spec.verdict),
         });
-        events.push_str(&serde_json::to_string(&line)
-            .map_err(std::io::Error::other)?);
+        events.push_str(&serde_json::to_string(&line).map_err(std::io::Error::other)?);
         events.push('\n');
     }
     std::fs::write(dir.join("batch_transport_events.jsonl"), events)?;
@@ -1393,7 +1576,9 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
     let mut cmds = String::new();
     cmds.push_str("# Batch Transport Evidence Commands\n");
     cmds.push_str("cargo test -p frankenengine-engine hostcall_batch_transport\n");
-    cmds.push_str("cargo test -p frankenengine-engine --test hostcall_batch_transport_integration\n");
+    cmds.push_str(
+        "cargo test -p frankenengine-engine --test hostcall_batch_transport_integration\n",
+    );
     std::fs::write(dir.join("batch_transport_commands.txt"), cmds)?;
 
     Ok(())
@@ -1416,7 +1601,11 @@ mod tests {
     }
 
     fn default_state() -> BatchTransportState {
-        BatchTransportState::new("test-sess".into(), BatchTransportConfig::default(), test_epoch())
+        BatchTransportState::new(
+            "test-sess".into(),
+            BatchTransportConfig::default(),
+            test_epoch(),
+        )
     }
 
     fn established_protocol() -> SessionProtocolState {
@@ -1508,7 +1697,10 @@ mod tests {
 
     #[test]
     fn region_allocate_too_many() {
-        let config = BatchTransportConfig { max_active_regions: 1, ..Default::default() };
+        let config = BatchTransportConfig {
+            max_active_regions: 1,
+            ..Default::default()
+        };
         let mut ts = BatchTransportState::new("s".into(), config, test_epoch());
         ts.allocate_region(100, 10).unwrap();
         let err = ts.allocate_region(100, 20);
@@ -1580,7 +1772,9 @@ mod tests {
     fn batch_build_success() {
         let mut ts = default_state();
         let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world")];
-        let batch = ts.build_batch(entries, &session_key(), test_epoch(), 100).unwrap();
+        let batch = ts
+            .build_batch(entries, &session_key(), test_epoch(), 100)
+            .unwrap();
         assert_eq!(batch.batch_id, 1);
         assert_eq!(batch.sequence_start, 1);
         assert_eq!(batch.sequence_end, 2);
@@ -1596,7 +1790,10 @@ mod tests {
 
     #[test]
     fn batch_build_too_large() {
-        let config = BatchTransportConfig { max_batch_size: 1, ..Default::default() };
+        let config = BatchTransportConfig {
+            max_batch_size: 1,
+            ..Default::default()
+        };
         let mut ts = BatchTransportState::new("s".into(), config, test_epoch());
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let err = ts.build_batch(entries, &session_key(), test_epoch(), 100);
@@ -1644,7 +1841,9 @@ mod tests {
         let mut ts = default_state();
         let protocol = established_protocol();
         let entries = vec![make_entry(1, b"data")];
-        let batch = ts.build_batch(entries, &session_key(), test_epoch(), 100).unwrap();
+        let batch = ts
+            .build_batch(entries, &session_key(), test_epoch(), 100)
+            .unwrap();
         let receipt = ts.submit_batch(batch, &protocol, 100).unwrap();
         assert_eq!(receipt.envelope_count, 1);
         assert_eq!(ts.accepted_batches.len(), 1);
@@ -1656,7 +1855,9 @@ mod tests {
         let protocol = established_protocol();
         let before = ts.credit_pool.available();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
-        let batch = ts.build_batch(entries, &session_key(), test_epoch(), 100).unwrap();
+        let batch = ts
+            .build_batch(entries, &session_key(), test_epoch(), 100)
+            .unwrap();
         ts.submit_batch(batch, &protocol, 100).unwrap();
         assert_eq!(ts.credit_pool.available(), before - 2);
     }
@@ -1664,11 +1865,11 @@ mod tests {
     #[test]
     fn submit_batch_uninit_rejected() {
         let mut ts = default_state();
-        let protocol = SessionProtocolState::new(
-            "s".into(), "e".into(), "h".into(), 64, 50,
-        );
+        let protocol = SessionProtocolState::new("s".into(), "e".into(), "h".into(), 64, 50);
         let entries = vec![make_entry(1, b"data")];
-        let batch = ts.build_batch(entries, &session_key(), test_epoch(), 100).unwrap();
+        let batch = ts
+            .build_batch(entries, &session_key(), test_epoch(), 100)
+            .unwrap();
         let err = ts.submit_batch(batch, &protocol, 100);
         assert!(err.is_err());
     }
@@ -1677,15 +1878,21 @@ mod tests {
 
     #[test]
     fn membrane_tracks_stats() {
-        let mut membrane = SafetyMembrane::new("s".into(), test_epoch(), 50);
+        let membrane = SafetyMembrane::new("s".into(), test_epoch(), 50);
         assert_eq!(membrane.total_accepted_batches(), 0);
         assert_eq!(membrane.total_rejected_batches(), 0);
     }
 
     #[test]
     fn membrane_rejection_reason_display() {
-        assert_eq!(MembraneRejectionReason::PhaseBlocked.to_string(), "phase_blocked");
-        assert_eq!(MembraneRejectionReason::EpochMismatch.to_string(), "epoch_mismatch");
+        assert_eq!(
+            MembraneRejectionReason::PhaseBlocked.to_string(),
+            "phase_blocked"
+        );
+        assert_eq!(
+            MembraneRejectionReason::EpochMismatch.to_string(),
+            "epoch_mismatch"
+        );
     }
 
     #[test]
@@ -1703,7 +1910,10 @@ mod tests {
     fn error_display() {
         let e = BatchTransportError::EmptyBatch;
         assert_eq!(e.to_string(), "empty batch");
-        let e2 = BatchTransportError::InsufficientCredits { requested: 10, available: 5 };
+        let e2 = BatchTransportError::InsufficientCredits {
+            requested: 10,
+            available: 5,
+        };
         assert!(e2.to_string().contains("10"));
     }
 
@@ -1775,7 +1985,10 @@ mod tests {
     fn membrane_verdict_is_accept() {
         let v = MembraneVerdict::Accept { envelope_count: 5 };
         assert!(v.is_accept());
-        let r = MembraneVerdict::Reject { reason: MembraneRejectionReason::PhaseBlocked, detail: "x".into() };
+        let r = MembraneVerdict::Reject {
+            reason: MembraneRejectionReason::PhaseBlocked,
+            detail: "x".into(),
+        };
         assert!(!r.is_accept());
     }
 
@@ -1784,7 +1997,9 @@ mod tests {
         let mut ts = default_state();
         let protocol = established_protocol();
         let entries = vec![make_entry(1, b"a")];
-        let batch = ts.build_batch(entries, &session_key(), test_epoch(), 100).unwrap();
+        let batch = ts
+            .build_batch(entries, &session_key(), test_epoch(), 100)
+            .unwrap();
         ts.submit_batch(batch, &protocol, 100).unwrap();
         let before = ts.credit_pool.available();
         ts.grant_credits(10);

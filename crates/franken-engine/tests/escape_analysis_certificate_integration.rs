@@ -5,11 +5,11 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::escape_analysis_certificate::{
-    self, AllocationKind, AllocationSite, AliasClassId, AliasRelation, EscapeAnalyzerConfig,
-    EscapeCertEvidenceInventory, EscapeCertSpecimenFamily, EscapeCertVerdict, EscapeState,
-    InvalidationReason, LivenessEnvelope, OptimizationEligibilityEnvelope,
-    ESCAPE_CERT_COMPONENT, ESCAPE_CERT_EVENT_SCHEMA_VERSION,
-    ESCAPE_CERT_MANIFEST_SCHEMA_VERSION, ESCAPE_CERT_POLICY_ID, ESCAPE_CERT_SCHEMA_VERSION,
+    self, AliasClassId, AliasRelation, AllocationKind, AllocationSite, ESCAPE_CERT_COMPONENT,
+    ESCAPE_CERT_EVENT_SCHEMA_VERSION, ESCAPE_CERT_MANIFEST_SCHEMA_VERSION, ESCAPE_CERT_POLICY_ID,
+    ESCAPE_CERT_SCHEMA_VERSION, EscapeAnalyzerConfig, EscapeCertEvidenceInventory,
+    EscapeCertSpecimenFamily, EscapeCertVerdict, EscapeState, InvalidationReason, LivenessEnvelope,
+    OptimizationEligibilityEnvelope,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -89,8 +89,11 @@ fn all_specimens_pass() {
     let inv = escape_analysis_certificate::run_escape_cert_corpus();
     for ev in &inv.evidence {
         assert_eq!(
-            ev.verdict, EscapeCertVerdict::Pass,
-            "specimen {} failed: {:?}", ev.specimen_id, ev.error_detail
+            ev.verdict,
+            EscapeCertVerdict::Pass,
+            "specimen {} failed: {:?}",
+            ev.specimen_id,
+            ev.error_detail
         );
     }
 }
@@ -210,7 +213,11 @@ fn invalidation_reason_serde_roundtrip() {
 
 #[test]
 fn alias_relation_serde_roundtrip() {
-    for r in [AliasRelation::NoAlias, AliasRelation::MayAlias, AliasRelation::MustAlias] {
+    for r in [
+        AliasRelation::NoAlias,
+        AliasRelation::MayAlias,
+        AliasRelation::MustAlias,
+    ] {
         let json = serde_json::to_string(&r).unwrap();
         let back: AliasRelation = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
@@ -326,7 +333,11 @@ fn escape_state_display_matches_as_str() {
 
 #[test]
 fn alias_relation_display_matches_as_str() {
-    for r in [AliasRelation::NoAlias, AliasRelation::MayAlias, AliasRelation::MustAlias] {
+    for r in [
+        AliasRelation::NoAlias,
+        AliasRelation::MayAlias,
+        AliasRelation::MustAlias,
+    ] {
         assert_eq!(r.to_string(), r.as_str());
     }
 }
@@ -337,21 +348,33 @@ fn alias_relation_display_matches_as_str() {
 
 #[test]
 fn liveness_known_range() {
-    let l = LivenessEnvelope { first_use: Some(5), last_use: Some(15), precise: true };
+    let l = LivenessEnvelope {
+        first_use: Some(5),
+        last_use: Some(15),
+        precise: true,
+    };
     assert!(l.is_known());
     assert_eq!(l.span(), Some(10));
 }
 
 #[test]
 fn liveness_unknown_range() {
-    let l = LivenessEnvelope { first_use: None, last_use: None, precise: false };
+    let l = LivenessEnvelope {
+        first_use: None,
+        last_use: None,
+        precise: false,
+    };
     assert!(!l.is_known());
     assert_eq!(l.span(), None);
 }
 
 #[test]
 fn liveness_partial_unknown() {
-    let l = LivenessEnvelope { first_use: Some(3), last_use: None, precise: false };
+    let l = LivenessEnvelope {
+        first_use: Some(3),
+        last_use: None,
+        precise: false,
+    };
     assert!(!l.is_known());
     assert_eq!(l.span(), None);
 }
@@ -480,7 +503,10 @@ fn same_scope_kind_share_alias_class() {
         site("s2", "fn_a", AllocationKind::ObjectLiteral),
     ];
     let env = analyze("fn_a", &sites, &[]);
-    assert_eq!(env.certificates[0].alias_class, env.certificates[1].alias_class);
+    assert_eq!(
+        env.certificates[0].alias_class,
+        env.certificates[1].alias_class
+    );
 }
 
 #[test]
@@ -490,7 +516,10 @@ fn different_scope_different_alias_class() {
         site("s2", "fn_b", AllocationKind::ObjectLiteral),
     ];
     let env = analyze("mixed", &sites, &[]);
-    assert_ne!(env.certificates[0].alias_class, env.certificates[1].alias_class);
+    assert_ne!(
+        env.certificates[0].alias_class,
+        env.certificates[1].alias_class
+    );
 }
 
 #[test]
@@ -500,7 +529,10 @@ fn different_kind_different_alias_class() {
         site("s2", "fn_a", AllocationKind::ArrayLiteral),
     ];
     let env = analyze("fn_a", &sites, &[]);
-    assert_ne!(env.certificates[0].alias_class, env.certificates[1].alias_class);
+    assert_ne!(
+        env.certificates[0].alias_class,
+        env.certificates[1].alias_class
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -521,9 +553,9 @@ fn envelope_total_sites_correct() {
 #[test]
 fn envelope_scalar_replacement_count() {
     let sites = vec![
-        site("s1", "fn", AllocationKind::IteratorResult),     // NoEscape → eligible
-        site("s2", "fn", AllocationKind::ArgumentsObject),    // NoEscape → eligible
-        site("s3", "fn", AllocationKind::ObjectLiteral),      // ArgEscape → not eligible
+        site("s1", "fn", AllocationKind::IteratorResult), // NoEscape → eligible
+        site("s2", "fn", AllocationKind::ArgumentsObject), // NoEscape → eligible
+        site("s3", "fn", AllocationKind::ObjectLiteral),  // ArgEscape → not eligible
     ];
     let env = analyze("fn", &sites, &[]);
     assert_eq!(env.scalar_replacement_count, 2);
@@ -532,9 +564,9 @@ fn envelope_scalar_replacement_count() {
 #[test]
 fn envelope_stack_allocation_count() {
     let sites = vec![
-        site("s1", "fn", AllocationKind::IteratorResult),     // NoEscape → stack eligible
-        site("s2", "fn", AllocationKind::ObjectLiteral),      // ArgEscape → stack eligible
-        site("s3", "fn", AllocationKind::Closure),            // GlobalEscape → not eligible
+        site("s1", "fn", AllocationKind::IteratorResult), // NoEscape → stack eligible
+        site("s2", "fn", AllocationKind::ObjectLiteral),  // ArgEscape → stack eligible
+        site("s3", "fn", AllocationKind::Closure),        // GlobalEscape → not eligible
     ];
     let env = analyze("fn", &sites, &[]);
     assert_eq!(env.stack_allocation_count, 2);
@@ -598,12 +630,19 @@ fn budget_exceeded_all_abstain() {
         .map(|i| site(&format!("s{i}"), "fn", AllocationKind::ObjectLiteral))
         .collect();
     let env = escape_analysis_certificate::analyze_escape(
-        "fn", &sites, &[], &config, SecurityEpoch::from_raw(1),
+        "fn",
+        &sites,
+        &[],
+        &config,
+        SecurityEpoch::from_raw(1),
     );
     assert_eq!(env.abstention_count, 5);
     for cert in &env.certificates {
         assert!(cert.abstention);
-        assert!(cert.invalidation_reasons.contains(&InvalidationReason::BudgetExceeded));
+        assert!(
+            cert.invalidation_reasons
+                .contains(&InvalidationReason::BudgetExceeded)
+        );
     }
 }
 
@@ -649,9 +688,8 @@ fn bundle_writer_creates_four_files() {
 fn bundle_inventory_is_valid_json() {
     let dir = std::env::temp_dir().join("pearl_escape_bundle_test_2");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = escape_analysis_certificate::write_escape_cert_evidence_bundle(
-        &dir, &[],
-    ).unwrap();
+    let artifacts =
+        escape_analysis_certificate::write_escape_cert_evidence_bundle(&dir, &[]).unwrap();
     let json = std::fs::read_to_string(&artifacts.inventory_path).unwrap();
     let inv: EscapeCertEvidenceInventory = serde_json::from_str(&json).unwrap();
     assert!(inv.contract_satisfied());
@@ -662,9 +700,8 @@ fn bundle_inventory_is_valid_json() {
 fn bundle_manifest_has_correct_policy() {
     let dir = std::env::temp_dir().join("pearl_escape_bundle_test_3");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = escape_analysis_certificate::write_escape_cert_evidence_bundle(
-        &dir, &[],
-    ).unwrap();
+    let artifacts =
+        escape_analysis_certificate::write_escape_cert_evidence_bundle(&dir, &[]).unwrap();
     let json = std::fs::read_to_string(&artifacts.run_manifest_path).unwrap();
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(v["policy_id"].as_str().unwrap(), ESCAPE_CERT_POLICY_ID);
@@ -675,9 +712,8 @@ fn bundle_manifest_has_correct_policy() {
 fn bundle_events_has_start_and_end() {
     let dir = std::env::temp_dir().join("pearl_escape_bundle_test_4");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = escape_analysis_certificate::write_escape_cert_evidence_bundle(
-        &dir, &[],
-    ).unwrap();
+    let artifacts =
+        escape_analysis_certificate::write_escape_cert_evidence_bundle(&dir, &[]).unwrap();
     let content = std::fs::read_to_string(&artifacts.events_path).unwrap();
     let lines: Vec<&str> = content.lines().collect();
     assert!(lines.len() >= 2);

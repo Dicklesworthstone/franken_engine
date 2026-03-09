@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::path::PathBuf;
 
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::module_resolver::ResolutionContext;
@@ -9,11 +10,15 @@ use frankenengine_engine::native_addon_membrane::{
     INVENTORY_SCHEMA_VERSION, NativeAddonAbiSurface, NativeAddonArtifactWriteRequest,
     NativeAddonCohort, NativeAddonCrashContainment, NativeAddonFallbackMode,
     NativeAddonHandleDiscipline, NativeAddonInvocationChannel, NativeAddonLoadRequest,
-    NativeAddonMembrane, NativeAddonMembraneErrorCode, NativeAddonRoute,
-    NativeAddonSupportStatus, NativeAddonSymbol, NativeAddonSymbolClass,
+    NativeAddonMembrane, NativeAddonMembraneErrorCode, NativeAddonRoute, NativeAddonSupportStatus,
+    NativeAddonSymbol, NativeAddonSymbolClass,
 };
 use frankenengine_engine::self_replacement::DelegateType;
 use frankenengine_engine::slot_registry::SlotCapability;
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
 
 fn context() -> ResolutionContext {
     ResolutionContext::new(
@@ -27,6 +32,92 @@ fn profile_with(caps: &[RuntimeCapability]) -> CapabilityProfile {
     let mut profile = CapabilityProfile::compute_only();
     profile.capabilities = caps.iter().copied().collect();
     profile
+}
+
+fn representative_inventory_requests() -> Vec<NativeAddonLoadRequest> {
+    let direct_request = NativeAddonLoadRequest::new(
+        "direct-addon",
+        "portable-addon",
+        "0.1.0",
+        "portable-addon",
+        "./build/Release/portable.node",
+        NativeAddonAbiSurface::NodeApi,
+    )
+    .with_node_api_version(8)
+    .with_symbol(NativeAddonSymbol::new(
+        "open",
+        NativeAddonSymbolClass::FunctionExport,
+    ));
+
+    let delegate_request = NativeAddonLoadRequest::new(
+        "delegate-addon",
+        "sharp",
+        "1.0.0",
+        "sharp",
+        "./build/Release/sharp.node",
+        NativeAddonAbiSurface::NodeApi,
+    )
+    .with_node_api_version(8)
+    .with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape)
+    .allow_fallback(NativeAddonFallbackMode::DelegateCell)
+    .with_symbol(NativeAddonSymbol::new(
+        "unsafe_buffer",
+        NativeAddonSymbolClass::ExternalBuffer,
+    ));
+
+    let mut wasm_request = NativeAddonLoadRequest::new(
+        "wasm-addon",
+        "bcrypt",
+        "5.0.0",
+        "bcrypt",
+        "./build/Release/bcrypt.node",
+        NativeAddonAbiSurface::Nan,
+    )
+    .allow_fallback(NativeAddonFallbackMode::WasmPort)
+    .allow_fallback(NativeAddonFallbackMode::DelegateCell);
+    wasm_request.wasm_portable = true;
+
+    let mut unsupported_request = NativeAddonLoadRequest::new(
+        "unsupported-addon",
+        "native-http",
+        "1.2.3",
+        "native-http",
+        "./build/Release/http.node",
+        NativeAddonAbiSurface::NodeApi,
+    )
+    .with_node_api_version(8)
+    .allow_fallback(NativeAddonFallbackMode::DelegateCell)
+    .with_symbol(NativeAddonSymbol::new(
+        "dispatch",
+        NativeAddonSymbolClass::FunctionExport,
+    ));
+    unsupported_request.requires_network_egress = true;
+
+    vec![
+        direct_request,
+        delegate_request,
+        wasm_request,
+        unsupported_request,
+    ]
+}
+
+fn representative_inventory_profile() -> CapabilityProfile {
+    profile_with(&[
+        RuntimeCapability::ExtensionLifecycle,
+        RuntimeCapability::HeapAllocate,
+    ])
+}
+
+fn bridge_commands() -> Vec<String> {
+    std::env::var("RGC_NATIVE_ADDON_MEMBRANE_COMMANDS_JSON")
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| {
+            vec![
+                "cargo test -p frankenengine-engine --test native_addon_membrane_integration"
+                    .to_string(),
+            ]
+        })
 }
 
 #[test]
@@ -270,56 +361,29 @@ fn abi_fingerprint_and_inventory_hash_are_deterministic() {
 #[test]
 fn artifact_bundle_writer_emits_expected_files() {
     let membrane = NativeAddonMembrane::standard();
-    let direct_request = frankenengine_engine::native_addon_membrane::NativeAddonLoadRequest::new(
-        "direct-addon",
-        "portable-addon",
-        "0.1.0",
-        "portable-addon",
-        "./build/Release/portable.node",
-        NativeAddonAbiSurface::NodeApi,
-    )
-    .with_node_api_version(8)
-    .with_symbol(NativeAddonSymbol::new(
-        "open",
-        NativeAddonSymbolClass::FunctionExport,
-    ));
-    let fallback_request =
-        frankenengine_engine::native_addon_membrane::NativeAddonLoadRequest::new(
-            "fallback-addon",
-            "sharp",
-            "1.0.0",
-            "sharp",
-            "./build/Release/sharp.node",
-            NativeAddonAbiSurface::NodeApi,
-        )
-        .with_node_api_version(8)
-        .with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape)
-        .allow_fallback(NativeAddonFallbackMode::DelegateCell)
-        .with_symbol(NativeAddonSymbol::new(
-            "unsafe_buffer",
-            NativeAddonSymbolClass::ExternalBuffer,
-        ));
-    let profile = profile_with(&[
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-    ]);
+    let requests = representative_inventory_requests();
+    let profile = representative_inventory_profile();
     let artifact_root = std::env::temp_dir().join("franken-engine-native-addon-membrane-tests");
     let artifact_request = NativeAddonArtifactWriteRequest {
         run_id: "native-addon-artifact-bundle".to_string(),
-        command_invocation: "cargo test -p frankenengine-engine --test native_addon_membrane_integration artifact_bundle_writer_emits_expected_files".to_string(),
+        command_transcript: vec![
+            "cargo test -p frankenengine-engine --test native_addon_membrane_integration artifact_bundle_writer_emits_expected_files".to_string(),
+        ],
         generated_at_unix_ms: 1_730_000_000_000,
     };
     let bundle = membrane
         .write_artifact_bundle(
             &artifact_root,
             &context(),
-            &[direct_request, fallback_request],
+            &requests,
             &profile,
             &artifact_request,
         )
         .expect("artifact bundle should write successfully");
 
+    assert!(bundle.step_logs_dir.exists());
     for path in [
+        &bundle.step_logs_dir,
         &bundle.run_manifest_path,
         &bundle.events_path,
         &bundle.commands_path,
@@ -338,25 +402,137 @@ fn artifact_bundle_writer_emits_expected_files() {
 
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&bundle.membrane_report_path).unwrap()).unwrap();
-    assert_eq!(report["addon_count"], 2);
+    assert_eq!(report["addon_count"], 4);
     assert_eq!(report["direct_count"], 1);
-    assert_eq!(report["fallback_only_count"], 1);
-    assert_eq!(report["unsupported_count"], 0);
+    assert_eq!(report["fallback_only_count"], 2);
+    assert_eq!(report["unsupported_count"], 1);
 
     let manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&bundle.run_manifest_path).unwrap()).unwrap();
     assert_eq!(manifest["trace_id"], "trace-native-addon");
     assert_eq!(manifest["bead_id"], "bd-1lsy.5.9");
     assert_eq!(manifest["component"], "native_addon_membrane");
+    assert!(
+        manifest["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.as_str() == Some("step_logs/"))
+    );
 
     let events = fs::read_to_string(&bundle.events_path).unwrap();
-    assert_eq!(events.lines().count(), 2);
+    assert_eq!(events.lines().count(), 4);
+
+    let compatibility_matrix: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&bundle.compatibility_matrix_path).unwrap())
+            .unwrap();
+    let compatibility_matrix = compatibility_matrix.as_array().unwrap();
+    let addon_ids = compatibility_matrix
+        .iter()
+        .map(|entry| entry["addon_id"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        addon_ids,
+        BTreeSet::from([
+            "delegate-addon",
+            "direct-addon",
+            "unsupported-addon",
+            "wasm-addon",
+        ])
+    );
+    let unsupported_entry = compatibility_matrix
+        .iter()
+        .find(|entry| entry["addon_id"].as_str() == Some("unsupported-addon"))
+        .expect("unsupported cohort should still have an explicit disposition");
+    assert_eq!(unsupported_entry["support_status"], "unsupported");
+    assert!(unsupported_entry["selected_route"].is_null());
 
     let fallback_receipts: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&bundle.fallback_receipts_path).unwrap()).unwrap();
     let fallback_receipts = fallback_receipts.as_array().unwrap();
-    assert_eq!(fallback_receipts.len(), 1);
-    assert_eq!(fallback_receipts[0]["route"], "delegate_cell");
+    assert_eq!(fallback_receipts.len(), 2);
+    let fallback_routes = fallback_receipts
+        .iter()
+        .map(|entry| entry["route"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        fallback_routes,
+        BTreeSet::from(["delegate_cell", "wasm_port"])
+    );
+}
+
+#[test]
+fn suite_script_is_rch_backed_and_fail_closed() {
+    let script =
+        fs::read_to_string(repo_root().join("scripts/run_rgc_native_addon_membrane_suite.sh"))
+            .expect("suite script should be readable");
+
+    assert!(script.contains("rch exec -- env"));
+    assert!(script.contains("rch reported local fallback; refusing local execution"));
+    assert!(
+        script.contains(
+            "cargo check -p frankenengine-engine --test native_addon_membrane_integration"
+        )
+    );
+    assert!(
+        script.contains(
+            "cargo test -p frankenengine-engine --test native_addon_membrane_integration"
+        )
+    );
+    assert!(
+        script.contains(
+            "cargo clippy -p frankenengine-engine --test native_addon_membrane_integration --no-deps -- -D warnings"
+        )
+    );
+    assert!(script.contains("RGC_NATIVE_ADDON_MEMBRANE_ARTIFACT_DIR"));
+}
+
+#[test]
+fn replay_wrapper_delegates_to_suite_script() {
+    let script =
+        fs::read_to_string(repo_root().join("scripts/e2e/rgc_native_addon_membrane_replay.sh"))
+            .expect("replay wrapper should be readable");
+
+    assert!(
+        script.contains("scripts/run_rgc_native_addon_membrane_suite.sh"),
+        "replay wrapper should invoke the suite script"
+    );
+}
+
+#[test]
+fn native_addon_membrane_artifact_bridge_emits_bundle_when_env_is_set() {
+    let Some(artifact_dir) = std::env::var_os("RGC_NATIVE_ADDON_MEMBRANE_ARTIFACT_DIR") else {
+        return;
+    };
+    let artifact_dir = PathBuf::from(artifact_dir);
+    let artifact_root = artifact_dir
+        .parent()
+        .expect("artifact directory should have a parent");
+    let run_id = artifact_dir
+        .file_name()
+        .expect("artifact directory should end in a run id")
+        .to_string_lossy()
+        .into_owned();
+    let membrane = NativeAddonMembrane::standard();
+    let profile = representative_inventory_profile();
+    let requests = representative_inventory_requests();
+
+    let bundle = membrane
+        .write_artifact_bundle(
+            artifact_root,
+            &context(),
+            &requests,
+            &profile,
+            &NativeAddonArtifactWriteRequest {
+                run_id,
+                command_transcript: bridge_commands(),
+                generated_at_unix_ms: 1_730_000_000_000,
+            },
+        )
+        .expect("artifact bridge should write bundle");
+
+    assert_eq!(bundle.run_dir, artifact_dir);
+    assert!(bundle.step_logs_dir.exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -675,24 +851,32 @@ fn required_capabilities_reflects_fs_and_network_flags() {
 fn required_capabilities_foreign_heap_implies_heap_allocate() {
     let mut req = simple_node_api_request("heap");
     req.uses_foreign_heap = true;
-    assert!(req.required_capabilities().contains(&RuntimeCapability::HeapAllocate));
+    assert!(
+        req.required_capabilities()
+            .contains(&RuntimeCapability::HeapAllocate)
+    );
 }
 
 #[test]
 fn required_capabilities_external_buffer_discipline_implies_heap() {
     let req = simple_node_api_request("extbuf")
         .with_handle_discipline(NativeAddonHandleDiscipline::ExternalBuffer);
-    assert!(req.required_capabilities().contains(&RuntimeCapability::HeapAllocate));
+    assert!(
+        req.required_capabilities()
+            .contains(&RuntimeCapability::HeapAllocate)
+    );
 }
 
 #[test]
 fn required_capabilities_symbol_caps_propagate() {
-    let req = simple_node_api_request("sym-caps")
-        .with_symbol(
-            NativeAddonSymbol::new("read_fn", NativeAddonSymbolClass::FunctionExport)
-                .require_capability(RuntimeCapability::FsRead),
-        );
-    assert!(req.required_capabilities().contains(&RuntimeCapability::FsRead));
+    let req = simple_node_api_request("sym-caps").with_symbol(
+        NativeAddonSymbol::new("read_fn", NativeAddonSymbolClass::FunctionExport)
+            .require_capability(RuntimeCapability::FsRead),
+    );
+    assert!(
+        req.required_capabilities()
+            .contains(&RuntimeCapability::FsRead)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -801,11 +985,10 @@ fn inventory_report_mixed_routes() {
         RuntimeCapability::HeapAllocate,
     ]);
 
-    let direct_req = simple_node_api_request("direct-mix")
-        .with_symbol(NativeAddonSymbol::new(
-            "open",
-            NativeAddonSymbolClass::FunctionExport,
-        ));
+    let direct_req = simple_node_api_request("direct-mix").with_symbol(NativeAddonSymbol::new(
+        "open",
+        NativeAddonSymbolClass::FunctionExport,
+    ));
     let fallback_req = simple_node_api_request("fallback-mix")
         .with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape)
         .allow_fallback(NativeAddonFallbackMode::DelegateCell);
@@ -819,7 +1002,10 @@ fn inventory_report_mixed_routes() {
         .iter()
         .find(|e| e.addon_id == "direct-mix")
         .expect("direct entry");
-    assert_eq!(direct_entry.support_status, NativeAddonSupportStatus::Direct);
+    assert_eq!(
+        direct_entry.support_status,
+        NativeAddonSupportStatus::Direct
+    );
     assert_eq!(
         direct_entry.selected_route,
         Some(NativeAddonRoute::DirectMembrane)
@@ -885,10 +1071,7 @@ fn unsafe_direct_surface_no_fallback_yields_error() {
     let err = membrane
         .plan(&req, &context(), &profile)
         .expect_err("unsafe discipline without fallback must fail");
-    assert_eq!(
-        err.code,
-        NativeAddonMembraneErrorCode::UnsafeDirectSurface
-    );
+    assert_eq!(err.code, NativeAddonMembraneErrorCode::UnsafeDirectSurface);
 }
 
 // ---------------------------------------------------------------------------

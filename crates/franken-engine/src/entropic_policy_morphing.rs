@@ -46,12 +46,10 @@ fn hex_encode(bytes: &[u8]) -> String {
 // Constants
 // ---------------------------------------------------------------------------
 
-pub const MORPHING_SCHEMA_VERSION: &str =
-    "franken-engine.entropic_policy_morphing.v1";
+pub const MORPHING_SCHEMA_VERSION: &str = "franken-engine.entropic_policy_morphing.v1";
 pub const MORPHING_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.entropic_policy_morphing_manifest.v1";
-pub const MORPHING_EVENT_SCHEMA_VERSION: &str =
-    "franken-engine.entropic_policy_morphing_event.v1";
+pub const MORPHING_EVENT_SCHEMA_VERSION: &str = "franken-engine.entropic_policy_morphing_event.v1";
 pub const MORPHING_COMPONENT: &str = "entropic_policy_morphing";
 pub const MORPHING_POLICY_ID: &str = "RGC-617B";
 
@@ -155,9 +153,8 @@ impl PolicyProfile {
             if p_m > 0 {
                 // -p * ln(p) in millionths
                 let ln_p = ln_millionths(p_m);
-                entropy = entropy.saturating_sub(
-                    p_m.saturating_mul(ln_p).checked_div(MILLION).unwrap_or(0),
-                );
+                entropy = entropy
+                    .saturating_sub(p_m.saturating_mul(ln_p).checked_div(MILLION).unwrap_or(0));
             }
         }
         entropy
@@ -349,9 +346,7 @@ pub enum MorphingOutcome {
         new_entropy_millionths: i64,
     },
     /// Morphing was rejected; anchor fallback applied.
-    Rejected {
-        reason: MorphingRejection,
-    },
+    Rejected { reason: MorphingRejection },
     /// No morphing needed; regimes are the same.
     NoOp,
 }
@@ -451,11 +446,7 @@ pub struct EntropicPolicyMorpher {
 
 impl EntropicPolicyMorpher {
     /// Create a new morpher with an anchor profile and budget.
-    pub fn new(
-        anchor: PolicyProfile,
-        budget: TransitionBudget,
-        config: MorphingConfig,
-    ) -> Self {
+    pub fn new(anchor: PolicyProfile, budget: TransitionBudget, config: MorphingConfig) -> Self {
         let current = anchor.clone();
         Self {
             config,
@@ -1169,7 +1160,8 @@ fn run_single_morphing_specimen(specimen: &MorphingSpecimen) -> MorphingSpecimen
                 actual_outcome_str = format!("{outcome2:?}");
                 if !outcome2.is_rejected() {
                     verdict = MorphingVerdict::Fail;
-                    error_detail = Some("expected second step Rejected (distance exhausted)".into());
+                    error_detail =
+                        Some("expected second step Rejected (distance exhausted)".into());
                 }
             }
             // If first step was also rejected due to distance, that's also budget exhaustion.
@@ -1244,11 +1236,8 @@ fn run_single_morphing_specimen(specimen: &MorphingSpecimen) -> MorphingSpecimen
                 interpolation_rate_millionths: 200_000,
                 ..MorphingConfig::default()
             };
-            let mut m = EntropicPolicyMorpher::new(
-                anchor,
-                TransitionBudget::with_defaults(epoch),
-                config,
-            );
+            let mut m =
+                EntropicPolicyMorpher::new(anchor, TransitionBudget::with_defaults(epoch), config);
             for (_, profile) in make_regime_profiles() {
                 if let Some(regime) = profile.target_regime {
                     m.register_profile(regime, profile);
@@ -1744,7 +1733,10 @@ mod tests {
     fn ln_millionths_of_e_is_near_million() {
         let result = ln_millionths(2_718_282);
         // ln(e) = 1.0 → should be near 1_000_000.
-        assert!((result - MILLION).abs() < 50_000, "ln(e) ≈ {result}, expected ~1_000_000");
+        assert!(
+            (result - MILLION).abs() < 50_000,
+            "ln(e) ≈ {result}, expected ~1_000_000"
+        );
     }
 
     #[test]

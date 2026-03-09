@@ -835,8 +835,7 @@ pub fn canonical_risk_ledgers() -> Vec<DistortionRiskLedger> {
 pub const ENGINE_OBSERVABILITY_CHANNEL_POLICY_SCHEMA_VERSION: &str =
     "franken-engine.engine-observability-channel-policy.v1";
 /// Schema version for the operator mode contract artifact.
-pub const OPERATOR_MODE_CONTRACT_SCHEMA_VERSION: &str =
-    "franken-engine.operator-mode-contract.v1";
+pub const OPERATOR_MODE_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.operator-mode-contract.v1";
 /// Schema version for the telemetry site policy matrix artifact.
 pub const TELEMETRY_SITE_POLICY_MATRIX_SCHEMA_VERSION: &str =
     "franken-engine.telemetry-site-policy-matrix.v1";
@@ -1280,7 +1279,10 @@ pub fn validate_observability_contract(
             push_contract_violation(
                 &mut violations,
                 "FE-RGC-066A-SAMPLING-0002",
-                format!("sampling rule for {} is defined more than once", rule.site_id),
+                format!(
+                    "sampling rule for {} is defined more than once",
+                    rule.site_id
+                ),
             );
         }
 
@@ -1338,7 +1340,10 @@ pub fn validate_observability_contract(
                 push_contract_violation(
                     &mut violations,
                     "FE-RGC-066A-SAMPLING-0007",
-                    format!("sampling rule for {} must declare a nonzero schedule", rule.site_id),
+                    format!(
+                        "sampling rule for {} must declare a nonzero schedule",
+                        rule.site_id
+                    ),
                 );
             }
             if rule.precision_target_millionths <= 0 {
@@ -1453,7 +1458,10 @@ pub fn validate_observability_contract(
                 push_contract_violation(
                     &mut violations,
                     "FE-RGC-066A-SITE-0009",
-                    format!("lossless site {} must have zero distortion budget", site.site_id),
+                    format!(
+                        "lossless site {} must have zero distortion budget",
+                        site.site_id
+                    ),
                 );
             }
             if site.allowed_modes.contains(&ObservabilityMode::Degraded) {
@@ -1467,7 +1475,10 @@ pub fn validate_observability_contract(
                 push_contract_violation(
                     &mut violations,
                     "FE-RGC-066A-SITE-0011",
-                    format!("lossless site {} cannot declare lossy precision", site.site_id),
+                    format!(
+                        "lossless site {} cannot declare lossy precision",
+                        site.site_id
+                    ),
                 );
             }
         } else {
@@ -1588,10 +1599,7 @@ pub fn canonical_engine_observability_channel_policy() -> EngineObservabilityCha
             PayloadFamily::Security,
             PayloadFamily::LegalProvenance,
         ],
-        approximate_allowed_families: vec![
-            PayloadFamily::Decision,
-            PayloadFamily::Optimization,
-        ],
+        approximate_allowed_families: vec![PayloadFamily::Decision, PayloadFamily::Optimization],
         redaction_must_precede_sampling: true,
         required_structured_log_fields: vec![
             "trace_id".to_string(),
@@ -1997,8 +2005,13 @@ pub fn canonical_sampling_seed_replay_fixture_matrix() -> SamplingSeedReplayFixt
             .into_iter()
             .map(
                 |(fixture_id, trace_id, workload_id, manifest_hash, site_id, mode)| {
-                    let seed_hex =
-                        derive_sampling_seed_hex(trace_id, workload_id, manifest_hash, site_id, mode);
+                    let seed_hex = derive_sampling_seed_hex(
+                        trace_id,
+                        workload_id,
+                        manifest_hash,
+                        site_id,
+                        mode,
+                    );
                     let interval = sampling_contract
                         .rule_for(site_id)
                         .map(|rule| {

@@ -19,8 +19,6 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-#[allow(unused_imports)]
-use crate::esm_loader::ModuleStatus as _;
 use crate::hash_tiers::ContentHash;
 use crate::module_live_binding::{BindingCellState, BindingId, LiveBindingMap};
 use crate::object_model::JsValue;
@@ -30,8 +28,7 @@ use crate::promise_model::PromiseHandle;
 // Constants
 // ---------------------------------------------------------------------------
 
-pub const MODULE_ASYNC_EVAL_SCHEMA_VERSION: &str =
-    "franken-engine.module_async_evaluation.v1";
+pub const MODULE_ASYNC_EVAL_SCHEMA_VERSION: &str = "franken-engine.module_async_evaluation.v1";
 pub const MODULE_ASYNC_EVAL_COMPONENT: &str = "module_async_evaluation";
 
 // ---------------------------------------------------------------------------
@@ -403,7 +400,11 @@ impl fmt::Display for AsyncEvalError {
             Self::ModuleNotFound { specifier } => {
                 write!(f, "module not found: {specifier}")
             }
-            Self::InvalidPhaseTransition { specifier, from, to } => {
+            Self::InvalidPhaseTransition {
+                specifier,
+                from,
+                to,
+            } => {
                 write!(
                     f,
                     "invalid phase transition for {specifier}: {from} -> {to}"
@@ -451,7 +452,9 @@ impl AsyncEvalResult {
     pub fn settled_count(&self) -> usize {
         self.module_states
             .values()
-            .filter(|s| s.phase == AsyncModulePhase::Settled || s.phase == AsyncModulePhase::Synchronous)
+            .filter(|s| {
+                s.phase == AsyncModulePhase::Settled || s.phase == AsyncModulePhase::Synchronous
+            })
             .count()
     }
 
@@ -557,8 +560,7 @@ impl AsyncModuleEvaluator {
         // Track which dependencies are async (need to wait).
         for dep in dependencies {
             if let Some(dep_state) = self.states.get(dep)
-                && (!dep_state.phase.is_terminal()
-                    || dep_state.phase == AsyncModulePhase::Rejected)
+                && (!dep_state.phase.is_terminal() || dep_state.phase == AsyncModulePhase::Rejected)
             {
                 state.add_pending_dependency(dep.clone());
             }
@@ -578,24 +580,28 @@ impl AsyncModuleEvaluator {
         specifier: &str,
         awaiting_promise: PromiseHandle,
     ) -> Result<(), AsyncEvalError> {
-        let state = self.states.get_mut(specifier).ok_or_else(|| {
-            AsyncEvalError::ModuleNotFound {
-                specifier: specifier.to_string(),
+        let detail = format!("promise={awaiting_promise}");
+        {
+            let state =
+                self.states
+                    .get_mut(specifier)
+                    .ok_or_else(|| AsyncEvalError::ModuleNotFound {
+                        specifier: specifier.to_string(),
+                    })?;
+
+            if state.suspensions.len() as u64 >= self.config.max_suspensions_per_module {
+                return Err(AsyncEvalError::SuspensionLimitExceeded {
+                    specifier: specifier.to_string(),
+                    limit: self.config.max_suspensions_per_module,
+                });
             }
-        })?;
 
-        if state.suspensions.len() as u64 >= self.config.max_suspensions_per_module {
-            return Err(AsyncEvalError::SuspensionLimitExceeded {
-                specifier: specifier.to_string(),
-                limit: self.config.max_suspensions_per_module,
-            });
+            state.record_suspension(awaiting_promise, SuspensionContext::TopLevelAwait);
         }
-
-        state.record_suspension(awaiting_promise, SuspensionContext::TopLevelAwait);
         self.emit_event(
             specifier,
             AsyncEvalEventType::TopLevelAwaitSuspended,
-            format!("promise={awaiting_promise}"),
+            detail,
         );
         Ok(())
     }
@@ -607,24 +613,24 @@ impl AsyncModuleEvaluator {
         dependency: &str,
         awaiting_promise: PromiseHandle,
     ) -> Result<(), AsyncEvalError> {
-        let state = self.states.get_mut(specifier).ok_or_else(|| {
-            AsyncEvalError::ModuleNotFound {
-                specifier: specifier.to_string(),
-            }
-        })?;
+        let detail = format!("awaiting={dependency}");
+        {
+            let state =
+                self.states
+                    .get_mut(specifier)
+                    .ok_or_else(|| AsyncEvalError::ModuleNotFound {
+                        specifier: specifier.to_string(),
+                    })?;
 
-        state.record_suspension(
-            awaiting_promise,
-            SuspensionContext::AwaitingDependency {
-                module_specifier: dependency.to_string(),
-            },
-        );
-        state.add_pending_dependency(dependency.to_string());
-        self.emit_event(
-            specifier,
-            AsyncEvalEventType::DependencySuspended,
-            format!("awaiting={dependency}"),
-        );
+            state.record_suspension(
+                awaiting_promise,
+                SuspensionContext::AwaitingDependency {
+                    module_specifier: dependency.to_string(),
+                },
+            );
+            state.add_pending_dependency(dependency.to_string());
+        }
+        self.emit_event(specifier, AsyncEvalEventType::DependencySuspended, detail);
         Ok(())
     }
 
@@ -645,17 +651,20 @@ impl AsyncModuleEvaluator {
             .collect();
 
         for module_spec in &waiting_modules {
-            if let Some(state) = self.states.get_mut(module_spec) {
+            let all_settled = if let Some(state) = self.states.get_mut(module_spec) {
                 state.resolve_dependency(settled_module);
-                let all_settled = state.all_dependencies_settled();
-                self.emit_event(
-                    module_spec,
-                    AsyncEvalEventType::DependencySettled,
-                    format!("settled={settled_module}"),
-                );
-                if all_settled {
-                    resumable.push(module_spec.clone());
-                }
+                state.all_dependencies_settled()
+            } else {
+                continue;
+            };
+
+            self.emit_event(
+                module_spec,
+                AsyncEvalEventType::DependencySettled,
+                format!("settled={settled_module}"),
+            );
+            if all_settled {
+                resumable.push(module_spec.clone());
             }
         }
 
@@ -664,13 +673,16 @@ impl AsyncModuleEvaluator {
 
     /// Resume evaluation of a module after all dependencies have settled.
     pub fn resume_evaluation(&mut self, specifier: &str) -> Result<(), AsyncEvalError> {
-        let state = self.states.get_mut(specifier).ok_or_else(|| {
-            AsyncEvalError::ModuleNotFound {
-                specifier: specifier.to_string(),
-            }
-        })?;
+        {
+            let state =
+                self.states
+                    .get_mut(specifier)
+                    .ok_or_else(|| AsyncEvalError::ModuleNotFound {
+                        specifier: specifier.to_string(),
+                    })?;
 
-        state.record_resumption();
+            state.record_resumption();
+        }
         self.emit_event(
             specifier,
             AsyncEvalEventType::EvaluationResumed,
@@ -681,14 +693,17 @@ impl AsyncModuleEvaluator {
 
     /// Mark a module's evaluation as successfully settled.
     pub fn settle_module(&mut self, specifier: &str) -> Result<Vec<String>, AsyncEvalError> {
-        let state = self.states.get_mut(specifier).ok_or_else(|| {
-            AsyncEvalError::ModuleNotFound {
-                specifier: specifier.to_string(),
-            }
-        })?;
+        let suspension_count = {
+            let state =
+                self.states
+                    .get_mut(specifier)
+                    .ok_or_else(|| AsyncEvalError::ModuleNotFound {
+                        specifier: specifier.to_string(),
+                    })?;
 
-        state.settle();
-        let suspension_count = state.suspensions.len();
+            state.settle();
+            state.suspensions.len()
+        };
         self.emit_event(
             specifier,
             AsyncEvalEventType::EvaluationSettled,
@@ -716,12 +731,15 @@ impl AsyncModuleEvaluator {
             });
 
         // Mark the module as rejected.
-        let state = self.states.get_mut(specifier).ok_or_else(|| {
-            AsyncEvalError::ModuleNotFound {
-                specifier: specifier.to_string(),
-            }
-        })?;
-        state.reject(reason_hash.clone());
+        {
+            let state =
+                self.states
+                    .get_mut(specifier)
+                    .ok_or_else(|| AsyncEvalError::ModuleNotFound {
+                        specifier: specifier.to_string(),
+                    })?;
+            state.reject(reason_hash.clone());
+        }
 
         self.emit_event(
             specifier,
@@ -759,12 +777,15 @@ impl AsyncModuleEvaluator {
 
         // Propagate rejection to waiting modules.
         for module_spec in &transitive_closure {
-            if let Some(dep_state) = self.states.get_mut(module_spec)
+            let additional_dead = if let Some(dep_state) = self.states.get_mut(module_spec)
                 && !dep_state.phase.is_terminal()
             {
                 dep_state.reject(reason_hash.clone());
-                let additional_dead =
-                    Self::mark_bindings_dead(module_spec, live_bindings);
+                Some(Self::mark_bindings_dead(module_spec, live_bindings))
+            } else {
+                None
+            };
+            if let Some(additional_dead) = additional_dead {
                 for bid in &additional_dead {
                     self.emit_event(
                         module_spec,
@@ -834,7 +855,10 @@ impl AsyncModuleEvaluator {
 
     // -- Private helpers --
 
-    fn mark_bindings_dead(module_specifier: &str, live_bindings: &mut LiveBindingMap) -> Vec<BindingId> {
+    fn mark_bindings_dead(
+        module_specifier: &str,
+        live_bindings: &mut LiveBindingMap,
+    ) -> Vec<BindingId> {
         let mut dead = Vec::new();
         let binding_ids: Vec<BindingId> = live_bindings
             .cells
@@ -919,7 +943,10 @@ pub fn compute_async_evaluation_order(
     for (module, deps) in dependencies {
         for dep in deps {
             if module_specifiers.iter().any(|s| s == dep) {
-                adjacency.entry(dep.as_str()).or_default().push(module.as_str());
+                adjacency
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(module.as_str());
                 *in_degree.entry(module.as_str()).or_insert(0) += 1;
             }
         }
@@ -927,8 +954,8 @@ pub fn compute_async_evaluation_order(
 
     let mut queue: Vec<&str> = in_degree
         .iter()
-        .filter(|&(_, &deg)| deg == 0)
-        .map(|(&spec, _)| spec)
+        .filter(|(_, deg)| **deg == 0)
+        .map(|(spec, _)| *spec)
         .collect();
     queue.sort(); // deterministic ordering
 
@@ -1108,27 +1135,22 @@ mod tests {
         eval.register_module("sync.js", false, &[], None);
         let states = eval.states();
         assert_eq!(states.len(), 1);
-        assert_eq!(
-            states["sync.js"].phase,
-            AsyncModulePhase::Synchronous
-        );
+        assert_eq!(states["sync.js"].phase, AsyncModulePhase::Synchronous);
     }
 
     #[test]
     fn evaluator_register_async_module() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("async.js", true, &[], Some(PromiseHandle(10)));
-        assert_eq!(
-            eval.states()["async.js"].phase,
-            AsyncModulePhase::Suspended
-        );
+        assert_eq!(eval.states()["async.js"].phase, AsyncModulePhase::Suspended);
     }
 
     #[test]
     fn evaluator_suspend_and_resume() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("tla.js", true, &[], Some(PromiseHandle(10)));
-        eval.suspend_at_top_level_await("tla.js", PromiseHandle(20)).unwrap();
+        eval.suspend_at_top_level_await("tla.js", PromiseHandle(20))
+            .unwrap();
         assert_eq!(eval.states()["tla.js"].suspensions.len(), 1);
         eval.resume_evaluation("tla.js").unwrap();
         assert!(eval.states()["tla.js"].suspensions[0].resolved);
@@ -1213,7 +1235,8 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
-        eval.reject_module("bad.js", &js_error("err"), &mut bindings).unwrap();
+        eval.reject_module("bad.js", &js_error("err"), &mut bindings)
+            .unwrap();
         let result = eval.finalize();
         assert!(!result.all_settled);
         assert_eq!(result.total_rejections, 1);
@@ -1223,7 +1246,8 @@ mod tests {
     fn evaluator_witness_events_emitted() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
-        eval.suspend_at_top_level_await("m.js", PromiseHandle(2)).unwrap();
+        eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
+            .unwrap();
         eval.resume_evaluation("m.js").unwrap();
         eval.settle_module("m.js").unwrap();
         assert!(eval.witness_events().len() >= 4);
@@ -1237,10 +1261,17 @@ mod tests {
         };
         let mut eval = AsyncModuleEvaluator::new(config);
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
-        eval.suspend_at_top_level_await("m.js", PromiseHandle(2)).unwrap();
-        eval.suspend_at_top_level_await("m.js", PromiseHandle(3)).unwrap();
-        let err = eval.suspend_at_top_level_await("m.js", PromiseHandle(4)).unwrap_err();
-        assert!(matches!(err, AsyncEvalError::SuspensionLimitExceeded { .. }));
+        eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
+            .unwrap();
+        eval.suspend_at_top_level_await("m.js", PromiseHandle(3))
+            .unwrap();
+        let err = eval
+            .suspend_at_top_level_await("m.js", PromiseHandle(4))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            AsyncEvalError::SuspensionLimitExceeded { .. }
+        ));
     }
 
     #[test]
@@ -1408,7 +1439,8 @@ mod tests {
         eval.register_module("ok.js", false, &[], None);
         eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
-        eval.reject_module("bad.js", &js_error("err"), &mut bindings).unwrap();
+        eval.reject_module("bad.js", &js_error("err"), &mut bindings)
+            .unwrap();
         let result = eval.finalize();
         assert_eq!(result.settled_count(), 1); // ok.js is Synchronous
         assert_eq!(result.rejected_count(), 1); // bad.js

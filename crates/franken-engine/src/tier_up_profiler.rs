@@ -381,7 +381,10 @@ fn sha256_hex<T: Serialize>(value: &T) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytecode_vm::{ExecutionReport, InlineCacheStats, Value, VmEvent};
+    use crate::{
+        bytecode_vm::{ExecutionReport, InlineCacheStats, Value, VmEvent},
+        shape_transition_algebra::ShapeTransitionAlgebra,
+    };
 
     fn make_vm_event(ip: u32, opcode: &str, cache_hit: Option<bool>) -> VmEvent {
         VmEvent {
@@ -409,6 +412,8 @@ mod tests {
             },
             state_hash: String::new(),
             events,
+            shape_lattice: ShapeTransitionAlgebra::new().manifest(),
+            shape_trace: Vec::new(),
         }
     }
 

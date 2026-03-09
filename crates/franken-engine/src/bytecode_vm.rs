@@ -9,6 +9,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::shape_transition_algebra::{
+    PropertyAttributes, ShapeLatticeManifest, ShapeMutation, ShapeTraceEvent,
+    ShapeTransitionAlgebra,
+};
+
 const COMPONENT: &str = "bytecode_vm";
 
 /// Register index.
@@ -193,6 +198,7 @@ struct HeapObject {
     keys: Vec<String>,
     slots: Vec<Value>,
     key_to_slot: BTreeMap<String, usize>,
+    property_cell_revisions: BTreeMap<String, u64>,
 }
 
 impl HeapObject {
@@ -202,6 +208,7 @@ impl HeapObject {
             keys: Vec::new(),
             slots: Vec::new(),
             key_to_slot: BTreeMap::new(),
+            property_cell_revisions: BTreeMap::new(),
         }
     }
 
@@ -213,20 +220,6 @@ impl HeapObject {
 
     fn load_slot(&self, slot_index: usize) -> Option<Value> {
         self.slots.get(slot_index).cloned()
-    }
-
-    fn store(&mut self, key: &str, value: Value, next_shape_id: &mut u64) {
-        if let Some(slot) = self.key_to_slot.get(key).copied() {
-            self.slots[slot] = value;
-            return;
-        }
-
-        let slot = self.slots.len();
-        self.keys.push(key.to_string());
-        self.slots.push(value);
-        self.key_to_slot.insert(key.to_string(), slot);
-        self.shape_id = *next_shape_id;
-        *next_shape_id += 1;
     }
 }
 
@@ -271,6 +264,8 @@ pub struct ExecutionReport {
     pub cache_stats: InlineCacheStats,
     pub state_hash: String,
     pub events: Vec<VmEvent>,
+    pub shape_lattice: ShapeLatticeManifest,
+    pub shape_trace: Vec<ShapeTraceEvent>,
 }
 
 enum ControlFlow {
@@ -302,8 +297,9 @@ pub struct BytecodeVm {
     heap: Vec<HeapObject>,
     inline_cache: BTreeMap<u32, InlineCacheEntry>,
     step_budget: u64,
-    next_shape_id: u64,
+    shape_algebra: ShapeTransitionAlgebra,
     events: Vec<VmEvent>,
+    shape_trace: Vec<ShapeTraceEvent>,
 }
 
 impl BytecodeVm {
@@ -315,18 +311,20 @@ impl BytecodeVm {
             heap: Vec::new(),
             inline_cache: BTreeMap::new(),
             step_budget,
-            next_shape_id: 1,
+            shape_algebra: ShapeTransitionAlgebra::new(),
             events: Vec::new(),
+            shape_trace: Vec::new(),
         }
     }
 
     /// Execute a program deterministically.
     pub fn execute(&mut self, program: &Program) -> Result<ExecutionReport, VmError> {
         self.events.clear();
+        self.shape_trace.clear();
         self.inline_cache.clear();
         self.heap.clear();
         self.registers.fill(Value::Undefined);
-        self.next_shape_id = 1;
+        self.shape_algebra = ShapeTransitionAlgebra::new();
 
         let mut ip = 0usize;
         let mut steps = 0u64;
@@ -369,7 +367,7 @@ impl BytecodeVm {
             steps += 1;
             let opcode = instruction.opcode_name().to_string();
 
-            match self.execute_instruction(program, ip, instruction) {
+            match self.execute_instruction(program, ip, steps, instruction) {
                 Ok(ControlFlow::Continue { next_ip, cache_hit }) => {
                     self.record_event(EventRecord {
                         step: steps,
@@ -394,7 +392,9 @@ impl BytecodeVm {
                     });
 
                     let cache_stats = self.cache_stats();
-                    let state_hash = self.compute_state_hash(&value, steps, &cache_stats);
+                    let shape_lattice = self.shape_algebra.manifest();
+                    let state_hash =
+                        self.compute_state_hash(&value, steps, &cache_stats, &shape_lattice);
 
                     return Ok(ExecutionReport {
                         trace_id: self.trace_id.clone(),
@@ -403,6 +403,8 @@ impl BytecodeVm {
                         cache_stats,
                         state_hash,
                         events: self.events.clone(),
+                        shape_lattice,
+                        shape_trace: self.shape_trace.clone(),
                     });
                 }
                 Err(error) => {
@@ -425,6 +427,7 @@ impl BytecodeVm {
         &mut self,
         program: &Program,
         ip: usize,
+        step: u64,
         instruction: Instruction,
     ) -> Result<ControlFlow, VmError> {
         match instruction {
@@ -489,8 +492,7 @@ impl BytecodeVm {
             }
             Instruction::NewObject { dst } => {
                 let object_id = ObjectId(self.heap.len() as u32);
-                let object = HeapObject::new(self.next_shape_id);
-                self.next_shape_id += 1;
+                let object = HeapObject::new(self.shape_algebra.root_shape_id());
                 self.heap.push(object);
                 self.write_register(dst, Value::Object(object_id))?;
                 Ok(ControlFlow::Continue {
@@ -513,13 +515,73 @@ impl BytecodeVm {
                     })?
                     .clone();
                 let stored_value = self.read_register(value)?.clone();
-                let heap_object =
-                    self.heap
-                        .get_mut(object_id.0 as usize)
-                        .ok_or(VmError::ObjectNotFound {
+                let object_index = object_id.0 as usize;
+                let (current_shape_id, existing_slot, revision_before) = {
+                    let heap_object =
+                        self.heap.get(object_index).ok_or(VmError::ObjectNotFound {
                             object_id: object_id.0,
                         })?;
-                heap_object.store(&property_name, stored_value, &mut self.next_shape_id);
+                    (
+                        heap_object.shape_id,
+                        heap_object.key_to_slot.get(&property_name).copied(),
+                        heap_object
+                            .property_cell_revisions
+                            .get(&property_name)
+                            .copied(),
+                    )
+                };
+                let mutation = if existing_slot.is_some() {
+                    ShapeMutation::WritePropertyCell {
+                        key: property_name.clone(),
+                    }
+                } else {
+                    ShapeMutation::AddProperty {
+                        key: property_name.clone(),
+                        attributes: PropertyAttributes::default(),
+                    }
+                };
+                let outcome = self
+                    .shape_algebra
+                    .apply_mutation(current_shape_id, mutation)
+                    .expect("heap object shape must participate in canonical algebra");
+                let revision_after = revision_before.unwrap_or(0) + 1;
+                {
+                    let heap_object =
+                        self.heap
+                            .get_mut(object_index)
+                            .ok_or(VmError::ObjectNotFound {
+                                object_id: object_id.0,
+                            })?;
+                    heap_object.shape_id = outcome.shape.shape_id;
+                    if let Some(slot) = existing_slot {
+                        heap_object.slots[slot] = stored_value;
+                    } else {
+                        let slot = heap_object.slots.len();
+                        if let Some(layout) = outcome.transition.property_layout.as_ref() {
+                            debug_assert_eq!(layout.slot_index, slot);
+                        }
+                        heap_object.keys.push(property_name.clone());
+                        heap_object.slots.push(stored_value);
+                        heap_object.key_to_slot.insert(property_name.clone(), slot);
+                    }
+                    heap_object
+                        .property_cell_revisions
+                        .insert(property_name.clone(), revision_after);
+                }
+                self.shape_trace.push(ShapeTraceEvent {
+                    trace_id: self.trace_id.clone(),
+                    component: COMPONENT.to_string(),
+                    step,
+                    object_id: object_id.0,
+                    from_shape_id: current_shape_id,
+                    to_shape_id: outcome.shape.shape_id,
+                    to_shape_fingerprint: outcome.shape.fingerprint.clone(),
+                    transition_kind: outcome.transition.transition_kind.clone(),
+                    property_key: outcome.transition.property_key.clone(),
+                    invalidation_receipt: outcome.transition.invalidation_receipt.clone(),
+                    property_cell_revision_before: revision_before,
+                    property_cell_revision_after: Some(revision_after),
+                });
 
                 Ok(ControlFlow::Continue {
                     next_ip: ip + 1,
@@ -697,6 +759,7 @@ impl BytecodeVm {
         result: &Value,
         steps: u64,
         cache_stats: &InlineCacheStats,
+        shape_lattice: &ShapeLatticeManifest,
     ) -> String {
         #[derive(Serialize)]
         struct HashEnvelope<'a> {
@@ -707,6 +770,8 @@ impl BytecodeVm {
             registers: &'a [Value],
             cache_entries: &'a BTreeMap<u32, InlineCacheEntry>,
             heap: &'a [HeapObject],
+            shape_lattice: &'a ShapeLatticeManifest,
+            shape_trace: &'a [ShapeTraceEvent],
         }
 
         let envelope = HashEnvelope {
@@ -717,6 +782,8 @@ impl BytecodeVm {
             registers: &self.registers,
             cache_entries: &self.inline_cache,
             heap: &self.heap,
+            shape_lattice,
+            shape_trace: &self.shape_trace,
         };
 
         let payload =

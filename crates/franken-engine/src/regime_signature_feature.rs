@@ -44,8 +44,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 // Constants
 // ---------------------------------------------------------------------------
 
-pub const REGIME_SIG_SCHEMA_VERSION: &str =
-    "franken-engine.regime_signature_feature.v1";
+pub const REGIME_SIG_SCHEMA_VERSION: &str = "franken-engine.regime_signature_feature.v1";
 pub const REGIME_SIG_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.regime_signature_feature_manifest.v1";
 pub const REGIME_SIG_EVENT_SCHEMA_VERSION: &str =
@@ -400,9 +399,7 @@ pub fn extract_signature(trace: &RuntimeTrace, config: &SignatureConfig) -> Trac
             observation_count: trace.observations.len() as u64,
             feature_count: 0,
             valid: false,
-            signature_hash: hex_encode(
-                ContentHash::compute(hash_input.as_bytes()).as_bytes(),
-            ),
+            signature_hash: hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes()),
         };
     }
 
@@ -429,7 +426,11 @@ pub fn extract_signature(trace: &RuntimeTrace, config: &SignatureConfig) -> Trac
         "sig:{}:{}:{}",
         trace.trace_id,
         trace.observations.len(),
-        components.iter().map(|c| format!("{c}")).collect::<Vec<_>>().join(",")
+        components
+            .iter()
+            .map(|c| format!("{c}"))
+            .collect::<Vec<_>>()
+            .join(",")
     );
 
     TraceSignature {
@@ -441,9 +442,7 @@ pub fn extract_signature(trace: &RuntimeTrace, config: &SignatureConfig) -> Trac
         observation_count: trace.observations.len() as u64,
         feature_count: features_seen.len() as u64,
         valid: true,
-        signature_hash: hex_encode(
-            ContentHash::compute(hash_input.as_bytes()).as_bytes(),
-        ),
+        signature_hash: hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes()),
     }
 }
 
@@ -461,10 +460,7 @@ fn feature_to_bucket(feature_name: &str, dim: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Classify a signature against regime centroids.
-pub fn classify_regime(
-    signature: &TraceSignature,
-    config: &SignatureConfig,
-) -> (RegimeLabel, i64) {
+pub fn classify_regime(signature: &TraceSignature, config: &SignatureConfig) -> (RegimeLabel, i64) {
     if !signature.valid {
         return (RegimeLabel::Abstention, 0);
     }
@@ -500,11 +496,15 @@ pub fn classify_regime(
     }
 
     // Compute confidence: inverse of per-bucket mean distance, scaled to millionths.
-    let mean_distance = best_distance.checked_div(active_buckets as i64).unwrap_or(best_distance);
+    let mean_distance = best_distance
+        .checked_div(active_buckets as i64)
+        .unwrap_or(best_distance);
     let confidence = if mean_distance == 0 {
         MILLION
     } else {
-        (MILLION * MILLION).checked_div(mean_distance + MILLION).unwrap_or(0)
+        (MILLION * MILLION)
+            .checked_div(mean_distance + MILLION)
+            .unwrap_or(0)
     };
 
     if confidence < config.abstention_threshold {
@@ -808,7 +808,12 @@ pub fn signature_corpus() -> Vec<SignatureSpecimen> {
             specimen_id: "extract_single_feature".into(),
             description: "Extract signature from trace with one feature".into(),
             family: SignatureSpecimenFamily::Extraction,
-            traces: vec![make_trace("t1", "cpu_usage", &[500_000, 600_000, 450_000, 550_000, 520_000], 1)],
+            traces: vec![make_trace(
+                "t1",
+                "cpu_usage",
+                &[500_000, 600_000, 450_000, 550_000, 520_000],
+                1,
+            )],
             expected_outcome: SignatureExpectedOutcome::ValidSignature,
             expected_regime: None,
             expected_valid: Some(true),
@@ -818,11 +823,15 @@ pub fn signature_corpus() -> Vec<SignatureSpecimen> {
             specimen_id: "extract_multi_feature".into(),
             description: "Extract signature from trace with multiple features".into(),
             family: SignatureSpecimenFamily::Extraction,
-            traces: vec![make_multi_feature_trace("t2", &[
-                ("cpu_usage", &[500_000, 600_000]),
-                ("mem_usage", &[300_000, 400_000]),
-                ("cache_hit", &[900_000, 800_000]),
-            ], 1)],
+            traces: vec![make_multi_feature_trace(
+                "t2",
+                &[
+                    ("cpu_usage", &[500_000, 600_000]),
+                    ("mem_usage", &[300_000, 400_000]),
+                    ("cache_hit", &[900_000, 800_000]),
+                ],
+                1,
+            )],
             expected_outcome: SignatureExpectedOutcome::ValidSignature,
             expected_regime: None,
             expected_valid: Some(true),
@@ -870,7 +879,12 @@ pub fn signature_corpus() -> Vec<SignatureSpecimen> {
             specimen_id: "short_three_observations".into(),
             description: "Three observations still below MIN_TRACE_LENGTH=4".into(),
             family: SignatureSpecimenFamily::ShortTrace,
-            traces: vec![make_trace("t-short3", "metric", &[500_000, 600_000, 400_000], 1)],
+            traces: vec![make_trace(
+                "t-short3",
+                "metric",
+                &[500_000, 600_000, 400_000],
+                1,
+            )],
             expected_outcome: SignatureExpectedOutcome::InvalidSignature,
             expected_regime: None,
             expected_valid: Some(false),
@@ -881,10 +895,14 @@ pub fn signature_corpus() -> Vec<SignatureSpecimen> {
             specimen_id: "classify_normal_trace".into(),
             description: "Moderate values classify as Normal regime".into(),
             family: SignatureSpecimenFamily::Classification,
-            traces: vec![make_multi_feature_trace("t-normal", &[
-                ("cpu", &[500_000, 510_000, 490_000, 500_000]),
-                ("mem", &[500_000, 480_000, 520_000, 500_000]),
-            ], 1)],
+            traces: vec![make_multi_feature_trace(
+                "t-normal",
+                &[
+                    ("cpu", &[500_000, 510_000, 490_000, 500_000]),
+                    ("mem", &[500_000, 480_000, 520_000, 500_000]),
+                ],
+                1,
+            )],
             expected_outcome: SignatureExpectedOutcome::CorrectClassification,
             expected_regime: Some(RegimeLabel::Classified(Regime::Normal)),
             expected_valid: Some(true),
@@ -894,10 +912,14 @@ pub fn signature_corpus() -> Vec<SignatureSpecimen> {
             specimen_id: "classify_elevated_trace".into(),
             description: "Slightly elevated values classify as Elevated".into(),
             family: SignatureSpecimenFamily::Classification,
-            traces: vec![make_multi_feature_trace("t-elevated", &[
-                ("cpu", &[700_000, 720_000, 680_000, 710_000]),
-                ("mem", &[500_000, 520_000, 480_000, 500_000]),
-            ], 1)],
+            traces: vec![make_multi_feature_trace(
+                "t-elevated",
+                &[
+                    ("cpu", &[700_000, 720_000, 680_000, 710_000]),
+                    ("mem", &[500_000, 520_000, 480_000, 500_000]),
+                ],
+                1,
+            )],
             expected_outcome: SignatureExpectedOutcome::CorrectClassification,
             expected_regime: None, // Don't constrain which regime; just verify it classifies
             expected_valid: Some(true),
@@ -929,10 +951,14 @@ pub fn signature_corpus() -> Vec<SignatureSpecimen> {
             specimen_id: "chart_stable_single".into(),
             description: "Single trace produces stable chart with no transitions".into(),
             family: SignatureSpecimenFamily::StateChart,
-            traces: vec![make_multi_feature_trace("t-stable", &[
-                ("cpu", &[500_000, 510_000, 490_000, 505_000]),
-                ("mem", &[500_000, 490_000, 510_000, 500_000]),
-            ], 1)],
+            traces: vec![make_multi_feature_trace(
+                "t-stable",
+                &[
+                    ("cpu", &[500_000, 510_000, 490_000, 505_000]),
+                    ("mem", &[500_000, 490_000, 510_000, 500_000]),
+                ],
+                1,
+            )],
             expected_outcome: SignatureExpectedOutcome::StableChart,
             expected_regime: None,
             expected_valid: None,
@@ -943,12 +969,16 @@ pub fn signature_corpus() -> Vec<SignatureSpecimen> {
             description: "Two similar traces in same regime → no transitions".into(),
             family: SignatureSpecimenFamily::StateChart,
             traces: vec![
-                make_multi_feature_trace("t-same1", &[
-                    ("cpu", &[500_000, 510_000, 490_000, 500_000]),
-                ], 1),
-                make_multi_feature_trace("t-same2", &[
-                    ("cpu", &[505_000, 515_000, 485_000, 500_000]),
-                ], 2),
+                make_multi_feature_trace(
+                    "t-same1",
+                    &[("cpu", &[500_000, 510_000, 490_000, 500_000])],
+                    1,
+                ),
+                make_multi_feature_trace(
+                    "t-same2",
+                    &[("cpu", &[505_000, 515_000, 485_000, 500_000])],
+                    2,
+                ),
             ],
             expected_outcome: SignatureExpectedOutcome::StableChart,
             expected_regime: None,
@@ -974,8 +1004,18 @@ pub fn signature_corpus() -> Vec<SignatureSpecimen> {
             description: "Different traces have nonzero L1 distance".into(),
             family: SignatureSpecimenFamily::Similarity,
             traces: vec![
-                make_trace("t-diff1", "metric", &[100_000, 200_000, 300_000, 400_000], 1),
-                make_trace("t-diff2", "metric", &[900_000, 800_000, 700_000, 600_000], 1),
+                make_trace(
+                    "t-diff1",
+                    "metric",
+                    &[100_000, 200_000, 300_000, 400_000],
+                    1,
+                ),
+                make_trace(
+                    "t-diff2",
+                    "metric",
+                    &[900_000, 800_000, 700_000, 600_000],
+                    1,
+                ),
             ],
             expected_outcome: SignatureExpectedOutcome::SimilarityComputed,
             expected_regime: None,
@@ -1006,9 +1046,7 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
                 && sig.valid != expected
             {
                 verdict = SignatureVerdict::Fail;
-                error_detail = Some(format!(
-                    "expected valid={expected} got valid={}", sig.valid
-                ));
+                error_detail = Some(format!("expected valid={expected} got valid={}", sig.valid));
             }
         }
         SignatureExpectedOutcome::CorrectClassification => {
@@ -1021,9 +1059,7 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
                 && label != expected
             {
                 verdict = SignatureVerdict::Fail;
-                error_detail = Some(format!(
-                    "expected regime={:?} got {:?}", expected, label
-                ));
+                error_detail = Some(format!("expected regime={:?} got {:?}", expected, label));
             }
             // At minimum, classification should not abstain for valid signatures.
             if sig.valid && label.is_abstention() && specimen.expected_regime.is_some() {
@@ -1053,7 +1089,8 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
             {
                 verdict = SignatureVerdict::Fail;
                 error_detail = Some(format!(
-                    "expected transitions={expected} got {}", chart.transition_count
+                    "expected transitions={expected} got {}",
+                    chart.transition_count
                 ));
             }
         }
@@ -1067,7 +1104,9 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
 
                 if specimen.specimen_id.contains("identical") && distance != 0 {
                     verdict = SignatureVerdict::Fail;
-                    error_detail = Some(format!("identical traces should have distance=0, got {distance}"));
+                    error_detail = Some(format!(
+                        "identical traces should have distance=0, got {distance}"
+                    ));
                 }
                 if specimen.specimen_id.contains("different") && distance == 0 {
                     verdict = SignatureVerdict::Fail;
@@ -1092,9 +1131,7 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
         confidence_millionths,
         transition_count,
         error_detail,
-        evidence_hash: hex_encode(
-            ContentHash::compute(hash_input.as_bytes()).as_bytes(),
-        ),
+        evidence_hash: hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes()),
     }
 }
 
@@ -1333,10 +1370,14 @@ mod tests {
     #[test]
     fn classify_produces_label() {
         let config = SignatureConfig::default();
-        let trace = make_multi_feature_trace("test", &[
-            ("cpu", &[500_000, 510_000, 490_000, 500_000]),
-            ("mem", &[500_000, 480_000, 520_000, 500_000]),
-        ], 1);
+        let trace = make_multi_feature_trace(
+            "test",
+            &[
+                ("cpu", &[500_000, 510_000, 490_000, 500_000]),
+                ("mem", &[500_000, 480_000, 520_000, 500_000]),
+            ],
+            1,
+        );
         let sig = extract_signature(&trace, &config);
         let (label, conf) = classify_regime(&sig, &config);
         assert!(!label.is_abstention());
@@ -1363,9 +1404,11 @@ mod tests {
     #[test]
     fn state_chart_single_trace_no_transitions() {
         let config = SignatureConfig::default();
-        let traces = vec![make_multi_feature_trace("t", &[
-            ("cpu", &[500_000, 510_000, 490_000, 500_000]),
-        ], 1)];
+        let traces = vec![make_multi_feature_trace(
+            "t",
+            &[("cpu", &[500_000, 510_000, 490_000, 500_000])],
+            1,
+        )];
         let chart = build_regime_state_chart(&traces, &config);
         assert_eq!(chart.transition_count, 0);
         assert_eq!(chart.entries.len(), 1);
@@ -1436,7 +1479,10 @@ mod tests {
         let sig = extract_signature(&trace, &config);
         let cos = sig.cosine_similarity(&sig);
         // Identical vectors should have cosine similarity near 1M.
-        assert!(cos > 900_000, "cosine similarity {cos} too low for identical vectors");
+        assert!(
+            cos > 900_000,
+            "cosine similarity {cos} too low for identical vectors"
+        );
     }
 
     #[test]

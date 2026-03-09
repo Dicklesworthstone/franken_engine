@@ -343,8 +343,11 @@ impl DeterministicTsModuleResolver {
             .module_index_identity_report
             .workspace_fingerprint
             .clone();
-        let artifact_age_seconds = current_unix_seconds
-            .saturating_sub(bundle.module_index_identity_report.generated_at_unix_seconds);
+        let artifact_age_seconds = current_unix_seconds.saturating_sub(
+            bundle
+                .module_index_identity_report
+                .generated_at_unix_seconds,
+        );
 
         if expected_workspace_fingerprint != observed_workspace_fingerprint {
             return TsResolutionIndexValidationReport {
@@ -359,7 +362,8 @@ impl DeterministicTsModuleResolver {
         }
 
         let package_art_fingerprint = stable_fingerprint(&bundle.module_art_index_report);
-        let export_map_hash_catalog_fingerprint = stable_fingerprint(&bundle.export_map_hash_catalog);
+        let export_map_hash_catalog_fingerprint =
+            stable_fingerprint(&bundle.export_map_hash_catalog);
         let index_fingerprint = stable_fingerprint(&(
             observed_workspace_fingerprint.clone(),
             package_art_fingerprint.clone(),
@@ -434,12 +438,21 @@ impl DeterministicTsModuleResolver {
             "allow",
             "none",
             "indexed artifact passed validation",
-            Some(bundle.module_index_identity_report.index_fingerprint.clone()),
+            Some(
+                bundle
+                    .module_index_identity_report
+                    .index_fingerprint
+                    .clone(),
+            ),
         );
 
-        let Some(indexed_package_candidate) =
-            self.package_candidate_from_index(specifier, request.style, bundle, context, &mut traces)
-        else {
+        let Some(indexed_package_candidate) = self.package_candidate_from_index(
+            specifier,
+            request.style,
+            bundle,
+            context,
+            &mut traces,
+        ) else {
             return self.resolve(request, context);
         };
 
@@ -698,7 +711,9 @@ impl DeterministicTsModuleResolver {
         traces: &mut Vec<TsResolutionTraceEvent>,
     ) -> Option<CandidateBase> {
         let (package_name, export_key) = parse_package_specifier(specifier)?;
-        let terminal = bundle.module_art_index_report.lookup_package(&package_name)?;
+        let terminal = bundle
+            .module_art_index_report
+            .lookup_package(&package_name)?;
         let package = bundle.export_map_hash_catalog.package(&package_name)?;
 
         let indexed_entry = package
@@ -742,7 +757,10 @@ impl DeterministicTsModuleResolver {
             format!("resolved indexed package export '{indexed_key}'"),
             Some(base.clone()),
         );
-        Some(CandidateBase::new(base, "package_index").with_package(package_name, selected_condition))
+        Some(
+            CandidateBase::new(base, "package_index")
+                .with_package(package_name, selected_condition),
+        )
     }
 
     fn path_alias_candidates(&self, specifier: &str) -> Vec<PathAliasCandidate> {
@@ -1316,7 +1334,10 @@ impl TsModuleArtIndexReport {
         let mut node_index = 0usize;
         for ch in package_name.chars() {
             let node = self.nodes.get(node_index)?;
-            let edge = node.children.iter().find(|edge| edge.label == ch.to_string())?;
+            let edge = node
+                .children
+                .iter()
+                .find(|edge| edge.label == ch.to_string())?;
             node_index = edge.child_index;
         }
         self.nodes.get(node_index)?.terminal.as_ref()
@@ -1375,13 +1396,19 @@ pub struct TsExportMapHashCatalogPackage {
 
 impl TsExportMapHashCatalogPackage {
     pub fn lookup_exact_export(&self, export_key: &str) -> Option<&TsIndexedExportEntry> {
-        lookup_exact_slot(self.exact_export_mphf.as_ref()?, export_key)
-            .and_then(|slot| self.exact_exports.iter().find(|entry| entry.key == slot.key))
+        lookup_exact_slot(self.exact_export_mphf.as_ref()?, export_key).and_then(|slot| {
+            self.exact_exports
+                .iter()
+                .find(|entry| entry.key == slot.key)
+        })
     }
 
     pub fn lookup_hot_subpath(&self, export_key: &str) -> Option<&TsIndexedSubpathEntry> {
-        lookup_exact_slot(self.hot_subpath_mphf.as_ref()?, export_key)
-            .and_then(|slot| self.hot_subpaths.iter().find(|entry| entry.subpath == slot.key))
+        lookup_exact_slot(self.hot_subpath_mphf.as_ref()?, export_key).and_then(|slot| {
+            self.hot_subpaths
+                .iter()
+                .find(|entry| entry.subpath == slot.key)
+        })
     }
 }
 
@@ -1607,10 +1634,7 @@ pub fn write_ts_resolution_index_artifacts(
         policy_ids: unique_trace_field(traces, |trace| trace.policy_id.clone()),
     };
 
-    write_pretty_json(
-        &output_dir.join(&artifact_paths.trace_ids),
-        &trace_ids,
-    )?;
+    write_pretty_json(&output_dir.join(&artifact_paths.trace_ids), &trace_ids)?;
     write_pretty_json(
         &output_dir.join(&artifact_paths.module_art_index_report),
         &bundle.module_art_index_report,
@@ -1633,10 +1657,7 @@ pub fn write_ts_resolution_index_artifacts(
     let manifest = TsResolutionIndexRunManifest {
         schema_version: INDEX_MANIFEST_SCHEMA_VERSION.to_string(),
         scenario_id: scenario_id.to_string(),
-        generated_at_utc: bundle
-            .module_index_identity_report
-            .generated_at_utc
-            .clone(),
+        generated_at_utc: bundle.module_index_identity_report.generated_at_utc.clone(),
         generated_at_unix_seconds: bundle
             .module_index_identity_report
             .generated_at_unix_seconds,
@@ -1669,8 +1690,7 @@ struct MutableArtNode {
 }
 
 fn stable_fingerprint<T: Serialize>(value: &T) -> String {
-    let bytes =
-        serde_json::to_vec(value).expect("stable fingerprint serialization must succeed");
+    let bytes = serde_json::to_vec(value).expect("stable fingerprint serialization must succeed");
     ContentHash::compute(&bytes).to_hex()
 }
 
@@ -1789,7 +1809,10 @@ fn build_export_map_hash_catalog(
             None
         } else {
             match build_perfect_hash_layout(
-                &exact_exports.iter().map(|entry| entry.key.clone()).collect::<Vec<_>>(),
+                &exact_exports
+                    .iter()
+                    .map(|entry| entry.key.clone())
+                    .collect::<Vec<_>>(),
                 policy,
             ) {
                 Ok(layout) => Some(layout),
@@ -1955,13 +1978,7 @@ fn write_pretty_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
 fn sanitize_step_log_name(value: &str) -> String {
     let sanitized = value
         .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch
-            } else {
-                '_'
-            }
-        })
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect::<String>();
 
     if sanitized.is_empty() {

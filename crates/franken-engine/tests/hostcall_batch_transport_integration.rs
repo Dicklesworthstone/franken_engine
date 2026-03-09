@@ -10,14 +10,14 @@ use std::collections::BTreeMap;
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::hostcall_batch_transport::{
     BatchEntry, BatchEnvelope, BatchPayload, BatchReceipt, BatchTransportConfig,
-    BatchTransportError, BatchTransportSpecimenFamily, BatchTransportState,
-    BatchTransportVerdict, CreditPool, MembraneRejectionReason, MembraneVerdict,
-    RegionState, SafetyMembrane, SharedMemoryRegion, batch_transport_corpus,
-    compute_batch_mac, compute_entry_content_hash, run_batch_transport_corpus,
+    BatchTransportError, BatchTransportSpecimenFamily, BatchTransportState, BatchTransportVerdict,
+    CreditPool, MembraneRejectionReason, MembraneVerdict, RegionState, SafetyMembrane,
+    SharedMemoryRegion, batch_transport_corpus, compute_batch_mac, compute_entry_content_hash,
+    run_batch_transport_corpus,
 };
 use frankenengine_engine::hostcall_session_protocol::{
-    DegradedOperationKind, DegradedSeverity, KeyStagePurpose, SessionKeySchedule,
-    SessionPhaseTag, SessionProtocolState, TransitionTrigger,
+    DegradedOperationKind, DegradedSeverity, KeyStagePurpose, SessionKeySchedule, SessionPhaseTag,
+    SessionProtocolState, TransitionTrigger,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::session_hostcall_channel::BackpressureSignal;
@@ -55,13 +55,8 @@ fn make_entry(seq: u64, data: &[u8]) -> BatchEntry {
 }
 
 fn established_protocol() -> SessionProtocolState {
-    let mut state = SessionProtocolState::new(
-        "test-sess".into(),
-        "ext".into(),
-        "host".into(),
-        64,
-        50,
-    );
+    let mut state =
+        SessionProtocolState::new("test-sess".into(), "ext".into(), "host".into(), 64, 50);
     state
         .transition(
             SessionPhaseTag::Negotiating,
@@ -434,7 +429,9 @@ fn region_serde_roundtrip() {
 fn batch_build_valid() {
     let mut ts = default_state();
     let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world")];
-    let batch = ts.build_batch(entries, &session_key(), test_epoch(), 100).unwrap();
+    let batch = ts
+        .build_batch(entries, &session_key(), test_epoch(), 100)
+        .unwrap();
     assert_eq!(batch.batch_id, 1);
     assert_eq!(batch.session_id, "test-sess");
     assert_eq!(batch.sequence_start, 1);
@@ -488,8 +485,12 @@ fn batch_build_increments_batch_id() {
     let mut ts = default_state();
     let e1 = vec![make_entry(1, b"a")];
     let e2 = vec![make_entry(2, b"b")];
-    let b1 = ts.build_batch(e1, &session_key(), test_epoch(), 100).unwrap();
-    let b2 = ts.build_batch(e2, &session_key(), test_epoch(), 200).unwrap();
+    let b1 = ts
+        .build_batch(e1, &session_key(), test_epoch(), 100)
+        .unwrap();
+    let b2 = ts
+        .build_batch(e2, &session_key(), test_epoch(), 200)
+        .unwrap();
     assert_eq!(b1.batch_id, 1);
     assert_eq!(b2.batch_id, 2);
 }
@@ -498,7 +499,9 @@ fn batch_build_increments_batch_id() {
 fn batch_build_computes_total_payload_bytes() {
     let mut ts = default_state();
     let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world!")];
-    let batch = ts.build_batch(entries, &session_key(), test_epoch(), 100).unwrap();
+    let batch = ts
+        .build_batch(entries, &session_key(), test_epoch(), 100)
+        .unwrap();
     // "hello" = 5 bytes, "world!" = 6 bytes.
     assert_eq!(batch.total_payload_bytes, 11);
 }
@@ -507,7 +510,9 @@ fn batch_build_computes_total_payload_bytes() {
 fn batch_envelope_serde_roundtrip() {
     let mut ts = default_state();
     let entries = vec![make_entry(1, b"data")];
-    let batch = ts.build_batch(entries, &session_key(), test_epoch(), 100).unwrap();
+    let batch = ts
+        .build_batch(entries, &session_key(), test_epoch(), 100)
+        .unwrap();
     let json = serde_json::to_string(&batch).unwrap();
     let back: BatchEnvelope = serde_json::from_str(&json).unwrap();
     assert_eq!(batch, back);
@@ -550,7 +555,10 @@ fn membrane_rejects_phase_blocked() {
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
     let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
     assert!(!verdict.is_accept());
-    assert_eq!(membrane.rejection_count(MembraneRejectionReason::PhaseBlocked), 1);
+    assert_eq!(
+        membrane.rejection_count(MembraneRejectionReason::PhaseBlocked),
+        1
+    );
 }
 
 #[test]
@@ -569,7 +577,10 @@ fn membrane_rejects_epoch_mismatch() {
         ContentHash::compute(b"handshake"),
     );
     for purpose in KeyStagePurpose::ALL {
-        schedule.record_stage(*purpose, ContentHash::compute(purpose.domain_label().as_bytes()));
+        schedule.record_stage(
+            *purpose,
+            ContentHash::compute(purpose.domain_label().as_bytes()),
+        );
     }
     protocol.attach_key_schedule(schedule).unwrap();
 
@@ -583,7 +594,10 @@ fn membrane_rejects_epoch_mismatch() {
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
     let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
     assert!(!verdict.is_accept());
-    assert_eq!(membrane.rejection_count(MembraneRejectionReason::EpochMismatch), 1);
+    assert_eq!(
+        membrane.rejection_count(MembraneRejectionReason::EpochMismatch),
+        1
+    );
 }
 
 #[test]
@@ -605,7 +619,10 @@ fn membrane_rejects_batch_size_exceeded() {
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
     let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
     assert!(!verdict.is_accept());
-    assert_eq!(membrane.rejection_count(MembraneRejectionReason::BatchSizeExceeded), 1);
+    assert_eq!(
+        membrane.rejection_count(MembraneRejectionReason::BatchSizeExceeded),
+        1
+    );
 }
 
 #[test]
@@ -623,7 +640,10 @@ fn membrane_rejects_insufficient_credits() {
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
     let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
     assert!(!verdict.is_accept());
-    assert_eq!(membrane.rejection_count(MembraneRejectionReason::InsufficientCredits), 1);
+    assert_eq!(
+        membrane.rejection_count(MembraneRejectionReason::InsufficientCredits),
+        1
+    );
 }
 
 #[test]
@@ -644,7 +664,10 @@ fn membrane_rejects_degraded_blocked() {
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
     let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
     assert!(!verdict.is_accept());
-    assert_eq!(membrane.rejection_count(MembraneRejectionReason::DegradedBlocked), 1);
+    assert_eq!(
+        membrane.rejection_count(MembraneRejectionReason::DegradedBlocked),
+        1
+    );
 }
 
 #[test]
@@ -671,14 +694,19 @@ fn membrane_rejects_invalid_region_not_found() {
     let build_config = default_config();
     let mut ts = BatchTransportState::new("s".into(), build_config, epoch);
     let protocol = established_protocol();
-    let batch = ts.build_batch(vec![entry], &session_key(), epoch, 100).unwrap();
+    let batch = ts
+        .build_batch(vec![entry], &session_key(), epoch, 100)
+        .unwrap();
 
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
     let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
     assert!(!verdict.is_accept());
-    assert_eq!(membrane.rejection_count(MembraneRejectionReason::InvalidRegion), 1);
+    assert_eq!(
+        membrane.rejection_count(MembraneRejectionReason::InvalidRegion),
+        1
+    );
 }
 
 #[test]
@@ -718,13 +746,18 @@ fn membrane_rejects_invalid_region_not_sealed() {
     let build_config = default_config();
     let mut ts = BatchTransportState::new("s".into(), build_config, epoch);
     let protocol = established_protocol();
-    let batch = ts.build_batch(vec![entry], &session_key(), epoch, 100).unwrap();
+    let batch = ts
+        .build_batch(vec![entry], &session_key(), epoch, 100)
+        .unwrap();
 
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
     assert!(!verdict.is_accept());
-    assert_eq!(membrane.rejection_count(MembraneRejectionReason::InvalidRegion), 1);
+    assert_eq!(
+        membrane.rejection_count(MembraneRejectionReason::InvalidRegion),
+        1
+    );
 }
 
 #[test]
@@ -754,7 +787,10 @@ fn membrane_rejects_sequence_gap() {
     let protocol = established_protocol();
     let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
     assert!(!verdict.is_accept());
-    assert_eq!(membrane.rejection_count(MembraneRejectionReason::SequenceGap), 1);
+    assert_eq!(
+        membrane.rejection_count(MembraneRejectionReason::SequenceGap),
+        1
+    );
 }
 
 #[test]
@@ -797,9 +833,18 @@ fn membrane_rejection_reason_all_variants() {
 
 #[test]
 fn membrane_rejection_reason_display() {
-    assert_eq!(MembraneRejectionReason::PhaseBlocked.to_string(), "phase_blocked");
-    assert_eq!(MembraneRejectionReason::EpochMismatch.to_string(), "epoch_mismatch");
-    assert_eq!(MembraneRejectionReason::SequenceGap.to_string(), "sequence_gap");
+    assert_eq!(
+        MembraneRejectionReason::PhaseBlocked.to_string(),
+        "phase_blocked"
+    );
+    assert_eq!(
+        MembraneRejectionReason::EpochMismatch.to_string(),
+        "epoch_mismatch"
+    );
+    assert_eq!(
+        MembraneRejectionReason::SequenceGap.to_string(),
+        "sequence_gap"
+    );
 }
 
 // ===========================================================================
@@ -854,7 +899,9 @@ fn full_pipeline_shared_region_payload() {
         trace_id: "trace-region".into(),
     };
 
-    let batch = ts.build_batch(vec![entry], &session_key(), epoch, 100).unwrap();
+    let batch = ts
+        .build_batch(vec![entry], &session_key(), epoch, 100)
+        .unwrap();
     let receipt = ts.submit_batch(batch, &protocol, 100).unwrap();
     assert_eq!(receipt.envelope_count, 1);
     assert_eq!(ts.total_shared_bytes, 1024);
@@ -889,11 +936,10 @@ fn full_pipeline_multiple_batches() {
 
     for i in 0..5u64 {
         let seq_start = i * 2 + 1;
-        let entries = vec![
-            make_entry(seq_start, b"a"),
-            make_entry(seq_start + 1, b"b"),
-        ];
-        let batch = ts.build_batch(entries, &session_key(), epoch, 100 + i).unwrap();
+        let entries = vec![make_entry(seq_start, b"a"), make_entry(seq_start + 1, b"b")];
+        let batch = ts
+            .build_batch(entries, &session_key(), epoch, 100 + i)
+            .unwrap();
         ts.submit_batch(batch, &protocol, 100 + i).unwrap();
     }
     assert_eq!(ts.accepted_batches.len(), 5);
@@ -940,21 +986,16 @@ fn corpus_all_pass() {
 #[test]
 fn corpus_covers_all_families() {
     let corpus = batch_transport_corpus();
-    let families: std::collections::BTreeSet<_> =
-        corpus.iter().map(|s| s.family).collect();
+    let families: std::collections::BTreeSet<_> = corpus.iter().map(|s| s.family).collect();
     for family in BatchTransportSpecimenFamily::ALL {
-        assert!(
-            families.contains(family),
-            "corpus missing family: {family}"
-        );
+        assert!(families.contains(family), "corpus missing family: {family}");
     }
 }
 
 #[test]
 fn corpus_unique_names() {
     let corpus = batch_transport_corpus();
-    let names: std::collections::BTreeSet<_> =
-        corpus.iter().map(|s| s.name.clone()).collect();
+    let names: std::collections::BTreeSet<_> = corpus.iter().map(|s| s.name.clone()).collect();
     assert_eq!(names.len(), corpus.len(), "duplicate specimen names found");
 }
 
@@ -1310,7 +1351,8 @@ fn specimen_family_display() {
 fn evidence_bundle_write_succeeds() {
     let dir = std::env::temp_dir().join("batch_transport_evidence_test");
     let _ = std::fs::create_dir_all(&dir);
-    let result = frankenengine_engine::hostcall_batch_transport::write_batch_transport_evidence_bundle(&dir);
+    let result =
+        frankenengine_engine::hostcall_batch_transport::write_batch_transport_evidence_bundle(&dir);
     assert!(result.is_ok());
     assert!(dir.join("batch_transport_inventory.json").exists());
     assert!(dir.join("batch_transport_manifest.json").exists());

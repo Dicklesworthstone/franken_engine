@@ -1,13 +1,12 @@
 //! Integration tests for the parser_frontier_evidence module.
 
 use frankenengine_engine::parser_frontier_evidence::{
-    ActualParseOutcome, ExpectedParseOutcome, FrontierEvidenceArtifactPaths,
-    FrontierEvidenceEvent, FrontierEvidenceRunManifest,
-    FrontierSpecimen, FrontierSpecimenEvidence, FrontierVerdict, PARSER_FRONTIER_COMPONENT,
-    PARSER_FRONTIER_EVENT_SCHEMA_VERSION, PARSER_FRONTIER_EVIDENCE_SCHEMA_VERSION,
-    PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION, PARSER_FRONTIER_POLICY_ID,
-    ParserFrontierEvidenceInventory, ParserFrontierFamily, frontier_corpus, run_frontier_corpus,
-    write_frontier_evidence_bundle,
+    ActualParseOutcome, ExpectedParseOutcome, FrontierEvidenceArtifactPaths, FrontierEvidenceEvent,
+    FrontierEvidenceRunManifest, FrontierSpecimen, FrontierSpecimenEvidence, FrontierVerdict,
+    PARSER_FRONTIER_COMPONENT, PARSER_FRONTIER_EVENT_SCHEMA_VERSION,
+    PARSER_FRONTIER_EVIDENCE_SCHEMA_VERSION, PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION,
+    PARSER_FRONTIER_POLICY_ID, ParserFrontierEvidenceInventory, ParserFrontierFamily,
+    frontier_corpus, run_frontier_corpus, write_frontier_evidence_bundle,
 };
 use std::collections::BTreeSet;
 use std::fs;

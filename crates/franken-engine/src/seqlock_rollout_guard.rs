@@ -1277,7 +1277,10 @@ mod tests {
     #[test]
     fn verdict_label_returns_expected_strings() {
         assert_eq!(super::verdict_label(GuardEvidenceVerdict::Pass), "pass");
-        assert_eq!(super::verdict_label(GuardEvidenceVerdict::Missing), "missing");
+        assert_eq!(
+            super::verdict_label(GuardEvidenceVerdict::Missing),
+            "missing"
+        );
         assert_eq!(super::verdict_label(GuardEvidenceVerdict::Fail), "fail");
     }
 
@@ -1319,7 +1322,11 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let back: super::StructuredLogEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
-        let event_none = super::StructuredLogEvent { error_code: None, candidate_id: None, ..event };
+        let event_none = super::StructuredLogEvent {
+            error_code: None,
+            candidate_id: None,
+            ..event
+        };
         let json2 = serde_json::to_string(&event_none).unwrap();
         let back2: super::StructuredLogEvent = serde_json::from_str(&json2).unwrap();
         assert_eq!(event_none, back2);
@@ -1360,7 +1367,15 @@ mod tests {
         };
         let safety = build_safety_case_row(&candidate, &failing_starvation, &passing_model_check);
         assert!(!safety.rollout_allowed);
-        assert!(safety.disable_reasons.contains(&"starvation_microbench_failed".to_string()));
-        assert!(!safety.disable_reasons.contains(&"model_check_evidence_missing".to_string()));
+        assert!(
+            safety
+                .disable_reasons
+                .contains(&"starvation_microbench_failed".to_string())
+        );
+        assert!(
+            !safety
+                .disable_reasons
+                .contains(&"model_check_evidence_missing".to_string())
+        );
     }
 }

@@ -5,18 +5,15 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 use frankenengine_engine::observability_channel_model::{
     ENGINE_OBSERVABILITY_CHANNEL_POLICY_SCHEMA_VERSION,
     OBSERVABILITY_CONTRACT_VALIDATION_REPORT_SCHEMA_VERSION, OPERATOR_MODE_CONTRACT_SCHEMA_VERSION,
-    ObservabilityMode, OperatorModeContract,
-    SAMPLING_SEED_REPLAY_FIXTURE_MATRIX_SCHEMA_VERSION,
-    SKETCH_ERROR_ENVELOPE_REPORT_SCHEMA_VERSION, SketchFamily,
+    ObservabilityMode, OperatorModeContract, SAMPLING_SEED_REPLAY_FIXTURE_MATRIX_SCHEMA_VERSION,
+    SKETCH_ERROR_ENVELOPE_REPORT_SCHEMA_VERSION, SamplingSeedField, SamplingStrategy, SketchFamily,
     TELEMETRY_SAMPLING_CONTRACT_SCHEMA_VERSION, TELEMETRY_SITE_POLICY_MATRIX_SCHEMA_VERSION,
-    TelemetrySamplingContract, TelemetrySamplingRule,
-    TelemetrySitePolicyMatrix, canonical_engine_observability_channel_policy,
-    canonical_operator_mode_contract, canonical_sampling_seed_replay_fixture_matrix,
-    canonical_sketch_error_envelope_report, canonical_telemetry_sampling_contract,
-    canonical_telemetry_site_policy_matrix, derive_sampling_seed_hex,
-    deterministic_sampling_interval, resolve_observability_mode,
+    TelemetrySamplingContract, TelemetrySamplingRule, TelemetrySitePolicyMatrix,
+    canonical_engine_observability_channel_policy, canonical_operator_mode_contract,
+    canonical_sampling_seed_replay_fixture_matrix, canonical_sketch_error_envelope_report,
+    canonical_telemetry_sampling_contract, canonical_telemetry_site_policy_matrix,
+    derive_sampling_seed_hex, deterministic_sampling_interval, resolve_observability_mode,
     validate_observability_contract,
-    SamplingStrategy, SamplingSeedField,
 };
 use serde::{Deserialize, Serialize};
 
@@ -173,7 +170,10 @@ fn rgc_066a_sampling_contract_and_replay_fixtures_match_canonical_builders() {
         contract.sampling_seed_replay_fixture_matrix.schema_version,
         SAMPLING_SEED_REPLAY_FIXTURE_MATRIX_SCHEMA_VERSION
     );
-    assert_eq!(contract.sampling_seed_replay_fixture_matrix, expected_fixtures);
+    assert_eq!(
+        contract.sampling_seed_replay_fixture_matrix,
+        expected_fixtures
+    );
 
     for fixture in &contract.sampling_seed_replay_fixture_matrix.fixtures {
         let rule = contract
@@ -267,7 +267,8 @@ fn rgc_066a_validation_rejects_support_bundle_downsampling() {
         .iter_mut()
         .find(|site| site.site_id == "runtime_observability.replay_drop_total")
         .expect("replay drop site");
-    site.allowed_modes.retain(|mode| *mode != ObservabilityMode::SupportBundleExport);
+    site.allowed_modes
+        .retain(|mode| *mode != ObservabilityMode::SupportBundleExport);
 
     let report = validate_observability_contract(
         &contract.engine_observability_channel_policy,
@@ -309,7 +310,10 @@ fn rgc_066a_mode_resolution_prefers_highest_allowed_precedence() {
 
     let auth_mode = resolve_observability_mode(
         auth_site,
-        &[ObservabilityMode::Degraded, ObservabilityMode::SupportBundleExport],
+        &[
+            ObservabilityMode::Degraded,
+            ObservabilityMode::SupportBundleExport,
+        ],
         &mode_contract,
     )
     .expect("auth mode should resolve");
@@ -321,10 +325,9 @@ fn rgc_066a_operator_verification_commands_are_present() {
     let contract = parse_contract();
     let doc = fs::read_to_string(repo_root().join("docs/RGC_OBSERVABILITY_CHANNEL_POLICY_V1.md"))
         .expect("read observability policy doc");
-    let script = fs::read_to_string(
-        repo_root().join("scripts/run_rgc_observability_channel_policy.sh"),
-    )
-    .expect("read observability gate script");
+    let script =
+        fs::read_to_string(repo_root().join("scripts/run_rgc_observability_channel_policy.sh"))
+            .expect("read observability gate script");
 
     assert!(
         contract
@@ -439,7 +442,10 @@ fn rgc_066a_derive_sampling_seed_hex_different_inputs_produce_different_seeds() 
         "site-diff",
         ObservabilityMode::Degraded,
     );
-    assert_ne!(seed_a, seed_b, "different trace_id must yield different seed");
+    assert_ne!(
+        seed_a, seed_b,
+        "different trace_id must yield different seed"
+    );
     assert_ne!(seed_a, seed_c, "different mode must yield different seed");
 }
 
@@ -462,7 +468,10 @@ fn rgc_066a_deterministic_sampling_interval_monotonicity_with_burst() {
 
     // Interval never exceeds base_interval
     let i32 = deterministic_sampling_interval(&seed, 32, 1);
-    assert!(i32 <= 32, "interval must not exceed base_interval, got {i32}");
+    assert!(
+        i32 <= 32,
+        "interval must not exceed base_interval, got {i32}"
+    );
 }
 
 #[test]
@@ -634,13 +643,8 @@ fn rgc_066a_validation_rejects_empty_site_matrix() {
     let sampling = canonical_telemetry_sampling_contract();
     let sketch = canonical_sketch_error_envelope_report();
 
-    let report = validate_observability_contract(
-        &policy,
-        &mode_contract,
-        &empty_matrix,
-        &sampling,
-        &sketch,
-    );
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &empty_matrix, &sampling, &sketch);
     // With an empty site matrix, sampling rules reference sites that don't exist,
     // so the contract should still pass since no sites exist to fail validation.
     // The key point: the function executes without panicking on empty input.
@@ -676,7 +680,10 @@ fn rgc_066a_validation_accepts_extra_sampling_rule() {
     );
     // Extra rule referencing unknown site triggers violation
     assert!(
-        report.violations.iter().any(|v| v.code == "FE-RGC-066A-SAMPLING-0001"),
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-SAMPLING-0001"),
         "extra sampling rule for unknown site must trigger SAMPLING-0001, got {:?}",
         report.violations
     );
@@ -804,7 +811,9 @@ fn rgc_066a_mode_precedence_of_returns_none_for_missing_mode_in_empty_contract()
         modes: Vec::new(),
     };
     assert!(
-        empty_contract.precedence_of(ObservabilityMode::DefaultCapture).is_none(),
+        empty_contract
+            .precedence_of(ObservabilityMode::DefaultCapture)
+            .is_none(),
         "precedence_of must return None when mode is missing"
     );
 }
@@ -819,7 +828,9 @@ fn rgc_066a_incident_full_capture_has_highest_precedence() {
         if mode == ObservabilityMode::IncidentFullCapture {
             continue;
         }
-        let other_prec = contract.precedence_of(mode).expect("mode must have precedence");
+        let other_prec = contract
+            .precedence_of(mode)
+            .expect("mode must have precedence");
         assert!(
             incident_prec > other_prec,
             "IncidentFullCapture (prec={incident_prec}) must have highest precedence, but {:?} has {other_prec}",

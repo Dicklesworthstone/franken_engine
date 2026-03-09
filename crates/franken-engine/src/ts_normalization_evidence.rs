@@ -1016,6 +1016,10 @@ mod tests {
         let config = TsNormalizationConfig::default();
         let ev = evaluate_specimen(&specimen, &config);
         assert_eq!(ev.verdict, SpecimenVerdict::Fail);
-        assert!(ev.present_pattern_failures.iter().any(|p| p == "WILL_NOT_APPEAR"));
+        assert!(
+            ev.present_pattern_failures
+                .iter()
+                .any(|p| p == "WILL_NOT_APPEAR")
+        );
     }
 }

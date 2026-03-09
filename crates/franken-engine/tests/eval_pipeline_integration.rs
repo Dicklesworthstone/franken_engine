@@ -13,9 +13,9 @@
 //!   - Witness and event generation through the pipeline
 
 use frankenengine_engine::ast::{
-    AssignmentOperator, BindingPattern, Expression, ExpressionStatement, ObjectProperty,
-    ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    AssignmentOperator, BindingPattern, Expression, ExpressionStatement, ObjectProperty, ParseGoal,
+    SourceSpan, Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use frankenengine_engine::baseline_interpreter::{LaneChoice, LaneRouter, Value};
 use frankenengine_engine::ir_contract::Ir0Module;

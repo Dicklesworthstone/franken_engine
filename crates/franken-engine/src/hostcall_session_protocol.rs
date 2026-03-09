@@ -386,11 +386,7 @@ impl SessionKeySchedule {
     }
 
     /// Record that a key stage has been derived.
-    pub fn record_stage(
-        &mut self,
-        purpose: KeyStagePurpose,
-        key_fingerprint: ContentHash,
-    ) {
+    pub fn record_stage(&mut self, purpose: KeyStagePurpose, key_fingerprint: ContentHash) {
         let stage = KeyScheduleStage {
             stage: purpose as u32,
             purpose,
@@ -1067,10 +1063,7 @@ impl SessionProtocolState {
             SessionPhaseTag::Established => Ok(()),
             SessionPhaseTag::DegradedOpen => {
                 let fallback = DegradedModePolicy::strict(DegradedSeverity::IdentityCompromised);
-                let policy = self
-                    .degraded_policy
-                    .as_ref()
-                    .unwrap_or(&fallback);
+                let policy = self.degraded_policy.as_ref().unwrap_or(&fallback);
 
                 if !policy.is_operation_allowed(op) {
                     return Err(ProtocolError::DegradedModeBlocked {
@@ -1118,7 +1111,9 @@ impl SessionProtocolState {
         tick: u64,
         envelope_hash: Option<ContentHash>,
     ) -> Result<(), ProtocolError> {
-        let verdict = self.replay_ledger.check_and_record(sequence, tick, envelope_hash);
+        let verdict = self
+            .replay_ledger
+            .check_and_record(sequence, tick, envelope_hash);
         if verdict != ReplayVerdict::Accept {
             return Err(ProtocolError::ReplayRejected { sequence, verdict });
         }
@@ -1133,10 +1128,7 @@ impl SessionProtocolState {
     }
 
     /// Validate that the key schedule matches the current epoch.
-    pub fn validate_epoch(
-        &self,
-        current_epoch: SecurityEpoch,
-    ) -> Result<(), ProtocolError> {
+    pub fn validate_epoch(&self, current_epoch: SecurityEpoch) -> Result<(), ProtocolError> {
         if let Some(ref schedule) = self.key_schedule
             && !schedule.is_valid_for_epoch(current_epoch)
         {
@@ -1237,13 +1229,36 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
 
     // 1. Happy path: uninit → negotiating → established → closing → closed
     {
-        let mut state = SessionProtocolState::new(
-            "spec-happy".into(), "ext-a".into(), "host-b".into(), 64, 50,
-        );
-        state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
-        state.transition(SessionPhaseTag::Closing, TransitionTrigger::CloseInitiated, 3).unwrap();
-        state.transition(SessionPhaseTag::Closed, TransitionTrigger::DrainCompleted, 4).unwrap();
+        let mut state =
+            SessionProtocolState::new("spec-happy".into(), "ext-a".into(), "host-b".into(), 64, 50);
+        state
+            .transition(
+                SessionPhaseTag::Negotiating,
+                TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::HandshakeCompleted,
+                2,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closing,
+                TransitionTrigger::CloseInitiated,
+                3,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closed,
+                TransitionTrigger::DrainCompleted,
+                4,
+            )
+            .unwrap();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "happy_path_full".into(),
@@ -1258,10 +1273,26 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 2. Handshake rejection
     {
         let mut state = SessionProtocolState::new(
-            "spec-reject".into(), "ext-a".into(), "host-b".into(), 64, 50,
+            "spec-reject".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            64,
+            50,
         );
-        state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-        state.transition(SessionPhaseTag::Closed, TransitionTrigger::HandshakeRejected, 2).unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Negotiating,
+                TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closed,
+                TransitionTrigger::HandshakeRejected,
+                2,
+            )
+            .unwrap();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "handshake_rejected".into(),
@@ -1276,12 +1307,36 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 3. Degraded recovery: established → degraded → established
     {
         let mut state = SessionProtocolState::new(
-            "spec-degraded-recovery".into(), "ext-a".into(), "host-b".into(), 64, 50,
+            "spec-degraded-recovery".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            64,
+            50,
         );
-        state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
-        state.enter_degraded(DegradedSeverity::StaleKey, "epoch_advanced".into(), 3).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::DegradedRecovery, 4).unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Negotiating,
+                TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::HandshakeCompleted,
+                2,
+            )
+            .unwrap();
+        state
+            .enter_degraded(DegradedSeverity::StaleKey, "epoch_advanced".into(), 3)
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::DegradedRecovery,
+                4,
+            )
+            .unwrap();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "degraded_recovery".into(),
@@ -1296,16 +1351,39 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 4. Degraded budget exhaustion
     {
         let mut state = SessionProtocolState::new(
-            "spec-degraded-budget".into(), "ext-a".into(), "host-b".into(), 64, 50,
+            "spec-degraded-budget".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            64,
+            50,
         );
-        state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
-        state.enter_degraded(DegradedSeverity::PartialMacFailure, "mac_fail".into(), 3).unwrap();
-        let limit = state.degraded_policy.as_ref().map_or(0, |p| p.max_degraded_messages);
+        state
+            .transition(
+                SessionPhaseTag::Negotiating,
+                TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::HandshakeCompleted,
+                2,
+            )
+            .unwrap();
+        state
+            .enter_degraded(DegradedSeverity::PartialMacFailure, "mac_fail".into(), 3)
+            .unwrap();
+        let limit = state
+            .degraded_policy
+            .as_ref()
+            .map_or(0, |p| p.max_degraded_messages);
         for _ in 0..limit {
             state.record_degraded_message();
         }
-        let exhausted = state.check_operation(DegradedOperationKind::ReadHostcall, 4).is_err();
+        let exhausted = state
+            .check_operation(DegradedOperationKind::ReadHostcall, 4)
+            .is_err();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "degraded_budget_exhausted".into(),
@@ -1320,7 +1398,11 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 5. Anti-replay: sequential + replay detection
     {
         let mut state = SessionProtocolState::new(
-            "spec-replay".into(), "ext-a".into(), "host-b".into(), 32, 50,
+            "spec-replay".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            32,
+            50,
         );
         for seq in 1..=10 {
             state.check_replay(seq, seq * 10, None).unwrap();
@@ -1340,7 +1422,11 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 6. Anti-replay: window advance
     {
         let mut state = SessionProtocolState::new(
-            "spec-replay-window".into(), "ext-a".into(), "host-b".into(), 4, 50,
+            "spec-replay-window".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            4,
+            50,
         );
         for seq in 1..=20 {
             let _ = state.check_replay(seq, seq, None);
@@ -1359,16 +1445,21 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
 
     // 7. Epoch mismatch
     {
-        let mut state = SessionProtocolState::new(
-            "spec-epoch".into(), "ext-a".into(), "host-b".into(), 64, 50,
-        );
+        let mut state =
+            SessionProtocolState::new("spec-epoch".into(), "ext-a".into(), "host-b".into(), 64, 50);
         let epoch = SecurityEpoch::from_raw(1);
         let mut ks = SessionKeySchedule::new(
-            epoch, "spec-epoch".into(), "ext-a".into(), "host-b".into(),
+            epoch,
+            "spec-epoch".into(),
+            "ext-a".into(),
+            "host-b".into(),
             ContentHash::compute(b"epoch-test"),
         );
         for purpose in KeyStagePurpose::ALL {
-            ks.record_stage(*purpose, ContentHash::compute(purpose.domain_label().as_bytes()));
+            ks.record_stage(
+                *purpose,
+                ContentHash::compute(purpose.domain_label().as_bytes()),
+            );
         }
         state.attach_key_schedule(ks).unwrap();
         let mismatch = state.validate_epoch(SecurityEpoch::from_raw(99)).is_err();
@@ -1386,12 +1477,19 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 8. Invalid transition rejection
     {
         let mut state = SessionProtocolState::new(
-            "spec-invalid".into(), "ext-a".into(), "host-b".into(), 64, 50,
+            "spec-invalid".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            64,
+            50,
         );
-        let err = state.transition(
-            SessionPhaseTag::Established,
-            TransitionTrigger::HandshakeCompleted, 1,
-        ).is_err();
+        let err = state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::HandshakeCompleted,
+                1,
+            )
+            .is_err();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "invalid_transition".into(),
@@ -1406,25 +1504,62 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 9. Full lifecycle with key schedule, replay, degraded, close
     {
         let epoch = SecurityEpoch::from_raw(1);
-        let mut state = SessionProtocolState::new(
-            "spec-full".into(), "ext-a".into(), "host-b".into(), 64, 50,
-        );
-        state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
+        let mut state =
+            SessionProtocolState::new("spec-full".into(), "ext-a".into(), "host-b".into(), 64, 50);
+        state
+            .transition(
+                SessionPhaseTag::Negotiating,
+                TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::HandshakeCompleted,
+                2,
+            )
+            .unwrap();
         let mut ks = SessionKeySchedule::new(
-            epoch, "spec-full".into(), "ext-a".into(), "host-b".into(),
+            epoch,
+            "spec-full".into(),
+            "ext-a".into(),
+            "host-b".into(),
             ContentHash::compute(b"full-test"),
         );
         for purpose in KeyStagePurpose::ALL {
-            ks.record_stage(*purpose, ContentHash::compute(purpose.domain_label().as_bytes()));
+            ks.record_stage(
+                *purpose,
+                ContentHash::compute(purpose.domain_label().as_bytes()),
+            );
         }
         state.attach_key_schedule(ks).unwrap();
         state.check_replay(1, 10, None).unwrap();
         state.check_replay(2, 20, None).unwrap();
-        state.enter_degraded(DegradedSeverity::StaleKey, "rekey".into(), 30).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::DegradedRecovery, 40).unwrap();
-        state.transition(SessionPhaseTag::Closing, TransitionTrigger::CloseInitiated, 50).unwrap();
-        state.transition(SessionPhaseTag::Closed, TransitionTrigger::DrainCompleted, 60).unwrap();
+        state
+            .enter_degraded(DegradedSeverity::StaleKey, "rekey".into(), 30)
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::DegradedRecovery,
+                40,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closing,
+                TransitionTrigger::CloseInitiated,
+                50,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closed,
+                TransitionTrigger::DrainCompleted,
+                60,
+            )
+            .unwrap();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "full_lifecycle".into(),
@@ -1439,11 +1574,35 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 10. Expiry from established
     {
         let mut state = SessionProtocolState::new(
-            "spec-expiry".into(), "ext-a".into(), "host-b".into(), 64, 50,
+            "spec-expiry".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            64,
+            50,
         );
-        state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
-        state.transition(SessionPhaseTag::Closed, TransitionTrigger::SessionExpired { reason: "ttl".into() }, 3).unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Negotiating,
+                TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::HandshakeCompleted,
+                2,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closed,
+                TransitionTrigger::SessionExpired {
+                    reason: "ttl".into(),
+                },
+                3,
+            )
+            .unwrap();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "session_expiry".into(),
@@ -1458,13 +1617,47 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 11. Degraded close (without recovery)
     {
         let mut state = SessionProtocolState::new(
-            "spec-degraded-close".into(), "ext-a".into(), "host-b".into(), 64, 50,
+            "spec-degraded-close".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            64,
+            50,
         );
-        state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
-        state.enter_degraded(DegradedSeverity::IdentityCompromised, "compromised".into(), 3).unwrap();
-        state.transition(SessionPhaseTag::Closing, TransitionTrigger::CloseInitiated, 4).unwrap();
-        state.transition(SessionPhaseTag::Closed, TransitionTrigger::DrainCompleted, 5).unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Negotiating,
+                TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::HandshakeCompleted,
+                2,
+            )
+            .unwrap();
+        state
+            .enter_degraded(
+                DegradedSeverity::IdentityCompromised,
+                "compromised".into(),
+                3,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closing,
+                TransitionTrigger::CloseInitiated,
+                4,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closed,
+                TransitionTrigger::DrainCompleted,
+                5,
+            )
+            .unwrap();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "degraded_close".into(),
@@ -1479,12 +1672,36 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
     // 12. Replay threshold breach
     {
         let mut state = SessionProtocolState::new(
-            "spec-replay-breach".into(), "ext-a".into(), "host-b".into(), 64, 50,
+            "spec-replay-breach".into(),
+            "ext-a".into(),
+            "host-b".into(),
+            64,
+            50,
         );
-        state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-        state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
-        state.transition(SessionPhaseTag::Closed,
-            TransitionTrigger::ReplayThresholdBreached { drop_count: 50, window_ticks: 100 }, 3).unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Negotiating,
+                TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Established,
+                TransitionTrigger::HandshakeCompleted,
+                2,
+            )
+            .unwrap();
+        state
+            .transition(
+                SessionPhaseTag::Closed,
+                TransitionTrigger::ReplayThresholdBreached {
+                    drop_count: 50,
+                    window_ticks: 100,
+                },
+                3,
+            )
+            .unwrap();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "replay_threshold_breach".into(),
@@ -1514,7 +1731,8 @@ pub fn run_hsp_corpus() -> HspRunnerResult {
     let corpus = hsp_corpus();
     let specimen_count = corpus.len();
 
-    let mut families: std::collections::BTreeSet<HspSpecimenFamily> = std::collections::BTreeSet::new();
+    let mut families: std::collections::BTreeSet<HspSpecimenFamily> =
+        std::collections::BTreeSet::new();
     let mut all_clean = true;
     let mut terminal_count = 0;
 
@@ -1560,8 +1778,7 @@ pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
             })
         })
         .collect();
-    let inv_json = serde_json::to_string_pretty(&inventory)
-        .map_err(std::io::Error::other)?;
+    let inv_json = serde_json::to_string_pretty(&inventory).map_err(std::io::Error::other)?;
     std::fs::write(dir.join("hsp_inventory.json"), inv_json)?;
 
     // 2. Manifest JSON
@@ -1573,8 +1790,7 @@ pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
         "terminal_count": result.terminal_count,
         "content_hash": format!("{:?}", result.content_hash),
     });
-    let man_json = serde_json::to_string_pretty(&manifest)
-        .map_err(std::io::Error::other)?;
+    let man_json = serde_json::to_string_pretty(&manifest).map_err(std::io::Error::other)?;
     std::fs::write(dir.join("hsp_manifest.json"), man_json)?;
 
     // 3. Events JSONL
@@ -1588,8 +1804,7 @@ pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
             "transitions": spec.transition_count,
             "clean": spec.clean_completion,
         });
-        events.push_str(&serde_json::to_string(&line)
-            .map_err(std::io::Error::other)?);
+        events.push_str(&serde_json::to_string(&line).map_err(std::io::Error::other)?);
         events.push('\n');
     }
     std::fs::write(dir.join("hsp_events.jsonl"), events)?;
@@ -1598,7 +1813,9 @@ pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
     let mut cmds = String::new();
     cmds.push_str("# Hostcall Session Protocol Evidence Commands\n");
     cmds.push_str("cargo test -p frankenengine-engine hostcall_session_protocol\n");
-    cmds.push_str("cargo test -p frankenengine-engine --test hostcall_session_protocol_integration\n");
+    cmds.push_str(
+        "cargo test -p frankenengine-engine --test hostcall_session_protocol_integration\n",
+    );
     std::fs::write(dir.join("hsp_commands.txt"), cmds)?;
 
     Ok(())
@@ -1639,7 +1856,10 @@ mod tests {
             test_hash(),
         );
         for purpose in KeyStagePurpose::ALL {
-            ks.record_stage(*purpose, ContentHash::compute(purpose.domain_label().as_bytes()));
+            ks.record_stage(
+                *purpose,
+                ContentHash::compute(purpose.domain_label().as_bytes()),
+            );
         }
         ks
     }
@@ -1858,7 +2078,10 @@ mod tests {
 
     #[test]
     fn key_stage_purpose_domain_labels_unique() {
-        let labels: Vec<&str> = KeyStagePurpose::ALL.iter().map(|p| p.domain_label()).collect();
+        let labels: Vec<&str> = KeyStagePurpose::ALL
+            .iter()
+            .map(|p| p.domain_label())
+            .collect();
         let unique: std::collections::BTreeSet<&str> = labels.iter().copied().collect();
         assert_eq!(labels.len(), unique.len());
     }
@@ -2281,9 +2504,11 @@ mod tests {
                 2,
             )
             .unwrap();
-        assert!(state
-            .check_operation(DegradedOperationKind::WriteHostcall, 3)
-            .is_ok());
+        assert!(
+            state
+                .check_operation(DegradedOperationKind::WriteHostcall, 3)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2334,12 +2559,16 @@ mod tests {
         state
             .enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 3)
             .unwrap();
-        assert!(state
-            .check_operation(DegradedOperationKind::ReadHostcall, 4)
-            .is_ok());
-        assert!(state
-            .check_operation(DegradedOperationKind::WriteHostcall, 4)
-            .is_ok());
+        assert!(
+            state
+                .check_operation(DegradedOperationKind::ReadHostcall, 4)
+                .is_ok()
+        );
+        assert!(
+            state
+                .check_operation(DegradedOperationKind::WriteHostcall, 4)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2368,11 +2597,7 @@ mod tests {
             )
             .unwrap();
         state
-            .enter_degraded(
-                DegradedSeverity::PartialMacFailure,
-                "mac_fail".into(),
-                3,
-            )
+            .enter_degraded(DegradedSeverity::PartialMacFailure, "mac_fail".into(), 3)
             .unwrap();
 
         // Exhaust the budget.
@@ -2486,13 +2711,17 @@ mod tests {
         let max_ticks = policy.max_degraded_ticks;
 
         // Within budget.
-        assert!(state
-            .check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks)
-            .is_ok());
+        assert!(
+            state
+                .check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks)
+                .is_ok()
+        );
 
         // Exceeds budget.
-        assert!(state
-            .check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks + 1)
-            .is_err());
+        assert!(
+            state
+                .check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks + 1)
+                .is_err()
+        );
     }
 }

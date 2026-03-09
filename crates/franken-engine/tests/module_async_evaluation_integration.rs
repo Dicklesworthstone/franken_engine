@@ -10,10 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::esm_loader::BindingType;
 use frankenengine_engine::module_async_evaluation::{
-    compute_async_evaluation_order, AsyncEvalConfig, AsyncEvalError, AsyncEvalEventType,
-    AsyncEvalResult, AsyncEvalWitnessEvent, AsyncModuleEvaluator, AsyncModulePhase,
-    AsyncModuleState, LinkageKind, LinkedModule, RejectionLinkage, SuspensionContext,
-    SuspensionRecord, MODULE_ASYNC_EVAL_COMPONENT, MODULE_ASYNC_EVAL_SCHEMA_VERSION,
+    AsyncEvalConfig, AsyncEvalError, AsyncEvalEventType, AsyncEvalResult, AsyncEvalWitnessEvent,
+    AsyncModuleEvaluator, AsyncModulePhase, AsyncModuleState, LinkageKind, LinkedModule,
+    MODULE_ASYNC_EVAL_COMPONENT, MODULE_ASYNC_EVAL_SCHEMA_VERSION, RejectionLinkage,
+    SuspensionContext, SuspensionRecord, compute_async_evaluation_order,
 };
 use frankenengine_engine::module_live_binding::{
     BindingCell, BindingCellState, BindingId, LiveBindingMap,
@@ -489,10 +489,7 @@ fn evaluator_register_sync_module_phase() {
 fn evaluator_register_async_module_phase() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("async.js", true, &[], Some(PromiseHandle(1)));
-    assert_eq!(
-        eval.states()["async.js"].phase,
-        AsyncModulePhase::Suspended
-    );
+    assert_eq!(eval.states()["async.js"].phase, AsyncModulePhase::Suspended);
 }
 
 #[test]
@@ -535,9 +532,11 @@ fn evaluator_suspend_at_tla() {
         .unwrap();
     assert_eq!(eval.states()["tla.js"].suspensions.len(), 1);
     let events = eval.witness_events();
-    assert!(events
-        .iter()
-        .any(|e| e.event_type == AsyncEvalEventType::TopLevelAwaitSuspended));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == AsyncEvalEventType::TopLevelAwaitSuspended)
+    );
 }
 
 #[test]
@@ -723,7 +722,10 @@ fn evaluator_reject_marks_bindings_dead() {
     }
     // Binding from other.js should be unaffected
     let other_id = make_binding_id("other.js", "z");
-    assert_eq!(bindings.cells[&other_id].state, BindingCellState::Initialized);
+    assert_eq!(
+        bindings.cells[&other_id].state,
+        BindingCellState::Initialized
+    );
 }
 
 #[test]
@@ -807,12 +809,16 @@ fn evaluator_reject_emits_witness_events() {
         .unwrap();
 
     let events = eval.witness_events();
-    assert!(events
-        .iter()
-        .any(|e| e.event_type == AsyncEvalEventType::EvaluationRejected));
-    assert!(events
-        .iter()
-        .any(|e| e.event_type == AsyncEvalEventType::BindingMarkedDead));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == AsyncEvalEventType::EvaluationRejected)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == AsyncEvalEventType::BindingMarkedDead)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -895,7 +901,10 @@ fn evaluator_witness_events_monotonic_seq() {
 
     let events = eval.witness_events();
     for window in events.windows(2) {
-        assert!(window[0].seq < window[1].seq, "seq must be monotonically increasing");
+        assert!(
+            window[0].seq < window[1].seq,
+            "seq must be monotonically increasing"
+        );
     }
 }
 
@@ -908,11 +917,7 @@ fn evaluator_witness_event_types_cover_lifecycle() {
     eval.resume_evaluation("m.js").unwrap();
     eval.settle_module("m.js").unwrap();
 
-    let event_types: BTreeSet<_> = eval
-        .witness_events()
-        .iter()
-        .map(|e| e.event_type)
-        .collect();
+    let event_types: BTreeSet<_> = eval.witness_events().iter().map(|e| e.event_type).collect();
     assert!(event_types.contains(&AsyncEvalEventType::EvaluationStarted));
     assert!(event_types.contains(&AsyncEvalEventType::TopLevelAwaitSuspended));
     assert!(event_types.contains(&AsyncEvalEventType::EvaluationResumed));
@@ -1108,10 +1113,7 @@ fn pipeline_rejection_in_diamond_graph() {
         AsyncModulePhase::Rejected
     );
     // dep2.js should remain unaffected
-    assert_eq!(
-        eval.states()["dep2.js"].phase,
-        AsyncModulePhase::Suspended
-    );
+    assert_eq!(eval.states()["dep2.js"].phase, AsyncModulePhase::Suspended);
 }
 
 #[test]

@@ -5,13 +5,13 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::regime_detector::Regime;
 use frankenengine_engine::regime_signature_feature::{
+    ABSTENTION_THRESHOLD_MILLIONTHS, MAX_SIGNATURE_DIM, MIN_TRACE_LENGTH, REGIME_SIG_COMPONENT,
+    REGIME_SIG_EVENT_SCHEMA_VERSION, REGIME_SIG_MANIFEST_SCHEMA_VERSION, REGIME_SIG_POLICY_ID,
+    REGIME_SIG_SCHEMA_VERSION, RegimeLabel, RegimeStateChart, RegimeStateEntry, RuntimeTrace,
+    SignatureConfig, SignatureEvidenceInventory, SignatureExpectedOutcome, SignatureSpecimen,
+    SignatureSpecimenFamily, SignatureVerdict, TraceObservation, TraceSignature,
     build_regime_state_chart, classify_regime, extract_signature, run_signature_corpus,
-    signature_corpus, write_signature_evidence_bundle, RegimeLabel, RegimeStateChart,
-    RegimeStateEntry, RuntimeTrace, SignatureConfig, SignatureEvidenceInventory,
-    SignatureExpectedOutcome, SignatureSpecimen, SignatureSpecimenFamily, SignatureVerdict,
-    TraceObservation, TraceSignature, ABSTENTION_THRESHOLD_MILLIONTHS, MAX_SIGNATURE_DIM,
-    MIN_TRACE_LENGTH, REGIME_SIG_COMPONENT, REGIME_SIG_EVENT_SCHEMA_VERSION,
-    REGIME_SIG_MANIFEST_SCHEMA_VERSION, REGIME_SIG_POLICY_ID, REGIME_SIG_SCHEMA_VERSION,
+    signature_corpus, write_signature_evidence_bundle,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -35,11 +35,7 @@ fn make_trace(id: &str, feature: &str, values: &[i64], epoch: u64) -> RuntimeTra
     }
 }
 
-fn make_multi_feature_trace(
-    id: &str,
-    features: &[(&str, &[i64])],
-    epoch: u64,
-) -> RuntimeTrace {
+fn make_multi_feature_trace(id: &str, features: &[(&str, &[i64])], epoch: u64) -> RuntimeTrace {
     let mut observations = Vec::new();
     let mut seq = 0u64;
     for (feature, values) in features {
@@ -381,7 +377,10 @@ fn trace_signature_serde_roundtrip() {
 fn classify_normal_regime() {
     // Use run_signature_corpus to verify the public runner produces passing results.
     let inv = run_signature_corpus();
-    let normal_specimen = inv.evidence.iter().find(|e| e.specimen_id == "classify_normal_trace");
+    let normal_specimen = inv
+        .evidence
+        .iter()
+        .find(|e| e.specimen_id == "classify_normal_trace");
     if let Some(ev) = normal_specimen {
         assert_eq!(
             ev.verdict,
@@ -501,16 +500,8 @@ fn state_chart_single_trace_no_transitions() {
 fn state_chart_two_similar_traces_stable() {
     let config = SignatureConfig::default();
     let traces = vec![
-        make_multi_feature_trace(
-            "t1",
-            &[("cpu", &[500_000, 510_000, 490_000, 500_000])],
-            1,
-        ),
-        make_multi_feature_trace(
-            "t2",
-            &[("cpu", &[505_000, 515_000, 485_000, 500_000])],
-            2,
-        ),
+        make_multi_feature_trace("t1", &[("cpu", &[500_000, 510_000, 490_000, 500_000])], 1),
+        make_multi_feature_trace("t2", &[("cpu", &[505_000, 515_000, 485_000, 500_000])], 2),
     ];
     let chart = build_regime_state_chart(&traces, &config);
     assert_eq!(chart.entries.len(), 2);
@@ -666,7 +657,11 @@ fn signature_config_centroids_cover_all_regimes() {
         Regime::Degraded,
         Regime::Recovery,
     ] {
-        assert!(regimes.contains(&regime), "missing centroid for {:?}", regime);
+        assert!(
+            regimes.contains(&regime),
+            "missing centroid for {:?}",
+            regime
+        );
     }
 }
 
@@ -771,8 +766,7 @@ fn corpus_ids_unique() {
 #[test]
 fn corpus_covers_all_families() {
     let corpus = signature_corpus();
-    let covered: BTreeSet<SignatureSpecimenFamily> =
-        corpus.iter().map(|s| s.family).collect();
+    let covered: BTreeSet<SignatureSpecimenFamily> = corpus.iter().map(|s| s.family).collect();
     for f in SignatureSpecimenFamily::ALL {
         assert!(covered.contains(f), "missing family {:?}", f);
     }
@@ -852,7 +846,11 @@ fn evidence_hashes_are_64_hex() {
 #[test]
 fn evidence_hashes_unique() {
     let inv = run_signature_corpus();
-    let hashes: BTreeSet<&str> = inv.evidence.iter().map(|e| e.evidence_hash.as_str()).collect();
+    let hashes: BTreeSet<&str> = inv
+        .evidence
+        .iter()
+        .map(|e| e.evidence_hash.as_str())
+        .collect();
     assert_eq!(hashes.len(), inv.evidence.len());
 }
 
@@ -915,10 +913,11 @@ fn bundle_writer_creates_expected_files() {
     let dir = std::env::temp_dir().join("franken-regime-sig-test-bundle");
     let _ = std::fs::remove_dir_all(&dir);
     let commands = vec![
-        "cargo test -p frankenengine-engine --test regime_signature_feature_integration".to_string(),
+        "cargo test -p frankenengine-engine --test regime_signature_feature_integration"
+            .to_string(),
     ];
-    let artifacts = write_signature_evidence_bundle(&dir, &commands)
-        .expect("bundle write should succeed");
+    let artifacts =
+        write_signature_evidence_bundle(&dir, &commands).expect("bundle write should succeed");
     assert!(artifacts.inventory_path.exists());
     assert!(artifacts.run_manifest_path.exists());
     assert!(artifacts.events_path.exists());
@@ -931,11 +930,14 @@ fn bundle_writer_creates_expected_files() {
 fn bundle_manifest_has_correct_schema() {
     let dir = std::env::temp_dir().join("franken-regime-sig-test-manifest");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = write_signature_evidence_bundle(&dir, &[])
-        .expect("bundle write should succeed");
+    let artifacts =
+        write_signature_evidence_bundle(&dir, &[]).expect("bundle write should succeed");
     let manifest_json = std::fs::read_to_string(&artifacts.run_manifest_path).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
-    assert_eq!(manifest["schema_version"], REGIME_SIG_MANIFEST_SCHEMA_VERSION);
+    assert_eq!(
+        manifest["schema_version"],
+        REGIME_SIG_MANIFEST_SCHEMA_VERSION
+    );
     assert_eq!(manifest["component"], REGIME_SIG_COMPONENT);
     assert_eq!(manifest["policy_id"], REGIME_SIG_POLICY_ID);
     // contract_satisfied reflects whether ALL corpus specimens pass.
@@ -946,16 +948,16 @@ fn bundle_manifest_has_correct_schema() {
 fn bundle_events_are_valid_jsonl() {
     let dir = std::env::temp_dir().join("franken-regime-sig-test-events");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = write_signature_evidence_bundle(&dir, &[])
-        .expect("bundle write should succeed");
+    let artifacts =
+        write_signature_evidence_bundle(&dir, &[]).expect("bundle write should succeed");
     let events = std::fs::read_to_string(&artifacts.events_path).unwrap();
     let line_count = events.lines().count();
     // At least: start + N specimens + end = N+2
     let corpus_size = signature_corpus().len();
     assert_eq!(line_count, corpus_size + 2);
     for line in events.lines() {
-        let _: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("invalid JSON line: {e}"));
+        let _: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("invalid JSON line: {e}"));
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -964,8 +966,8 @@ fn bundle_events_are_valid_jsonl() {
 fn bundle_inventory_matches_corpus_run() {
     let dir = std::env::temp_dir().join("franken-regime-sig-test-inv-match");
     let _ = std::fs::remove_dir_all(&dir);
-    let artifacts = write_signature_evidence_bundle(&dir, &[])
-        .expect("bundle write should succeed");
+    let artifacts =
+        write_signature_evidence_bundle(&dir, &[]).expect("bundle write should succeed");
     let inv_json = std::fs::read_to_string(&artifacts.inventory_path).unwrap();
     let inv: SignatureEvidenceInventory = serde_json::from_str(&inv_json).unwrap();
     let direct = run_signature_corpus();

@@ -44,8 +44,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 // Constants
 // ---------------------------------------------------------------------------
 
-pub const ESCAPE_CERT_SCHEMA_VERSION: &str =
-    "franken-engine.escape_analysis_certificate.v1";
+pub const ESCAPE_CERT_SCHEMA_VERSION: &str = "franken-engine.escape_analysis_certificate.v1";
 pub const ESCAPE_CERT_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.escape_analysis_certificate_manifest.v1";
 pub const ESCAPE_CERT_EVENT_SCHEMA_VERSION: &str =
@@ -534,9 +533,7 @@ pub fn analyze_escape(
             confidence_millionths: confidence,
             invalidation_reasons: reasons,
             abstention,
-            certificate_hash: hex_encode(
-                ContentHash::compute(hash_input.as_bytes()).as_bytes(),
-            ),
+            certificate_hash: hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes()),
         });
     }
 
@@ -558,9 +555,7 @@ pub fn analyze_escape(
         alias_class_count: alias_classes.len() as u64,
         certificates,
         overall_confidence_millionths: if sites.is_empty() { 0 } else { min_confidence },
-        envelope_hash: hex_encode(
-            ContentHash::compute(env_hash_input.as_bytes()).as_bytes(),
-        ),
+        envelope_hash: hex_encode(ContentHash::compute(env_hash_input.as_bytes()).as_bytes()),
         epoch,
     }
 }
@@ -578,8 +573,7 @@ fn derive_escape_state(kind: &AllocationKind) -> EscapeState {
         | AllocationKind::ArrayLiteral
         | AllocationKind::SpreadArray => EscapeState::ArgEscape,
         // Closures and constructors may escape arbitrarily.
-        AllocationKind::Closure
-        | AllocationKind::ConstructorCall => EscapeState::GlobalEscape,
+        AllocationKind::Closure | AllocationKind::ConstructorCall => EscapeState::GlobalEscape,
         // RegExp: typically local.
         AllocationKind::RegExpLiteral => EscapeState::ArgEscape,
     }
@@ -908,7 +902,10 @@ fn run_single_escape_specimen(specimen: &EscapeCertSpecimen) -> EscapeCertSpecim
             actual = format!("{:?}", cert.escape_state);
             if cert.escape_state != EscapeState::GlobalEscape {
                 verdict = EscapeCertVerdict::Fail;
-                error_detail = Some(format!("expected GlobalEscape, got {:?}", cert.escape_state));
+                error_detail = Some(format!(
+                    "expected GlobalEscape, got {:?}",
+                    cert.escape_state
+                ));
             }
         }
         "escape_lattice_join_monotone" => {
@@ -917,7 +914,9 @@ fn run_single_escape_specimen(specimen: &EscapeCertSpecimen) -> EscapeCertSpecim
                     let joined = a.join(*b);
                     if joined < *a || joined < *b {
                         verdict = EscapeCertVerdict::Fail;
-                        error_detail = Some(format!("join({a:?}, {b:?}) = {joined:?} violates monotonicity"));
+                        error_detail = Some(format!(
+                            "join({a:?}, {b:?}) = {joined:?} violates monotonicity"
+                        ));
                         break;
                     }
                 }
@@ -1008,13 +1007,15 @@ fn run_single_escape_specimen(specimen: &EscapeCertSpecimen) -> EscapeCertSpecim
         }
         "envelope_aggregates_correctly" => {
             let sites = vec![
-                make_site("s1", "fn_mix", AllocationKind::IteratorResult),     // NoEscape
-                make_site("s2", "fn_mix", AllocationKind::ObjectLiteral),      // ArgEscape
-                make_site("s3", "fn_mix", AllocationKind::Closure),            // GlobalEscape
+                make_site("s1", "fn_mix", AllocationKind::IteratorResult), // NoEscape
+                make_site("s2", "fn_mix", AllocationKind::ObjectLiteral),  // ArgEscape
+                make_site("s3", "fn_mix", AllocationKind::Closure),        // GlobalEscape
             ];
             let env = analyze_escape("fn_mix", &sites, &[], &config, epoch);
-            actual = format!("total={} scalar={} stack={}",
-                env.total_sites, env.scalar_replacement_count, env.stack_allocation_count);
+            actual = format!(
+                "total={} scalar={} stack={}",
+                env.total_sites, env.scalar_replacement_count, env.stack_allocation_count
+            );
             if env.total_sites != 3 {
                 verdict = EscapeCertVerdict::Fail;
                 error_detail = Some("total sites should be 3".into());
@@ -1025,7 +1026,8 @@ fn run_single_escape_specimen(specimen: &EscapeCertSpecimen) -> EscapeCertSpecim
             if env.scalar_replacement_count != 1 {
                 verdict = EscapeCertVerdict::Fail;
                 error_detail = Some(format!(
-                    "expected 1 scalar replacement, got {}", env.scalar_replacement_count
+                    "expected 1 scalar replacement, got {}",
+                    env.scalar_replacement_count
                 ));
             }
         }
@@ -1349,7 +1351,11 @@ mod tests {
 
     #[test]
     fn alias_relation_display() {
-        for r in [AliasRelation::NoAlias, AliasRelation::MayAlias, AliasRelation::MustAlias] {
+        for r in [
+            AliasRelation::NoAlias,
+            AliasRelation::MayAlias,
+            AliasRelation::MustAlias,
+        ] {
             assert_eq!(r.to_string(), r.as_str());
         }
     }

@@ -622,23 +622,22 @@ pub fn form_superblock(
 
         // Generate type guards for type-constrained slots
         for slot in &feedback.type_slots {
-            if slot.is_monomorphic() {
-                if let Some(mono_type) = slot.monomorphic_type() {
-                    let guard_kind = GuardKind::TypeCheck {
-                        expected_type: format!("{}", mono_type),
-                    };
-                    let exit =
-                        SideExit::new(current_offset, position, SideExitReason::TypeMismatch);
-                    let guard = SuperblockGuard::new(
-                        position,
-                        current_offset,
-                        guard_kind,
-                        exit.exit_id.clone(),
-                    );
-                    if side_exits.len() < policy.max_side_exits {
-                        side_exits.push(exit);
-                        guards.push(guard);
-                    }
+            if slot.is_monomorphic()
+                && let Some(mono_type) = slot.monomorphic_type()
+            {
+                let guard_kind = GuardKind::TypeCheck {
+                    expected_type: format!("{}", mono_type),
+                };
+                let exit = SideExit::new(current_offset, position, SideExitReason::TypeMismatch);
+                let guard = SuperblockGuard::new(
+                    position,
+                    current_offset,
+                    guard_kind,
+                    exit.exit_id.clone(),
+                );
+                if side_exits.len() < policy.max_side_exits {
+                    side_exits.push(exit);
+                    guards.push(guard);
                 }
             }
         }
@@ -936,8 +935,9 @@ mod tests {
         let b = GuardKind::TypeCheck {
             expected_type: "int".into(),
         };
-        // Just verify Ord is implemented
-        assert!(a < b || a >= b);
+        // Verify Ord is implemented and gives consistent results
+        let _ordering = a.cmp(&b);
+        assert_eq!(a.cmp(&a), std::cmp::Ordering::Equal);
     }
 
     #[test]

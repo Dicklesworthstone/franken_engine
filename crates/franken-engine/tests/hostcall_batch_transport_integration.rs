@@ -16,8 +16,8 @@ use frankenengine_engine::hostcall_batch_transport::{
     run_batch_transport_corpus,
 };
 use frankenengine_engine::hostcall_session_protocol::{
-    DegradedOperationKind, DegradedSeverity, KeyStagePurpose, SessionKeySchedule, SessionPhaseTag,
-    SessionProtocolState, TransitionTrigger,
+    DegradedSeverity, KeyStagePurpose, SessionKeySchedule, SessionPhaseTag, SessionProtocolState,
+    TransitionTrigger,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::session_hostcall_channel::BackpressureSignal;

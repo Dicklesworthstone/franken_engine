@@ -214,7 +214,33 @@
         "replay_stable": true
       },
       {
+        "site_id": "runtime_observability.capability_denial_total",
+        "strategy": "deterministic_stride",
+        "base_interval": 1,
+        "max_burst_samples": 1,
+        "seed_fields": [
+          "trace_id",
+          "site_id",
+          "mode"
+        ],
+        "precision_target_millionths": 0,
+        "replay_stable": true
+      },
+      {
         "site_id": "runtime_observability.replay_drop_total",
+        "strategy": "deterministic_stride",
+        "base_interval": 1,
+        "max_burst_samples": 1,
+        "seed_fields": [
+          "trace_id",
+          "site_id",
+          "mode"
+        ],
+        "precision_target_millionths": 0,
+        "replay_stable": true
+      },
+      {
+        "site_id": "observability_channel_model.legal_archive",
         "strategy": "deterministic_stride",
         "base_interval": 1,
         "max_burst_samples": 1,
@@ -298,6 +324,15 @@
         "required_exact_shadow_samples": 1024
       },
       {
+        "sketch_family": "count_min",
+        "family": "optimization",
+        "bias_bound_millionths": 45000,
+        "variance_bound_millionths": 35000,
+        "collision_bound_millionths": 12000,
+        "quantile_error_bound_millionths": 0,
+        "required_exact_shadow_samples": 1024
+      },
+      {
         "sketch_family": "kll",
         "family": "optimization",
         "bias_bound_millionths": 25000,
@@ -305,6 +340,15 @@
         "collision_bound_millionths": 0,
         "quantile_error_bound_millionths": 50000,
         "required_exact_shadow_samples": 1024
+      },
+      {
+        "sketch_family": "nitro_sketch_weighted",
+        "family": "optimization",
+        "bias_bound_millionths": 60000,
+        "variance_bound_millionths": 50000,
+        "collision_bound_millionths": 18000,
+        "quantile_error_bound_millionths": 0,
+        "required_exact_shadow_samples": 2048
       }
     ]
   },
@@ -355,6 +399,8 @@
   },
   "operator_verification": [
     "jq empty docs/rgc_observability_channel_policy_v1.json",
+    "cat artifacts/rgc_observability_channel_policy/<UTC_TIMESTAMP>/trace_ids",
+    "ls artifacts/rgc_observability_channel_policy/<UTC_TIMESTAMP>/step_logs",
     "./scripts/run_rgc_observability_channel_policy.sh ci",
     "./scripts/e2e/rgc_observability_channel_policy_replay.sh ci"
   ]

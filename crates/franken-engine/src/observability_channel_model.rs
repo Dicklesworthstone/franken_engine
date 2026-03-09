@@ -15,7 +15,7 @@
 //!
 //! Plan reference: FRX-17.1 (Observability Channel Model).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -849,6 +849,9 @@ pub const SKETCH_ERROR_ENVELOPE_REPORT_SCHEMA_VERSION: &str =
 /// Schema version for the sampling replay fixture matrix artifact.
 pub const SAMPLING_SEED_REPLAY_FIXTURE_MATRIX_SCHEMA_VERSION: &str =
     "franken-engine.sampling-seed-replay-fixture-matrix.v1";
+/// Schema version for the observability contract validation report.
+pub const OBSERVABILITY_CONTRACT_VALIDATION_REPORT_SCHEMA_VERSION: &str =
+    "franken-engine.observability-contract-validation-report.v1";
 
 /// Operator-visible observability modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1108,6 +1111,418 @@ pub struct SamplingReplayFixture {
 pub struct SamplingSeedReplayFixtureMatrix {
     pub schema_version: String,
     pub fixtures: Vec<SamplingReplayFixture>,
+}
+
+/// Fail-closed contract violation emitted by observability validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservabilityContractViolation {
+    pub code: String,
+    pub detail: String,
+}
+
+/// Validation report for the engine observability contract surfaces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservabilityContractValidationReport {
+    pub schema_version: String,
+    pub gate_pass: bool,
+    pub violations: Vec<ObservabilityContractViolation>,
+}
+
+fn push_contract_violation(
+    violations: &mut Vec<ObservabilityContractViolation>,
+    code: &str,
+    detail: impl Into<String>,
+) {
+    violations.push(ObservabilityContractViolation {
+        code: code.to_string(),
+        detail: detail.into(),
+    });
+}
+
+/// Validate the engine telemetry contract and fail closed on missing proofs.
+pub fn validate_observability_contract(
+    policy: &EngineObservabilityChannelPolicy,
+    mode_contract: &OperatorModeContract,
+    site_matrix: &TelemetrySitePolicyMatrix,
+    sampling_contract: &TelemetrySamplingContract,
+    sketch_report: &SketchErrorEnvelopeReport,
+) -> ObservabilityContractValidationReport {
+    let mut violations = Vec::new();
+    let lossless_families = policy
+        .required_lossless_families
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let approximate_families = policy
+        .approximate_allowed_families
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    if !policy.redaction_must_precede_sampling {
+        push_contract_violation(
+            &mut violations,
+            "FE-RGC-066A-CONTRACT-0001",
+            "engine policy must require redaction before sampling",
+        );
+    }
+
+    for family in lossless_families.intersection(&approximate_families) {
+        push_contract_violation(
+            &mut violations,
+            "FE-RGC-066A-CONTRACT-0002",
+            format!("family {family} cannot be both lossless and approximate"),
+        );
+    }
+
+    let known_modes = mode_contract
+        .modes
+        .iter()
+        .map(|entry| entry.mode)
+        .collect::<BTreeSet<_>>();
+    if known_modes.len() != mode_contract.modes.len() {
+        push_contract_violation(
+            &mut violations,
+            "FE-RGC-066A-MODE-0001",
+            "operator mode contract must not define duplicate modes",
+        );
+    }
+
+    let precedence_values = mode_contract
+        .modes
+        .iter()
+        .map(|entry| entry.precedence)
+        .collect::<BTreeSet<_>>();
+    if precedence_values.len() != mode_contract.modes.len() {
+        push_contract_violation(
+            &mut violations,
+            "FE-RGC-066A-MODE-0002",
+            "operator mode contract must not reuse precedence values",
+        );
+    }
+
+    for mode in ObservabilityMode::ALL {
+        if !known_modes.contains(&mode) {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-MODE-0003",
+                format!("operator mode contract is missing {mode}"),
+            );
+        }
+    }
+
+    match mode_contract
+        .modes
+        .iter()
+        .find(|entry| entry.mode == ObservabilityMode::SupportBundleExport)
+    {
+        Some(entry) if entry.approximate_allowed || !entry.lossless_required => {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-MODE-0004",
+                "support_bundle_export must be lossless and forbid approximate capture",
+            );
+        }
+        Some(_) => {}
+        None => push_contract_violation(
+            &mut violations,
+            "FE-RGC-066A-MODE-0005",
+            "support_bundle_export mode definition is required",
+        ),
+    }
+
+    let mut envelope_pairs = BTreeSet::new();
+    for envelope in &sketch_report.envelopes {
+        if !approximate_families.contains(&envelope.family) {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SKETCH-0001",
+                format!(
+                    "sketch envelope {} cannot target non-approximate family {}",
+                    envelope.sketch_family, envelope.family
+                ),
+            );
+        }
+        if envelope.required_exact_shadow_samples == 0 {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SKETCH-0002",
+                format!(
+                    "sketch envelope {} must require exact-shadow samples",
+                    envelope.sketch_family
+                ),
+            );
+        }
+        if !envelope_pairs.insert((envelope.sketch_family, envelope.family)) {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SKETCH-0003",
+                format!(
+                    "duplicate sketch envelope for {} / {}",
+                    envelope.sketch_family, envelope.family
+                ),
+            );
+        }
+    }
+
+    let mut rule_sites = BTreeSet::new();
+    for rule in &sampling_contract.rules {
+        let Some(site) = site_matrix.site(&rule.site_id) else {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SAMPLING-0001",
+                format!("sampling rule references unknown site {}", rule.site_id),
+            );
+            continue;
+        };
+
+        if !rule_sites.insert(rule.site_id.clone()) {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SAMPLING-0002",
+                format!("sampling rule for {} is defined more than once", rule.site_id),
+            );
+        }
+
+        if !rule.replay_stable {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SAMPLING-0003",
+                format!("sampling rule for {} must be replay-stable", rule.site_id),
+            );
+        }
+
+        if !rule.seed_fields.contains(&SamplingSeedField::SiteId)
+            || !rule.seed_fields.contains(&SamplingSeedField::Mode)
+        {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SAMPLING-0004",
+                format!(
+                    "sampling rule for {} must include site_id and mode in the seed",
+                    rule.site_id
+                ),
+            );
+        }
+
+        if site.lossless_required || lossless_families.contains(&site.family) {
+            if rule.strategy != SamplingStrategy::DeterministicStride
+                || rule.base_interval != 1
+                || rule.max_burst_samples != 1
+                || rule.precision_target_millionths != 0
+            {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SAMPLING-0005",
+                    format!(
+                        "lossless site {} must use deterministic stride with exact capture",
+                        rule.site_id
+                    ),
+                );
+            }
+        } else {
+            if !rule.seed_fields.contains(&SamplingSeedField::TraceId)
+                || !rule.seed_fields.contains(&SamplingSeedField::WorkloadId)
+                || !rule.seed_fields.contains(&SamplingSeedField::ManifestHash)
+            {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SAMPLING-0006",
+                    format!(
+                        "approximate site {} must seed from trace_id, workload_id, and manifest_hash",
+                        rule.site_id
+                    ),
+                );
+            }
+            if rule.base_interval == 0 || rule.max_burst_samples == 0 {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SAMPLING-0007",
+                    format!("sampling rule for {} must declare a nonzero schedule", rule.site_id),
+                );
+            }
+            if rule.precision_target_millionths <= 0 {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SAMPLING-0008",
+                    format!(
+                        "approximate site {} must declare a positive precision target",
+                        rule.site_id
+                    ),
+                );
+            }
+        }
+    }
+
+    for site in &site_matrix.sites {
+        if site.site_id.trim().is_empty() || site.component.trim().is_empty() {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SITE-0001",
+                "site identifiers and component names must be nonempty",
+            );
+        }
+        if !site.requires_redaction {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SITE-0002",
+                format!(
+                    "site {} must prove deterministic redaction precedes sampling",
+                    site.site_id
+                ),
+            );
+        }
+        if !site.allowed_modes.contains(&site.default_mode) {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SITE-0003",
+                format!(
+                    "site {} default mode {} must appear in allowed_modes",
+                    site.site_id, site.default_mode
+                ),
+            );
+        }
+        if !site
+            .allowed_modes
+            .contains(&ObservabilityMode::SupportBundleExport)
+        {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SITE-0004",
+                format!(
+                    "site {} must declare support_bundle_export explicitly",
+                    site.site_id
+                ),
+            );
+        }
+        for mode in &site.allowed_modes {
+            if !known_modes.contains(mode) {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0005",
+                    format!("site {} references unknown mode {}", site.site_id, mode),
+                );
+            }
+        }
+
+        let Some(rule) = sampling_contract.rule_for(&site.site_id) else {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SAMPLING-0009",
+                format!(
+                    "site {} has no sampling determinism contract and must fail closed",
+                    site.site_id
+                ),
+            );
+            continue;
+        };
+
+        let site_is_lossless = site.lossless_required || lossless_families.contains(&site.family);
+        let site_is_approximate = approximate_families.contains(&site.family);
+        if !site_is_lossless && !site_is_approximate {
+            push_contract_violation(
+                &mut violations,
+                "FE-RGC-066A-SITE-0006",
+                format!(
+                    "site {} family {} is not classified by engine policy",
+                    site.site_id, site.family
+                ),
+            );
+            continue;
+        }
+
+        if site_is_lossless {
+            if !lossless_families.contains(&site.family) {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0007",
+                    format!(
+                        "site {} marked lossless but family {} is not lossless",
+                        site.site_id, site.family
+                    ),
+                );
+            }
+            if !site.allowed_sketch_families.is_empty() {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0008",
+                    format!("lossless site {} cannot allow sketches", site.site_id),
+                );
+            }
+            if site.distortion_budget_millionths != 0 {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0009",
+                    format!("lossless site {} must have zero distortion budget", site.site_id),
+                );
+            }
+            if site.allowed_modes.contains(&ObservabilityMode::Degraded) {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0010",
+                    format!("lossless site {} cannot allow degraded mode", site.site_id),
+                );
+            }
+            if rule.precision_target_millionths != 0 {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0011",
+                    format!("lossless site {} cannot declare lossy precision", site.site_id),
+                );
+            }
+        } else {
+            if site.distortion_budget_millionths <= 0 {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0012",
+                    format!(
+                        "approximate site {} must declare a positive distortion budget",
+                        site.site_id
+                    ),
+                );
+            }
+            if site.allowed_sketch_families.is_empty() {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0013",
+                    format!(
+                        "approximate site {} must declare at least one sketch family",
+                        site.site_id
+                    ),
+                );
+            }
+            if !site.allowed_modes.contains(&ObservabilityMode::Degraded)
+                || !site.allowed_modes.contains(&ObservabilityMode::ExactShadow)
+            {
+                push_contract_violation(
+                    &mut violations,
+                    "FE-RGC-066A-SITE-0014",
+                    format!(
+                        "approximate site {} must allow degraded and exact_shadow modes",
+                        site.site_id
+                    ),
+                );
+            }
+            for family in &site.allowed_sketch_families {
+                if !envelope_pairs.contains(&(*family, site.family)) {
+                    push_contract_violation(
+                        &mut violations,
+                        "FE-RGC-066A-SKETCH-0004",
+                        format!(
+                            "approximate site {} is missing sketch envelope coverage for {}",
+                            site.site_id, family
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    ObservabilityContractValidationReport {
+        schema_version: OBSERVABILITY_CONTRACT_VALIDATION_REPORT_SCHEMA_VERSION.to_string(),
+        gate_pass: violations.is_empty(),
+        violations,
+    }
 }
 
 /// Derive a replay-stable sampling seed from canonical telemetry context.
@@ -1394,7 +1809,33 @@ pub fn canonical_telemetry_sampling_contract() -> TelemetrySamplingContract {
                 replay_stable: true,
             },
             TelemetrySamplingRule {
+                site_id: "runtime_observability.capability_denial_total".to_string(),
+                strategy: SamplingStrategy::DeterministicStride,
+                base_interval: 1,
+                max_burst_samples: 1,
+                seed_fields: vec![
+                    SamplingSeedField::TraceId,
+                    SamplingSeedField::SiteId,
+                    SamplingSeedField::Mode,
+                ],
+                precision_target_millionths: 0,
+                replay_stable: true,
+            },
+            TelemetrySamplingRule {
                 site_id: "runtime_observability.replay_drop_total".to_string(),
+                strategy: SamplingStrategy::DeterministicStride,
+                base_interval: 1,
+                max_burst_samples: 1,
+                seed_fields: vec![
+                    SamplingSeedField::TraceId,
+                    SamplingSeedField::SiteId,
+                    SamplingSeedField::Mode,
+                ],
+                precision_target_millionths: 0,
+                replay_stable: true,
+            },
+            TelemetrySamplingRule {
+                site_id: "observability_channel_model.legal_archive".to_string(),
                 strategy: SamplingStrategy::DeterministicStride,
                 base_interval: 1,
                 max_burst_samples: 1,
@@ -1482,6 +1923,15 @@ pub fn canonical_sketch_error_envelope_report() -> SketchErrorEnvelopeReport {
                 required_exact_shadow_samples: 1024,
             },
             SketchErrorEnvelope {
+                sketch_family: SketchFamily::CountMin,
+                family: PayloadFamily::Optimization,
+                bias_bound_millionths: 45_000,
+                variance_bound_millionths: 35_000,
+                collision_bound_millionths: 12_000,
+                quantile_error_bound_millionths: 0,
+                required_exact_shadow_samples: 1024,
+            },
+            SketchErrorEnvelope {
                 sketch_family: SketchFamily::Kll,
                 family: PayloadFamily::Optimization,
                 bias_bound_millionths: 25_000,
@@ -1489,6 +1939,15 @@ pub fn canonical_sketch_error_envelope_report() -> SketchErrorEnvelopeReport {
                 collision_bound_millionths: 0,
                 quantile_error_bound_millionths: 50_000,
                 required_exact_shadow_samples: 1024,
+            },
+            SketchErrorEnvelope {
+                sketch_family: SketchFamily::NitroSketchWeighted,
+                family: PayloadFamily::Optimization,
+                bias_bound_millionths: 60_000,
+                variance_bound_millionths: 50_000,
+                collision_bound_millionths: 18_000,
+                quantile_error_bound_millionths: 0,
+                required_exact_shadow_samples: 2048,
             },
         ],
     }
@@ -2858,5 +3317,87 @@ mod tests {
         let err = state.emit(&spec, 0).unwrap_err();
         assert!(err.detail.contains("buffer full"));
         assert!(err.detail.contains("1")); // capacity
+    }
+
+    #[test]
+    fn observability_contract_validation_accepts_canonical_contract() {
+        let report = validate_observability_contract(
+            &canonical_engine_observability_channel_policy(),
+            &canonical_operator_mode_contract(),
+            &canonical_telemetry_site_policy_matrix(),
+            &canonical_telemetry_sampling_contract(),
+            &canonical_sketch_error_envelope_report(),
+        );
+
+        assert!(
+            report.gate_pass,
+            "canonical contract should validate: {:?}",
+            report.violations
+        );
+        assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn observability_contract_validation_rejects_lossless_downsampling() {
+        let policy = canonical_engine_observability_channel_policy();
+        let mode_contract = canonical_operator_mode_contract();
+        let site_matrix = canonical_telemetry_site_policy_matrix();
+        let sketch_report = canonical_sketch_error_envelope_report();
+        let mut sampling_contract = canonical_telemetry_sampling_contract();
+        let auth_rule = sampling_contract
+            .rules
+            .iter_mut()
+            .find(|rule| rule.site_id == "runtime_observability.auth_failure_total")
+            .expect("auth failure sampling rule");
+        auth_rule.base_interval = 2;
+
+        let report = validate_observability_contract(
+            &policy,
+            &mode_contract,
+            &site_matrix,
+            &sampling_contract,
+            &sketch_report,
+        );
+
+        assert!(!report.gate_pass);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.code == "FE-RGC-066A-SAMPLING-0005"),
+            "expected lossless downsampling rejection, got {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn observability_contract_validation_rejects_missing_sketch_coverage() {
+        let policy = canonical_engine_observability_channel_policy();
+        let mode_contract = canonical_operator_mode_contract();
+        let site_matrix = canonical_telemetry_site_policy_matrix();
+        let sampling_contract = canonical_telemetry_sampling_contract();
+        let mut sketch_report = canonical_sketch_error_envelope_report();
+        sketch_report.envelopes.retain(|envelope| {
+            !(envelope.sketch_family == SketchFamily::HeavyHitter
+                && envelope.family == PayloadFamily::Decision)
+        });
+
+        let report = validate_observability_contract(
+            &policy,
+            &mode_contract,
+            &site_matrix,
+            &sampling_contract,
+            &sketch_report,
+        );
+
+        assert!(!report.gate_pass);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.code == "FE-RGC-066A-SKETCH-0004"),
+            "expected missing sketch coverage rejection, got {:?}",
+            report.violations
+        );
     }
 }

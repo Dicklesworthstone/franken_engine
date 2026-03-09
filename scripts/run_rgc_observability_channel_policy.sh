@@ -17,6 +17,8 @@ run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
+trace_ids_path="${run_dir}/trace_ids"
+step_logs_dir="${run_dir}/step_logs"
 
 contract_json="docs/rgc_observability_channel_policy_v1.json"
 contract_doc="docs/RGC_OBSERVABILITY_CHANNEL_POLICY_V1.md"
@@ -34,7 +36,7 @@ component="rgc_observability_channel_policy_gate"
 scenario_id="rgc-066a"
 replay_command="./scripts/e2e/rgc_observability_channel_policy_replay.sh ${mode}"
 
-mkdir -p "$run_dir"
+mkdir -p "$run_dir" "$step_logs_dir"
 
 if [[ ! -f "$contract_doc" || ! -f "$contract_json" ]]; then
   echo "FE-RGC-066A-CONTRACT-0001: missing observability contract inputs" >&2
@@ -79,31 +81,28 @@ manifest_written=false
 
 run_step() {
   local command_text="$1"
-  local log_path
+  local log_path step_index
   shift
 
   commands_run+=("$command_text")
   echo "==> $command_text"
 
-  log_path="$(mktemp)"
+  step_index="${#commands_run[@]}"
+  log_path="${step_logs_dir}/step-$(printf '%02d' "${step_index}").log"
   if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
     if rg -q "Remote command finished: exit=0" "$log_path"; then
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" \
         | tee -a "$log_path"
     else
-      rm -f "$log_path"
       failed_command="$command_text"
       return 1
     fi
   fi
 
   if ! rch_reject_local_fallback "$log_path"; then
-    rm -f "$log_path"
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
   fi
-
-  rm -f "$log_path"
 }
 
 run_mode() {
@@ -160,6 +159,12 @@ write_manifest() {
   fi
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
+  cat >"$trace_ids_path" <<EOF
+trace_id=${trace_id}
+decision_id=${decision_id}
+policy_id=${policy_id}
+scenario_id=${scenario_id}
+EOF
 
   {
     echo "{\"schema_version\":\"rgc.observability-channel-policy.gate.event.v1\",\"scenario_id\":\"${scenario_id}\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"gate_completed\",\"runtime_lane\":\"observability_contract\",\"seed\":\"fixed-observability-contract-seed-v1\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json}}"
@@ -203,6 +208,8 @@ write_manifest() {
     echo "    \"manifest\": \"${manifest_path}\","
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
+    echo "    \"trace_ids\": \"${trace_ids_path}\","
+    echo "    \"step_logs\": \"${step_logs_dir}\","
     echo "    \"engine_observability_channel_policy\": \"${engine_policy_path}\","
     echo "    \"operator_mode_contract\": \"${operator_mode_path}\","
     echo "    \"telemetry_site_policy_matrix\": \"${site_policy_path}\","
@@ -221,6 +228,8 @@ write_manifest() {
     echo "    \"cat ${manifest_path}\","
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
+    echo "    \"cat ${trace_ids_path}\","
+    echo "    \"ls ${step_logs_dir}\","
     echo "    \"cat ${engine_policy_path}\","
     echo "    \"cat ${operator_mode_path}\","
     echo "    \"cat ${site_policy_path}\","

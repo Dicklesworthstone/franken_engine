@@ -116,6 +116,8 @@ with:
 - `run_manifest.json`
 - `events.jsonl`
 - `commands.txt`
+- `trace_ids`
+- `step_logs/`
 - `engine_observability_channel_policy.json`
 - `operator_mode_contract.json`
 - `telemetry_site_policy_matrix.json`
@@ -129,6 +131,9 @@ with:
 jq empty docs/rgc_observability_channel_policy_v1.json
 
 ./scripts/run_rgc_observability_channel_policy.sh ci
+
+cat artifacts/rgc_observability_channel_policy/<UTC_TIMESTAMP>/trace_ids
+ls artifacts/rgc_observability_channel_policy/<UTC_TIMESTAMP>/step_logs
 
 ./scripts/e2e/rgc_observability_channel_policy_replay.sh ci
 ```

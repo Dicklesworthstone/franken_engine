@@ -455,6 +455,39 @@ fn string_concat() {
     );
 }
 
+#[test]
+fn string_receipt_tracks_unicode_observability_for_slice() {
+    let traced = exec_string_method_with_receipt(
+        BuiltinId::StringPrototypeSlice,
+        "a😀b",
+        &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
+    )
+    .unwrap();
+    let receipt = traced.receipt.expect("string receipt");
+
+    assert_eq!(traced.value, JsValue::Str("😀".into()));
+    assert_eq!(receipt.source_utf16_units, 4);
+    assert_eq!(receipt.result_utf16_units, 2);
+    assert!(receipt.result_has_non_bmp);
+    assert!(!receipt.flatten_required);
+}
+
+#[test]
+fn string_receipt_marks_flatten_budget_pressure_for_concat() {
+    let traced = exec_string_method_with_receipt(
+        BuiltinId::StringPrototypeConcat,
+        &"x".repeat(220),
+        &[JsValue::Str("y".repeat(80))],
+    )
+    .unwrap();
+    let receipt = traced.receipt.expect("string receipt");
+
+    assert!(receipt.flatten_required);
+    assert!(receipt.flatten_budget_exhausted);
+    assert_eq!(receipt.segment_count, 2);
+    assert!(receipt.trace_id.starts_with("trace-string-"));
+}
+
 // ---------------------------------------------------------------------------
 // Number method tests
 // ---------------------------------------------------------------------------
@@ -1593,6 +1626,147 @@ fn string_repeat_zero() {
 fn string_normalize_ascii() {
     let result = exec_string_method(BuiltinId::StringPrototypeNormalize, "hello", &[]).unwrap();
     assert_eq!(result, JsValue::Str("hello".into()));
+}
+
+#[test]
+fn string_representation_scenario_emits_artifact_triad_and_reports() {
+    let slice = exec_string_method_with_receipt(
+        BuiltinId::StringPrototypeSlice,
+        "prefix-😀-suffix",
+        &[JsValue::Int(7 * FP_SCALE), JsValue::Int(8 * FP_SCALE)],
+    )
+    .unwrap();
+    let concat = exec_string_method_with_receipt(
+        BuiltinId::StringPrototypeConcat,
+        &"x".repeat(220),
+        &[JsValue::Str("y".repeat(80))],
+    )
+    .unwrap();
+    let normalize =
+        exec_string_method_with_receipt(BuiltinId::StringPrototypeNormalize, "Cafe\u{301}", &[])
+            .unwrap();
+
+    let receipts = vec![
+        slice.receipt.clone().expect("slice receipt"),
+        concat.receipt.clone().expect("concat receipt"),
+        normalize.receipt.clone().expect("normalize receipt"),
+    ];
+    let trace_ids: Vec<String> = receipts
+        .iter()
+        .map(|receipt| receipt.trace_id.clone())
+        .collect();
+
+    let context = DeterministicTestContext::new(
+        "bd-1lsy.4.12.1-string-representation",
+        "string-representation-fixture",
+        HarnessLane::E2e,
+        4_121,
+    );
+    let events = vec![
+        context.event(EventInput {
+            sequence: 1,
+            component: "stdlib",
+            event: "string_slice_receipt",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 11,
+            timestamp_unix_ms: 1_700_000_004_121,
+        }),
+        context.event(EventInput {
+            sequence: 2,
+            component: "stdlib",
+            event: "string_concat_receipt",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 17,
+            timestamp_unix_ms: 1_700_000_004_122,
+        }),
+        context.event(EventInput {
+            sequence: 3,
+            component: "stdlib",
+            event: "string_normalize_receipt",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 9,
+            timestamp_unix_ms: 1_700_000_004_123,
+        }),
+    ];
+    let commands = vec![
+        format!(
+            "exec_string_method_with_receipt {} trace_id={}",
+            receipts[0].builtin, receipts[0].trace_id
+        ),
+        format!(
+            "exec_string_method_with_receipt {} trace_id={}",
+            receipts[1].builtin, receipts[1].trace_id
+        ),
+        format!(
+            "exec_string_method_with_receipt {} trace_id={}",
+            receipts[2].builtin, receipts[2].trace_id
+        ),
+    ];
+    let run_id = context.default_run_id();
+    let manifest = HarnessRunManifest::from_context(
+        &context,
+        &run_id,
+        events.len(),
+        commands.len(),
+        "cargo test --test stdlib_integration string_representation_scenario_emits_artifact_triad_and_reports",
+        1_700_000_004_199,
+    );
+
+    let root = artifact_root("string_representation");
+    let triad = write_artifact_triad(&root, &manifest, &events, &commands).unwrap();
+    let trace_ids_path = triad.run_dir.join("trace_ids.json");
+    let contract_path = triad
+        .run_dir
+        .join("bd-1lsy.4.12.1_string_representation_contract.json");
+    let budget_path = triad
+        .run_dir
+        .join("bd-1lsy.4.12.1_string_flatten_budget_report.json");
+
+    let report = StringRepresentationScenarioReport {
+        bead_id: "bd-1lsy.4.12.1",
+        trace_ids: trace_ids.clone(),
+        receipts: receipts
+            .iter()
+            .map(|receipt| serde_json::to_value(receipt).expect("receipt json"))
+            .collect(),
+    };
+    let budget_report = serde_json::json!({
+        "bead_id": "bd-1lsy.4.12.1",
+        "flatten_budget_code_units": receipts[1].flatten_budget_code_units,
+        "flatten_cost_code_units": receipts[1].flatten_cost_code_units,
+        "flatten_budget_exhausted": receipts[1].flatten_budget_exhausted,
+        "trace_id": receipts[1].trace_id,
+    });
+
+    fs::write(
+        &trace_ids_path,
+        serde_json::to_vec_pretty(&trace_ids).expect("trace ids json"),
+    )
+    .expect("write trace ids");
+    fs::write(
+        &contract_path,
+        serde_json::to_vec_pretty(&report).expect("string contract json"),
+    )
+    .expect("write string contract");
+    fs::write(
+        &budget_path,
+        serde_json::to_vec_pretty(&budget_report).expect("budget json"),
+    )
+    .expect("write budget report");
+
+    assert!(triad.manifest_path.exists());
+    assert!(triad.events_path.exists());
+    assert!(triad.commands_path.exists());
+    assert!(trace_ids_path.exists());
+    assert!(contract_path.exists());
+    assert!(budget_path.exists());
+
+    let report_text = fs::read_to_string(&contract_path).expect("read string contract");
+    assert!(report_text.contains("bd-1lsy.4.12.1"));
+    assert!(report_text.contains("trace-string-"));
 }
 
 // ---------------------------------------------------------------------------

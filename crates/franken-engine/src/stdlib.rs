@@ -32,6 +32,10 @@ const FP_SCALE: i64 = 1_000_000;
 
 /// Maximum string repeat count to prevent OOM.
 const MAX_STRING_REPEAT: usize = 1_048_576;
+/// Maximum number of Unicode scalar values treated as inline.
+const STRING_INLINE_CHAR_MAX: usize = 22;
+/// Budget for forcing a concrete flatten in the baseline string lane.
+const STRING_FLATTEN_BUDGET_CODE_UNITS: usize = 256;
 
 // ---------------------------------------------------------------------------
 // BuiltinId — identifies a native function implementation
@@ -1241,6 +1245,41 @@ pub struct HeapCollectionMethodResult {
     pub trace: CollectionMutationTrace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StringRepresentationKind {
+    Inline,
+    Flat,
+    SliceView,
+    RopeCandidate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StringRepresentationReceipt {
+    pub trace_id: String,
+    pub builtin: String,
+    pub kind: StringRepresentationKind,
+    pub source_char_len: usize,
+    pub result_char_len: usize,
+    pub source_utf16_units: usize,
+    pub result_utf16_units: usize,
+    pub source_is_ascii: bool,
+    pub result_is_ascii: bool,
+    pub source_has_non_bmp: bool,
+    pub result_has_non_bmp: bool,
+    pub segment_count: usize,
+    pub flatten_budget_code_units: usize,
+    pub flatten_cost_code_units: usize,
+    pub flatten_required: bool,
+    pub flatten_budget_exhausted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StringMethodResult {
+    pub value: JsValue,
+    pub receipt: Option<StringRepresentationReceipt>,
+}
+
 pub fn alloc_array_instance(
     heap: &mut ObjectHeap,
     prototype: ObjectHandle,
@@ -2119,6 +2158,21 @@ pub fn exec_string_method(
     }
 }
 
+pub fn exec_string_method_with_receipt(
+    builtin: BuiltinId,
+    this: &str,
+    args: &[JsValue],
+) -> Result<StringMethodResult, StdlibError> {
+    let value = exec_string_method(builtin, this, args)?;
+    let receipt = match &value {
+        JsValue::Str(result) => Some(build_string_representation_receipt(
+            builtin, this, args, result,
+        )),
+        _ => None,
+    };
+    Ok(StringMethodResult { value, receipt })
+}
+
 /// Execute a pure Number method.
 pub fn exec_number_method(
     builtin: BuiltinId,
@@ -2566,6 +2620,132 @@ fn resolve_string_index(idx: i64, len: i64) -> i64 {
     } else {
         idx.min(len)
     }
+}
+
+fn build_string_representation_receipt(
+    builtin: BuiltinId,
+    source: &str,
+    args: &[JsValue],
+    result: &str,
+) -> StringRepresentationReceipt {
+    let source_char_len = source.chars().count();
+    let result_char_len = result.chars().count();
+    let source_utf16_units = utf16_code_units(source);
+    let result_utf16_units = utf16_code_units(result);
+    let segment_count = string_segment_count(builtin, source, args, result);
+    let flatten_required = matches!(
+        builtin,
+        BuiltinId::StringPrototypeConcat
+            | BuiltinId::StringPrototypePadStart
+            | BuiltinId::StringPrototypePadEnd
+            | BuiltinId::StringPrototypeRepeat
+            | BuiltinId::StringPrototypeReplace
+    ) && result_char_len > 0;
+    let flatten_cost_code_units = if flatten_required {
+        result_utf16_units
+    } else {
+        0
+    };
+    let flatten_budget_exhausted =
+        flatten_required && flatten_cost_code_units > STRING_FLATTEN_BUDGET_CODE_UNITS;
+    let kind = classify_string_representation(
+        builtin,
+        source_char_len,
+        result_char_len,
+        segment_count,
+        flatten_required,
+    );
+    let digest = hex::encode(Sha256::digest(
+        format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            builtin.name(),
+            source,
+            result,
+            source_utf16_units,
+            result_utf16_units,
+            segment_count,
+            flatten_required,
+            flatten_budget_exhausted
+        )
+        .as_bytes(),
+    ));
+    StringRepresentationReceipt {
+        trace_id: format!("trace-string-{}", &digest[..16]),
+        builtin: builtin.name().to_string(),
+        kind,
+        source_char_len,
+        result_char_len,
+        source_utf16_units,
+        result_utf16_units,
+        source_is_ascii: source.is_ascii(),
+        result_is_ascii: result.is_ascii(),
+        source_has_non_bmp: has_non_bmp_scalars(source),
+        result_has_non_bmp: has_non_bmp_scalars(result),
+        segment_count,
+        flatten_budget_code_units: STRING_FLATTEN_BUDGET_CODE_UNITS,
+        flatten_cost_code_units,
+        flatten_required,
+        flatten_budget_exhausted,
+    }
+}
+
+fn classify_string_representation(
+    builtin: BuiltinId,
+    source_char_len: usize,
+    result_char_len: usize,
+    segment_count: usize,
+    flatten_required: bool,
+) -> StringRepresentationKind {
+    if result_char_len <= STRING_INLINE_CHAR_MAX {
+        return StringRepresentationKind::Inline;
+    }
+    if matches!(
+        builtin,
+        BuiltinId::StringPrototypeSlice
+            | BuiltinId::StringPrototypeSubstring
+            | BuiltinId::StringPrototypeTrim
+            | BuiltinId::StringPrototypeTrimStart
+            | BuiltinId::StringPrototypeTrimEnd
+            | BuiltinId::StringPrototypeMatch
+    ) && result_char_len <= source_char_len
+    {
+        return StringRepresentationKind::SliceView;
+    }
+    if flatten_required && segment_count > 1 {
+        return StringRepresentationKind::RopeCandidate;
+    }
+    StringRepresentationKind::Flat
+}
+
+fn string_segment_count(builtin: BuiltinId, source: &str, args: &[JsValue], result: &str) -> usize {
+    match builtin {
+        BuiltinId::StringPrototypeConcat => 1 + args.len(),
+        BuiltinId::StringPrototypePadStart | BuiltinId::StringPrototypePadEnd => {
+            if result == source { 1 } else { 2 }
+        }
+        BuiltinId::StringPrototypeRepeat => {
+            let count = require_int("String.prototype.repeat", args, 0)
+                .map(|raw| (raw / FP_SCALE).max(0) as usize)
+                .unwrap_or(0);
+            count.max(1)
+        }
+        BuiltinId::StringPrototypeReplace => {
+            if result == source {
+                1
+            } else {
+                3
+            }
+        }
+        _ => 1,
+    }
+}
+
+fn utf16_code_units(value: &str) -> usize {
+    value.encode_utf16().count()
+}
+
+fn has_non_bmp_scalars(value: &str) -> bool {
+    value.chars().any(|ch| u32::from(ch) > 0xFFFF)
 }
 
 fn pad_string(s: &str, target_len: i64, pad_str: &str, start: bool) -> String {
@@ -4922,6 +5102,52 @@ mod tests {
     fn test_string_normalize_ascii() {
         let result = exec_string_method(BuiltinId::StringPrototypeNormalize, "hello", &[]).unwrap();
         assert_eq!(result, JsValue::Str("hello".into()));
+    }
+
+    #[test]
+    fn test_string_receipt_slice_view_with_non_bmp_unicode() {
+        let traced = exec_string_method_with_receipt(
+            BuiltinId::StringPrototypeSlice,
+            "a😀b",
+            &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
+        )
+        .unwrap();
+        let receipt = traced.receipt.expect("string receipt");
+        assert_eq!(traced.value, JsValue::Str("😀".into()));
+        assert_eq!(receipt.kind, StringRepresentationKind::Inline);
+        assert_eq!(receipt.result_utf16_units, 2);
+        assert!(receipt.result_has_non_bmp);
+        assert!(!receipt.flatten_required);
+        assert!(receipt.trace_id.starts_with("trace-string-"));
+    }
+
+    #[test]
+    fn test_string_receipt_concat_marks_flatten_budget_exhaustion() {
+        let left = "x".repeat(220);
+        let traced = exec_string_method_with_receipt(
+            BuiltinId::StringPrototypeConcat,
+            &left,
+            &[JsValue::Str("y".repeat(80))],
+        )
+        .unwrap();
+        let receipt = traced.receipt.expect("string receipt");
+        assert_eq!(receipt.kind, StringRepresentationKind::RopeCandidate);
+        assert!(receipt.flatten_required);
+        assert!(receipt.flatten_budget_exhausted);
+        assert_eq!(receipt.segment_count, 2);
+        assert!(receipt.flatten_cost_code_units > receipt.flatten_budget_code_units);
+    }
+
+    #[test]
+    fn test_string_receipt_absent_for_boolean_result() {
+        let traced = exec_string_method_with_receipt(
+            BuiltinId::StringPrototypeIncludes,
+            "hello",
+            &[JsValue::Str("el".into())],
+        )
+        .unwrap();
+        assert_eq!(traced.value, JsValue::Bool(true));
+        assert!(traced.receipt.is_none());
     }
 
     // -- Date method tests ---------------------------------------------------

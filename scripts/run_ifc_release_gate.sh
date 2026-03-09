@@ -6,11 +6,13 @@ cd "$root_dir"
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_ifc_release_gate}"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_franken_engine_ifc_release_gate}"
+artifact_root="${IFC_RELEASE_GATE_ARTIFACT_ROOT:-artifacts/ifc_release_gate}"
+rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 component="ifc_release_gate"
 bead_id="bd-eke"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-run_dir="artifacts/ifc_release_gate/${timestamp}"
+run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/ifc_release_gate_events.jsonl"
 commands_path="${run_dir}/commands.txt"
@@ -24,8 +26,37 @@ policy_id="policy-ifc-release-gate-v1"
 mkdir -p "$logs_dir"
 mkdir -p "$ifc_output_root"
 
+if ! command -v rch >/dev/null 2>&1; then
+  echo "rch is required for IFC release gate heavy commands" >&2
+  exit 2
+fi
+
 run_rch() {
-  rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  timeout "${rch_timeout_seconds}" \
+    rch exec -q -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+}
+
+rch_reject_local_fallback() {
+  local log_path="$1"
+  if grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|running locally|\[RCH\] local \(|Failed to query daemon:.*running locally|Dependency preflight blocked remote execution|RCH-E326' "$log_path"; then
+    echo "rch reported local fallback; refusing local execution for heavy command" >&2
+    return 1
+  fi
+}
+
+declare -a runtime_guard_tests=(
+  "execution_orchestrator::tests::phase_enforce_runtime_flow_guards_allows_static_artifact"
+  "execution_orchestrator::tests::phase_enforce_runtime_flow_guards_blocks_pending_declassifications"
+  "execution_orchestrator::tests::phase_enforce_runtime_flow_guards_blocks_runtime_checkpoints"
+  "execution_orchestrator::tests::execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter"
+)
+
+run_runtime_guard_tests() {
+  local test_filter
+  for test_filter in "${runtime_guard_tests[@]}"; do
+    run_step "cargo test -p frankenengine-engine --lib ${test_filter} -- --exact" \
+      run_rch cargo test -p frankenengine-engine --lib "${test_filter}" -- --exact
+  done
 }
 
 json_escape() {
@@ -61,16 +92,28 @@ run_step() {
   command_logs+=("$log_path")
   echo "==> $command_text"
 
-  if "$@" > >(tee "$log_path") 2>&1; then
-    return 0
+  if ! "$@" > >(tee "$log_path") 2>&1; then
+    if rg -q "Remote command finished: exit=0" "$log_path"; then
+      echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
+    else
+      failed_command="$command_text"
+      failed_log_path="$log_path"
+      return 1
+    fi
   fi
 
-  failed_command="$command_text"
-  failed_log_path="$log_path"
-  return 1
+  if ! rch_reject_local_fallback "$log_path"; then
+    failed_command="${command_text} (rch-local-fallback-detected)"
+    failed_log_path="$log_path"
+    return 1
+  fi
+
+  return 0
 }
 
 run_check() {
+  run_step "cargo check -p frankenengine-engine --lib" \
+    run_rch cargo check -p frankenengine-engine --lib
   run_step "cargo check -p frankenengine-engine --test ifc_release_gate" \
     run_rch cargo check -p frankenengine-engine --test ifc_release_gate
   run_step "cargo check -p frankenengine-engine --bin franken_ifc_conformance_runner" \
@@ -80,6 +123,7 @@ run_check() {
 run_test() {
   run_step "cargo test -p frankenengine-engine --test ifc_release_gate" \
     run_rch cargo test -p frankenengine-engine --test ifc_release_gate
+  run_runtime_guard_tests
 }
 
 run_clippy() {
@@ -129,6 +173,10 @@ validate_thresholds() {
   fi
   if [[ "$false_positive_count" -ne 0 ]]; then
     echo "IFC gate failure: false_positive_count=${false_positive_count} (expected 0)" >&2
+    threshold_failure=1
+  fi
+  if [[ "$false_negative_count" -ne 0 ]]; then
+    echo "IFC gate failure: false_negative_count=${false_negative_count} (expected 0)" >&2
     threshold_failure=1
   fi
   if [[ "$false_negative_direct_indirect_count" -ne 0 ]]; then
@@ -250,6 +298,7 @@ JSONL
     echo '  "thresholds": {'
     echo '    "ci_blocking_failures": 0,'
     echo '    "false_positive_count": 0,'
+    echo '    "false_negative_count": 0,'
     echo '    "false_negative_direct_indirect_count": 0,'
     echo '    "benign_total_min": 100,'
     echo '    "exfil_total_min": 80,'
@@ -289,6 +338,7 @@ JSONL
     echo "    \"ifc_summary\": \"$(json_escape "$summary_path")\","
     echo '    "suite_script": "scripts/run_ifc_release_gate.sh",'
     echo '    "gate_test": "crates/franken-engine/tests/ifc_release_gate.rs",'
+    echo '    "runtime_guard_source": "crates/franken-engine/src/execution_orchestrator.rs",'
     echo '    "runner_bin": "crates/franken-engine/src/bin/franken_ifc_conformance_runner.rs",'
     echo '    "runbook": "artifacts/ifc_release_gate/README.md"'
     echo '  },'
@@ -296,6 +346,7 @@ JSONL
     echo "    \"cat $(json_escape "$manifest_path")\","
     echo "    \"cat $(json_escape "$events_path")\","
     echo "    \"cat $(json_escape "$commands_path")\","
+    echo '    "./scripts/run_ifc_release_gate.sh test",'
     echo "    \"${0} gate\""
     echo '  ]'
     echo "}"

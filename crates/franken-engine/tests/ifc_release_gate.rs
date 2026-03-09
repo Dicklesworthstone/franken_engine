@@ -756,6 +756,34 @@ fn ifc_release_gate_blocks_on_direct_indirect_bypass() {
 }
 
 #[test]
+fn ifc_release_gate_blocks_on_non_direct_false_negative() {
+    let mut run = run_ifc_corpus();
+    let exfil_event = run
+        .logs
+        .iter_mut()
+        .find(|event| {
+            event.category.as_deref() == Some("exfil")
+                && matches!(event.flow_path_type.as_deref(), Some("implicit" | "temporal" | "covert"))
+        })
+        .expect("expected at least one non-direct exfil workload");
+
+    exfil_event.actual_outcome = Some("allow".to_string());
+    exfil_event.evidence_type = Some("none".to_string());
+    exfil_event.evidence_id = None;
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert_eq!(decision.metrics.unauthorized_exfil_success_count, 1);
+    assert_eq!(decision.metrics.direct_indirect_bypass_count, 0);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("unauthorized exfiltration succeeded"))
+    );
+}
+
+#[test]
 fn ifc_release_gate_metrics_corpus_size_meets_minimum_thresholds() {
     let run = run_ifc_corpus();
     let decision = evaluate_ifc_release_gate(&run);

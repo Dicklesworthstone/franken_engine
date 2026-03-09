@@ -103,9 +103,17 @@ fn simple_layout(site_id: &str) -> FieldLayout {
 }
 
 fn make_envelope(certs: Vec<EscapeCertificate>) -> OptimizationEligibilityEnvelope {
+    let len = certs.len() as u64;
     OptimizationEligibilityEnvelope {
+        schema_version: "v1".to_string(),
         scope_id: "test_scope".to_string(),
+        total_sites: len,
+        scalar_replacement_count: 0,
+        stack_allocation_count: 0,
+        abstention_count: 0,
+        alias_class_count: len,
         certificates: certs,
+        overall_confidence_millionths: 800_000,
         epoch: epoch(),
         envelope_hash: "env_hash".to_string(),
     }
@@ -332,7 +340,7 @@ fn field_source_kind_serde_roundtrip() {
         FieldSourceKind::Register,
         FieldSourceKind::StackSlot,
         FieldSourceKind::Constant,
-        FieldSourceKind::Undefined,
+        FieldSourceKind::RegionSlot,
     ];
     for k in &kinds {
         let json = serde_json::to_string(k).unwrap();
@@ -350,7 +358,7 @@ fn transform_denial_reason_as_str_non_empty() {
     let reasons = [
         TransformDenialReason::CertificateAbstained,
         TransformDenialReason::TooManyFields,
-        TransformDenialReason::UnsealedLayout,
+        TransformDenialReason::NonDecomposableFields,
         TransformDenialReason::DecompositionTooDeep,
         TransformDenialReason::GloballyEscaped,
         TransformDenialReason::ThreadEscaped,

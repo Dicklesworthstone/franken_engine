@@ -97,7 +97,6 @@ fn simple_layout(site_id: &str) -> FieldLayout {
                 always_initialized: true,
             },
         ],
-        total_size_bytes: 16,
         layout_sealed: true,
         site_id: site_id.to_string(),
     }
@@ -544,7 +543,7 @@ fn build_scalar_plan_register_safe_fields() {
             nesting_depth: 0,
             always_initialized: true,
         }],
-        total_size_bytes: 8,
+
         layout_sealed: true,
         site_id: "bp2".to_string(),
     };
@@ -1213,7 +1212,7 @@ fn config_default_sensible() {
     let config = ScalarReplacementConfig::default();
     assert!(config.max_fields > 0);
     assert!(config.max_decomposition_depth > 0);
-    assert!(config.confidence_threshold_millionths > 0);
+    assert!(config.min_confidence_millionths > 0);
     assert!(config.max_transforms_per_scope > 0);
 }
 
@@ -1224,8 +1223,8 @@ fn config_serde_roundtrip() {
     let back: ScalarReplacementConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(back.max_fields, config.max_fields);
     assert_eq!(
-        back.confidence_threshold_millionths,
-        config.confidence_threshold_millionths
+        back.min_confidence_millionths,
+        config.min_confidence_millionths
     );
 }
 
@@ -1350,7 +1349,7 @@ fn end_to_end_escape_cert_to_scalar_replacement() {
                 nesting_depth: 0,
                 always_initialized: true,
             }],
-            total_size_bytes: 8,
+    
             layout_sealed: true,
             site_id: "e2e1".to_string(),
         },
@@ -1379,7 +1378,7 @@ fn end_to_end_escape_cert_global_escape_denied() {
     let envelope = escape_analysis_certificate::analyze_escape(
         "leak_fn",
         &[site],
-        &[("e2e2", InvalidationReason::EscapesToGlobal)],
+        &[("e2e2", InvalidationReason::DynamicEval)],
         &escape_analysis_certificate::EscapeAnalyzerConfig::default(),
         epoch(),
     );

@@ -136,6 +136,7 @@ pub mod migration_contract;
 pub mod migration_kit;
 pub mod milestone_release_test_evidence_integrator;
 pub mod mmr_proof;
+pub mod module_async_evaluation;
 pub mod module_cache;
 pub mod module_compatibility_matrix;
 pub mod module_live_binding;

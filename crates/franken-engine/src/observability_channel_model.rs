@@ -828,6 +828,745 @@ pub fn canonical_risk_ledgers() -> Vec<DistortionRiskLedger> {
 }
 
 // ---------------------------------------------------------------------------
+// Engine telemetry observability contract surfaces
+// ---------------------------------------------------------------------------
+
+/// Schema version for the engine observability channel policy artifact.
+pub const ENGINE_OBSERVABILITY_CHANNEL_POLICY_SCHEMA_VERSION: &str =
+    "franken-engine.engine-observability-channel-policy.v1";
+/// Schema version for the operator mode contract artifact.
+pub const OPERATOR_MODE_CONTRACT_SCHEMA_VERSION: &str =
+    "franken-engine.operator-mode-contract.v1";
+/// Schema version for the telemetry site policy matrix artifact.
+pub const TELEMETRY_SITE_POLICY_MATRIX_SCHEMA_VERSION: &str =
+    "franken-engine.telemetry-site-policy-matrix.v1";
+/// Schema version for the telemetry sampling contract artifact.
+pub const TELEMETRY_SAMPLING_CONTRACT_SCHEMA_VERSION: &str =
+    "franken-engine.telemetry-sampling-contract.v1";
+/// Schema version for the sketch error envelope artifact.
+pub const SKETCH_ERROR_ENVELOPE_REPORT_SCHEMA_VERSION: &str =
+    "franken-engine.sketch-error-envelope-report.v1";
+/// Schema version for the sampling replay fixture matrix artifact.
+pub const SAMPLING_SEED_REPLAY_FIXTURE_MATRIX_SCHEMA_VERSION: &str =
+    "franken-engine.sampling-seed-replay-fixture-matrix.v1";
+
+/// Operator-visible observability modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservabilityMode {
+    /// Default shipped capture mode.
+    DefaultCapture,
+    /// Exact-shadow validation mode.
+    ExactShadow,
+    /// Degraded fallback mode for bounded-loss telemetry families.
+    Degraded,
+    /// Incident mode that forces full-fidelity capture.
+    IncidentFullCapture,
+    /// Support-bundle export mode.
+    SupportBundleExport,
+}
+
+impl ObservabilityMode {
+    pub const ALL: [Self; 5] = [
+        Self::DefaultCapture,
+        Self::ExactShadow,
+        Self::Degraded,
+        Self::IncidentFullCapture,
+        Self::SupportBundleExport,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DefaultCapture => "default_capture",
+            Self::ExactShadow => "exact_shadow",
+            Self::Degraded => "degraded",
+            Self::IncidentFullCapture => "incident_full_capture",
+            Self::SupportBundleExport => "support_bundle_export",
+        }
+    }
+}
+
+impl fmt::Display for ObservabilityMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Approximate sketch families permitted for budgeted telemetry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SketchFamily {
+    CountMin,
+    HyperLogLog,
+    Kll,
+    HeavyHitter,
+    NitroSketchWeighted,
+}
+
+impl SketchFamily {
+    pub const ALL: [Self; 5] = [
+        Self::CountMin,
+        Self::HyperLogLog,
+        Self::Kll,
+        Self::HeavyHitter,
+        Self::NitroSketchWeighted,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CountMin => "count_min",
+            Self::HyperLogLog => "hyper_log_log",
+            Self::Kll => "kll",
+            Self::HeavyHitter => "heavy_hitter",
+            Self::NitroSketchWeighted => "nitro_sketch_weighted",
+        }
+    }
+}
+
+impl fmt::Display for SketchFamily {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Sampling strategy used by an engine telemetry site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SamplingStrategy {
+    DeterministicStride,
+    GeometricWeightedSkip,
+}
+
+impl SamplingStrategy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DeterministicStride => "deterministic_stride",
+            Self::GeometricWeightedSkip => "geometric_weighted_skip",
+        }
+    }
+}
+
+impl fmt::Display for SamplingStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Seed-material field used when deriving replay-stable sampling decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SamplingSeedField {
+    TraceId,
+    WorkloadId,
+    ManifestHash,
+    SiteId,
+    Mode,
+}
+
+impl SamplingSeedField {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TraceId => "trace_id",
+            Self::WorkloadId => "workload_id",
+            Self::ManifestHash => "manifest_hash",
+            Self::SiteId => "site_id",
+            Self::Mode => "mode",
+        }
+    }
+}
+
+impl fmt::Display for SamplingSeedField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Top-level channel policy for engine telemetry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineObservabilityChannelPolicy {
+    pub schema_version: String,
+    pub required_lossless_families: Vec<PayloadFamily>,
+    pub approximate_allowed_families: Vec<PayloadFamily>,
+    pub redaction_must_precede_sampling: bool,
+    pub required_structured_log_fields: Vec<String>,
+    pub exported_artifacts: Vec<String>,
+}
+
+/// Mode-level policy row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorModePolicy {
+    pub mode: ObservabilityMode,
+    pub precedence: u8,
+    pub approximate_allowed: bool,
+    pub lossless_required: bool,
+    pub requires_calibration: bool,
+    pub description: String,
+}
+
+/// Contract defining precedence and semantics for operator-visible modes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorModeContract {
+    pub schema_version: String,
+    pub modes: Vec<OperatorModePolicy>,
+}
+
+impl OperatorModeContract {
+    pub fn precedence_of(&self, mode: ObservabilityMode) -> Option<u8> {
+        self.modes
+            .iter()
+            .find(|entry| entry.mode == mode)
+            .map(|entry| entry.precedence)
+    }
+}
+
+/// Site-level policy row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetrySitePolicy {
+    pub site_id: String,
+    pub component: String,
+    pub family: PayloadFamily,
+    pub default_mode: ObservabilityMode,
+    pub allowed_modes: Vec<ObservabilityMode>,
+    pub allowed_sketch_families: Vec<SketchFamily>,
+    pub lossless_required: bool,
+    pub requires_redaction: bool,
+    pub distortion_budget_millionths: i64,
+}
+
+/// Matrix of site-level telemetry policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetrySitePolicyMatrix {
+    pub schema_version: String,
+    pub sites: Vec<TelemetrySitePolicy>,
+}
+
+impl TelemetrySitePolicyMatrix {
+    pub fn site(&self, site_id: &str) -> Option<&TelemetrySitePolicy> {
+        self.sites.iter().find(|site| site.site_id == site_id)
+    }
+}
+
+/// Sampling rule for a telemetry site.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetrySamplingRule {
+    pub site_id: String,
+    pub strategy: SamplingStrategy,
+    pub base_interval: u64,
+    pub max_burst_samples: u64,
+    pub seed_fields: Vec<SamplingSeedField>,
+    pub precision_target_millionths: i64,
+    pub replay_stable: bool,
+}
+
+/// Contract defining deterministic sampling rules for the engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetrySamplingContract {
+    pub schema_version: String,
+    pub rules: Vec<TelemetrySamplingRule>,
+}
+
+impl TelemetrySamplingContract {
+    pub fn rule_for(&self, site_id: &str) -> Option<&TelemetrySamplingRule> {
+        self.rules.iter().find(|rule| rule.site_id == site_id)
+    }
+}
+
+/// Error envelope for one approximate sketch family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SketchErrorEnvelope {
+    pub sketch_family: SketchFamily,
+    pub family: PayloadFamily,
+    pub bias_bound_millionths: i64,
+    pub variance_bound_millionths: i64,
+    pub collision_bound_millionths: i64,
+    pub quantile_error_bound_millionths: i64,
+    pub required_exact_shadow_samples: u64,
+}
+
+/// Aggregate sketch error envelope report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SketchErrorEnvelopeReport {
+    pub schema_version: String,
+    pub envelopes: Vec<SketchErrorEnvelope>,
+}
+
+/// Replay-stable sampling fixture for deterministic contract checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamplingReplayFixture {
+    pub fixture_id: String,
+    pub trace_id: String,
+    pub workload_id: String,
+    pub manifest_hash: String,
+    pub site_id: String,
+    pub mode: ObservabilityMode,
+    pub expected_seed_hex: String,
+    pub expected_interval: u64,
+}
+
+/// Matrix of deterministic sampling fixtures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SamplingSeedReplayFixtureMatrix {
+    pub schema_version: String,
+    pub fixtures: Vec<SamplingReplayFixture>,
+}
+
+/// Derive a replay-stable sampling seed from canonical telemetry context.
+pub fn derive_sampling_seed_hex(
+    trace_id: &str,
+    workload_id: &str,
+    manifest_hash: &str,
+    site_id: &str,
+    mode: ObservabilityMode,
+) -> String {
+    let canonical = format!(
+        "{trace_id}\n{workload_id}\n{manifest_hash}\n{site_id}\n{}",
+        mode.as_str()
+    );
+    hex::encode(Sha256::digest(canonical.as_bytes()))
+}
+
+/// Convert a seed into a deterministic capture interval.
+pub fn deterministic_sampling_interval(
+    seed_hex: &str,
+    base_interval: u64,
+    max_burst_samples: u64,
+) -> u64 {
+    if base_interval <= 1 {
+        return 1;
+    }
+
+    let prefix = seed_hex.get(..16).unwrap_or("0");
+    let seed_prefix = u64::from_str_radix(prefix, 16).unwrap_or(0);
+    let burst = max_burst_samples.max(1);
+    let window = base_interval.saturating_mul(burst);
+    let offset = if window == 0 { 0 } else { seed_prefix % window };
+    offset / burst + 1
+}
+
+/// Resolve the effective observability mode using site policy and precedence.
+pub fn resolve_observability_mode(
+    site_policy: &TelemetrySitePolicy,
+    requested_modes: &[ObservabilityMode],
+    mode_contract: &OperatorModeContract,
+) -> Option<ObservabilityMode> {
+    let candidates = if requested_modes.is_empty() {
+        vec![site_policy.default_mode]
+    } else {
+        requested_modes
+            .iter()
+            .copied()
+            .filter(|mode| site_policy.allowed_modes.contains(mode))
+            .collect::<Vec<_>>()
+    };
+
+    candidates
+        .into_iter()
+        .max_by_key(|mode| mode_contract.precedence_of(*mode).unwrap_or(0))
+}
+
+/// Canonical engine-level policy for deterministic telemetry contracts.
+pub fn canonical_engine_observability_channel_policy() -> EngineObservabilityChannelPolicy {
+    EngineObservabilityChannelPolicy {
+        schema_version: ENGINE_OBSERVABILITY_CHANNEL_POLICY_SCHEMA_VERSION.to_string(),
+        required_lossless_families: vec![
+            PayloadFamily::Replay,
+            PayloadFamily::Security,
+            PayloadFamily::LegalProvenance,
+        ],
+        approximate_allowed_families: vec![
+            PayloadFamily::Decision,
+            PayloadFamily::Optimization,
+        ],
+        redaction_must_precede_sampling: true,
+        required_structured_log_fields: vec![
+            "trace_id".to_string(),
+            "decision_id".to_string(),
+            "policy_id".to_string(),
+            "component".to_string(),
+            "event".to_string(),
+            "outcome".to_string(),
+            "error_code".to_string(),
+            "observability_mode".to_string(),
+            "sampling_seed".to_string(),
+            "site_id".to_string(),
+        ],
+        exported_artifacts: vec![
+            "engine_observability_channel_policy.json".to_string(),
+            "operator_mode_contract.json".to_string(),
+            "telemetry_site_policy_matrix.json".to_string(),
+            "telemetry_sampling_contract.json".to_string(),
+            "sketch_error_envelope_report.json".to_string(),
+            "sampling_seed_replay_fixture_matrix.json".to_string(),
+        ],
+    }
+}
+
+/// Canonical mode contract for engine telemetry.
+pub fn canonical_operator_mode_contract() -> OperatorModeContract {
+    OperatorModeContract {
+        schema_version: OPERATOR_MODE_CONTRACT_SCHEMA_VERSION.to_string(),
+        modes: vec![
+            OperatorModePolicy {
+                mode: ObservabilityMode::DefaultCapture,
+                precedence: 10,
+                approximate_allowed: true,
+                lossless_required: false,
+                requires_calibration: true,
+                description: "Default shipped capture path for declared telemetry sites."
+                    .to_string(),
+            },
+            OperatorModePolicy {
+                mode: ObservabilityMode::Degraded,
+                precedence: 60,
+                approximate_allowed: true,
+                lossless_required: false,
+                requires_calibration: true,
+                description:
+                    "Bounded-loss degraded path for approximate families when overhead budgets are tight."
+                        .to_string(),
+            },
+            OperatorModePolicy {
+                mode: ObservabilityMode::ExactShadow,
+                precedence: 80,
+                approximate_allowed: false,
+                lossless_required: true,
+                requires_calibration: false,
+                description:
+                    "Exact-shadow validation path used to calibrate approximate telemetry decisions."
+                        .to_string(),
+            },
+            OperatorModePolicy {
+                mode: ObservabilityMode::SupportBundleExport,
+                precedence: 90,
+                approximate_allowed: false,
+                lossless_required: true,
+                requires_calibration: false,
+                description:
+                    "Support-bundle export path that forbids silent downsampling during export."
+                        .to_string(),
+            },
+            OperatorModePolicy {
+                mode: ObservabilityMode::IncidentFullCapture,
+                precedence: 100,
+                approximate_allowed: false,
+                lossless_required: true,
+                requires_calibration: false,
+                description:
+                    "Incident mode forces full-fidelity capture for replay and operator triage."
+                        .to_string(),
+            },
+        ],
+    }
+}
+
+/// Canonical telemetry-site matrix for engine observability.
+pub fn canonical_telemetry_site_policy_matrix() -> TelemetrySitePolicyMatrix {
+    TelemetrySitePolicyMatrix {
+        schema_version: TELEMETRY_SITE_POLICY_MATRIX_SCHEMA_VERSION.to_string(),
+        sites: vec![
+            TelemetrySitePolicy {
+                site_id: "runtime_observability.auth_failure_total".to_string(),
+                component: "runtime_observability".to_string(),
+                family: PayloadFamily::Security,
+                default_mode: ObservabilityMode::DefaultCapture,
+                allowed_modes: vec![
+                    ObservabilityMode::DefaultCapture,
+                    ObservabilityMode::ExactShadow,
+                    ObservabilityMode::IncidentFullCapture,
+                    ObservabilityMode::SupportBundleExport,
+                ],
+                allowed_sketch_families: Vec::new(),
+                lossless_required: true,
+                requires_redaction: true,
+                distortion_budget_millionths: 0,
+            },
+            TelemetrySitePolicy {
+                site_id: "runtime_observability.capability_denial_total".to_string(),
+                component: "runtime_observability".to_string(),
+                family: PayloadFamily::Security,
+                default_mode: ObservabilityMode::DefaultCapture,
+                allowed_modes: vec![
+                    ObservabilityMode::DefaultCapture,
+                    ObservabilityMode::ExactShadow,
+                    ObservabilityMode::IncidentFullCapture,
+                    ObservabilityMode::SupportBundleExport,
+                ],
+                allowed_sketch_families: Vec::new(),
+                lossless_required: true,
+                requires_redaction: true,
+                distortion_budget_millionths: 0,
+            },
+            TelemetrySitePolicy {
+                site_id: "runtime_observability.replay_drop_total".to_string(),
+                component: "runtime_observability".to_string(),
+                family: PayloadFamily::Replay,
+                default_mode: ObservabilityMode::DefaultCapture,
+                allowed_modes: vec![
+                    ObservabilityMode::DefaultCapture,
+                    ObservabilityMode::ExactShadow,
+                    ObservabilityMode::IncidentFullCapture,
+                    ObservabilityMode::SupportBundleExport,
+                ],
+                allowed_sketch_families: Vec::new(),
+                lossless_required: true,
+                requires_redaction: true,
+                distortion_budget_millionths: 0,
+            },
+            TelemetrySitePolicy {
+                site_id: "observability_channel_model.decision_lattice".to_string(),
+                component: "observability_channel_model".to_string(),
+                family: PayloadFamily::Decision,
+                default_mode: ObservabilityMode::DefaultCapture,
+                allowed_modes: vec![
+                    ObservabilityMode::DefaultCapture,
+                    ObservabilityMode::Degraded,
+                    ObservabilityMode::ExactShadow,
+                    ObservabilityMode::IncidentFullCapture,
+                    ObservabilityMode::SupportBundleExport,
+                ],
+                allowed_sketch_families: vec![
+                    SketchFamily::CountMin,
+                    SketchFamily::HeavyHitter,
+                    SketchFamily::NitroSketchWeighted,
+                ],
+                lossless_required: false,
+                requires_redaction: true,
+                distortion_budget_millionths: 100_000,
+            },
+            TelemetrySitePolicy {
+                site_id: "entropy_evidence_compressor.optimization_entropy".to_string(),
+                component: "entropy_evidence_compressor".to_string(),
+                family: PayloadFamily::Optimization,
+                default_mode: ObservabilityMode::DefaultCapture,
+                allowed_modes: vec![
+                    ObservabilityMode::DefaultCapture,
+                    ObservabilityMode::Degraded,
+                    ObservabilityMode::ExactShadow,
+                    ObservabilityMode::IncidentFullCapture,
+                    ObservabilityMode::SupportBundleExport,
+                ],
+                allowed_sketch_families: vec![
+                    SketchFamily::CountMin,
+                    SketchFamily::HyperLogLog,
+                    SketchFamily::Kll,
+                    SketchFamily::NitroSketchWeighted,
+                ],
+                lossless_required: false,
+                requires_redaction: true,
+                distortion_budget_millionths: 200_000,
+            },
+            TelemetrySitePolicy {
+                site_id: "observability_channel_model.legal_archive".to_string(),
+                component: "observability_channel_model".to_string(),
+                family: PayloadFamily::LegalProvenance,
+                default_mode: ObservabilityMode::DefaultCapture,
+                allowed_modes: vec![
+                    ObservabilityMode::DefaultCapture,
+                    ObservabilityMode::ExactShadow,
+                    ObservabilityMode::IncidentFullCapture,
+                    ObservabilityMode::SupportBundleExport,
+                ],
+                allowed_sketch_families: Vec::new(),
+                lossless_required: true,
+                requires_redaction: true,
+                distortion_budget_millionths: 0,
+            },
+        ],
+    }
+}
+
+/// Canonical deterministic sampling contract for the engine.
+pub fn canonical_telemetry_sampling_contract() -> TelemetrySamplingContract {
+    TelemetrySamplingContract {
+        schema_version: TELEMETRY_SAMPLING_CONTRACT_SCHEMA_VERSION.to_string(),
+        rules: vec![
+            TelemetrySamplingRule {
+                site_id: "runtime_observability.auth_failure_total".to_string(),
+                strategy: SamplingStrategy::DeterministicStride,
+                base_interval: 1,
+                max_burst_samples: 1,
+                seed_fields: vec![
+                    SamplingSeedField::TraceId,
+                    SamplingSeedField::SiteId,
+                    SamplingSeedField::Mode,
+                ],
+                precision_target_millionths: 0,
+                replay_stable: true,
+            },
+            TelemetrySamplingRule {
+                site_id: "runtime_observability.replay_drop_total".to_string(),
+                strategy: SamplingStrategy::DeterministicStride,
+                base_interval: 1,
+                max_burst_samples: 1,
+                seed_fields: vec![
+                    SamplingSeedField::TraceId,
+                    SamplingSeedField::SiteId,
+                    SamplingSeedField::Mode,
+                ],
+                precision_target_millionths: 0,
+                replay_stable: true,
+            },
+            TelemetrySamplingRule {
+                site_id: "observability_channel_model.decision_lattice".to_string(),
+                strategy: SamplingStrategy::GeometricWeightedSkip,
+                base_interval: 16,
+                max_burst_samples: 4,
+                seed_fields: vec![
+                    SamplingSeedField::TraceId,
+                    SamplingSeedField::WorkloadId,
+                    SamplingSeedField::ManifestHash,
+                    SamplingSeedField::SiteId,
+                    SamplingSeedField::Mode,
+                ],
+                precision_target_millionths: 80_000,
+                replay_stable: true,
+            },
+            TelemetrySamplingRule {
+                site_id: "entropy_evidence_compressor.optimization_entropy".to_string(),
+                strategy: SamplingStrategy::GeometricWeightedSkip,
+                base_interval: 32,
+                max_burst_samples: 8,
+                seed_fields: vec![
+                    SamplingSeedField::TraceId,
+                    SamplingSeedField::WorkloadId,
+                    SamplingSeedField::ManifestHash,
+                    SamplingSeedField::SiteId,
+                    SamplingSeedField::Mode,
+                ],
+                precision_target_millionths: 150_000,
+                replay_stable: true,
+            },
+        ],
+    }
+}
+
+/// Canonical sketch error envelopes for approximate telemetry families.
+pub fn canonical_sketch_error_envelope_report() -> SketchErrorEnvelopeReport {
+    SketchErrorEnvelopeReport {
+        schema_version: SKETCH_ERROR_ENVELOPE_REPORT_SCHEMA_VERSION.to_string(),
+        envelopes: vec![
+            SketchErrorEnvelope {
+                sketch_family: SketchFamily::CountMin,
+                family: PayloadFamily::Decision,
+                bias_bound_millionths: 40_000,
+                variance_bound_millionths: 25_000,
+                collision_bound_millionths: 10_000,
+                quantile_error_bound_millionths: 0,
+                required_exact_shadow_samples: 512,
+            },
+            SketchErrorEnvelope {
+                sketch_family: SketchFamily::HeavyHitter,
+                family: PayloadFamily::Decision,
+                bias_bound_millionths: 30_000,
+                variance_bound_millionths: 20_000,
+                collision_bound_millionths: 5_000,
+                quantile_error_bound_millionths: 0,
+                required_exact_shadow_samples: 512,
+            },
+            SketchErrorEnvelope {
+                sketch_family: SketchFamily::NitroSketchWeighted,
+                family: PayloadFamily::Decision,
+                bias_bound_millionths: 50_000,
+                variance_bound_millionths: 40_000,
+                collision_bound_millionths: 15_000,
+                quantile_error_bound_millionths: 0,
+                required_exact_shadow_samples: 1024,
+            },
+            SketchErrorEnvelope {
+                sketch_family: SketchFamily::HyperLogLog,
+                family: PayloadFamily::Optimization,
+                bias_bound_millionths: 35_000,
+                variance_bound_millionths: 45_000,
+                collision_bound_millionths: 20_000,
+                quantile_error_bound_millionths: 0,
+                required_exact_shadow_samples: 1024,
+            },
+            SketchErrorEnvelope {
+                sketch_family: SketchFamily::Kll,
+                family: PayloadFamily::Optimization,
+                bias_bound_millionths: 25_000,
+                variance_bound_millionths: 35_000,
+                collision_bound_millionths: 0,
+                quantile_error_bound_millionths: 50_000,
+                required_exact_shadow_samples: 1024,
+            },
+        ],
+    }
+}
+
+/// Canonical replay fixtures proving deterministic schedule reproduction.
+pub fn canonical_sampling_seed_replay_fixture_matrix() -> SamplingSeedReplayFixtureMatrix {
+    let fixtures = vec![
+        (
+            "decision_default_capture",
+            "trace-rgc-066a-001",
+            "workload-react-dashboard",
+            "manifest-optimization-alpha",
+            "observability_channel_model.decision_lattice",
+            ObservabilityMode::DefaultCapture,
+        ),
+        (
+            "decision_degraded",
+            "trace-rgc-066a-002",
+            "workload-react-dashboard",
+            "manifest-optimization-alpha",
+            "observability_channel_model.decision_lattice",
+            ObservabilityMode::Degraded,
+        ),
+        (
+            "optimization_exact_shadow",
+            "trace-rgc-066a-003",
+            "workload-benchmark-suite",
+            "manifest-optimization-beta",
+            "entropy_evidence_compressor.optimization_entropy",
+            ObservabilityMode::ExactShadow,
+        ),
+        (
+            "security_support_bundle",
+            "trace-rgc-066a-004",
+            "workload-incident-replay",
+            "manifest-security-gamma",
+            "runtime_observability.auth_failure_total",
+            ObservabilityMode::SupportBundleExport,
+        ),
+    ];
+    let sampling_contract = canonical_telemetry_sampling_contract();
+
+    SamplingSeedReplayFixtureMatrix {
+        schema_version: SAMPLING_SEED_REPLAY_FIXTURE_MATRIX_SCHEMA_VERSION.to_string(),
+        fixtures: fixtures
+            .into_iter()
+            .map(
+                |(fixture_id, trace_id, workload_id, manifest_hash, site_id, mode)| {
+                    let seed_hex =
+                        derive_sampling_seed_hex(trace_id, workload_id, manifest_hash, site_id, mode);
+                    let interval = sampling_contract
+                        .rule_for(site_id)
+                        .map(|rule| {
+                            deterministic_sampling_interval(
+                                &seed_hex,
+                                rule.base_interval,
+                                rule.max_burst_samples,
+                            )
+                        })
+                        .unwrap_or(1);
+                    SamplingReplayFixture {
+                        fixture_id: fixture_id.to_string(),
+                        trace_id: trace_id.to_string(),
+                        workload_id: workload_id.to_string(),
+                        manifest_hash: manifest_hash.to_string(),
+                        site_id: site_id.to_string(),
+                        mode,
+                        expected_seed_hex: seed_hex,
+                        expected_interval: interval,
+                    }
+                },
+            )
+            .collect(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

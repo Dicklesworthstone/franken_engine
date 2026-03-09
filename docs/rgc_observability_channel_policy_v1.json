@@ -1,0 +1,361 @@
+{
+  "schema_version": "rgc.observability-channel-policy.contract.v1",
+  "bead_id": "bd-1lsy.11.20.1",
+  "generated_by": "bd-1lsy.11.20.1",
+  "generated_at_utc": "2026-03-09T05:15:00Z",
+  "track": {
+    "id": "RGC-066A",
+    "name": "Engine Telemetry Sampling and Distortion Contract"
+  },
+  "engine_observability_channel_policy": {
+    "schema_version": "franken-engine.engine-observability-channel-policy.v1",
+    "required_lossless_families": [
+      "replay",
+      "security",
+      "legal_provenance"
+    ],
+    "approximate_allowed_families": [
+      "decision",
+      "optimization"
+    ],
+    "redaction_must_precede_sampling": true,
+    "required_structured_log_fields": [
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "event",
+      "outcome",
+      "error_code",
+      "observability_mode",
+      "sampling_seed",
+      "site_id"
+    ],
+    "exported_artifacts": [
+      "engine_observability_channel_policy.json",
+      "operator_mode_contract.json",
+      "telemetry_site_policy_matrix.json",
+      "telemetry_sampling_contract.json",
+      "sketch_error_envelope_report.json",
+      "sampling_seed_replay_fixture_matrix.json"
+    ]
+  },
+  "operator_mode_contract": {
+    "schema_version": "franken-engine.operator-mode-contract.v1",
+    "modes": [
+      {
+        "mode": "default_capture",
+        "precedence": 10,
+        "approximate_allowed": true,
+        "lossless_required": false,
+        "requires_calibration": true,
+        "description": "Default shipped capture path for declared telemetry sites."
+      },
+      {
+        "mode": "degraded",
+        "precedence": 60,
+        "approximate_allowed": true,
+        "lossless_required": false,
+        "requires_calibration": true,
+        "description": "Bounded-loss degraded path for approximate families when overhead budgets are tight."
+      },
+      {
+        "mode": "exact_shadow",
+        "precedence": 80,
+        "approximate_allowed": false,
+        "lossless_required": true,
+        "requires_calibration": false,
+        "description": "Exact-shadow validation path used to calibrate approximate telemetry decisions."
+      },
+      {
+        "mode": "support_bundle_export",
+        "precedence": 90,
+        "approximate_allowed": false,
+        "lossless_required": true,
+        "requires_calibration": false,
+        "description": "Support-bundle export path that forbids silent downsampling during export."
+      },
+      {
+        "mode": "incident_full_capture",
+        "precedence": 100,
+        "approximate_allowed": false,
+        "lossless_required": true,
+        "requires_calibration": false,
+        "description": "Incident mode forces full-fidelity capture for replay and operator triage."
+      }
+    ]
+  },
+  "telemetry_site_policy_matrix": {
+    "schema_version": "franken-engine.telemetry-site-policy-matrix.v1",
+    "sites": [
+      {
+        "site_id": "runtime_observability.auth_failure_total",
+        "component": "runtime_observability",
+        "family": "security",
+        "default_mode": "default_capture",
+        "allowed_modes": [
+          "default_capture",
+          "exact_shadow",
+          "incident_full_capture",
+          "support_bundle_export"
+        ],
+        "allowed_sketch_families": [],
+        "lossless_required": true,
+        "requires_redaction": true,
+        "distortion_budget_millionths": 0
+      },
+      {
+        "site_id": "runtime_observability.capability_denial_total",
+        "component": "runtime_observability",
+        "family": "security",
+        "default_mode": "default_capture",
+        "allowed_modes": [
+          "default_capture",
+          "exact_shadow",
+          "incident_full_capture",
+          "support_bundle_export"
+        ],
+        "allowed_sketch_families": [],
+        "lossless_required": true,
+        "requires_redaction": true,
+        "distortion_budget_millionths": 0
+      },
+      {
+        "site_id": "runtime_observability.replay_drop_total",
+        "component": "runtime_observability",
+        "family": "replay",
+        "default_mode": "default_capture",
+        "allowed_modes": [
+          "default_capture",
+          "exact_shadow",
+          "incident_full_capture",
+          "support_bundle_export"
+        ],
+        "allowed_sketch_families": [],
+        "lossless_required": true,
+        "requires_redaction": true,
+        "distortion_budget_millionths": 0
+      },
+      {
+        "site_id": "observability_channel_model.decision_lattice",
+        "component": "observability_channel_model",
+        "family": "decision",
+        "default_mode": "default_capture",
+        "allowed_modes": [
+          "default_capture",
+          "degraded",
+          "exact_shadow",
+          "incident_full_capture",
+          "support_bundle_export"
+        ],
+        "allowed_sketch_families": [
+          "count_min",
+          "heavy_hitter",
+          "nitro_sketch_weighted"
+        ],
+        "lossless_required": false,
+        "requires_redaction": true,
+        "distortion_budget_millionths": 100000
+      },
+      {
+        "site_id": "entropy_evidence_compressor.optimization_entropy",
+        "component": "entropy_evidence_compressor",
+        "family": "optimization",
+        "default_mode": "default_capture",
+        "allowed_modes": [
+          "default_capture",
+          "degraded",
+          "exact_shadow",
+          "incident_full_capture",
+          "support_bundle_export"
+        ],
+        "allowed_sketch_families": [
+          "count_min",
+          "hyper_log_log",
+          "kll",
+          "nitro_sketch_weighted"
+        ],
+        "lossless_required": false,
+        "requires_redaction": true,
+        "distortion_budget_millionths": 200000
+      },
+      {
+        "site_id": "observability_channel_model.legal_archive",
+        "component": "observability_channel_model",
+        "family": "legal_provenance",
+        "default_mode": "default_capture",
+        "allowed_modes": [
+          "default_capture",
+          "exact_shadow",
+          "incident_full_capture",
+          "support_bundle_export"
+        ],
+        "allowed_sketch_families": [],
+        "lossless_required": true,
+        "requires_redaction": true,
+        "distortion_budget_millionths": 0
+      }
+    ]
+  },
+  "telemetry_sampling_contract": {
+    "schema_version": "franken-engine.telemetry-sampling-contract.v1",
+    "rules": [
+      {
+        "site_id": "runtime_observability.auth_failure_total",
+        "strategy": "deterministic_stride",
+        "base_interval": 1,
+        "max_burst_samples": 1,
+        "seed_fields": [
+          "trace_id",
+          "site_id",
+          "mode"
+        ],
+        "precision_target_millionths": 0,
+        "replay_stable": true
+      },
+      {
+        "site_id": "runtime_observability.replay_drop_total",
+        "strategy": "deterministic_stride",
+        "base_interval": 1,
+        "max_burst_samples": 1,
+        "seed_fields": [
+          "trace_id",
+          "site_id",
+          "mode"
+        ],
+        "precision_target_millionths": 0,
+        "replay_stable": true
+      },
+      {
+        "site_id": "observability_channel_model.decision_lattice",
+        "strategy": "geometric_weighted_skip",
+        "base_interval": 16,
+        "max_burst_samples": 4,
+        "seed_fields": [
+          "trace_id",
+          "workload_id",
+          "manifest_hash",
+          "site_id",
+          "mode"
+        ],
+        "precision_target_millionths": 80000,
+        "replay_stable": true
+      },
+      {
+        "site_id": "entropy_evidence_compressor.optimization_entropy",
+        "strategy": "geometric_weighted_skip",
+        "base_interval": 32,
+        "max_burst_samples": 8,
+        "seed_fields": [
+          "trace_id",
+          "workload_id",
+          "manifest_hash",
+          "site_id",
+          "mode"
+        ],
+        "precision_target_millionths": 150000,
+        "replay_stable": true
+      }
+    ]
+  },
+  "sketch_error_envelope_report": {
+    "schema_version": "franken-engine.sketch-error-envelope-report.v1",
+    "envelopes": [
+      {
+        "sketch_family": "count_min",
+        "family": "decision",
+        "bias_bound_millionths": 40000,
+        "variance_bound_millionths": 25000,
+        "collision_bound_millionths": 10000,
+        "quantile_error_bound_millionths": 0,
+        "required_exact_shadow_samples": 512
+      },
+      {
+        "sketch_family": "heavy_hitter",
+        "family": "decision",
+        "bias_bound_millionths": 30000,
+        "variance_bound_millionths": 20000,
+        "collision_bound_millionths": 5000,
+        "quantile_error_bound_millionths": 0,
+        "required_exact_shadow_samples": 512
+      },
+      {
+        "sketch_family": "nitro_sketch_weighted",
+        "family": "decision",
+        "bias_bound_millionths": 50000,
+        "variance_bound_millionths": 40000,
+        "collision_bound_millionths": 15000,
+        "quantile_error_bound_millionths": 0,
+        "required_exact_shadow_samples": 1024
+      },
+      {
+        "sketch_family": "hyper_log_log",
+        "family": "optimization",
+        "bias_bound_millionths": 35000,
+        "variance_bound_millionths": 45000,
+        "collision_bound_millionths": 20000,
+        "quantile_error_bound_millionths": 0,
+        "required_exact_shadow_samples": 1024
+      },
+      {
+        "sketch_family": "kll",
+        "family": "optimization",
+        "bias_bound_millionths": 25000,
+        "variance_bound_millionths": 35000,
+        "collision_bound_millionths": 0,
+        "quantile_error_bound_millionths": 50000,
+        "required_exact_shadow_samples": 1024
+      }
+    ]
+  },
+  "sampling_seed_replay_fixture_matrix": {
+    "schema_version": "franken-engine.sampling-seed-replay-fixture-matrix.v1",
+    "fixtures": [
+      {
+        "fixture_id": "decision_default_capture",
+        "trace_id": "trace-rgc-066a-001",
+        "workload_id": "workload-react-dashboard",
+        "manifest_hash": "manifest-optimization-alpha",
+        "site_id": "observability_channel_model.decision_lattice",
+        "mode": "default_capture",
+        "expected_seed_hex": "97dd0ef94528fc57b093fce246747520a40ce735b2c69349c91f8f3bcd95cc02",
+        "expected_interval": 6
+      },
+      {
+        "fixture_id": "decision_degraded",
+        "trace_id": "trace-rgc-066a-002",
+        "workload_id": "workload-react-dashboard",
+        "manifest_hash": "manifest-optimization-alpha",
+        "site_id": "observability_channel_model.decision_lattice",
+        "mode": "degraded",
+        "expected_seed_hex": "535161b55dff0caad1b4849bb8840fcc1494168e96930f5d8ac074ae7d40d483",
+        "expected_interval": 11
+      },
+      {
+        "fixture_id": "optimization_exact_shadow",
+        "trace_id": "trace-rgc-066a-003",
+        "workload_id": "workload-benchmark-suite",
+        "manifest_hash": "manifest-optimization-beta",
+        "site_id": "entropy_evidence_compressor.optimization_entropy",
+        "mode": "exact_shadow",
+        "expected_seed_hex": "f724f45f87c5ad1678d977f17961951189a22c53b24f3199836850c9e958fe8e",
+        "expected_interval": 3
+      },
+      {
+        "fixture_id": "security_support_bundle",
+        "trace_id": "trace-rgc-066a-004",
+        "workload_id": "workload-incident-replay",
+        "manifest_hash": "manifest-security-gamma",
+        "site_id": "runtime_observability.auth_failure_total",
+        "mode": "support_bundle_export",
+        "expected_seed_hex": "ded3f2a5a3aff0ef25a2039018d0be957ca0eb517527316155c25b89dafc9a3f",
+        "expected_interval": 1
+      }
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_observability_channel_policy_v1.json",
+    "./scripts/run_rgc_observability_channel_policy.sh ci",
+    "./scripts/e2e/rgc_observability_channel_policy_replay.sh ci"
+  ]
+}

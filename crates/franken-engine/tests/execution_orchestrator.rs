@@ -251,6 +251,26 @@ fn metadata_in_package_is_preserved() {
     assert_eq!(recovered.capabilities, vec!["cap_a"]);
 }
 
+#[test]
+fn execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let pkg = simple_package(
+        "ext-ifc-runtime-checkpoint",
+        r#"let secret_token = "secret_token"; sink(secret_token);"#,
+    );
+
+    let err = orch
+        .execute(&pkg)
+        .expect_err("unresolved runtime checkpoint must fail closed");
+    match err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("runtime checkpoints=1"));
+            assert!(detail.contains("hostcall.invoke"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
 // ────────────────────────────────────────────────────────────
 // Enrichment batch: serde, error paths, accessors, result fields
 // ────────────────────────────────────────────────────────────

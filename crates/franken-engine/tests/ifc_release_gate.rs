@@ -763,7 +763,10 @@ fn ifc_release_gate_blocks_on_non_direct_false_negative() {
         .iter_mut()
         .find(|event| {
             event.category.as_deref() == Some("exfil")
-                && matches!(event.flow_path_type.as_deref(), Some("implicit" | "temporal" | "covert"))
+                && matches!(
+                    event.flow_path_type.as_deref(),
+                    Some("implicit" | "temporal" | "covert")
+                )
         })
         .expect("expected at least one non-direct exfil workload");
 

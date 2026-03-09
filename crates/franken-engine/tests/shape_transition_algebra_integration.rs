@@ -1,11 +1,9 @@
 //! Integration tests for the shape-transition algebra and IC invalidation contract.
 
 use frankenengine_engine::shape_transition_algebra::{
-    ConvergenceWitness, DeoptEvent, DeoptTrigger, GuardFailureReason, InlineCacheState,
-    InlineCacheSummary, InlineCacheTable, LineageStep, PropertyAttributes, PropertyCellState,
-    PropertyCellTable, PropertyCellTracker, ShapeGuardWitness, ShapeLineage, ShapeMutation,
-    ShapeTransitionAlgebra, ShapeTransitionSpecimen, run_shape_transition_corpus,
-    shape_transition_corpus,
+    DeoptTrigger, GuardFailureReason, InlineCacheState, InlineCacheTable, PropertyAttributes,
+    PropertyCellState, PropertyCellTable, PropertyCellTracker, ShapeGuardWitness, ShapeMutation,
+    ShapeTransitionAlgebra, run_shape_transition_corpus, shape_transition_corpus,
 };
 
 // ---------------------------------------------------------------------------

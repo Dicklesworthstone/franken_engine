@@ -8,10 +8,9 @@ use frankenengine_engine::regexp_deterministic_engine::{
     AutomataCache, AutomataTier, CharRange, CompilationReceipt, CompiledRegExp, DeclineReason,
     NfaProgram, NfaState, NfaTransition, REGEXP_ENGINE_COMPONENT, REGEXP_ENGINE_POLICY_ID,
     REGEXP_ENGINE_SCHEMA_VERSION, RegExpArtifactPaths, RegExpAstNode, RegExpCompileError,
-    RegExpCompilerConfig, RegExpEvidenceEvent, RegExpEvidenceInventory,
-    RegExpFlag, RegExpRunManifest, RegExpSpecimenFamily,
-    RegExpVerdict, TailRiskAssessment, UnicodeCategory, compile_regexp, regexp_corpus,
-    run_regexp_corpus,
+    RegExpCompilerConfig, RegExpEvidenceEvent, RegExpEvidenceInventory, RegExpFlag,
+    RegExpRunManifest, RegExpSpecimenFamily, RegExpVerdict, TailRiskAssessment, UnicodeCategory,
+    compile_regexp, regexp_corpus, run_regexp_corpus,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 

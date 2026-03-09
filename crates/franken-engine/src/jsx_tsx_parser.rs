@@ -29,7 +29,8 @@ use crate::ast::SourceSpan;
 /// Schema version for JSX/TSX parser node contract.
 pub const JSX_PARSER_SCHEMA_VERSION: &str = "franken-engine.jsx-tsx-parser.inventory.v1";
 /// Schema version for JSX/TSX run manifests.
-pub const JSX_PARSER_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.jsx-tsx-parser.run-manifest.v1";
+pub const JSX_PARSER_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.jsx-tsx-parser.run-manifest.v1";
 /// Schema version for JSX/TSX evidence events.
 pub const JSX_PARSER_EVENT_SCHEMA_VERSION: &str = "franken-engine.jsx-tsx-parser.event.v1";
 /// Component name for evidence linkage.
@@ -197,12 +198,10 @@ impl JsxElementName {
     /// Whether this name starts with an uppercase letter (component vs intrinsic).
     pub fn is_component(&self) -> bool {
         match self {
-            Self::Identifier { name, .. } => {
-                name.starts_with(|c: char| c.is_ascii_uppercase())
-            }
-            Self::MemberExpression { segments, .. } => {
-                segments.first().is_some_and(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
-            }
+            Self::Identifier { name, .. } => name.starts_with(|c: char| c.is_ascii_uppercase()),
+            Self::MemberExpression { segments, .. } => segments
+                .first()
+                .is_some_and(|s| s.starts_with(|c: char| c.is_ascii_uppercase())),
             Self::NamespacedName { .. } => false,
         }
     }
@@ -394,19 +393,13 @@ impl JsxDiagnosticCode {
         match self {
             Self::UnmatchedOpeningTag => "Opening tag has no matching closing tag",
             Self::UnmatchedClosingTag => "Closing tag has no matching opening tag",
-            Self::MissingClosingTag => {
-                "Element is not self-closing and has no closing tag"
-            }
+            Self::MissingClosingTag => "Element is not self-closing and has no closing tag",
             Self::InvalidAttributeName => "Invalid JSX attribute name",
             Self::InvalidAttributeValue => "Invalid JSX attribute value",
-            Self::UnclosedExpressionContainer => {
-                "Expression container `{` is not closed with `}`"
-            }
+            Self::UnclosedExpressionContainer => "Expression container `{` is not closed with `}`",
             Self::EmptyExpression => "Empty expression container `{}` is not allowed",
             Self::InvalidElementName => "Invalid JSX element name",
-            Self::NestedFragmentDepthExceeded => {
-                "Fragment nesting depth exceeds safety limit"
-            }
+            Self::NestedFragmentDepthExceeded => "Fragment nesting depth exceeds safety limit",
             Self::UnsupportedJsxSyntax => "Unsupported JSX syntax",
         }
     }
@@ -458,7 +451,11 @@ impl fmt::Display for JsxParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FailClosed { diagnostics } => {
-                write!(f, "JSX parse failed with {} diagnostic(s)", diagnostics.len())
+                write!(
+                    f,
+                    "JSX parse failed with {} diagnostic(s)",
+                    diagnostics.len()
+                )
             }
             Self::EmptyInput => write!(f, "JSX input is empty"),
             Self::DepthExceeded { depth, limit } => {
@@ -531,7 +528,10 @@ pub fn parse_jsx(source: &str, config: &JsxParserConfig) -> Result<JsxParseResul
 
     let node = parse_jsx_node(&mut cursor, config, 0, &mut diagnostics, &mut families_used)?;
 
-    if !diagnostics.iter().all(|d| d.severity != JsxDiagnosticSeverity::Error) {
+    if !diagnostics
+        .iter()
+        .all(|d| d.severity != JsxDiagnosticSeverity::Error)
+    {
         return Err(JsxParseError::FailClosed { diagnostics });
     }
 
@@ -591,7 +591,14 @@ impl<'a> Cursor<'a> {
     }
 
     fn make_span(&self, start: (u64, u64, u64)) -> SourceSpan {
-        SourceSpan::new(start.0, self.pos as u64, start.1, start.2, self.line, self.col)
+        SourceSpan::new(
+            start.0,
+            self.pos as u64,
+            start.1,
+            start.2,
+            self.line,
+            self.col,
+        )
     }
 
     fn at_end(&self) -> bool {
@@ -655,6 +662,13 @@ fn parse_fragment(
     diagnostics: &mut Vec<JsxDiagnostic>,
     families: &mut Vec<JsxFeatureFamily>,
 ) -> Result<JsxFragment, JsxParseError> {
+    if depth > config.max_depth {
+        return Err(JsxParseError::DepthExceeded {
+            depth,
+            limit: config.max_depth,
+        });
+    }
+
     let start = cursor.span_start();
 
     // Consume `<>`
@@ -690,6 +704,13 @@ fn parse_element(
     diagnostics: &mut Vec<JsxDiagnostic>,
     families: &mut Vec<JsxFeatureFamily>,
 ) -> Result<JsxElement, JsxParseError> {
+    if depth > config.max_depth {
+        return Err(JsxParseError::DepthExceeded {
+            depth,
+            limit: config.max_depth,
+        });
+    }
+
     let start = cursor.span_start();
 
     // Consume `<`
@@ -735,13 +756,20 @@ fn parse_element(
     families.push(JsxFeatureFamily::Element);
 
     let tag_name = name.to_string_repr();
-    let children = parse_children(cursor, config, depth, diagnostics, families, Some(&tag_name))?;
+    let children = parse_children(
+        cursor,
+        config,
+        depth,
+        diagnostics,
+        families,
+        Some(&tag_name),
+    )?;
 
     // Expect `</name>`
     if cursor.peek_str(2) == "</" {
         cursor.advance(); // <
         cursor.advance(); // /
-        let closing_name = read_identifier(cursor);
+        let closing_name = read_dotted_identifier(cursor);
         if closing_name != tag_name {
             diagnostics.push(JsxDiagnostic {
                 code: JsxDiagnosticCode::UnmatchedClosingTag,
@@ -1011,6 +1039,17 @@ fn read_identifier(cursor: &mut Cursor<'_>) -> String {
     name
 }
 
+/// Read a dotted identifier like `Ctx.Provider` (for closing tags of member expression names).
+fn read_dotted_identifier(cursor: &mut Cursor<'_>) -> String {
+    let mut name = read_identifier(cursor);
+    while cursor.peek() == Some('.') {
+        cursor.advance(); // .
+        name.push('.');
+        name.push_str(&read_identifier(cursor));
+    }
+    name
+}
+
 fn read_until_char(cursor: &mut Cursor<'_>, terminator: char) -> String {
     let mut value = String::new();
     while let Some(ch) = cursor.peek() {
@@ -1274,7 +1313,9 @@ pub struct JsxEvidenceInventory {
 }
 
 /// Run the corpus and produce evidence.
-pub fn run_jsx_corpus(config: &JsxParserConfig) -> (JsxRunManifest, JsxEvidenceInventory, Vec<JsxEvidenceEvent>) {
+pub fn run_jsx_corpus(
+    config: &JsxParserConfig,
+) -> (JsxRunManifest, JsxEvidenceInventory, Vec<JsxEvidenceEvent>) {
     let corpus = jsx_corpus();
     let mut specimens = Vec::new();
     let mut events = Vec::new();
@@ -1379,19 +1420,16 @@ pub fn write_jsx_evidence_bundle(
 
     std::fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(manifest)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+        serde_json::to_string_pretty(manifest).map_err(std::io::Error::other)?,
     )?;
     std::fs::write(
         &inventory_path,
-        serde_json::to_string_pretty(inventory)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+        serde_json::to_string_pretty(inventory).map_err(std::io::Error::other)?,
     )?;
 
     let mut events_content = String::new();
     for event in events {
-        let line = serde_json::to_string(event)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let line = serde_json::to_string(event).map_err(std::io::Error::other)?;
         events_content.push_str(&line);
         events_content.push('\n');
     }
@@ -1697,8 +1735,7 @@ mod tests {
 
     #[test]
     fn test_parse_member_expression_name() {
-        let result =
-            parse_jsx("<Ctx.Provider>x</Ctx.Provider>", &default_config()).unwrap();
+        let result = parse_jsx("<Ctx.Provider>x</Ctx.Provider>", &default_config()).unwrap();
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.name.to_string_repr(), "Ctx.Provider");
@@ -1766,10 +1803,10 @@ mod tests {
     #[test]
     fn test_depth_exceeded() {
         let config = JsxParserConfig {
-            max_depth: 2,
+            max_depth: 1,
             ..default_config()
         };
-        // Build deeply nested JSX
+        // Depth 0: <a>, depth 1: <b>, depth 2: <c> exceeds limit of 1
         let source = "<a><b><c>x</c></b></a>";
         let err = parse_jsx(source, &config).unwrap_err();
         assert!(matches!(err, JsxParseError::DepthExceeded { .. }));
@@ -1781,7 +1818,11 @@ mod tests {
         // Should produce diagnostics about mismatched tags
         match result {
             Ok(r) => {
-                assert!(r.diagnostics.iter().any(|d| d.code == JsxDiagnosticCode::UnmatchedClosingTag));
+                assert!(
+                    r.diagnostics
+                        .iter()
+                        .any(|d| d.code == JsxDiagnosticCode::UnmatchedClosingTag)
+                );
             }
             Err(JsxParseError::FailClosed { diagnostics }) => {
                 assert!(!diagnostics.is_empty());
@@ -1942,7 +1983,10 @@ mod tests {
     fn test_run_corpus_no_failures() {
         let config = default_config();
         let (manifest, inventory, events) = run_jsx_corpus(&config);
-        assert_eq!(manifest.fail_count, 0, "corpus should have no unexpected failures");
+        assert_eq!(
+            manifest.fail_count, 0,
+            "corpus should have no unexpected failures"
+        );
         assert!(manifest.pass_count > 0);
         assert!(manifest.expected_failure_count > 0);
         assert_eq!(manifest.specimen_count, inventory.specimens.len());
@@ -2019,22 +2063,26 @@ mod tests {
     #[test]
     fn test_key_prop_detected() {
         let result = parse_jsx(r#"<Item key="a" />"#, &default_config()).unwrap();
-        assert!(result
-            .feature_families_used
-            .contains(&JsxFeatureFamily::KeyProp));
+        assert!(
+            result
+                .feature_families_used
+                .contains(&JsxFeatureFamily::KeyProp)
+        );
     }
 
     // --- Mixed children ---
 
     #[test]
     fn test_mixed_children() {
-        let result =
-            parse_jsx("<div>text{expr}<span /></div>", &default_config()).unwrap();
+        let result = parse_jsx("<div>text{expr}<span /></div>", &default_config()).unwrap();
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.children.len(), 3);
                 assert!(matches!(el.children[0], JsxChild::Text { .. }));
-                assert!(matches!(el.children[1], JsxChild::ExpressionContainer { .. }));
+                assert!(matches!(
+                    el.children[1],
+                    JsxChild::ExpressionContainer { .. }
+                ));
                 assert!(matches!(el.children[2], JsxChild::Element(_)));
             }
             _ => panic!("expected element"),
@@ -2072,9 +2120,11 @@ mod tests {
         assert!(!inventory.family_coverage.is_empty());
         // Every specimen family should appear in coverage
         for specimen in &inventory.specimens {
-            assert!(inventory
-                .family_coverage
-                .contains_key(specimen.feature_family.as_str()));
+            assert!(
+                inventory
+                    .family_coverage
+                    .contains_key(specimen.feature_family.as_str())
+            );
         }
     }
 }

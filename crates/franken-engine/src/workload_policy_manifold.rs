@@ -52,9 +52,7 @@ pub const DEFAULT_NEIGHBORHOOD_RADIUS: i64 = 50_000;
 // ---------------------------------------------------------------------------
 
 /// Classification of a manifold axis into one of the four dimensions.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ManifoldDimension {
     /// Workload characteristics: request rate, payload size, concurrency, etc.
@@ -126,10 +124,10 @@ impl AxisDescriptor {
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(self.key.as_bytes());
-        hasher.update(&[self.dimension as u8]);
+        hasher.update([self.dimension as u8]);
         hasher.update(self.min_calibrated_millionths.to_le_bytes());
         hasher.update(self.max_calibrated_millionths.to_le_bytes());
-        hasher.update(&[u8::from(self.required)]);
+        hasher.update([u8::from(self.required)]);
         ContentHash::compute(&hasher.finalize())
     }
 }
@@ -405,10 +403,7 @@ pub struct ManifoldNeighborhood {
 
 /// Compute L∞ (Chebyshev) distance between two coordinate points
 /// using only the shared normalized axes.
-pub fn chebyshev_distance(
-    a: &BTreeMap<String, i64>,
-    b: &BTreeMap<String, i64>,
-) -> Option<i64> {
+pub fn chebyshev_distance(a: &BTreeMap<String, i64>, b: &BTreeMap<String, i64>) -> Option<i64> {
     let mut max_diff: i64 = 0;
     let mut shared_axes = 0;
 
@@ -431,10 +426,7 @@ pub fn chebyshev_distance(
 
 /// Compute L1 (Manhattan) distance between two coordinate points
 /// using only shared normalized axes.
-pub fn manhattan_distance(
-    a: &BTreeMap<String, i64>,
-    b: &BTreeMap<String, i64>,
-) -> Option<i64> {
+pub fn manhattan_distance(a: &BTreeMap<String, i64>, b: &BTreeMap<String, i64>) -> Option<i64> {
     let mut total: i64 = 0;
     let mut shared_axes = 0;
 
@@ -445,11 +437,7 @@ pub fn manhattan_distance(
         }
     }
 
-    if shared_axes == 0 {
-        None
-    } else {
-        Some(total)
-    }
+    if shared_axes == 0 { None } else { Some(total) }
 }
 
 /// Compute L2² (squared Euclidean) distance between two coordinate points
@@ -469,11 +457,7 @@ pub fn squared_euclidean_distance(
         }
     }
 
-    if shared_axes == 0 {
-        None
-    } else {
-        Some(total)
-    }
+    if shared_axes == 0 { None } else { Some(total) }
 }
 
 // ---------------------------------------------------------------------------
@@ -512,10 +496,9 @@ impl NeighborhoodBuilder {
             }
             if let Some(dist) =
                 chebyshev_distance(&center.normalized_values, &candidate.normalized_values)
+                && dist <= radius
             {
-                if dist <= radius {
-                    member_ids.insert(candidate.coordinate_id.clone());
-                }
+                member_ids.insert(candidate.coordinate_id.clone());
             }
         }
 
@@ -653,19 +636,14 @@ pub struct ManifoldTrajectory {
 
 impl ManifoldTrajectory {
     /// Build a trajectory from a sequence of coordinates.
-    pub fn from_coordinates(
-        trajectory_id: &str,
-        coordinates: &[ManifoldCoordinate],
-    ) -> Self {
+    pub fn from_coordinates(trajectory_id: &str, coordinates: &[ManifoldCoordinate]) -> Self {
         let mut step_velocities = Vec::new();
         let mut total_path_length: i64 = 0;
 
         for window in coordinates.windows(2) {
-            let dist = chebyshev_distance(
-                &window[0].normalized_values,
-                &window[1].normalized_values,
-            )
-            .unwrap_or(0);
+            let dist =
+                chebyshev_distance(&window[0].normalized_values, &window[1].normalized_values)
+                    .unwrap_or(0);
             step_velocities.push(dist);
             total_path_length = total_path_length.saturating_add(dist);
         }
@@ -769,7 +747,7 @@ impl ManifoldWitness {
     ) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(witness_id.as_bytes());
-        hasher.update(&[operation as u8]);
+        hasher.update([operation as u8]);
         hasher.update(schema_id.as_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
         hasher.update(detail.as_bytes());
@@ -1082,9 +1060,18 @@ mod tests {
     #[test]
     fn schema_axes_for_dimension() {
         let schema = test_schema();
-        assert_eq!(schema.axes_for_dimension(ManifoldDimension::Workload).len(), 1);
-        assert_eq!(schema.axes_for_dimension(ManifoldDimension::Hardware).len(), 1);
-        assert_eq!(schema.axes_for_dimension(ManifoldDimension::Policy).len(), 1);
+        assert_eq!(
+            schema.axes_for_dimension(ManifoldDimension::Workload).len(),
+            1
+        );
+        assert_eq!(
+            schema.axes_for_dimension(ManifoldDimension::Hardware).len(),
+            1
+        );
+        assert_eq!(
+            schema.axes_for_dimension(ManifoldDimension::Policy).len(),
+            1
+        );
         assert_eq!(schema.axes_for_dimension(ManifoldDimension::Cache).len(), 0);
     }
 
@@ -1280,7 +1267,7 @@ mod tests {
         v.insert("cores".into(), 64 * MILLION);
         let center = placer.place(&v, None);
         let builder = NeighborhoodBuilder::new(MILLION);
-        let neighborhood = builder.build(&center, &[center.clone()], None);
+        let neighborhood = builder.build(&center, std::slice::from_ref(&center), None);
         assert!(!neighborhood.member_ids.contains(&center.coordinate_id));
     }
 
@@ -1423,21 +1410,45 @@ mod tests {
 
     #[test]
     fn witness_deterministic_hash() {
-        let w1 = ManifoldWitness::new("w1", ManifoldOperation::Placement, "s1", test_epoch(), "detail");
-        let w2 = ManifoldWitness::new("w1", ManifoldOperation::Placement, "s1", test_epoch(), "detail");
+        let w1 = ManifoldWitness::new(
+            "w1",
+            ManifoldOperation::Placement,
+            "s1",
+            test_epoch(),
+            "detail",
+        );
+        let w2 = ManifoldWitness::new(
+            "w1",
+            ManifoldOperation::Placement,
+            "s1",
+            test_epoch(),
+            "detail",
+        );
         assert_eq!(w1.content_hash, w2.content_hash);
     }
 
     #[test]
     fn witness_different_operations_different_hash() {
         let w1 = ManifoldWitness::new("w1", ManifoldOperation::Placement, "s1", test_epoch(), "d");
-        let w2 = ManifoldWitness::new("w1", ManifoldOperation::ProximityCheck, "s1", test_epoch(), "d");
+        let w2 = ManifoldWitness::new(
+            "w1",
+            ManifoldOperation::ProximityCheck,
+            "s1",
+            test_epoch(),
+            "d",
+        );
         assert_ne!(w1.content_hash, w2.content_hash);
     }
 
     #[test]
     fn witness_serde_roundtrip() {
-        let w = ManifoldWitness::new("w1", ManifoldOperation::TrajectoryBuild, "s1", test_epoch(), "test");
+        let w = ManifoldWitness::new(
+            "w1",
+            ManifoldOperation::TrajectoryBuild,
+            "s1",
+            test_epoch(),
+            "test",
+        );
         let json = serde_json::to_string(&w).unwrap();
         let back: ManifoldWitness = serde_json::from_str(&json).unwrap();
         assert_eq!(w, back);
@@ -1448,10 +1459,22 @@ mod tests {
     #[test]
     fn operation_display() {
         assert_eq!(format!("{}", ManifoldOperation::Placement), "placement");
-        assert_eq!(format!("{}", ManifoldOperation::NeighborhoodBuild), "neighborhood_build");
-        assert_eq!(format!("{}", ManifoldOperation::ProximityCheck), "proximity_check");
-        assert_eq!(format!("{}", ManifoldOperation::TrajectoryBuild), "trajectory_build");
-        assert_eq!(format!("{}", ManifoldOperation::SchemaCreation), "schema_creation");
+        assert_eq!(
+            format!("{}", ManifoldOperation::NeighborhoodBuild),
+            "neighborhood_build"
+        );
+        assert_eq!(
+            format!("{}", ManifoldOperation::ProximityCheck),
+            "proximity_check"
+        );
+        assert_eq!(
+            format!("{}", ManifoldOperation::TrajectoryBuild),
+            "trajectory_build"
+        );
+        assert_eq!(
+            format!("{}", ManifoldOperation::SchemaCreation),
+            "schema_creation"
+        );
     }
 
     #[test]
@@ -1494,10 +1517,26 @@ mod tests {
     #[test]
     fn default_schema_has_all_dimensions() {
         let schema = default_manifold_schema(test_epoch());
-        assert!(!schema.axes_for_dimension(ManifoldDimension::Workload).is_empty());
-        assert!(!schema.axes_for_dimension(ManifoldDimension::Hardware).is_empty());
-        assert!(!schema.axes_for_dimension(ManifoldDimension::Policy).is_empty());
-        assert!(!schema.axes_for_dimension(ManifoldDimension::Cache).is_empty());
+        assert!(
+            !schema
+                .axes_for_dimension(ManifoldDimension::Workload)
+                .is_empty()
+        );
+        assert!(
+            !schema
+                .axes_for_dimension(ManifoldDimension::Hardware)
+                .is_empty()
+        );
+        assert!(
+            !schema
+                .axes_for_dimension(ManifoldDimension::Policy)
+                .is_empty()
+        );
+        assert!(
+            !schema
+                .axes_for_dimension(ManifoldDimension::Cache)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1513,7 +1552,10 @@ mod tests {
     #[test]
     fn placement_validity_display() {
         assert_eq!(format!("{}", PlacementValidity::Valid), "valid");
-        assert_eq!(format!("{}", PlacementValidity::MissingRequired), "missing_required");
+        assert_eq!(
+            format!("{}", PlacementValidity::MissingRequired),
+            "missing_required"
+        );
         assert_eq!(format!("{}", PlacementValidity::OutOfRange), "out_of_range");
         assert_eq!(
             format!("{}", PlacementValidity::MissingAndOutOfRange),
@@ -1539,9 +1581,18 @@ mod tests {
 
     #[test]
     fn issue_kind_display() {
-        assert_eq!(format!("{}", CoordinateIssueKind::MissingRequired), "missing_required");
-        assert_eq!(format!("{}", CoordinateIssueKind::BelowRange), "below_range");
-        assert_eq!(format!("{}", CoordinateIssueKind::AboveRange), "above_range");
+        assert_eq!(
+            format!("{}", CoordinateIssueKind::MissingRequired),
+            "missing_required"
+        );
+        assert_eq!(
+            format!("{}", CoordinateIssueKind::BelowRange),
+            "below_range"
+        );
+        assert_eq!(
+            format!("{}", CoordinateIssueKind::AboveRange),
+            "above_range"
+        );
     }
 
     // --- BoundaryDirection ---

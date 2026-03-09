@@ -368,7 +368,7 @@ fn verdict_equality() {
 
 #[test]
 fn topology_ordering_is_consistent() {
-    let mut topologies = vec![
+    let mut topologies = [
         ModuleGraphTopology::PureEsm,
         ModuleGraphTopology::Mixed,
         ModuleGraphTopology::PureCjs,

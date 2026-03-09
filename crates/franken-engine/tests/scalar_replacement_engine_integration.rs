@@ -360,12 +360,12 @@ fn transform_denial_reason_as_str_non_empty() {
         TransformDenialReason::TooManyFields,
         TransformDenialReason::NonDecomposableFields,
         TransformDenialReason::DecompositionTooDeep,
-        TransformDenialReason::GloballyEscaped,
-        TransformDenialReason::ThreadEscaped,
+        TransformDenialReason::EscapeBeyondScope,
+        TransformDenialReason::LivenessUnknown,
         TransformDenialReason::SideEffectBarrier,
         TransformDenialReason::BudgetExhausted,
-        TransformDenialReason::NoSinkablePosition,
-        TransformDenialReason::InsufficientConfidence,
+        TransformDenialReason::RegionScopeUnavailable,
+        TransformDenialReason::KindNotEligible,
     ];
     for r in &reasons {
         assert!(!r.as_str().is_empty());
@@ -387,12 +387,10 @@ fn transform_denial_reason_serde_roundtrip() {
 #[test]
 fn side_effect_kind_serde_roundtrip() {
     let kinds = [
-        SideEffectKind::ExternalCall,
+        SideEffectKind::Call,
         SideEffectKind::PropertyStore,
-        SideEffectKind::GlobalAccess,
-        SideEffectKind::Throw,
-        SideEffectKind::Yield,
-        SideEffectKind::Await,
+        SideEffectKind::ExceptionThrow,
+        SideEffectKind::YieldAwait,
         SideEffectKind::DebuggerStatement,
     ];
     for k in &kinds {
@@ -404,7 +402,7 @@ fn side_effect_kind_serde_roundtrip() {
 
 #[test]
 fn side_effect_kind_as_str_non_empty() {
-    for k in &[SideEffectKind::ExternalCall, SideEffectKind::Throw] {
+    for k in &[SideEffectKind::Call, SideEffectKind::ExceptionThrow] {
         assert!(!k.as_str().is_empty());
     }
 }
@@ -463,9 +461,11 @@ fn select_transform_global_escape_denied() {
         false,
         false,
     );
-    let config = default_config();
-    let (kind, _) = scalar_replacement_engine::select_transform(&cert, None, &[], &config, 0);
+    let mut config = default_config();
+    config.enable_allocation_sinking = false;
+    let (kind, denial) = scalar_replacement_engine::select_transform(&cert, None, &[], &config, 0);
     assert_eq!(kind, TransformKind::NoTransform);
+    assert_eq!(denial, Some(TransformDenialReason::EscapeBeyondScope));
 }
 
 #[test]
@@ -623,7 +623,7 @@ fn build_sinking_plan_with_barrier() {
     );
     let barrier = SideEffectBarrier {
         instruction_index: 10,
-        kind: SideEffectKind::ExternalCall,
+        effect_kind: SideEffectKind::Call,
         description: "call foo()".to_string(),
     };
     let result = scalar_replacement_engine::build_sinking_plan(&cert, &[barrier]);
@@ -670,7 +670,7 @@ fn build_deopt_witness_scalar_replacement() {
     assert_eq!(witness.site_id, "dw1");
     assert_eq!(witness.transform_kind, TransformKind::ScalarReplacement);
     assert!(!witness.witness_hash.is_empty());
-    assert!(!witness.deopt_triggers.is_empty());
+    assert!(!witness.trigger_set.is_empty());
 }
 
 #[test]
@@ -689,7 +689,7 @@ fn build_deopt_witness_region_promotion() {
         epoch(),
     );
     assert_eq!(witness.transform_kind, TransformKind::RegionPromotion);
-    assert!(!witness.deopt_triggers.is_empty());
+    assert!(!witness.trigger_set.is_empty());
 }
 
 #[test]
@@ -1327,10 +1327,11 @@ fn validation_receipt_serde_roundtrip() {
 #[test]
 fn end_to_end_escape_cert_to_scalar_replacement() {
     use frankenengine_engine::escape_analysis_certificate;
+    // IteratorResult → NoEscape → scalar_replacement_eligible = true
     let site = AllocationSite {
         site_id: "e2e1".to_string(),
         scope: "hot_fn".to_string(),
-        allocation_kind: AllocationKind::ObjectLiteral,
+        allocation_kind: AllocationKind::IteratorResult,
         estimated_size_bytes: Some(32),
     };
     let envelope = escape_analysis_certificate::analyze_escape(
@@ -1343,7 +1344,7 @@ fn end_to_end_escape_cert_to_scalar_replacement() {
     // The escape analysis should produce at least one certificate
     assert!(!envelope.certificates.is_empty());
     let cert = &envelope.certificates[0];
-    // With no invalidation reasons, should be eligible for scalar replacement
+    // IteratorResult with no invalidation reasons → NoEscape → elision eligible
     assert!(cert.scalar_replacement_eligible);
 
     // Now run the scalar replacement pipeline
@@ -1357,7 +1358,6 @@ fn end_to_end_escape_cert_to_scalar_replacement() {
                 nesting_depth: 0,
                 always_initialized: true,
             }],
-    
             layout_sealed: true,
             site_id: "e2e1".to_string(),
         },

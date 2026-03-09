@@ -2,6 +2,7 @@
 
 extern crate self as frankenengine_engine;
 
+pub mod aara_resource_certificate;
 pub mod activation_lifecycle;
 pub mod adversarial_campaign;
 pub mod adversarial_coevolution_harness;
@@ -28,6 +29,7 @@ pub mod canonical_encoding;
 pub mod canonical_evidence_emitter;
 pub mod capability;
 pub mod capability_token;
+pub mod capability_pruned_dispatch;
 pub mod capability_witness;
 pub mod catastrophic_tail_tournament_gate;
 pub mod causal_regret_evidence_gate;
@@ -293,6 +295,7 @@ pub mod trust_zone;
 pub mod ts_module_resolution;
 pub mod ts_normalization;
 pub mod ts_normalization_evidence;
+pub mod ts_resolution_manifest;
 pub mod ts_shipped_path_evidence;
 pub mod unit_test_taxonomy;
 pub mod universal_dominance_ratchet;

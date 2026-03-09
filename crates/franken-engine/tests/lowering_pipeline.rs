@@ -1,5 +1,10 @@
 use frankenengine_engine::ast::{ParseGoal, SourceSpan, SyntaxTree};
-use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::ifc_artifacts::Label;
+use frankenengine_engine::ir_contract::{
+    CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module, Ir1Op, Ir2Module, Ir2Op,
+    Ir3Instruction,
+};
 use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineError, lower_ir0_to_ir1, lower_ir0_to_ir3, lower_ir1_to_ir2,
     lower_ir2_to_ir3, validate_ir0_static_semantics,
@@ -534,6 +539,84 @@ fn hostcall_source_generates_ifc_flow_proof_entries() {
                 .is_empty(),
         "hostcall source should produce some flow proof entries"
     );
+}
+
+#[test]
+fn dynamic_hostcall_flow_proof_artifact_emits_runtime_checkpoint() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser.parse("doWork();", ParseGoal::Script).expect("parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "dynamic_hostcall_fixture.ts");
+    let ctx = LoweringContext::new(
+        "trace-dynamic-artifact",
+        "decision-dynamic-artifact",
+        "policy-dynamic-artifact",
+    );
+    let output = lower_ir0_to_ir3(&ir0, &ctx).expect("pipeline");
+    let artifact = &output.ir2_flow_proof_artifact;
+
+    assert!(artifact.denied_flows.is_empty());
+    assert!(artifact.proved_flows.is_empty());
+    assert!(artifact.required_declassifications.is_empty());
+    assert_eq!(artifact.runtime_checkpoints.len(), 1);
+    assert_eq!(artifact.runtime_checkpoints[0].reason, "dynamic_capability");
+    assert_eq!(
+        artifact.runtime_checkpoints[0].capability.as_deref(),
+        Some("hostcall.invoke")
+    );
+}
+
+#[test]
+fn declassification_flow_inserts_runtime_ifc_guard_before_hostcall() {
+    let mut ir2 = Ir2Module::new(ContentHash::compute(b"declass-ir2"), "declass_fixture.js");
+    ir2.ops.push(Ir2Op {
+        inner: Ir1Op::Call { arg_count: 1 },
+        effect: EffectBoundary::HostcallEffect,
+        required_capability: Some(CapabilityTag("declassify.audit".to_string())),
+        flow: Some(FlowAnnotation {
+            data_label: Label::Secret,
+            sink_clearance: Label::Public,
+            declassification_required: true,
+        }),
+    });
+
+    let ir3 = lower_ir2_to_ir3(&ir2)
+        .expect("IR2->IR3 should succeed")
+        .module;
+    let hostcall_caps: Vec<&str> = ir3
+        .instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Ir3Instruction::HostCall { capability, .. } => Some(capability.0.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(hostcall_caps.contains(&"ifc.check_flow"));
+    assert!(hostcall_caps.contains(&"declassify.audit"));
+
+    let guard_index = ir3
+        .instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                Ir3Instruction::HostCall { capability, .. }
+                if capability.0 == "ifc.check_flow"
+            )
+        })
+        .expect("guard hostcall");
+    let declass_index = ir3
+        .instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                Ir3Instruction::HostCall { capability, .. }
+                if capability.0 == "declassify.audit"
+            )
+        })
+        .expect("declassify hostcall");
+    assert!(guard_index < declass_index);
 }
 
 #[test]

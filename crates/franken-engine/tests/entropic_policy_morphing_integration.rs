@@ -9,8 +9,8 @@ use frankenengine_engine::entropic_policy_morphing::{
     MAX_ENTROPY_MILLIONTHS, MAX_STEP_DISTANCE_MILLIONTHS, MIN_ENTROPY_MILLIONTHS,
     MORPHING_COMPONENT, MORPHING_EVENT_SCHEMA_VERSION, MORPHING_MANIFEST_SCHEMA_VERSION,
     MORPHING_POLICY_ID, MORPHING_SCHEMA_VERSION, MorphingConfig, MorphingEvidenceInventory,
-    MorphingExpectedOutcome, MorphingOutcome, MorphingRejection, MorphingSpecimenFamily,
-    MorphingVerdict, PolicyProfile, TransitionBudget,
+    MorphingOutcome, MorphingRejection, MorphingSpecimenFamily, MorphingVerdict, PolicyProfile,
+    TransitionBudget,
 };
 use frankenengine_engine::regime_detector::Regime;
 use frankenengine_engine::regime_signature_feature::RegimeLabel;
@@ -756,22 +756,22 @@ fn specimen_family_serde_roundtrip() {
 
 #[test]
 fn default_transition_budget_positive() {
-    assert!(DEFAULT_TRANSITION_BUDGET > 0);
+    const { assert!(DEFAULT_TRANSITION_BUDGET > 0) };
 }
 
 #[test]
 fn max_step_distance_positive() {
-    assert!(MAX_STEP_DISTANCE_MILLIONTHS > 0);
+    const { assert!(MAX_STEP_DISTANCE_MILLIONTHS > 0) };
 }
 
 #[test]
 fn entropy_bounds_ordered() {
-    assert!(MIN_ENTROPY_MILLIONTHS < MAX_ENTROPY_MILLIONTHS);
+    const { assert!(MIN_ENTROPY_MILLIONTHS < MAX_ENTROPY_MILLIONTHS) };
 }
 
 #[test]
 fn cooldown_steps_positive() {
-    assert!(FALLBACK_COOLDOWN_STEPS > 0);
+    const { assert!(FALLBACK_COOLDOWN_STEPS > 0) };
 }
 
 // ---------------------------------------------------------------------------

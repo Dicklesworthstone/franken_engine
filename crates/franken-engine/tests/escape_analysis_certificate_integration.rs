@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::escape_analysis_certificate::{
-    self, AliasClassId, AliasRelation, AllocationKind, AllocationSite, ESCAPE_CERT_COMPONENT,
+    self, AliasRelation, AllocationKind, AllocationSite, ESCAPE_CERT_COMPONENT,
     ESCAPE_CERT_EVENT_SCHEMA_VERSION, ESCAPE_CERT_MANIFEST_SCHEMA_VERSION, ESCAPE_CERT_POLICY_ID,
     ESCAPE_CERT_SCHEMA_VERSION, EscapeAnalyzerConfig, EscapeCertEvidenceInventory,
     EscapeCertSpecimenFamily, EscapeCertVerdict, EscapeState, InvalidationReason, LivenessEnvelope,

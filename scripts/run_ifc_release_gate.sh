@@ -44,18 +44,29 @@ rch_reject_local_fallback() {
   fi
 }
 
-declare -a runtime_guard_tests=(
-  "execution_orchestrator::tests::phase_enforce_runtime_flow_guards_allows_static_artifact"
-  "execution_orchestrator::tests::phase_enforce_runtime_flow_guards_blocks_pending_declassifications"
-  "execution_orchestrator::tests::phase_enforce_runtime_flow_guards_blocks_runtime_checkpoints"
-  "execution_orchestrator::tests::execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter"
+declare -a runtime_guard_test_commands=(
+  "cargo test -p frankenengine-engine --test lowering_pipeline dynamic_hostcall_flow_proof_artifact_emits_runtime_checkpoint -- --exact"
+  "cargo test -p frankenengine-engine --test lowering_pipeline declassification_flow_inserts_runtime_ifc_guard_before_hostcall -- --exact"
+  "cargo test -p frankenengine-engine --test execution_orchestrator execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter -- --exact"
 )
 
 run_runtime_guard_tests() {
-  local test_filter
-  for test_filter in "${runtime_guard_tests[@]}"; do
-    run_step "cargo test -p frankenengine-engine --lib ${test_filter} -- --exact" \
-      run_rch cargo test -p frankenengine-engine --lib "${test_filter}" -- --exact
+  local command_text
+  for command_text in "${runtime_guard_test_commands[@]}"; do
+    case "$command_text" in
+      *"dynamic_hostcall_flow_proof_artifact_emits_runtime_checkpoint"*)
+        run_step "$command_text" \
+          run_rch cargo test -p frankenengine-engine --test lowering_pipeline dynamic_hostcall_flow_proof_artifact_emits_runtime_checkpoint -- --exact
+        ;;
+      *"declassification_flow_inserts_runtime_ifc_guard_before_hostcall"*)
+        run_step "$command_text" \
+          run_rch cargo test -p frankenengine-engine --test lowering_pipeline declassification_flow_inserts_runtime_ifc_guard_before_hostcall -- --exact
+        ;;
+      *"execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter"*)
+        run_step "$command_text" \
+          run_rch cargo test -p frankenengine-engine --test execution_orchestrator execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter -- --exact
+        ;;
+    esac
   done
 }
 
@@ -112,8 +123,10 @@ run_step() {
 }
 
 run_check() {
-  run_step "cargo check -p frankenengine-engine --lib" \
-    run_rch cargo check -p frankenengine-engine --lib
+  run_step "cargo check -p frankenengine-engine --test lowering_pipeline" \
+    run_rch cargo check -p frankenengine-engine --test lowering_pipeline
+  run_step "cargo check -p frankenengine-engine --test execution_orchestrator" \
+    run_rch cargo check -p frankenengine-engine --test execution_orchestrator
   run_step "cargo check -p frankenengine-engine --test ifc_release_gate" \
     run_rch cargo check -p frankenengine-engine --test ifc_release_gate
   run_step "cargo check -p frankenengine-engine --bin franken_ifc_conformance_runner" \
@@ -127,8 +140,8 @@ run_test() {
 }
 
 run_clippy() {
-  run_step "cargo clippy -p frankenengine-engine --test ifc_release_gate -- -D warnings" \
-    run_rch cargo clippy -p frankenengine-engine --test ifc_release_gate -- -D warnings
+  run_step "cargo clippy -p frankenengine-engine --test lowering_pipeline --test execution_orchestrator --test ifc_release_gate --bin franken_ifc_conformance_runner -- -D warnings" \
+    run_rch cargo clippy -p frankenengine-engine --test lowering_pipeline --test execution_orchestrator --test ifc_release_gate --bin franken_ifc_conformance_runner -- -D warnings
 }
 
 extract_metric_from_log() {

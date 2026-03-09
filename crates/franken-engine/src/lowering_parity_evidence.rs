@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn parity_verdict_ordering_is_deterministic() {
-        let mut verdicts = vec![
+        let mut verdicts = [
             ParityVerdict::OpenGap,
             ParityVerdict::LoweringLeadsParser,
             ParityVerdict::Covered,

@@ -1646,7 +1646,7 @@ fn string_representation_scenario_emits_artifact_triad_and_reports() {
         exec_string_method_with_receipt(BuiltinId::StringPrototypeNormalize, "Cafe\u{301}", &[])
             .unwrap();
 
-    let receipts = vec![
+    let receipts = [
         slice.receipt.clone().expect("slice receipt"),
         concat.receipt.clone().expect("concat receipt"),
         normalize.receipt.clone().expect("normalize receipt"),

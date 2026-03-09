@@ -2677,8 +2677,8 @@ mod tests {
     fn inventory_report_hash_deterministic() {
         let m = NativeAddonMembrane::standard();
         let req = simple_request();
-        let r1 = m.inventory_report(&[req.clone()], &full_profile());
-        let r2 = m.inventory_report(&[req], &full_profile());
+        let r1 = m.inventory_report(std::slice::from_ref(&req), &full_profile());
+        let r2 = m.inventory_report(std::slice::from_ref(&req), &full_profile());
         assert_eq!(r1.report_hash, r2.report_hash);
     }
 
@@ -3115,8 +3115,8 @@ mod tests {
     fn inventory_report_canonical_hash_stable() {
         let m = NativeAddonMembrane::standard();
         let req = simple_request();
-        let r1 = m.inventory_report(&[req.clone()], &full_profile());
-        let r2 = m.inventory_report(&[req], &full_profile());
+        let r1 = m.inventory_report(std::slice::from_ref(&req), &full_profile());
+        let r2 = m.inventory_report(std::slice::from_ref(&req), &full_profile());
         assert_eq!(r1.canonical_hash(), r2.canonical_hash());
     }
 

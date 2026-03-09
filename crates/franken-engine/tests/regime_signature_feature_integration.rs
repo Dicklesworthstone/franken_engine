@@ -94,13 +94,13 @@ fn max_signature_dim_is_power_of_two() {
 
 #[test]
 fn min_trace_length_positive() {
-    assert!(MIN_TRACE_LENGTH > 0);
+    const { assert!(MIN_TRACE_LENGTH > 0) };
 }
 
 #[test]
 fn abstention_threshold_in_valid_range() {
-    assert!(ABSTENTION_THRESHOLD_MILLIONTHS > 0);
-    assert!(ABSTENTION_THRESHOLD_MILLIONTHS < 1_000_000);
+    const { assert!(ABSTENTION_THRESHOLD_MILLIONTHS > 0) };
+    const { assert!(ABSTENTION_THRESHOLD_MILLIONTHS < 1_000_000) };
 }
 
 // ---------------------------------------------------------------------------

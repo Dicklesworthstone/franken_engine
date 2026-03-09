@@ -4,9 +4,9 @@ use frankenengine_engine::quickening_feedback_lattice::{
     ObservedType, QuickeningLevel, QuickeningPolicy, QuickeningProfile,
 };
 use frankenengine_engine::superblock_formation::{
-    FormationOutcome, GuardKind, SideExit, SideExitReason, Superblock, SuperblockEntry,
-    SuperblockGuard, SuperblockPolicy, TraceTree, TraceTreeSummary, COMPONENT,
-    SUPERBLOCK_SCHEMA_VERSION, TRACE_TREE_SCHEMA_VERSION, form_superblock,
+    COMPONENT, FormationOutcome, GuardKind, SUPERBLOCK_SCHEMA_VERSION, SideExit, SideExitReason,
+    Superblock, SuperblockEntry, SuperblockGuard, SuperblockPolicy, TRACE_TREE_SCHEMA_VERSION,
+    TraceTree, TraceTreeSummary, form_superblock,
 };
 
 // ---------------------------------------------------------------------------
@@ -24,10 +24,7 @@ fn aggressive_quickening_policy() -> QuickeningPolicy {
     }
 }
 
-fn make_hot_profile(
-    function_id: &str,
-    offsets_and_opcodes: &[(u32, &str)],
-) -> QuickeningProfile {
+fn make_hot_profile(function_id: &str, offsets_and_opcodes: &[(u32, &str)]) -> QuickeningProfile {
     let q_policy = aggressive_quickening_policy();
     let mut profile = QuickeningProfile::new(function_id);
     for &(offset, opcode) in offsets_and_opcodes {
@@ -74,11 +71,7 @@ fn make_simple_superblock(function_id: &str, entry_offset: u32) -> Superblock {
             },
             "exit-test-0001".into(),
         )],
-        side_exits: vec![SideExit::new(
-            entry_offset,
-            0,
-            SideExitReason::TypeMismatch,
-        )],
+        side_exits: vec![SideExit::new(entry_offset, 0, SideExitReason::TypeMismatch)],
         tail_duplication_count: 0,
         formation_epoch: 1,
     }
@@ -108,8 +101,10 @@ fn policy_hash_deterministic() {
 #[test]
 fn policy_hash_differs_on_change() {
     let p1 = SuperblockPolicy::default();
-    let mut p2 = SuperblockPolicy::default();
-    p2.max_block_length = 128;
+    let p2 = SuperblockPolicy {
+        max_block_length: 128,
+        ..SuperblockPolicy::default()
+    };
     assert_ne!(p1.policy_hash(), p2.policy_hash());
 }
 

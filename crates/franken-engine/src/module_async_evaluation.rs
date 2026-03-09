@@ -19,7 +19,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::esm_loader::ModuleStatus;
+use crate::esm_loader::ModuleStatus as _;
 use crate::hash_tiers::ContentHash;
 use crate::module_live_binding::{BindingCellState, BindingId, LiveBindingMap};
 use crate::object_model::JsValue;
@@ -645,12 +645,13 @@ impl AsyncModuleEvaluator {
         for module_spec in &waiting_modules {
             if let Some(state) = self.states.get_mut(module_spec) {
                 state.resolve_dependency(settled_module);
+                let all_settled = state.all_dependencies_settled();
                 self.emit_event(
                     module_spec,
                     AsyncEvalEventType::DependencySettled,
                     format!("settled={settled_module}"),
                 );
-                if state.all_dependencies_settled() {
+                if all_settled {
                     resumable.push(module_spec.clone());
                 }
             }
@@ -685,10 +686,11 @@ impl AsyncModuleEvaluator {
         })?;
 
         state.settle();
+        let suspension_count = state.suspensions.len();
         self.emit_event(
             specifier,
             AsyncEvalEventType::EvaluationSettled,
-            format!("suspensions={}", state.suspensions.len()),
+            format!("suspensions={suspension_count}"),
         );
 
         // Notify dependents.
@@ -923,7 +925,7 @@ pub fn compute_async_evaluation_order(
 
     let mut queue: Vec<&str> = in_degree
         .iter()
-        .filter(|(_, &deg)| deg == 0)
+        .filter(|&(_, &deg)| deg == 0)
         .map(|(&spec, _)| spec)
         .collect();
     queue.sort(); // deterministic ordering

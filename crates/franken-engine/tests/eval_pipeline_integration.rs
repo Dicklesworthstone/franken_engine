@@ -13,10 +13,11 @@
 //!   - Witness and event generation through the pipeline
 
 use frankenengine_engine::ast::{
-    BindingPattern, Expression, ExpressionStatement, ParseGoal, SourceSpan, Statement, SyntaxTree,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    AssignmentOperator, BindingPattern, Expression, ExpressionStatement, ObjectProperty,
+    ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
-use frankenengine_engine::baseline_interpreter::{LaneChoice, LaneRouter};
+use frankenengine_engine::baseline_interpreter::{LaneChoice, LaneRouter, Value};
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::ts_normalization::SourceLanguage;
@@ -426,6 +427,89 @@ fn ir3_execution_of_var_declaration() {
         .execute(&output.ir3, "trace-var", Some(LaneChoice::QuickJs))
         .expect("execution should succeed");
     assert!(result.result.instructions_executed > 0);
+}
+
+#[test]
+fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantics() {
+    let cases = [
+        (
+            "logical_and_member_assign_updates_truthy_property",
+            AssignmentOperator::LogicalAndAssign,
+            false,
+            Expression::NumericLiteral(2),
+            Expression::NumericLiteral(7),
+            Value::Int(7),
+        ),
+        (
+            "logical_or_member_assign_updates_computed_falsy_property",
+            AssignmentOperator::LogicalOrAssign,
+            true,
+            Expression::NumericLiteral(0),
+            Expression::NumericLiteral(7),
+            Value::Int(7),
+        ),
+        (
+            "nullish_member_assign_preserves_existing_property",
+            AssignmentOperator::NullishCoalescingAssign,
+            false,
+            Expression::NumericLiteral(5),
+            Expression::NumericLiteral(9),
+            Value::Int(5),
+        ),
+    ];
+
+    for (label, operator, computed, initial, rhs, expected) in cases {
+        let mut body = Vec::new();
+        if computed {
+            body.push(var_decl(
+                VariableDeclarationKind::Const,
+                "key",
+                Some(Expression::StringLiteral("x".to_string())),
+            ));
+        }
+        body.push(var_decl(
+            VariableDeclarationKind::Var,
+            "obj",
+            Some(Expression::ObjectLiteral(vec![ObjectProperty {
+                key: Expression::Identifier("x".to_string()),
+                value: initial,
+                computed: false,
+                shorthand: false,
+            }])),
+        ));
+        body.push(expr_stmt(Expression::Assignment {
+            operator,
+            left: Box::new(Expression::Member {
+                object: Box::new(Expression::Identifier("obj".to_string())),
+                property: Box::new(if computed {
+                    Expression::Identifier("key".to_string())
+                } else {
+                    Expression::Identifier("x".to_string())
+                }),
+                computed,
+            }),
+            right: Box::new(rhs),
+        }));
+        body.push(expr_stmt(Expression::Member {
+            object: Box::new(Expression::Identifier("obj".to_string())),
+            property: Box::new(if computed {
+                Expression::Identifier("key".to_string())
+            } else {
+                Expression::Identifier("x".to_string())
+            }),
+            computed,
+        }));
+
+        let ir0 = Ir0Module::from_syntax_tree(make_tree(ParseGoal::Script, body), "member.js");
+        let ctx = LoweringContext::new("trace-member", "decision-member", "policy-member");
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("lowering should succeed");
+
+        let router = LaneRouter::new();
+        let result = router
+            .execute(&output.ir3, label, Some(LaneChoice::QuickJs))
+            .expect("execution should succeed");
+        assert_eq!(result.result.value, expected, "{label}");
+    }
 }
 
 #[test]

@@ -3000,6 +3000,161 @@ fn lower_expression_to_ir1(
                 computed,
             } = left.as_ref()
             {
+                if matches!(
+                    operator,
+                    AssignmentOperator::LogicalAndAssign
+                        | AssignmentOperator::LogicalOrAssign
+                        | AssignmentOperator::NullishCoalescingAssign
+                ) {
+                    let object_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_assignment_object",
+                    )?;
+                    lower_expression_to_ir1(
+                        object,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: object_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    let (key, dynamic_key_binding) = if *computed {
+                        let key_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "member_assignment_key",
+                        )?;
+                        lower_expression_to_ir1(
+                            property,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: key_binding,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        (Ir1PropertyKey::Dynamic, Some(key_binding))
+                    } else {
+                        (
+                            lower_member_property_key_to_ir1(
+                                property,
+                                false,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?,
+                            None,
+                        )
+                    };
+
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+
+                    let current_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_assignment_current",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: current_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    let eval_rhs_label = alloc_label(label_counter);
+                    let end_label = alloc_label(label_counter);
+
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: current_binding,
+                    });
+                    match operator {
+                        AssignmentOperator::LogicalAndAssign => {
+                            ops.push(Ir1Op::JumpIfTruthy {
+                                label_id: eval_rhs_label,
+                            });
+                        }
+                        AssignmentOperator::LogicalOrAssign => {
+                            ops.push(Ir1Op::JumpIfFalsyConsume {
+                                label_id: eval_rhs_label,
+                            });
+                        }
+                        AssignmentOperator::NullishCoalescingAssign => {
+                            ops.push(Ir1Op::JumpIfNullish {
+                                label_id: eval_rhs_label,
+                            });
+                        }
+                        _ => unreachable!(),
+                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: current_binding,
+                    });
+                    ops.push(Ir1Op::Jump {
+                        label_id: end_label,
+                    });
+                    ops.push(Ir1Op::Label { id: eval_rhs_label });
+
+                    let rhs_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_assignment_rhs",
+                    )?;
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: rhs_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: rhs_binding,
+                    });
+                    ops.push(Ir1Op::SetProperty { key });
+                    ops.push(Ir1Op::Label { id: end_label });
+                    return Ok(());
+                }
+
                 lower_expression_to_ir1(
                     object,
                     ops,
@@ -3019,18 +3174,6 @@ fn lower_expression_to_ir1(
                     root_scope_id,
                     label_counter,
                 )?;
-                if matches!(
-                    operator,
-                    AssignmentOperator::LogicalAndAssign
-                        | AssignmentOperator::LogicalOrAssign
-                        | AssignmentOperator::NullishCoalescingAssign
-                ) {
-                    return Err(unsupported_frontier_expression_error(
-                        "logical_compound_member_assignment",
-                        "logical compound assignment for member expressions is not implemented; fail-closed frontier contract rejected the expression",
-                        None,
-                    ));
-                }
                 lower_expression_to_ir1(
                     right,
                     ops,

@@ -1977,6 +1977,145 @@ fn lowering_computed_member_assignment() {
 }
 
 #[test]
+fn lowering_logical_compound_member_assignment_uses_short_circuit_ops() {
+    for (operator, label, computed) in [
+        (AssignmentOperator::LogicalAndAssign, "&&= static", false),
+        (AssignmentOperator::LogicalOrAssign, "||= computed", true),
+        (
+            AssignmentOperator::NullishCoalescingAssign,
+            "??= static",
+            false,
+        ),
+    ] {
+        let mut body = vec![make_var_decl(VariableDeclarationKind::Var, "obj", None)];
+        if computed {
+            body.push(make_var_decl(
+                VariableDeclarationKind::Const,
+                "propKey",
+                Some(Expression::StringLiteral("prop".to_string())),
+            ));
+        }
+        body.push(make_expr_stmt(Expression::Assignment {
+            operator,
+            left: Box::new(Expression::Member {
+                object: Box::new(Expression::Identifier("obj".to_string())),
+                property: Box::new(if computed {
+                    Expression::Identifier("propKey".to_string())
+                } else {
+                    Expression::Identifier("prop".to_string())
+                }),
+                computed,
+            }),
+            right: Box::new(Expression::NumericLiteral(7)),
+        }));
+
+        let ir1 = lower_ir0_to_ir1(&make_ir0(ParseGoal::Script, body)).unwrap();
+
+        assert!(
+            ir1.module.ops.iter().any(|op| match operator {
+                AssignmentOperator::LogicalAndAssign => {
+                    matches!(op, Ir1Op::JumpIfTruthy { .. })
+                }
+                AssignmentOperator::LogicalOrAssign => {
+                    matches!(op, Ir1Op::JumpIfFalsyConsume { .. })
+                }
+                AssignmentOperator::NullishCoalescingAssign => {
+                    matches!(op, Ir1Op::JumpIfNullish { .. })
+                }
+                _ => false,
+            }),
+            "{label} should lower through short-circuit branch ops"
+        );
+        let has_expected_get_property = if computed {
+            ir1.module.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                )
+            })
+        } else {
+            ir1.module.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static(key)
+                    } if key == "prop"
+                )
+            })
+        };
+        assert!(
+            has_expected_get_property,
+            "{label} should preserve member read semantics"
+        );
+        let has_expected_set_property = if computed {
+            ir1.module.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::SetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                )
+            })
+        } else {
+            ir1.module.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::SetProperty {
+                        key: Ir1PropertyKey::Static(key)
+                    } if key == "prop"
+                )
+            })
+        };
+        assert!(
+            has_expected_set_property,
+            "{label} should preserve member write semantics"
+        );
+        assert!(
+            !ir1.module.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Ir1Op::AssignOp {
+                        operator: AssignmentOperator::LogicalAndAssign
+                            | AssignmentOperator::LogicalOrAssign
+                            | AssignmentOperator::NullishCoalescingAssign,
+                        ..
+                    }
+                )
+            }),
+            "{label} should not survive as a logical AssignOp"
+        );
+
+        if computed {
+            let prop_key_binding = ir1
+                .module
+                .scopes
+                .iter()
+                .flat_map(|scope| scope.bindings.iter())
+                .find(|binding| binding.name == "propKey")
+                .expect("computed key binding should be present")
+                .binding_id;
+            let prop_key_loads = ir1
+                .module
+                .ops
+                .iter()
+                .filter(|op| {
+                    matches!(
+                        op,
+                        Ir1Op::LoadBinding { binding_id } if *binding_id == prop_key_binding
+                    )
+                })
+                .count();
+            assert_eq!(
+                prop_key_loads, 1,
+                "{label} should evaluate the original computed property key once"
+            );
+        }
+    }
+}
+
+#[test]
 fn lowering_this_expression() {
     let ir0 = make_ir0(ParseGoal::Script, vec![make_expr_stmt(Expression::This)]);
     let output = run_full(&ir0);

@@ -42,7 +42,8 @@ use crate::expected_loss_selector::{
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{Ir0Module, Ir3Module};
 use crate::lowering_pipeline::{
-    LoweringContext, LoweringEvent, LoweringPipelineError, PassWitness, lower_ir0_to_ir3,
+    Ir2FlowProofArtifact, LoweringContext, LoweringEvent, LoweringPipelineError, PassWitness,
+    lower_ir0_to_ir3,
 };
 use crate::optimal_stopping::{
     EscalationPolicy, Observation as StoppingObservation, OptimalStoppingCertificate,
@@ -234,6 +235,7 @@ struct EvidenceRecordInput<'a> {
 pub enum OrchestratorError {
     Parse(Box<ParseError>),
     Lowering(Box<LoweringPipelineError>),
+    IfcRuntimeGuardBlocked { detail: String },
     Interpreter(InterpreterError),
     Ledger(LedgerError),
     Saga(SagaError),
@@ -249,6 +251,9 @@ impl fmt::Display for OrchestratorError {
         match self {
             Self::Parse(e) => write!(f, "parse: {e}"),
             Self::Lowering(e) => write!(f, "lowering: {e}"),
+            Self::IfcRuntimeGuardBlocked { detail } => {
+                write!(f, "ifc runtime guard blocked execution: {detail}")
+            }
             Self::Interpreter(e) => write!(f, "interpreter: {e}"),
             Self::Ledger(e) => write!(f, "ledger: {e}"),
             Self::Saga(e) => write!(f, "saga: {e}"),
@@ -414,10 +419,7 @@ impl ExecutionOrchestrator {
         let source_label = format!("ext:{}", package.extension_id);
 
         // Step 1b: TS normalization — detect language, normalize if TypeScript.
-        let effective_source_label = package
-            .source_file
-            .as_deref()
-            .unwrap_or(&source_label);
+        let effective_source_label = package.source_file.as_deref().unwrap_or(&source_label);
         let prepared = prepare_source_entry_for_public_entrypoints(
             &package.source,
             effective_source_label,
@@ -453,6 +455,7 @@ impl ExecutionOrchestrator {
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
         let lowering_events = lowering_output.events.clone();
         let lowering_witnesses = lowering_output.witnesses.clone();
+        self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
         let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3);
 
         // Step 6: Execute IR3.
@@ -571,6 +574,63 @@ impl ExecutionOrchestrator {
         self.lane_router
             .execute(ir3, trace_id, self.config.force_lane)
             .map_err(OrchestratorError::Interpreter)
+    }
+
+    fn phase_enforce_runtime_flow_guards(
+        &self,
+        artifact: &Ir2FlowProofArtifact,
+    ) -> Result<(), OrchestratorError> {
+        if artifact.required_declassifications.is_empty() && artifact.runtime_checkpoints.is_empty()
+        {
+            return Ok(());
+        }
+
+        let mut summary = Vec::new();
+
+        if !artifact.required_declassifications.is_empty() {
+            let pending = artifact
+                .required_declassifications
+                .iter()
+                .take(3)
+                .map(|entry| format!("{}@op{}", entry.obligation_id, entry.op_index))
+                .collect::<Vec<_>>()
+                .join(", ");
+            summary.push(format!(
+                "pending declassifications={} [{}]",
+                artifact.required_declassifications.len(),
+                pending
+            ));
+        }
+
+        if !artifact.runtime_checkpoints.is_empty() {
+            let checkpoints = artifact
+                .runtime_checkpoints
+                .iter()
+                .take(3)
+                .map(|entry| {
+                    format!(
+                        "op{}:{}:{}",
+                        entry.op_index,
+                        entry.capability.as_deref().unwrap_or("unknown"),
+                        entry.reason
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            summary.push(format!(
+                "runtime checkpoints={} [{}]",
+                artifact.runtime_checkpoints.len(),
+                checkpoints
+            ));
+        }
+
+        Err(OrchestratorError::IfcRuntimeGuardBlocked {
+            detail: format!(
+                "artifact {} has unresolved IFC runtime obligations: {}",
+                artifact.artifact_id,
+                summary.join("; ")
+            ),
+        })
     }
 
     fn phase_record_evidence(
@@ -1178,6 +1238,28 @@ mod tests {
         }
     }
 
+    fn package_with_source(source: &str) -> ExtensionPackage {
+        ExtensionPackage {
+            source: source.to_string(),
+            ..simple_package()
+        }
+    }
+
+    fn empty_flow_artifact() -> Ir2FlowProofArtifact {
+        Ir2FlowProofArtifact {
+            schema_version: "test-schema".to_string(),
+            artifact_id: "artifact-test".to_string(),
+            trace_id: "trace-test".to_string(),
+            decision_id: "decision-test".to_string(),
+            policy_id: "policy-test".to_string(),
+            module_id: "module-test".to_string(),
+            proved_flows: Vec::new(),
+            denied_flows: Vec::new(),
+            required_declassifications: Vec::new(),
+            runtime_checkpoints: Vec::new(),
+        }
+    }
+
     #[test]
     fn end_to_end_simple_source() {
         let mut orch = ExecutionOrchestrator::with_defaults();
@@ -1191,6 +1273,88 @@ mod tests {
         assert!(result.posterior.is_valid());
         assert!(!result.evidence_entries.is_empty());
         assert_eq!(result.epoch, SecurityEpoch::from_raw(1));
+    }
+
+    #[test]
+    fn phase_enforce_runtime_flow_guards_allows_static_artifact() {
+        let orch = ExecutionOrchestrator::with_defaults();
+        orch.phase_enforce_runtime_flow_guards(&empty_flow_artifact())
+            .expect("static flow artifact should pass");
+    }
+
+    #[test]
+    fn phase_enforce_runtime_flow_guards_blocks_pending_declassifications() {
+        let orch = ExecutionOrchestrator::with_defaults();
+        let mut artifact = empty_flow_artifact();
+        artifact.required_declassifications.push(
+            crate::lowering_pipeline::RequiredDeclassificationArtifactEntry {
+                op_index: 7,
+                source_label: crate::ifc_artifacts::Label::Secret,
+                sink_clearance: crate::ifc_artifacts::Label::Public,
+                capability: Some("declassify.audit".to_string()),
+                obligation_id: "obl-7".to_string(),
+                decision_contract_id: "decision-7".to_string(),
+                requires_operator_approval: true,
+                receipt_linkage_required: true,
+                replay_command_hint: "frankenctl replay run --trace trace-test --obligation obl-7"
+                    .to_string(),
+            },
+        );
+
+        let err = orch
+            .phase_enforce_runtime_flow_guards(&artifact)
+            .expect_err("pending declassification must fail closed");
+        match err {
+            OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+                assert!(detail.contains("pending declassifications=1"));
+                assert!(detail.contains("obl-7@op7"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn phase_enforce_runtime_flow_guards_blocks_runtime_checkpoints() {
+        let orch = ExecutionOrchestrator::with_defaults();
+        let mut artifact = empty_flow_artifact();
+        artifact.runtime_checkpoints.push(
+            crate::lowering_pipeline::RuntimeCheckpointArtifactEntry {
+                op_index: 4,
+                source_label: crate::ifc_artifacts::Label::Secret,
+                sink_clearance: crate::ifc_artifacts::Label::Internal,
+                capability: Some("hostcall.invoke".to_string()),
+                reason: "dynamic_capability".to_string(),
+            },
+        );
+
+        let err = orch
+            .phase_enforce_runtime_flow_guards(&artifact)
+            .expect_err("runtime checkpoint must fail closed");
+        match err {
+            OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+                assert!(detail.contains("runtime checkpoints=1"));
+                assert!(detail.contains("hostcall.invoke"));
+                assert!(detail.contains("dynamic_capability"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let pkg = package_with_source("let secret_token = \"secret_token\"; sink(secret_token);");
+
+        let err = orch
+            .execute(&pkg)
+            .expect_err("unresolved runtime checkpoint must fail closed");
+        match err {
+            OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+                assert!(detail.contains("runtime checkpoints=1"));
+                assert!(detail.contains("hostcall.invoke"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 
     #[test]

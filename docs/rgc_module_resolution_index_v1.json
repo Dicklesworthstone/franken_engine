@@ -1,0 +1,72 @@
+{
+  "schema_version": "rgc.ts-module-resolution.index.v1",
+  "bead_id": "bd-1lsy.5.8.1",
+  "generated_by": "bd-1lsy.5.8.1",
+  "generated_at_utc": "2026-03-09T05:30:00Z",
+  "track": {
+    "id": "RGC-406A",
+    "name": "Module Resolution Index"
+  },
+  "index_policy": {
+    "deterministic": true,
+    "reject_stale": true,
+    "fallback_on_unverifiable": true,
+    "accelerated_surfaces": [
+      "package_name",
+      "exact_export_key",
+      "exact_hot_subpath"
+    ]
+  },
+  "index_families": [
+    {
+      "family": "package_art",
+      "structure": "adaptive_radix_tree",
+      "required": true
+    },
+    {
+      "family": "export_map_mphf",
+      "structure": "minimal_perfect_hash_style_catalog",
+      "required": true
+    },
+    {
+      "family": "hot_subpath_mphf",
+      "structure": "minimal_perfect_hash_style_catalog",
+      "required": true
+    }
+  ],
+  "fallback_reasons": [
+    "artifact_age_exceeded",
+    "workspace_fingerprint_mismatch",
+    "index_fingerprint_mismatch",
+    "collision_search_exhausted",
+    "unsupported_wildcard_export"
+  ],
+  "artifact_contract": {
+    "required_paths": [
+      "module_art_index_report.json",
+      "export_map_hash_catalog.json",
+      "module_index_identity_report.json",
+      "run_manifest.json",
+      "events.jsonl",
+      "commands.txt",
+      "trace_ids.json",
+      "step_logs/"
+    ],
+    "manifest_fields": [
+      "schema_version",
+      "scenario_id",
+      "generated_at_utc",
+      "generated_at_unix_seconds",
+      "workspace_fingerprint",
+      "index_fingerprint",
+      "validation",
+      "artifact_paths"
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_module_resolution_index_v1.json",
+    "./scripts/run_rgc_module_resolution_index_suite.sh ci",
+    "./scripts/e2e/rgc_module_resolution_index_replay.sh ci",
+    "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_module_resolution_index cargo test -p frankenengine-engine --test module_resolution_index"
+  ]
+}

@@ -478,9 +478,9 @@ impl ScopeChain {
         let env = self.get_env_mut(target_handle)?;
         // Function declarations overwrite previous var/function of the same name.
         let mut slot =
-            BindingSlot::new_hoisted(name.clone(), binding_id, BindingKind::FunctionDecl);
+            BindingSlot::new_hoisted(name, binding_id, BindingKind::FunctionDecl);
         slot.value = value;
-        env.bindings.insert(name, slot);
+        env.add_binding(slot);
         Ok(())
     }
 

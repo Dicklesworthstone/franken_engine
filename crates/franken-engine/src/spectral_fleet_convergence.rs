@@ -263,11 +263,12 @@ impl LaplacianMatrix {
 
         let mut data = vec![0i64; n * n];
 
-        // Set off-diagonal entries: L[i][j] = -w(i,j)
+        // Set off-diagonal entries: L[i][j] = -sum(w(i,j))
+        // Accumulate weights to handle multiple edges between the same pair.
         for (&node, edges) in &topology.adjacency {
             for &(neighbor, weight) in edges {
                 if node != neighbor {
-                    data[node * n + neighbor] = -weight;
+                    data[node * n + neighbor] -= weight;
                 }
             }
         }

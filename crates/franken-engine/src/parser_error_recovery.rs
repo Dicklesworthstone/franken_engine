@@ -831,22 +831,22 @@ impl CalibrationReport {
         confidence_threshold_millionths: u64,
     ) -> Self {
         let total_cases = true_positives + false_positives + true_negatives + false_negatives;
-        let total_positive = true_positives + false_positives;
-        let total_negative = true_negatives + false_negatives;
+        let actual_negatives = false_positives + true_negatives;
+        let actual_positives = true_positives + false_negatives;
 
-        let fpr = if total_positive > 0 {
+        let fpr = if actual_negatives > 0 {
             false_positives
                 .checked_mul(1_000_000)
-                .and_then(|n| n.checked_div(total_positive))
+                .and_then(|n| n.checked_div(actual_negatives))
                 .unwrap_or(0)
         } else {
             0
         };
 
-        let fnr = if total_negative > 0 {
+        let fnr = if actual_positives > 0 {
             false_negatives
                 .checked_mul(1_000_000)
-                .and_then(|n| n.checked_div(total_negative))
+                .and_then(|n| n.checked_div(actual_positives))
                 .unwrap_or(0)
         } else {
             0

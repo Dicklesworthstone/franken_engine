@@ -152,12 +152,12 @@ pub struct ConfidenceEnvelope {
 }
 
 impl ConfidenceEnvelope {
-    /// Returns `true` when the entire envelope is non-negative.
+    /// Returns `true` when the entire envelope is strictly positive.
     pub fn is_positive(&self) -> bool {
         self.lower_millionths > 0
     }
 
-    /// Returns `true` when the entire envelope is non-positive.
+    /// Returns `true` when the entire envelope is strictly negative.
     pub fn is_negative(&self) -> bool {
         self.upper_millionths < 0
     }

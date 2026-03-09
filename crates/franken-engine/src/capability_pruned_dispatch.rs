@@ -25,8 +25,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::hash_tiers::ContentHash;
 use crate::policy_theorem_compiler::Capability;
-use crate::content_hash::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -161,11 +161,7 @@ impl DispatchSite {
     }
 
     /// Mark as requiring an IFC flow proof with given labels.
-    pub fn with_ifc_flow(
-        mut self,
-        source: impl Into<String>,
-        sink: impl Into<String>,
-    ) -> Self {
+    pub fn with_ifc_flow(mut self, source: impl Into<String>, sink: impl Into<String>) -> Self {
         self.requires_flow_proof = true;
         self.source_label = Some(source.into());
         self.sink_clearance = Some(sink.into());
@@ -460,10 +456,7 @@ impl fmt::Display for DispatchDecisionRecord {
         write!(
             f,
             "dispatch-decision {} (hostcall={}, route={}, epoch={})",
-            self.decision_id,
-            self.hostcall_id,
-            self.route,
-            self.epoch,
+            self.decision_id, self.hostcall_id, self.route, self.epoch,
         )
     }
 }
@@ -498,11 +491,7 @@ pub struct CheckElidableRegion {
 
 impl CheckElidableRegion {
     /// Create a new elidable region.
-    pub fn new(
-        start_offset: u32,
-        end_offset: u32,
-        epoch: SecurityEpoch,
-    ) -> Self {
+    pub fn new(start_offset: u32, end_offset: u32, epoch: SecurityEpoch) -> Self {
         let region_id = Self::compute_id(start_offset, end_offset, epoch);
         Self {
             region_id,
@@ -711,12 +700,8 @@ impl DispatchCompiler {
     pub fn decide(&self, site: &DispatchSite) -> DispatchDecisionRecord {
         let (route, cap_proofs, flow_proof_refs) = self.evaluate_site(site);
 
-        let decision_id = DispatchDecisionRecord::compute_id(
-            site.offset,
-            &site.hostcall_id,
-            &route,
-            self.epoch,
-        );
+        let decision_id =
+            DispatchDecisionRecord::compute_id(site.offset, &site.hostcall_id, &route, self.epoch);
 
         DispatchDecisionRecord {
             decision_id,
@@ -783,43 +768,43 @@ impl DispatchCompiler {
 
         // Check IFC flow proofs if required
         let mut matched_flow_proofs = Vec::new();
-        if site.requires_flow_proof && self.policy.require_ifc_proofs {
-            if let (Some(src), Some(sink)) = (&site.source_label, &site.sink_clearance) {
-                let matching = self.flow_proofs.iter().find(|fp| {
-                    fp.source_label == *src
-                        && fp.sink_clearance == *sink
-                        && fp.epoch == self.epoch
-                });
-                if let Some(fp) = matching {
-                    matched_flow_proofs.push(fp.clone());
-                } else {
-                    // Check for stale proof
-                    let stale = self.flow_proofs.iter().find(|fp| {
-                        fp.source_label == *src && fp.sink_clearance == *sink
-                    });
-                    if let Some(stale_fp) = stale {
-                        return (
-                            DispatchRoute::Rejected {
-                                reason: DispatchRejection::FlowProofStale {
-                                    proof_id: stale_fp.proof_id.clone(),
-                                    proof_epoch: stale_fp.epoch.as_u64(),
-                                },
-                            },
-                            satisfied_proofs,
-                            Vec::new(),
-                        );
-                    }
+        if site.requires_flow_proof
+            && self.policy.require_ifc_proofs
+            && let (Some(src), Some(sink)) = (&site.source_label, &site.sink_clearance)
+        {
+            let matching = self.flow_proofs.iter().find(|fp| {
+                fp.source_label == *src && fp.sink_clearance == *sink && fp.epoch == self.epoch
+            });
+            if let Some(fp) = matching {
+                matched_flow_proofs.push(fp.clone());
+            } else {
+                // Check for stale proof
+                let stale = self
+                    .flow_proofs
+                    .iter()
+                    .find(|fp| fp.source_label == *src && fp.sink_clearance == *sink);
+                if let Some(stale_fp) = stale {
                     return (
                         DispatchRoute::Rejected {
-                            reason: DispatchRejection::MissingFlowProof {
-                                source_label: src.clone(),
-                                sink_clearance: sink.clone(),
+                            reason: DispatchRejection::FlowProofStale {
+                                proof_id: stale_fp.proof_id.clone(),
+                                proof_epoch: stale_fp.epoch.as_u64(),
                             },
                         },
                         satisfied_proofs,
                         Vec::new(),
                     );
                 }
+                return (
+                    DispatchRoute::Rejected {
+                        reason: DispatchRejection::MissingFlowProof {
+                            source_label: src.clone(),
+                            sink_clearance: sink.clone(),
+                        },
+                    },
+                    satisfied_proofs,
+                    Vec::new(),
+                );
             }
         }
 
@@ -828,7 +813,11 @@ impl DispatchCompiler {
             if satisfied_proofs.len() >= self.policy.min_witness_count
                 || site.required_capabilities.is_empty()
             {
-                (DispatchRoute::FastPath, satisfied_proofs, matched_flow_proofs)
+                (
+                    DispatchRoute::FastPath,
+                    satisfied_proofs,
+                    matched_flow_proofs,
+                )
             } else if self.policy.allow_degraded_dispatch {
                 (
                     DispatchRoute::CheckedPath {
@@ -1039,11 +1028,26 @@ impl fmt::Display for DispatchSpecimenFamily {
 /// Build a test corpus for dispatch specimens.
 pub fn dispatch_corpus() -> Vec<(DispatchSpecimenFamily, String)> {
     vec![
-        (DispatchSpecimenFamily::SingleSite, "Single hostcall dispatch with one capability".into()),
-        (DispatchSpecimenFamily::MixedCapabilities, "Multiple hostcalls requiring different capabilities".into()),
-        (DispatchSpecimenFamily::IfcRequired, "Hostcall dispatch requiring IFC flow proofs".into()),
-        (DispatchSpecimenFamily::ContiguousRegion, "Contiguous fast-path sites forming elidable regions".into()),
-        (DispatchSpecimenFamily::DegradedMode, "Degraded-mode dispatch with reduced capability set".into()),
+        (
+            DispatchSpecimenFamily::SingleSite,
+            "Single hostcall dispatch with one capability".into(),
+        ),
+        (
+            DispatchSpecimenFamily::MixedCapabilities,
+            "Multiple hostcalls requiring different capabilities".into(),
+        ),
+        (
+            DispatchSpecimenFamily::IfcRequired,
+            "Hostcall dispatch requiring IFC flow proofs".into(),
+        ),
+        (
+            DispatchSpecimenFamily::ContiguousRegion,
+            "Contiguous fast-path sites forming elidable regions".into(),
+        ),
+        (
+            DispatchSpecimenFamily::DegradedMode,
+            "Degraded-mode dispatch with reduced capability set".into(),
+        ),
     ]
 }
 
@@ -1158,8 +1162,7 @@ mod tests {
 
     #[test]
     fn dispatch_site_with_ifc() {
-        let site = DispatchSite::new(0, "data.send")
-            .with_ifc_flow("Confidential", "Internal");
+        let site = DispatchSite::new(0, "data.send").with_ifc_flow("Confidential", "Internal");
         assert!(site.requires_flow_proof);
         assert_eq!(site.source_label.as_deref(), Some("Confidential"));
         assert_eq!(site.sink_clearance.as_deref(), Some("Internal"));
@@ -1514,7 +1517,10 @@ mod tests {
         let decision = compiler.decide(&site);
         assert!(decision.is_rejected());
         if let DispatchRoute::Rejected { reason } = &decision.route {
-            assert!(matches!(reason, DispatchRejection::InsufficientConfidence { .. }));
+            assert!(matches!(
+                reason,
+                DispatchRejection::InsufficientConfidence { .. }
+            ));
         }
     }
 
@@ -1564,8 +1570,7 @@ mod tests {
         let mut compiler = DispatchCompiler::new(PruningPolicy::default(), test_epoch());
         compiler.register_flow_proofs(vec![make_flow_proof(test_epoch())]);
 
-        let site = DispatchSite::new(0, "data.send")
-            .with_ifc_flow("Confidential", "Internal");
+        let site = DispatchSite::new(0, "data.send").with_ifc_flow("Confidential", "Internal");
         let decision = compiler.decide(&site);
         assert!(decision.is_fast_path());
     }
@@ -1573,8 +1578,7 @@ mod tests {
     #[test]
     fn compiler_rejected_missing_flow_proof() {
         let compiler = DispatchCompiler::new(PruningPolicy::default(), test_epoch());
-        let site = DispatchSite::new(0, "data.send")
-            .with_ifc_flow("Confidential", "Internal");
+        let site = DispatchSite::new(0, "data.send").with_ifc_flow("Confidential", "Internal");
         let decision = compiler.decide(&site);
         assert!(decision.is_rejected());
         if let DispatchRoute::Rejected { reason } = &decision.route {
@@ -1589,8 +1593,7 @@ mod tests {
         let mut compiler = DispatchCompiler::new(PruningPolicy::default(), current_epoch);
         compiler.register_flow_proofs(vec![make_flow_proof(old_epoch)]);
 
-        let site = DispatchSite::new(0, "data.send")
-            .with_ifc_flow("Confidential", "Internal");
+        let site = DispatchSite::new(0, "data.send").with_ifc_flow("Confidential", "Internal");
         let decision = compiler.decide(&site);
         assert!(decision.is_rejected());
         if let DispatchRoute::Rejected { reason } = &decision.route {
@@ -1605,8 +1608,7 @@ mod tests {
             ..PruningPolicy::default()
         };
         let compiler = DispatchCompiler::new(policy, test_epoch());
-        let site = DispatchSite::new(0, "data.send")
-            .with_ifc_flow("Confidential", "Internal");
+        let site = DispatchSite::new(0, "data.send").with_ifc_flow("Confidential", "Internal");
         let decision = compiler.decide(&site);
         assert!(decision.is_fast_path());
     }

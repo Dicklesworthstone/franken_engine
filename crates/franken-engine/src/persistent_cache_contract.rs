@@ -1490,4 +1490,130 @@ mod tests {
         assert!(!ctx.trace_id.is_empty());
         assert!(!ctx.command_invocation.is_empty());
     }
+
+    #[test]
+    fn schema_version_constants_are_mutually_distinct() {
+        let versions = [
+            CONTRACT_SCHEMA_VERSION,
+            RECEIPT_SCHEMA_VERSION,
+            ROLLBACK_PLAN_SCHEMA_VERSION,
+            TRACE_IDS_SCHEMA_VERSION,
+            RUN_MANIFEST_SCHEMA_VERSION,
+            DOCS_CONTRACT_SCHEMA_VERSION,
+        ];
+        let set: std::collections::BTreeSet<&str> = versions.iter().copied().collect();
+        assert_eq!(set.len(), versions.len());
+    }
+
+    #[test]
+    fn cache_key_material_serde_round_trip() {
+        let km = PersistentCacheKeyMaterial {
+            module_id: "mod-1".into(),
+            source_hash: "abc123".into(),
+            policy_version: 2,
+            trust_revision: 1,
+            config_fingerprint: "cfg-fp".into(),
+            dependency_graph_hash: "dep-hash".into(),
+            transform_profile: "default".into(),
+            runtime_mode: "safe".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let json = serde_json::to_string(&km).unwrap();
+        let back: PersistentCacheKeyMaterial = serde_json::from_str(&json).unwrap();
+        assert_eq!(km, back);
+        assert_eq!(km.cache_key_id(), back.cache_key_id());
+    }
+
+    #[test]
+    fn cache_key_id_differs_for_different_policy_versions() {
+        let base = PersistentCacheKeyMaterial {
+            module_id: "mod-1".into(),
+            source_hash: "abc123".into(),
+            policy_version: 1,
+            trust_revision: 1,
+            config_fingerprint: "cfg".into(),
+            dependency_graph_hash: "dep".into(),
+            transform_profile: "default".into(),
+            runtime_mode: "safe".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let mut alt = base.clone();
+        alt.policy_version = 2;
+        assert_ne!(base.cache_key_id(), alt.cache_key_id());
+    }
+
+    #[test]
+    fn error_display_covers_all_variants() {
+        let errors = [
+            PersistentCacheContractError::MissingEntry {
+                module_id: "m1".into(),
+                cache_key_id: "k1".into(),
+            },
+            PersistentCacheContractError::ReceiptFieldMismatch {
+                field: "source_hash",
+                expected: "aaa".into(),
+                actual: "bbb".into(),
+            },
+            PersistentCacheContractError::RollbackTargetMissing {
+                receipt_id: "r1".into(),
+            },
+            PersistentCacheContractError::EmptyRollbackCriteria,
+        ];
+        for err in &errors {
+            let display = format!("{}", err);
+            assert!(!display.is_empty());
+            assert!(display.contains(err.error_code()));
+        }
+    }
+
+    #[test]
+    fn contract_scenario_result_serde_round_trip() {
+        let result = ContractScenarioResult {
+            scenario_id: "test-scenario".into(),
+            outcome: "pass".into(),
+            detail: "test".into(),
+            error_code: None,
+            receipt_id: Some("r-1".into()),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: ContractScenarioResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result, back);
+    }
+
+    #[test]
+    fn contract_scenario_result_none_receipt() {
+        let result = ContractScenarioResult {
+            scenario_id: "test-2".into(),
+            outcome: "fail".into(),
+            detail: "no receipt".into(),
+            error_code: Some("FE-PCACHE-0001".into()),
+            receipt_id: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: ContractScenarioResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result, back);
+        assert!(back.receipt_id.is_none());
+    }
+
+    #[test]
+    fn error_codes_all_start_with_fe_pcache() {
+        let errors = [
+            PersistentCacheContractError::MissingEntry {
+                module_id: "m".into(),
+                cache_key_id: "k".into(),
+            },
+            PersistentCacheContractError::ReceiptFieldMismatch {
+                field: "f",
+                expected: "e".into(),
+                actual: "a".into(),
+            },
+            PersistentCacheContractError::RollbackTargetMissing {
+                receipt_id: "r".into(),
+            },
+            PersistentCacheContractError::EmptyRollbackCriteria,
+        ];
+        for err in &errors {
+            assert!(err.error_code().starts_with("FE-PCACHE-"));
+        }
+    }
 }

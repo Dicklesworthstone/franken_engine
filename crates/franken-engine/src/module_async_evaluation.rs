@@ -19,6 +19,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+#[allow(unused_imports)]
 use crate::esm_loader::ModuleStatus as _;
 use crate::hash_tiers::ContentHash;
 use crate::module_live_binding::{BindingCellState, BindingId, LiveBindingMap};
@@ -283,10 +284,10 @@ impl AsyncModuleState {
 
     pub fn record_resumption(&mut self) {
         let seq = self.next_seq();
-        if let Some(last) = self.suspensions.last_mut() {
-            if !last.resolved {
-                last.resolve(seq);
-            }
+        if let Some(last) = self.suspensions.last_mut()
+            && !last.resolved
+        {
+            last.resolve(seq);
         }
     }
 
@@ -555,10 +556,11 @@ impl AsyncModuleEvaluator {
 
         // Track which dependencies are async (need to wait).
         for dep in dependencies {
-            if let Some(dep_state) = self.states.get(dep) {
-                if !dep_state.phase.is_terminal() || dep_state.phase == AsyncModulePhase::Rejected {
-                    state.add_pending_dependency(dep.clone());
-                }
+            if let Some(dep_state) = self.states.get(dep)
+                && (!dep_state.phase.is_terminal()
+                    || dep_state.phase == AsyncModulePhase::Rejected)
+            {
+                state.add_pending_dependency(dep.clone());
             }
         }
 
@@ -757,18 +759,18 @@ impl AsyncModuleEvaluator {
 
         // Propagate rejection to waiting modules.
         for module_spec in &transitive_closure {
-            if let Some(dep_state) = self.states.get_mut(module_spec) {
-                if !dep_state.phase.is_terminal() {
-                    dep_state.reject(reason_hash.clone());
-                    let additional_dead =
-                        Self::mark_bindings_dead(module_spec, live_bindings);
-                    for bid in &additional_dead {
-                        self.emit_event(
-                            module_spec,
-                            AsyncEvalEventType::BindingMarkedDead,
-                            format!("binding={}:{}", bid.module_specifier, bid.export_name),
-                        );
-                    }
+            if let Some(dep_state) = self.states.get_mut(module_spec)
+                && !dep_state.phase.is_terminal()
+            {
+                dep_state.reject(reason_hash.clone());
+                let additional_dead =
+                    Self::mark_bindings_dead(module_spec, live_bindings);
+                for bid in &additional_dead {
+                    self.emit_event(
+                        module_spec,
+                        AsyncEvalEventType::BindingMarkedDead,
+                        format!("binding={}:{}", bid.module_specifier, bid.export_name),
+                    );
                 }
             }
             self.emit_event(
@@ -841,11 +843,11 @@ impl AsyncModuleEvaluator {
             .cloned()
             .collect();
         for id in binding_ids {
-            if let Some(cell) = live_bindings.cells.get_mut(&id) {
-                if cell.state != BindingCellState::Dead {
-                    cell.mark_dead();
-                    dead.push(id);
-                }
+            if let Some(cell) = live_bindings.cells.get_mut(&id)
+                && cell.state != BindingCellState::Dead
+            {
+                cell.mark_dead();
+                dead.push(id);
             }
         }
         dead

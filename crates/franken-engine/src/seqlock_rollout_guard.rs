@@ -1258,4 +1258,109 @@ mod tests {
         assert!(!ctx.decision_id.is_empty());
         assert!(!ctx.policy_id.is_empty());
     }
+
+    #[test]
+    fn all_schema_version_constants_are_pairwise_distinct() {
+        let versions = [
+            super::SAFETY_CASE_SCHEMA_VERSION,
+            super::STARVATION_REPORT_SCHEMA_VERSION,
+            super::LOOM_COVERAGE_SCHEMA_VERSION,
+            super::ROLLOUT_GUARD_SCHEMA_VERSION,
+            super::TRACE_IDS_SCHEMA_VERSION,
+            super::RUN_MANIFEST_SCHEMA_VERSION,
+            super::DOCS_CONTRACT_SCHEMA_VERSION,
+        ];
+        let unique: std::collections::BTreeSet<&str> = versions.iter().copied().collect();
+        assert_eq!(unique.len(), versions.len());
+    }
+
+    #[test]
+    fn verdict_label_returns_expected_strings() {
+        assert_eq!(super::verdict_label(GuardEvidenceVerdict::Pass), "pass");
+        assert_eq!(super::verdict_label(GuardEvidenceVerdict::Missing), "missing");
+        assert_eq!(super::verdict_label(GuardEvidenceVerdict::Fail), "fail");
+    }
+
+    #[test]
+    fn policy_for_candidate_rejects_unknown_candidate() {
+        let result = super::policy_for_candidate("nonexistent-candidate-xyz");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("nonexistent-candidate-xyz"));
+    }
+
+    #[test]
+    fn trace_ids_artifact_serde_round_trip() {
+        let artifact = super::TraceIdsArtifact {
+            schema_version: super::TRACE_IDS_SCHEMA_VERSION.to_string(),
+            trace_ids: vec!["trace-a".to_string(), "trace-b".to_string()],
+            decision_id: "dec-1".to_string(),
+            policy_id: "pol-1".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let back: super::TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn structured_log_event_serde_round_trip() {
+        let event = super::StructuredLogEvent {
+            trace_id: "trace.1".to_string(),
+            decision_id: "dec.1".to_string(),
+            policy_id: "pol.1".to_string(),
+            component: "test_component".to_string(),
+            event: "test_event".to_string(),
+            outcome: "pass".to_string(),
+            error_code: Some("ERR-001".to_string()),
+            candidate_id: Some("candidate-1".to_string()),
+            detail: "detail text".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: super::StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+        let event_none = super::StructuredLogEvent { error_code: None, candidate_id: None, ..event };
+        let json2 = serde_json::to_string(&event_none).unwrap();
+        let back2: super::StructuredLogEvent = serde_json::from_str(&json2).unwrap();
+        assert_eq!(event_none, back2);
+    }
+
+    #[test]
+    fn safety_case_row_disallows_rollout_when_starvation_fails() {
+        let candidate = accepted_candidates("2026-03-06T00:00:00Z")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let failing_starvation = super::StarvationMicrobenchRow {
+            candidate_id: candidate.candidate_id.clone(),
+            retry_budget_policy: candidate.retry_budget_policy,
+            burst_writes: 3,
+            observations: Vec::new(),
+            telemetry: frankenengine_engine::seqlock_fastpath::FastPathTelemetry {
+                total_reads: 0,
+                fast_path_reads: 0,
+                fallback_reads: 0,
+                total_retries: 0,
+                writer_pressure_observations: 0,
+                retry_budget_fallbacks: 0,
+                uninitialized_fallbacks: 0,
+                writer_pressure_fallbacks: 0,
+                writes: 0,
+            },
+            verdict: GuardEvidenceVerdict::Fail,
+            notes: vec!["simulated failure".to_string()],
+        };
+        let passing_model_check = super::LoomScheduleCoverageRow {
+            candidate_id: candidate.candidate_id.clone(),
+            manual_schedule_cases: vec!["case1".to_string()],
+            loom_schedule_count: 100,
+            verdict: GuardEvidenceVerdict::Pass,
+            notes: Vec::new(),
+        };
+        let safety = build_safety_case_row(&candidate, &failing_starvation, &passing_model_check);
+        assert!(!safety.rollout_allowed);
+        assert!(safety.disable_reasons.contains(&"starvation_microbench_failed".to_string()));
+        assert!(!safety.disable_reasons.contains(&"model_check_evidence_missing".to_string()));
+    }
 }

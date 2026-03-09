@@ -3071,14 +3071,13 @@ fn utf16_code_point_at(value: &str, index: usize) -> Option<u32> {
     let mut code_units = value.encode_utf16();
     let first = code_units.nth(index)?;
     let first_u32 = u32::from(first);
-    if is_utf16_lead_surrogate(first) {
-        if let Some(second) = code_units.next() {
-            if is_utf16_trail_surrogate(second) {
-                let lead = first_u32 - 0xD800;
-                let trail = u32::from(second) - 0xDC00;
-                return Some(0x1_0000 + ((lead << 10) | trail));
-            }
-        }
+    if is_utf16_lead_surrogate(first)
+        && let Some(second) = code_units.next()
+        && is_utf16_trail_surrogate(second)
+    {
+        let lead = first_u32 - 0xD800;
+        let trail = u32::from(second) - 0xDC00;
+        return Some(0x1_0000 + ((lead << 10) | trail));
     }
     Some(first_u32)
 }

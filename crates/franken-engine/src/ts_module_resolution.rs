@@ -729,11 +729,8 @@ impl DeterministicTsModuleResolver {
             return None;
         };
 
-        let Some((rendered, selected_condition)) =
-            select_indexed_export_target(export_target, self.condition_order_for(style))
-        else {
-            return None;
-        };
+        let (rendered, selected_condition) =
+            select_indexed_export_target(export_target, self.condition_order_for(style))?;
 
         let base = normalize_absolute_path(&join_paths(&terminal.package_root, &rendered));
         push_trace(

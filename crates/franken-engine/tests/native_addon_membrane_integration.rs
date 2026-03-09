@@ -1,14 +1,16 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
 use std::fs;
 
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::module_resolver::ResolutionContext;
 use frankenengine_engine::native_addon_membrane::{
     INVENTORY_SCHEMA_VERSION, NativeAddonAbiSurface, NativeAddonArtifactWriteRequest,
-    NativeAddonCrashContainment, NativeAddonFallbackMode, NativeAddonHandleDiscipline,
-    NativeAddonInvocationChannel, NativeAddonMembrane, NativeAddonMembraneErrorCode,
-    NativeAddonRoute, NativeAddonSupportStatus, NativeAddonSymbol, NativeAddonSymbolClass,
+    NativeAddonCohort, NativeAddonCrashContainment, NativeAddonFallbackMode,
+    NativeAddonHandleDiscipline, NativeAddonInvocationChannel, NativeAddonLoadRequest,
+    NativeAddonMembrane, NativeAddonMembraneErrorCode, NativeAddonRoute,
+    NativeAddonSupportStatus, NativeAddonSymbol, NativeAddonSymbolClass,
 };
 use frankenengine_engine::self_replacement::DelegateType;
 use frankenengine_engine::slot_registry::SlotCapability;
@@ -355,4 +357,577 @@ fn artifact_bundle_writer_emits_expected_files() {
     let fallback_receipts = fallback_receipts.as_array().unwrap();
     assert_eq!(fallback_receipts.len(), 1);
     assert_eq!(fallback_receipts[0]["route"], "delegate_cell");
+}
+
+// ---------------------------------------------------------------------------
+// Enum as_str / Display round-trips
+// ---------------------------------------------------------------------------
+
+#[test]
+fn abi_surface_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonAbiSurface::NodeApi,
+        NativeAddonAbiSurface::Nan,
+        NativeAddonAbiSurface::V8Direct,
+        NativeAddonAbiSurface::ForeignFfi,
+        NativeAddonAbiSurface::Unknown,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        let s = v.as_str();
+        assert!(!s.is_empty());
+        assert_eq!(v.to_string(), s);
+        assert!(seen.insert(s), "duplicate as_str for AbiSurface");
+    }
+}
+
+#[test]
+fn cohort_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonCohort::NodeApiPortable,
+        NativeAddonCohort::NodeApiIsolateBound,
+        NativeAddonCohort::NodeApiPrivileged,
+        NativeAddonCohort::LegacyNan,
+        NativeAddonCohort::V8Binding,
+        NativeAddonCohort::ForeignFfi,
+        NativeAddonCohort::Unknown,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        let s = v.as_str();
+        assert!(!s.is_empty());
+        assert_eq!(v.to_string(), s);
+        assert!(seen.insert(s), "duplicate as_str for Cohort");
+    }
+}
+
+#[test]
+fn fallback_mode_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonFallbackMode::WasmPort,
+        NativeAddonFallbackMode::DelegateCell,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        assert_eq!(v.to_string(), v.as_str());
+        assert!(seen.insert(v.as_str()));
+    }
+}
+
+#[test]
+fn route_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonRoute::DirectMembrane,
+        NativeAddonRoute::WasmPort,
+        NativeAddonRoute::DelegateCell,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        assert_eq!(v.to_string(), v.as_str());
+        assert!(seen.insert(v.as_str()));
+    }
+}
+
+#[test]
+fn support_status_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonSupportStatus::Direct,
+        NativeAddonSupportStatus::FallbackOnly,
+        NativeAddonSupportStatus::Unsupported,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        assert_eq!(v.to_string(), v.as_str());
+        assert!(seen.insert(v.as_str()));
+    }
+}
+
+#[test]
+fn handle_discipline_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonHandleDiscipline::NodeApiOnly,
+        NativeAddonHandleDiscipline::ThreadSafeFunctionOnly,
+        NativeAddonHandleDiscipline::FinalizerBounded,
+        NativeAddonHandleDiscipline::ExternalBuffer,
+        NativeAddonHandleDiscipline::RawPointerEscape,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        assert_eq!(v.to_string(), v.as_str());
+        assert!(seen.insert(v.as_str()));
+    }
+}
+
+#[test]
+fn symbol_class_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonSymbolClass::ValueExport,
+        NativeAddonSymbolClass::FunctionExport,
+        NativeAddonSymbolClass::ThreadSafeFunction,
+        NativeAddonSymbolClass::Finalizer,
+        NativeAddonSymbolClass::PropertyAccessor,
+        NativeAddonSymbolClass::ExternalBuffer,
+        NativeAddonSymbolClass::ForeignCallback,
+        NativeAddonSymbolClass::GlobalStateHook,
+        NativeAddonSymbolClass::Unknown,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        assert_eq!(v.to_string(), v.as_str());
+        assert!(seen.insert(v.as_str()));
+    }
+}
+
+#[test]
+fn invocation_channel_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonInvocationChannel::InProcessMembrane,
+        NativeAddonInvocationChannel::HostcallSession,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        assert_eq!(v.to_string(), v.as_str());
+        assert!(seen.insert(v.as_str()));
+    }
+}
+
+#[test]
+fn crash_containment_as_str_display_round_trip() {
+    let variants = [
+        NativeAddonCrashContainment::InProcessMembrane,
+        NativeAddonCrashContainment::WasmSandbox,
+        NativeAddonCrashContainment::DelegateCellBoundary,
+    ];
+    let mut seen = BTreeSet::new();
+    for v in variants {
+        assert_eq!(v.to_string(), v.as_str());
+        assert!(seen.insert(v.as_str()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HandleDiscipline::is_direct_safe
+// ---------------------------------------------------------------------------
+
+#[test]
+fn handle_discipline_is_direct_safe_for_each_variant() {
+    assert!(NativeAddonHandleDiscipline::NodeApiOnly.is_direct_safe());
+    assert!(NativeAddonHandleDiscipline::ThreadSafeFunctionOnly.is_direct_safe());
+    assert!(NativeAddonHandleDiscipline::FinalizerBounded.is_direct_safe());
+    assert!(!NativeAddonHandleDiscipline::ExternalBuffer.is_direct_safe());
+    assert!(!NativeAddonHandleDiscipline::RawPointerEscape.is_direct_safe());
+}
+
+// ---------------------------------------------------------------------------
+// SymbolClass::is_direct_safe
+// ---------------------------------------------------------------------------
+
+#[test]
+fn symbol_class_is_direct_safe_for_each_variant() {
+    assert!(NativeAddonSymbolClass::ValueExport.is_direct_safe());
+    assert!(NativeAddonSymbolClass::FunctionExport.is_direct_safe());
+    assert!(NativeAddonSymbolClass::ThreadSafeFunction.is_direct_safe());
+    assert!(NativeAddonSymbolClass::Finalizer.is_direct_safe());
+    assert!(NativeAddonSymbolClass::PropertyAccessor.is_direct_safe());
+    assert!(!NativeAddonSymbolClass::ExternalBuffer.is_direct_safe());
+    assert!(!NativeAddonSymbolClass::ForeignCallback.is_direct_safe());
+    assert!(!NativeAddonSymbolClass::GlobalStateHook.is_direct_safe());
+    assert!(!NativeAddonSymbolClass::Unknown.is_direct_safe());
+}
+
+// ---------------------------------------------------------------------------
+// Cohort classification
+// ---------------------------------------------------------------------------
+
+fn simple_node_api_request(id: &str) -> NativeAddonLoadRequest {
+    NativeAddonLoadRequest::new(
+        id,
+        "pkg",
+        "1.0.0",
+        "pkg",
+        "./build/addon.node",
+        NativeAddonAbiSurface::NodeApi,
+    )
+    .with_node_api_version(8)
+}
+
+#[test]
+fn cohort_default_node_api_portable() {
+    let req = simple_node_api_request("portable-addon");
+    assert_eq!(req.cohort(), NativeAddonCohort::NodeApiPortable);
+}
+
+#[test]
+fn cohort_async_workers_yields_isolate_bound() {
+    let mut req = simple_node_api_request("async-addon");
+    req.uses_async_workers = true;
+    assert_eq!(req.cohort(), NativeAddonCohort::NodeApiIsolateBound);
+}
+
+#[test]
+fn cohort_thread_safe_function_symbol_yields_isolate_bound() {
+    let req = simple_node_api_request("tsf-addon").with_symbol(NativeAddonSymbol::new(
+        "worker_fn",
+        NativeAddonSymbolClass::ThreadSafeFunction,
+    ));
+    assert_eq!(req.cohort(), NativeAddonCohort::NodeApiIsolateBound);
+}
+
+#[test]
+fn cohort_process_global_state_yields_privileged() {
+    let mut req = simple_node_api_request("global-addon");
+    req.uses_process_global_state = true;
+    assert_eq!(req.cohort(), NativeAddonCohort::NodeApiPrivileged);
+}
+
+#[test]
+fn cohort_foreign_heap_yields_privileged() {
+    let mut req = simple_node_api_request("heap-addon");
+    req.uses_foreign_heap = true;
+    assert_eq!(req.cohort(), NativeAddonCohort::NodeApiPrivileged);
+}
+
+#[test]
+fn cohort_unsafe_discipline_yields_privileged() {
+    let req = simple_node_api_request("unsafe-addon")
+        .with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape);
+    assert_eq!(req.cohort(), NativeAddonCohort::NodeApiPrivileged);
+}
+
+#[test]
+fn cohort_nan_yields_legacy_nan() {
+    let req = NativeAddonLoadRequest::new(
+        "nan-addon",
+        "pkg",
+        "1.0.0",
+        "pkg",
+        "./build/nan.node",
+        NativeAddonAbiSurface::Nan,
+    );
+    assert_eq!(req.cohort(), NativeAddonCohort::LegacyNan);
+}
+
+#[test]
+fn cohort_v8_direct_yields_v8_binding() {
+    let req = NativeAddonLoadRequest::new(
+        "v8-addon",
+        "pkg",
+        "1.0.0",
+        "pkg",
+        "./build/v8.node",
+        NativeAddonAbiSurface::V8Direct,
+    );
+    assert_eq!(req.cohort(), NativeAddonCohort::V8Binding);
+}
+
+#[test]
+fn cohort_foreign_ffi_yields_foreign_ffi() {
+    let req = NativeAddonLoadRequest::new(
+        "ffi-addon",
+        "pkg",
+        "1.0.0",
+        "pkg",
+        "./build/ffi.node",
+        NativeAddonAbiSurface::ForeignFfi,
+    );
+    assert_eq!(req.cohort(), NativeAddonCohort::ForeignFfi);
+}
+
+#[test]
+fn cohort_unknown_yields_unknown() {
+    let req = NativeAddonLoadRequest::new(
+        "unk-addon",
+        "pkg",
+        "1.0.0",
+        "pkg",
+        "./build/unk.node",
+        NativeAddonAbiSurface::Unknown,
+    );
+    assert_eq!(req.cohort(), NativeAddonCohort::Unknown);
+}
+
+// ---------------------------------------------------------------------------
+// required_capabilities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn required_capabilities_always_includes_extension_lifecycle() {
+    let req = simple_node_api_request("basic");
+    let caps = req.required_capabilities();
+    assert!(caps.contains(&RuntimeCapability::ExtensionLifecycle));
+}
+
+#[test]
+fn required_capabilities_reflects_fs_and_network_flags() {
+    let mut req = simple_node_api_request("io-addon");
+    req.requires_filesystem_read = true;
+    req.requires_filesystem_write = true;
+    req.requires_network_egress = true;
+    req.requires_process_spawn = true;
+    let caps = req.required_capabilities();
+    assert!(caps.contains(&RuntimeCapability::FsRead));
+    assert!(caps.contains(&RuntimeCapability::FsWrite));
+    assert!(caps.contains(&RuntimeCapability::NetworkEgress));
+    assert!(caps.contains(&RuntimeCapability::ProcessSpawn));
+}
+
+#[test]
+fn required_capabilities_foreign_heap_implies_heap_allocate() {
+    let mut req = simple_node_api_request("heap");
+    req.uses_foreign_heap = true;
+    assert!(req.required_capabilities().contains(&RuntimeCapability::HeapAllocate));
+}
+
+#[test]
+fn required_capabilities_external_buffer_discipline_implies_heap() {
+    let req = simple_node_api_request("extbuf")
+        .with_handle_discipline(NativeAddonHandleDiscipline::ExternalBuffer);
+    assert!(req.required_capabilities().contains(&RuntimeCapability::HeapAllocate));
+}
+
+#[test]
+fn required_capabilities_symbol_caps_propagate() {
+    let req = simple_node_api_request("sym-caps")
+        .with_symbol(
+            NativeAddonSymbol::new("read_fn", NativeAddonSymbolClass::FunctionExport)
+                .require_capability(RuntimeCapability::FsRead),
+        );
+    assert!(req.required_capabilities().contains(&RuntimeCapability::FsRead));
+}
+
+// ---------------------------------------------------------------------------
+// required_slot_capabilities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn required_slot_capabilities_base_contains_emit_and_hostcall() {
+    let req = simple_node_api_request("slot-base");
+    let slots = req.required_slot_capabilities();
+    assert!(slots.contains(&SlotCapability::EmitEvidence));
+    assert!(slots.contains(&SlotCapability::InvokeHostcall));
+}
+
+#[test]
+fn required_slot_capabilities_module_linkage_adds_module_access() {
+    let mut req = simple_node_api_request("slot-module");
+    req.requires_module_linkage = true;
+    let slots = req.required_slot_capabilities();
+    assert!(slots.contains(&SlotCapability::ModuleAccess));
+}
+
+#[test]
+fn required_slot_capabilities_async_workers_adds_schedule_async() {
+    let mut req = simple_node_api_request("slot-async");
+    req.uses_async_workers = true;
+    let slots = req.required_slot_capabilities();
+    assert!(slots.contains(&SlotCapability::ScheduleAsync));
+}
+
+#[test]
+fn required_slot_capabilities_foreign_heap_adds_heap_alloc() {
+    let mut req = simple_node_api_request("slot-heap");
+    req.uses_foreign_heap = true;
+    let slots = req.required_slot_capabilities();
+    assert!(slots.contains(&SlotCapability::HeapAlloc));
+}
+
+// ---------------------------------------------------------------------------
+// NativeAddonMembraneErrorCode::stable_code
+// ---------------------------------------------------------------------------
+
+#[test]
+fn error_code_stable_codes_non_empty_and_distinct() {
+    let codes = [
+        NativeAddonMembraneErrorCode::MissingCapability,
+        NativeAddonMembraneErrorCode::UnsupportedAbiSurface,
+        NativeAddonMembraneErrorCode::UnsafeDirectSurface,
+        NativeAddonMembraneErrorCode::NoFallbackRoute,
+    ];
+    let mut seen = BTreeSet::new();
+    for c in codes {
+        let s = c.stable_code();
+        assert!(!s.is_empty());
+        assert!(seen.insert(s), "duplicate stable_code");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Serde round-trip for NativeAddonLoadRequest
+// ---------------------------------------------------------------------------
+
+#[test]
+fn load_request_serde_roundtrip() {
+    let mut req = simple_node_api_request("serde-addon")
+        .with_symbol(NativeAddonSymbol::new(
+            "init",
+            NativeAddonSymbolClass::FunctionExport,
+        ))
+        .allow_fallback(NativeAddonFallbackMode::DelegateCell)
+        .with_handle_discipline(NativeAddonHandleDiscipline::FinalizerBounded);
+    req.requires_filesystem_read = true;
+    req.uses_async_workers = true;
+
+    let json = serde_json::to_string(&req).expect("serialize");
+    let back: NativeAddonLoadRequest = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(req, back);
+}
+
+// ---------------------------------------------------------------------------
+// Empty inventory report
+// ---------------------------------------------------------------------------
+
+#[test]
+fn empty_inventory_report() {
+    let membrane = NativeAddonMembrane::standard();
+    let profile = profile_with(&[RuntimeCapability::ExtensionLifecycle]);
+    let report = membrane.inventory_report(&[], &profile);
+    assert_eq!(report.schema_version, INVENTORY_SCHEMA_VERSION);
+    assert!(report.support_surface.is_empty());
+    assert!(report.compatibility_matrix.is_empty());
+    assert!(report.abi_fingerprint_index.is_empty());
+    assert!(report.cohort_counts.is_empty());
+    assert_eq!(report.report_hash, report.canonical_hash());
+}
+
+// ---------------------------------------------------------------------------
+// Report with mixed routes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inventory_report_mixed_routes() {
+    let membrane = NativeAddonMembrane::standard();
+    let profile = profile_with(&[
+        RuntimeCapability::ExtensionLifecycle,
+        RuntimeCapability::HeapAllocate,
+    ]);
+
+    let direct_req = simple_node_api_request("direct-mix")
+        .with_symbol(NativeAddonSymbol::new(
+            "open",
+            NativeAddonSymbolClass::FunctionExport,
+        ));
+    let fallback_req = simple_node_api_request("fallback-mix")
+        .with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape)
+        .allow_fallback(NativeAddonFallbackMode::DelegateCell);
+
+    let report = membrane.inventory_report(&[direct_req, fallback_req], &profile);
+    assert_eq!(report.support_surface.len(), 2);
+    assert_eq!(report.compatibility_matrix.len(), 2);
+
+    let direct_entry = report
+        .compatibility_matrix
+        .iter()
+        .find(|e| e.addon_id == "direct-mix")
+        .expect("direct entry");
+    assert_eq!(direct_entry.support_status, NativeAddonSupportStatus::Direct);
+    assert_eq!(
+        direct_entry.selected_route,
+        Some(NativeAddonRoute::DirectMembrane)
+    );
+
+    let fallback_entry = report
+        .compatibility_matrix
+        .iter()
+        .find(|e| e.addon_id == "fallback-mix")
+        .expect("fallback entry");
+    assert_eq!(
+        fallback_entry.support_status,
+        NativeAddonSupportStatus::FallbackOnly
+    );
+    assert_eq!(
+        fallback_entry.selected_route,
+        Some(NativeAddonRoute::DelegateCell)
+    );
+
+    // Cohort counts should reflect two node_api variants
+    let total: u32 = report.cohort_counts.values().sum();
+    assert_eq!(total, 2);
+}
+
+// ---------------------------------------------------------------------------
+// Unsupported ABI surface error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unsupported_abi_surface_without_fallback_errors() {
+    let membrane = NativeAddonMembrane::standard();
+    let req = NativeAddonLoadRequest::new(
+        "v8-no-fallback",
+        "v8-pkg",
+        "1.0.0",
+        "v8-pkg",
+        "./build/v8.node",
+        NativeAddonAbiSurface::V8Direct,
+    );
+    let profile = profile_with(&[RuntimeCapability::ExtensionLifecycle]);
+    let err = membrane
+        .plan(&req, &context(), &profile)
+        .expect_err("v8 direct without fallback must fail");
+    assert_eq!(
+        err.code,
+        NativeAddonMembraneErrorCode::UnsupportedAbiSurface
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Unsafe direct surface without approved fallback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unsafe_direct_surface_no_fallback_yields_error() {
+    let membrane = NativeAddonMembrane::standard();
+    let req = simple_node_api_request("unsafe-no-fb")
+        .with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape);
+    let profile = profile_with(&[
+        RuntimeCapability::ExtensionLifecycle,
+        RuntimeCapability::HeapAllocate,
+    ]);
+    let err = membrane
+        .plan(&req, &context(), &profile)
+        .expect_err("unsafe discipline without fallback must fail");
+    assert_eq!(
+        err.code,
+        NativeAddonMembraneErrorCode::UnsafeDirectSurface
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Node API version exceeding ceiling
+// ---------------------------------------------------------------------------
+
+#[test]
+fn node_api_version_above_ceiling_blocks_direct() {
+    let membrane = NativeAddonMembrane::standard();
+    let req = NativeAddonLoadRequest::new(
+        "future-api",
+        "future-pkg",
+        "1.0.0",
+        "future-pkg",
+        "./build/future.node",
+        NativeAddonAbiSurface::NodeApi,
+    )
+    .with_node_api_version(99)
+    .allow_fallback(NativeAddonFallbackMode::DelegateCell);
+    let profile = profile_with(&[RuntimeCapability::ExtensionLifecycle]);
+    let plan = membrane
+        .plan(&req, &context(), &profile)
+        .expect("should fall back");
+    assert_eq!(plan.route, NativeAddonRoute::DelegateCell);
+    assert!(
+        plan.support_surface
+            .direct_blockers
+            .iter()
+            .any(|b| b.contains("exceeds"))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Membrane default
+// ---------------------------------------------------------------------------
+
+#[test]
+fn membrane_default_equals_standard() {
+    let std = NativeAddonMembrane::standard();
+    let def = NativeAddonMembrane::default();
+    assert_eq!(std, def);
 }

@@ -916,4 +916,106 @@ mod tests {
         assert_eq!(inv.schema_version, TS_DIAGNOSTIC_CORPUS_SCHEMA_VERSION);
         assert_eq!(inv.component, TS_EVIDENCE_COMPONENT);
     }
+
+    #[test]
+    fn schema_version_constants_are_all_distinct() {
+        let versions = [
+            TS_DIAGNOSTIC_CORPUS_SCHEMA_VERSION,
+            TS_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+            TS_EVIDENCE_EVENT_SCHEMA_VERSION,
+            TS_EVIDENCE_POLICY_ID,
+        ];
+        let set: std::collections::BTreeSet<&str> = versions.iter().copied().collect();
+        assert_eq!(set.len(), versions.len());
+    }
+
+    #[test]
+    fn ts_feature_family_serde_roundtrip_all_variants() {
+        for family in TsFeatureFamily::ALL {
+            let json = serde_json::to_string(family).unwrap();
+            let back: TsFeatureFamily = serde_json::from_str(&json).unwrap();
+            assert_eq!(*family, back);
+        }
+    }
+
+    #[test]
+    fn actual_outcome_serde_roundtrip() {
+        for variant in [ActualOutcome::Success, ActualOutcome::Rejected] {
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: ActualOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn specimen_verdict_serde_roundtrip() {
+        for variant in [SpecimenVerdict::Pass, SpecimenVerdict::Fail] {
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: SpecimenVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_failures_present() {
+        let inv = TsNormalizationEvidenceInventory {
+            schema_version: TS_DIAGNOSTIC_CORPUS_SCHEMA_VERSION.into(),
+            component: TS_EVIDENCE_COMPONENT.into(),
+            specimen_count: 5,
+            pass_count: 4,
+            fail_count: 1,
+            known_gap_count: 0,
+            feature_family_coverage: BTreeMap::new(),
+            evidence: vec![],
+        };
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_satisfied_with_known_gaps_and_zero_failures() {
+        let inv = TsNormalizationEvidenceInventory {
+            schema_version: TS_DIAGNOSTIC_CORPUS_SCHEMA_VERSION.into(),
+            component: TS_EVIDENCE_COMPONENT.into(),
+            specimen_count: 10,
+            pass_count: 10,
+            fail_count: 0,
+            known_gap_count: 3,
+            feature_family_coverage: BTreeMap::new(),
+            evidence: vec![],
+        };
+        assert!(inv.contract_satisfied());
+    }
+
+    #[test]
+    fn ts_evidence_event_serde_roundtrip() {
+        let ev = TsEvidenceEvent {
+            schema_version: TS_EVIDENCE_EVENT_SCHEMA_VERSION.into(),
+            component: TS_EVIDENCE_COMPONENT.into(),
+            event: "specimen_evaluated".into(),
+            policy_id: TS_EVIDENCE_POLICY_ID.into(),
+            specimen_id: Some("ts_type_annotation".into()),
+            verdict: Some("pass".into()),
+            detail: Some("normalized successfully".into()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: TsEvidenceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn evaluate_specimen_fail_when_expected_present_pattern_missing() {
+        let specimen = CorpusSpecimen {
+            specimen_id: "test_present".to_string(),
+            feature_family: TsFeatureFamily::TypeAnnotation,
+            ts_source: "const x: number = 1;".to_string(),
+            expected_outcome: ExpectedOutcome::NormalizedAway,
+            expected_absent_patterns: vec![],
+            expected_present_patterns: vec!["WILL_NOT_APPEAR".to_string()],
+            description: "test present pattern failure".to_string(),
+        };
+        let config = TsNormalizationConfig::default();
+        let ev = evaluate_specimen(&specimen, &config);
+        assert_eq!(ev.verdict, SpecimenVerdict::Fail);
+        assert!(ev.present_pattern_failures.iter().any(|p| p == "WILL_NOT_APPEAR"));
+    }
 }

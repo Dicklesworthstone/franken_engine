@@ -532,10 +532,10 @@ pub fn build_regime_state_chart(
         let (label, confidence) = classify_regime(&sig, config);
 
         // Track transitions.
-        if let Some(prev) = prev_label {
-            if prev != label {
-                transition_count += 1;
-            }
+        if let Some(prev) = prev_label
+            && prev != label
+        {
+            transition_count += 1;
         }
         prev_label = Some(label);
 
@@ -1002,13 +1002,13 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
         SignatureExpectedOutcome::ValidSignature | SignatureExpectedOutcome::InvalidSignature => {
             let sig = extract_signature(&specimen.traces[0], &config);
             signature_valid = Some(sig.valid);
-            if let Some(expected) = specimen.expected_valid {
-                if sig.valid != expected {
-                    verdict = SignatureVerdict::Fail;
-                    error_detail = Some(format!(
-                        "expected valid={expected} got valid={}", sig.valid
-                    ));
-                }
+            if let Some(expected) = specimen.expected_valid
+                && sig.valid != expected
+            {
+                verdict = SignatureVerdict::Fail;
+                error_detail = Some(format!(
+                    "expected valid={expected} got valid={}", sig.valid
+                ));
             }
         }
         SignatureExpectedOutcome::CorrectClassification => {
@@ -1017,13 +1017,13 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
             let (label, conf) = classify_regime(&sig, &config);
             classified_regime = Some(label);
             confidence_millionths = Some(conf);
-            if let Some(expected) = specimen.expected_regime {
-                if label != expected {
-                    verdict = SignatureVerdict::Fail;
-                    error_detail = Some(format!(
-                        "expected regime={:?} got {:?}", expected, label
-                    ));
-                }
+            if let Some(expected) = specimen.expected_regime
+                && label != expected
+            {
+                verdict = SignatureVerdict::Fail;
+                error_detail = Some(format!(
+                    "expected regime={:?} got {:?}", expected, label
+                ));
             }
             // At minimum, classification should not abstain for valid signatures.
             if sig.valid && label.is_abstention() && specimen.expected_regime.is_some() {
@@ -1048,13 +1048,13 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
         SignatureExpectedOutcome::StableChart | SignatureExpectedOutcome::TransitionDetected => {
             let chart = build_regime_state_chart(&specimen.traces, &config);
             transition_count = Some(chart.transition_count);
-            if let Some(expected) = specimen.expected_transition_count {
-                if chart.transition_count != expected {
-                    verdict = SignatureVerdict::Fail;
-                    error_detail = Some(format!(
-                        "expected transitions={expected} got {}", chart.transition_count
-                    ));
-                }
+            if let Some(expected) = specimen.expected_transition_count
+                && chart.transition_count != expected
+            {
+                verdict = SignatureVerdict::Fail;
+                error_detail = Some(format!(
+                    "expected transitions={expected} got {}", chart.transition_count
+                ));
             }
         }
         SignatureExpectedOutcome::SimilarityComputed => {

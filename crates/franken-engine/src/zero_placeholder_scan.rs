@@ -1200,4 +1200,151 @@ mod tests {
             "bundle lock should be released after failure",
         );
     }
+
+    #[test]
+    fn schema_version_constants_are_all_distinct() {
+        let versions = [
+            ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION,
+            ZERO_PLACEHOLDER_SCAN_TRACE_IDS_SCHEMA_VERSION,
+            ZERO_PLACEHOLDER_SCAN_RUN_MANIFEST_SCHEMA_VERSION,
+            ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION,
+            ZERO_PLACEHOLDER_SCAN_POLICY_ID,
+        ];
+        let unique: std::collections::BTreeSet<&str> = versions.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            versions.len(),
+            "all schema version / policy constants must be distinct"
+        );
+    }
+
+    #[test]
+    fn scan_event_serde_round_trip_with_none_optionals() {
+        let event = ZeroPlaceholderScanEvent {
+            schema_version: ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-none".to_string(),
+            decision_id: "decision-none".to_string(),
+            policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            event: "inventory_started".to_string(),
+            outcome: "started".to_string(),
+            subsystem: None,
+            finding_id: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        // None fields with skip_serializing_if should be absent from JSON
+        assert!(!json.contains("subsystem"));
+        assert!(!json.contains("finding_id"));
+        assert!(!json.contains("detail"));
+        let back: ZeroPlaceholderScanEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn finding_serde_round_trip_with_none_diagnostic_code() {
+        let finding = ZeroPlaceholderFinding {
+            finding_id: "test::no_diag".to_string(),
+            subsystem: ZeroPlaceholderSubsystem::Runtime,
+            status: ZeroPlaceholderStatus::FailClosed,
+            severity: ZeroPlaceholderSeverity::Medium,
+            owner: "test_owner".to_string(),
+            owner_bead_id: "bd-test-none".to_string(),
+            subject_area: "test.area".to_string(),
+            source_reference: "src/test.rs".to_string(),
+            observed_behavior: "observed".to_string(),
+            required_behavior: "required".to_string(),
+            diagnostic_code: None,
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        assert!(!json.contains("diagnostic_code"));
+        let back: ZeroPlaceholderFinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, finding);
+    }
+
+    #[test]
+    fn bead_id_fallbacks_for_unknown_feature_families() {
+        // Parser: unknown families fall back to the default bead id
+        let default_parser = bead_id_for_parser_feature("unknown_feature");
+        assert_eq!(default_parser, "bd-1lsy.9.5.1");
+
+        // Known families map to specific bead IDs
+        assert_eq!(bead_id_for_parser_feature("for_in_statement"), "bd-1lsy.4.8");
+        assert_eq!(bead_id_for_parser_feature("for_of_statement"), "bd-1lsy.4.8");
+        assert_eq!(bead_id_for_parser_feature("new_expression"), "bd-1lsy.4.7.2");
+        assert_eq!(bead_id_for_parser_feature("template_literal"), "bd-1lsy.4.7.2");
+        assert_eq!(
+            bead_id_for_parser_feature("binary_non_arithmetic_expression"),
+            "bd-1lsy.4.7.3"
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("member_assignment_expression"),
+            "bd-1lsy.4.7.1"
+        );
+
+        // Lowering: unknown families also fall back to the default
+        let default_lowering = bead_id_for_lowering_family("unknown_node");
+        assert_eq!(default_lowering, "bd-1lsy.9.5.1");
+
+        assert_eq!(bead_id_for_lowering_family("statement.for_in"), "bd-1lsy.4.8");
+        assert_eq!(bead_id_for_lowering_family("expression.new"), "bd-1lsy.4.7.2");
+        assert_eq!(
+            bead_id_for_lowering_family("expression.binary_non_arithmetic"),
+            "bd-1lsy.4.7.3"
+        );
+        assert_eq!(
+            bead_id_for_lowering_family("expression.assignment_member_target"),
+            "bd-1lsy.4.7.1"
+        );
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_detects_banned_readme_fragment_only() {
+        let contract = DocsHelpSurfaceAuditContract {
+            policy_id: "test-policy".to_string(),
+            required_help_fragments: vec![],
+            banned_help_fragments: vec![],
+            required_readme_fragments: vec![],
+            banned_readme_fragments: vec!["deprecated_feature".to_string()],
+        };
+        // Banned fragment present => FailClosed
+        let (status, severity, detail) = evaluate_cli_docs_truth_guard(
+            &contract,
+            "This README mentions deprecated_feature which is banned",
+            "clean help source",
+        );
+        assert_eq!(status, ZeroPlaceholderStatus::FailClosed);
+        assert_eq!(severity, ZeroPlaceholderSeverity::Medium);
+        assert!(detail.contains("banned README fragment present"));
+
+        // Banned fragment absent => Resolved
+        let (status2, severity2, _) = evaluate_cli_docs_truth_guard(
+            &contract,
+            "clean README without banned content",
+            "clean help source",
+        );
+        assert_eq!(status2, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(severity2, ZeroPlaceholderSeverity::Low);
+    }
+
+    #[test]
+    fn subsystem_summaries_on_empty_inventory_yields_zeros() {
+        let inventory = ZeroPlaceholderInventory {
+            schema_version: ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            findings: vec![],
+        };
+        assert_eq!(inventory.open_placeholder_finding_count(), 0);
+        assert_eq!(inventory.fail_closed_finding_count(), 0);
+        assert_eq!(inventory.resolved_finding_count(), 0);
+
+        let summaries = inventory.subsystem_summaries();
+        assert_eq!(summaries.len(), 4);
+        for summary in &summaries {
+            assert_eq!(summary.finding_count, 0);
+            assert_eq!(summary.open_placeholder_finding_count, 0);
+            assert_eq!(summary.fail_closed_finding_count, 0);
+            assert_eq!(summary.resolved_finding_count, 0);
+        }
+    }
 }

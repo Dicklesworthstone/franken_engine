@@ -21,6 +21,7 @@ fn simple_package(id: &str, source: &str) -> ExtensionPackage {
     ExtensionPackage {
         extension_id: id.to_string(),
         source: source.to_string(),
+        source_file: None,
         capabilities: vec![],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
@@ -31,6 +32,7 @@ fn package_with_caps(id: &str, source: &str, caps: &[&str]) -> ExtensionPackage 
     ExtensionPackage {
         extension_id: id.to_string(),
         source: source.to_string(),
+        source_file: None,
         capabilities: caps.iter().map(|c| c.to_string()).collect(),
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
@@ -45,6 +47,7 @@ fn package_with_metadata(id: &str, source: &str, meta: &[(&str, &str)]) -> Exten
     ExtensionPackage {
         extension_id: id.to_string(),
         source: source.to_string(),
+        source_file: None,
         capabilities: vec![],
         version: "1.0.0".to_string(),
         metadata,
@@ -314,6 +317,7 @@ fn extension_package_serde_roundtrip() {
     let pkg = ExtensionPackage {
         extension_id: "ext-serde".to_string(),
         source: "1+2".to_string(),
+        source_file: None,
         capabilities: vec!["fs_read".to_string(), "net".to_string()],
         version: "2.0.0".to_string(),
         metadata: {
@@ -354,6 +358,7 @@ fn extension_package_many_capabilities_serde() {
     let pkg = ExtensionPackage {
         extension_id: "many-cap".to_string(),
         source: "42".to_string(),
+        source_file: None,
         capabilities: caps.clone(),
         version: "3.0.0".to_string(),
         metadata: BTreeMap::new(),
@@ -1034,6 +1039,7 @@ fn extension_version_recorded_in_evidence() {
     let pkg = ExtensionPackage {
         extension_id: "ext-ver".to_string(),
         source: "42".to_string(),
+        source_file: None,
         capabilities: vec![],
         version: "5.3.1".to_string(),
         metadata: BTreeMap::new(),

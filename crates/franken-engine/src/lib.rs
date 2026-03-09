@@ -278,6 +278,7 @@ pub mod trust_zone;
 pub mod ts_module_resolution;
 pub mod ts_normalization;
 pub mod ts_normalization_evidence;
+pub mod ts_shipped_path_evidence;
 pub mod unit_test_taxonomy;
 pub mod universal_dominance_ratchet;
 pub mod version_matrix_lane;

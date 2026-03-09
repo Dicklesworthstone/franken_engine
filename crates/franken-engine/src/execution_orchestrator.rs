@@ -62,6 +62,9 @@ use crate::security_epoch::SecurityEpoch;
 use crate::tropical_semiring::{
     InstructionCostGraph, InstructionNode, ScheduleOptimizer, TropicalWeight,
 };
+use crate::ts_normalization::{
+    SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
+};
 
 const ADAPTIVE_ROUTER_GAMMA_MILLIONTHS: i64 = 100_000;
 const STOPPING_CUSUM_THRESHOLD_MILLIONTHS: i64 = 5_000_000;
@@ -142,8 +145,11 @@ impl Default for OrchestratorConfig {
 pub struct ExtensionPackage {
     /// Unique extension identifier.
     pub extension_id: String,
-    /// JavaScript source code.
+    /// Source code (JavaScript or TypeScript).
     pub source: String,
+    /// Optional source file path or label used for TS detection (e.g. "app.ts").
+    #[serde(default)]
+    pub source_file: Option<String>,
     /// Declared capabilities.
     pub capabilities: Vec<String>,
     /// Extension version.
@@ -164,6 +170,9 @@ pub struct OrchestratorResult {
     pub trace_id: String,
     pub decision_id: String,
     pub source_label: String,
+
+    // Source ingestion (JS passthrough or TS normalization)
+    pub source_ingestion: SourceIngestionSummary,
 
     // Lowering
     pub lowering_events: Vec<LoweringEvent>,
@@ -230,6 +239,7 @@ pub enum OrchestratorError {
     Saga(SagaError),
     Cell(CellError),
     Containment(ContainmentError),
+    TsNormalization(TsNormalizationError),
     EmptySource,
     EmptyExtensionId,
 }
@@ -244,6 +254,7 @@ impl fmt::Display for OrchestratorError {
             Self::Saga(e) => write!(f, "saga: {e}"),
             Self::Cell(e) => write!(f, "cell: {e}"),
             Self::Containment(e) => write!(f, "containment: {e}"),
+            Self::TsNormalization(e) => write!(f, "ts normalization: {e}"),
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
         }
@@ -291,6 +302,12 @@ impl From<CellError> for OrchestratorError {
 impl From<ContainmentError> for OrchestratorError {
     fn from(e: ContainmentError) -> Self {
         Self::Containment(e)
+    }
+}
+
+impl From<TsNormalizationError> for OrchestratorError {
+    fn from(e: TsNormalizationError) -> Self {
+        Self::TsNormalization(e)
     }
 }
 
@@ -396,6 +413,21 @@ impl ExecutionOrchestrator {
         let (attempt_index, trace_id, decision_id) = self.allocate_attempt_identifiers();
         let source_label = format!("ext:{}", package.extension_id);
 
+        // Step 1b: TS normalization — detect language, normalize if TypeScript.
+        let effective_source_label = package
+            .source_file
+            .as_deref()
+            .unwrap_or(&source_label);
+        let prepared = prepare_source_entry_for_public_entrypoints(
+            &package.source,
+            effective_source_label,
+            &trace_id,
+            &decision_id,
+            &self.config.policy_id,
+        )?;
+        let source_ingestion = prepared.source_ingestion.clone();
+        let parse_source = prepared.prepared_source;
+
         // Step 2: Create execution cell.
         let mut cell = ExecutionCell::with_context(
             &trace_id,
@@ -408,9 +440,9 @@ impl ExecutionOrchestrator {
         // Step 3: Register extension in containment executor.
         self.containment_executor.register(&package.extension_id);
 
-        // Step 4: Parse source.
+        // Step 4: Parse source (uses normalized source if TS was detected).
         let syntax_tree = self.parser.parse_with_options(
-            package.source.as_str(),
+            parse_source.as_str(),
             self.config.parse_goal,
             &self.config.parser_options,
         )?;
@@ -494,6 +526,7 @@ impl ExecutionOrchestrator {
             trace_id,
             decision_id,
             source_label,
+            source_ingestion,
             lowering_events,
             lowering_witnesses,
             lane,
@@ -1131,6 +1164,7 @@ mod tests {
         ExtensionPackage {
             extension_id: "test-ext-1".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -1268,6 +1302,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-1".to_string(),
             source: "".to_string(),
+            source_file: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -1282,6 +1317,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -1320,6 +1356,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-serde".to_string(),
             source: "1+2".to_string(),
+            source_file: None,
             capabilities: vec!["fs_read".to_string(), "net".to_string()],
             version: "2.0.0".to_string(),
             metadata: {
@@ -1371,6 +1408,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-ws".to_string(),
             source: "  \t\n  ".to_string(),
+            source_file: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -1385,6 +1423,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "   ".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -1536,6 +1575,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-cap".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec!["fs_read".to_string(), "net".to_string()],
             version: "2.0.0".to_string(),
             metadata: {
@@ -1592,6 +1632,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-many".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec![
                 "fs_read".to_string(),
                 "fs_write".to_string(),
@@ -2028,6 +2069,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-caps".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec!["fs".to_string(), "net".to_string(), "crypto".to_string()],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
@@ -2149,6 +2191,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "id-1".to_string(),
             source: "1".to_string(),
+            source_file: None,
             capabilities: vec!["net".to_string()],
             version: "0.1.0".to_string(),
             metadata: {
@@ -2202,6 +2245,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-large-meta".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata,
@@ -2321,6 +2365,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-ver".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec![],
             version: "7.3.1".to_string(),
             metadata: BTreeMap::new(),
@@ -2368,6 +2413,7 @@ mod tests {
         let pkg = ExtensionPackage {
             extension_id: "ext-\u{00e9}\u{00f1}\u{00fc}".to_string(),
             source: "42".to_string(),
+            source_file: None,
             capabilities: vec![],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),

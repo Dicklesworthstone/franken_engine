@@ -12,6 +12,7 @@ fn simple_package(id: &str, source: &str) -> ExtensionPackage {
     ExtensionPackage {
         extension_id: id.to_string(),
         source: source.to_string(),
+        source_file: None,
         capabilities: vec![],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
@@ -22,6 +23,7 @@ fn high_capability_package() -> ExtensionPackage {
     ExtensionPackage {
         extension_id: "high-cap-ext".to_string(),
         source: "42".to_string(),
+        source_file: None,
         capabilities: (0..16).map(|i| format!("cap_{i}")).collect(),
         version: "2.0.0".to_string(),
         metadata: BTreeMap::new(),
@@ -98,6 +100,7 @@ fn empty_source_returns_error() {
     let pkg = ExtensionPackage {
         extension_id: "ext-empty".to_string(),
         source: "".to_string(),
+        source_file: None,
         capabilities: vec![],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
@@ -116,6 +119,7 @@ fn empty_extension_id_returns_error() {
     let pkg = ExtensionPackage {
         extension_id: "".to_string(),
         source: "42".to_string(),
+        source_file: None,
         capabilities: vec![],
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
@@ -235,6 +239,7 @@ fn metadata_in_package_is_preserved() {
     let pkg = ExtensionPackage {
         extension_id: "ext-meta".to_string(),
         source: "42".to_string(),
+        source_file: None,
         capabilities: vec!["cap_a".to_string()],
         version: "1.0.0".to_string(),
         metadata: metadata.clone(),
@@ -417,6 +422,7 @@ fn extension_package_with_many_capabilities_serde_round_trip() {
     let pkg = ExtensionPackage {
         extension_id: "ext-many-caps".to_string(),
         source: "42".to_string(),
+        source_file: None,
         capabilities: (0..32).map(|i| format!("cap_{i}")).collect(),
         version: "3.0.0".to_string(),
         metadata: BTreeMap::from([

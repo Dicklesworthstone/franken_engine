@@ -10,6 +10,11 @@
 //! - **baseline_throughput_profile**: larger budgets for performance-oriented
 //!   workloads.
 //!
+//! Membership operators currently fail closed rather than pretending the
+//! stripped heap is prototype-aware. `object_model.rs` remains the semantic
+//! source of truth for prototype-chain membership until the baseline
+//! interpreter can faithfully reuse that substrate.
+//!
 //! Both profiles share the same `InterpreterCore` execution logic; the profile
 //! difference is in policy (instruction budget, register limit, dispatch
 //! strategy), not in a second engine backend.
@@ -216,6 +221,8 @@ pub enum InterpreterError {
     StringPoolOutOfBounds { index: u32, pool_size: u32 },
     /// Capability check failed for hostcall.
     CapabilityDenied { capability: String },
+    /// The baseline heap cannot safely answer prototype-aware membership.
+    UnsupportedMembershipSemantics { operator: String },
     /// Halt instruction reached (normal termination).
     Halted,
 }
@@ -261,6 +268,10 @@ impl fmt::Display for InterpreterError {
             Self::CapabilityDenied { capability } => {
                 write!(f, "capability denied: {capability}")
             }
+            Self::UnsupportedMembershipSemantics { operator } => write!(
+                f,
+                "unsupported {operator} semantics: baseline interpreter heap is not prototype-aware"
+            ),
             Self::Halted => write!(f, "execution halted"),
         }
     }
@@ -1119,46 +1130,45 @@ impl InterpreterCore {
     fn eval_instanceof(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let candidate = self.read_reg(lhs)?;
         let constructor = self.read_reg(rhs)?;
-        let func_idx = match constructor {
-            Value::Function(func_idx) => func_idx,
+        match constructor {
+            Value::Function(_) => {}
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "function".to_string(),
                     got: other.type_name().to_string(),
                 });
             }
-        };
+        }
 
-        let matches = match candidate {
-            Value::Object(object_id) => {
-                let heap_obj = self
-                    .heap
-                    .get(object_id.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                heap_obj.constructor_function == Some(func_idx)
-            }
-            _ => false,
-        };
-        Ok(Value::Bool(matches))
+        if let Value::Object(object_id) = candidate {
+            self.heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        }
+
+        Err(Self::unsupported_membership_semantics("instanceof"))
     }
 
     fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
-        let key = self.read_reg(lhs)?;
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
-                let heap_obj = self
-                    .heap
+                self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                Ok(Value::Bool(
-                    heap_obj.properties.contains_key(&Self::property_key(&key)),
-                ))
+                let _ = self.read_reg(lhs)?;
+                Err(Self::unsupported_membership_semantics("in"))
             }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
                 got: other.type_name().to_string(),
             }),
+        }
+    }
+
+    fn unsupported_membership_semantics(operator: &str) -> InterpreterError {
+        InterpreterError::UnsupportedMembershipSemantics {
+            operator: operator.to_string(),
         }
     }
 
@@ -2223,6 +2233,9 @@ mod tests {
             InterpreterError::CapabilityDenied {
                 capability: "net".to_string(),
             },
+            InterpreterError::UnsupportedMembershipSemantics {
+                operator: "in".to_string(),
+            },
         ];
         for e in errors {
             let s = e.to_string();
@@ -2454,6 +2467,9 @@ mod tests {
             InterpreterError::StringPoolOutOfBounds {
                 index: 99,
                 pool_size: 5,
+            },
+            InterpreterError::UnsupportedMembershipSemantics {
+                operator: "instanceof".to_string(),
             },
         ];
         let mut displays = std::collections::BTreeSet::new();
@@ -2777,6 +2793,9 @@ mod tests {
             InterpreterError::CapabilityDenied {
                 capability: "net".to_string(),
             },
+            InterpreterError::UnsupportedMembershipSemantics {
+                operator: "instanceof".to_string(),
+            },
             InterpreterError::Halted,
         ];
         for v in &variants {
@@ -2786,8 +2805,8 @@ mod tests {
         }
         assert_eq!(
             variants.len(),
-            13,
-            "all 13 InterpreterError variants covered"
+            14,
+            "all 14 InterpreterError variants covered"
         );
     }
 
@@ -3696,7 +3715,34 @@ mod tests {
     }
 
     #[test]
-    fn construct_tags_this_for_instanceof_checks() {
+    fn in_operator_fails_closed_without_prototype_model() {
+        let m = test_module(vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadInt { dst: 1, value: 7 },
+            Ir3Instruction::LoadInt { dst: 2, value: 42 },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::InOp {
+                dst: 3,
+                lhs: 1,
+                rhs: 0,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ]);
+        let err = quickjs_execute(&m).unwrap_err();
+        assert_eq!(
+            err,
+            InterpreterError::UnsupportedMembershipSemantics {
+                operator: "in".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn construct_fails_closed_for_instanceof_without_prototype_model() {
         let m = test_module_with_functions(
             vec![
                 Ir3Instruction::Construct {
@@ -3723,8 +3769,13 @@ mod tests {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "test");
         core.registers[0] = Value::Function(0);
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Bool(true));
+        let err = core.execute(&m).unwrap_err();
+        assert_eq!(
+            err,
+            InterpreterError::UnsupportedMembershipSemantics {
+                operator: "instanceof".to_string(),
+            }
+        );
     }
 
     // -- TemplateLiteral tests -------------------------------------------

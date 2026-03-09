@@ -224,6 +224,9 @@ fn interpreter_error_display_all_unique() {
         InterpreterError::CapabilityDenied {
             capability: "net".into(),
         },
+        InterpreterError::UnsupportedMembershipSemantics {
+            operator: "in".into(),
+        },
         InterpreterError::Halted,
     ];
     let mut set = BTreeSet::new();
@@ -269,6 +272,9 @@ fn interpreter_error_serde_all_variants() {
         },
         InterpreterError::CapabilityDenied {
             capability: "cap".into(),
+        },
+        InterpreterError::UnsupportedMembershipSemantics {
+            operator: "instanceof".into(),
         },
         InterpreterError::Halted,
     ];
@@ -1651,7 +1657,7 @@ fn comparison_and_equality_ops_execute_across_lanes() {
 }
 
 #[test]
-fn in_operator_checks_membership_across_lanes() {
+fn in_operator_fails_closed_without_prototype_model_across_lanes() {
     let m = test_module_with_pool(
         vec![
             Ir3Instruction::NewObject { dst: 0 },
@@ -1671,7 +1677,18 @@ fn in_operator_checks_membership_across_lanes() {
         ],
         vec![],
     );
-    assert_both_lanes_value(&m, Value::Bool(true), "in_operator");
+    assert_eq!(
+        qjs_run(&m).unwrap_err(),
+        InterpreterError::UnsupportedMembershipSemantics {
+            operator: "in".into(),
+        }
+    );
+    assert_eq!(
+        v8_run(&m).unwrap_err(),
+        InterpreterError::UnsupportedMembershipSemantics {
+            operator: "in".into(),
+        }
+    );
 }
 
 #[test]

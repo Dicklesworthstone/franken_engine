@@ -1501,6 +1501,38 @@ mod tests {
     }
 
     #[test]
+    fn all_schema_versions_are_distinct_and_non_empty() {
+        let versions = [
+            LAW_MINING_SCHEMA_VERSION,
+            CANDIDATE_LAW_CATALOG_SCHEMA_VERSION,
+            INVARIANT_SEED_LEDGER_SCHEMA_VERSION,
+            NORMAL_FORM_HYPOTHESES_SCHEMA_VERSION,
+            LAW_PROVENANCE_INDEX_SCHEMA_VERSION,
+            CANDIDATE_SCOPE_HYPOTHESES_SCHEMA_VERSION,
+            LAW_MINING_TRACE_IDS_SCHEMA_VERSION,
+            LAW_MINING_RUN_MANIFEST_SCHEMA_VERSION,
+            LAW_MINING_ENV_SCHEMA_VERSION,
+            LAW_MINING_ARTIFACT_INDEX_SCHEMA_VERSION,
+            LAW_MINING_EVENT_STREAM_SCHEMA_VERSION,
+        ];
+        let unique: BTreeSet<&str> = versions.iter().copied().collect();
+        assert_eq!(unique.len(), versions.len());
+        for version in &versions {
+            assert!(!version.is_empty());
+            assert!(version.starts_with("franken-engine."));
+        }
+    }
+
+    #[test]
+    fn provenance_source_kind_serde_round_trip() {
+        for kind in [ProvenanceSourceKind::Counterexample, ProvenanceSourceKind::EvidenceEntry] {
+            let json = serde_json::to_string(&kind).unwrap();
+            let back: ProvenanceSourceKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, kind);
+        }
+    }
+
+    #[test]
     fn candidate_extraction_is_deterministic_across_input_order() {
         let a = sample_counterexample(
             1,

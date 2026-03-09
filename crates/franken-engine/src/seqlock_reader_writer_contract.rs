@@ -877,6 +877,49 @@ mod tests {
     }
 
     #[test]
+    fn all_schema_versions_are_distinct() {
+        let versions = [
+            CONTRACT_SCHEMA_VERSION,
+            RETRY_POLICY_SCHEMA_VERSION,
+            FALLBACK_MATRIX_SCHEMA_VERSION,
+            TRACE_IDS_SCHEMA_VERSION,
+            RUN_MANIFEST_SCHEMA_VERSION,
+            DOCS_CONTRACT_SCHEMA_VERSION,
+        ];
+        let unique: std::collections::BTreeSet<_> = versions.iter().collect();
+        assert_eq!(unique.len(), versions.len());
+    }
+
+    #[test]
+    fn accepted_candidates_match_inventory_count() {
+        let inventory = default_candidate_inventory("2026-03-06T00:00:00Z");
+        let accept_count = inventory
+            .candidates
+            .iter()
+            .filter(|c| c.disposition == CandidateDisposition::Accept)
+            .count();
+        let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
+        assert_eq!(rows.len(), accept_count);
+    }
+
+    #[test]
+    fn render_summary_mentions_bead_and_component() {
+        let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
+        let contract = ReaderWriterContractArtifact {
+            schema_version: CONTRACT_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            component: COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            contract_hash: "abc".to_string(),
+            accepted_candidates: rows,
+            observed_telemetry: vec![],
+        };
+        let summary = render_summary(&contract);
+        assert!(summary.contains(BEAD_ID));
+        assert!(summary.contains(COMPONENT));
+    }
+
+    #[test]
     fn accepted_candidate_rows_match_inventory_accepts() {
         let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
         assert_eq!(rows.len(), 3);

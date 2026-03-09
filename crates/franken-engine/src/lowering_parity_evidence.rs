@@ -419,6 +419,61 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_constants_are_non_empty() {
+        assert!(!PARITY_EVIDENCE_SCHEMA_VERSION.is_empty());
+        assert!(!PARITY_EVIDENCE_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!PARITY_EVIDENCE_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!PARITY_EVIDENCE_COMPONENT.is_empty());
+        assert!(!PARITY_EVIDENCE_POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn parity_verdict_serde_round_trip() {
+        for verdict in [
+            ParityVerdict::Covered,
+            ParityVerdict::FailClosedAgreed,
+            ParityVerdict::ParserLeadsLowering,
+            ParityVerdict::LoweringLeadsParser,
+            ParityVerdict::OpenGap,
+        ] {
+            let json = serde_json::to_string(&verdict).unwrap();
+            let back: ParityVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, verdict);
+        }
+    }
+
+    #[test]
+    fn parity_finding_serde_round_trip() {
+        let finding = ParityFinding {
+            site_id: "test.site".to_string(),
+            feature_family: "test_family".to_string(),
+            parser_status: "resolved".to_string(),
+            lowering_status: "resolved".to_string(),
+            verdict: ParityVerdict::Covered,
+            diagnostic_code: "FE-TEST-0001".to_string(),
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        let back: ParityFinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, finding);
+    }
+
+    #[test]
+    fn parity_evidence_event_serde_round_trip() {
+        let event = ParityEvidenceEvent {
+            schema_version: PARITY_EVIDENCE_EVENT_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            event: "finding_recorded".to_string(),
+            policy_id: PARITY_EVIDENCE_POLICY_ID.to_string(),
+            site_id: Some("test.site".to_string()),
+            verdict: Some("covered".to_string()),
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ParityEvidenceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
     fn parity_evidence_inventory_has_findings() {
         let inventory = parity_evidence_inventory();
         assert!(

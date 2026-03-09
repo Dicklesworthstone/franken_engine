@@ -677,6 +677,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn schema_version_constants_are_non_empty() {
+        assert!(!CLAIM_ATOM_LATTICE_SCHEMA_VERSION.is_empty());
+        assert!(!CLAIM_ATOM_LATTICE_BEAD_ID.is_empty());
+        assert!(!ENTITLEMENT_RESULT_SCHEMA_VERSION.is_empty());
+    }
+
     // -- Display --
 
     #[test]

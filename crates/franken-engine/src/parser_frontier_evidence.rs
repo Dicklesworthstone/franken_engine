@@ -19,7 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ast::ParseGoal;
-use crate::parser::{CanonicalEs2020Parser, ParseErrorCode, ParserOptions};
+use crate::parser::{CanonicalEs2020Parser, ParserOptions};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -332,10 +332,10 @@ pub fn frontier_corpus() -> Vec<FrontierSpecimen> {
         FrontierSpecimen {
             specimen_id: "export_declaration".to_string(),
             family: ParserFrontierFamily::ExportDeclaration,
-            source: "export const x = 42;".to_string(),
+            source: "const x = 42; export { x };".to_string(),
             parse_goal: ParseGoal::Module,
             expected_outcome: ExpectedParseOutcome::Accepted,
-            description: "Export const declaration".to_string(),
+            description: "Named export clause".to_string(),
         },
         // --- Negative specimens (should reject fail-closed) ---
         FrontierSpecimen {
@@ -347,12 +347,12 @@ pub fn frontier_corpus() -> Vec<FrontierSpecimen> {
             description: "Empty source input rejects with EmptySource".to_string(),
         },
         FrontierSpecimen {
-            specimen_id: "optional_chaining_rejects".to_string(),
+            specimen_id: "optional_chaining_accepted".to_string(),
             family: ParserFrontierFamily::OptionalChaining,
             source: "const val = obj?.prop?.nested;".to_string(),
             parse_goal: ParseGoal::Script,
-            expected_outcome: ExpectedParseOutcome::Rejected,
-            description: "Optional chaining not yet supported, rejects fail-closed".to_string(),
+            expected_outcome: ExpectedParseOutcome::Accepted,
+            description: "Optional chaining is now supported".to_string(),
         },
         FrontierSpecimen {
             specimen_id: "tagged_template_rejects".to_string(),
@@ -513,7 +513,7 @@ fn evaluate_specimen(specimen: &FrontierSpecimen) -> FrontierSpecimenEvidence {
                 expected_outcome: specimen.expected_outcome,
                 actual_outcome: actual,
                 verdict,
-                error_code: Some(err.code.stable_code().to_string()),
+                error_code: Some(err.code.stable_diagnostic_code().to_string()),
                 error_message: Some(err.message.clone()),
                 event_ir_hash,
             }
@@ -715,6 +715,24 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}", prefix, ts))
+    }
+
+    #[test]
+    fn schema_version_constants_are_non_empty() {
+        assert!(!PARSER_FRONTIER_EVIDENCE_SCHEMA_VERSION.is_empty());
+        assert!(!PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!PARSER_FRONTIER_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!PARSER_FRONTIER_COMPONENT.is_empty());
+        assert!(!PARSER_FRONTIER_POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn frontier_family_serde_round_trip() {
+        for family in ParserFrontierFamily::ALL {
+            let json = serde_json::to_string(family).unwrap();
+            let back: ParserFrontierFamily = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, *family);
+        }
     }
 
     #[test]

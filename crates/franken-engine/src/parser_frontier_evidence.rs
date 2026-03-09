@@ -32,8 +32,7 @@ pub const PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION: &str =
 pub const PARSER_FRONTIER_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.parser-frontier-evidence.event.v1";
 pub const PARSER_FRONTIER_COMPONENT: &str = "parser_frontier_evidence";
-pub const PARSER_FRONTIER_POLICY_ID: &str =
-    "franken-engine.parser-frontier-evidence.policy.v1";
+pub const PARSER_FRONTIER_POLICY_ID: &str = "franken-engine.parser-frontier-evidence.policy.v1";
 
 // ---------------------------------------------------------------------------
 // Corpus: Parser frontier syntax families
@@ -562,9 +561,7 @@ pub fn run_frontier_corpus() -> ParserFrontierEvidenceInventory {
 }
 
 /// Generate events.
-fn generate_events(
-    inventory: &ParserFrontierEvidenceInventory,
-) -> Vec<FrontierEvidenceEvent> {
+fn generate_events(inventory: &ParserFrontierEvidenceInventory) -> Vec<FrontierEvidenceEvent> {
     let mut events = Vec::new();
 
     events.push(FrontierEvidenceEvent {
@@ -743,8 +740,7 @@ mod tests {
     #[test]
     fn corpus_covers_all_families() {
         let corpus = frontier_corpus();
-        let covered: BTreeSet<ParserFrontierFamily> =
-            corpus.iter().map(|s| s.family).collect();
+        let covered: BTreeSet<ParserFrontierFamily> = corpus.iter().map(|s| s.family).collect();
         for f in ParserFrontierFamily::ALL {
             assert!(covered.contains(f), "missing coverage for {:?}", f);
         }
@@ -800,10 +796,7 @@ mod tests {
     fn corpus_counts_consistent() {
         let inv = run_frontier_corpus();
         assert_eq!(inv.pass_count + inv.fail_count, inv.specimen_count);
-        assert_eq!(
-            inv.accepted_count + inv.rejected_count,
-            inv.specimen_count
-        );
+        assert_eq!(inv.accepted_count + inv.rejected_count, inv.specimen_count);
         assert_eq!(inv.evidence.len() as u64, inv.specimen_count);
     }
 
@@ -816,8 +809,10 @@ mod tests {
 
     #[test]
     fn frontier_family_as_str_distinct() {
-        let strs: BTreeSet<&str> =
-            ParserFrontierFamily::ALL.iter().map(|f| f.as_str()).collect();
+        let strs: BTreeSet<&str> = ParserFrontierFamily::ALL
+            .iter()
+            .map(|f| f.as_str())
+            .collect();
         assert_eq!(strs.len(), ParserFrontierFamily::ALL.len());
     }
 

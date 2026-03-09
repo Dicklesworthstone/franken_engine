@@ -5,11 +5,11 @@
 
 use frankenengine_engine::ts_normalization_evidence::{
     ActualOutcome, CorpusSpecimen, ExpectedOutcome, SpecimenEvidence, SpecimenVerdict,
-    TsEvidenceArtifactPaths, TsEvidenceBundleArtifacts, TsEvidenceEvent, TsEvidenceRunManifest,
-    TsFeatureFamily, TsNormalizationEvidenceInventory,
     TS_DIAGNOSTIC_CORPUS_SCHEMA_VERSION, TS_EVIDENCE_COMPONENT, TS_EVIDENCE_EVENT_SCHEMA_VERSION,
-    TS_EVIDENCE_MANIFEST_SCHEMA_VERSION, TS_EVIDENCE_POLICY_ID,
-    diagnostic_corpus, run_diagnostic_corpus, write_evidence_bundle,
+    TS_EVIDENCE_MANIFEST_SCHEMA_VERSION, TS_EVIDENCE_POLICY_ID, TsEvidenceArtifactPaths,
+    TsEvidenceBundleArtifacts, TsEvidenceEvent, TsEvidenceRunManifest, TsFeatureFamily,
+    TsNormalizationEvidenceInventory, diagnostic_corpus, run_diagnostic_corpus,
+    write_evidence_bundle,
 };
 use std::collections::BTreeSet;
 use std::fs;
@@ -35,10 +35,13 @@ fn corpus_is_non_empty() {
 #[test]
 fn corpus_covers_all_feature_families() {
     let corpus = diagnostic_corpus();
-    let covered: BTreeSet<TsFeatureFamily> =
-        corpus.iter().map(|s| s.feature_family).collect();
+    let covered: BTreeSet<TsFeatureFamily> = corpus.iter().map(|s| s.feature_family).collect();
     for family in TsFeatureFamily::ALL {
-        assert!(covered.contains(family), "missing coverage for {:?}", family);
+        assert!(
+            covered.contains(family),
+            "missing coverage for {:?}",
+            family
+        );
     }
 }
 
@@ -62,10 +65,18 @@ fn corpus_specimens_have_valid_fields() {
 #[test]
 fn corpus_has_at_least_one_per_outcome_type() {
     let corpus = diagnostic_corpus();
-    let has_normalized = corpus.iter().any(|s| s.expected_outcome == ExpectedOutcome::NormalizedAway);
-    let has_lowered = corpus.iter().any(|s| s.expected_outcome == ExpectedOutcome::LoweredToEs2020);
-    let has_fail_closed = corpus.iter().any(|s| s.expected_outcome == ExpectedOutcome::FailClosed);
-    let has_known_gap = corpus.iter().any(|s| s.expected_outcome == ExpectedOutcome::KnownGap);
+    let has_normalized = corpus
+        .iter()
+        .any(|s| s.expected_outcome == ExpectedOutcome::NormalizedAway);
+    let has_lowered = corpus
+        .iter()
+        .any(|s| s.expected_outcome == ExpectedOutcome::LoweredToEs2020);
+    let has_fail_closed = corpus
+        .iter()
+        .any(|s| s.expected_outcome == ExpectedOutcome::FailClosed);
+    let has_known_gap = corpus
+        .iter()
+        .any(|s| s.expected_outcome == ExpectedOutcome::KnownGap);
     assert!(has_normalized, "missing NormalizedAway specimen");
     assert!(has_lowered, "missing LoweredToEs2020 specimen");
     assert!(has_fail_closed, "missing FailClosed specimen");
@@ -187,7 +198,12 @@ fn every_evidence_record_has_valid_fields() {
 fn no_unexpected_failures_in_evidence() {
     let inv = run_diagnostic_corpus();
     for ev in &inv.evidence {
-        assert_eq!(ev.verdict, SpecimenVerdict::Pass, "specimen {} failed", ev.specimen_id);
+        assert_eq!(
+            ev.verdict,
+            SpecimenVerdict::Pass,
+            "specimen {} failed",
+            ev.specimen_id
+        );
     }
 }
 
@@ -355,7 +371,10 @@ fn bundle_manifest_fields_consistent() {
     assert_eq!(manifest.schema_version, TS_EVIDENCE_MANIFEST_SCHEMA_VERSION);
     assert_eq!(manifest.component, TS_EVIDENCE_COMPONENT);
     assert_eq!(manifest.policy_id, TS_EVIDENCE_POLICY_ID);
-    assert_eq!(manifest.pass_count + manifest.fail_count, manifest.specimen_count);
+    assert_eq!(
+        manifest.pass_count + manifest.fail_count,
+        manifest.specimen_count
+    );
 }
 
 #[test]
@@ -454,7 +473,11 @@ fn bundle_manifest_artifact_paths_are_relative() {
 #[test]
 fn type_annotation_specimen_normalizes_away() {
     let inv = run_diagnostic_corpus();
-    let ev = inv.evidence.iter().find(|e| e.specimen_id == "type_annotation_variable").unwrap();
+    let ev = inv
+        .evidence
+        .iter()
+        .find(|e| e.specimen_id == "type_annotation_variable")
+        .unwrap();
     assert_eq!(ev.verdict, SpecimenVerdict::Pass);
     assert_eq!(ev.actual_outcome, ActualOutcome::Success);
 }
@@ -462,7 +485,11 @@ fn type_annotation_specimen_normalizes_away() {
 #[test]
 fn enum_specimen_lowers_to_es2020() {
     let inv = run_diagnostic_corpus();
-    let ev = inv.evidence.iter().find(|e| e.specimen_id == "enum_declaration").unwrap();
+    let ev = inv
+        .evidence
+        .iter()
+        .find(|e| e.specimen_id == "enum_declaration")
+        .unwrap();
     assert_eq!(ev.verdict, SpecimenVerdict::Pass);
     assert_eq!(ev.expected_outcome, ExpectedOutcome::LoweredToEs2020);
 }
@@ -470,7 +497,11 @@ fn enum_specimen_lowers_to_es2020() {
 #[test]
 fn namespace_specimen_fails_closed() {
     let inv = run_diagnostic_corpus();
-    let ev = inv.evidence.iter().find(|e| e.specimen_id == "namespace_simple").unwrap();
+    let ev = inv
+        .evidence
+        .iter()
+        .find(|e| e.specimen_id == "namespace_simple")
+        .unwrap();
     assert_eq!(ev.verdict, SpecimenVerdict::Pass);
     assert_eq!(ev.expected_outcome, ExpectedOutcome::FailClosed);
     assert_eq!(ev.actual_outcome, ActualOutcome::Rejected);
@@ -479,7 +510,11 @@ fn namespace_specimen_fails_closed() {
 #[test]
 fn interface_specimen_is_known_gap() {
     let inv = run_diagnostic_corpus();
-    let ev = inv.evidence.iter().find(|e| e.specimen_id == "interface_declaration").unwrap();
+    let ev = inv
+        .evidence
+        .iter()
+        .find(|e| e.specimen_id == "interface_declaration")
+        .unwrap();
     assert_eq!(ev.verdict, SpecimenVerdict::Pass);
     assert_eq!(ev.expected_outcome, ExpectedOutcome::KnownGap);
 }
@@ -487,6 +522,10 @@ fn interface_specimen_is_known_gap() {
 #[test]
 fn decorator_specimen_lowers_correctly() {
     let inv = run_diagnostic_corpus();
-    let ev = inv.evidence.iter().find(|e| e.specimen_id == "class_decorator").unwrap();
+    let ev = inv
+        .evidence
+        .iter()
+        .find(|e| e.specimen_id == "class_decorator")
+        .unwrap();
     assert_eq!(ev.verdict, SpecimenVerdict::Pass);
 }

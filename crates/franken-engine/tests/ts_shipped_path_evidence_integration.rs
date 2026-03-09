@@ -11,11 +11,10 @@ use frankenengine_engine::ts_normalization::SourceLanguage;
 use frankenengine_engine::ts_shipped_path_evidence::{
     ShippedPathActualOutcome, ShippedPathEvidenceArtifactPaths, ShippedPathEvidenceEvent,
     ShippedPathEvidenceRunManifest, ShippedPathExpectedOutcome, ShippedPathSpecimen,
-    ShippedPathSpecimenEvidence, ShippedPathVerdict, TsShippedPathEvidenceInventory,
-    TS_SHIPPED_PATH_COMPONENT, TS_SHIPPED_PATH_EVENT_SCHEMA_VERSION,
-    TS_SHIPPED_PATH_MANIFEST_SCHEMA_VERSION, TS_SHIPPED_PATH_POLICY_ID,
-    TS_SHIPPED_PATH_SCHEMA_VERSION, run_shipped_path_corpus, shipped_path_corpus,
-    write_shipped_path_evidence_bundle,
+    ShippedPathSpecimenEvidence, ShippedPathVerdict, TS_SHIPPED_PATH_COMPONENT,
+    TS_SHIPPED_PATH_EVENT_SCHEMA_VERSION, TS_SHIPPED_PATH_MANIFEST_SCHEMA_VERSION,
+    TS_SHIPPED_PATH_POLICY_ID, TS_SHIPPED_PATH_SCHEMA_VERSION, TsShippedPathEvidenceInventory,
+    run_shipped_path_corpus, shipped_path_corpus, write_shipped_path_evidence_bundle,
 };
 
 // ===========================================================================
@@ -144,7 +143,11 @@ fn run_corpus_evidence_ids_match_corpus() {
     let corpus = shipped_path_corpus();
     let inv = run_shipped_path_corpus();
     let corpus_ids: Vec<&str> = corpus.iter().map(|s| s.specimen_id.as_str()).collect();
-    let evidence_ids: Vec<&str> = inv.evidence.iter().map(|e| e.specimen_id.as_str()).collect();
+    let evidence_ids: Vec<&str> = inv
+        .evidence
+        .iter()
+        .map(|e| e.specimen_id.as_str())
+        .collect();
     assert_eq!(corpus_ids, evidence_ids);
 }
 
@@ -408,7 +411,9 @@ fn test_dir(suffix: &str) -> std::path::PathBuf {
         .unwrap_or_default()
         .as_nanos();
     let tid = std::thread::current().id();
-    std::env::temp_dir().join(format!("franken_ts_shipped_path_integ_{suffix}-{ts}-{tid:?}"))
+    std::env::temp_dir().join(format!(
+        "franken_ts_shipped_path_integ_{suffix}-{ts}-{tid:?}"
+    ))
 }
 
 #[test]
@@ -422,42 +427,36 @@ fn write_bundle_creates_all_artifacts() {
     assert!(artifacts.run_manifest_path.exists());
     assert!(artifacts.events_path.exists());
     assert!(artifacts.commands_path.exists());
-
 }
 
 #[test]
 fn write_bundle_inventory_is_valid_json() {
     let dir = test_dir("inv_json");
 
-    let artifacts =
-        write_shipped_path_evidence_bundle(&dir, &["cmd".to_string()]).unwrap();
+    let artifacts = write_shipped_path_evidence_bundle(&dir, &["cmd".to_string()]).unwrap();
 
     let content = std::fs::read_to_string(&artifacts.inventory_path).unwrap();
     let inv: TsShippedPathEvidenceInventory = serde_json::from_str(&content).unwrap();
     assert!(inv.contract_satisfied());
-
 }
 
 #[test]
 fn write_bundle_manifest_is_valid_json() {
     let dir = test_dir("manifest_json");
 
-    let artifacts =
-        write_shipped_path_evidence_bundle(&dir, &["cmd".to_string()]).unwrap();
+    let artifacts = write_shipped_path_evidence_bundle(&dir, &["cmd".to_string()]).unwrap();
 
     let content = std::fs::read_to_string(&artifacts.run_manifest_path).unwrap();
     let manifest: ShippedPathEvidenceRunManifest = serde_json::from_str(&content).unwrap();
     assert!(manifest.contract_satisfied);
     assert_eq!(manifest.policy_id, TS_SHIPPED_PATH_POLICY_ID);
-
 }
 
 #[test]
 fn write_bundle_events_are_jsonl() {
     let dir = test_dir("events_jsonl");
 
-    let artifacts =
-        write_shipped_path_evidence_bundle(&dir, &["cmd".to_string()]).unwrap();
+    let artifacts = write_shipped_path_evidence_bundle(&dir, &["cmd".to_string()]).unwrap();
 
     let content = std::fs::read_to_string(&artifacts.events_path).unwrap();
     for line in content.lines() {
@@ -466,7 +465,6 @@ fn write_bundle_events_are_jsonl() {
     // At least start + per-specimen + end = 1 + N + 1
     let corpus_len = shipped_path_corpus().len();
     assert!(content.lines().count() >= corpus_len + 2);
-
 }
 
 #[test]
@@ -479,18 +477,15 @@ fn write_bundle_commands_recorded() {
     let content = std::fs::read_to_string(&artifacts.commands_path).unwrap();
     assert!(content.contains("alpha"));
     assert!(content.contains("beta"));
-
 }
 
 #[test]
 fn write_bundle_inventory_hash_non_empty() {
     let dir = test_dir("hash_nonempty");
 
-    let artifacts =
-        write_shipped_path_evidence_bundle(&dir, &["cmd".to_string()]).unwrap();
+    let artifacts = write_shipped_path_evidence_bundle(&dir, &["cmd".to_string()]).unwrap();
     assert!(!artifacts.inventory_hash.is_empty());
     assert_eq!(artifacts.inventory_hash.len(), 64, "SHA-256 hex = 64 chars");
-
 }
 
 #[test]
@@ -498,10 +493,7 @@ fn write_bundle_hash_deterministic() {
     let dir1 = test_dir("hash_det_1");
     let dir2 = test_dir("hash_det_2");
 
-
     let a = write_shipped_path_evidence_bundle(&dir1, &["cmd".to_string()]).unwrap();
     let b = write_shipped_path_evidence_bundle(&dir2, &["cmd".to_string()]).unwrap();
     assert_eq!(a.inventory_hash, b.inventory_hash);
-
-
 }

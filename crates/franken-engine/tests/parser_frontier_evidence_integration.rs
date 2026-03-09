@@ -3,12 +3,11 @@
 use frankenengine_engine::parser_frontier_evidence::{
     ActualParseOutcome, ExpectedParseOutcome, FrontierEvidenceArtifactPaths,
     FrontierEvidenceBundleArtifacts, FrontierEvidenceEvent, FrontierEvidenceRunManifest,
-    FrontierSpecimen, FrontierSpecimenEvidence, FrontierVerdict,
-    ParserFrontierEvidenceInventory, ParserFrontierFamily,
-    PARSER_FRONTIER_COMPONENT, PARSER_FRONTIER_EVIDENCE_SCHEMA_VERSION,
-    PARSER_FRONTIER_EVENT_SCHEMA_VERSION, PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION,
-    PARSER_FRONTIER_POLICY_ID,
-    frontier_corpus, run_frontier_corpus, write_frontier_evidence_bundle,
+    FrontierSpecimen, FrontierSpecimenEvidence, FrontierVerdict, PARSER_FRONTIER_COMPONENT,
+    PARSER_FRONTIER_EVENT_SCHEMA_VERSION, PARSER_FRONTIER_EVIDENCE_SCHEMA_VERSION,
+    PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION, PARSER_FRONTIER_POLICY_ID,
+    ParserFrontierEvidenceInventory, ParserFrontierFamily, frontier_corpus, run_frontier_corpus,
+    write_frontier_evidence_bundle,
 };
 use std::collections::BTreeSet;
 use std::fs;
@@ -49,8 +48,16 @@ fn corpus_ids_unique() {
 #[test]
 fn corpus_has_positive_and_negative() {
     let corpus = frontier_corpus();
-    assert!(corpus.iter().any(|s| s.expected_outcome == ExpectedParseOutcome::Accepted));
-    assert!(corpus.iter().any(|s| s.expected_outcome == ExpectedParseOutcome::Rejected));
+    assert!(
+        corpus
+            .iter()
+            .any(|s| s.expected_outcome == ExpectedParseOutcome::Accepted)
+    );
+    assert!(
+        corpus
+            .iter()
+            .any(|s| s.expected_outcome == ExpectedParseOutcome::Rejected)
+    );
 }
 
 #[test]
@@ -65,7 +72,10 @@ fn corpus_specimens_have_valid_fields() {
 
 #[test]
 fn family_as_str_distinct() {
-    let strs: BTreeSet<&str> = ParserFrontierFamily::ALL.iter().map(|f| f.as_str()).collect();
+    let strs: BTreeSet<&str> = ParserFrontierFamily::ALL
+        .iter()
+        .map(|f| f.as_str())
+        .collect();
     assert_eq!(strs.len(), ParserFrontierFamily::ALL.len());
 }
 
@@ -85,9 +95,12 @@ fn all_specimens_pass() {
     let inv = run_frontier_corpus();
     for ev in &inv.evidence {
         assert_eq!(
-            ev.verdict, FrontierVerdict::Pass,
+            ev.verdict,
+            FrontierVerdict::Pass,
             "specimen {} failed: expected={:?}, actual={:?}",
-            ev.specimen_id, ev.expected_outcome, ev.actual_outcome
+            ev.specimen_id,
+            ev.expected_outcome,
+            ev.actual_outcome
         );
     }
 }
@@ -118,7 +131,11 @@ fn rejected_specimens_have_error_codes() {
     let inv = run_frontier_corpus();
     for ev in &inv.evidence {
         if ev.actual_outcome == ActualParseOutcome::Rejected {
-            assert!(ev.error_code.is_some(), "specimen {} needs error_code", ev.specimen_id);
+            assert!(
+                ev.error_code.is_some(),
+                "specimen {} needs error_code",
+                ev.specimen_id
+            );
         }
     }
 }
@@ -127,7 +144,11 @@ fn rejected_specimens_have_error_codes() {
 fn all_specimens_have_event_ir_hash() {
     let inv = run_frontier_corpus();
     for ev in &inv.evidence {
-        assert!(ev.event_ir_hash.is_some(), "specimen {} needs event_ir_hash", ev.specimen_id);
+        assert!(
+            ev.event_ir_hash.is_some(),
+            "specimen {} needs event_ir_hash",
+            ev.specimen_id
+        );
     }
 }
 
@@ -298,8 +319,8 @@ fn bundle_events_valid_jsonl() {
     let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
     let events = fs::read_to_string(&arts.events_path).unwrap();
     for (i, line) in events.lines().enumerate() {
-        let _: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("line {} invalid: {}", i, e));
+        let _: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("line {} invalid: {}", i, e));
     }
 }
 

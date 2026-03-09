@@ -1374,12 +1374,22 @@ mod tests {
         let fp1 = ModuleVersionFingerprint::new(ContentHash::compute(b"src-a"), 1, 1);
         let fp2 = ModuleVersionFingerprint::new(ContentHash::compute(b"src-b"), 1, 1);
         let m1 = PersistentCacheKeyMaterial::from_fingerprint(
-            "mod:a", &fp1, ContentHash::compute(b"cfg"), ContentHash::compute(b"deps"),
-            "lower_ir3", "profile", "0.1.0",
+            "mod:a",
+            &fp1,
+            ContentHash::compute(b"cfg"),
+            ContentHash::compute(b"deps"),
+            "lower_ir3",
+            "profile",
+            "0.1.0",
         );
         let m2 = PersistentCacheKeyMaterial::from_fingerprint(
-            "mod:a", &fp2, ContentHash::compute(b"cfg"), ContentHash::compute(b"deps"),
-            "lower_ir3", "profile", "0.1.0",
+            "mod:a",
+            &fp2,
+            ContentHash::compute(b"cfg"),
+            ContentHash::compute(b"deps"),
+            "lower_ir3",
+            "profile",
+            "0.1.0",
         );
         assert_ne!(m1.cache_key_id(), m2.cache_key_id());
     }
@@ -1388,8 +1398,13 @@ mod tests {
     fn cache_key_id_is_hex_sha256() {
         let fp = ModuleVersionFingerprint::new(ContentHash::compute(b"source"), 1, 1);
         let material = PersistentCacheKeyMaterial::from_fingerprint(
-            "mod:test", &fp, ContentHash::compute(b"cfg"), ContentHash::compute(b"deps"),
-            "lower_ir3", "profile", "0.1.0",
+            "mod:test",
+            &fp,
+            ContentHash::compute(b"cfg"),
+            ContentHash::compute(b"deps"),
+            "lower_ir3",
+            "profile",
+            "0.1.0",
         );
         let key = material.cache_key_id();
         assert!(key.starts_with("sha256:"));

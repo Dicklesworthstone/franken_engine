@@ -1018,8 +1018,16 @@ mod tests {
     fn candidate_rows_have_non_empty_api_fields() {
         let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
         for row in &rows {
-            assert!(!row.read_api.is_empty(), "read_api empty for {}", row.candidate_id);
-            assert!(!row.write_api.is_empty(), "write_api empty for {}", row.candidate_id);
+            assert!(
+                !row.read_api.is_empty(),
+                "read_api empty for {}",
+                row.candidate_id
+            );
+            assert!(
+                !row.write_api.is_empty(),
+                "write_api empty for {}",
+                row.candidate_id
+            );
             assert!(!row.module_path.is_empty());
             assert!(!row.surface_name.is_empty());
             assert!(!row.incumbent_baseline.is_empty());
@@ -1031,7 +1039,10 @@ mod tests {
         let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
         for row in &rows {
             assert!(row.telemetry_fields.contains(&"total_reads".to_string()));
-            assert!(row.telemetry_fields.contains(&"fast_path_reads".to_string()));
+            assert!(
+                row.telemetry_fields
+                    .contains(&"fast_path_reads".to_string())
+            );
             assert!(row.telemetry_fields.contains(&"writes".to_string()));
         }
     }
@@ -1141,7 +1152,10 @@ mod tests {
     #[test]
     fn artifact_context_has_expected_defaults() {
         let ctx = ArtifactContext::new("/tmp/test");
-        assert!(ctx.run_id.starts_with("run-seqlock_reader_writer_contract-"));
+        assert!(
+            ctx.run_id
+                .starts_with("run-seqlock_reader_writer_contract-")
+        );
         assert!(ctx.trace_id.starts_with("trace."));
         assert!(ctx.decision_id.starts_with("decision."));
         assert!(ctx.policy_id.starts_with("policy."));
@@ -1154,7 +1168,11 @@ mod tests {
         let fixture = build_docs_contract_fixture();
         assert_eq!(fixture.bead_id, BEAD_ID);
         assert_eq!(fixture.candidate_policies.len(), 3);
-        let ids: Vec<_> = fixture.candidate_policies.iter().map(|p| p.candidate_id.as_str()).collect();
+        let ids: Vec<_> = fixture
+            .candidate_policies
+            .iter()
+            .map(|p| p.candidate_id.as_str())
+            .collect();
         let mut sorted = ids.clone();
         sorted.sort();
         assert_eq!(ids, sorted);

@@ -1525,7 +1525,10 @@ mod tests {
 
     #[test]
     fn provenance_source_kind_serde_round_trip() {
-        for kind in [ProvenanceSourceKind::Counterexample, ProvenanceSourceKind::EvidenceEntry] {
+        for kind in [
+            ProvenanceSourceKind::Counterexample,
+            ProvenanceSourceKind::EvidenceEntry,
+        ] {
             let json = serde_json::to_string(&kind).unwrap();
             let back: ProvenanceSourceKind = serde_json::from_str(&json).unwrap();
             assert_eq!(back, kind);
@@ -1807,12 +1810,18 @@ mod tests {
     #[test]
     fn candidates_have_unique_ids() {
         let a = sample_counterexample(
-            10, FormalProperty::MergeDeterminism,
-            &["fs.read"], &[("r", "a")], &["m"],
+            10,
+            FormalProperty::MergeDeterminism,
+            &["fs.read"],
+            &[("r", "a")],
+            &["m"],
         );
         let b = sample_counterexample(
-            11, FormalProperty::Monotonicity,
-            &["net.send"], &[("r", "b")], &["n"],
+            11,
+            FormalProperty::Monotonicity,
+            &["net.send"],
+            &[("r", "b")],
+            &["n"],
         );
         let catalog = LawMiningCatalog::from_sources(5, &[a, b], &[]);
         let ids: BTreeSet<_> = catalog.candidates.iter().map(|c| &c.candidate_id).collect();
@@ -1822,16 +1831,25 @@ mod tests {
     #[test]
     fn candidates_are_ranked_descending() {
         let a = sample_counterexample(
-            20, FormalProperty::MergeDeterminism,
-            &["fs.read", "net.send"], &[("x", "1")], &["m-a", "m-b"],
+            20,
+            FormalProperty::MergeDeterminism,
+            &["fs.read", "net.send"],
+            &[("x", "1")],
+            &["m-a", "m-b"],
         );
         let b = sample_counterexample(
-            21, FormalProperty::MergeDeterminism,
-            &["fs.read", "net.send"], &[("x", "1")], &["m-a", "m-b"],
+            21,
+            FormalProperty::MergeDeterminism,
+            &["fs.read", "net.send"],
+            &[("x", "1")],
+            &["m-a", "m-b"],
         );
         let evidence = sample_evidence_entry(
-            "trace-rank", DecisionType::SecurityAction,
-            "policy-rank", &["quorum"], &["posterior"],
+            "trace-rank",
+            DecisionType::SecurityAction,
+            "policy-rank",
+            &["quorum"],
+            &["posterior"],
         );
         let catalog = LawMiningCatalog::from_sources(5, &[a, b], &[evidence]);
         for window in catalog.candidates.windows(2) {
@@ -1849,8 +1867,11 @@ mod tests {
         let mut catalog = LawMiningCatalog::from_sources(
             1,
             &[sample_counterexample(
-                30, FormalProperty::MergeDeterminism,
-                &["x"], &[("k", "v")], &["m"],
+                30,
+                FormalProperty::MergeDeterminism,
+                &["x"],
+                &[("k", "v")],
+                &["m"],
             )],
             &[],
         );
@@ -1865,11 +1886,18 @@ mod tests {
     #[test]
     fn provenance_records_reference_valid_candidates() {
         let cx = sample_counterexample(
-            40, FormalProperty::NonInterference,
-            &["fs.read"], &[("r", "v")], &["m"],
+            40,
+            FormalProperty::NonInterference,
+            &["fs.read"],
+            &[("r", "v")],
+            &["m"],
         );
         let catalog = LawMiningCatalog::from_sources(7, &[cx], &[]);
-        let candidate_ids: BTreeSet<_> = catalog.candidates.iter().map(|c| &c.provenance_id).collect();
+        let candidate_ids: BTreeSet<_> = catalog
+            .candidates
+            .iter()
+            .map(|c| &c.provenance_id)
+            .collect();
         for record in &catalog.provenance_index {
             assert!(
                 candidate_ids.contains(&record.provenance_id),
@@ -1884,8 +1912,11 @@ mod tests {
     #[test]
     fn catalog_serde_round_trip() {
         let cx = sample_counterexample(
-            50, FormalProperty::MergeDeterminism,
-            &["cache.lookup"], &[("board", "declared")], &["m-a"],
+            50,
+            FormalProperty::MergeDeterminism,
+            &["cache.lookup"],
+            &[("board", "declared")],
+            &["m-a"],
         );
         let catalog = LawMiningCatalog::from_sources(9, &[cx], &[]);
         let json = serde_json::to_string(&catalog).unwrap();

@@ -846,7 +846,7 @@ mod tests {
         assert!(!ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION.is_empty());
         assert!(!ZERO_PLACEHOLDER_SCAN_COMPONENT.is_empty());
         assert!(!ZERO_PLACEHOLDER_SCAN_POLICY_ID.is_empty());
-        assert!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT > 0);
+        const { assert!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT > 0) };
     }
 
     #[test]

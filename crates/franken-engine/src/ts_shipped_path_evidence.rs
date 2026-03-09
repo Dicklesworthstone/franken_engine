@@ -24,12 +24,10 @@ use crate::ts_normalization::SourceLanguage;
 // Constants
 // ---------------------------------------------------------------------------
 
-pub const TS_SHIPPED_PATH_SCHEMA_VERSION: &str =
-    "franken-engine.ts_shipped_path_evidence.v1";
+pub const TS_SHIPPED_PATH_SCHEMA_VERSION: &str = "franken-engine.ts_shipped_path_evidence.v1";
 pub const TS_SHIPPED_PATH_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.ts_shipped_path_manifest.v1";
-pub const TS_SHIPPED_PATH_EVENT_SCHEMA_VERSION: &str =
-    "franken-engine.ts_shipped_path_event.v1";
+pub const TS_SHIPPED_PATH_EVENT_SCHEMA_VERSION: &str = "franken-engine.ts_shipped_path_event.v1";
 pub const TS_SHIPPED_PATH_COMPONENT: &str = "ts_shipped_path_evidence";
 pub const TS_SHIPPED_PATH_POLICY_ID: &str = "RGC-204";
 
@@ -397,12 +395,16 @@ fn run_single_specimen(specimen: &ShippedPathSpecimen) -> ShippedPathSpecimenEvi
 
     let outcome_matches = matches!(
         (specimen.expected_outcome, actual_outcome),
-        (ShippedPathExpectedOutcome::ExecuteSuccess, ShippedPathActualOutcome::ExecuteSuccess)
-            | (
-                ShippedPathExpectedOutcome::NormalizationFailure,
-                ShippedPathActualOutcome::NormalizationFailure,
-            )
-            | (ShippedPathExpectedOutcome::ParseFailure, ShippedPathActualOutcome::ParseFailure)
+        (
+            ShippedPathExpectedOutcome::ExecuteSuccess,
+            ShippedPathActualOutcome::ExecuteSuccess
+        ) | (
+            ShippedPathExpectedOutcome::NormalizationFailure,
+            ShippedPathActualOutcome::NormalizationFailure,
+        ) | (
+            ShippedPathExpectedOutcome::ParseFailure,
+            ShippedPathActualOutcome::ParseFailure
+        )
     );
 
     let language_matches = specimen.expected_language == actual_language;
@@ -445,8 +447,7 @@ pub fn write_shipped_path_evidence_bundle(
     fs::create_dir_all(output_dir)?;
 
     let inv = run_shipped_path_corpus();
-    let inv_json = serde_json::to_string_pretty(&inv)
-        .map_err(std::io::Error::other)?;
+    let inv_json = serde_json::to_string_pretty(&inv).map_err(std::io::Error::other)?;
     let inventory_hash = sha256_hex(inv_json.as_bytes());
 
     let inv_path = output_dir.join("ts_shipped_path_evidence_inventory.json");
@@ -480,12 +481,14 @@ pub fn write_shipped_path_evidence_bundle(
         event: "shipped_path_evidence_run_completed".into(),
         policy_id: TS_SHIPPED_PATH_POLICY_ID.into(),
         specimen_id: None,
-        verdict: Some(if inv.contract_satisfied() {
-            "pass"
-        } else {
-            "fail"
-        }
-        .into()),
+        verdict: Some(
+            if inv.contract_satisfied() {
+                "pass"
+            } else {
+                "fail"
+            }
+            .into(),
+        ),
         detail: Some(format!(
             "pass={} fail={} js={} ts={}",
             inv.pass_count, inv.fail_count, inv.js_count, inv.ts_count
@@ -514,8 +517,14 @@ pub fn write_shipped_path_evidence_bundle(
     let manifest = ShippedPathEvidenceRunManifest {
         schema_version: TS_SHIPPED_PATH_MANIFEST_SCHEMA_VERSION.into(),
         component: TS_SHIPPED_PATH_COMPONENT.into(),
-        trace_id: format!("shipped-path-evidence-{}", inventory_hash.get(..8).unwrap_or("?")),
-        decision_id: format!("shipped-path-decision-{}", inventory_hash.get(..8).unwrap_or("?")),
+        trace_id: format!(
+            "shipped-path-evidence-{}",
+            inventory_hash.get(..8).unwrap_or("?")
+        ),
+        decision_id: format!(
+            "shipped-path-decision-{}",
+            inventory_hash.get(..8).unwrap_or("?")
+        ),
         policy_id: TS_SHIPPED_PATH_POLICY_ID.into(),
         inventory_hash: inventory_hash.clone(),
         specimen_count: inv.specimen_count,
@@ -525,8 +534,7 @@ pub fn write_shipped_path_evidence_bundle(
         artifact_paths,
     };
     let manifest_path = output_dir.join("ts_shipped_path_evidence_manifest.json");
-    let manifest_json = serde_json::to_string_pretty(&manifest)
-        .map_err(std::io::Error::other)?;
+    let manifest_json = serde_json::to_string_pretty(&manifest).map_err(std::io::Error::other)?;
     fs::write(&manifest_path, &manifest_json)?;
 
     Ok(ShippedPathBundleArtifacts {
@@ -554,8 +562,16 @@ mod tests {
     #[test]
     fn corpus_has_js_and_ts() {
         let corpus = shipped_path_corpus();
-        assert!(corpus.iter().any(|s| s.expected_language == SourceLanguage::JavaScript));
-        assert!(corpus.iter().any(|s| s.expected_language == SourceLanguage::TypeScript));
+        assert!(
+            corpus
+                .iter()
+                .any(|s| s.expected_language == SourceLanguage::JavaScript)
+        );
+        assert!(
+            corpus
+                .iter()
+                .any(|s| s.expected_language == SourceLanguage::TypeScript)
+        );
     }
 
     #[test]
@@ -614,7 +630,11 @@ mod tests {
         let inv = run_shipped_path_corpus();
         for ev in &inv.evidence {
             if ev.expected_language == SourceLanguage::JavaScript {
-                assert!(!ev.actual_normalization, "JS specimen {} was normalized", ev.specimen_id);
+                assert!(
+                    !ev.actual_normalization,
+                    "JS specimen {} was normalized",
+                    ev.specimen_id
+                );
             }
         }
     }
@@ -760,7 +780,11 @@ mod tests {
             TS_SHIPPED_PATH_EVENT_SCHEMA_VERSION,
         ];
         let set: std::collections::BTreeSet<&str> = versions.iter().copied().collect();
-        assert_eq!(set.len(), versions.len(), "schema versions must be distinct");
+        assert_eq!(
+            set.len(),
+            versions.len(),
+            "schema versions must be distinct"
+        );
     }
 
     #[test]

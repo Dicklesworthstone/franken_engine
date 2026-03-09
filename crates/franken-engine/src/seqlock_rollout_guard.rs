@@ -1169,7 +1169,11 @@ mod tests {
             let model_check = build_missing_model_check_row(candidate);
             let safety = build_safety_case_row(candidate, &starvation, &model_check);
             assert!(!safety.rollout_allowed);
-            assert!(safety.disable_reasons.contains(&"model_check_evidence_missing".to_string()));
+            assert!(
+                safety
+                    .disable_reasons
+                    .contains(&"model_check_evidence_missing".to_string())
+            );
         }
     }
 
@@ -1235,8 +1239,11 @@ mod tests {
             surface_name: "surface".to_string(),
             module_path: "crate::test".to_string(),
             incumbent_baseline: "rwlock".to_string(),
-            disposition: frankenengine_engine::seqlock_candidate_inventory::CandidateDisposition::Accept,
-            retry_budget_policy: frankenengine_engine::seqlock_fastpath::RetryBudgetPolicy::new(3, 1),
+            disposition:
+                frankenengine_engine::seqlock_candidate_inventory::CandidateDisposition::Accept,
+            retry_budget_policy: frankenengine_engine::seqlock_fastpath::RetryBudgetPolicy::new(
+                3, 1,
+            ),
         };
         let json = serde_json::to_string(&input).unwrap();
         let back: super::CandidateRolloutInput = serde_json::from_str(&json).unwrap();

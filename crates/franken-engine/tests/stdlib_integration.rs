@@ -20,9 +20,9 @@ use frankenengine_engine::stdlib::{
     ArrayMethodResult, BuiltinId, GlobalEnvironment, StdlibError, alloc_array_instance,
     alloc_map_instance, alloc_set_instance, exec_array_method, exec_boolean_method,
     exec_date_method, exec_error_constructor, exec_global_function, exec_heap_collection_method,
-    exec_math, exec_number_method, exec_object_static, exec_string_method, exec_string_static,
-    exec_symbol_static, install_stdlib, json_parse, json_stringify, read_array_elements,
-    read_map_entries, read_set_values,
+    exec_math, exec_number_method, exec_object_static, exec_string_method,
+    exec_string_method_with_receipt, exec_string_static, exec_symbol_static, install_stdlib,
+    json_parse, json_stringify, read_array_elements, read_map_entries, read_set_values,
 };
 
 const FP_SCALE: i64 = 1_000_000;
@@ -1725,6 +1725,13 @@ struct CollectionMutationScenarioReport {
     final_set: Vec<JsValue>,
 }
 
+#[derive(Debug, Serialize)]
+struct StringRepresentationScenarioReport {
+    bead_id: &'static str,
+    trace_ids: Vec<String>,
+    receipts: Vec<serde_json::Value>,
+}
+
 fn artifact_root(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2051,7 +2058,8 @@ fn heap_array_internal_reads_fail_closed_on_inherited_element_slots() {
     )
     .unwrap();
 
-    heap.delete_property(array, &PropertyKey::from("0")).unwrap();
+    heap.delete_property(array, &PropertyKey::from("0"))
+        .unwrap();
     heap.define_property(
         env.prototypes.array_prototype,
         PropertyKey::from("0"),

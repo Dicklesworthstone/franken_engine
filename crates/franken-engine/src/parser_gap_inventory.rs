@@ -913,7 +913,10 @@ mod tests {
     #[test]
     fn parser_gap_site_id_all_resolved() {
         for site in ParserGapSiteId::ALL {
-            assert_eq!(site.remediation_status(), ParserGapRemediationStatus::Resolved);
+            assert_eq!(
+                site.remediation_status(),
+                ParserGapRemediationStatus::Resolved
+            );
         }
     }
 
@@ -958,7 +961,10 @@ mod tests {
         let desc = ParserGapSiteDescriptor::from_site(ParserGapSiteId::ForInStatementPlaceholder);
         assert_eq!(desc.site_id, "lower_ir0_to_ir1.for_in_placeholder");
         assert_eq!(desc.stage, ParserGapStage::Ir0ToIr1);
-        assert_eq!(desc.remediation_status, ParserGapRemediationStatus::Resolved);
+        assert_eq!(
+            desc.remediation_status,
+            ParserGapRemediationStatus::Resolved
+        );
         assert_eq!(desc.owner, "lowering_pipeline");
         assert_eq!(desc.feature_family, "for_in_statement");
         assert_eq!(desc.api_surface, "lower_ir0_to_ir1");

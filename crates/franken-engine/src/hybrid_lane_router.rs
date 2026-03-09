@@ -424,7 +424,7 @@ impl RiskAccumulator {
         }
         let mut sorted = self.latencies_us.clone();
         sorted.sort_unstable();
-        let idx = (sorted.len() * 99) / 100;
+        let idx = ((sorted.len() - 1) * 99) / 100;
         sorted[idx.min(sorted.len() - 1)]
     }
 
@@ -709,12 +709,14 @@ pub struct HybridLaneRouter {
 impl HybridLaneRouter {
     /// Create a new router with the given configuration.
     pub fn new(config: RouterConfig) -> Self {
+        let conformal = ConformalState::new(config.conformal.clone());
+        let change_point = ChangePointMonitor::new(config.change_point.clone());
         Self {
             config,
             policy: RoutingPolicy::Conservative,
             weights: AdaptiveWeights::new(),
-            conformal: ConformalState::new(ConformalConfig::default_config()),
-            change_point: ChangePointMonitor::new(ChangePointConfig::default_config()),
+            conformal,
+            change_point,
             risk: RiskAccumulator::new(),
             round: 0,
             policy_transitions: Vec::new(),
@@ -1441,7 +1443,6 @@ mod tests {
             },
             ..RouterConfig::default_config()
         });
-        router.conformal = ConformalState::new(router.config.conformal.clone());
         router.promote_to_adaptive().unwrap();
 
         let bad_obs = LaneObservation {
@@ -1605,7 +1606,6 @@ mod tests {
             },
             ..RouterConfig::default_config()
         });
-        router.change_point = ChangePointMonitor::new(router.config.change_point.clone());
         router.promote_to_adaptive().unwrap();
 
         // Good period

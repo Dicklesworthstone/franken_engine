@@ -1043,14 +1043,16 @@ pub fn exec_object_static(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValu
 pub fn exec_string_static(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, StdlibError> {
     match builtin {
         BuiltinId::StringFromCharCode => {
-            let mut result = String::new();
+            let mut code_units = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
                 let code = coerce_to_int(&format!("String.fromCharCode arg {i}"), arg)? / FP_SCALE;
-                if let Some(ch) = char::from_u32(code.max(0) as u32) {
-                    result.push(ch);
-                }
+                code_units.push(code as u16);
             }
-            Ok(JsValue::Str(result))
+            Ok(JsValue::Str(utf16_materialize(
+                &code_units,
+                "String.fromCharCode",
+                "from the requested UTF-16 code units",
+            )?))
         }
         BuiltinId::StringFromCodePoint => {
             let mut result = String::new();
@@ -2824,6 +2826,8 @@ fn build_string_representation_receipt(
     let result_char_len = result.chars().count();
     let source_utf16_units = utf16_code_units(source);
     let result_utf16_units = utf16_code_units(result);
+    let source_has_non_bmp = has_non_bmp_scalars(source);
+    let result_has_non_bmp = has_non_bmp_scalars(result);
     let segment_count = string_segment_count(builtin, source, args, result);
     let flatten_required = matches!(
         builtin,
@@ -2832,7 +2836,7 @@ fn build_string_representation_receipt(
             | BuiltinId::StringPrototypePadEnd
             | BuiltinId::StringPrototypeRepeat
             | BuiltinId::StringPrototypeReplace
-    ) && result_char_len > 0;
+    ) && result_utf16_units > 0;
     let flatten_cost_code_units = if flatten_required {
         result_utf16_units
     } else {
@@ -2840,16 +2844,23 @@ fn build_string_representation_receipt(
     };
     let flatten_budget_exhausted =
         flatten_required && flatten_cost_code_units > STRING_FLATTEN_BUDGET_CODE_UNITS;
+    let observation_mode = if source_has_non_bmp || result_has_non_bmp {
+        StringObservationMode::BoundarySensitiveUtf16
+    } else {
+        StringObservationMode::ScalarAlignedUtf16
+    };
     let kind = classify_string_representation(
         builtin,
-        source_char_len,
-        result_char_len,
+        source_utf16_units,
+        result_utf16_units,
         segment_count,
         flatten_required,
     );
+    let view_eligible =
+        matches!(kind, StringRepresentationKind::SliceView) && !flatten_required && result_utf16_units > 0;
     let digest = hex::encode(Sha256::digest(
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}",
             builtin.name(),
             source,
             result,
@@ -2857,25 +2868,31 @@ fn build_string_representation_receipt(
             result_utf16_units,
             segment_count,
             flatten_required,
-            flatten_budget_exhausted
+            flatten_budget_exhausted,
+            kind,
+            observation_mode,
+            view_eligible
         )
         .as_bytes(),
     ));
     StringRepresentationReceipt {
         trace_id: format!("trace-string-{}", &digest[..16]),
+        stable_hash: digest.clone(),
         builtin: builtin.name().to_string(),
         kind,
+        observation_mode,
         source_char_len,
         result_char_len,
         source_utf16_units,
         result_utf16_units,
         source_is_ascii: source.is_ascii(),
         result_is_ascii: result.is_ascii(),
-        source_has_non_bmp: has_non_bmp_scalars(source),
-        result_has_non_bmp: has_non_bmp_scalars(result),
+        source_has_non_bmp,
+        result_has_non_bmp,
         segment_count,
         flatten_budget_code_units: STRING_FLATTEN_BUDGET_CODE_UNITS,
         flatten_cost_code_units,
+        view_eligible,
         flatten_required,
         flatten_budget_exhausted,
     }
@@ -2883,14 +2900,11 @@ fn build_string_representation_receipt(
 
 fn classify_string_representation(
     builtin: BuiltinId,
-    source_char_len: usize,
-    result_char_len: usize,
+    source_utf16_units: usize,
+    result_utf16_units: usize,
     segment_count: usize,
     flatten_required: bool,
 ) -> StringRepresentationKind {
-    if result_char_len <= STRING_INLINE_CHAR_MAX {
-        return StringRepresentationKind::Inline;
-    }
     if matches!(
         builtin,
         BuiltinId::StringPrototypeSlice
@@ -2899,12 +2913,16 @@ fn classify_string_representation(
             | BuiltinId::StringPrototypeTrimStart
             | BuiltinId::StringPrototypeTrimEnd
             | BuiltinId::StringPrototypeMatch
-    ) && result_char_len <= source_char_len
+    ) && result_utf16_units > 0
+        && result_utf16_units <= source_utf16_units
     {
         return StringRepresentationKind::SliceView;
     }
     if flatten_required && segment_count > 1 {
         return StringRepresentationKind::RopeCandidate;
+    }
+    if result_utf16_units <= STRING_INLINE_CHAR_MAX {
+        return StringRepresentationKind::Inline;
     }
     StringRepresentationKind::Flat
 }
@@ -2936,25 +2954,90 @@ fn utf16_code_units(value: &str) -> usize {
     value.encode_utf16().count()
 }
 
+fn utf16_code_units_vec(value: &str) -> Vec<u16> {
+    value.encode_utf16().collect()
+}
+
+fn utf16_materialize(
+    code_units: &[u16],
+    builtin_name: &str,
+    detail: &str,
+) -> Result<String, StdlibError> {
+    String::from_utf16(code_units).map_err(|_| {
+        StdlibError::TypeError(format!(
+            "{builtin_name} cannot materialize {detail} without exposing lone surrogates"
+        ))
+    })
+}
+
+fn utf16_slice_lossless(
+    value: &str,
+    start: usize,
+    end: usize,
+    builtin_name: &str,
+) -> Result<String, StdlibError> {
+    let code_units = utf16_code_units_vec(value);
+    utf16_materialize(
+        &code_units[start..end],
+        builtin_name,
+        &format!("UTF-16 slice [{start}, {end})"),
+    )
+}
+
+fn utf16_code_point_at(value: &str, index: usize) -> Option<u32> {
+    let code_units = utf16_code_units_vec(value);
+    let first = *code_units.get(index)?;
+    let first_u32 = u32::from(first);
+    if is_utf16_lead_surrogate(first) {
+        if let Some(second) = code_units.get(index + 1).copied() {
+            if is_utf16_trail_surrogate(second) {
+                let lead = first_u32 - 0xD800;
+                let trail = u32::from(second) - 0xDC00;
+                return Some(0x1_0000 + ((lead << 10) | trail));
+            }
+        }
+    }
+    Some(first_u32)
+}
+
+fn is_utf16_lead_surrogate(unit: u16) -> bool {
+    (0xD800..=0xDBFF).contains(&unit)
+}
+
+fn is_utf16_trail_surrogate(unit: u16) -> bool {
+    (0xDC00..=0xDFFF).contains(&unit)
+}
+
 fn has_non_bmp_scalars(value: &str) -> bool {
     value.chars().any(|ch| u32::from(ch) > 0xFFFF)
 }
 
-fn pad_string(s: &str, target_len: i64, pad_str: &str, start: bool) -> String {
-    let current_len = s.chars().count() as i64;
+fn pad_string(
+    s: &str,
+    target_len: i64,
+    pad_str: &str,
+    start: bool,
+    builtin_name: &str,
+) -> Result<String, StdlibError> {
+    let current_len = utf16_code_units(s) as i64;
     if target_len <= current_len || pad_str.is_empty() {
-        return s.to_string();
+        return Ok(s.to_string());
     }
     let needed = (target_len - current_len) as usize;
-    let mut padding = String::with_capacity(needed);
-    while padding.chars().count() < needed {
-        padding.push_str(pad_str);
+    let pad_units = utf16_code_units_vec(pad_str);
+    let mut padding_units = Vec::with_capacity(needed + pad_units.len());
+    while padding_units.len() < needed {
+        padding_units.extend_from_slice(&pad_units);
     }
-    let padding: String = padding.chars().take(needed).collect();
+    let padding = utf16_materialize(
+        &padding_units[..needed],
+        builtin_name,
+        "padding truncated at a surrogate boundary",
+    )?;
     if start {
-        format!("{padding}{s}")
+        Ok(format!("{padding}{s}"))
     } else {
-        format!("{s}{padding}")
+        Ok(format!("{s}{padding}"))
     }
 }
 
@@ -4156,6 +4239,20 @@ mod tests {
     }
 
     #[test]
+    fn test_string_char_at_rejects_surrogate_split() {
+        let err = exec_string_method(
+            BuiltinId::StringPrototypeCharAt,
+            "😀",
+            &[JsValue::Int(0)],
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("lone surrogates"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_string_includes() {
         assert_eq!(
             exec_string_method(
@@ -4222,6 +4319,19 @@ mod tests {
     }
 
     #[test]
+    fn test_string_index_of_reports_utf16_offsets_for_non_bmp() {
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeIndexOf,
+                "A😀B",
+                &[JsValue::Str("B".into())]
+            )
+            .unwrap(),
+            JsValue::Int(3 * FP_SCALE)
+        );
+    }
+
+    #[test]
     fn test_string_slice() {
         assert_eq!(
             exec_string_method(
@@ -4253,6 +4363,33 @@ mod tests {
             )
             .unwrap(),
             JsValue::Str("llo".into())
+        );
+    }
+
+    #[test]
+    fn test_string_slice_uses_utf16_code_unit_indices() {
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeSlice,
+                "A😀B",
+                &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)]
+            )
+            .unwrap(),
+            JsValue::Str("😀".into())
+        );
+    }
+
+    #[test]
+    fn test_string_slice_rejects_surrogate_split_boundary() {
+        let err = exec_string_method(
+            BuiltinId::StringPrototypeSlice,
+            "A😀B",
+            &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("lone surrogates"),
+            "unexpected error: {err}"
         );
     }
 
@@ -4825,6 +4962,34 @@ mod tests {
     }
 
     #[test]
+    fn test_string_from_char_code_surrogate_pair() {
+        assert_eq!(
+            exec_string_static(
+                BuiltinId::StringFromCharCode,
+                &[
+                    JsValue::Int(0xD83D_i64 * FP_SCALE),
+                    JsValue::Int(0xDE00_i64 * FP_SCALE),
+                ]
+            )
+            .unwrap(),
+            JsValue::Str("😀".into())
+        );
+    }
+
+    #[test]
+    fn test_string_from_char_code_lone_surrogate_fails_closed() {
+        let err = exec_string_static(
+            BuiltinId::StringFromCharCode,
+            &[JsValue::Int(0xD83D_i64 * FP_SCALE)],
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("lone surrogates"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_string_from_code_point() {
         assert_eq!(
             exec_string_static(
@@ -4868,6 +5033,50 @@ mod tests {
             )
             .unwrap(),
             JsValue::Undefined
+        );
+    }
+
+    #[test]
+    fn test_string_code_point_at_non_bmp_uses_utf16_observation() {
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeCodePointAt,
+                "😀",
+                &[JsValue::Int(0)]
+            )
+            .unwrap(),
+            JsValue::Int(0x1F600_i64 * FP_SCALE)
+        );
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeCodePointAt,
+                "😀",
+                &[JsValue::Int(FP_SCALE)]
+            )
+            .unwrap(),
+            JsValue::Int(0xDE00_i64 * FP_SCALE)
+        );
+    }
+
+    #[test]
+    fn test_string_char_code_at_non_bmp_reports_surrogate_units() {
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeCharCodeAt,
+                "😀",
+                &[JsValue::Int(0)]
+            )
+            .unwrap(),
+            JsValue::Int(0xD83D_i64 * FP_SCALE)
+        );
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeCharCodeAt,
+                "😀",
+                &[JsValue::Int(FP_SCALE)]
+            )
+            .unwrap(),
+            JsValue::Int(0xDE00_i64 * FP_SCALE)
         );
     }
 
@@ -5301,16 +5510,22 @@ mod tests {
         let traced = exec_string_method_with_receipt(
             BuiltinId::StringPrototypeSlice,
             "a😀b",
-            &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
+            &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)],
         )
         .unwrap();
         let receipt = traced.receipt.expect("string receipt");
         assert_eq!(traced.value, JsValue::Str("😀".into()));
-        assert_eq!(receipt.kind, StringRepresentationKind::Inline);
+        assert_eq!(receipt.kind, StringRepresentationKind::SliceView);
+        assert_eq!(
+            receipt.observation_mode,
+            StringObservationMode::BoundarySensitiveUtf16
+        );
         assert_eq!(receipt.result_utf16_units, 2);
         assert!(receipt.result_has_non_bmp);
+        assert!(receipt.view_eligible);
         assert!(!receipt.flatten_required);
         assert!(receipt.trace_id.starts_with("trace-string-"));
+        assert_eq!(receipt.stable_hash.len(), 64);
     }
 
     #[test]
@@ -5340,6 +5555,69 @@ mod tests {
         .unwrap();
         assert_eq!(traced.value, JsValue::Bool(true));
         assert!(traced.receipt.is_none());
+    }
+
+    #[test]
+    fn test_string_fast_path_gate_missing_receipt_fails_closed() {
+        let err =
+            require_string_fast_path_eligibility(StringFastPathConsumer::Runtime, None).unwrap_err();
+        assert!(matches!(
+            err,
+            StringFastPathGateError::MissingReceipt {
+                consumer: StringFastPathConsumer::Runtime
+            }
+        ));
+    }
+
+    #[test]
+    fn test_string_fast_path_gate_optimizer_rejects_boundary_sensitive_slice_view() {
+        let traced = exec_string_method_with_receipt(
+            BuiltinId::StringPrototypeSlice,
+            "a😀b",
+            &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)],
+        )
+        .unwrap();
+        let receipt = traced.receipt.as_ref().expect("slice receipt");
+        let err = require_string_fast_path_eligibility(
+            StringFastPathConsumer::Optimizer,
+            Some(receipt),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            StringFastPathGateError::BoundarySensitiveUnicode {
+                consumer: StringFastPathConsumer::Optimizer,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_string_fast_path_eligibility_cache_roundtrip_is_stable() {
+        let traced_a = exec_string_method_with_receipt(
+            BuiltinId::StringPrototypeConcat,
+            "left",
+            &[JsValue::Str("-right".into())],
+        )
+        .unwrap();
+        let traced_b = exec_string_method_with_receipt(
+            BuiltinId::StringPrototypeConcat,
+            "left",
+            &[JsValue::Str("-right".into())],
+        )
+        .unwrap();
+        let receipt_a = traced_a.receipt.as_ref().expect("receipt a");
+        let receipt_b = traced_b.receipt.as_ref().expect("receipt b");
+        assert_eq!(receipt_a.stable_hash, receipt_b.stable_hash);
+
+        let eligibility =
+            require_string_fast_path_eligibility(StringFastPathConsumer::Cache, Some(receipt_a))
+                .unwrap();
+        let serialized =
+            serde_json::to_string(&eligibility).expect("serialize string fast-path eligibility");
+        let round_trip: StringFastPathEligibility =
+            serde_json::from_str(&serialized).expect("deserialize string fast-path eligibility");
+        assert_eq!(round_trip, eligibility);
     }
 
     // -- Date method tests ---------------------------------------------------

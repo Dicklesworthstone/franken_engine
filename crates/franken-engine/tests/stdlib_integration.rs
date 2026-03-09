@@ -1769,6 +1769,176 @@ fn string_representation_scenario_emits_artifact_triad_and_reports() {
     assert!(report_text.contains("trace-string-"));
 }
 
+#[test]
+fn string_ascii_fast_path_hotloop_emits_artifact_report() {
+    const ITERATIONS: usize = 4_096;
+
+    let prefix = "prefix-".repeat(32);
+    let haystack = format!("{prefix}target{}", "-suffix".repeat(32));
+    let expected_index_units = prefix.len();
+    let slice_args = [
+        JsValue::Int(expected_index_units as i64 * FP_SCALE),
+        JsValue::Int((expected_index_units + "target".len()) as i64 * FP_SCALE),
+    ];
+    let search_arg = [JsValue::Str("target".into())];
+
+    for _ in 0..ITERATIONS {
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeCharCodeAt,
+                &haystack,
+                &[JsValue::Int(0)],
+            )
+            .unwrap(),
+            JsValue::Int(i64::from(b'p') * FP_SCALE)
+        );
+        assert_eq!(
+            exec_string_method(BuiltinId::StringPrototypeIndexOf, &haystack, &search_arg).unwrap(),
+            JsValue::Int(expected_index_units as i64 * FP_SCALE)
+        );
+        assert_eq!(
+            exec_string_method(BuiltinId::StringPrototypeSearch, &haystack, &search_arg).unwrap(),
+            JsValue::Int(expected_index_units as i64 * FP_SCALE)
+        );
+        assert_eq!(
+            exec_string_method(BuiltinId::StringPrototypeSlice, &haystack, &slice_args).unwrap(),
+            JsValue::Str("target".into())
+        );
+    }
+
+    let traced =
+        exec_string_method_with_receipt(BuiltinId::StringPrototypeSlice, &haystack, &slice_args)
+            .unwrap();
+    let receipt = traced.receipt.expect("slice receipt");
+    assert_eq!(traced.value, JsValue::Str("target".into()));
+    assert!(receipt.source_is_ascii);
+    assert!(receipt.result_is_ascii);
+
+    let context = DeterministicTestContext::new(
+        "bd-1lsy.4.12.1-string-ascii-fast-path",
+        "string-ascii-fast-path-fixture",
+        HarnessLane::E2e,
+        4_122,
+    );
+    let events = vec![
+        context.event(EventInput {
+            sequence: 1,
+            component: "stdlib",
+            event: "string_ascii_hotloop_char_code_at",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 8,
+            timestamp_unix_ms: 1_700_000_004_221,
+        }),
+        context.event(EventInput {
+            sequence: 2,
+            component: "stdlib",
+            event: "string_ascii_hotloop_index_of",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 12,
+            timestamp_unix_ms: 1_700_000_004_222,
+        }),
+        context.event(EventInput {
+            sequence: 3,
+            component: "stdlib",
+            event: "string_ascii_hotloop_search",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 12,
+            timestamp_unix_ms: 1_700_000_004_223,
+        }),
+        context.event(EventInput {
+            sequence: 4,
+            component: "stdlib",
+            event: "string_ascii_hotloop_slice",
+            outcome: "pass",
+            error_code: None,
+            timing_us: 14,
+            timestamp_unix_ms: 1_700_000_004_224,
+        }),
+    ];
+    let benchmark_command = "cargo test -p frankenengine-engine --test stdlib_integration string_ascii_fast_path_hotloop_emits_artifact_report -- --exact --nocapture".to_string();
+    let commands = vec![
+        benchmark_command.clone(),
+        format!(
+            "exec_string_method {} iterations={} ascii_only=true",
+            BuiltinId::StringPrototypeCharCodeAt.name(),
+            ITERATIONS
+        ),
+        format!(
+            "exec_string_method {} iterations={} ascii_only=true",
+            BuiltinId::StringPrototypeIndexOf.name(),
+            ITERATIONS
+        ),
+        format!(
+            "exec_string_method {} iterations={} ascii_only=true",
+            BuiltinId::StringPrototypeSearch.name(),
+            ITERATIONS
+        ),
+        format!(
+            "exec_string_method {} iterations={} trace_id={}",
+            BuiltinId::StringPrototypeSlice.name(),
+            ITERATIONS,
+            receipt.trace_id
+        ),
+    ];
+    let run_id = context.default_run_id();
+    let manifest = HarnessRunManifest::from_context(
+        &context,
+        &run_id,
+        events.len(),
+        commands.len(),
+        &benchmark_command,
+        1_700_000_004_299,
+    );
+
+    let root = artifact_root("string_ascii_fast_path");
+    let triad = write_artifact_triad(&root, &manifest, &events, &commands).unwrap();
+    let trace_ids = vec![receipt.trace_id.clone()];
+    let trace_ids_path = triad.run_dir.join("trace_ids.json");
+    let report_path = triad
+        .run_dir
+        .join("bd-1lsy.4.12.1_string_ascii_fast_path_report.json");
+    let report = StringAsciiFastPathScenarioReport {
+        bead_id: "bd-1lsy.4.12.1",
+        iterations: ITERATIONS,
+        ascii_only: haystack.is_ascii(),
+        haystack_bytes: haystack.len(),
+        expected_utf16_index: expected_index_units,
+        hotloop_operations: vec![
+            BuiltinId::StringPrototypeCharCodeAt.name(),
+            BuiltinId::StringPrototypeIndexOf.name(),
+            BuiltinId::StringPrototypeSearch.name(),
+            BuiltinId::StringPrototypeSlice.name(),
+        ],
+        trace_id: receipt.trace_id.clone(),
+        slice_receipt: serde_json::to_value(&receipt).expect("slice receipt json"),
+    };
+
+    fs::write(
+        &trace_ids_path,
+        serde_json::to_vec_pretty(&trace_ids).expect("trace ids json"),
+    )
+    .expect("write trace ids");
+    fs::write(
+        &report_path,
+        serde_json::to_vec_pretty(&report).expect("ascii fast path report json"),
+    )
+    .expect("write ascii fast path report");
+
+    assert!(triad.manifest_path.exists());
+    assert!(triad.events_path.exists());
+    assert!(triad.commands_path.exists());
+    assert!(trace_ids_path.exists());
+    assert!(report_path.exists());
+
+    let report_text = fs::read_to_string(&report_path).expect("read ascii fast path report");
+    assert!(report_text.contains("\"ascii_only\": true"));
+    assert!(report_text.contains("\"iterations\": 4096"));
+    assert!(report_text.contains("trace-string-"));
+}
+
 // ---------------------------------------------------------------------------
 // Additional JSON tests
 // ---------------------------------------------------------------------------
@@ -1904,6 +2074,18 @@ struct StringRepresentationScenarioReport {
     bead_id: &'static str,
     trace_ids: Vec<String>,
     receipts: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct StringAsciiFastPathScenarioReport {
+    bead_id: &'static str,
+    iterations: usize,
+    ascii_only: bool,
+    haystack_bytes: usize,
+    expected_utf16_index: usize,
+    hotloop_operations: Vec<&'static str>,
+    trace_id: String,
+    slice_receipt: serde_json::Value,
 }
 
 fn artifact_root(label: &str) -> PathBuf {

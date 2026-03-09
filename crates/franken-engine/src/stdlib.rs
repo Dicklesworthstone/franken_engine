@@ -2080,10 +2080,9 @@ pub fn exec_string_method(
             if idx < 0 {
                 return Ok(JsValue::Str(String::new()));
             }
-            let code_units = utf16_code_units_vec(this);
-            match code_units.get(idx as usize) {
+            match utf16_code_unit_at(this, idx as usize) {
                 Some(unit) => Ok(JsValue::Str(utf16_materialize(
-                    std::slice::from_ref(unit),
+                    std::slice::from_ref(&unit),
                     "String.prototype.charAt",
                     &format!("at UTF-16 index {idx}"),
                 )?)),
@@ -2095,8 +2094,8 @@ pub fn exec_string_method(
             if idx < 0 {
                 return Ok(JsValue::Int(0));
             }
-            match utf16_code_units_vec(this).get(idx as usize) {
-                Some(unit) => Ok(JsValue::Int(i64::from(*unit) * FP_SCALE)),
+            match utf16_code_unit_at(this, idx as usize) {
+                Some(unit) => Ok(JsValue::Int(i64::from(unit) * FP_SCALE)),
                 None => Ok(JsValue::Int(0)), // NaN equivalent
             }
         }
@@ -2135,7 +2134,7 @@ pub fn exec_string_method(
             let search = require_str("String.prototype.indexOf", args, 0)?;
             match this.find(search.as_str()) {
                 Some(byte_idx) => {
-                    let utf16_idx = utf16_code_units(&this[..byte_idx]) as i64;
+                    let utf16_idx = utf16_offset_for_match(this, byte_idx) as i64;
                     Ok(JsValue::Int(utf16_idx * FP_SCALE))
                 }
                 None => Ok(JsValue::Int(-FP_SCALE)),
@@ -2145,7 +2144,7 @@ pub fn exec_string_method(
             let search = require_str("String.prototype.lastIndexOf", args, 0)?;
             match this.rfind(search.as_str()) {
                 Some(byte_idx) => {
-                    let utf16_idx = utf16_code_units(&this[..byte_idx]) as i64;
+                    let utf16_idx = utf16_offset_for_match(this, byte_idx) as i64;
                     Ok(JsValue::Int(utf16_idx * FP_SCALE))
                 }
                 None => Ok(JsValue::Int(-FP_SCALE)),
@@ -2263,7 +2262,7 @@ pub fn exec_string_method(
             // Simple substring search (no regex). Returns UTF-16 code-unit index or -1.
             match this.find(&*search) {
                 Some(byte_idx) => {
-                    let utf16_idx = utf16_code_units(&this[..byte_idx]) as i64;
+                    let utf16_idx = utf16_offset_for_match(this, byte_idx) as i64;
                     Ok(JsValue::Int(utf16_idx * FP_SCALE))
                 }
                 None => Ok(JsValue::Int(-FP_SCALE)),
@@ -2325,7 +2324,10 @@ pub fn derive_string_fast_path_eligibility(
         runtime_eligible,
         optimizer_eligible,
         cache_eligible,
-        stable_cache_key: format!("string-fast-path:{}:{}", receipt.builtin, receipt.stable_hash),
+        stable_cache_key: format!(
+            "string-fast-path:{}:{}",
+            receipt.builtin, receipt.stable_hash
+        ),
     }
 }
 
@@ -2822,12 +2824,14 @@ fn build_string_representation_receipt(
     args: &[JsValue],
     result: &str,
 ) -> StringRepresentationReceipt {
-    let source_char_len = source.chars().count();
-    let result_char_len = result.chars().count();
-    let source_utf16_units = utf16_code_units(source);
-    let result_utf16_units = utf16_code_units(result);
-    let source_has_non_bmp = has_non_bmp_scalars(source);
-    let result_has_non_bmp = has_non_bmp_scalars(result);
+    let source_metrics = inspect_string(source);
+    let result_metrics = inspect_string(result);
+    let source_char_len = source_metrics.scalar_count;
+    let result_char_len = result_metrics.scalar_count;
+    let source_utf16_units = source_metrics.utf16_units;
+    let result_utf16_units = result_metrics.utf16_units;
+    let source_has_non_bmp = source_metrics.has_non_bmp;
+    let result_has_non_bmp = result_metrics.has_non_bmp;
     let segment_count = string_segment_count(builtin, source, args, result);
     let flatten_required = matches!(
         builtin,
@@ -2856,8 +2860,9 @@ fn build_string_representation_receipt(
         segment_count,
         flatten_required,
     );
-    let view_eligible =
-        matches!(kind, StringRepresentationKind::SliceView) && !flatten_required && result_utf16_units > 0;
+    let view_eligible = matches!(kind, StringRepresentationKind::SliceView)
+        && !flatten_required
+        && result_utf16_units > 0;
     let digest = hex::encode(Sha256::digest(
         format!(
             "{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}",
@@ -2885,8 +2890,8 @@ fn build_string_representation_receipt(
         result_char_len,
         source_utf16_units,
         result_utf16_units,
-        source_is_ascii: source.is_ascii(),
-        result_is_ascii: result.is_ascii(),
+        source_is_ascii: source_metrics.is_ascii,
+        result_is_ascii: result_metrics.is_ascii,
         source_has_non_bmp,
         result_has_non_bmp,
         segment_count,
@@ -2950,8 +2955,51 @@ fn string_segment_count(builtin: BuiltinId, source: &str, args: &[JsValue], resu
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StringMetrics {
+    scalar_count: usize,
+    utf16_units: usize,
+    has_non_bmp: bool,
+    is_ascii: bool,
+}
+
+fn inspect_string(value: &str) -> StringMetrics {
+    if value.is_ascii() {
+        let len = value.len();
+        return StringMetrics {
+            scalar_count: len,
+            utf16_units: len,
+            has_non_bmp: false,
+            is_ascii: true,
+        };
+    }
+
+    let mut scalar_count = 0;
+    let mut utf16_units = 0;
+    let mut has_non_bmp = false;
+    for ch in value.chars() {
+        scalar_count += 1;
+        if u32::from(ch) > 0xFFFF {
+            utf16_units += 2;
+            has_non_bmp = true;
+        } else {
+            utf16_units += 1;
+        }
+    }
+    StringMetrics {
+        scalar_count,
+        utf16_units,
+        has_non_bmp,
+        is_ascii: false,
+    }
+}
+
 fn utf16_code_units(value: &str) -> usize {
-    value.encode_utf16().count()
+    if value.is_ascii() {
+        value.len()
+    } else {
+        value.encode_utf16().count()
+    }
 }
 
 fn utf16_code_units_vec(value: &str) -> Vec<u16> {
@@ -2976,20 +3024,55 @@ fn utf16_slice_lossless(
     end: usize,
     builtin_name: &str,
 ) -> Result<String, StdlibError> {
-    let code_units = utf16_code_units_vec(value);
+    if start >= end {
+        return Ok(String::new());
+    }
+    if value.is_ascii() {
+        return value
+            .get(start..end)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                StdlibError::TypeError(format!(
+                    "{builtin_name} cannot materialize UTF-16 slice [{start}, {end}) without exposing lone surrogates"
+                ))
+            });
+    }
+    let code_units = value
+        .encode_utf16()
+        .skip(start)
+        .take(end - start)
+        .collect::<Vec<_>>();
     utf16_materialize(
-        &code_units[start..end],
+        &code_units,
         builtin_name,
         &format!("UTF-16 slice [{start}, {end})"),
     )
 }
 
+fn utf16_code_unit_at(value: &str, index: usize) -> Option<u16> {
+    if value.is_ascii() {
+        return value.as_bytes().get(index).copied().map(u16::from);
+    }
+    value.encode_utf16().nth(index)
+}
+
+fn utf16_offset_for_match(value: &str, byte_idx: usize) -> usize {
+    if byte_idx == 0 || value.is_ascii() {
+        byte_idx
+    } else {
+        utf16_code_units(&value[..byte_idx])
+    }
+}
+
 fn utf16_code_point_at(value: &str, index: usize) -> Option<u32> {
-    let code_units = utf16_code_units_vec(value);
-    let first = *code_units.get(index)?;
+    if value.is_ascii() {
+        return value.as_bytes().get(index).copied().map(u32::from);
+    }
+    let mut code_units = value.encode_utf16();
+    let first = code_units.nth(index)?;
     let first_u32 = u32::from(first);
     if is_utf16_lead_surrogate(first) {
-        if let Some(second) = code_units.get(index + 1).copied() {
+        if let Some(second) = code_units.next() {
             if is_utf16_trail_surrogate(second) {
                 let lead = first_u32 - 0xD800;
                 let trail = u32::from(second) - 0xDC00;
@@ -3006,10 +3089,6 @@ fn is_utf16_lead_surrogate(unit: u16) -> bool {
 
 fn is_utf16_trail_surrogate(unit: u16) -> bool {
     (0xDC00..=0xDFFF).contains(&unit)
-}
-
-fn has_non_bmp_scalars(value: &str) -> bool {
-    value.chars().any(|ch| u32::from(ch) > 0xFFFF)
 }
 
 fn pad_string(
@@ -4240,15 +4319,37 @@ mod tests {
 
     #[test]
     fn test_string_char_at_rejects_surrogate_split() {
-        let err = exec_string_method(
-            BuiltinId::StringPrototypeCharAt,
-            "😀",
-            &[JsValue::Int(0)],
-        )
-        .unwrap_err();
+        let err = exec_string_method(BuiltinId::StringPrototypeCharAt, "😀", &[JsValue::Int(0)])
+            .unwrap_err();
         assert!(
             format!("{err}").contains("lone surrogates"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_string_char_code_at_reports_utf16_code_unit_for_non_bmp() {
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeCharCodeAt,
+                "😀",
+                &[JsValue::Int(0)]
+            )
+            .unwrap(),
+            JsValue::Int(i64::from(0xD83D_u16) * FP_SCALE)
+        );
+    }
+
+    #[test]
+    fn test_string_code_point_at_trail_surrogate_returns_trail_code_unit() {
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeCodePointAt,
+                "😀",
+                &[JsValue::Int(FP_SCALE)]
+            )
+            .unwrap(),
+            JsValue::Int(i64::from(0xDE00_u16) * FP_SCALE)
         );
     }
 
@@ -4328,6 +4429,19 @@ mod tests {
             )
             .unwrap(),
             JsValue::Int(3 * FP_SCALE)
+        );
+    }
+
+    #[test]
+    fn test_string_last_index_of_reports_utf16_offsets_for_non_bmp() {
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeLastIndexOf,
+                "😀ab😀ab",
+                &[JsValue::Str("ab".into())]
+            )
+            .unwrap(),
+            JsValue::Int(6 * FP_SCALE)
         );
     }
 
@@ -4664,7 +4778,10 @@ mod tests {
 
     #[test]
     fn test_pad_string_no_op_when_already_long() {
-        assert_eq!(pad_string("hello", 3, " ", true), "hello");
+        assert_eq!(
+            pad_string("hello", 3, " ", true, "padStart").unwrap(),
+            "hello"
+        );
     }
 
     #[test]
@@ -5473,6 +5590,17 @@ mod tests {
         assert_eq!(result, JsValue::Int(-FP_SCALE));
     }
 
+    #[test]
+    fn test_string_search_reports_utf16_offsets_for_non_bmp_prefix() {
+        let result = exec_string_method(
+            BuiltinId::StringPrototypeSearch,
+            "😀hello",
+            &[JsValue::Str("hello".into())],
+        )
+        .unwrap();
+        assert_eq!(result, JsValue::Int(2 * FP_SCALE));
+    }
+
     // -- String.prototype.match tests ----------------------------------------
 
     #[test]
@@ -5529,6 +5657,26 @@ mod tests {
     }
 
     #[test]
+    fn test_string_receipt_ascii_slice_stays_scalar_aligned() {
+        let traced = exec_string_method_with_receipt(
+            BuiltinId::StringPrototypeSlice,
+            "prefix-target-suffix",
+            &[JsValue::Int(7 * FP_SCALE), JsValue::Int(13 * FP_SCALE)],
+        )
+        .unwrap();
+        let receipt = traced.receipt.expect("string receipt");
+        assert_eq!(traced.value, JsValue::Str("target".into()));
+        assert!(receipt.source_is_ascii);
+        assert!(receipt.result_is_ascii);
+        assert_eq!(
+            receipt.observation_mode,
+            StringObservationMode::ScalarAlignedUtf16
+        );
+        assert_eq!(receipt.source_char_len, receipt.source_utf16_units);
+        assert_eq!(receipt.result_char_len, receipt.result_utf16_units);
+    }
+
+    #[test]
     fn test_string_receipt_concat_marks_flatten_budget_exhaustion() {
         let left = "x".repeat(220);
         let traced = exec_string_method_with_receipt(
@@ -5559,8 +5707,8 @@ mod tests {
 
     #[test]
     fn test_string_fast_path_gate_missing_receipt_fails_closed() {
-        let err =
-            require_string_fast_path_eligibility(StringFastPathConsumer::Runtime, None).unwrap_err();
+        let err = require_string_fast_path_eligibility(StringFastPathConsumer::Runtime, None)
+            .unwrap_err();
         assert!(matches!(
             err,
             StringFastPathGateError::MissingReceipt {
@@ -5578,11 +5726,9 @@ mod tests {
         )
         .unwrap();
         let receipt = traced.receipt.as_ref().expect("slice receipt");
-        let err = require_string_fast_path_eligibility(
-            StringFastPathConsumer::Optimizer,
-            Some(receipt),
-        )
-        .unwrap_err();
+        let err =
+            require_string_fast_path_eligibility(StringFastPathConsumer::Optimizer, Some(receipt))
+                .unwrap_err();
         assert!(matches!(
             err,
             StringFastPathGateError::BoundarySensitiveUnicode {

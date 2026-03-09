@@ -8,8 +8,14 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::hash_tiers::ContentHash;
+
 const COMPONENT: &str = "ts_module_resolver";
 const SCHEMA_VERSION: &str = "rgc.ts-module-resolution.parity.v1";
+const INDEX_SCHEMA_VERSION: &str = "rgc.ts-module-resolution.index.v1";
+const INDEX_MANIFEST_SCHEMA_VERSION: &str = "rgc.ts-module-resolution.index.manifest.v1";
+const INDEX_TRACE_IDS_SCHEMA_VERSION: &str = "rgc.ts-module-resolution.index.trace-ids.v1";
+const DEFAULT_INDEX_MAX_AGE_SECONDS: u64 = 3_600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -252,6 +258,213 @@ impl DeterministicTsModuleResolver {
         self.packages.insert(package.package_name.clone(), package);
     }
 
+    pub fn build_resolution_index_bundle(
+        &self,
+        generated_at_utc: impl Into<String>,
+        generated_at_unix_seconds: u64,
+    ) -> TsModuleResolutionIndexBundle {
+        self.build_resolution_index_bundle_with_policy(
+            generated_at_utc,
+            generated_at_unix_seconds,
+            &TsResolutionIndexBuildPolicy::default(),
+        )
+    }
+
+    pub fn build_resolution_index_bundle_with_policy(
+        &self,
+        generated_at_utc: impl Into<String>,
+        generated_at_unix_seconds: u64,
+        policy: &TsResolutionIndexBuildPolicy,
+    ) -> TsModuleResolutionIndexBundle {
+        let generated_at_utc = generated_at_utc.into();
+        let config_fingerprint = stable_fingerprint(&self.config);
+        let files_fingerprint = stable_fingerprint(&self.files);
+        let packages_fingerprint = stable_fingerprint(&self.packages);
+        let workspace_fingerprint = stable_fingerprint(&(
+            config_fingerprint.clone(),
+            files_fingerprint.clone(),
+            packages_fingerprint.clone(),
+        ));
+
+        let module_art_index_report =
+            build_package_art_index(&self.packages, &workspace_fingerprint);
+        let export_map_hash_catalog =
+            build_export_map_hash_catalog(&self.packages, &workspace_fingerprint, policy);
+        let package_art_fingerprint = stable_fingerprint(&module_art_index_report);
+        let export_map_hash_catalog_fingerprint = stable_fingerprint(&export_map_hash_catalog);
+        let index_fingerprint = stable_fingerprint(&(
+            workspace_fingerprint.clone(),
+            package_art_fingerprint.clone(),
+            export_map_hash_catalog_fingerprint.clone(),
+        ));
+        let fallback_packages = export_map_hash_catalog
+            .packages
+            .iter()
+            .filter(|package| !package.fallback_reasons.is_empty())
+            .map(|package| TsIndexFallbackPackage {
+                package_name: package.package_name.clone(),
+                reasons: package.fallback_reasons.clone(),
+            })
+            .collect();
+
+        TsModuleResolutionIndexBundle {
+            module_art_index_report,
+            export_map_hash_catalog,
+            module_index_identity_report: TsModuleIndexIdentityReport {
+                schema_version: INDEX_SCHEMA_VERSION.to_string(),
+                component: COMPONENT.to_string(),
+                generated_at_utc,
+                generated_at_unix_seconds,
+                default_max_age_seconds: DEFAULT_INDEX_MAX_AGE_SECONDS,
+                config_fingerprint,
+                files_fingerprint,
+                packages_fingerprint,
+                workspace_fingerprint,
+                package_art_fingerprint,
+                export_map_hash_catalog_fingerprint,
+                index_fingerprint,
+                fallback_packages,
+            },
+        }
+    }
+
+    pub fn validate_resolution_index_bundle(
+        &self,
+        bundle: &TsModuleResolutionIndexBundle,
+        current_unix_seconds: u64,
+        max_age_seconds: u64,
+    ) -> TsResolutionIndexValidationReport {
+        let expected_workspace_fingerprint = stable_fingerprint(&(
+            stable_fingerprint(&self.config),
+            stable_fingerprint(&self.files),
+            stable_fingerprint(&self.packages),
+        ));
+        let observed_workspace_fingerprint = bundle
+            .module_index_identity_report
+            .workspace_fingerprint
+            .clone();
+        let artifact_age_seconds = current_unix_seconds
+            .saturating_sub(bundle.module_index_identity_report.generated_at_unix_seconds);
+
+        if expected_workspace_fingerprint != observed_workspace_fingerprint {
+            return TsResolutionIndexValidationReport {
+                accepted: false,
+                reason: Some(TsResolutionIndexFallbackReason::WorkspaceFingerprintMismatch),
+                detail: "workspace fingerprint no longer matches the resolver state".to_string(),
+                expected_workspace_fingerprint,
+                observed_workspace_fingerprint,
+                artifact_age_seconds,
+                max_age_seconds,
+            };
+        }
+
+        let package_art_fingerprint = stable_fingerprint(&bundle.module_art_index_report);
+        let export_map_hash_catalog_fingerprint = stable_fingerprint(&bundle.export_map_hash_catalog);
+        let index_fingerprint = stable_fingerprint(&(
+            observed_workspace_fingerprint.clone(),
+            package_art_fingerprint.clone(),
+            export_map_hash_catalog_fingerprint.clone(),
+        ));
+
+        if package_art_fingerprint != bundle.module_index_identity_report.package_art_fingerprint
+            || export_map_hash_catalog_fingerprint
+                != bundle
+                    .module_index_identity_report
+                    .export_map_hash_catalog_fingerprint
+            || index_fingerprint != bundle.module_index_identity_report.index_fingerprint
+        {
+            return TsResolutionIndexValidationReport {
+                accepted: false,
+                reason: Some(TsResolutionIndexFallbackReason::IndexFingerprintMismatch),
+                detail: "artifact fingerprint verification failed".to_string(),
+                expected_workspace_fingerprint,
+                observed_workspace_fingerprint,
+                artifact_age_seconds,
+                max_age_seconds,
+            };
+        }
+
+        if artifact_age_seconds > max_age_seconds {
+            return TsResolutionIndexValidationReport {
+                accepted: false,
+                reason: Some(TsResolutionIndexFallbackReason::ArtifactAgeExceeded),
+                detail: "artifact age exceeds the configured freshness window".to_string(),
+                expected_workspace_fingerprint,
+                observed_workspace_fingerprint,
+                artifact_age_seconds,
+                max_age_seconds,
+            };
+        }
+
+        TsResolutionIndexValidationReport {
+            accepted: true,
+            reason: None,
+            detail: "artifact accepted for indexed package lookups".to_string(),
+            expected_workspace_fingerprint,
+            observed_workspace_fingerprint,
+            artifact_age_seconds,
+            max_age_seconds,
+        }
+    }
+
+    pub fn resolve_with_index_or_fallback(
+        &self,
+        request: &TsModuleRequest,
+        context: &TsResolutionContext,
+        bundle: &TsModuleResolutionIndexBundle,
+        current_unix_seconds: u64,
+        max_age_seconds: u64,
+    ) -> Result<TsModuleResolutionOutcome, TsModuleResolutionError> {
+        let validation =
+            self.validate_resolution_index_bundle(bundle, current_unix_seconds, max_age_seconds);
+        if !validation.accepted {
+            return self.resolve(request, context);
+        }
+
+        let specifier = request.specifier.trim();
+        if specifier.is_empty() || is_relative_specifier(specifier) || specifier.starts_with('/') {
+            return self.resolve(request, context);
+        }
+
+        let mut traces = Vec::new();
+        push_trace(
+            &mut traces,
+            context,
+            "package_index_validation",
+            "allow",
+            "none",
+            "indexed artifact passed validation",
+            Some(bundle.module_index_identity_report.index_fingerprint.clone()),
+        );
+
+        let Some(indexed_package_candidate) =
+            self.package_candidate_from_index(specifier, request.style, bundle, context, &mut traces)
+        else {
+            return self.resolve(request, context);
+        };
+
+        let fallback_base = normalize_absolute_path(&join_paths(&self.base_url_dir(), specifier));
+        push_trace(
+            &mut traces,
+            context,
+            "base_url_fallback",
+            "allow",
+            "none",
+            "added baseUrl fallback candidate",
+            Some(fallback_base.clone()),
+        );
+
+        self.resolve_from_candidate_bases(
+            request,
+            context,
+            traces,
+            vec![
+                indexed_package_candidate,
+                CandidateBase::new(fallback_base, "base_url_fallback"),
+            ],
+        )
+    }
+
     pub fn resolve(
         &self,
         request: &TsModuleRequest,
@@ -410,6 +623,16 @@ impl DeterministicTsModuleResolver {
             candidate_bases.push(CandidateBase::new(fallback_base, "base_url_fallback"));
         }
 
+        self.resolve_from_candidate_bases(request, context, traces, candidate_bases)
+    }
+
+    fn resolve_from_candidate_bases(
+        &self,
+        request: &TsModuleRequest,
+        context: &TsResolutionContext,
+        mut traces: Vec<TsResolutionTraceEvent>,
+        candidate_bases: Vec<CandidateBase>,
+    ) -> Result<TsModuleResolutionOutcome, TsModuleResolutionError> {
         let probe_suffixes = effective_probe_suffixes(self.probe_suffixes_for(request.style));
         let mut seen = BTreeSet::new();
         for candidate_base in candidate_bases {
@@ -464,6 +687,65 @@ impl DeterministicTsModuleResolver {
             message: format!("unable to resolve '{}'", request.specifier),
             traces,
         })
+    }
+
+    fn package_candidate_from_index(
+        &self,
+        specifier: &str,
+        style: TsRequestStyle,
+        bundle: &TsModuleResolutionIndexBundle,
+        context: &TsResolutionContext,
+        traces: &mut Vec<TsResolutionTraceEvent>,
+    ) -> Option<CandidateBase> {
+        let (package_name, export_key) = parse_package_specifier(specifier)?;
+        let terminal = bundle.module_art_index_report.lookup_package(&package_name)?;
+        let package = bundle.export_map_hash_catalog.package(&package_name)?;
+
+        let indexed_entry = package
+            .lookup_hot_subpath(&export_key)
+            .map(|entry| (&entry.export_target, entry.subpath.as_str()))
+            .or_else(|| {
+                package
+                    .lookup_exact_export(&export_key)
+                    .map(|entry| (&entry.export_target, entry.key.as_str()))
+            });
+
+        let Some((export_target, indexed_key)) = indexed_entry else {
+            if package
+                .wildcard_exports
+                .iter()
+                .any(|entry| capture_single_wildcard(&entry.pattern, &export_key).is_some())
+            {
+                push_trace(
+                    traces,
+                    context,
+                    "package_index_lookup",
+                    "miss",
+                    TsResolutionIndexFallbackReason::UnsupportedWildcardExport.stable_code(),
+                    "wildcard export requires incumbent fallback",
+                    Some(export_key),
+                );
+            }
+            return None;
+        };
+
+        let Some((rendered, selected_condition)) =
+            select_indexed_export_target(export_target, self.condition_order_for(style))
+        else {
+            return None;
+        };
+
+        let base = normalize_absolute_path(&join_paths(&terminal.package_root, &rendered));
+        push_trace(
+            traces,
+            context,
+            "package_index_lookup",
+            "allow",
+            "none",
+            format!("resolved indexed package export '{indexed_key}'"),
+            Some(base.clone()),
+        );
+        Some(CandidateBase::new(base, "package_index").with_package(package_name, selected_condition))
     }
 
     fn path_alias_candidates(&self, specifier: &str) -> Vec<PathAliasCandidate> {
@@ -949,6 +1231,251 @@ pub struct TsResolutionRunManifest {
     pub artifact_paths: TsResolutionArtifactPaths,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsResolutionIndexBuildPolicy {
+    pub max_salt_attempts: u64,
+}
+
+impl Default for TsResolutionIndexBuildPolicy {
+    fn default() -> Self {
+        Self {
+            max_salt_attempts: 4_096,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TsResolutionIndexFallbackReason {
+    ArtifactAgeExceeded,
+    WorkspaceFingerprintMismatch,
+    IndexFingerprintMismatch,
+    CollisionSearchExhausted,
+    UnsupportedWildcardExport,
+    PackageMissingFromIndex,
+    ExportMissingFromIndex,
+}
+
+impl TsResolutionIndexFallbackReason {
+    pub const fn stable_code(self) -> &'static str {
+        match self {
+            Self::ArtifactAgeExceeded => "FE-TSRES-IDX-0001",
+            Self::WorkspaceFingerprintMismatch => "FE-TSRES-IDX-0002",
+            Self::IndexFingerprintMismatch => "FE-TSRES-IDX-0003",
+            Self::CollisionSearchExhausted => "FE-TSRES-IDX-0004",
+            Self::UnsupportedWildcardExport => "FE-TSRES-IDX-0005",
+            Self::PackageMissingFromIndex => "FE-TSRES-IDX-0006",
+            Self::ExportMissingFromIndex => "FE-TSRES-IDX-0007",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsResolutionIndexValidationReport {
+    pub accepted: bool,
+    pub reason: Option<TsResolutionIndexFallbackReason>,
+    pub detail: String,
+    pub expected_workspace_fingerprint: String,
+    pub observed_workspace_fingerprint: String,
+    pub artifact_age_seconds: u64,
+    pub max_age_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsPackageArtEdge {
+    pub label: String,
+    pub child_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsPackageArtTerminal {
+    pub package_name: String,
+    pub package_root: String,
+    pub export_count: usize,
+    pub hot_subpath_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsPackageArtNode {
+    pub node_id: usize,
+    pub fragment: String,
+    pub terminal: Option<TsPackageArtTerminal>,
+    pub children: Vec<TsPackageArtEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsModuleArtIndexReport {
+    pub schema_version: String,
+    pub component: String,
+    pub workspace_fingerprint: String,
+    pub package_count: usize,
+    pub node_count: usize,
+    pub terminal_count: usize,
+    pub nodes: Vec<TsPackageArtNode>,
+}
+
+impl TsModuleArtIndexReport {
+    pub fn lookup_package(&self, package_name: &str) -> Option<&TsPackageArtTerminal> {
+        let mut node_index = 0usize;
+        for ch in package_name.chars() {
+            let node = self.nodes.get(node_index)?;
+            let edge = node.children.iter().find(|edge| edge.label == ch.to_string())?;
+            node_index = edge.child_index;
+        }
+        self.nodes.get(node_index)?.terminal.as_ref()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsPerfectHashSlot {
+    pub slot: usize,
+    pub key: String,
+    pub key_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsPerfectHashLayout {
+    pub salt: u64,
+    pub table_size: usize,
+    pub slots: Vec<TsPerfectHashSlot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsIndexedExportEntry {
+    pub key: String,
+    pub key_fingerprint: String,
+    pub target_fingerprint: String,
+    pub export_target: TsPackageExportTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsIndexedSubpathEntry {
+    pub subpath: String,
+    pub key_fingerprint: String,
+    pub target_fingerprint: String,
+    pub export_target: TsPackageExportTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsWildcardExportEntry {
+    pub pattern: String,
+    pub pattern_fingerprint: String,
+    pub target_fingerprint: String,
+    pub export_target: TsPackageExportTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsExportMapHashCatalogPackage {
+    pub package_name: String,
+    pub package_root: String,
+    pub exact_exports: Vec<TsIndexedExportEntry>,
+    pub exact_export_mphf: Option<TsPerfectHashLayout>,
+    pub hot_subpaths: Vec<TsIndexedSubpathEntry>,
+    pub hot_subpath_mphf: Option<TsPerfectHashLayout>,
+    pub wildcard_exports: Vec<TsWildcardExportEntry>,
+    pub fallback_reasons: Vec<TsResolutionIndexFallbackReason>,
+}
+
+impl TsExportMapHashCatalogPackage {
+    pub fn lookup_exact_export(&self, export_key: &str) -> Option<&TsIndexedExportEntry> {
+        lookup_exact_slot(self.exact_export_mphf.as_ref()?, export_key)
+            .and_then(|slot| self.exact_exports.iter().find(|entry| entry.key == slot.key))
+    }
+
+    pub fn lookup_hot_subpath(&self, export_key: &str) -> Option<&TsIndexedSubpathEntry> {
+        lookup_exact_slot(self.hot_subpath_mphf.as_ref()?, export_key)
+            .and_then(|slot| self.hot_subpaths.iter().find(|entry| entry.subpath == slot.key))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsExportMapHashCatalog {
+    pub schema_version: String,
+    pub component: String,
+    pub workspace_fingerprint: String,
+    pub indexed_package_count: usize,
+    pub fallback_package_count: usize,
+    pub packages: Vec<TsExportMapHashCatalogPackage>,
+}
+
+impl TsExportMapHashCatalog {
+    pub fn package(&self, package_name: &str) -> Option<&TsExportMapHashCatalogPackage> {
+        self.packages
+            .iter()
+            .find(|package| package.package_name == package_name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsIndexFallbackPackage {
+    pub package_name: String,
+    pub reasons: Vec<TsResolutionIndexFallbackReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsModuleIndexIdentityReport {
+    pub schema_version: String,
+    pub component: String,
+    pub generated_at_utc: String,
+    pub generated_at_unix_seconds: u64,
+    pub default_max_age_seconds: u64,
+    pub config_fingerprint: String,
+    pub files_fingerprint: String,
+    pub packages_fingerprint: String,
+    pub workspace_fingerprint: String,
+    pub package_art_fingerprint: String,
+    pub export_map_hash_catalog_fingerprint: String,
+    pub index_fingerprint: String,
+    pub fallback_packages: Vec<TsIndexFallbackPackage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsModuleResolutionIndexBundle {
+    pub module_art_index_report: TsModuleArtIndexReport,
+    pub export_map_hash_catalog: TsExportMapHashCatalog,
+    pub module_index_identity_report: TsModuleIndexIdentityReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsResolutionIndexArtifactPaths {
+    pub run_manifest: String,
+    pub events: String,
+    pub commands: String,
+    pub trace_ids: String,
+    pub module_art_index_report: String,
+    pub export_map_hash_catalog: String,
+    pub module_index_identity_report: String,
+    pub step_logs_dir: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsResolutionIndexRunManifest {
+    pub schema_version: String,
+    pub scenario_id: String,
+    pub generated_at_utc: String,
+    pub generated_at_unix_seconds: u64,
+    pub trace_count: usize,
+    pub workspace_fingerprint: String,
+    pub index_fingerprint: String,
+    pub validation: TsResolutionIndexValidationReport,
+    pub artifact_paths: TsResolutionIndexArtifactPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsResolutionIndexTraceIds {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_ids: Vec<String>,
+    pub decision_ids: Vec<String>,
+    pub policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TsResolutionIndexStepLog {
+    pub name: String,
+    pub contents: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct StableTraceRecord<'a> {
     trace_id: &'a str,
@@ -1029,6 +1556,428 @@ pub fn write_ts_resolution_artifacts(
     Ok(manifest)
 }
 
+pub fn write_ts_resolution_index_artifacts(
+    output_dir: &Path,
+    scenario_id: &str,
+    commands: &[String],
+    traces: &[TsResolutionTraceEvent],
+    bundle: &TsModuleResolutionIndexBundle,
+    validation: &TsResolutionIndexValidationReport,
+    step_logs: &[TsResolutionIndexStepLog],
+) -> io::Result<TsResolutionIndexRunManifest> {
+    fs::create_dir_all(output_dir)?;
+
+    let artifact_paths = TsResolutionIndexArtifactPaths {
+        run_manifest: "run_manifest.json".to_string(),
+        events: "events.jsonl".to_string(),
+        commands: "commands.txt".to_string(),
+        trace_ids: "trace_ids.json".to_string(),
+        module_art_index_report: "module_art_index_report.json".to_string(),
+        export_map_hash_catalog: "export_map_hash_catalog.json".to_string(),
+        module_index_identity_report: "module_index_identity_report.json".to_string(),
+        step_logs_dir: "step_logs".to_string(),
+    };
+
+    let step_logs_dir = output_dir.join(&artifact_paths.step_logs_dir);
+    fs::create_dir_all(&step_logs_dir)?;
+
+    let mut commands_file = File::create(output_dir.join(&artifact_paths.commands))?;
+    for command in commands {
+        writeln!(commands_file, "{command}")?;
+    }
+
+    let mut events_file = File::create(output_dir.join(&artifact_paths.events))?;
+    for trace in traces {
+        let stable = StableTraceRecord {
+            trace_id: &trace.trace_id,
+            decision_id: &trace.decision_id,
+            policy_id: &trace.policy_id,
+            component: &trace.component,
+            event: &trace.event,
+            outcome: &trace.outcome,
+            error_code: &trace.error_code,
+        };
+        let line = serde_json::to_string(&stable)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+        writeln!(events_file, "{line}")?;
+    }
+
+    let trace_ids = TsResolutionIndexTraceIds {
+        schema_version: INDEX_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        trace_ids: unique_trace_field(traces, |trace| trace.trace_id.clone()),
+        decision_ids: unique_trace_field(traces, |trace| trace.decision_id.clone()),
+        policy_ids: unique_trace_field(traces, |trace| trace.policy_id.clone()),
+    };
+
+    write_pretty_json(
+        &output_dir.join(&artifact_paths.trace_ids),
+        &trace_ids,
+    )?;
+    write_pretty_json(
+        &output_dir.join(&artifact_paths.module_art_index_report),
+        &bundle.module_art_index_report,
+    )?;
+    write_pretty_json(
+        &output_dir.join(&artifact_paths.export_map_hash_catalog),
+        &bundle.export_map_hash_catalog,
+    )?;
+    write_pretty_json(
+        &output_dir.join(&artifact_paths.module_index_identity_report),
+        &bundle.module_index_identity_report,
+    )?;
+
+    for (index, step_log) in step_logs.iter().enumerate() {
+        let step_name = sanitize_step_log_name(&step_log.name);
+        let path = step_logs_dir.join(format!("step_{:03}_{step_name}.log", index + 1));
+        fs::write(path, step_log.contents.as_bytes())?;
+    }
+
+    let manifest = TsResolutionIndexRunManifest {
+        schema_version: INDEX_MANIFEST_SCHEMA_VERSION.to_string(),
+        scenario_id: scenario_id.to_string(),
+        generated_at_utc: bundle
+            .module_index_identity_report
+            .generated_at_utc
+            .clone(),
+        generated_at_unix_seconds: bundle
+            .module_index_identity_report
+            .generated_at_unix_seconds,
+        trace_count: traces.len(),
+        workspace_fingerprint: bundle
+            .module_index_identity_report
+            .workspace_fingerprint
+            .clone(),
+        index_fingerprint: bundle
+            .module_index_identity_report
+            .index_fingerprint
+            .clone(),
+        validation: validation.clone(),
+        artifact_paths,
+    };
+
+    write_pretty_json(
+        &output_dir.join(&manifest.artifact_paths.run_manifest),
+        &manifest,
+    )?;
+
+    Ok(manifest)
+}
+
+#[derive(Default)]
+struct MutableArtNode {
+    fragment: String,
+    terminal: Option<TsPackageArtTerminal>,
+    children: BTreeMap<String, usize>,
+}
+
+fn stable_fingerprint<T: Serialize>(value: &T) -> String {
+    let bytes =
+        serde_json::to_vec(value).expect("stable fingerprint serialization must succeed");
+    ContentHash::compute(&bytes).to_hex()
+}
+
+fn build_package_art_index(
+    packages: &BTreeMap<String, TsPackageDefinition>,
+    workspace_fingerprint: &str,
+) -> TsModuleArtIndexReport {
+    let mut nodes = vec![MutableArtNode::default()];
+    for package in packages.values() {
+        let mut node_index = 0usize;
+        for ch in package.package_name.chars() {
+            let label = ch.to_string();
+            let next_index = if let Some(existing) = nodes[node_index].children.get(&label) {
+                *existing
+            } else {
+                let child_index = nodes.len();
+                nodes.push(MutableArtNode {
+                    fragment: label.clone(),
+                    ..MutableArtNode::default()
+                });
+                nodes[node_index].children.insert(label, child_index);
+                child_index
+            };
+            node_index = next_index;
+        }
+
+        nodes[node_index].terminal = Some(TsPackageArtTerminal {
+            package_name: package.package_name.clone(),
+            package_root: package.package_root.clone(),
+            export_count: package.exports.len(),
+            hot_subpath_count: package
+                .exports
+                .keys()
+                .filter(|key| is_hot_subpath_key(key))
+                .count(),
+        });
+    }
+
+    let public_nodes = nodes
+        .into_iter()
+        .enumerate()
+        .map(|(node_id, node)| TsPackageArtNode {
+            node_id,
+            fragment: node.fragment,
+            terminal: node.terminal,
+            children: node
+                .children
+                .into_iter()
+                .map(|(label, child_index)| TsPackageArtEdge { label, child_index })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+
+    let terminal_count = public_nodes
+        .iter()
+        .filter(|node| node.terminal.is_some())
+        .count();
+
+    TsModuleArtIndexReport {
+        schema_version: INDEX_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        workspace_fingerprint: workspace_fingerprint.to_string(),
+        package_count: packages.len(),
+        node_count: public_nodes.len(),
+        terminal_count,
+        nodes: public_nodes,
+    }
+}
+
+fn build_export_map_hash_catalog(
+    packages: &BTreeMap<String, TsPackageDefinition>,
+    workspace_fingerprint: &str,
+    policy: &TsResolutionIndexBuildPolicy,
+) -> TsExportMapHashCatalog {
+    let mut package_catalogs = Vec::new();
+    let mut indexed_package_count = 0usize;
+    let mut fallback_package_count = 0usize;
+
+    for package in packages.values() {
+        let mut fallback_reasons = Vec::new();
+        let exact_exports = package
+            .exports
+            .iter()
+            .filter(|(key, _)| !key.contains('*'))
+            .map(|(key, export_target)| TsIndexedExportEntry {
+                key: key.clone(),
+                key_fingerprint: stable_fingerprint(key),
+                target_fingerprint: stable_fingerprint(export_target),
+                export_target: export_target.clone(),
+            })
+            .collect::<Vec<_>>();
+        let hot_subpaths = package
+            .exports
+            .iter()
+            .filter(|(key, _)| is_hot_subpath_key(key))
+            .map(|(key, export_target)| TsIndexedSubpathEntry {
+                subpath: key.clone(),
+                key_fingerprint: stable_fingerprint(key),
+                target_fingerprint: stable_fingerprint(export_target),
+                export_target: export_target.clone(),
+            })
+            .collect::<Vec<_>>();
+        let wildcard_exports = package
+            .exports
+            .iter()
+            .filter(|(key, _)| key.contains('*'))
+            .map(|(pattern, export_target)| TsWildcardExportEntry {
+                pattern: pattern.clone(),
+                pattern_fingerprint: stable_fingerprint(pattern),
+                target_fingerprint: stable_fingerprint(export_target),
+                export_target: export_target.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let exact_export_mphf = if exact_exports.is_empty() {
+            None
+        } else {
+            match build_perfect_hash_layout(
+                &exact_exports.iter().map(|entry| entry.key.clone()).collect::<Vec<_>>(),
+                policy,
+            ) {
+                Ok(layout) => Some(layout),
+                Err(reason) => {
+                    fallback_reasons.push(reason);
+                    None
+                }
+            }
+        };
+        let hot_subpath_mphf = if hot_subpaths.is_empty() {
+            None
+        } else {
+            match build_perfect_hash_layout(
+                &hot_subpaths
+                    .iter()
+                    .map(|entry| entry.subpath.clone())
+                    .collect::<Vec<_>>(),
+                policy,
+            ) {
+                Ok(layout) => Some(layout),
+                Err(reason) => {
+                    if !fallback_reasons.contains(&reason) {
+                        fallback_reasons.push(reason);
+                    }
+                    None
+                }
+            }
+        };
+
+        if !wildcard_exports.is_empty() {
+            fallback_reasons.push(TsResolutionIndexFallbackReason::UnsupportedWildcardExport);
+        }
+
+        if exact_export_mphf.is_some() || hot_subpath_mphf.is_some() {
+            indexed_package_count += 1;
+        }
+        if !fallback_reasons.is_empty() {
+            fallback_package_count += 1;
+        }
+
+        package_catalogs.push(TsExportMapHashCatalogPackage {
+            package_name: package.package_name.clone(),
+            package_root: package.package_root.clone(),
+            exact_exports,
+            exact_export_mphf,
+            hot_subpaths,
+            hot_subpath_mphf,
+            wildcard_exports,
+            fallback_reasons,
+        });
+    }
+
+    TsExportMapHashCatalog {
+        schema_version: INDEX_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        workspace_fingerprint: workspace_fingerprint.to_string(),
+        indexed_package_count,
+        fallback_package_count,
+        packages: package_catalogs,
+    }
+}
+
+fn build_perfect_hash_layout(
+    keys: &[String],
+    policy: &TsResolutionIndexBuildPolicy,
+) -> Result<TsPerfectHashLayout, TsResolutionIndexFallbackReason> {
+    let table_size = keys.len();
+    if table_size == 0 {
+        return Ok(TsPerfectHashLayout {
+            salt: 0,
+            table_size: 0,
+            slots: Vec::new(),
+        });
+    }
+
+    for salt in 0..policy.max_salt_attempts {
+        let mut seen_slots = BTreeMap::new();
+        let mut slots = Vec::new();
+        let mut collision_detected = false;
+
+        for key in keys {
+            let slot = perfect_hash_slot(key, salt, table_size).expect("table size is non-zero");
+            if seen_slots.insert(slot, key.clone()).is_some() {
+                collision_detected = true;
+                break;
+            }
+            slots.push(TsPerfectHashSlot {
+                slot,
+                key: key.clone(),
+                key_fingerprint: stable_fingerprint(key),
+            });
+        }
+
+        if !collision_detected {
+            slots.sort_by(|left, right| left.slot.cmp(&right.slot).then(left.key.cmp(&right.key)));
+            return Ok(TsPerfectHashLayout {
+                salt,
+                table_size,
+                slots,
+            });
+        }
+    }
+
+    Err(TsResolutionIndexFallbackReason::CollisionSearchExhausted)
+}
+
+fn lookup_exact_slot<'a>(
+    layout: &'a TsPerfectHashLayout,
+    key: &str,
+) -> Option<&'a TsPerfectHashSlot> {
+    let slot = perfect_hash_slot(key, layout.salt, layout.table_size)?;
+    layout
+        .slots
+        .iter()
+        .find(|entry| entry.slot == slot && entry.key == key)
+}
+
+fn perfect_hash_slot(key: &str, salt: u64, table_size: usize) -> Option<usize> {
+    if table_size == 0 {
+        return None;
+    }
+
+    let digest = ContentHash::compute(format!("{salt}:{key}").as_bytes());
+    let prefix = &digest.as_bytes()[..8];
+    let value = u64::from_be_bytes(prefix.try_into().ok()?);
+    Some((value % table_size as u64) as usize)
+}
+
+fn select_indexed_export_target(
+    export_target: &TsPackageExportTarget,
+    condition_order: &[String],
+) -> Option<(String, String)> {
+    for condition in condition_order {
+        if let Some(path_template) = export_target.condition_targets.get(condition) {
+            return Some((apply_wildcard_capture(path_template, ""), condition.clone()));
+        }
+    }
+
+    export_target
+        .fallback_target
+        .as_deref()
+        .map(|path| (apply_wildcard_capture(path, ""), "fallback".to_string()))
+}
+
+fn unique_trace_field<F>(traces: &[TsResolutionTraceEvent], map: F) -> Vec<String>
+where
+    F: Fn(&TsResolutionTraceEvent) -> String,
+{
+    traces
+        .iter()
+        .map(map)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn write_pretty_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    fs::write(path, bytes)
+}
+
+fn sanitize_step_log_name(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    if sanitized.is_empty() {
+        "step".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn is_hot_subpath_key(key: &str) -> bool {
+    key.starts_with("./") && !key.contains('*')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,6 +1999,13 @@ mod tests {
 
     fn require_request(specifier: &str) -> TsModuleRequest {
         TsModuleRequest::new(specifier, TsRequestStyle::Require)
+    }
+
+    fn export_target(condition: &str, path: &str) -> TsPackageExportTarget {
+        TsPackageExportTarget {
+            condition_targets: BTreeMap::from([(condition.to_string(), path.to_string())]),
+            fallback_target: None,
+        }
     }
 
     // Section 1: Type Construction and Serde
@@ -1895,5 +2851,165 @@ mod tests {
             let back: TsResolutionDriftClass = serde_json::from_str(&json).unwrap();
             assert_eq!(class, back);
         }
+    }
+
+    // Section 12: Index Build, Validation, and Artifact Writing
+
+    #[test]
+    fn resolution_index_bundle_is_deterministic() {
+        let mut resolver = default_resolver();
+        resolver.register_file("/project/node_modules/react/dist/index.mjs");
+        resolver.register_package(
+            TsPackageDefinition::new("react", "/project/node_modules/react")
+                .with_export(".", export_target("import", "./dist/index.mjs")),
+        );
+
+        let first = resolver.build_resolution_index_bundle("2026-03-09T00:00:00Z", 100);
+        let second = resolver.build_resolution_index_bundle("2026-03-09T00:00:00Z", 100);
+
+        assert_eq!(first, second);
+        assert_eq!(
+            first.module_index_identity_report.index_fingerprint,
+            second.module_index_identity_report.index_fingerprint
+        );
+    }
+
+    #[test]
+    fn zero_attempt_policy_marks_package_as_fallback_only() {
+        let mut resolver = default_resolver();
+        resolver.register_package(
+            TsPackageDefinition::new("react", "/project/node_modules/react")
+                .with_export(".", export_target("import", "./dist/index.mjs"))
+                .with_export(
+                    "./jsx-runtime",
+                    export_target("import", "./dist/jsx-runtime.mjs"),
+                ),
+        );
+
+        let bundle = resolver.build_resolution_index_bundle_with_policy(
+            "2026-03-09T00:00:00Z",
+            100,
+            &TsResolutionIndexBuildPolicy {
+                max_salt_attempts: 0,
+            },
+        );
+        let package = bundle.export_map_hash_catalog.package("react").unwrap();
+
+        assert!(package.exact_export_mphf.is_none());
+        assert!(package.hot_subpath_mphf.is_none());
+        assert!(
+            package
+                .fallback_reasons
+                .contains(&TsResolutionIndexFallbackReason::CollisionSearchExhausted)
+        );
+    }
+
+    #[test]
+    fn resolve_with_index_or_fallback_matches_exact_package_resolution() {
+        let mut resolver = default_resolver();
+        resolver.register_file("/project/node_modules/react/dist/index.mjs");
+        resolver.register_file("/project/node_modules/react/dist/jsx-runtime.mjs");
+        resolver.register_package(
+            TsPackageDefinition::new("react", "/project/node_modules/react")
+                .with_export(".", export_target("import", "./dist/index.mjs"))
+                .with_export(
+                    "./jsx-runtime",
+                    export_target("import", "./dist/jsx-runtime.mjs"),
+                ),
+        );
+
+        let bundle = resolver.build_resolution_index_bundle("2026-03-09T00:00:00Z", 100);
+        let request = import_request("react/jsx-runtime");
+        let direct = resolver.resolve(&request, &ctx()).unwrap();
+        let indexed = resolver
+            .resolve_with_index_or_fallback(&request, &ctx(), &bundle, 150, 300)
+            .unwrap();
+
+        assert_eq!(direct.resolved_path, indexed.resolved_path);
+        assert_eq!(direct.package_name, indexed.package_name);
+        assert_eq!(direct.selected_condition, indexed.selected_condition);
+        assert!(
+            indexed
+                .traces
+                .iter()
+                .any(|trace| trace.event == "package_index_lookup")
+        );
+    }
+
+    #[test]
+    fn stale_index_validation_rejects_and_direct_resolution_still_works() {
+        let mut resolver = default_resolver();
+        resolver.register_file("/project/node_modules/react/dist/index.mjs");
+        resolver.register_package(
+            TsPackageDefinition::new("react", "/project/node_modules/react")
+                .with_export(".", export_target("import", "./dist/index.mjs")),
+        );
+
+        let bundle = resolver.build_resolution_index_bundle("2026-03-09T00:00:00Z", 10);
+        let validation = resolver.validate_resolution_index_bundle(&bundle, 500, 60);
+        let request = import_request("react");
+        let direct = resolver.resolve(&request, &ctx()).unwrap();
+        let indexed = resolver
+            .resolve_with_index_or_fallback(&request, &ctx(), &bundle, 500, 60)
+            .unwrap();
+
+        assert!(!validation.accepted);
+        assert_eq!(
+            validation.reason,
+            Some(TsResolutionIndexFallbackReason::ArtifactAgeExceeded)
+        );
+        assert_eq!(direct.resolved_path, indexed.resolved_path);
+    }
+
+    #[test]
+    fn write_index_artifacts_creates_required_files() {
+        let dir = std::env::temp_dir().join("frx_ts_resolution_index_artifacts");
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut resolver = default_resolver();
+        resolver.register_file("/project/node_modules/react/dist/index.mjs");
+        resolver.register_package(
+            TsPackageDefinition::new("react", "/project/node_modules/react")
+                .with_export(".", export_target("import", "./dist/index.mjs")),
+        );
+        let bundle = resolver.build_resolution_index_bundle("2026-03-09T00:00:00Z", 100);
+        let validation = resolver.validate_resolution_index_bundle(&bundle, 120, 300);
+        let traces = vec![TsResolutionTraceEvent {
+            trace_id: "trace-index".to_string(),
+            decision_id: "decision-index".to_string(),
+            policy_id: "policy-index".to_string(),
+            component: COMPONENT.to_string(),
+            event: "package_index_lookup".to_string(),
+            outcome: "allow".to_string(),
+            error_code: "none".to_string(),
+            detail: "resolved indexed export".to_string(),
+            candidate: Some("/project/node_modules/react/dist/index.mjs".to_string()),
+        }];
+
+        let manifest = write_ts_resolution_index_artifacts(
+            &dir,
+            "rgc-406a",
+            &["cargo test -p frankenengine-engine --test module_resolution_index".to_string()],
+            &traces,
+            &bundle,
+            &validation,
+            &[TsResolutionIndexStepLog {
+                name: "check".to_string(),
+                contents: "rch step log".to_string(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(manifest.schema_version, INDEX_MANIFEST_SCHEMA_VERSION);
+        assert!(dir.join("run_manifest.json").exists());
+        assert!(dir.join("events.jsonl").exists());
+        assert!(dir.join("commands.txt").exists());
+        assert!(dir.join("trace_ids.json").exists());
+        assert!(dir.join("module_art_index_report.json").exists());
+        assert!(dir.join("export_map_hash_catalog.json").exists());
+        assert!(dir.join("module_index_identity_report.json").exists());
+        assert!(dir.join("step_logs").exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

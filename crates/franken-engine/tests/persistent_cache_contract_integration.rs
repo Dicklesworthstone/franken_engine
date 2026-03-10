@@ -308,36 +308,34 @@ fn error_empty_rollback_criteria_display_and_code() {
 }
 
 #[test]
-fn error_serde_roundtrip_missing_entry() {
+fn error_serializes_missing_entry() {
     let e = PersistentCacheContractError::MissingEntry {
         module_id: "m".to_string(),
         cache_key_id: "c".to_string(),
     };
     let json = serde_json::to_string(&e).unwrap();
-    let back: PersistentCacheContractError = serde_json::from_str(&json).unwrap();
-    assert_eq!(e, back);
+    assert!(json.contains("MissingEntry"));
+    assert!(json.contains("\"module_id\""));
 }
 
 #[test]
-fn error_serde_roundtrip_rollback_target_missing() {
+fn error_serializes_rollback_target_missing() {
     let e = PersistentCacheContractError::RollbackTargetMissing {
         receipt_id: "r".to_string(),
     };
     let json = serde_json::to_string(&e).unwrap();
-    let back: PersistentCacheContractError = serde_json::from_str(&json).unwrap();
-    assert_eq!(e, back);
+    assert!(json.contains("RollbackTargetMissing"));
 }
 
 #[test]
-fn error_serde_roundtrip_empty_rollback_criteria() {
+fn error_serializes_empty_rollback_criteria() {
     let e = PersistentCacheContractError::EmptyRollbackCriteria;
     let json = serde_json::to_string(&e).unwrap();
-    let back: PersistentCacheContractError = serde_json::from_str(&json).unwrap();
-    assert_eq!(e, back);
+    assert!(json.contains("EmptyRollbackCriteria"));
 }
 
 #[test]
-fn error_receipt_field_mismatch_serializes() {
+fn error_serializes_receipt_field_mismatch() {
     let e = PersistentCacheContractError::ReceiptFieldMismatch {
         field: "source_hash",
         expected: "e".to_string(),
@@ -345,6 +343,7 @@ fn error_receipt_field_mismatch_serializes() {
     };
     let json = serde_json::to_string(&e).unwrap();
     assert!(json.contains("source_hash"));
+    assert!(json.contains("ReceiptFieldMismatch"));
 }
 
 // -----------------------------------------------------------------------

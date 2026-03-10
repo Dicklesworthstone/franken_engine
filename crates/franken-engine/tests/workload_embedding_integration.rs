@@ -4,13 +4,12 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::workload_embedding::{
-    AbstentionReason, CatalogEntry, CatalogSummary, CertificateVerdict,
-    DEFAULT_COSINE_NEAR_THRESHOLD, DEFAULT_NEIGHBORHOOD_RADIUS, DistanceMetric, DistanceResult,
-    EMBEDDING_SCHEMA_VERSION, EmbeddingBuilder, EmbeddingCatalog, EmbeddingValidity,
-    FeatureComponent, FeatureExtractionConfig, FeatureFamily, MAX_EMBEDDING_DIM,
-    MIN_OBSERVATIONS_FOR_EMBEDDING, NeighborResult, NeighborhoodCertificate,
-    NeighborhoodCertificateConfig, TransferRecommendation, WorkloadEmbedding, compute_distance,
-    issue_neighborhood_certificate,
+    AbstentionReason, CatalogSummary, CertificateVerdict, DEFAULT_COSINE_NEAR_THRESHOLD,
+    DEFAULT_NEIGHBORHOOD_RADIUS, DistanceMetric, DistanceResult, EMBEDDING_SCHEMA_VERSION,
+    EmbeddingBuilder, EmbeddingCatalog, EmbeddingValidity, FeatureComponent,
+    FeatureExtractionConfig, FeatureFamily, MAX_EMBEDDING_DIM, MIN_OBSERVATIONS_FOR_EMBEDDING,
+    NeighborResult, NeighborhoodCertificate, NeighborhoodCertificateConfig, TransferRecommendation,
+    WorkloadEmbedding, compute_distance, issue_neighborhood_certificate,
 };
 
 // ---------------------------------------------------------------------------

@@ -1177,6 +1177,16 @@ impl ModuleResolver for DeterministicModuleResolver {
     ) -> ResolutionResult<ResolutionOutcome> {
         let (canonical_specifier, record, probe_sequence) =
             self.resolve_candidate(request, context)?;
+        if request.style == ImportStyle::Require && record.syntax == ModuleSyntax::EsModule {
+            return Err(Box::new(ResolutionError::new(
+                ResolutionErrorCode::UnsupportedSpecifier,
+                format!(
+                    "ERR_REQUIRE_ESM: require() of ES module '{}' is not supported; use dynamic import() or provide a CommonJS entry point",
+                    canonical_specifier
+                ),
+                context,
+            )));
+        }
         policy.authorize(request, record, context)?;
 
         let resolved = ResolvedModule {
@@ -1402,6 +1412,33 @@ mod tests {
             require_outcome.module.probe_sequence,
             vec!["/app/lib", "/app/lib.cjs"]
         );
+    }
+
+    #[test]
+    fn require_rejects_esm_resolution_even_when_extension_probing_finds_js() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_workspace_module(
+                "/repo/pkg/index.js",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'esm';"),
+            )
+            .unwrap();
+
+        let error = resolver
+            .resolve(
+                &ModuleRequest::new("pkg", ImportStyle::Require),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect_err("require() of an ESM-only package entry must fail closed");
+
+        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert_eq!(
+            error.event.error_code,
+            ResolutionErrorCode::UnsupportedSpecifier.stable_code()
+        );
+        assert!(error.message.contains("ERR_REQUIRE_ESM"));
+        assert!(error.message.contains("/repo/pkg/index.js"));
     }
 
     #[test]

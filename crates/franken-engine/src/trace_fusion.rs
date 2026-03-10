@@ -371,9 +371,7 @@ pub struct FusedTrace {
 impl FusedTrace {
     /// Create a new fused trace.
     pub fn new(function_id: &str, epoch: SecurityEpoch) -> Self {
-        let hash = ContentHash::compute(
-            format!("{function_id}:{}", epoch.as_u64()).as_bytes(),
-        );
+        let hash = ContentHash::compute(format!("{function_id}:{}", epoch.as_u64()).as_bytes());
         Self {
             trace_id: format!("ft-{}", &hash.to_hex()[..16]),
             schema_version: TRACE_FUSION_SCHEMA_VERSION.to_string(),
@@ -455,7 +453,10 @@ impl FusedTrace {
 
     /// Guard count.
     pub fn guard_count(&self) -> usize {
-        self.instructions.iter().filter(|i| i.guard.is_some()).count()
+        self.instructions
+            .iter()
+            .filter(|i| i.guard.is_some())
+            .count()
     }
 
     /// Side-exit ratio in millionths (exits / executions).
@@ -471,8 +472,7 @@ impl FusedTrace {
 
     /// Whether this trace has degraded (high side-exit ratio).
     pub fn is_degraded(&self, max_exit_ratio_millionths: u64) -> bool {
-        self.execution_count > 0
-            && self.side_exit_ratio_millionths() > max_exit_ratio_millionths
+        self.execution_count > 0 && self.side_exit_ratio_millionths() > max_exit_ratio_millionths
     }
 
     /// Content hash of this trace for deterministic identity.
@@ -536,7 +536,10 @@ pub enum FusionDisableReason {
     /// Proof lineage was invalidated (capability revoked or IFC flow broken).
     ProofInvalidated { lineage_id: String },
     /// Side-exit ratio exceeded threshold.
-    ExcessiveSideExits { ratio_millionths: u64, threshold_millionths: u64 },
+    ExcessiveSideExits {
+        ratio_millionths: u64,
+        threshold_millionths: u64,
+    },
     /// Security epoch advanced past formation epoch.
     EpochAdvanced { formation: u64, current: u64 },
     /// Operator manually disabled this trace.
@@ -591,7 +594,7 @@ impl Default for FusionPolicy {
             max_super_instructions: 16,
             max_guards: 8,
             max_exit_ratio_millionths: 200_000, // 20%
-            min_net_savings_millionths: 50_000,  // 5%
+            min_net_savings_millionths: 50_000, // 5%
             require_proof_lineage: true,
             allow_effectful_fusion: false,
             max_traces_per_function: 4,
@@ -718,9 +721,7 @@ pub struct FusionRecord {
 impl FusionRecord {
     /// Create a new fusion record.
     pub fn new(function_id: &str, epoch: SecurityEpoch) -> Self {
-        let hash = ContentHash::compute(
-            format!("{function_id}:rec:{}", epoch.as_u64()).as_bytes(),
-        );
+        let hash = ContentHash::compute(format!("{function_id}:rec:{}", epoch.as_u64()).as_bytes());
         Self {
             record_id: format!("fr-{}", &hash.to_hex()[..16]),
             function_id: function_id.to_string(),
@@ -801,10 +802,7 @@ impl MotifRecognizer {
     }
 
     fn recognize_property_chains(&self) -> Vec<FusionMotif> {
-        let prop_ops: BTreeSet<&str> = ["GetProperty", "SetProperty"]
-            .iter()
-            .copied()
-            .collect();
+        let prop_ops: BTreeSet<&str> = ["GetProperty", "SetProperty"].iter().copied().collect();
         self.recognize_consecutive_pattern(&prop_ops, MotifKind::PropertyChain, 2)
     }
 
@@ -816,7 +814,14 @@ impl MotifRecognizer {
     fn recognize_comparison_branches(&self) -> Vec<FusionMotif> {
         let mut motifs = Vec::new();
         let cmp_ops: BTreeSet<&str> = [
-            "Lt", "Lte", "Gt", "Gte", "Eq", "StrictEq", "NotEq", "StrictNotEq",
+            "Lt",
+            "Lte",
+            "Gt",
+            "Gte",
+            "Eq",
+            "StrictEq",
+            "NotEq",
+            "StrictNotEq",
         ]
         .iter()
         .copied()
@@ -862,8 +867,10 @@ impl MotifRecognizer {
                     j += 1;
                 }
                 if j > start + 1 {
-                    let opcodes: Vec<String> =
-                        self.entries[start..j].iter().map(|e| e.opcode.clone()).collect();
+                    let opcodes: Vec<String> = self.entries[start..j]
+                        .iter()
+                        .map(|e| e.opcode.clone())
+                        .collect();
                     let mut motif = FusionMotif::new(
                         MotifKind::AllocationInit,
                         opcodes,
@@ -912,8 +919,10 @@ impl MotifRecognizer {
                 }
             } else if let Some(start) = run_start {
                 if i - start >= min_len {
-                    let opcodes: Vec<String> =
-                        self.entries[start..i].iter().map(|e| e.opcode.clone()).collect();
+                    let opcodes: Vec<String> = self.entries[start..i]
+                        .iter()
+                        .map(|e| e.opcode.clone())
+                        .collect();
                     let mut motif = FusionMotif::new(
                         kind.clone(),
                         opcodes,
@@ -950,8 +959,10 @@ impl MotifRecognizer {
         if let Some(start) = run_start {
             let end = self.entries.len();
             if end - start >= min_len {
-                let opcodes: Vec<String> =
-                    self.entries[start..end].iter().map(|e| e.opcode.clone()).collect();
+                let opcodes: Vec<String> = self.entries[start..end]
+                    .iter()
+                    .map(|e| e.opcode.clone())
+                    .collect();
                 let mut motif = FusionMotif::new(
                     kind,
                     opcodes,
@@ -1094,8 +1105,7 @@ impl FusionTemplateCatalog {
 
     /// Register a template.
     pub fn register(&mut self, template: SuperInstructionTemplate) {
-        self.templates
-            .insert(template.opcode.clone(), template);
+        self.templates.insert(template.opcode.clone(), template);
     }
 
     /// Find a template for a given motif.
@@ -1214,16 +1224,12 @@ impl TraceFusionEngine {
         // Validate motifs against policy.
         let mut accepted = Vec::new();
         for motif in &motifs {
-            record
-                .considered_motifs
-                .push(motif.motif_id.clone());
+            record.considered_motifs.push(motif.motif_id.clone());
             match self.policy.validate_motif(motif) {
                 MotifValidation::Accepted => {
                     if accepted.len() < self.policy.max_motifs_per_trace {
                         accepted.push(motif.clone());
-                        record
-                            .accepted_motifs
-                            .push(motif.motif_id.clone());
+                        record.accepted_motifs.push(motif.motif_id.clone());
                     } else {
                         record.rejected_motifs.push((
                             motif.motif_id.clone(),
@@ -1262,7 +1268,11 @@ impl TraceFusionEngine {
                 if !offsets.is_empty() {
                     fused_ranges.insert(
                         motif.start_offset,
-                        (motif.end_offset, template.opcode.clone(), template.savings_millionths),
+                        (
+                            motif.end_offset,
+                            template.opcode.clone(),
+                            template.savings_millionths,
+                        ),
                     );
                     total_savings += template.savings_millionths;
                     trace.record_fused_motif(&motif.motif_id);
@@ -1321,7 +1331,7 @@ impl TraceFusionEngine {
                 let mut instr = FusedInstruction::super_instruction(
                     position,
                     fused_offsets,
-                    &super_opcode,
+                    super_opcode,
                     cost_savings,
                 );
                 // Add guard if template requires one and we haven't hit guard limit.
@@ -1375,11 +1385,7 @@ impl TraceFusionEngine {
     }
 
     /// Disable a trace by ID.
-    pub fn disable_trace(
-        &mut self,
-        trace_id: &str,
-        reason: FusionDisableReason,
-    ) -> bool {
+    pub fn disable_trace(&mut self, trace_id: &str, reason: FusionDisableReason) -> bool {
         if let Some(trace) = self.active_traces.get_mut(trace_id) {
             trace.disable(reason);
             true
@@ -1443,26 +1449,23 @@ impl TraceFusionEngine {
             .collect();
 
         for trace_id in trace_ids {
-            if let Some(trace) = self.active_traces.get_mut(&trace_id) {
-                if let Some(ref lineage) = trace.proof_lineage {
-                    let lid = lineage.lineage_id.clone();
-                    trace.disable(FusionDisableReason::ProofInvalidated {
-                        lineage_id: lid,
-                    });
-                }
+            if let Some(trace) = self.active_traces.get_mut(&trace_id)
+                && let Some(ref lineage) = trace.proof_lineage
+            {
+                let lid = lineage.lineage_id.clone();
+                trace.disable(FusionDisableReason::ProofInvalidated { lineage_id: lid });
             }
         }
     }
 
     /// Advance epoch and disable traces formed in earlier epochs.
     pub fn advance_epoch(&mut self, new_epoch: SecurityEpoch) {
-        let old = self.epoch;
         self.epoch = new_epoch;
 
         let trace_ids: Vec<String> = self
             .active_traces
             .iter()
-            .filter(|(_, t)| t.enabled && t.formation_epoch.as_u64() < old.as_u64())
+            .filter(|(_, t)| t.enabled && t.formation_epoch.as_u64() < new_epoch.as_u64())
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -1491,10 +1494,7 @@ impl TraceFusionEngine {
 
     /// Active (enabled) trace count.
     pub fn active_count(&self) -> usize {
-        self.active_traces
-            .values()
-            .filter(|t| t.enabled)
-            .count()
+        self.active_traces.values().filter(|t| t.enabled).count()
     }
 
     /// Total trace count (including disabled).
@@ -1518,10 +1518,7 @@ impl TraceFusionEngine {
 
     /// Summaries of all traces.
     pub fn all_summaries(&self) -> Vec<FusedTraceSummary> {
-        self.active_traces
-            .values()
-            .map(|t| t.summary())
-            .collect()
+        self.active_traces.values().map(|t| t.summary()).collect()
     }
 
     /// Engine diagnostics.
@@ -1535,16 +1532,8 @@ impl TraceFusionEngine {
             .filter(|t| t.enabled)
             .map(|t| t.cost_savings_millionths)
             .sum();
-        let total_executions: u64 = self
-            .active_traces
-            .values()
-            .map(|t| t.execution_count)
-            .sum();
-        let total_exits: u64 = self
-            .active_traces
-            .values()
-            .map(|t| t.side_exit_count)
-            .sum();
+        let total_executions: u64 = self.active_traces.values().map(|t| t.execution_count).sum();
+        let total_exits: u64 = self.active_traces.values().map(|t| t.side_exit_count).sum();
         let formed_count = self
             .records
             .iter()
@@ -1781,11 +1770,8 @@ mod tests {
 
     #[test]
     fn test_proof_lineage_epoch_check() {
-        let lineage = FusionProofLineage::new(
-            vec!["p1".into()],
-            vec![],
-            SecurityEpoch::from_raw(5),
-        );
+        let lineage =
+            FusionProofLineage::new(vec!["p1".into()], vec![], SecurityEpoch::from_raw(5));
         assert!(!lineage.is_valid_at(SecurityEpoch::from_raw(3)));
         assert!(lineage.is_valid_at(SecurityEpoch::from_raw(5)));
         assert!(lineage.is_valid_at(SecurityEpoch::from_raw(10)));
@@ -1840,9 +1826,12 @@ mod tests {
 
     #[test]
     fn test_guard_factored() {
-        let mut guard = FusionGuard::new(FusionGuardKind::CapabilityValid {
-            capability_name: "fs.read".into(),
-        }, 0);
+        let mut guard = FusionGuard::new(
+            FusionGuardKind::CapabilityValid {
+                capability_name: "fs.read".into(),
+            },
+            0,
+        );
         guard.mark_factored();
         assert!(guard.factored);
     }
@@ -1942,10 +1931,7 @@ mod tests {
     #[test]
     fn test_trace_with_superblock() {
         let trace = FusedTrace::new("fn_test", test_epoch()).with_superblock("sb-abc123");
-        assert_eq!(
-            trace.source_superblock_id,
-            Some("sb-abc123".to_string())
-        );
+        assert_eq!(trace.source_superblock_id, Some("sb-abc123".to_string()));
     }
 
     // --- FusionPolicy tests ---
@@ -2365,10 +2351,7 @@ mod tests {
             })
             .collect();
         let outcome2 = engine.fuse("fn_test", &entries2, None);
-        assert!(matches!(
-            outcome2,
-            FusionOutcome::TraceLimitExceeded { .. }
-        ));
+        assert!(matches!(outcome2, FusionOutcome::TraceLimitExceeded { .. }));
     }
 
     #[test]
@@ -2377,12 +2360,7 @@ mod tests {
         engine.policy.require_proof_lineage = false;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine
-            .active_traces
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
+        let trace_id = engine.active_traces.keys().next().unwrap().clone();
         assert!(engine.disable_trace(
             &trace_id,
             FusionDisableReason::OperatorDisabled {
@@ -2398,12 +2376,7 @@ mod tests {
         engine.policy.require_proof_lineage = false;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine
-            .active_traces
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
+        let trace_id = engine.active_traces.keys().next().unwrap().clone();
         engine.disable_trace(
             &trace_id,
             FusionDisableReason::OperatorDisabled {
@@ -2420,12 +2393,7 @@ mod tests {
         engine.policy.require_proof_lineage = false;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine
-            .active_traces
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
+        let trace_id = engine.active_traces.keys().next().unwrap().clone();
         assert!(engine.record_execution(&trace_id));
         assert!(engine.record_execution(&trace_id));
         let trace = engine.get_trace(&trace_id).unwrap();
@@ -2439,12 +2407,7 @@ mod tests {
         engine.policy.max_exit_ratio_millionths = 200_000;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine
-            .active_traces
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
+        let trace_id = engine.active_traces.keys().next().unwrap().clone();
 
         // 3 executions, 1 exit = 33% > 20%.
         engine.record_execution(&trace_id);
@@ -2461,12 +2424,7 @@ mod tests {
         let mut engine = TraceFusionEngine::new(test_epoch());
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, Some(proof_lineage()));
-        let trace_id = engine
-            .active_traces
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
+        let trace_id = engine.active_traces.keys().next().unwrap().clone();
 
         engine.invalidate_proof("cap-proof-1");
         let trace = engine.get_trace(&trace_id).unwrap();
@@ -2485,11 +2443,7 @@ mod tests {
         engine.fuse("fn_test", &entries, None);
 
         engine.advance_epoch(SecurityEpoch::from_raw(5));
-        let trace = engine
-            .active_traces
-            .values()
-            .next()
-            .unwrap();
+        let trace = engine.active_traces.values().next().unwrap();
         assert!(!trace.enabled);
     }
 
@@ -2594,12 +2548,7 @@ mod tests {
         engine.policy.require_proof_lineage = false;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine
-            .active_traces
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
+        let trace_id = engine.active_traces.keys().next().unwrap().clone();
         engine.disable_trace(
             &trace_id,
             FusionDisableReason::OperatorDisabled {
@@ -2852,10 +2801,7 @@ mod tests {
         engine.policy.min_net_savings_millionths = 999_999_999;
         let entries = arith_entries(4, 200);
         let outcome = engine.fuse("fn_test", &entries, None);
-        assert!(matches!(
-            outcome,
-            FusionOutcome::InsufficientSavings { .. }
-        ));
+        assert!(matches!(outcome, FusionOutcome::InsufficientSavings { .. }));
     }
 
     #[test]
@@ -2891,9 +2837,7 @@ mod tests {
             },
             0,
         );
-        trace.add_instruction(
-            FusedInstruction::passthrough(0, 0, "Add").with_guard(guard),
-        );
+        trace.add_instruction(FusedInstruction::passthrough(0, 0, "Add").with_guard(guard));
         trace.add_instruction(FusedInstruction::passthrough(1, 4, "Sub"));
         assert_eq!(trace.guard_count(), 1);
     }

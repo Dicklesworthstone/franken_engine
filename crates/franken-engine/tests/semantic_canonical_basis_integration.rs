@@ -514,13 +514,21 @@ fn class_empty_members() {
 #[test]
 fn class_with_orbits() {
     let orbits = vec![
-        orbit(ArtifactFamily::Ir1Fragment, "a", "c", vec![
-            step(0, EquivalenceTransformation::AlphaRenaming),
-        ]),
-        orbit(ArtifactFamily::Ir1Fragment, "b", "c", vec![
-            step(0, EquivalenceTransformation::AlphaRenaming),
-            step(1, EquivalenceTransformation::ConstantFolding),
-        ]),
+        orbit(
+            ArtifactFamily::Ir1Fragment,
+            "a",
+            "c",
+            vec![step(0, EquivalenceTransformation::AlphaRenaming)],
+        ),
+        orbit(
+            ArtifactFamily::Ir1Fragment,
+            "b",
+            "c",
+            vec![
+                step(0, EquivalenceTransformation::AlphaRenaming),
+                step(1, EquivalenceTransformation::ConstantFolding),
+            ],
+        ),
     ];
     let c = class(ArtifactFamily::Ir1Fragment, "c", orbits);
     assert_eq!(c.member_count(), 2);
@@ -531,12 +539,18 @@ fn class_with_orbits() {
 #[test]
 fn class_all_transformations_used() {
     let orbits = vec![
-        orbit(ArtifactFamily::CacheEntry, "x", "z", vec![
-            step(0, EquivalenceTransformation::CommutativeReorder),
-        ]),
-        orbit(ArtifactFamily::CacheEntry, "y", "z", vec![
-            step(0, EquivalenceTransformation::MetadataNormalization),
-        ]),
+        orbit(
+            ArtifactFamily::CacheEntry,
+            "x",
+            "z",
+            vec![step(0, EquivalenceTransformation::CommutativeReorder)],
+        ),
+        orbit(
+            ArtifactFamily::CacheEntry,
+            "y",
+            "z",
+            vec![step(0, EquivalenceTransformation::MetadataNormalization)],
+        ),
     ];
     let c = class(ArtifactFamily::CacheEntry, "z", orbits);
     let used = c.all_transformations_used();
@@ -697,12 +711,7 @@ fn query_same_class_succeeds() {
 
 #[test]
 fn query_different_class_fails() {
-    let orbits = vec![orbit(
-        ArtifactFamily::Ir1Fragment,
-        "a",
-        "canon",
-        Vec::new(),
-    )];
+    let orbits = vec![orbit(ArtifactFamily::Ir1Fragment, "a", "canon", Vec::new())];
     let b = basis(vec![class(ArtifactFamily::Ir1Fragment, "canon", orbits)]);
     let result = query_identification(&b, ArtifactFamily::Ir1Fragment, "a", "unknown");
     assert!(result.is_err());
@@ -805,9 +814,11 @@ fn validate_orbit_depth_exceeded() {
         .collect();
     let o = orbit(ArtifactFamily::Ir1Fragment, "a", "b", steps);
     let issues = validate_orbit(&o, &all_transforms());
-    assert!(issues
-        .iter()
-        .any(|i| matches!(i, RefusalReason::OrbitDepthExceeded { .. })));
+    assert!(
+        issues
+            .iter()
+            .any(|i| matches!(i, RefusalReason::OrbitDepthExceeded { .. }))
+    );
 }
 
 #[test]

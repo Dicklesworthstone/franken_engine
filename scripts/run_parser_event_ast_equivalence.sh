@@ -67,6 +67,30 @@ rch_reject_local_fallback() {
   fi
 }
 
+rch_last_remote_exit_code() {
+  local log_path="$1"
+  local exit_line
+  exit_line="$(grep -Eo 'Remote command finished: exit=[0-9]+' "$log_path" | tail -n 1 || true)"
+  if [[ -z "$exit_line" ]]; then
+    echo ""
+    return
+  fi
+  echo "${exit_line##*=}"
+}
+
+rch_has_recoverable_artifact_timeout() {
+  local log_path="$1"
+  grep -Eiq 'artifact retrieval timed out|artifact transfer timed out|timed out waiting for artifacts' "$log_path"
+}
+
+rch_reject_artifact_retrieval_failure() {
+  local log_path="$1"
+  if grep -Eiq 'Artifact retrieval failed|Failed to retrieve artifacts:|rsync artifact retrieval failed|artifact retrieval .*rsync error|rsync error: .*code 23' "$log_path"; then
+    echo "rch artifact retrieval failed; refusing to mark heavy command as successful" >&2
+    return 1
+  fi
+}
+
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
@@ -74,8 +98,7 @@ manifest_written=false
 run_step() {
   local command_text="$1"
   local log_path
-  local remote_success_marker='Remote command finished: exit=0'
-  local remote_failure_marker='Remote command finished: exit=[1-9][0-9]*'
+  local remote_exit_code
   shift
 
   commands_run+=("$command_text")
@@ -83,7 +106,8 @@ run_step() {
   log_path="$(mktemp)"
 
   if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
-    if rg -q "$remote_success_marker" "$log_path"; then
+    remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
+    if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
     else
       rm -f "$log_path"
@@ -92,19 +116,24 @@ run_step() {
     fi
   fi
 
-  # Fail closed if rch reports a non-zero remote exit but still returns success.
-  if rg -q "$remote_failure_marker" "$log_path"; then
+  remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
+  if [[ -z "$remote_exit_code" ]]; then
+    echo "rch did not emit a remote exit marker for step: ${command_text}" >&2
+    rm -f "$log_path"
+    failed_command="${command_text} (rch-remote-exit-marker-missing)"
+    return 1
+  fi
+
+  if [[ "$remote_exit_code" != "0" ]]; then
     echo "rch reported non-zero remote exit for step: ${command_text}" >&2
     rm -f "$log_path"
     failed_command="${command_text} (rch-remote-exit-nonzero)"
     return 1
   fi
 
-  # Require explicit remote success marker to avoid ambiguous pass states.
-  if ! rg -q "$remote_success_marker" "$log_path"; then
-    echo "rch did not emit a remote success marker for step: ${command_text}" >&2
+  if ! rch_reject_artifact_retrieval_failure "$log_path"; then
     rm -f "$log_path"
-    failed_command="${command_text} (rch-remote-success-marker-missing)"
+    failed_command="${command_text} (rch-artifact-retrieval-failed)"
     return 1
   fi
 
@@ -343,7 +372,7 @@ write_manifest() {
     echo '    "contract_doc": "docs/PARSER_EVENT_AST_EQUIVALENCE_REPLAY_CONTRACT.md",'
     echo '    "gate_fixture": "crates/franken-engine/tests/fixtures/parser_event_ast_equivalence_v1.json",'
     echo '    "gate_tests": "crates/franken-engine/tests/parser_event_ast_equivalence.rs",'
-    echo '    "replay_wrapper": "scripts/e2e/parser_event_ast_equivalence_replay.sh",'
+    echo '    "replay_wrapper": "./scripts/e2e/parser_event_ast_equivalence_replay.sh",'
     echo "    \"matrix_summary\": \"${matrix_summary_path}\""
     echo "  },"
     echo '  "operator_verification": ['

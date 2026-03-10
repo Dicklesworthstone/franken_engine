@@ -58,6 +58,11 @@ fn load_doc() -> String {
     fs::read_to_string(path).expect("read parser event ast equivalence contract doc")
 }
 
+fn load_script() -> String {
+    let path = Path::new("../../scripts/run_parser_event_ast_equivalence.sh");
+    fs::read_to_string(path).expect("read parser event ast equivalence gate script")
+}
+
 fn parse_goal(goal: &str) -> ParseGoal {
     match goal {
         "script" => ParseGoal::Script,
@@ -386,6 +391,30 @@ fn parser_event_ast_equivalence_contract_doc_and_logs_are_well_formed() {
             .and_then(Value::as_str)
             .expect("schema_version must be a non-empty string");
         assert!(schema_version.starts_with("franken-engine.parser"));
+    }
+}
+
+#[test]
+fn parser_event_ast_equivalence_script_contains_fail_closed_rch_markers() {
+    let script = load_script();
+    let required_markers = [
+        "rch_last_remote_exit_code",
+        "rch_has_recoverable_artifact_timeout",
+        "rch_reject_artifact_retrieval_failure",
+        "Artifact retrieval failed",
+        "rsync error: .*code 23",
+        "running locally",
+        "RCH-E326",
+        "rch-remote-exit-marker-missing",
+        "rch-artifact-retrieval-failed",
+        "./scripts/e2e/parser_event_ast_equivalence_replay.sh",
+    ];
+
+    for marker in required_markers {
+        assert!(
+            script.contains(marker),
+            "event->AST equivalence script missing fail-closed marker: {marker}"
+        );
     }
 }
 

@@ -82,7 +82,11 @@ fn cmp_branch_entries(exec_count: u64, base_offset: u32) -> Vec<InstructionEntry
     ]
 }
 
-fn alloc_init_entries(prop_count: usize, exec_count: u64, base_offset: u32) -> Vec<InstructionEntry> {
+fn alloc_init_entries(
+    prop_count: usize,
+    exec_count: u64,
+    base_offset: u32,
+) -> Vec<InstructionEntry> {
     let mut entries = vec![InstructionEntry {
         offset: base_offset,
         opcode: "NewObject".to_string(),
@@ -130,7 +134,10 @@ fn test_arithmetic_chain_recognition_pipeline() {
         rec.add_entry(entry);
     }
     let motifs = rec.recognize();
-    let arith: Vec<_> = motifs.iter().filter(|m| m.kind == MotifKind::ArithmeticChain).collect();
+    let arith: Vec<_> = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::ArithmeticChain)
+        .collect();
     assert_eq!(arith.len(), 1);
     assert_eq!(arith[0].instruction_count(), 6);
     assert_eq!(arith[0].observation_count, 200);
@@ -144,7 +151,10 @@ fn test_property_chain_recognition_pipeline() {
         rec.add_entry(entry);
     }
     let motifs = rec.recognize();
-    let props: Vec<_> = motifs.iter().filter(|m| m.kind == MotifKind::PropertyChain).collect();
+    let props: Vec<_> = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::PropertyChain)
+        .collect();
     assert_eq!(props.len(), 1);
     assert_eq!(props[0].instruction_count(), 5);
 }
@@ -156,7 +166,10 @@ fn test_hostcall_sequence_recognition() {
         rec.add_entry(entry);
     }
     let motifs = rec.recognize();
-    let hc: Vec<_> = motifs.iter().filter(|m| m.kind == MotifKind::HostcallSequence).collect();
+    let hc: Vec<_> = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::HostcallSequence)
+        .collect();
     assert_eq!(hc.len(), 1);
     assert!(!hc[0].side_effect_free);
     assert!(hc[0].required_capabilities.contains("fs.read"));
@@ -169,7 +182,10 @@ fn test_comparison_branch_recognition() {
         rec.add_entry(entry);
     }
     let motifs = rec.recognize();
-    let cmps: Vec<_> = motifs.iter().filter(|m| m.kind == MotifKind::ComparisonBranch).collect();
+    let cmps: Vec<_> = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::ComparisonBranch)
+        .collect();
     assert_eq!(cmps.len(), 1);
     assert_eq!(cmps[0].instruction_count(), 2);
 }
@@ -181,7 +197,10 @@ fn test_allocation_init_recognition() {
         rec.add_entry(entry);
     }
     let motifs = rec.recognize();
-    let allocs: Vec<_> = motifs.iter().filter(|m| m.kind == MotifKind::AllocationInit).collect();
+    let allocs: Vec<_> = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::AllocationInit)
+        .collect();
     assert_eq!(allocs.len(), 1);
     assert_eq!(allocs[0].instruction_count(), 4); // NewObject + 3 SetProperty
 }
@@ -207,8 +226,14 @@ fn test_multiple_motif_types_in_stream() {
         rec.add_entry(entry);
     }
     let motifs = rec.recognize();
-    let arith_count = motifs.iter().filter(|m| m.kind == MotifKind::ArithmeticChain).count();
-    let prop_count = motifs.iter().filter(|m| m.kind == MotifKind::PropertyChain).count();
+    let arith_count = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::ArithmeticChain)
+        .count();
+    let prop_count = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::PropertyChain)
+        .count();
     assert_eq!(arith_count, 1);
     assert_eq!(prop_count, 1);
 }
@@ -389,9 +414,12 @@ fn test_disable_and_reenable_trace() {
     let tid = engine.active_traces.keys().next().unwrap().clone();
 
     assert_eq!(engine.active_count(), 1);
-    engine.disable_trace(&tid, FusionDisableReason::OperatorDisabled {
-        reason: "maintenance".to_string(),
-    });
+    engine.disable_trace(
+        &tid,
+        FusionDisableReason::OperatorDisabled {
+            reason: "maintenance".to_string(),
+        },
+    );
     assert_eq!(engine.active_count(), 0);
     assert_eq!(engine.total_count(), 1);
 
@@ -446,7 +474,10 @@ fn test_epoch_advance_disables_old_traces() {
     assert!(!trace.enabled);
     assert!(matches!(
         trace.disable_reason,
-        Some(FusionDisableReason::EpochAdvanced { formation: 1, current: 5 })
+        Some(FusionDisableReason::EpochAdvanced {
+            formation: 1,
+            current: 5
+        })
     ));
 }
 
@@ -463,7 +494,10 @@ fn test_overlapping_offsets_detected_as_interference() {
     engine.fuse("fn_test", &entries, None);
 
     let outcome2 = engine.fuse("fn_test", &entries, None);
-    assert!(matches!(outcome2, FusionOutcome::InterferenceBlocked { .. }));
+    assert!(matches!(
+        outcome2,
+        FusionOutcome::InterferenceBlocked { .. }
+    ));
 }
 
 #[test]
@@ -579,9 +613,12 @@ fn test_all_summaries_includes_disabled() {
     let entries = arith_entries(4, 200, 0);
     engine.fuse("fn_test", &entries, None);
     let tid = engine.active_traces.keys().next().unwrap().clone();
-    engine.disable_trace(&tid, FusionDisableReason::OperatorDisabled {
-        reason: "test".into(),
-    });
+    engine.disable_trace(
+        &tid,
+        FusionDisableReason::OperatorDisabled {
+            reason: "test".into(),
+        },
+    );
 
     assert_eq!(engine.active_summaries().len(), 0);
     assert_eq!(engine.all_summaries().len(), 1);
@@ -612,13 +649,21 @@ fn test_trace_content_hash_deterministic() {
 fn test_motif_content_hash_stability() {
     let m1 = FusionMotif::new(
         MotifKind::PropertyChain,
-        vec!["GetProperty".into(), "GetProperty".into(), "GetProperty".into()],
+        vec![
+            "GetProperty".into(),
+            "GetProperty".into(),
+            "GetProperty".into(),
+        ],
         0,
         8,
     );
     let m2 = FusionMotif::new(
         MotifKind::PropertyChain,
-        vec!["GetProperty".into(), "GetProperty".into(), "GetProperty".into()],
+        vec![
+            "GetProperty".into(),
+            "GetProperty".into(),
+            "GetProperty".into(),
+        ],
         0,
         8,
     );
@@ -694,7 +739,8 @@ fn test_catalog_default_templates() {
     let arith_motif = FusionMotif::new(
         MotifKind::ArithmeticChain,
         vec!["Add".into(), "Sub".into(), "Mul".into()],
-        0, 8,
+        0,
+        8,
     );
     assert!(catalog.find_template(&arith_motif).is_some());
 }
@@ -711,11 +757,7 @@ fn test_catalog_custom_template() {
         required_guard: None,
     });
 
-    let motif = FusionMotif::new(
-        MotifKind::LoopInvariant,
-        vec!["LoadInt".into()],
-        0, 0,
-    );
+    let motif = FusionMotif::new(MotifKind::LoopInvariant, vec!["LoadInt".into()], 0, 0);
     let t = catalog.find_template(&motif);
     assert!(t.is_some());
     assert_eq!(t.unwrap().opcode, "CustomSuper");
@@ -727,7 +769,8 @@ fn test_catalog_no_template_for_oversized_motif() {
     let motif = FusionMotif::new(
         MotifKind::ArithmeticChain,
         (0..20).map(|_| "Add".to_string()).collect(), // 20 > max_opcodes=16
-        0, 76,
+        0,
+        76,
     );
     assert!(catalog.find_template(&motif).is_none());
 }
@@ -738,14 +781,10 @@ fn test_catalog_no_template_for_oversized_motif() {
 
 #[test]
 fn test_proof_lineage_validity_window() {
-    let lineage = FusionProofLineage::new(
-        vec!["p1".into()],
-        vec![],
-        epoch(3),
-    );
+    let lineage = FusionProofLineage::new(vec!["p1".into()], vec![], epoch(3));
     assert!(!lineage.is_valid_at(epoch(1))); // Before epoch
     assert!(!lineage.is_valid_at(epoch(2)));
-    assert!(lineage.is_valid_at(epoch(3)));   // At epoch
+    assert!(lineage.is_valid_at(epoch(3))); // At epoch
     assert!(lineage.is_valid_at(epoch(100))); // After epoch
 }
 
@@ -765,7 +804,10 @@ fn test_proof_lineage_invalidation_permanent() {
 fn test_empty_instruction_stream() {
     let mut engine = TraceFusionEngine::new(epoch(1));
     engine.policy = relaxed_policy();
-    assert_eq!(engine.fuse("fn_test", &[], None), FusionOutcome::NoFusibleMotifs);
+    assert_eq!(
+        engine.fuse("fn_test", &[], None),
+        FusionOutcome::NoFusibleMotifs
+    );
 }
 
 #[test]
@@ -780,15 +822,21 @@ fn test_single_instruction_stream() {
         has_side_effects: false,
         capabilities: BTreeSet::new(),
     }];
-    assert_eq!(engine.fuse("fn_test", &entries, None), FusionOutcome::NoFusibleMotifs);
+    assert_eq!(
+        engine.fuse("fn_test", &entries, None),
+        FusionOutcome::NoFusibleMotifs
+    );
 }
 
 #[test]
 fn test_disable_nonexistent_trace() {
     let mut engine = TraceFusionEngine::new(epoch(1));
-    assert!(!engine.disable_trace("nonexistent", FusionDisableReason::OperatorDisabled {
-        reason: "test".into(),
-    }));
+    assert!(!engine.disable_trace(
+        "nonexistent",
+        FusionDisableReason::OperatorDisabled {
+            reason: "test".into(),
+        }
+    ));
 }
 
 #[test]
@@ -890,22 +938,31 @@ fn test_mixed_stream_partial_fusion_coverage() {
     let mut entries = vec![];
     // Prefix: LoadInt (non-fusible)
     entries.push(InstructionEntry {
-        offset: 0, opcode: "LoadInt".into(), execution_count: 200,
-        type_stability_millionths: 1_000_000, has_side_effects: false,
+        offset: 0,
+        opcode: "LoadInt".into(),
+        execution_count: 200,
+        type_stability_millionths: 1_000_000,
+        has_side_effects: false,
         capabilities: BTreeSet::new(),
     });
     // Arith chain (fusible)
     for i in 1..=4 {
         entries.push(InstructionEntry {
-            offset: i * 4, opcode: ["Add", "Sub", "Mul", "Div"][(i as usize - 1) % 4].into(),
-            execution_count: 200, type_stability_millionths: 950_000,
-            has_side_effects: false, capabilities: BTreeSet::new(),
+            offset: i * 4,
+            opcode: ["Add", "Sub", "Mul", "Div"][(i as usize - 1) % 4].into(),
+            execution_count: 200,
+            type_stability_millionths: 950_000,
+            has_side_effects: false,
+            capabilities: BTreeSet::new(),
         });
     }
     // Suffix: Return (non-fusible)
     entries.push(InstructionEntry {
-        offset: 20, opcode: "Return".into(), execution_count: 200,
-        type_stability_millionths: 1_000_000, has_side_effects: false,
+        offset: 20,
+        opcode: "Return".into(),
+        execution_count: 200,
+        type_stability_millionths: 1_000_000,
+        has_side_effects: false,
         capabilities: BTreeSet::new(),
     });
 
@@ -928,8 +985,11 @@ fn test_guard_count_respects_policy_limit() {
     // Two separate fusible regions
     let mut entries = arith_entries(4, 200, 0);
     entries.push(InstructionEntry {
-        offset: 16, opcode: "LoadInt".into(), execution_count: 200,
-        type_stability_millionths: 1_000_000, has_side_effects: false,
+        offset: 16,
+        opcode: "LoadInt".into(),
+        execution_count: 200,
+        type_stability_millionths: 1_000_000,
+        has_side_effects: false,
         capabilities: BTreeSet::new(),
     });
     entries.extend(prop_chain_entries(3, 200, 20));

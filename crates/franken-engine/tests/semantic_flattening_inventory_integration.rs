@@ -1,7 +1,7 @@
 //! Integration tests for `semantic_flattening_inventory` module.
 
-use frankenengine_engine::semantic_flattening_inventory::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::semantic_flattening_inventory::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -91,7 +91,10 @@ fn semantic_domain_display_all_variants() {
     assert_eq!(format!("{}", SemanticDomain::TraceId), "TraceId");
     assert_eq!(format!("{}", SemanticDomain::DecisionId), "DecisionId");
     assert_eq!(format!("{}", SemanticDomain::EvidenceLink), "EvidenceLink");
-    assert_eq!(format!("{}", SemanticDomain::SchemaVersion), "SchemaVersion");
+    assert_eq!(
+        format!("{}", SemanticDomain::SchemaVersion),
+        "SchemaVersion"
+    );
 }
 
 #[test]
@@ -167,10 +170,19 @@ fn translation_kind_ordering() {
 
 #[test]
 fn flattening_classification_display_all() {
-    assert_eq!(format!("{}", FlatteningClassification::Intentional), "Intentional");
+    assert_eq!(
+        format!("{}", FlatteningClassification::Intentional),
+        "Intentional"
+    );
     assert_eq!(format!("{}", FlatteningClassification::MustFix), "MustFix");
-    assert_eq!(format!("{}", FlatteningClassification::AcceptableEdge), "AcceptableEdge");
-    assert_eq!(format!("{}", FlatteningClassification::FalsePositive), "FalsePositive");
+    assert_eq!(
+        format!("{}", FlatteningClassification::AcceptableEdge),
+        "AcceptableEdge"
+    );
+    assert_eq!(
+        format!("{}", FlatteningClassification::FalsePositive),
+        "FalsePositive"
+    );
 }
 
 #[test]
@@ -320,15 +332,39 @@ fn occurrence_hash_differs_for_different_ids() {
 
 #[test]
 fn occurrence_hash_differs_for_different_domains() {
-    let occ1 = make_occurrence("X", SemanticDomain::Budget, TranslationKind::Collapsed, FlatteningClassification::MustFix, FlatteningSeverity::High);
-    let occ2 = make_occurrence("X", SemanticDomain::Outcome, TranslationKind::Collapsed, FlatteningClassification::MustFix, FlatteningSeverity::High);
+    let occ1 = make_occurrence(
+        "X",
+        SemanticDomain::Budget,
+        TranslationKind::Collapsed,
+        FlatteningClassification::MustFix,
+        FlatteningSeverity::High,
+    );
+    let occ2 = make_occurrence(
+        "X",
+        SemanticDomain::Outcome,
+        TranslationKind::Collapsed,
+        FlatteningClassification::MustFix,
+        FlatteningSeverity::High,
+    );
     assert_ne!(occ1.content_hash, occ2.content_hash);
 }
 
 #[test]
 fn occurrence_hash_differs_for_different_translation_kind() {
-    let occ1 = make_occurrence("X", SemanticDomain::Budget, TranslationKind::Collapsed, FlatteningClassification::MustFix, FlatteningSeverity::High);
-    let occ2 = make_occurrence("X", SemanticDomain::Budget, TranslationKind::Dropped, FlatteningClassification::MustFix, FlatteningSeverity::High);
+    let occ1 = make_occurrence(
+        "X",
+        SemanticDomain::Budget,
+        TranslationKind::Collapsed,
+        FlatteningClassification::MustFix,
+        FlatteningSeverity::High,
+    );
+    let occ2 = make_occurrence(
+        "X",
+        SemanticDomain::Budget,
+        TranslationKind::Dropped,
+        FlatteningClassification::MustFix,
+        FlatteningSeverity::High,
+    );
     assert_ne!(occ1.content_hash, occ2.content_hash);
 }
 
@@ -405,7 +441,13 @@ fn inventory_add_occurrences() {
 fn inventory_must_fix_items() {
     let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
     inv.add(sample_occurrence("MF-1")); // MustFix
-    inv.add(make_occurrence("INT-1", SemanticDomain::Capability, TranslationKind::Preserved, FlatteningClassification::Intentional, FlatteningSeverity::Info));
+    inv.add(make_occurrence(
+        "INT-1",
+        SemanticDomain::Capability,
+        TranslationKind::Preserved,
+        FlatteningClassification::Intentional,
+        FlatteningSeverity::Info,
+    ));
     inv.add(sample_occurrence("MF-2")); // MustFix
     let mf = inv.must_fix_items();
     assert_eq!(mf.len(), 2);
@@ -423,7 +465,13 @@ fn inventory_must_fix_empty() {
 fn inventory_by_domain() {
     let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
     inv.add(sample_occurrence("BD-1")); // Budget
-    inv.add(make_occurrence("CAP-1", SemanticDomain::Capability, TranslationKind::Narrowed, FlatteningClassification::AcceptableEdge, FlatteningSeverity::Medium));
+    inv.add(make_occurrence(
+        "CAP-1",
+        SemanticDomain::Capability,
+        TranslationKind::Narrowed,
+        FlatteningClassification::AcceptableEdge,
+        FlatteningSeverity::Medium,
+    ));
     inv.add(sample_occurrence("BD-2")); // Budget
     let budget = inv.by_domain(SemanticDomain::Budget);
     assert_eq!(budget.len(), 2);
@@ -437,7 +485,13 @@ fn inventory_by_domain() {
 fn inventory_by_severity() {
     let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
     inv.add(sample_occurrence("S-1")); // High
-    inv.add(make_occurrence("S-2", SemanticDomain::Outcome, TranslationKind::Dropped, FlatteningClassification::MustFix, FlatteningSeverity::Critical));
+    inv.add(make_occurrence(
+        "S-2",
+        SemanticDomain::Outcome,
+        TranslationKind::Dropped,
+        FlatteningClassification::MustFix,
+        FlatteningSeverity::Critical,
+    ));
     let high = inv.by_severity(FlatteningSeverity::High);
     assert_eq!(high.len(), 1);
     let crit = inv.by_severity(FlatteningSeverity::Critical);
@@ -469,11 +523,29 @@ fn inventory_summary_populated() {
     // MustFix, Budget, High
     inv.add(sample_occurrence("SUM-1"));
     // Intentional, Capability, Info
-    inv.add(make_occurrence("SUM-2", SemanticDomain::Capability, TranslationKind::Preserved, FlatteningClassification::Intentional, FlatteningSeverity::Info));
+    inv.add(make_occurrence(
+        "SUM-2",
+        SemanticDomain::Capability,
+        TranslationKind::Preserved,
+        FlatteningClassification::Intentional,
+        FlatteningSeverity::Info,
+    ));
     // AcceptableEdge, Capability, Medium
-    inv.add(make_occurrence("SUM-3", SemanticDomain::Capability, TranslationKind::Narrowed, FlatteningClassification::AcceptableEdge, FlatteningSeverity::Medium));
+    inv.add(make_occurrence(
+        "SUM-3",
+        SemanticDomain::Capability,
+        TranslationKind::Narrowed,
+        FlatteningClassification::AcceptableEdge,
+        FlatteningSeverity::Medium,
+    ));
     // FalsePositive, TraceId, Low
-    inv.add(make_occurrence("SUM-4", SemanticDomain::TraceId, TranslationKind::Translated, FlatteningClassification::FalsePositive, FlatteningSeverity::Low));
+    inv.add(make_occurrence(
+        "SUM-4",
+        SemanticDomain::TraceId,
+        TranslationKind::Translated,
+        FlatteningClassification::FalsePositive,
+        FlatteningSeverity::Low,
+    ));
 
     let s = inv.summary();
     assert_eq!(s.total, 4);
@@ -578,7 +650,13 @@ fn inventory_display_nonzero_count() {
 fn inventory_serde_roundtrip() {
     let mut inv = FlatteningInventory::new(SecurityEpoch::from_raw(99));
     inv.add(sample_occurrence("RND-1"));
-    inv.add(make_occurrence("RND-2", SemanticDomain::Diagnostics, TranslationKind::Dropped, FlatteningClassification::AcceptableEdge, FlatteningSeverity::Medium));
+    inv.add(make_occurrence(
+        "RND-2",
+        SemanticDomain::Diagnostics,
+        TranslationKind::Dropped,
+        FlatteningClassification::AcceptableEdge,
+        FlatteningSeverity::Medium,
+    ));
     let json = serde_json::to_string(&inv).unwrap();
     let back: FlatteningInventory = serde_json::from_str(&json).unwrap();
     assert_eq!(inv, back);

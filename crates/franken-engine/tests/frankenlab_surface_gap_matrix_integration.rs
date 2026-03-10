@@ -71,7 +71,10 @@ fn surface_id_all_unique() {
 fn surface_id_source_file_all_start_with_src() {
     for s in SurfaceId::ALL {
         let f = s.source_file();
-        assert!(f.starts_with("src/"), "source_file for {s} must start with src/");
+        assert!(
+            f.starts_with("src/"),
+            "source_file for {s} must start with src/"
+        );
         assert!(f.ends_with(".rs"), "source_file for {s} must end with .rs");
     }
 }
@@ -108,10 +111,22 @@ fn surface_id_source_file_specific_mappings() {
 #[test]
 fn surface_id_display_all_variants() {
     assert_eq!(format!("{}", SurfaceId::LabRuntime), "lab_runtime");
-    assert_eq!(format!("{}", SurfaceId::FrankenlabScenarios), "frankenlab_scenarios");
-    assert_eq!(format!("{}", SurfaceId::InterleavingExplorer), "interleaving_explorer");
-    assert_eq!(format!("{}", SurfaceId::EvidenceReplayChecker), "evidence_replay_checker");
-    assert_eq!(format!("{}", SurfaceId::DeterministicReplay), "deterministic_replay");
+    assert_eq!(
+        format!("{}", SurfaceId::FrankenlabScenarios),
+        "frankenlab_scenarios"
+    );
+    assert_eq!(
+        format!("{}", SurfaceId::InterleavingExplorer),
+        "interleaving_explorer"
+    );
+    assert_eq!(
+        format!("{}", SurfaceId::EvidenceReplayChecker),
+        "evidence_replay_checker"
+    );
+    assert_eq!(
+        format!("{}", SurfaceId::DeterministicReplay),
+        "deterministic_replay"
+    );
     assert_eq!(format!("{}", SurfaceId::SimScheduler), "sim_scheduler");
     assert_eq!(format!("{}", SurfaceId::ReleaseGate), "release_gate");
 }
@@ -170,7 +185,10 @@ fn capability_id_display_not_empty() {
     assert_eq!(all.len(), 18, "expected 18 CapabilityId variants");
     for c in all {
         let s = format!("{c}");
-        assert!(!s.is_empty(), "Display for CapabilityId should not be empty");
+        assert!(
+            !s.is_empty(),
+            "Display for CapabilityId should not be empty"
+        );
     }
 }
 
@@ -251,9 +269,15 @@ fn coverage_level_ordering() {
 
 #[test]
 fn migration_decision_display() {
-    assert_eq!(format!("{}", MigrationDecision::DirectAdoption), "direct_adoption");
+    assert_eq!(
+        format!("{}", MigrationDecision::DirectAdoption),
+        "direct_adoption"
+    );
     assert_eq!(format!("{}", MigrationDecision::ThinBridge), "thin_bridge");
-    assert_eq!(format!("{}", MigrationDecision::MaintainedWrapper), "maintained_wrapper");
+    assert_eq!(
+        format!("{}", MigrationDecision::MaintainedWrapper),
+        "maintained_wrapper"
+    );
 }
 
 #[test]
@@ -306,7 +330,10 @@ fn gap_cell_display_format() {
     assert!(s.contains("partial"), "should contain coverage display");
     assert!(s.contains("half done"), "should contain notes");
     // Format is: surface x capability: coverage -- notes
-    assert!(s.contains("\u{d7}") || s.contains("×"), "should contain multiplication sign");
+    assert!(
+        s.contains("\u{d7}") || s.contains("×"),
+        "should contain multiplication sign"
+    );
 }
 
 #[test]
@@ -344,11 +371,36 @@ fn gap_cell_serde_json_structure() {
 #[test]
 fn surface_assessment_build_counts_correctly() {
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::FaultInjection, CoverageLevel::Partial, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::RaceExploration, CoverageLevel::Missing, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::TaskLifecycle, CoverageLevel::LocalOnly, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::ScheduleReplay, CoverageLevel::Covered, ""),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Covered,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::FaultInjection,
+            CoverageLevel::Partial,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::RaceExploration,
+            CoverageLevel::Missing,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::TaskLifecycle,
+            CoverageLevel::LocalOnly,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::ScheduleReplay,
+            CoverageLevel::Covered,
+            "",
+        ),
     ];
     let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::ThinBridge);
     assert_eq!(a.covered_count, 2);
@@ -362,10 +414,24 @@ fn surface_assessment_build_counts_correctly() {
 #[test]
 fn surface_assessment_coverage_rate_full() {
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::TaskLifecycle, CoverageLevel::Covered, ""),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Covered,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::TaskLifecycle,
+            CoverageLevel::Covered,
+            "",
+        ),
     ];
-    let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::DirectAdoption);
+    let a = make_assessment(
+        SurfaceId::LabRuntime,
+        cells,
+        MigrationDecision::DirectAdoption,
+    );
     assert_eq!(a.coverage_rate_millionths(), 1_000_000);
 }
 
@@ -373,8 +439,18 @@ fn surface_assessment_coverage_rate_full() {
 fn surface_assessment_coverage_rate_partial_only() {
     // 2 partial, 0 covered, 0 missing -> (0 + 2*500_000) / 2 = 500_000
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Partial, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::TaskLifecycle, CoverageLevel::Partial, ""),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Partial,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::TaskLifecycle,
+            CoverageLevel::Partial,
+            "",
+        ),
     ];
     let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::ThinBridge);
     assert_eq!(a.coverage_rate_millionths(), 500_000);
@@ -384,8 +460,18 @@ fn surface_assessment_coverage_rate_partial_only() {
 fn surface_assessment_coverage_rate_mixed() {
     // 1 covered (1_000_000) + 1 partial (500_000) = 1_500_000 / 2 = 750_000
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::TaskLifecycle, CoverageLevel::Partial, ""),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Covered,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::TaskLifecycle,
+            CoverageLevel::Partial,
+            "",
+        ),
     ];
     let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::ThinBridge);
     assert_eq!(a.coverage_rate_millionths(), 750_000);
@@ -395,9 +481,24 @@ fn surface_assessment_coverage_rate_mixed() {
 fn surface_assessment_coverage_rate_all_missing() {
     // 0 covered, 0 partial, 3 missing -> 0 / 3 = 0
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Missing, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::TaskLifecycle, CoverageLevel::Missing, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::FaultInjection, CoverageLevel::Missing, ""),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Missing,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::TaskLifecycle,
+            CoverageLevel::Missing,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::FaultInjection,
+            CoverageLevel::Missing,
+            "",
+        ),
     ];
     let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::ThinBridge);
     assert_eq!(a.coverage_rate_millionths(), 0);
@@ -405,7 +506,11 @@ fn surface_assessment_coverage_rate_all_missing() {
 
 #[test]
 fn surface_assessment_coverage_rate_empty_cells() {
-    let a = make_assessment(SurfaceId::LabRuntime, vec![], MigrationDecision::DirectAdoption);
+    let a = make_assessment(
+        SurfaceId::LabRuntime,
+        vec![],
+        MigrationDecision::DirectAdoption,
+    );
     // Empty -> returns 1_000_000 (100%)
     assert_eq!(a.coverage_rate_millionths(), 1_000_000);
 }
@@ -415,10 +520,24 @@ fn surface_assessment_coverage_rate_local_only_excluded() {
     // LocalOnly is NOT included in coverage rate denominator
     // 1 covered + 1 local_only -> total = covered + partial + missing = 1, covered_equiv = 1_000_000
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::TaskLifecycle, CoverageLevel::LocalOnly, ""),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Covered,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::TaskLifecycle,
+            CoverageLevel::LocalOnly,
+            "",
+        ),
     ];
-    let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::MaintainedWrapper);
+    let a = make_assessment(
+        SurfaceId::LabRuntime,
+        cells,
+        MigrationDecision::MaintainedWrapper,
+    );
     assert_eq!(a.coverage_rate_millionths(), 1_000_000);
 }
 
@@ -437,10 +556,17 @@ fn surface_assessment_display_format() {
 
 #[test]
 fn surface_assessment_serde_roundtrip() {
-    let cells = vec![
-        make_cell(SurfaceId::SimScheduler, CapabilityId::EventSimulation, CoverageLevel::Covered, "sim events"),
-    ];
-    let a = make_assessment(SurfaceId::SimScheduler, cells, MigrationDecision::MaintainedWrapper);
+    let cells = vec![make_cell(
+        SurfaceId::SimScheduler,
+        CapabilityId::EventSimulation,
+        CoverageLevel::Covered,
+        "sim events",
+    )];
+    let a = make_assessment(
+        SurfaceId::SimScheduler,
+        cells,
+        MigrationDecision::MaintainedWrapper,
+    );
     let json = serde_json::to_string(&a).unwrap();
     let back: SurfaceAssessment = serde_json::from_str(&json).unwrap();
     assert_eq!(a, back);
@@ -464,7 +590,11 @@ fn gap_matrix_build_empty() {
 
 #[test]
 fn gap_matrix_for_surface_found() {
-    let a = make_assessment(SurfaceId::LabRuntime, vec![], MigrationDecision::MaintainedWrapper);
+    let a = make_assessment(
+        SurfaceId::LabRuntime,
+        vec![],
+        MigrationDecision::MaintainedWrapper,
+    );
     let m = GapMatrix::build(vec![a]);
     let found = m.for_surface(SurfaceId::LabRuntime);
     assert!(found.is_some());
@@ -473,16 +603,23 @@ fn gap_matrix_for_surface_found() {
 
 #[test]
 fn gap_matrix_for_surface_not_found() {
-    let a = make_assessment(SurfaceId::LabRuntime, vec![], MigrationDecision::MaintainedWrapper);
+    let a = make_assessment(
+        SurfaceId::LabRuntime,
+        vec![],
+        MigrationDecision::MaintainedWrapper,
+    );
     let m = GapMatrix::build(vec![a]);
     assert!(m.for_surface(SurfaceId::ReleaseGate).is_none());
 }
 
 #[test]
 fn gap_matrix_has_gaps_true() {
-    let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Missing, "gap"),
-    ];
+    let cells = vec![make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Missing,
+        "gap",
+    )];
     let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::ThinBridge);
     let m = GapMatrix::build(vec![a]);
     assert!(m.has_gaps());
@@ -491,8 +628,18 @@ fn gap_matrix_has_gaps_true() {
 #[test]
 fn gap_matrix_has_gaps_false_when_all_covered() {
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::TaskLifecycle, CoverageLevel::Partial, ""),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Covered,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::TaskLifecycle,
+            CoverageLevel::Partial,
+            "",
+        ),
     ];
     let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::ThinBridge);
     let m = GapMatrix::build(vec![a]);
@@ -501,9 +648,21 @@ fn gap_matrix_has_gaps_false_when_all_covered() {
 
 #[test]
 fn gap_matrix_surfaces_with_decision_direct_adoption() {
-    let a1 = make_assessment(SurfaceId::LabRuntime, vec![], MigrationDecision::DirectAdoption);
-    let a2 = make_assessment(SurfaceId::ReleaseGate, vec![], MigrationDecision::ThinBridge);
-    let a3 = make_assessment(SurfaceId::SimScheduler, vec![], MigrationDecision::DirectAdoption);
+    let a1 = make_assessment(
+        SurfaceId::LabRuntime,
+        vec![],
+        MigrationDecision::DirectAdoption,
+    );
+    let a2 = make_assessment(
+        SurfaceId::ReleaseGate,
+        vec![],
+        MigrationDecision::ThinBridge,
+    );
+    let a3 = make_assessment(
+        SurfaceId::SimScheduler,
+        vec![],
+        MigrationDecision::DirectAdoption,
+    );
     let m = GapMatrix::build(vec![a1, a2, a3]);
     let direct = m.surfaces_with_decision(MigrationDecision::DirectAdoption);
     assert_eq!(direct.len(), 2);
@@ -513,7 +672,11 @@ fn gap_matrix_surfaces_with_decision_direct_adoption() {
 
 #[test]
 fn gap_matrix_surfaces_with_decision_empty_result() {
-    let a = make_assessment(SurfaceId::LabRuntime, vec![], MigrationDecision::MaintainedWrapper);
+    let a = make_assessment(
+        SurfaceId::LabRuntime,
+        vec![],
+        MigrationDecision::MaintainedWrapper,
+    );
     let m = GapMatrix::build(vec![a]);
     let direct = m.surfaces_with_decision(MigrationDecision::DirectAdoption);
     assert!(direct.is_empty());
@@ -521,9 +684,21 @@ fn gap_matrix_surfaces_with_decision_empty_result() {
 
 #[test]
 fn gap_matrix_summary_decision_map() {
-    let a1 = make_assessment(SurfaceId::LabRuntime, vec![], MigrationDecision::MaintainedWrapper);
-    let a2 = make_assessment(SurfaceId::ReleaseGate, vec![], MigrationDecision::ThinBridge);
-    let a3 = make_assessment(SurfaceId::SimScheduler, vec![], MigrationDecision::ThinBridge);
+    let a1 = make_assessment(
+        SurfaceId::LabRuntime,
+        vec![],
+        MigrationDecision::MaintainedWrapper,
+    );
+    let a2 = make_assessment(
+        SurfaceId::ReleaseGate,
+        vec![],
+        MigrationDecision::ThinBridge,
+    );
+    let a3 = make_assessment(
+        SurfaceId::SimScheduler,
+        vec![],
+        MigrationDecision::ThinBridge,
+    );
     let m = GapMatrix::build(vec![a1, a2, a3]);
     assert_eq!(m.summary.decisions.get("maintained_wrapper"), Some(&1));
     assert_eq!(m.summary.decisions.get("thin_bridge"), Some(&2));
@@ -532,7 +707,11 @@ fn gap_matrix_summary_decision_map() {
 
 #[test]
 fn gap_matrix_display_format() {
-    let a = make_assessment(SurfaceId::LabRuntime, vec![], MigrationDecision::MaintainedWrapper);
+    let a = make_assessment(
+        SurfaceId::LabRuntime,
+        vec![],
+        MigrationDecision::MaintainedWrapper,
+    );
     let m = GapMatrix::build(vec![a]);
     let s = format!("{m}");
     assert!(s.contains("Frankenlab Surface Gap Matrix"));
@@ -543,8 +722,18 @@ fn gap_matrix_display_format() {
 #[test]
 fn gap_matrix_serde_roundtrip() {
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, "ok"),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::FaultInjection, CoverageLevel::Missing, "gap"),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Covered,
+            "ok",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::FaultInjection,
+            CoverageLevel::Missing,
+            "gap",
+        ),
     ];
     let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::ThinBridge);
     let m = GapMatrix::build(vec![a]);
@@ -555,37 +744,85 @@ fn gap_matrix_serde_roundtrip() {
 
 #[test]
 fn gap_matrix_hash_deterministic() {
-    let cells1 = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-    ];
-    let cells2 = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-    ];
-    let m1 = GapMatrix::build(vec![make_assessment(SurfaceId::LabRuntime, cells1, MigrationDecision::DirectAdoption)]);
-    let m2 = GapMatrix::build(vec![make_assessment(SurfaceId::LabRuntime, cells2, MigrationDecision::DirectAdoption)]);
+    let cells1 = vec![make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Covered,
+        "",
+    )];
+    let cells2 = vec![make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Covered,
+        "",
+    )];
+    let m1 = GapMatrix::build(vec![make_assessment(
+        SurfaceId::LabRuntime,
+        cells1,
+        MigrationDecision::DirectAdoption,
+    )]);
+    let m2 = GapMatrix::build(vec![make_assessment(
+        SurfaceId::LabRuntime,
+        cells2,
+        MigrationDecision::DirectAdoption,
+    )]);
     assert_eq!(m1.matrix_hash, m2.matrix_hash);
 }
 
 #[test]
 fn gap_matrix_hash_differs_for_different_content() {
-    let cells1 = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-    ];
-    let cells2 = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Missing, ""),
-    ];
-    let m1 = GapMatrix::build(vec![make_assessment(SurfaceId::LabRuntime, cells1, MigrationDecision::DirectAdoption)]);
-    let m2 = GapMatrix::build(vec![make_assessment(SurfaceId::LabRuntime, cells2, MigrationDecision::DirectAdoption)]);
+    let cells1 = vec![make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Covered,
+        "",
+    )];
+    let cells2 = vec![make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Missing,
+        "",
+    )];
+    let m1 = GapMatrix::build(vec![make_assessment(
+        SurfaceId::LabRuntime,
+        cells1,
+        MigrationDecision::DirectAdoption,
+    )]);
+    let m2 = GapMatrix::build(vec![make_assessment(
+        SurfaceId::LabRuntime,
+        cells2,
+        MigrationDecision::DirectAdoption,
+    )]);
     assert_ne!(m1.matrix_hash, m2.matrix_hash);
 }
 
 #[test]
 fn gap_matrix_summary_cell_counts() {
     let cells = vec![
-        make_cell(SurfaceId::LabRuntime, CapabilityId::VirtualTime, CoverageLevel::Covered, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::FaultInjection, CoverageLevel::Partial, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::RaceExploration, CoverageLevel::Missing, ""),
-        make_cell(SurfaceId::LabRuntime, CapabilityId::TaskLifecycle, CoverageLevel::LocalOnly, ""),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::VirtualTime,
+            CoverageLevel::Covered,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::FaultInjection,
+            CoverageLevel::Partial,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::RaceExploration,
+            CoverageLevel::Missing,
+            "",
+        ),
+        make_cell(
+            SurfaceId::LabRuntime,
+            CapabilityId::TaskLifecycle,
+            CoverageLevel::LocalOnly,
+            "",
+        ),
     ];
     let a = make_assessment(SurfaceId::LabRuntime, cells, MigrationDecision::ThinBridge);
     let m = GapMatrix::build(vec![a]);
@@ -733,6 +970,10 @@ fn canonical_matrix_lab_runtime_cells_not_empty() {
 fn canonical_matrix_all_assessments_have_rationale() {
     let m = build_canonical_gap_matrix();
     for a in &m.assessments {
-        assert!(!a.rationale.is_empty(), "assessment for {} has empty rationale", a.surface);
+        assert!(
+            !a.rationale.is_empty(),
+            "assessment for {} has empty rationale",
+            a.surface
+        );
     }
 }

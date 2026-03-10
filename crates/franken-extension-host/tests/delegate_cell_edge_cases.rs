@@ -3,14 +3,14 @@
 // and idempotent lifetime-expiry behavior.
 
 use frankenengine_extension_host::{
-    BudgetExhaustionPolicy, CancellationConfig, Capability, DataRef, DeclassificationPurpose,
-    DeclassificationDenialReason, DeclassificationOutcome, DeclassificationRequest,
-    DelegateCellError, DelegateCellEvidence, DelegateCellFactory, DelegateCellManifest,
-    DelegateCellPolicy, DelegationScope, ExtensionManifest, ExtensionState,
-    FlowEnforcementContext, FlowLabel, GuardplaneDecisionLogEntry, GuardplanePolicyAction,
-    HostcallResult, HostcallSinkPolicy, HostcallType, IntegrityLevel, Labeled, LifecycleContext,
-    LifecycleTransition, ResourceBudget, SecrecyLevel, MAX_DELEGATE_CPU_BUDGET_NS,
-    MAX_DELEGATE_HOSTCALL_BUDGET, MAX_DELEGATE_LIFETIME_NS, MAX_DELEGATE_MEMORY_BUDGET_BYTES,
+    BudgetExhaustionPolicy, CancellationConfig, Capability, DataRef, DeclassificationDenialReason,
+    DeclassificationOutcome, DeclassificationPurpose, DeclassificationRequest, DelegateCellError,
+    DelegateCellEvidence, DelegateCellFactory, DelegateCellManifest, DelegateCellPolicy,
+    DelegationScope, ExtensionManifest, ExtensionState, FlowEnforcementContext, FlowLabel,
+    GuardplaneDecisionLogEntry, GuardplanePolicyAction, HostcallResult, HostcallSinkPolicy,
+    HostcallType, IntegrityLevel, Labeled, LifecycleContext, LifecycleTransition, ResourceBudget,
+    SecrecyLevel, MAX_DELEGATE_CPU_BUDGET_NS, MAX_DELEGATE_HOSTCALL_BUDGET,
+    MAX_DELEGATE_LIFETIME_NS, MAX_DELEGATE_MEMORY_BUDGET_BYTES,
 };
 
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -639,7 +639,10 @@ fn guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence() {
     let second_decisions = run_mixed_guardplane_sequence(&mut second);
 
     assert_eq!(first_decisions, second_decisions);
-    assert_eq!(first.containment_workflow_log(), second.containment_workflow_log());
+    assert_eq!(
+        first.containment_workflow_log(),
+        second.containment_workflow_log()
+    );
     assert_eq!(first.events(), second.events());
     assert_eq!(
         first

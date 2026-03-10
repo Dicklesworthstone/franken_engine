@@ -85,6 +85,15 @@ Matrix scenario (`bd-2mds.1.4.4.2`) enforces deterministic coverage metadata:
 
 All heavy Rust checks/tests for this lane run via `rch`.
 
+Fail-closed wrapper requirements:
+- reject any `rch` local-fallback path (`running locally`, `RCH-E326`, or
+  equivalent fallback markers)
+- reject missing remote exit markers and explicit non-zero remote exit markers
+- reject artifact-retrieval failures (`Artifact retrieval failed`, rsync
+  artifact errors)
+- allow recovery only when the remote command explicitly finished with
+  `exit=0` and the only follow-on problem is a recoverable artifact timeout
+
 Canonical gate command:
 
 ```bash

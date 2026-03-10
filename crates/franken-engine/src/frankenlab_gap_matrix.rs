@@ -33,9 +33,7 @@ pub const GAP_MATRIX_BEAD_ID: &str = "bd-3nr.1.1.2";
 // ---------------------------------------------------------------------------
 
 /// Enumerates the local deterministic lab and release-gate surfaces.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LabSurfaceKind {
     /// Deterministic replay harness.
@@ -98,9 +96,7 @@ impl fmt::Display for LabSurfaceKind {
 // ---------------------------------------------------------------------------
 
 /// Enumerates upstream frankenlab/LabRuntime/oracle capabilities.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamCapability {
     /// Core lab runtime execution environment.
@@ -163,9 +159,7 @@ impl fmt::Display for UpstreamCapability {
 // ---------------------------------------------------------------------------
 
 /// Classification of how well a local surface covers an upstream capability.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GapStatus {
     /// Local surface fully covers the upstream capability.
@@ -194,9 +188,7 @@ impl fmt::Display for GapStatus {
 // ---------------------------------------------------------------------------
 
 /// Migration decision for a local surface relative to an upstream capability.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MigrationDecision {
     /// Use upstream directly, remove local implementation.
@@ -505,324 +497,924 @@ pub fn build_canonical_gap_matrix(epoch: SecurityEpoch) -> GapMatrix {
     };
 
     // -- DeterministicReplay row --
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::LabRuntime,
-        GapStatus::Covered, 950_000, MigrationDecision::MaintainedWrapper, 900_000,
-        "Local replay harness tightly coupled to engine internals");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::OracleDispatch,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 750_000,
-        "Oracle verification partially overlaps with replay divergence detection");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 800_000,
-        "No scenario orchestration in replay; adopt upstream");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::EvidenceReplay,
-        GapStatus::Covered, 900_000, MigrationDecision::NoMigration, 850_000,
-        "Local nondeterminism capture fully covers evidence replay");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::CancelInjection,
-        GapStatus::PartialGap, 300_000, MigrationDecision::ThinBridge, 700_000,
-        "Replay handles cancel as event but lacks injection API");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::VirtualTimeControl,
-        GapStatus::Covered, 850_000, MigrationDecision::NoMigration, 900_000,
-        "Replay uses deterministic tick clock");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::TraceValidation,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Divergence detection provides partial trace validation");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Lifecycle management not in scope for replay");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Quarantine not in scope for replay");
-    add(LabSurfaceKind::DeterministicReplay, UpstreamCapability::ReleaseGating,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "Replay does not gate releases; adopt upstream gating");
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::MaintainedWrapper,
+        900_000,
+        "Local replay harness tightly coupled to engine internals",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Oracle verification partially overlaps with replay divergence detection",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        800_000,
+        "No scenario orchestration in replay; adopt upstream",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+        850_000,
+        "Local nondeterminism capture fully covers evidence replay",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::CancelInjection,
+        GapStatus::PartialGap,
+        300_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Replay handles cancel as event but lacks injection API",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::Covered,
+        850_000,
+        MigrationDecision::NoMigration,
+        900_000,
+        "Replay uses deterministic tick clock",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::TraceValidation,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Divergence detection provides partial trace validation",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Lifecycle management not in scope for replay",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Quarantine not in scope for replay",
+    );
+    add(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "Replay does not gate releases; adopt upstream gating",
+    );
 
     // -- ScenarioRunner row --
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::LabRuntime,
-        GapStatus::Covered, 800_000, MigrationDecision::MaintainedWrapper, 850_000,
-        "Scenarios drive LabRuntime tasks directly");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::OracleDispatch,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "No oracle dispatch in scenario runner");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::Covered, 900_000, MigrationDecision::NoMigration, 900_000,
-        "Local scenario runner covers orchestration needs");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::EvidenceReplay,
-        GapStatus::PartialGap, 350_000, MigrationDecision::ThinBridge, 750_000,
-        "Scenarios generate evidence but lack replay verification");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::CancelInjection,
-        GapStatus::Covered, 850_000, MigrationDecision::NoMigration, 850_000,
-        "Quarantine and ForcedCancel scenarios inject cancellation");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::VirtualTimeControl,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 700_000,
-        "Scenarios use virtual time indirectly via LabRuntime");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::TraceValidation,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 750_000,
-        "No trace validation in scenario runner");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::Covered, 900_000, MigrationDecision::NoMigration, 900_000,
-        "Scenario runner is the lifecycle orchestrator");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::PartialGap, 600_000, MigrationDecision::ThinBridge, 750_000,
-        "Quarantine scenario exists but limited orchestration");
-    add(LabSurfaceKind::ScenarioRunner, UpstreamCapability::ReleaseGating,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "Scenario runner does not gate releases");
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        800_000,
+        MigrationDecision::MaintainedWrapper,
+        850_000,
+        "Scenarios drive LabRuntime tasks directly",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "No oracle dispatch in scenario runner",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+        900_000,
+        "Local scenario runner covers orchestration needs",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::PartialGap,
+        350_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Scenarios generate evidence but lack replay verification",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::CancelInjection,
+        GapStatus::Covered,
+        850_000,
+        MigrationDecision::NoMigration,
+        850_000,
+        "Quarantine and ForcedCancel scenarios inject cancellation",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Scenarios use virtual time indirectly via LabRuntime",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::TraceValidation,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        750_000,
+        "No trace validation in scenario runner",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+        900_000,
+        "Scenario runner is the lifecycle orchestrator",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::PartialGap,
+        600_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Quarantine scenario exists but limited orchestration",
+    );
+    add(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "Scenario runner does not gate releases",
+    );
 
     // -- EvidenceChecker row --
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::LabRuntime,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 750_000,
-        "Evidence checker uses LabRuntime indirectly");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::OracleDispatch,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 700_000,
-        "Oracle validation partially overlaps with evidence chain checks");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 800_000,
-        "No scenario orchestration in evidence checker");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::EvidenceReplay,
-        GapStatus::Covered, 950_000, MigrationDecision::NoMigration, 950_000,
-        "Evidence replay is the core function of this surface");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::CancelInjection,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Cancel injection not relevant to evidence checking");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::VirtualTimeControl,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Virtual time not directly used by evidence checker");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::TraceValidation,
-        GapStatus::Covered, 850_000, MigrationDecision::NoMigration, 850_000,
-        "Evidence chain validation includes trace verification");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Lifecycle orchestration outside evidence scope");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Quarantine outside evidence scope");
-    add(LabSurfaceKind::EvidenceChecker, UpstreamCapability::ReleaseGating,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Evidence results feed into release gating but not directly");
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::LabRuntime,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Evidence checker uses LabRuntime indirectly",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Oracle validation partially overlaps with evidence chain checks",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        800_000,
+        "No scenario orchestration in evidence checker",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+        950_000,
+        "Evidence replay is the core function of this surface",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::CancelInjection,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Cancel injection not relevant to evidence checking",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Virtual time not directly used by evidence checker",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::TraceValidation,
+        GapStatus::Covered,
+        850_000,
+        MigrationDecision::NoMigration,
+        850_000,
+        "Evidence chain validation includes trace verification",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Lifecycle orchestration outside evidence scope",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Quarantine outside evidence scope",
+    );
+    add(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Evidence results feed into release gating but not directly",
+    );
 
     // -- CancellationInjector row --
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::LabRuntime,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Injector uses LabRuntime inject_cancel API");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::OracleDispatch,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Oracle dispatch not related to cancellation");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Cancellation scenarios partially cover orchestration");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::EvidenceReplay,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Evidence replay not related to cancellation");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::CancelInjection,
-        GapStatus::Covered, 950_000, MigrationDecision::NoMigration, 950_000,
-        "Core function of this surface; full coverage");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::VirtualTimeControl,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Virtual time not directly used by injector");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::TraceValidation,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Trace validation outside injection scope");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::PartialGap, 300_000, MigrationDecision::ThinBridge, 650_000,
-        "Cancel affects lifecycle but injector is narrow");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 700_000,
-        "Cancellation triggers quarantine in some cases");
-    add(LabSurfaceKind::CancellationInjector, UpstreamCapability::ReleaseGating,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "Injector does not gate releases");
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::LabRuntime,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Injector uses LabRuntime inject_cancel API",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Oracle dispatch not related to cancellation",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Cancellation scenarios partially cover orchestration",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Evidence replay not related to cancellation",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::CancelInjection,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+        950_000,
+        "Core function of this surface; full coverage",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Virtual time not directly used by injector",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::TraceValidation,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Trace validation outside injection scope",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::PartialGap,
+        300_000,
+        MigrationDecision::ThinBridge,
+        650_000,
+        "Cancel affects lifecycle but injector is narrow",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Cancellation triggers quarantine in some cases",
+    );
+    add(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "Injector does not gate releases",
+    );
 
     // -- VirtualTimeClock row --
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::LabRuntime,
-        GapStatus::Covered, 900_000, MigrationDecision::MaintainedWrapper, 900_000,
-        "Virtual clock is core LabRuntime infrastructure");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::OracleDispatch,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Oracle dispatch unrelated to virtual time");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Time advances drive scenarios but clock is passive");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::EvidenceReplay,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Evidence replay unrelated to virtual time");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::CancelInjection,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Cancel injection unrelated to virtual time");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::VirtualTimeControl,
-        GapStatus::Covered, 950_000, MigrationDecision::NoMigration, 950_000,
-        "Core function; tick-based deterministic clock");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::TraceValidation,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Trace validation unrelated to virtual time");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::PartialGap, 300_000, MigrationDecision::ThinBridge, 650_000,
-        "Time drives lifecycle but clock is passive");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Quarantine unrelated to virtual time");
-    add(LabSurfaceKind::VirtualTimeClock, UpstreamCapability::ReleaseGating,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "Clock does not gate releases");
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::MaintainedWrapper,
+        900_000,
+        "Virtual clock is core LabRuntime infrastructure",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Oracle dispatch unrelated to virtual time",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Time advances drive scenarios but clock is passive",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Evidence replay unrelated to virtual time",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::CancelInjection,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Cancel injection unrelated to virtual time",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+        950_000,
+        "Core function; tick-based deterministic clock",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::TraceValidation,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Trace validation unrelated to virtual time",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::PartialGap,
+        300_000,
+        MigrationDecision::ThinBridge,
+        650_000,
+        "Time drives lifecycle but clock is passive",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Quarantine unrelated to virtual time",
+    );
+    add(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "Clock does not gate releases",
+    );
 
     // -- DecisionTraceValidator row --
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::LabRuntime,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Trace validator consumes LabRuntime output");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::OracleDispatch,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Oracle dispatch partially overlaps with trace audit");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 750_000,
-        "No scenario orchestration in trace validator");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::EvidenceReplay,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Trace validation overlaps with evidence replay audit");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::CancelInjection,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Cancel injection outside trace scope");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::VirtualTimeControl,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Virtual time outside trace scope");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::TraceValidation,
-        GapStatus::Covered, 950_000, MigrationDecision::NoMigration, 950_000,
-        "Core function of this surface");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Lifecycle outside trace scope");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Quarantine outside trace scope");
-    add(LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::ReleaseGating,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Trace results feed into release gating indirectly");
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::LabRuntime,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Trace validator consumes LabRuntime output",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Oracle dispatch partially overlaps with trace audit",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        750_000,
+        "No scenario orchestration in trace validator",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Trace validation overlaps with evidence replay audit",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::CancelInjection,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Cancel injection outside trace scope",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Virtual time outside trace scope",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::TraceValidation,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+        950_000,
+        "Core function of this surface",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Lifecycle outside trace scope",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Quarantine outside trace scope",
+    );
+    add(
+        LabSurfaceKind::DecisionTraceValidator,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Trace results feed into release gating indirectly",
+    );
 
     // -- ScheduleReplay row --
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::LabRuntime,
-        GapStatus::Covered, 900_000, MigrationDecision::MaintainedWrapper, 900_000,
-        "Schedule replay is core LabRuntime infrastructure");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::OracleDispatch,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Oracle dispatch unrelated to schedule replay");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Schedule replay can drive scenarios but lacks orchestration");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::EvidenceReplay,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Schedule transcript overlaps with evidence replay");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::CancelInjection,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Cancel injection unrelated to schedule replay");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::VirtualTimeControl,
-        GapStatus::Covered, 850_000, MigrationDecision::NoMigration, 850_000,
-        "Schedule replay uses deterministic tick-based time");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::TraceValidation,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Schedule transcripts provide partial trace data");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "Schedule replay does not orchestrate lifecycles");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Quarantine unrelated to schedule replay");
-    add(LabSurfaceKind::ScheduleReplay, UpstreamCapability::ReleaseGating,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "Schedule replay does not gate releases");
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::MaintainedWrapper,
+        900_000,
+        "Schedule replay is core LabRuntime infrastructure",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Oracle dispatch unrelated to schedule replay",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Schedule replay can drive scenarios but lacks orchestration",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Schedule transcript overlaps with evidence replay",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::CancelInjection,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Cancel injection unrelated to schedule replay",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::Covered,
+        850_000,
+        MigrationDecision::NoMigration,
+        850_000,
+        "Schedule replay uses deterministic tick-based time",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::TraceValidation,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Schedule transcripts provide partial trace data",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "Schedule replay does not orchestrate lifecycles",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Quarantine unrelated to schedule replay",
+    );
+    add(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "Schedule replay does not gate releases",
+    );
 
     // -- LifecycleTester row --
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::LabRuntime,
-        GapStatus::Covered, 800_000, MigrationDecision::MaintainedWrapper, 850_000,
-        "Lifecycle tester drives LabRuntime tasks");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::OracleDispatch,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "No oracle dispatch in lifecycle tester");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::PartialGap, 600_000, MigrationDecision::ThinBridge, 800_000,
-        "Lifecycle scenarios partially cover orchestration");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::EvidenceReplay,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Evidence replay outside lifecycle scope");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::CancelInjection,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Lifecycle includes cancel but not full injection");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::VirtualTimeControl,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Lifecycle uses time indirectly");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::TraceValidation,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 750_000,
-        "No trace validation in lifecycle tester");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::Covered, 950_000, MigrationDecision::NoMigration, 950_000,
-        "Core function of this surface");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Lifecycle quarantine partially covers orchestration");
-    add(LabSurfaceKind::LifecycleTester, UpstreamCapability::ReleaseGating,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 700_000,
-        "Lifecycle tester does not gate releases");
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        800_000,
+        MigrationDecision::MaintainedWrapper,
+        850_000,
+        "Lifecycle tester drives LabRuntime tasks",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "No oracle dispatch in lifecycle tester",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::PartialGap,
+        600_000,
+        MigrationDecision::ThinBridge,
+        800_000,
+        "Lifecycle scenarios partially cover orchestration",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Evidence replay outside lifecycle scope",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::CancelInjection,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Lifecycle includes cancel but not full injection",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Lifecycle uses time indirectly",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::TraceValidation,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        750_000,
+        "No trace validation in lifecycle tester",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+        950_000,
+        "Core function of this surface",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Lifecycle quarantine partially covers orchestration",
+    );
+    add(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        700_000,
+        "Lifecycle tester does not gate releases",
+    );
 
     // -- QuarantineHarness row --
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::LabRuntime,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Quarantine harness uses LabRuntime for isolated execution");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::OracleDispatch,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Oracle dispatch unrelated to quarantine");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Quarantine scenarios partially cover orchestration");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::EvidenceReplay,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Evidence replay outside quarantine scope");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::CancelInjection,
-        GapStatus::Covered, 800_000, MigrationDecision::NoMigration, 850_000,
-        "Quarantine drives cancellation for fault containment");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::VirtualTimeControl,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Virtual time not directly used by quarantine");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::TraceValidation,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 750_000,
-        "No trace validation in quarantine harness");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Quarantine affects lifecycle but is narrowly scoped");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::Covered, 950_000, MigrationDecision::NoMigration, 950_000,
-        "Core function of this surface");
-    add(LabSurfaceKind::QuarantineHarness, UpstreamCapability::ReleaseGating,
-        GapStatus::PartialGap, 300_000, MigrationDecision::ThinBridge, 650_000,
-        "Quarantine results inform release gating indirectly");
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::LabRuntime,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Quarantine harness uses LabRuntime for isolated execution",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Oracle dispatch unrelated to quarantine",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Quarantine scenarios partially cover orchestration",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Evidence replay outside quarantine scope",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::CancelInjection,
+        GapStatus::Covered,
+        800_000,
+        MigrationDecision::NoMigration,
+        850_000,
+        "Quarantine drives cancellation for fault containment",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Virtual time not directly used by quarantine",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::TraceValidation,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        750_000,
+        "No trace validation in quarantine harness",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Quarantine affects lifecycle but is narrowly scoped",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+        950_000,
+        "Core function of this surface",
+    );
+    add(
+        LabSurfaceKind::QuarantineHarness,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::PartialGap,
+        300_000,
+        MigrationDecision::ThinBridge,
+        650_000,
+        "Quarantine results inform release gating indirectly",
+    );
 
     // -- ReleaseGateRunner row --
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::LabRuntime,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 750_000,
-        "Release gate runner delegates to LabRuntime for checks");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::OracleDispatch,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Oracle results feed into gate decisions");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::ScenarioOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::DirectAdoption, 750_000,
-        "No scenario orchestration in release gate");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::EvidenceReplay,
-        GapStatus::PartialGap, 500_000, MigrationDecision::ThinBridge, 750_000,
-        "Evidence results feed into gate decisions");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::CancelInjection,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Cancel injection not relevant to release gating");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::VirtualTimeControl,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Virtual time not relevant to release gating");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::TraceValidation,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Trace results feed into gate decisions");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::LifecycleOrchestration,
-        GapStatus::FullGap, 0, MigrationDecision::Deferred, 500_000,
-        "Lifecycle orchestration outside gate scope");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::QuarantineOrchestration,
-        GapStatus::PartialGap, 400_000, MigrationDecision::ThinBridge, 700_000,
-        "Quarantine results inform gate decisions");
-    add(LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::ReleaseGating,
-        GapStatus::Covered, 950_000, MigrationDecision::NoMigration, 950_000,
-        "Core function of this surface; fail-closed gating");
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::LabRuntime,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Release gate runner delegates to LabRuntime for checks",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Oracle results feed into gate decisions",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::ScenarioOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+        750_000,
+        "No scenario orchestration in release gate",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+        750_000,
+        "Evidence results feed into gate decisions",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::CancelInjection,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Cancel injection not relevant to release gating",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Virtual time not relevant to release gating",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::TraceValidation,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Trace results feed into gate decisions",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::Deferred,
+        500_000,
+        "Lifecycle orchestration outside gate scope",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::QuarantineOrchestration,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+        700_000,
+        "Quarantine results inform gate decisions",
+    );
+    add(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+        950_000,
+        "Core function of this surface; fail-closed gating",
+    );
 
     matrix
 }
@@ -891,10 +1483,7 @@ mod tests {
 
     #[test]
     fn upstream_capability_display() {
-        assert_eq!(
-            format!("{}", UpstreamCapability::LabRuntime),
-            "lab_runtime"
-        );
+        assert_eq!(format!("{}", UpstreamCapability::LabRuntime), "lab_runtime");
         assert_eq!(
             format!("{}", UpstreamCapability::ReleaseGating),
             "release_gating"
@@ -953,10 +1542,7 @@ mod tests {
             format!("{}", MigrationDecision::DirectAdoption),
             "direct_adoption"
         );
-        assert_eq!(
-            format!("{}", MigrationDecision::ThinBridge),
-            "thin_bridge"
-        );
+        assert_eq!(format!("{}", MigrationDecision::ThinBridge), "thin_bridge");
         assert_eq!(
             format!("{}", MigrationDecision::MaintainedWrapper),
             "maintained_wrapper"
@@ -1080,12 +1666,13 @@ mod tests {
     #[test]
     fn gap_matrix_lookup_not_found() {
         let m = GapMatrix::new(SecurityEpoch::from_raw(1));
-        assert!(m
-            .lookup(
+        assert!(
+            m.lookup(
                 LabSurfaceKind::DeterministicReplay,
                 UpstreamCapability::LabRuntime
             )
-            .is_none());
+            .is_none()
+        );
     }
 
     #[test]
@@ -1260,19 +1847,43 @@ mod tests {
         // Each surface's "primary" upstream capability should be Covered.
         let m = build_canonical_gap_matrix(SecurityEpoch::from_raw(1));
         let diagonals = [
-            (LabSurfaceKind::EvidenceChecker, UpstreamCapability::EvidenceReplay),
-            (LabSurfaceKind::CancellationInjector, UpstreamCapability::CancelInjection),
-            (LabSurfaceKind::VirtualTimeClock, UpstreamCapability::VirtualTimeControl),
-            (LabSurfaceKind::DecisionTraceValidator, UpstreamCapability::TraceValidation),
-            (LabSurfaceKind::QuarantineHarness, UpstreamCapability::QuarantineOrchestration),
-            (LabSurfaceKind::ReleaseGateRunner, UpstreamCapability::ReleaseGating),
-            (LabSurfaceKind::LifecycleTester, UpstreamCapability::LifecycleOrchestration),
-            (LabSurfaceKind::ScenarioRunner, UpstreamCapability::ScenarioOrchestration),
+            (
+                LabSurfaceKind::EvidenceChecker,
+                UpstreamCapability::EvidenceReplay,
+            ),
+            (
+                LabSurfaceKind::CancellationInjector,
+                UpstreamCapability::CancelInjection,
+            ),
+            (
+                LabSurfaceKind::VirtualTimeClock,
+                UpstreamCapability::VirtualTimeControl,
+            ),
+            (
+                LabSurfaceKind::DecisionTraceValidator,
+                UpstreamCapability::TraceValidation,
+            ),
+            (
+                LabSurfaceKind::QuarantineHarness,
+                UpstreamCapability::QuarantineOrchestration,
+            ),
+            (
+                LabSurfaceKind::ReleaseGateRunner,
+                UpstreamCapability::ReleaseGating,
+            ),
+            (
+                LabSurfaceKind::LifecycleTester,
+                UpstreamCapability::LifecycleOrchestration,
+            ),
+            (
+                LabSurfaceKind::ScenarioRunner,
+                UpstreamCapability::ScenarioOrchestration,
+            ),
         ];
         for (surface, cap) in diagonals {
-            let entry = m.lookup(surface, cap).unwrap_or_else(|| {
-                panic!("missing diagonal entry for {surface}x{cap}")
-            });
+            let entry = m
+                .lookup(surface, cap)
+                .unwrap_or_else(|| panic!("missing diagonal entry for {surface}x{cap}"));
             assert_eq!(
                 entry.status,
                 GapStatus::Covered,

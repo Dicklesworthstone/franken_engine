@@ -381,6 +381,25 @@ fn require_falls_through_to_js_extension() {
     assert_eq!(outcome.module.canonical_specifier, "/app/utils.js");
 }
 
+#[test]
+fn require_of_explicit_esm_path_returns_err_require_esm() {
+    let mut r = DeterministicModuleResolver::new("/app");
+    r.register_workspace_module("/app/esm_only.mjs", esm("export default 1;"))
+        .unwrap();
+
+    let req =
+        ModuleRequest::new("./esm_only.mjs", ImportStyle::Require).with_referrer("/app/main.cjs");
+    let err = r.resolve(&req, &ctx(), &AllowAllPolicy).unwrap_err();
+
+    assert_eq!(err.code, ResolutionErrorCode::UnsupportedSpecifier);
+    assert_eq!(
+        err.event.error_code,
+        ResolutionErrorCode::UnsupportedSpecifier.stable_code()
+    );
+    assert!(err.message.contains("ERR_REQUIRE_ESM"));
+    assert!(err.message.contains("/app/esm_only.mjs"));
+}
+
 // -----------------------------------------------------------------------
 // Section 9: External module resolution
 // -----------------------------------------------------------------------

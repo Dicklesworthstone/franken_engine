@@ -475,7 +475,7 @@ pub struct RequiredImport {
 }
 
 /// Statistics about the lowering pass.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoweringStats {
     /// Total elements lowered.
     pub elements_lowered: u32,
@@ -495,22 +495,6 @@ pub struct LoweringStats {
     pub keys_extracted: u32,
     /// Refs extracted.
     pub refs_extracted: u32,
-}
-
-impl Default for LoweringStats {
-    fn default() -> Self {
-        Self {
-            elements_lowered: 0,
-            fragments_lowered: 0,
-            text_children: 0,
-            expression_children: 0,
-            spread_attributes: 0,
-            max_depth_reached: 0,
-            total_props: 0,
-            keys_extracted: 0,
-            refs_extracted: 0,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +669,17 @@ pub fn compute_lowering_receipt(
 // Internal Lowering Context
 // ---------------------------------------------------------------------------
 
+/// Input to `build_lowered_element` (avoids too-many-arguments).
+struct BuildElementInput {
+    element_type: ElementType,
+    props: LoweredProps,
+    children: Vec<LoweredChild>,
+    source_location: Option<SourceLocation>,
+    is_static_children: bool,
+    depth: usize,
+    span: SourceSpan,
+}
+
 struct LoweringCtx<'a> {
     config: &'a ReactLoweringConfig,
     diagnostics: Vec<LoweringDiagnostic>,
@@ -794,15 +789,15 @@ impl<'a> LoweringCtx<'a> {
                 .all(|c| matches!(c, LoweredChild::Text { .. } | LoweredChild::Element(_)));
 
         // Build the call convention and lowered element
-        self.build_lowered_element(
+        self.build_lowered_element(BuildElementInput {
             element_type,
             props,
             children,
             source_location,
             is_static_children,
             depth,
-            element.span.clone(),
-        )
+            span: element.span.clone(),
+        })
     }
 
     fn lower_fragment(
@@ -839,15 +834,15 @@ impl<'a> LoweringCtx<'a> {
         // Add fragment import
         self.add_fragment_import();
 
-        self.build_lowered_element(
-            ElementType::Fragment,
+        self.build_lowered_element(BuildElementInput {
+            element_type: ElementType::Fragment,
             props,
             children,
             source_location,
             is_static_children,
             depth,
-            fragment.span.clone(),
-        )
+            span: fragment.span.clone(),
+        })
     }
 
     fn lower_attributes(
@@ -1030,14 +1025,17 @@ impl<'a> LoweringCtx<'a> {
 
     fn build_lowered_element(
         &mut self,
-        element_type: ElementType,
-        mut props: LoweredProps,
-        children: Vec<LoweredChild>,
-        source_location: Option<SourceLocation>,
-        is_static_children: bool,
-        depth: usize,
-        span: SourceSpan,
+        input: BuildElementInput,
     ) -> Result<LoweredElement, ReactLoweringError> {
+        let BuildElementInput {
+            element_type,
+            mut props,
+            children,
+            source_location,
+            is_static_children,
+            depth,
+            span,
+        } = input;
         let call_convention = match self.config.runtime_mode {
             JsxRuntimeMode::Classic => CallConvention::Classic {
                 object: self.config.classic_object().to_string(),
@@ -1129,6 +1127,12 @@ fn trim_jsx_text(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
         return String::new();
+    }
+
+    // Single-line: trim both ends; if only whitespace, empty
+    if lines.len() == 1 {
+        let trimmed = lines[0].trim();
+        return trimmed.to_string();
     }
 
     let mut result_parts: Vec<String> = Vec::new();
@@ -1506,18 +1510,19 @@ pub fn run_lowering_corpus(config: &ReactLoweringConfig) -> LoweringRunManifest 
     for specimen in &specimens {
         let result = lower_jsx_to_react(&specimen.node, config);
 
-        let (verdict, element_type_match, child_count_match, diagnostic_count, error) = match result
-        {
-            Ok(res) => {
-                let et_match =
-                    res.element.element_type.canonical_value() == specimen.expected_element_type;
+        let (verdict, element_type_match, child_count_match, diagnostic_count, error) =
+            match result {
+                Ok(res) => {
+                    let et_match = res.element.element_type.canonical_value()
+                        == specimen.expected_element_type;
 
-                // Count effective children based on mode
-                let actual_children = match config.runtime_mode {
-                    JsxRuntimeMode::Classic => res.element.children.len(),
-                    JsxRuntimeMode::Automatic => {
-                        // In automatic mode, children are in props
-                        res.element
+                    // Count effective children based on mode
+                    let actual_children =
+                        match config.runtime_mode {
+                            JsxRuntimeMode::Classic => res.element.children.len(),
+                            JsxRuntimeMode::Automatic => {
+                                // In automatic mode, children are in props
+                                res.element
                             .props
                             .entries
                             .iter()
@@ -1525,45 +1530,38 @@ pub fn run_lowering_corpus(config: &ReactLoweringConfig) -> LoweringRunManifest 
                             .count()
                             .min(1)
                             * specimen.expected_child_count.min(1)
-                            + if specimen.expected_child_count == 0 {
-                                0
-                            } else {
-                                0
                             }
-                    }
-                    JsxRuntimeMode::Preserve => 0,
-                };
+                            JsxRuntimeMode::Preserve => 0,
+                        };
 
-                let cc_match = if config.runtime_mode == JsxRuntimeMode::Automatic {
-                    // For automatic mode, check that children presence matches
-                    (specimen.expected_child_count > 0)
-                        == res
-                            .element
-                            .props
-                            .entries
-                            .iter()
-                            .any(|e| matches!(e, PropsEntry::Named(p) if p.name == "children"))
-                } else {
-                    actual_children == specimen.expected_child_count
-                };
+                    let cc_match =
+                        if config.runtime_mode == JsxRuntimeMode::Automatic {
+                            // For automatic mode, check that children presence matches
+                            (specimen.expected_child_count > 0)
+                                == res.element.props.entries.iter().any(
+                                    |e| matches!(e, PropsEntry::Named(p) if p.name == "children"),
+                                )
+                        } else {
+                            actual_children == specimen.expected_child_count
+                        };
 
-                let v = if et_match && cc_match {
-                    if res.diagnostics.is_empty() {
-                        LoweringVerdict::Pass
+                    let v = if et_match && cc_match {
+                        if res.diagnostics.is_empty() {
+                            LoweringVerdict::Pass
+                        } else {
+                            LoweringVerdict::PassWithDiagnostics
+                        }
                     } else {
-                        LoweringVerdict::PassWithDiagnostics
-                    }
-                } else {
-                    LoweringVerdict::Fail
-                };
+                        LoweringVerdict::Fail
+                    };
 
-                (v, et_match, cc_match, res.diagnostics.len() as u32, None)
-            }
-            Err(ReactLoweringError::PreserveMode) => {
-                (LoweringVerdict::Skipped, false, false, 0, None)
-            }
-            Err(e) => (LoweringVerdict::Fail, false, false, 0, Some(e.to_string())),
-        };
+                    (v, et_match, cc_match, res.diagnostics.len() as u32, None)
+                }
+                Err(ReactLoweringError::PreserveMode) => {
+                    (LoweringVerdict::Skipped, false, false, 0, None)
+                }
+                Err(e) => (LoweringVerdict::Fail, false, false, 0, Some(e.to_string())),
+            };
 
         match verdict {
             LoweringVerdict::Pass | LoweringVerdict::PassWithDiagnostics => pass_count += 1,

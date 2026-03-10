@@ -9,11 +9,10 @@ use frankenengine_engine::metadata_substrate_inventory::{
     SubstrateContract, SubstrateInventory, SubstrateKind,
 };
 use frankenengine_engine::optimized_metadata_substrate::{
-    default_optimized_assignments, OverridePolicy, OverrideReason,
-    SubstrateHealthCheck, SubstrateInstance, SubstrateInstanceStatus,
+    COMPONENT, OPTIMIZED_SUBSTRATE_BEAD_ID, OPTIMIZED_SUBSTRATE_SCHEMA_VERSION, OverridePolicy,
+    OverrideReason, SubstrateHealthCheck, SubstrateInstance, SubstrateInstanceStatus,
     SubstrateSelectionError, SubstrateSelectionReceipt, SubstrateSelector, SubstrateSnapshot,
-    SubstrateTransitionEvent, SubstrateTransitionKind, COMPONENT,
-    OPTIMIZED_SUBSTRATE_BEAD_ID, OPTIMIZED_SUBSTRATE_SCHEMA_VERSION,
+    SubstrateTransitionEvent, SubstrateTransitionKind, default_optimized_assignments,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -565,7 +564,11 @@ fn test_health_check_all_defaults_healthy() {
 
     for instance in &selector.instances {
         let check = SubstrateHealthCheck::check(instance, e);
-        assert!(check.healthy, "{} should be healthy", instance.structure_kind);
+        assert!(
+            check.healthy,
+            "{} should be healthy",
+            instance.structure_kind
+        );
         assert!(check.serving);
         assert!(!check.overloaded);
     }
@@ -711,7 +714,9 @@ fn test_override_then_snapshot_then_rollback() {
     );
     assert!(result.is_ok());
 
-    let instance = selector.instance_for_mut(MetadataStructureKind::ShapeTable).unwrap();
+    let instance = selector
+        .instance_for_mut(MetadataStructureKind::ShapeTable)
+        .unwrap();
     instance.activate();
     instance.record_entries(500);
     let snapshot = instance.take_snapshot(epoch(1));
@@ -730,14 +735,21 @@ fn test_concurrent_structures_independent_lifecycle() {
     selector.instantiate_all(&inventory);
 
     // Decommission shape table
-    selector.instance_for_mut(MetadataStructureKind::ShapeTable).unwrap().decommission();
+    selector
+        .instance_for_mut(MetadataStructureKind::ShapeTable)
+        .unwrap()
+        .decommission();
 
     // GC metadata should still be serving
-    let gc = selector.instance_for(MetadataStructureKind::GcMetadata).unwrap();
+    let gc = selector
+        .instance_for(MetadataStructureKind::GcMetadata)
+        .unwrap();
     assert!(gc.is_serving());
 
     // Shape table should not be serving
-    let shape = selector.instance_for(MetadataStructureKind::ShapeTable).unwrap();
+    let shape = selector
+        .instance_for(MetadataStructureKind::ShapeTable)
+        .unwrap();
     assert!(!shape.is_serving());
 }
 

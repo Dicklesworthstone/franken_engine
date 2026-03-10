@@ -273,13 +273,8 @@ impl FlatteningOccurrence {
         remediation: String,
         remediation_bead: String,
     ) -> Self {
-        let content_hash = Self::compute_content_hash(
-            &id,
-            domain,
-            &boundary,
-            translation_kind,
-            classification,
-        );
+        let content_hash =
+            Self::compute_content_hash(&id, domain, &boundary, translation_kind, classification);
         Self {
             id,
             domain,
@@ -413,12 +408,8 @@ impl FlatteningInventory {
                 FlatteningClassification::AcceptableEdge => acceptable += 1,
                 FlatteningClassification::FalsePositive => false_positive += 1,
             }
-            *by_domain
-                .entry(format!("{}", occ.domain))
-                .or_insert(0) += 1;
-            *by_severity
-                .entry(format!("{}", occ.severity))
-                .or_insert(0) += 1;
+            *by_domain.entry(format!("{}", occ.domain)).or_insert(0) += 1;
+            *by_severity.entry(format!("{}", occ.severity)).or_insert(0) += 1;
         }
 
         FlatteningSummary {
@@ -505,7 +496,10 @@ mod tests {
         assert_eq!(format!("{}", SemanticDomain::TraceId), "TraceId");
         assert_eq!(format!("{}", SemanticDomain::DecisionId), "DecisionId");
         assert_eq!(format!("{}", SemanticDomain::EvidenceLink), "EvidenceLink");
-        assert_eq!(format!("{}", SemanticDomain::SchemaVersion), "SchemaVersion");
+        assert_eq!(
+            format!("{}", SemanticDomain::SchemaVersion),
+            "SchemaVersion"
+        );
     }
 
     #[test]
@@ -520,10 +514,19 @@ mod tests {
 
     #[test]
     fn test_flattening_classification_display() {
-        assert_eq!(format!("{}", FlatteningClassification::Intentional), "Intentional");
+        assert_eq!(
+            format!("{}", FlatteningClassification::Intentional),
+            "Intentional"
+        );
         assert_eq!(format!("{}", FlatteningClassification::MustFix), "MustFix");
-        assert_eq!(format!("{}", FlatteningClassification::AcceptableEdge), "AcceptableEdge");
-        assert_eq!(format!("{}", FlatteningClassification::FalsePositive), "FalsePositive");
+        assert_eq!(
+            format!("{}", FlatteningClassification::AcceptableEdge),
+            "AcceptableEdge"
+        );
+        assert_eq!(
+            format!("{}", FlatteningClassification::FalsePositive),
+            "FalsePositive"
+        );
     }
 
     #[test]
@@ -924,7 +927,10 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(FLATTENING_SCHEMA_VERSION, "franken-engine.semantic-flattening-inventory.v1");
+        assert_eq!(
+            FLATTENING_SCHEMA_VERSION,
+            "franken-engine.semantic-flattening-inventory.v1"
+        );
         assert_eq!(FLATTENING_BEAD_ID, "bd-3nr.1.1.3");
     }
 

@@ -5,10 +5,10 @@
 //! supersession, and the full promotion pipeline lifecycle.
 
 use frankenengine_engine::law_promotion_pack::{
-    AcceptedLaw, FrontierEntry, FrontierLedger, LawStrength, PromotionPipeline,
-    PromotionReceipt, PromotionStatus, PromotionTarget, RewritePack, RewriteRule,
-    SupportAtlas, SupportAtlasEntry, SynthesisLane, SynthesisSeed, COMPONENT,
-    LAW_PROMOTION_BEAD_ID, LAW_PROMOTION_SCHEMA_VERSION,
+    AcceptedLaw, COMPONENT, FrontierEntry, FrontierLedger, LAW_PROMOTION_BEAD_ID,
+    LAW_PROMOTION_SCHEMA_VERSION, LawStrength, PromotionPipeline, PromotionReceipt,
+    PromotionStatus, PromotionTarget, RewritePack, RewriteRule, SupportAtlas, SupportAtlasEntry,
+    SynthesisLane, SynthesisSeed,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -234,8 +234,7 @@ fn test_rewrite_pack_accumulation() {
     let mut pack = RewritePack::new("pack-001", epoch(10));
     let law = proved_law();
     for i in 0..5 {
-        let rule =
-            RewriteRule::from_law(&format!("rw-{i}"), &law, "p", "r", "g", 1_000_000);
+        let rule = RewriteRule::from_law(&format!("rw-{i}"), &law, "p", "r", "g", 1_000_000);
         pack.add_rule(rule);
     }
     assert_eq!(pack.rule_count(), 5);
@@ -246,7 +245,9 @@ fn test_rewrite_pack_hash_changes_on_add() {
     let mut pack = RewritePack::new("pack-001", epoch(10));
     let hash_empty = pack.pack_hash.clone();
     let law = proved_law();
-    pack.add_rule(RewriteRule::from_law("rw-1", &law, "p", "r", "g", 1_000_000));
+    pack.add_rule(RewriteRule::from_law(
+        "rw-1", &law, "p", "r", "g", 1_000_000,
+    ));
     assert_ne!(pack.pack_hash, hash_empty);
 }
 
@@ -258,7 +259,10 @@ fn test_rewrite_pack_hash_changes_on_add() {
 fn test_synthesis_seed_priority_from_law() {
     let law = proved_law();
     let seed = SynthesisSeed::from_law("syn-001", &law, "template", vec![], "pattern");
-    assert_eq!(seed.priority_millionths, law.promotion_priority_millionths());
+    assert_eq!(
+        seed.priority_millionths,
+        law.promotion_priority_millionths()
+    );
 }
 
 #[test]
@@ -297,9 +301,24 @@ fn test_atlas_entry_validate_changes_hash() {
 fn test_atlas_covered_domains_dedup() {
     let mut atlas = SupportAtlas::new("atlas-001", epoch(10));
     let law = proved_law();
-    atlas.add_entry(SupportAtlasEntry::from_law("e1", &law, "string.length", 500_000));
-    atlas.add_entry(SupportAtlasEntry::from_law("e2", &law, "string.length", 700_000));
-    atlas.add_entry(SupportAtlasEntry::from_law("e3", &law, "array.push", 600_000));
+    atlas.add_entry(SupportAtlasEntry::from_law(
+        "e1",
+        &law,
+        "string.length",
+        500_000,
+    ));
+    atlas.add_entry(SupportAtlasEntry::from_law(
+        "e2",
+        &law,
+        "string.length",
+        700_000,
+    ));
+    atlas.add_entry(SupportAtlasEntry::from_law(
+        "e3",
+        &law,
+        "array.push",
+        600_000,
+    ));
     assert_eq!(atlas.covered_domains().len(), 2);
     assert_eq!(atlas.entry_count(), 3);
 }
@@ -399,8 +418,7 @@ fn test_receipt_hash_determinism() {
 #[test]
 fn test_receipt_different_targets_different_hashes() {
     let r1 = PromotionReceipt::new("p", "l", PromotionTarget::RewritePack, "a", epoch(1), "r");
-    let r2 =
-        PromotionReceipt::new("p", "l", PromotionTarget::SupportAtlas, "a", epoch(1), "r");
+    let r2 = PromotionReceipt::new("p", "l", PromotionTarget::SupportAtlas, "a", epoch(1), "r");
     assert_ne!(r1.receipt_hash, r2.receipt_hash);
 }
 
@@ -593,13 +611,52 @@ fn test_full_promotion_lifecycle_with_revocation() {
 #[test]
 fn test_priority_ordering_across_strengths() {
     let laws: Vec<AcceptedLaw> = vec![
-        AcceptedLaw::new("l1", "c1", "s1", LawStrength::Proved, vec![], 800_000, epoch(1), vec![]),
-        AcceptedLaw::new("l2", "c2", "s2", LawStrength::Empirical, vec![], 800_000, epoch(1), vec![]),
-        AcceptedLaw::new("l3", "c3", "s3", LawStrength::Conditional, vec![], 800_000, epoch(1), vec![]),
-        AcceptedLaw::new("l4", "c4", "s4", LawStrength::Heuristic, vec![], 800_000, epoch(1), vec![]),
+        AcceptedLaw::new(
+            "l1",
+            "c1",
+            "s1",
+            LawStrength::Proved,
+            vec![],
+            800_000,
+            epoch(1),
+            vec![],
+        ),
+        AcceptedLaw::new(
+            "l2",
+            "c2",
+            "s2",
+            LawStrength::Empirical,
+            vec![],
+            800_000,
+            epoch(1),
+            vec![],
+        ),
+        AcceptedLaw::new(
+            "l3",
+            "c3",
+            "s3",
+            LawStrength::Conditional,
+            vec![],
+            800_000,
+            epoch(1),
+            vec![],
+        ),
+        AcceptedLaw::new(
+            "l4",
+            "c4",
+            "s4",
+            LawStrength::Heuristic,
+            vec![],
+            800_000,
+            epoch(1),
+            vec![],
+        ),
     ];
 
-    let priorities: Vec<u64> = laws.iter().map(|l| l.promotion_priority_millionths()).collect();
+    let priorities: Vec<u64> = laws
+        .iter()
+        .map(|l| l.promotion_priority_millionths())
+        .collect();
     // Should be strictly decreasing (Proved > Empirical > Conditional > Heuristic)
     for i in 0..priorities.len() - 1 {
         assert!(

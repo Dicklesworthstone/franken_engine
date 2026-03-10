@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::fs;
 
 use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_resolver::*;
 use frankenengine_engine::rgc_test_harness::{
     DeterministicTestContext, EventInput, HarnessLane, HarnessRunManifest, write_artifact_triad,
@@ -398,6 +399,21 @@ fn require_of_explicit_esm_path_returns_err_require_esm() {
     );
     assert!(err.message.contains("ERR_REQUIRE_ESM"));
     assert!(err.message.contains("/app/esm_only.mjs"));
+}
+
+#[test]
+fn require_of_explicit_esm_path_succeeds_in_bun_compat_mode() {
+    let mut r = DeterministicModuleResolver::new("/app");
+    r.register_workspace_module("/app/esm_only.mjs", esm("export default 1;"))
+        .unwrap();
+
+    let req = ModuleRequest::new("./esm_only.mjs", ImportStyle::Require)
+        .with_referrer("/app/main.cjs")
+        .with_compatibility_mode(CompatibilityMode::BunCompat);
+    let outcome = r.resolve(&req, &ctx(), &AllowAllPolicy).unwrap();
+
+    assert_eq!(outcome.module.canonical_specifier, "/app/esm_only.mjs");
+    assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
 }
 
 // -----------------------------------------------------------------------
@@ -975,10 +991,21 @@ fn module_dependency_serde_round_trip() {
 
 #[test]
 fn module_request_serde_round_trip() {
-    let mr = ModuleRequest::new("franken:core", ImportStyle::Import).with_referrer("/app/main.js");
+    let mr = ModuleRequest::new("franken:core", ImportStyle::Import)
+        .with_referrer("/app/main.js")
+        .with_compatibility_mode(CompatibilityMode::BunCompat);
     let json = serde_json::to_string(&mr).unwrap();
     let restored: ModuleRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(mr, restored);
+    assert_eq!(restored.compatibility_mode, CompatibilityMode::BunCompat);
+}
+
+#[test]
+fn module_request_legacy_json_defaults_to_native_compat_mode() {
+    let restored: ModuleRequest =
+        serde_json::from_str(r#"{"specifier":"pkg","referrer":"/app/main.js","style":"require"}"#)
+            .unwrap();
+    assert_eq!(restored.compatibility_mode, CompatibilityMode::Native);
 }
 
 #[test]

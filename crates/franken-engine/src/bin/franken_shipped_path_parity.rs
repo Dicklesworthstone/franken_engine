@@ -12,16 +12,13 @@ use frankenengine_engine::execution_orchestrator::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
-use frankenengine_engine::lowering_pipeline::{
-    LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
-};
-use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseError, ParserOptions};
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 use frankenengine_engine::rgc_test_harness::{
     DeterministicTestContext, EventInput, HarnessLane, HarnessRunManifest, write_artifact_triad,
 };
 use frankenengine_engine::ts_normalization::{
-    SourceIngestionSummary, SourceLanguage, TsNormalizationError,
-    prepare_source_entry_for_public_entrypoints,
+    SourceIngestionSummary, SourceLanguage, prepare_source_entry_for_public_entrypoints,
 };
 use serde::{Deserialize, Serialize};
 

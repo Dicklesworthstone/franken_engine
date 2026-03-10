@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle,
     ModuleDefinition, ModuleDependency, ModuleRequest, ModuleResolver, ModuleSyntax,
@@ -105,6 +106,52 @@ fn cjs_and_esm_compatibility_resolution_order_is_deterministic() {
         import_outcome.module.canonical_specifier,
         "/repo/pkg/index.js"
     );
+}
+
+#[test]
+fn bun_compat_allows_require_of_esm_package_entry() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_workspace_module(
+            "/repo/pkg/index.js",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'esm';"),
+        )
+        .unwrap();
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("pkg", ImportStyle::Require)
+                .with_compatibility_mode(CompatibilityMode::BunCompat),
+            &context(),
+            &AllowAllPolicy,
+        )
+        .expect("bun_compat should allow ESM package entry resolution");
+
+    assert_eq!(outcome.module.canonical_specifier, "/repo/pkg/index.js");
+    assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
+}
+
+#[test]
+fn node_compat_still_rejects_require_of_esm_package_entry() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_workspace_module(
+            "/repo/pkg/index.js",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'esm';"),
+        )
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("pkg", ImportStyle::Require)
+                .with_compatibility_mode(CompatibilityMode::NodeCompat),
+            &context(),
+            &AllowAllPolicy,
+        )
+        .expect_err("node_compat should stay fail-closed for require() of ESM");
+
+    assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+    assert!(error.message.contains("ERR_REQUIRE_ESM"));
 }
 
 // ────────────────────────────────────────────────────────────

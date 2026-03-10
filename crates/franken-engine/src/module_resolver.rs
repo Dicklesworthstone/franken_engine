@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::RuntimeCapability;
 use crate::deterministic_serde::{CanonicalValue, encode_value};
 use crate::hash_tiers::ContentHash;
+use crate::module_compatibility_matrix::CompatibilityMode;
 
 pub type ResolutionResult<T> = Result<T, Box<ResolutionError>>;
 pub type RegistryResult<T> = Result<T, RegistryError>;
@@ -223,6 +224,11 @@ pub struct ModuleRequest {
     pub specifier: String,
     pub referrer: Option<String>,
     pub style: ImportStyle,
+    #[serde(
+        default = "default_compatibility_mode",
+        skip_serializing_if = "is_native_compatibility_mode"
+    )]
+    pub compatibility_mode: CompatibilityMode,
 }
 
 impl ModuleRequest {
@@ -231,6 +237,7 @@ impl ModuleRequest {
             specifier: specifier.into(),
             referrer: None,
             style,
+            compatibility_mode: default_compatibility_mode(),
         }
     }
 
@@ -238,6 +245,19 @@ impl ModuleRequest {
         self.referrer = Some(referrer.into());
         self
     }
+
+    pub fn with_compatibility_mode(mut self, compatibility_mode: CompatibilityMode) -> Self {
+        self.compatibility_mode = compatibility_mode;
+        self
+    }
+}
+
+const fn default_compatibility_mode() -> CompatibilityMode {
+    CompatibilityMode::Native
+}
+
+fn is_native_compatibility_mode(mode: &CompatibilityMode) -> bool {
+    *mode == CompatibilityMode::Native
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1177,7 +1197,10 @@ impl ModuleResolver for DeterministicModuleResolver {
     ) -> ResolutionResult<ResolutionOutcome> {
         let (canonical_specifier, record, probe_sequence) =
             self.resolve_candidate(request, context)?;
-        if request.style == ImportStyle::Require && record.syntax == ModuleSyntax::EsModule {
+        if request.style == ImportStyle::Require
+            && record.syntax == ModuleSyntax::EsModule
+            && request.compatibility_mode != CompatibilityMode::BunCompat
+        {
             return Err(Box::new(ResolutionError::new(
                 ResolutionErrorCode::UnsupportedSpecifier,
                 format!(
@@ -1225,7 +1248,8 @@ impl ModuleResolver for DeterministicModuleResolver {
             for dependency in &outcome.module.record.dependencies {
                 queue.push_back(
                     ModuleRequest::new(dependency.specifier.clone(), dependency.style)
-                        .with_referrer(module_id.clone()),
+                        .with_referrer(module_id.clone())
+                        .with_compatibility_mode(request.compatibility_mode),
                 );
             }
 
@@ -1439,6 +1463,75 @@ mod tests {
         );
         assert!(error.message.contains("ERR_REQUIRE_ESM"));
         assert!(error.message.contains("/repo/pkg/index.js"));
+    }
+
+    #[test]
+    fn require_allows_esm_resolution_in_bun_compat_mode() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_workspace_module(
+                "/repo/pkg/index.js",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'esm';"),
+            )
+            .unwrap();
+
+        let outcome = resolver
+            .resolve(
+                &ModuleRequest::new("pkg", ImportStyle::Require)
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("bun_compat should allow require() of ESM package entry");
+
+        assert_eq!(outcome.module.canonical_specifier, "/repo/pkg/index.js");
+        assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
+        assert_eq!(
+            outcome.module.probe_sequence,
+            vec![
+                "/repo/pkg",
+                "/repo/pkg.cjs",
+                "/repo/pkg/index.cjs",
+                "/repo/pkg/index.js"
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_chain_propagates_bun_compat_mode_to_nested_require_dependencies() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_workspace_module(
+                "/repo/main.cjs",
+                ModuleDefinition::new(
+                    ModuleSyntax::CommonJs,
+                    "const lib = require('./lib.mjs'); module.exports = lib;",
+                )
+                .with_dependency(ModuleDependency::new("./lib.mjs", ImportStyle::Require)),
+            )
+            .unwrap();
+        resolver
+            .register_workspace_module(
+                "/repo/lib.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export const value = 1;"),
+            )
+            .unwrap();
+
+        let outcomes = resolver
+            .resolve_chain(
+                &ModuleRequest::new("/repo/main.cjs", ImportStyle::Require)
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("bun_compat should propagate to nested require() edges");
+
+        let specifiers = outcomes
+            .iter()
+            .map(|outcome| outcome.module.canonical_specifier.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(specifiers, vec!["/repo/main.cjs", "/repo/lib.mjs"]);
+        assert_eq!(outcomes[1].module.record.syntax, ModuleSyntax::EsModule);
     }
 
     #[test]
@@ -2169,6 +2262,26 @@ mod tests {
         let json = serde_json::to_string(&mr).expect("serialize");
         let restored: ModuleRequest = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(mr, restored);
+    }
+
+    #[test]
+    fn module_request_serde_roundtrip_with_bun_compat_mode() {
+        let mr = ModuleRequest::new("pkg", ImportStyle::Require)
+            .with_referrer("/repo/main.cjs")
+            .with_compatibility_mode(CompatibilityMode::BunCompat);
+        let json = serde_json::to_string(&mr).expect("serialize");
+        let restored: ModuleRequest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(mr, restored);
+        assert_eq!(restored.compatibility_mode, CompatibilityMode::BunCompat);
+    }
+
+    #[test]
+    fn module_request_legacy_json_defaults_to_native_compat_mode() {
+        let restored: ModuleRequest = serde_json::from_str(
+            r#"{"specifier":"pkg","referrer":"/repo/main.cjs","style":"require"}"#,
+        )
+        .expect("deserialize");
+        assert_eq!(restored.compatibility_mode, CompatibilityMode::Native);
     }
 
     #[test]

@@ -5,10 +5,9 @@
 
 use frankenengine_engine::array_fast_lane::{
     ARRAY_FAST_LANE_SCHEMA_VERSION, ArrayFastLaneDiagnostics, ArrayFastLaneEngine,
-    ArrayLaneDescriptor, DeoptReason, DeoptRecord, ElementKind, ElementKindTransition,
-    FastLanePolicy, TransitionReason, TransitionReceipt, TypedArrayDescriptor,
+    ArrayLaneDescriptor, DeoptReason, ElementKind, ElementKindTransition, FastLanePolicy,
+    TransitionReason, TransitionReceipt, TypedArrayDescriptor,
 };
-use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 fn epoch(n: u64) -> SecurityEpoch {
@@ -420,7 +419,7 @@ fn test_engine_max_transitions_enforced() {
     let receipt = engine.transition_element_kind(
         "arr-1",
         ElementKind::HoleyElements,
-        TransitionReason::HoleCreation,
+        TransitionReason::ElementDeleted,
         12,
     );
     assert!(receipt.is_none());
@@ -834,7 +833,7 @@ fn test_transition_reason_serde() {
         TransitionReason::InitialAllocation,
         TransitionReason::SmiToDouble,
         TransitionReason::DoubleToElements,
-        TransitionReason::HoleCreation,
+        TransitionReason::ElementDeleted,
         TransitionReason::ObjectFreeze,
         TransitionReason::ObjectSeal,
         TransitionReason::DeoptReboxing,
@@ -907,7 +906,7 @@ fn test_same_kind_transition_is_noop() {
     let mut engine = ArrayFastLaneEngine::new(epoch(1));
     engine.register_array("arr-1", ElementKind::PackedSmi, 10);
     // Same kind → same kind: old_kind == new_kind path
-    let receipt = engine.transition_element_kind(
+    let _receipt = engine.transition_element_kind(
         "arr-1",
         ElementKind::PackedSmi,
         TransitionReason::InitialAllocation,

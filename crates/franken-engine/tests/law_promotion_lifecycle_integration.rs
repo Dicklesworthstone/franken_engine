@@ -6,9 +6,7 @@ use frankenengine_engine::law_promotion_lifecycle::{
     LifecycleConfig, LifecycleError, LifecycleEventKind, LifecyclePipeline, RefusalReason,
     RoutingDecision,
 };
-use frankenengine_engine::law_promotion_pack::{
-    LawStrength, PromotionStatus, PromotionTarget,
-};
+use frankenengine_engine::law_promotion_pack::{LawStrength, PromotionStatus, PromotionTarget};
 use frankenengine_engine::law_proof_refutation::{
     ProofCampaignConfig, ProofCampaignResult, ProofRefutationPipeline, ProofVerdict,
 };
@@ -19,7 +17,8 @@ fn epoch(n: u64) -> SecurityEpoch {
 }
 
 fn test_candidate(id: &str, kind: CandidateKind) -> LawCandidate {
-    let mut c = LawCandidate {
+    let hash_data = format!("candidate:{id}:{kind:?}");
+    LawCandidate {
         candidate_id: id.to_string(),
         kind,
         statement: format!("law-statement-{id}"),
@@ -28,14 +27,13 @@ fn test_candidate(id: &str, kind: CandidateKind) -> LawCandidate {
         scope_hypothesis_id: format!("scope-{id}"),
         provenance_id: format!("prov-{id}"),
         supporting_source_ids: vec![format!("src-{id}")],
-        candidate_hash: ContentHash::compute(b"placeholder"),
-    };
-    c.recompute_hash();
-    c
+        candidate_hash: ContentHash::compute(hash_data.as_bytes()),
+    }
 }
 
 fn accepted_result(candidate_id: &str, kind: CandidateKind) -> ProofCampaignResult {
-    let mut r = ProofCampaignResult {
+    let hash_data = format!("accepted:{candidate_id}:{kind:?}");
+    ProofCampaignResult {
         candidate_id: candidate_id.to_string(),
         candidate_kind: kind,
         final_verdict: ProofVerdict::Proved,
@@ -45,14 +43,13 @@ fn accepted_result(candidate_id: &str, kind: CandidateKind) -> ProofCampaignResu
         accepted: true,
         rationale: "proved with high confidence".to_string(),
         campaign_epoch: epoch(10),
-        result_hash: ContentHash::compute(b"result"),
-    };
-    r.recompute_hash();
-    r
+        result_hash: ContentHash::compute(hash_data.as_bytes()),
+    }
 }
 
 fn rejected_result(candidate_id: &str, kind: CandidateKind) -> ProofCampaignResult {
-    let mut r = ProofCampaignResult {
+    let hash_data = format!("rejected:{candidate_id}:{kind:?}");
+    ProofCampaignResult {
         candidate_id: candidate_id.to_string(),
         candidate_kind: kind,
         final_verdict: ProofVerdict::Refuted,
@@ -62,10 +59,8 @@ fn rejected_result(candidate_id: &str, kind: CandidateKind) -> ProofCampaignResu
         accepted: false,
         rationale: "refuted by counterexample".to_string(),
         campaign_epoch: epoch(10),
-        result_hash: ContentHash::compute(b"result"),
-    };
-    r.recompute_hash();
-    r
+        result_hash: ContentHash::compute(hash_data.as_bytes()),
+    }
 }
 
 // ===========================================================================

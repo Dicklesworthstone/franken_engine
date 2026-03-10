@@ -235,12 +235,24 @@ fn strategy_serde_roundtrip() {
 #[test]
 fn constraint_tags_unique() {
     let constraints = vec![
-        PolicyConstraint::AllowedKinds { kinds: BTreeSet::new() },
-        PolicyConstraint::ForbiddenStrategies { strategy_ids: BTreeSet::new() },
-        PolicyConstraint::MaxCost { limit_millionths: 0 },
-        PolicyConstraint::MaxRegret { limit_millionths: 0 },
-        PolicyConstraint::MinReward { threshold_millionths: 0 },
-        PolicyConstraint::ForceStrategy { strategy_id: "x".into() },
+        PolicyConstraint::AllowedKinds {
+            kinds: BTreeSet::new(),
+        },
+        PolicyConstraint::ForbiddenStrategies {
+            strategy_ids: BTreeSet::new(),
+        },
+        PolicyConstraint::MaxCost {
+            limit_millionths: 0,
+        },
+        PolicyConstraint::MaxRegret {
+            limit_millionths: 0,
+        },
+        PolicyConstraint::MinReward {
+            threshold_millionths: 0,
+        },
+        PolicyConstraint::ForceStrategy {
+            strategy_id: "x".into(),
+        },
     ];
     let tags: BTreeSet<&str> = constraints.iter().map(|c| c.tag()).collect();
     assert_eq!(tags.len(), 6);
@@ -248,7 +260,9 @@ fn constraint_tags_unique() {
 
 #[test]
 fn constraint_display_content() {
-    let c = PolicyConstraint::MaxCost { limit_millionths: 50_000 };
+    let c = PolicyConstraint::MaxCost {
+        limit_millionths: 50_000,
+    };
     assert!(c.to_string().contains("50000"));
 }
 
@@ -268,8 +282,18 @@ fn constraint_serde_roundtrip() {
 
 #[test]
 fn reason_acceptance_semantics() {
-    assert!(SelectionReason::HighestNetValue { net_value_millionths: 100 }.is_acceptance());
-    assert!(SelectionReason::OperatorOverride { strategy_id: "x".into() }.is_acceptance());
+    assert!(
+        SelectionReason::HighestNetValue {
+            net_value_millionths: 100
+        }
+        .is_acceptance()
+    );
+    assert!(
+        SelectionReason::OperatorOverride {
+            strategy_id: "x".into()
+        }
+        .is_acceptance()
+    );
     assert!(SelectionReason::FallbackToDefault.is_acceptance());
     assert!(!SelectionReason::KindNotAllowed.is_acceptance());
     assert!(!SelectionReason::Forbidden.is_acceptance());
@@ -279,15 +303,27 @@ fn reason_acceptance_semantics() {
 #[test]
 fn reason_tags_unique() {
     let reasons = vec![
-        SelectionReason::HighestNetValue { net_value_millionths: 0 },
-        SelectionReason::OperatorOverride { strategy_id: "x".into() },
+        SelectionReason::HighestNetValue {
+            net_value_millionths: 0,
+        },
+        SelectionReason::OperatorOverride {
+            strategy_id: "x".into(),
+        },
         SelectionReason::FallbackToDefault,
         SelectionReason::KindNotAllowed,
         SelectionReason::Forbidden,
         SelectionReason::CostExceeded { cost: 0, limit: 0 },
-        SelectionReason::RegretExceeded { regret: 0, budget: 0 },
-        SelectionReason::RewardBelowThreshold { reward: 0, threshold: 0 },
-        SelectionReason::MissingFeatures { missing: BTreeSet::new() },
+        SelectionReason::RegretExceeded {
+            regret: 0,
+            budget: 0,
+        },
+        SelectionReason::RewardBelowThreshold {
+            reward: 0,
+            threshold: 0,
+        },
+        SelectionReason::MissingFeatures {
+            missing: BTreeSet::new(),
+        },
     ];
     let tags: BTreeSet<&str> = reasons.iter().map(|r| r.tag()).collect();
     assert_eq!(tags.len(), 9);
@@ -332,7 +368,9 @@ fn select_highest_net_value() {
 fn select_cost_constraint_filters() {
     let sel = ContextualSelector::with_defaults(
         vec![strategy_tier(), strategy_cache()],
-        vec![PolicyConstraint::MaxCost { limit_millionths: 30_000 }],
+        vec![PolicyConstraint::MaxCost {
+            limit_millionths: 30_000,
+        }],
     );
     let d = sel.select(&ctx_full(), epoch());
     // tier costs 50k > 30k limit, only cache (20k) feasible
@@ -343,7 +381,9 @@ fn select_cost_constraint_filters() {
 fn select_regret_constraint_filters() {
     let sel = ContextualSelector::with_defaults(
         vec![strategy_tier(), strategy_cache()],
-        vec![PolicyConstraint::MaxRegret { limit_millionths: 50_000 }],
+        vec![PolicyConstraint::MaxRegret {
+            limit_millionths: 50_000,
+        }],
     );
     let d = sel.select(&ctx_full(), epoch());
     // tier regret 80k > 50k, only cache (40k) feasible
@@ -378,7 +418,9 @@ fn select_forbidden_constraint() {
 fn select_min_reward_constraint() {
     let sel = ContextualSelector::with_defaults(
         vec![strategy_tier(), strategy_cache()],
-        vec![PolicyConstraint::MinReward { threshold_millionths: 180_000 }],
+        vec![PolicyConstraint::MinReward {
+            threshold_millionths: 180_000,
+        }],
     );
     let d = sel.select(&ctx_full(), epoch());
     // cache reward 150k < 180k threshold, only tier (200k) feasible
@@ -389,7 +431,9 @@ fn select_min_reward_constraint() {
 fn select_all_constrained_out_fallback() {
     let sel = ContextualSelector::with_defaults(
         vec![strategy_tier(), strategy_cache()],
-        vec![PolicyConstraint::MaxCost { limit_millionths: 10_000 }],
+        vec![PolicyConstraint::MaxCost {
+            limit_millionths: 10_000,
+        }],
     );
     let d = sel.select(&ctx_full(), epoch());
     // Both exceed 10k cost limit
@@ -404,7 +448,9 @@ fn select_all_constrained_out_fallback() {
 fn select_operator_override() {
     let sel = ContextualSelector::with_defaults(
         vec![strategy_tier(), strategy_cache()],
-        vec![PolicyConstraint::ForceStrategy { strategy_id: "cache-opt".into() }],
+        vec![PolicyConstraint::ForceStrategy {
+            strategy_id: "cache-opt".into(),
+        }],
     );
     let d = sel.select(&ctx_full(), epoch());
     assert!(d.is_override());
@@ -416,8 +462,12 @@ fn select_override_ignores_other_constraints() {
     let sel = ContextualSelector::with_defaults(
         vec![strategy_tier()],
         vec![
-            PolicyConstraint::ForceStrategy { strategy_id: "tier-opt".into() },
-            PolicyConstraint::MaxCost { limit_millionths: 1 },
+            PolicyConstraint::ForceStrategy {
+                strategy_id: "tier-opt".into(),
+            },
+            PolicyConstraint::MaxCost {
+                limit_millionths: 1,
+            },
         ],
     );
     let d = sel.select(&ctx_full(), epoch());
@@ -443,10 +493,7 @@ fn select_missing_features_skips_strategy() {
 
 #[test]
 fn select_partial_features_picks_feasible() {
-    let sel = ContextualSelector::with_defaults(
-        vec![strategy_tier(), strategy_spec()],
-        Vec::new(),
-    );
+    let sel = ContextualSelector::with_defaults(vec![strategy_tier(), strategy_spec()], Vec::new());
     let d = sel.select(&ctx_minimal(), epoch());
     // tier requires RequestRate (present), spec requires HotFunctionCount (missing)
     assert_eq!(d.selected_strategy_id.as_deref(), Some("tier-opt"));
@@ -477,10 +524,8 @@ fn decision_feasible_count() {
 
 #[test]
 fn decision_serde_roundtrip() {
-    let sel = ContextualSelector::with_defaults(
-        vec![strategy_tier(), strategy_cache()],
-        Vec::new(),
-    );
+    let sel =
+        ContextualSelector::with_defaults(vec![strategy_tier(), strategy_cache()], Vec::new());
     let d = sel.select(&ctx_full(), epoch());
     let json = serde_json::to_string(&d).unwrap();
     let back: SelectionDecision = serde_json::from_str(&json).unwrap();
@@ -495,7 +540,9 @@ fn decision_serde_roundtrip() {
 fn selector_serde_roundtrip() {
     let sel = ContextualSelector::with_defaults(
         vec![strategy_tier(), strategy_cache()],
-        vec![PolicyConstraint::MaxCost { limit_millionths: 100_000 }],
+        vec![PolicyConstraint::MaxCost {
+            limit_millionths: 100_000,
+        }],
     );
     let json = serde_json::to_string(&sel).unwrap();
     let back: ContextualSelector = serde_json::from_str(&json).unwrap();

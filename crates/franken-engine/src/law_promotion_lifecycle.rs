@@ -30,9 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
 use crate::law_mining::{CandidateKind, LawCandidate};
-use crate::law_promotion_pack::{
-    AcceptedLaw, LawStrength, PromotionPipeline, PromotionTarget,
-};
+use crate::law_promotion_pack::{AcceptedLaw, LawStrength, PromotionPipeline, PromotionTarget};
 use crate::law_proof_refutation::{ProofCampaignResult, ProofRefutationPipeline, ProofVerdict};
 use crate::security_epoch::SecurityEpoch;
 
@@ -51,6 +49,7 @@ pub const LAW_PROMOTION_LIFECYCLE_BEAD_ID: &str = "bd-1lsy.9.10.3";
 pub const COMPONENT: &str = "law_promotion_lifecycle";
 
 /// One million — the unit for fixed-point millionths arithmetic.
+#[allow(dead_code)]
 const MILLION: u64 = 1_000_000;
 
 /// Default expiration window (10 epochs).
@@ -447,7 +446,8 @@ impl LifecyclePipeline {
             });
         }
 
-        if strength < self.config.min_auto_strength {
+        // Higher weight = stronger. Refuse if strength is weaker than minimum.
+        if strength.weight_millionths() < self.config.min_auto_strength.weight_millionths() {
             return Err(RefusalReason::InsufficientStrength {
                 actual: strength,
                 minimum: self.config.min_auto_strength,
@@ -482,11 +482,7 @@ impl LifecyclePipeline {
             &candidate.candidate_id,
             &candidate.statement,
             strength,
-            candidate
-                .supporting_source_ids
-                .iter()
-                .cloned()
-                .collect(),
+            candidate.supporting_source_ids.iter().cloned().collect(),
             candidate.rank_millionths,
             self.pipeline_epoch,
             evidence_ids,
@@ -494,11 +490,7 @@ impl LifecyclePipeline {
     }
 
     /// Route an accepted law to promotion targets based on its candidate kind.
-    pub fn route_law(
-        &self,
-        law: &AcceptedLaw,
-        candidate_kind: CandidateKind,
-    ) -> RoutingDecision {
+    pub fn route_law(&self, law: &AcceptedLaw, candidate_kind: CandidateKind) -> RoutingDecision {
         let selected_targets = if self.config.auto_route_by_kind {
             targets_for_kind(candidate_kind)
         } else {
@@ -523,7 +515,11 @@ impl LifecyclePipeline {
         candidate: &LawCandidate,
         result: &ProofCampaignResult,
     ) -> LifecycleEvent {
-        let event_id = format!("evt-{}-{}", self.lifecycle_events.len(), candidate.candidate_id);
+        let event_id = format!(
+            "evt-{}-{}",
+            self.lifecycle_events.len(),
+            candidate.candidate_id
+        );
 
         match self.convert_to_accepted_law(candidate, result) {
             Ok(law) => {
@@ -730,7 +726,9 @@ impl LifecyclePipeline {
             .accepted_laws
             .iter()
             .filter(|law| {
-                let age = current_epoch.as_u64().saturating_sub(law.accepted_epoch.as_u64());
+                let age = current_epoch
+                    .as_u64()
+                    .saturating_sub(law.accepted_epoch.as_u64());
                 age > window
                     && !self.revoked_law_ids.contains(&law.law_id)
                     && !self.superseded_law_ids.contains(&law.law_id)
@@ -800,9 +798,7 @@ impl LifecyclePipeline {
 
     /// Get the routing decision for a specific law.
     pub fn routing_for(&self, law_id: &str) -> Option<&RoutingDecision> {
-        self.routing_decisions
-            .iter()
-            .find(|r| r.law_id == law_id)
+        self.routing_decisions.iter().find(|r| r.law_id == law_id)
     }
 
     /// Generate a summary report of the lifecycle pipeline.
@@ -853,7 +849,11 @@ impl LifecyclePipeline {
         let mean_priority_millionths = if priorities.is_empty() {
             0
         } else {
-            priorities.iter().sum::<u64>().checked_div(priorities.len() as u64).unwrap_or(0)
+            priorities
+                .iter()
+                .sum::<u64>()
+                .checked_div(priorities.len() as u64)
+                .unwrap_or(0)
         };
 
         LifecycleSummary {
@@ -929,10 +929,9 @@ fn verdict_to_strength(result: &ProofCampaignResult) -> LawStrength {
 fn targets_for_kind(kind: CandidateKind) -> Vec<PromotionTarget> {
     match kind {
         CandidateKind::Invariant => PromotionTarget::ALL.to_vec(),
-        CandidateKind::SideCondition => vec![
-            PromotionTarget::RewritePack,
-            PromotionTarget::SupportAtlas,
-        ],
+        CandidateKind::SideCondition => {
+            vec![PromotionTarget::RewritePack, PromotionTarget::SupportAtlas]
+        }
         CandidateKind::NormalForm => vec![
             PromotionTarget::SynthesisLane,
             PromotionTarget::FrontierLedger,
@@ -954,7 +953,9 @@ mod tests {
     }
 
     fn test_candidate(id: &str, kind: CandidateKind) -> LawCandidate {
-        let mut c = LawCandidate {
+        // recompute_hash is private, so compute a representative hash inline
+        let hash_data = format!("candidate:{id}:{kind:?}");
+        LawCandidate {
             candidate_id: id.to_string(),
             kind,
             statement: format!("law-statement-{id}"),
@@ -963,14 +964,13 @@ mod tests {
             scope_hypothesis_id: format!("scope-{id}"),
             provenance_id: format!("prov-{id}"),
             supporting_source_ids: vec![format!("src-{id}")],
-            candidate_hash: ContentHash::compute(b"placeholder"),
-        };
-        c.recompute_hash();
-        c
+            candidate_hash: ContentHash::compute(hash_data.as_bytes()),
+        }
     }
 
     fn accepted_result(candidate_id: &str, kind: CandidateKind) -> ProofCampaignResult {
-        let mut r = ProofCampaignResult {
+        let hash_data = format!("accepted:{candidate_id}:{kind:?}");
+        ProofCampaignResult {
             candidate_id: candidate_id.to_string(),
             candidate_kind: kind,
             final_verdict: ProofVerdict::Proved,
@@ -980,14 +980,13 @@ mod tests {
             accepted: true,
             rationale: "proved with high confidence".to_string(),
             campaign_epoch: epoch(10),
-            result_hash: ContentHash::compute(b"result"),
-        };
-        r.recompute_hash();
-        r
+            result_hash: ContentHash::compute(hash_data.as_bytes()),
+        }
     }
 
     fn rejected_result(candidate_id: &str, kind: CandidateKind) -> ProofCampaignResult {
-        let mut r = ProofCampaignResult {
+        let hash_data = format!("rejected:{candidate_id}:{kind:?}");
+        ProofCampaignResult {
             candidate_id: candidate_id.to_string(),
             candidate_kind: kind,
             final_verdict: ProofVerdict::Refuted,
@@ -997,10 +996,8 @@ mod tests {
             accepted: false,
             rationale: "refuted by counterexample".to_string(),
             campaign_epoch: epoch(10),
-            result_hash: ContentHash::compute(b"result"),
-        };
-        r.recompute_hash();
-        r
+            result_hash: ContentHash::compute(hash_data.as_bytes()),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1578,7 +1575,11 @@ mod tests {
         p.promote_law(&c, &r);
 
         let summary = p.summary_report();
-        let total: usize = summary.receipts_by_target.iter().map(|t| t.receipt_count).sum();
+        let total: usize = summary
+            .receipts_by_target
+            .iter()
+            .map(|t| t.receipt_count)
+            .sum();
         assert_eq!(total, 4); // Invariant → 4 targets
     }
 

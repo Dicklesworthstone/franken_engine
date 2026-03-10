@@ -291,7 +291,9 @@ impl fmt::Display for PolicyConstraint {
             }
             Self::MaxCost { limit_millionths } => write!(f, "max cost: {}", limit_millionths),
             Self::MaxRegret { limit_millionths } => write!(f, "max regret: {}", limit_millionths),
-            Self::MinReward { threshold_millionths } => {
+            Self::MinReward {
+                threshold_millionths,
+            } => {
                 write!(f, "min reward: {}", threshold_millionths)
             }
             Self::ForceStrategy { strategy_id } => write!(f, "force: {}", strategy_id),
@@ -331,9 +333,7 @@ impl SelectionReason {
     pub fn is_acceptance(&self) -> bool {
         matches!(
             self,
-            Self::HighestNetValue { .. }
-                | Self::OperatorOverride { .. }
-                | Self::FallbackToDefault
+            Self::HighestNetValue { .. } | Self::OperatorOverride { .. } | Self::FallbackToDefault
         )
     }
 
@@ -434,11 +434,7 @@ impl ContextualSelector {
     }
 
     /// Select the best strategy for the given context.
-    pub fn select(
-        &self,
-        ctx: &WorkloadContext,
-        epoch: SecurityEpoch,
-    ) -> SelectionDecision {
+    pub fn select(&self, ctx: &WorkloadContext, epoch: SecurityEpoch) -> SelectionDecision {
         // Check for operator override first
         for c in &self.constraints {
             if let PolicyConstraint::ForceStrategy { strategy_id } = c {
@@ -564,7 +560,9 @@ impl ContextualSelector {
                         });
                     }
                 }
-                PolicyConstraint::MinReward { threshold_millionths } => {
+                PolicyConstraint::MinReward {
+                    threshold_millionths,
+                } => {
                     if strategy.expected_reward_millionths < *threshold_millionths {
                         return Err(SelectionReason::RewardBelowThreshold {
                             reward: strategy.expected_reward_millionths,
@@ -874,8 +872,18 @@ mod tests {
 
     #[test]
     fn selection_reason_acceptance() {
-        assert!(SelectionReason::HighestNetValue { net_value_millionths: 100 }.is_acceptance());
-        assert!(SelectionReason::OperatorOverride { strategy_id: "x".into() }.is_acceptance());
+        assert!(
+            SelectionReason::HighestNetValue {
+                net_value_millionths: 100
+            }
+            .is_acceptance()
+        );
+        assert!(
+            SelectionReason::OperatorOverride {
+                strategy_id: "x".into()
+            }
+            .is_acceptance()
+        );
         assert!(SelectionReason::FallbackToDefault.is_acceptance());
         assert!(!SelectionReason::KindNotAllowed.is_acceptance());
         assert!(!SelectionReason::Forbidden.is_acceptance());
@@ -884,15 +892,27 @@ mod tests {
     #[test]
     fn selection_reason_tags_unique() {
         let reasons = vec![
-            SelectionReason::HighestNetValue { net_value_millionths: 0 },
-            SelectionReason::OperatorOverride { strategy_id: "x".into() },
+            SelectionReason::HighestNetValue {
+                net_value_millionths: 0,
+            },
+            SelectionReason::OperatorOverride {
+                strategy_id: "x".into(),
+            },
             SelectionReason::FallbackToDefault,
             SelectionReason::KindNotAllowed,
             SelectionReason::Forbidden,
             SelectionReason::CostExceeded { cost: 0, limit: 0 },
-            SelectionReason::RegretExceeded { regret: 0, budget: 0 },
-            SelectionReason::RewardBelowThreshold { reward: 0, threshold: 0 },
-            SelectionReason::MissingFeatures { missing: BTreeSet::new() },
+            SelectionReason::RegretExceeded {
+                regret: 0,
+                budget: 0,
+            },
+            SelectionReason::RewardBelowThreshold {
+                reward: 0,
+                threshold: 0,
+            },
+            SelectionReason::MissingFeatures {
+                missing: BTreeSet::new(),
+            },
         ];
         let tags: BTreeSet<&str> = reasons.iter().map(|r| r.tag()).collect();
         assert_eq!(tags.len(), 9);
@@ -987,20 +1007,14 @@ mod tests {
     #[test]
     fn selector_missing_features_fallback() {
         // expensive_strategy requires HotFunctionCount, which basic_context doesn't have
-        let sel = ContextualSelector::with_defaults(
-            vec![expensive_strategy()],
-            Vec::new(),
-        );
+        let sel = ContextualSelector::with_defaults(vec![expensive_strategy()], Vec::new());
         let d = sel.select(&basic_context(), epoch());
         assert!(d.is_fallback());
     }
 
     #[test]
     fn selector_decision_hash_deterministic() {
-        let sel = ContextualSelector::with_defaults(
-            vec![tiering_strategy()],
-            Vec::new(),
-        );
+        let sel = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
         let ctx = basic_context();
         let d1 = sel.select(&ctx, epoch());
         let d2 = sel.select(&ctx, epoch());

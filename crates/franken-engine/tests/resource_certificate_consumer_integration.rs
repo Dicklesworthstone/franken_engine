@@ -156,10 +156,7 @@ fn test_e2e_module_load_gating() {
         },
         &[(EnforcedDimension::ModuleLoadCount, 1_000_001)],
     );
-    assert!(matches!(
-        r.decision,
-        EnforcementDecision::Reject { .. }
-    ));
+    assert!(matches!(r.decision, EnforcementDecision::Reject { .. }));
 }
 
 #[test]
@@ -291,7 +288,11 @@ fn test_receipt_contains_budget_snapshots() {
         &[(EnforcedDimension::Time, 1_000)],
     );
     assert!(!r.budget_snapshot.is_empty());
-    assert!(r.budget_snapshot.iter().any(|s| s.dimension == EnforcedDimension::Time));
+    assert!(
+        r.budget_snapshot
+            .iter()
+            .any(|s| s.dimension == EnforcedDimension::Time)
+    );
 }
 
 #[test]

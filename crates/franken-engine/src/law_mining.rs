@@ -46,7 +46,7 @@ pub const LAW_MINING_ARTIFACT_INDEX_SCHEMA_VERSION: &str =
     "franken-engine.law-mining.artifact-index.v1";
 pub const LAW_MINING_EVENT_STREAM_SCHEMA_VERSION: &str = "franken-engine.law-mining.events.v1";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CandidateKind {
     Invariant,
     SideCondition,

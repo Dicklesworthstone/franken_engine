@@ -1410,6 +1410,61 @@ Artifacts are written under:
 - `artifacts/rgc_runtime_semantics_verification_pack/<timestamp>/runtime_semantics_verification_report.json`
 - `artifacts/rgc_runtime_semantics_verification_pack/<timestamp>/step_logs/step_*.log`
 
+## RGC Seqlock Reader/Writer Contract
+
+`bd-1lsy.7.21.2` binds accepted seqlock candidates to deterministic retry
+budgets, writer-pressure limits, and incumbent fallback semantics before
+rollout is considered.
+
+```bash
+# RGC seqlock reader/writer contract suite (rch-backed check + test + clippy + bundle emission)
+./scripts/run_seqlock_reader_writer_contract_suite.sh ci
+
+# deterministic replay wrapper
+./scripts/e2e/seqlock_reader_writer_contract_replay.sh ci
+```
+
+Contract and vectors:
+
+- [`docs/RGC_SEQLOCK_READER_WRITER_CONTRACT_V1.md`](./docs/RGC_SEQLOCK_READER_WRITER_CONTRACT_V1.md)
+- `docs/rgc_seqlock_reader_writer_contract_v1.json`
+- `crates/franken-engine/src/seqlock_reader_writer_contract.rs`
+- `crates/franken-engine/tests/seqlock_reader_writer_contract.rs`
+
+Artifacts are written under:
+
+- `artifacts/seqlock_reader_writer_contract/<timestamp>/run_manifest.json`
+- `artifacts/seqlock_reader_writer_contract/<timestamp>/seqlock_reader_writer_contract.json`
+- `artifacts/seqlock_reader_writer_contract/<timestamp>/retry_budget_policy.json`
+- `artifacts/seqlock_reader_writer_contract/<timestamp>/incumbent_fallback_matrix.json`
+
+## RGC Seqlock Rollout Guard
+
+`bd-1lsy.7.21.3` gates seqlock-backed rollout on deterministic safety-case,
+starvation microbench, and loom/model-check evidence, and fails closed until
+positive model-check coverage exists for the accepted candidates.
+
+```bash
+# RGC seqlock rollout guard suite (rch-backed check + test + clippy + bundle emission)
+./scripts/run_seqlock_rollout_guard_suite.sh ci
+
+# deterministic replay wrapper
+./scripts/e2e/seqlock_rollout_guard_replay.sh ci
+```
+
+Contract and vectors:
+
+- [`docs/RGC_SEQLOCK_ROLLOUT_GUARD_V1.md`](./docs/RGC_SEQLOCK_ROLLOUT_GUARD_V1.md)
+- `docs/rgc_seqlock_rollout_guard_v1.json`
+- `crates/franken-engine/src/seqlock_rollout_guard.rs`
+- `crates/franken-engine/tests/seqlock_rollout_guard.rs`
+
+Artifacts are written under:
+
+- `artifacts/seqlock_rollout_guard/<timestamp>/run_manifest.json`
+- `artifacts/seqlock_rollout_guard/<timestamp>/events.jsonl`
+- `artifacts/seqlock_rollout_guard/<timestamp>/commands.txt`
+
 ## RGC Exception and Diagnostic Semantics Gate
 
 `bd-1lsy.4.5` adds a deterministic exception/diagnostics gate for runtime

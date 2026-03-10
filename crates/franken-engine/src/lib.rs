@@ -363,6 +363,7 @@ pub mod wasm_runtime_lane;
 pub mod wave_handoff_contract;
 pub mod workload_embedding;
 pub mod workload_policy_manifold;
+pub mod workload_transfer_prior;
 pub mod zero_placeholder_scan;
 
 use std::{cmp::Ordering, error::Error, fmt};

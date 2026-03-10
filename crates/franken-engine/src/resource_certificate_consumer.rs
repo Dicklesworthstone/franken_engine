@@ -189,17 +189,23 @@ impl DimensionBudget {
         }
         let usage = self.current_usage_millionths.max(0) as u64;
         let bound = self.upper_bound_millionths as u64;
-        usage.saturating_mul(MILLIONTHS).checked_div(bound).unwrap_or(MILLIONTHS)
+        usage
+            .saturating_mul(MILLIONTHS)
+            .checked_div(bound)
+            .unwrap_or(MILLIONTHS)
     }
 
     /// Record additional usage.
     pub fn record_usage(&mut self, amount_millionths: i64) {
-        self.current_usage_millionths = self.current_usage_millionths.saturating_add(amount_millionths);
+        self.current_usage_millionths = self
+            .current_usage_millionths
+            .saturating_add(amount_millionths);
     }
 
     /// Remaining budget in millionths.
     pub fn remaining_millionths(&self) -> i64 {
-        self.upper_bound_millionths.saturating_sub(self.current_usage_millionths)
+        self.upper_bound_millionths
+            .saturating_sub(self.current_usage_millionths)
     }
 
     /// Whether budget is exhausted.
@@ -414,37 +420,49 @@ pub struct EnforcementReceipt {
     pub policy_hash: String,
 }
 
+/// Input for constructing an enforcement receipt.
+#[derive(Debug, Clone)]
+pub struct EnforcementReceiptInput {
+    /// Extension being checked.
+    pub extension_id: String,
+    /// Scope of the check.
+    pub scope: EnforcementScope,
+    /// Decision made.
+    pub decision: EnforcementDecision,
+    /// Certificate consulted (if any).
+    pub certificate_id: Option<String>,
+    /// Budget snapshots at decision time.
+    pub budget_snapshot: Vec<DimensionBudgetSnapshot>,
+    /// Security epoch.
+    pub epoch: SecurityEpoch,
+    /// Decision sequence.
+    pub seq: u64,
+    /// Policy hash.
+    pub policy_hash: String,
+}
+
 impl EnforcementReceipt {
-    /// Create a new receipt.
-    fn new(
-        extension_id: String,
-        scope: EnforcementScope,
-        decision: EnforcementDecision,
-        certificate_id: Option<String>,
-        budget_snapshot: Vec<DimensionBudgetSnapshot>,
-        epoch: SecurityEpoch,
-        seq: u64,
-        policy_hash: String,
-    ) -> Self {
+    /// Create a new receipt from input.
+    fn from_input(input: EnforcementReceiptInput) -> Self {
         let content_hash = Self::compute_hash(
-            &extension_id,
-            &scope,
-            &decision,
-            &epoch,
-            seq,
+            &input.extension_id,
+            &input.scope,
+            &input.decision,
+            &input.epoch,
+            input.seq,
         );
         let receipt_id = format!("erc-{}", &content_hash.to_hex()[..16]);
         Self {
             receipt_id,
-            extension_id,
-            scope,
-            decision,
-            certificate_id,
-            budget_snapshot,
-            decision_epoch: epoch,
-            decision_sequence: seq,
+            extension_id: input.extension_id,
+            scope: input.scope,
+            decision: input.decision,
+            certificate_id: input.certificate_id,
+            budget_snapshot: input.budget_snapshot,
+            decision_epoch: input.epoch,
+            decision_sequence: input.seq,
             content_hash,
-            policy_hash,
+            policy_hash: input.policy_hash,
         }
     }
 
@@ -725,8 +743,7 @@ impl BudgetEnforcer {
         }
 
         // Check abstention if fail-closed.
-        if self.policy.fail_closed_on_abstention
-            && digest.verdict == CertificateVerdict::Abstained
+        if self.policy.fail_closed_on_abstention && digest.verdict == CertificateVerdict::Abstained
         {
             return Err(BudgetViolationReason::CertificateAbstained {
                 certificate_id: digest.certificate_id.clone(),
@@ -779,16 +796,16 @@ impl BudgetEnforcer {
             .unwrap_or_default();
 
         self.decision_sequence += 1;
-        let receipt = EnforcementReceipt::new(
-            extension_id.to_string(),
+        let receipt = EnforcementReceipt::from_input(EnforcementReceiptInput {
+            extension_id: extension_id.to_string(),
             scope,
             decision,
             certificate_id,
-            snapshots,
-            self.current_epoch,
-            self.decision_sequence,
-            self.policy_hash.clone(),
-        );
+            budget_snapshot: snapshots,
+            epoch: self.current_epoch,
+            seq: self.decision_sequence,
+            policy_hash: self.policy_hash.clone(),
+        });
 
         // Retain bounded receipts.
         if self.receipts.len() >= self.policy.max_receipts {
@@ -799,6 +816,7 @@ impl BudgetEnforcer {
     }
 
     /// Compute the enforcement decision.
+    #[allow(clippy::collapsible_if)]
     fn compute_decision(
         &self,
         extension_id: &str,
@@ -1618,22 +1636,12 @@ mod tests {
         enforcer.install_certificate("ext-1", digest).unwrap();
 
         assert!(!enforcer.is_exhausted("ext-1"));
-        // Need to use an amount just at the boundary (not above, or it would be rejected)
-        enforcer.enforce(
-            "ext-1",
-            EnforcementScope::General {
-                description: "test".to_string(),
-            },
-            &[(EnforcedDimension::Time, 9_999_999)],
-        );
-        // 9_999_999 is just under threshold, so it goes through. Now next small usage:
-        enforcer.enforce(
-            "ext-1",
-            EnforcementScope::General {
-                description: "test2".to_string(),
-            },
-            &[(EnforcedDimension::Time, 1)],
-        );
+        // Enforcement rejects when projected ratio >= reject_threshold, so usage
+        // can never reach the bound through enforce() alone. Record usage directly
+        // on the extension state to test the is_exhausted boundary.
+        if let Some(state) = enforcer.extensions.get_mut("ext-1") {
+            state.record_usage(EnforcedDimension::Time, 10_000_000);
+        }
         assert!(enforcer.is_exhausted("ext-1"));
     }
 
@@ -1716,10 +1724,19 @@ mod tests {
     fn test_enforced_dimension_display() {
         assert_eq!(EnforcedDimension::Time.to_string(), "time");
         assert_eq!(EnforcedDimension::HeapMemory.to_string(), "heap_memory");
-        assert_eq!(EnforcedDimension::HostcallCount.to_string(), "hostcall_count");
+        assert_eq!(
+            EnforcedDimension::HostcallCount.to_string(),
+            "hostcall_count"
+        );
         assert_eq!(EnforcedDimension::GcPressure.to_string(), "gc_pressure");
-        assert_eq!(EnforcedDimension::ModuleLoadCount.to_string(), "module_load_count");
-        assert_eq!(EnforcedDimension::IoOperationCount.to_string(), "io_operation_count");
+        assert_eq!(
+            EnforcedDimension::ModuleLoadCount.to_string(),
+            "module_load_count"
+        );
+        assert_eq!(
+            EnforcedDimension::IoOperationCount.to_string(),
+            "io_operation_count"
+        );
         assert_eq!(EnforcedDimension::StackDepth.to_string(), "stack_depth");
     }
 

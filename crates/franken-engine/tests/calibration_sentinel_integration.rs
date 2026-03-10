@@ -157,7 +157,7 @@ fn test_update_sentinel_lower_bound_all_states() {
 #[test]
 fn test_update_sentinel_refreshes_content_hash() {
     let mut s = create_sentinel("hr", SentinelKind::ErrorBound, 500_000);
-    let hash_before = s.content_hash;
+    let hash_before = s.content_hash.clone();
     update_sentinel(&mut s, 200_000);
     assert_ne!(s.content_hash, hash_before);
 }

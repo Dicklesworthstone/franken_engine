@@ -737,6 +737,7 @@ mod tests {
         make_segment(id, MotifKind::ArithmeticChain, 5, hotness, true, vec![])
     }
 
+    #[allow(dead_code)]
     fn hot_segment(id: &str, motif: MotifKind) -> TraceSegment {
         make_segment(id, motif, 4, 800_000, true, vec![])
     }

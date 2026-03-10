@@ -229,7 +229,7 @@ fn test_build_complex_filtration_range() {
 fn test_compute_persistence_single_vertex() {
     let simplices = vec![vertex("v1", "a", 100_000)];
     let complex = frontier_complex_cartography::build_complex(simplices).unwrap();
-    let diagram = frontier_complex_cartography::compute_persistence(&complex);
+    let diagram = frontier_complex_cartography::compute_persistence(&complex).unwrap();
     // Single vertex should have one essential pair (H0 component)
     assert!(!diagram.pairs.is_empty() || diagram.pairs.is_empty()); // may or may not produce pairs
 }
@@ -242,9 +242,9 @@ fn test_compute_persistence_deterministic() {
         edge_simplex("e1", "a", "b", 300_000),
     ];
     let c = frontier_complex_cartography::build_complex(simplices.clone()).unwrap();
-    let d1 = frontier_complex_cartography::compute_persistence(&c);
+    let d1 = frontier_complex_cartography::compute_persistence(&c).unwrap();
     let c2 = frontier_complex_cartography::build_complex(simplices).unwrap();
-    let d2 = frontier_complex_cartography::compute_persistence(&c2);
+    let d2 = frontier_complex_cartography::compute_persistence(&c2).unwrap();
     assert_eq!(d1.pairs.len(), d2.pairs.len());
 }
 

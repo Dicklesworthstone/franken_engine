@@ -1349,6 +1349,7 @@ mod tests {
         HardwareCell::new("arm-a78", "aarch64", "cortex_a78", 128, 64)
     }
 
+    #[allow(dead_code)]
     fn cell_riscv() -> HardwareCell {
         HardwareCell::new("riscv-gen", "riscv64", "generic", 128, 64)
     }

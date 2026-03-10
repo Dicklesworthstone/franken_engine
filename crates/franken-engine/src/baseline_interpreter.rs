@@ -10,10 +10,10 @@
 //! - **baseline_throughput_profile**: larger budgets for performance-oriented
 //!   workloads.
 //!
-//! Membership operators currently fail closed rather than pretending the
-//! stripped heap is prototype-aware. `object_model.rs` remains the semantic
-//! source of truth for prototype-chain membership until the baseline
-//! interpreter can faithfully reuse that substrate.
+//! Membership operators now use deterministic prototype links for the
+//! baseline heap so `in` / `instanceof` stop failing closed on the shipped
+//! execution path. `object_model.rs` remains the richer semantic source of
+//! truth for advanced descriptor/proxy behavior.
 //!
 //! Both profiles share the same `InterpreterCore` execution logic; the profile
 //! difference is in policy (instruction budget, register limit, dispatch
@@ -26,7 +26,7 @@
 //! Dependencies: bd-crp (parser), bd-1wa (IR contract), bd-20b (slot registry).
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -56,6 +56,8 @@ const DEFAULT_V8_MAX_REGISTERS: u32 = 4096;
 
 /// Maximum call-stack depth.
 const MAX_CALL_DEPTH: usize = 256;
+/// Deterministic bound for baseline prototype-chain walks.
+const MAX_PROTOTYPE_CHAIN_DEPTH: u32 = 64;
 
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
@@ -158,6 +160,8 @@ pub struct ObjectId(pub u32);
 pub struct HeapObject {
     /// Property storage (BTreeMap for deterministic ordering).
     pub properties: BTreeMap<String, Value>,
+    /// Prototype link used by membership operators and constructor instances.
+    pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
     pub constructor_function: Option<u32>,
 }
@@ -362,6 +366,8 @@ pub struct InterpreterCore {
     call_stack: Vec<CallFrame>,
     /// Object heap.
     heap: Vec<HeapObject>,
+    /// Lazily allocated prototype objects for constructor functions.
+    function_prototypes: BTreeMap<u32, ObjectId>,
     /// Current instruction pointer.
     ip: usize,
     /// Instructions executed counter.
@@ -389,6 +395,7 @@ impl InterpreterCore {
             registers: vec![Value::Undefined; max_regs],
             call_stack: Vec::new(),
             heap: Vec::new(),
+            function_prototypes: BTreeMap::new(),
             ip: 0,
             instructions_executed: 0,
             witness_events: Vec::new(),
@@ -872,7 +879,8 @@ impl InterpreterCore {
                             }
 
                             // Allocate the `this` object for the constructor.
-                            let this_id = self.alloc_object();
+                            let prototype = self.ensure_function_prototype(func_idx);
+                            let this_id = self.alloc_object_with_prototype(Some(prototype));
                             if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
                                 this_obj.constructor_function = Some(func_idx);
                             }
@@ -1127,37 +1135,38 @@ impl InterpreterCore {
         Ok(Value::Int(result))
     }
 
-    fn eval_instanceof(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+    fn eval_instanceof(&mut self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let candidate = self.read_reg(lhs)?;
         let constructor = self.read_reg(rhs)?;
-        match constructor {
-            Value::Function(_) => {}
+        let func_idx = match constructor {
+            Value::Function(func_idx) => func_idx,
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "function".to_string(),
                     got: other.type_name().to_string(),
                 });
             }
-        }
+        };
 
-        if let Value::Object(object_id) = candidate {
-            self.heap
-                .get(object_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        }
+        let Value::Object(object_id) = candidate else {
+            return Ok(Value::Bool(false));
+        };
 
-        Err(Self::unsupported_membership_semantics("instanceof"))
+        let prototype = self.ensure_function_prototype(func_idx);
+        Ok(Value::Bool(
+            self.prototype_chain_contains(object_id, prototype)?,
+        ))
     }
 
     fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+        let key = Self::property_key(&self.read_reg(lhs)?);
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
                 self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                let _ = self.read_reg(lhs)?;
-                Err(Self::unsupported_membership_semantics("in"))
+                Ok(Value::Bool(self.prototype_chain_has_key(object_id, &key)?))
             }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
@@ -1166,10 +1175,63 @@ impl InterpreterCore {
         }
     }
 
-    fn unsupported_membership_semantics(operator: &str) -> InterpreterError {
-        InterpreterError::UnsupportedMembershipSemantics {
-            operator: operator.to_string(),
+    fn prototype_chain_contains(
+        &self,
+        object_id: ObjectId,
+        prototype: ObjectId,
+    ) -> Result<bool, InterpreterError> {
+        let mut current = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .prototype;
+        let mut depth = 0u32;
+        let mut visited = BTreeSet::new();
+        visited.insert(object_id);
+
+        while let Some(id) = current {
+            if id == prototype {
+                return Ok(true);
+            }
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                return Ok(false);
+            }
+            current = self
+                .heap
+                .get(id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?
+                .prototype;
+            depth += 1;
         }
+
+        Ok(false)
+    }
+
+    fn prototype_chain_has_key(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<bool, InterpreterError> {
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = BTreeSet::new();
+
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                return Ok(false);
+            }
+            let object = self
+                .heap
+                .get(id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+            if object.properties.contains_key(key) {
+                return Ok(true);
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+
+        Ok(false)
     }
 
     fn property_key(value: &Value) -> String {
@@ -1248,11 +1310,28 @@ impl InterpreterCore {
 
     // -- Heap operations ---------------------------------------------------
 
+    /// Allocate a new object with an explicit prototype link.
+    fn alloc_object_with_prototype(&mut self, prototype: Option<ObjectId>) -> ObjectId {
+        let id = ObjectId(self.heap.len() as u32);
+        let mut object = HeapObject::new();
+        object.prototype = prototype;
+        self.heap.push(object);
+        id
+    }
+
     /// Allocate a new object on the heap and return its ID.
     pub fn alloc_object(&mut self) -> ObjectId {
-        let id = ObjectId(self.heap.len() as u32);
-        self.heap.push(HeapObject::new());
-        id
+        self.alloc_object_with_prototype(None)
+    }
+
+    fn ensure_function_prototype(&mut self, func_idx: u32) -> ObjectId {
+        if let Some(existing) = self.function_prototypes.get(&func_idx) {
+            *existing
+        } else {
+            let prototype = self.alloc_object();
+            self.function_prototypes.insert(func_idx, prototype);
+            prototype
+        }
     }
 
     /// Get the number of objects on the heap.
@@ -1610,6 +1689,11 @@ mod tests {
 
     fn v8_execute(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
         V8Lane::new().execute(module, "test-trace")
+    }
+
+    fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
+        assert_eq!(quickjs_execute(module).unwrap().value, expected);
+        assert_eq!(v8_execute(module).unwrap().value, expected);
     }
 
     // -----------------------------------------------------------------------
@@ -3715,7 +3799,7 @@ mod tests {
     }
 
     #[test]
-    fn in_operator_fails_closed_without_prototype_model() {
+    fn in_operator_checks_own_properties() {
         let m = test_module(vec![
             Ir3Instruction::NewObject { dst: 0 },
             Ir3Instruction::LoadInt { dst: 1, value: 7 },
@@ -3732,17 +3816,81 @@ mod tests {
             },
             Ir3Instruction::Return { value: 3 },
         ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert_eq!(
-            err,
-            InterpreterError::UnsupportedMembershipSemantics {
-                operator: "in".to_string(),
-            }
-        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Bool(true));
     }
 
     #[test]
-    fn construct_fails_closed_for_instanceof_without_prototype_model() {
+    fn in_operator_checks_own_properties_across_lanes() {
+        let m = test_module(vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadInt { dst: 1, value: 7 },
+            Ir3Instruction::LoadInt { dst: 2, value: 42 },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::InOp {
+                dst: 3,
+                lhs: 1,
+                rhs: 0,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ]);
+
+        assert_both_lanes_value(&m, Value::Bool(true));
+    }
+
+    #[test]
+    fn in_operator_walks_prototype_chain() {
+        let m = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 1, value: 7 },
+            Ir3Instruction::InOp {
+                dst: 2,
+                lhs: 1,
+                rhs: 0,
+            },
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        let prototype = core.alloc_object();
+        let instance = core.alloc_object_with_prototype(Some(prototype));
+        core.heap[prototype.0 as usize]
+            .properties
+            .insert("7".to_string(), Value::Int(42));
+        core.registers[0] = Value::Object(instance);
+
+        let result = core.execute(&m).unwrap();
+        assert_eq!(result.value, Value::Bool(true));
+    }
+
+    #[test]
+    fn in_operator_returns_false_for_prototype_cycles() {
+        let m = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 1, value: 7 },
+            Ir3Instruction::InOp {
+                dst: 2,
+                lhs: 1,
+                rhs: 0,
+            },
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        let prototype_a = core.alloc_object();
+        let prototype_b = core.alloc_object_with_prototype(Some(prototype_a));
+        let instance = core.alloc_object_with_prototype(Some(prototype_b));
+        core.heap[prototype_a.0 as usize].prototype = Some(prototype_b);
+        core.registers[0] = Value::Object(instance);
+
+        let result = core.execute(&m).unwrap();
+        assert_eq!(result.value, Value::Bool(false));
+    }
+
+    #[test]
+    fn construct_supports_instanceof_via_constructor_prototype() {
         let m = test_module_with_functions(
             vec![
                 Ir3Instruction::Construct {
@@ -3769,13 +3917,91 @@ mod tests {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "test");
         core.registers[0] = Value::Function(0);
-        let err = core.execute(&m).unwrap_err();
-        assert_eq!(
-            err,
-            InterpreterError::UnsupportedMembershipSemantics {
-                operator: "instanceof".to_string(),
-            }
+        let result = core.execute(&m).unwrap();
+        assert_eq!(result.value, Value::Bool(true));
+    }
+
+    #[test]
+    fn constructed_object_is_instanceof_constructor_across_lanes() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::InstanceOf {
+                    dst: 2,
+                    lhs: 1,
+                    rhs: 0,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadUndefined { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                name: Some("Ctor".to_string()),
+                entry: 3,
+                arity: 0,
+                frame_size: 4,
+            }],
         );
+
+        assert_both_lanes_value(&m, Value::Bool(true));
+    }
+
+    #[test]
+    fn instanceof_returns_false_for_primitives() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::InstanceOf {
+                    dst: 2,
+                    lhs: 1,
+                    rhs: 0,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadUndefined { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                name: Some("Ctor".to_string()),
+                entry: 2,
+                arity: 0,
+                frame_size: 4,
+            }],
+        );
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Int(7);
+
+        let result = core.execute(&m).unwrap();
+        assert_eq!(result.value, Value::Bool(false));
+    }
+
+    #[test]
+    fn instanceof_returns_false_for_primitives_across_lanes() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 7 },
+                Ir3Instruction::InstanceOf {
+                    dst: 2,
+                    lhs: 1,
+                    rhs: 0,
+                },
+                Ir3Instruction::Return { value: 2 },
+                Ir3Instruction::LoadUndefined { dst: 1 },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            vec![Ir3FunctionDesc {
+                name: Some("Ctor".to_string()),
+                entry: 3,
+                arity: 0,
+                frame_size: 4,
+            }],
+        );
+
+        assert_both_lanes_value(&m, Value::Bool(false));
     }
 
     // -- TemplateLiteral tests -------------------------------------------

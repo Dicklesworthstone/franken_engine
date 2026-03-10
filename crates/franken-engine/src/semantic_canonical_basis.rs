@@ -996,7 +996,7 @@ mod tests {
 
     #[test]
     fn refusal_reason_tags_unique() {
-        let reasons = vec![
+        let reasons = [
             RefusalReason::FamilyMismatch {
                 left: ArtifactFamily::Ir1Fragment,
                 right: ArtifactFamily::CacheEntry,
@@ -1510,10 +1510,13 @@ mod tests {
         assert!(!SCHEMA_VERSION.is_empty());
         assert!(!BEAD_ID.is_empty());
         assert!(!COMPONENT.is_empty());
-        assert!(MAX_ORBIT_DEPTH > 0);
-        assert!(MAX_CLASSES_PER_BASIS > 0);
-        assert!(MIN_SIMILARITY_THRESHOLD > 0);
-        assert!(MIN_SIMILARITY_THRESHOLD <= MILLION);
+        let mod_val = MAX_ORBIT_DEPTH;
+        let mcpb = MAX_CLASSES_PER_BASIS;
+        let mst = MIN_SIMILARITY_THRESHOLD;
+        assert!(mod_val > 0);
+        assert!(mcpb > 0);
+        assert!(mst > 0);
+        assert!(mst <= MILLION);
     }
 
     #[test]

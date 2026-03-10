@@ -698,9 +698,11 @@ mod tests {
 
     #[test]
     fn budget_constraints() {
-        assert!(DEFAULT_EXPLORATION_BUDGET > 0);
-        assert!(DEFAULT_EXPLORATION_BUDGET < MILLION);
-        assert!(MAX_REGRET_BUDGET > 0);
+        let deb = DEFAULT_EXPLORATION_BUDGET;
+        let mrb = MAX_REGRET_BUDGET;
+        assert!(deb > 0);
+        assert!(deb < MILLION);
+        assert!(mrb > 0);
     }
 
     // --- FeatureKey ---
@@ -826,7 +828,7 @@ mod tests {
 
     #[test]
     fn constraint_tags_unique() {
-        let constraints = vec![
+        let constraints = [
             PolicyConstraint::AllowedKinds {
                 kinds: BTreeSet::new(),
             },

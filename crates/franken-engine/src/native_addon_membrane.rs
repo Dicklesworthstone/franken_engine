@@ -957,12 +957,41 @@ impl NativeAddonAbiFingerprintEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeAddonCoverageGap {
+    pub addon_id: String,
+    pub reason_code: String,
+    pub message: String,
+}
+
+impl NativeAddonCoverageGap {
+    fn canonical_value(&self) -> CanonicalValue {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "addon_id".to_string(),
+            CanonicalValue::String(self.addon_id.clone()),
+        );
+        map.insert(
+            "message".to_string(),
+            CanonicalValue::String(self.message.clone()),
+        );
+        map.insert(
+            "reason_code".to_string(),
+            CanonicalValue::String(self.reason_code.clone()),
+        );
+        CanonicalValue::Map(map)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeAddonInventoryReport {
     pub schema_version: String,
     pub support_surface: Vec<NativeAddonSupportSurface>,
     pub compatibility_matrix: Vec<NativeAddonCompatibilityMatrixEntry>,
     pub abi_fingerprint_index: Vec<NativeAddonAbiFingerprintEntry>,
     pub cohort_counts: BTreeMap<String, u32>,
+    pub required_addon_ids: Vec<String>,
+    pub coverage_gaps: Vec<NativeAddonCoverageGap>,
+    pub coverage_complete: bool,
     pub report_hash: ContentHash,
 }
 
@@ -996,11 +1025,33 @@ impl NativeAddonInventoryReport {
             ),
         );
         map.insert(
+            "coverage_complete".to_string(),
+            CanonicalValue::Bool(self.coverage_complete),
+        );
+        map.insert(
+            "coverage_gaps".to_string(),
+            CanonicalValue::Array(
+                self.coverage_gaps
+                    .iter()
+                    .map(NativeAddonCoverageGap::canonical_value)
+                    .collect(),
+            ),
+        );
+        map.insert(
             "compatibility_matrix".to_string(),
             CanonicalValue::Array(
                 self.compatibility_matrix
                     .iter()
                     .map(NativeAddonCompatibilityMatrixEntry::canonical_value)
+                    .collect(),
+            ),
+        );
+        map.insert(
+            "required_addon_ids".to_string(),
+            CanonicalValue::Array(
+                self.required_addon_ids
+                    .iter()
+                    .map(|addon_id| CanonicalValue::String(addon_id.clone()))
                     .collect(),
             ),
         );
@@ -1099,6 +1150,7 @@ pub struct NativeAddonArtifactWriteRequest {
     pub run_id: String,
     pub command_transcript: Vec<String>,
     pub generated_at_unix_ms: u64,
+    pub required_addon_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1339,6 +1391,15 @@ impl NativeAddonMembrane {
         requests: &[NativeAddonLoadRequest],
         profile: &CapabilityProfile,
     ) -> NativeAddonInventoryReport {
+        self.inventory_report_with_requirements(requests, profile, &[])
+    }
+
+    pub fn inventory_report_with_requirements(
+        &self,
+        requests: &[NativeAddonLoadRequest],
+        profile: &CapabilityProfile,
+        required_addon_ids: &[String],
+    ) -> NativeAddonInventoryReport {
         let mut support_surface = Vec::with_capacity(requests.len());
         let mut compatibility_matrix = Vec::with_capacity(requests.len());
         let mut abi_fingerprint_index = Vec::with_capacity(requests.len());
@@ -1411,12 +1472,34 @@ impl NativeAddonMembrane {
                 ))
         });
 
+        let required_addon_ids = normalize_required_addon_ids(required_addon_ids);
+        let observed_addon_ids = support_surface
+            .iter()
+            .map(|surface| surface.addon_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let coverage_gaps = required_addon_ids
+            .iter()
+            .filter(|addon_id| !observed_addon_ids.contains(addon_id.as_str()))
+            .map(|addon_id| NativeAddonCoverageGap {
+                addon_id: addon_id.clone(),
+                reason_code: "missing_from_inventory_input".to_string(),
+                message: format!(
+                    "required addon '{}' is missing from the inventory input",
+                    addon_id
+                ),
+            })
+            .collect::<Vec<_>>();
+        let coverage_complete = coverage_gaps.is_empty();
+
         let mut report = NativeAddonInventoryReport {
             schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
             support_surface,
             compatibility_matrix,
             abi_fingerprint_index,
             cohort_counts,
+            required_addon_ids,
+            coverage_gaps,
+            coverage_complete,
             report_hash: ContentHash::compute(b"pending-native-addon-report"),
         };
         report.report_hash = report.canonical_hash();
@@ -1445,7 +1528,11 @@ impl NativeAddonMembrane {
             message: err.to_string(),
         })?;
 
-        let inventory = self.inventory_report(requests, profile);
+        let inventory = self.inventory_report_with_requirements(
+            requests,
+            profile,
+            &artifact_request.required_addon_ids,
+        );
         let mut events = Vec::with_capacity(requests.len());
         let mut handle_safety = Vec::with_capacity(requests.len());
         let mut execution_disposition = Vec::with_capacity(requests.len());
@@ -1842,6 +1929,17 @@ fn compatibility_notes(surface: &NativeAddonSupportSurface) -> String {
         );
     }
     format!("{metadata_prefix}; direct membrane eligible")
+}
+
+fn normalize_required_addon_ids(required_addon_ids: &[String]) -> Vec<String> {
+    required_addon_ids
+        .iter()
+        .map(|addon_id| addon_id.trim())
+        .filter(|addon_id| !addon_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn classify_risk(
@@ -2916,6 +3014,34 @@ mod tests {
         assert_eq!(*report.cohort_counts.get("node_api_portable").unwrap(), 2);
     }
 
+    #[test]
+    fn inventory_report_required_addon_coverage_is_explicit() {
+        let m = NativeAddonMembrane::standard();
+        let req = simple_request();
+        let report = m.inventory_report_with_requirements(
+            std::slice::from_ref(&req),
+            &full_profile(),
+            &[
+                " missing-addon ".to_string(),
+                req.addon_id.clone(),
+                "missing-addon".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            report.required_addon_ids,
+            vec!["missing-addon".to_string(), req.addon_id.clone()]
+        );
+        assert!(!report.coverage_complete);
+        assert_eq!(report.coverage_gaps.len(), 1);
+        assert_eq!(report.coverage_gaps[0].addon_id, "missing-addon");
+        assert_eq!(
+            report.coverage_gaps[0].reason_code,
+            "missing_from_inventory_input"
+        );
+        assert!(report.coverage_gaps[0].message.contains("missing-addon"));
+    }
+
     // -----------------------------------------------------------------------
     // direct_blockers
     // -----------------------------------------------------------------------
@@ -3466,6 +3592,9 @@ mod tests {
             compatibility_matrix: Vec::new(),
             abi_fingerprint_index: Vec::new(),
             cohort_counts: BTreeMap::new(),
+            required_addon_ids: Vec::new(),
+            coverage_gaps: Vec::new(),
+            coverage_complete: true,
             report_hash: ContentHash::compute(b"empty"),
         };
         let json = serde_json::to_string(&report).unwrap();

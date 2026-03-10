@@ -816,25 +816,21 @@ impl BudgetEnforcer {
     }
 
     /// Compute the enforcement decision.
-    #[allow(clippy::collapsible_if)]
     fn compute_decision(
         &self,
         extension_id: &str,
         usage_deltas: &[(EnforcedDimension, i64)],
     ) -> EnforcementDecision {
         // Check if extension has a certificate.
-        let state = match self.extensions.get(extension_id) {
-            Some(s) => s,
-            None => {
-                if self.policy.fail_closed_on_missing {
-                    return EnforcementDecision::Reject {
-                        reason: BudgetViolationReason::NoCertificate {
-                            extension_id: extension_id.to_string(),
-                        },
-                    };
-                }
-                return EnforcementDecision::Allow;
+        let Some(state) = self.extensions.get(extension_id) else {
+            if self.policy.fail_closed_on_missing {
+                return EnforcementDecision::Reject {
+                    reason: BudgetViolationReason::NoCertificate {
+                        extension_id: extension_id.to_string(),
+                    },
+                };
             }
+            return EnforcementDecision::Allow;
         };
 
         if state.active_certificate.is_none() && self.policy.fail_closed_on_missing {
@@ -888,26 +884,26 @@ impl BudgetEnforcer {
                 },
             };
         }
-        if let Some(dim) = exceeded_dims.first() {
-            if let Some(budget) = state.budgets.get(dim) {
-                return EnforcementDecision::Reject {
-                    reason: BudgetViolationReason::BudgetExceeded {
-                        dimension: *dim,
-                        usage_millionths: budget.current_usage_millionths,
-                        bound_millionths: budget.upper_bound_millionths,
-                    },
-                };
-            }
+        if let Some(dim) = exceeded_dims.first()
+            && let Some(budget) = state.budgets.get(dim)
+        {
+            return EnforcementDecision::Reject {
+                reason: BudgetViolationReason::BudgetExceeded {
+                    dimension: *dim,
+                    usage_millionths: budget.current_usage_millionths,
+                    bound_millionths: budget.upper_bound_millionths,
+                },
+            };
         }
 
         // Check for throttle threshold.
-        if worst_ratio >= self.policy.throttle_threshold_millionths {
-            if let Some(dim) = worst_dim {
-                return EnforcementDecision::Throttle {
-                    usage_ratio_millionths: worst_ratio,
-                    dimension: dim,
-                };
-            }
+        if worst_ratio >= self.policy.throttle_threshold_millionths
+            && let Some(dim) = worst_dim
+        {
+            return EnforcementDecision::Throttle {
+                usage_ratio_millionths: worst_ratio,
+                dimension: dim,
+            };
         }
 
         EnforcementDecision::Allow
@@ -935,22 +931,19 @@ impl BudgetEnforcer {
 
     /// Check if any dimension is in throttle zone for an extension.
     pub fn is_throttled(&self, extension_id: &str) -> bool {
-        if let Some(state) = self.extensions.get(extension_id) {
-            for budget in state.budgets.values() {
-                if budget.usage_ratio_millionths() >= self.policy.throttle_threshold_millionths {
-                    return true;
-                }
-            }
-        }
-        false
+        self.extensions.get(extension_id).is_some_and(|state| {
+            state
+                .budgets
+                .values()
+                .any(|b| b.usage_ratio_millionths() >= self.policy.throttle_threshold_millionths)
+        })
     }
 
     /// Check if any dimension is exhausted for an extension.
     pub fn is_exhausted(&self, extension_id: &str) -> bool {
-        if let Some(state) = self.extensions.get(extension_id) {
-            return state.budgets.values().any(|b| b.is_exhausted());
-        }
-        false
+        self.extensions
+            .get(extension_id)
+            .is_some_and(|state| state.budgets.values().any(|b| b.is_exhausted()))
     }
 
     /// Get aggregate enforcement summary.
@@ -1132,8 +1125,10 @@ mod tests {
     #[test]
     fn test_policy_hash_varies() {
         let p1 = BudgetEnforcementPolicy::default();
-        let mut p2 = BudgetEnforcementPolicy::default();
-        p2.throttle_threshold_millionths = 800_000;
+        let p2 = BudgetEnforcementPolicy {
+            throttle_threshold_millionths: 800_000,
+            ..BudgetEnforcementPolicy::default()
+        };
         assert_ne!(p1.policy_hash(), p2.policy_hash());
     }
 
@@ -1257,8 +1252,10 @@ mod tests {
 
     #[test]
     fn test_install_abstained_allowed_when_not_fail_closed() {
-        let mut policy = BudgetEnforcementPolicy::default();
-        policy.fail_closed_on_abstention = false;
+        let policy = BudgetEnforcementPolicy {
+            fail_closed_on_abstention: false,
+            ..BudgetEnforcementPolicy::default()
+        };
         let mut enforcer = BudgetEnforcer::new(policy, test_epoch());
         let mut digest = make_digest("cert-1", CertificateVerdict::Abstained);
         digest.abstention_count = 3;
@@ -1291,8 +1288,10 @@ mod tests {
 
     #[test]
     fn test_install_extension_limit() {
-        let mut policy = BudgetEnforcementPolicy::default();
-        policy.max_extensions = 1;
+        let policy = BudgetEnforcementPolicy {
+            max_extensions: 1,
+            ..BudgetEnforcementPolicy::default()
+        };
         let mut enforcer = BudgetEnforcer::new(policy, test_epoch());
         let d1 = make_digest("cert-1", CertificateVerdict::Certified);
         assert!(enforcer.install_certificate("ext-1", d1).is_ok());
@@ -1383,8 +1382,10 @@ mod tests {
 
     #[test]
     fn test_enforce_no_certificate_allow_when_not_fail_closed() {
-        let mut policy = BudgetEnforcementPolicy::default();
-        policy.fail_closed_on_missing = false;
+        let policy = BudgetEnforcementPolicy {
+            fail_closed_on_missing: false,
+            ..BudgetEnforcementPolicy::default()
+        };
         let mut enforcer = BudgetEnforcer::new(policy, test_epoch());
         let receipt = enforcer.enforce(
             "ext-unknown",
@@ -1592,8 +1593,10 @@ mod tests {
 
     #[test]
     fn test_receipts_bounded() {
-        let mut policy = BudgetEnforcementPolicy::default();
-        policy.max_receipts = 2;
+        let policy = BudgetEnforcementPolicy {
+            max_receipts: 2,
+            ..BudgetEnforcementPolicy::default()
+        };
         let mut enforcer = BudgetEnforcer::new(policy, test_epoch());
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer.install_certificate("ext-1", digest).unwrap();

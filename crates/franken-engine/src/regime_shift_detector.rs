@@ -284,18 +284,11 @@ pub enum DowngradeAction {
         reason: String,
     },
     /// Disable adaptive tiering entirely.
-    DisableAdaptive {
-        reason: String,
-    },
+    DisableAdaptive { reason: String },
     /// Reduce allowed concurrency/parallelism.
-    ReduceConcurrency {
-        target_workers: u64,
-        reason: String,
-    },
+    ReduceConcurrency { target_workers: u64, reason: String },
     /// Enable conservative mode (higher margins, lower utilization target).
-    ConservativeMode {
-        reason: String,
-    },
+    ConservativeMode { reason: String },
 }
 
 impl fmt::Display for DowngradeAction {
@@ -1006,8 +999,10 @@ mod tests {
     #[test]
     fn test_config_hash_varies() {
         let c1 = RegimeShiftConfig::default();
-        let mut c2 = RegimeShiftConfig::default();
-        c2.cusum_threshold_millionths = 1_000_000;
+        let c2 = RegimeShiftConfig {
+            cusum_threshold_millionths: 1_000_000,
+            ..Default::default()
+        };
         assert_ne!(c1.config_hash(), c2.config_hash());
     }
 
@@ -1103,10 +1098,7 @@ mod tests {
             engine.observe(MetricKind::Latency, None, 900_000);
             engine.observe(MetricKind::Throughput, None, 500_000);
         }
-        let det_lat = engine
-            .detectors
-            .get(&(MetricKind::Latency, None))
-            .unwrap();
+        let det_lat = engine.detectors.get(&(MetricKind::Latency, None)).unwrap();
         let det_thr = engine
             .detectors
             .get(&(MetricKind::Throughput, None))
@@ -1118,16 +1110,8 @@ mod tests {
     #[test]
     fn test_stage_scoped_detector() {
         let mut engine = make_engine();
-        engine.register_detector(
-            MetricKind::Latency,
-            Some(ExecutionStage::Parse),
-            500_000,
-        );
-        engine.register_detector(
-            MetricKind::Latency,
-            Some(ExecutionStage::GcPause),
-            500_000,
-        );
+        engine.register_detector(MetricKind::Latency, Some(ExecutionStage::Parse), 500_000);
+        engine.register_detector(MetricKind::Latency, Some(ExecutionStage::GcPause), 500_000);
         assert_eq!(engine.detectors.len(), 2);
     }
 }

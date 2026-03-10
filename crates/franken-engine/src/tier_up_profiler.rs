@@ -93,6 +93,29 @@ pub struct TierUpCandidate {
     pub rationale: String,
 }
 
+impl TierUpCandidate {
+    /// Deterministic candidate identifier for downstream compilation planning.
+    pub fn candidate_id(&self, trace_id: &str) -> String {
+        #[derive(Serialize)]
+        struct CandidateEnvelope<'a> {
+            trace_id: &'a str,
+            ip: u32,
+            opcode: &'a str,
+            invocations: u64,
+            cache_hit_rate_millionths: i64,
+        }
+
+        let digest = sha256_hex(&CandidateEnvelope {
+            trace_id,
+            ip: self.ip,
+            opcode: &self.opcode,
+            invocations: self.invocations,
+            cache_hit_rate_millionths: self.cache_hit_rate_millionths,
+        });
+        format!("tc-{}", &digest[..16])
+    }
+}
+
 /// Path rejected by the policy with explicit reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TierUpRejection {
@@ -1127,6 +1150,23 @@ mod tests {
         let json = serde_json::to_string(&candidate).unwrap();
         let back: TierUpCandidate = serde_json::from_str(&json).unwrap();
         assert_eq!(candidate, back);
+    }
+
+    #[test]
+    fn candidate_id_is_deterministic() {
+        let candidate = TierUpCandidate {
+            ip: 7,
+            opcode: "store".to_string(),
+            invocations: 100,
+            cache_hit_rate_millionths: 800_000,
+            rationale: "hot".to_string(),
+        };
+        let id_a = candidate.candidate_id("trace-a");
+        let id_b = candidate.candidate_id("trace-a");
+        let id_c = candidate.candidate_id("trace-b");
+        assert_eq!(id_a, id_b);
+        assert_ne!(id_a, id_c);
+        assert!(id_a.starts_with("tc-"));
     }
 
     #[test]

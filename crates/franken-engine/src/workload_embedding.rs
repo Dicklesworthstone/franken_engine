@@ -1329,20 +1329,24 @@ mod tests {
 
     #[test]
     fn max_embedding_dim_reasonable() {
-        assert!(MAX_EMBEDDING_DIM >= 32);
-        assert!(MAX_EMBEDDING_DIM <= 1024);
+        let med = MAX_EMBEDDING_DIM;
+        assert!(med >= 32);
+        assert!(med <= 1024);
     }
 
     #[test]
     fn min_observations_positive() {
-        assert!(MIN_OBSERVATIONS_FOR_EMBEDDING > 0);
+        let mofe = MIN_OBSERVATIONS_FOR_EMBEDDING;
+        assert!(mofe > 0);
     }
 
     #[test]
     fn default_thresholds_ordered() {
-        assert!(DEFAULT_NEIGHBORHOOD_RADIUS > 0);
-        assert!(DEFAULT_COSINE_NEAR_THRESHOLD > 0);
-        assert!(DEFAULT_COSINE_NEAR_THRESHOLD < MILLION);
+        let dnr = DEFAULT_NEIGHBORHOOD_RADIUS;
+        let dcnt = DEFAULT_COSINE_NEAR_THRESHOLD;
+        assert!(dnr > 0);
+        assert!(dcnt > 0);
+        assert!(dcnt < MILLION);
     }
 
     // --- FeatureFamily ---

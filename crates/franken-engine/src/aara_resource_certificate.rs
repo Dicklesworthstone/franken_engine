@@ -532,7 +532,7 @@ impl ResourceBound {
 // ---------------------------------------------------------------------------
 
 /// Verdict of a resource certificate analysis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CertificateVerdict {
     /// All resource bounds certified; potential non-negative everywhere.
@@ -1135,12 +1135,12 @@ mod tests {
             5 * MILLION,
             vec![
                 ("entry", 5 * MILLION),
-                ("alloc_heavy", -1 * MILLION),
+                ("alloc_heavy", -MILLION),
                 ("exit", 0),
             ],
         );
         assert!(!pot.is_valid);
-        assert_eq!(pot.min_potential_millionths, -1 * MILLION);
+        assert_eq!(pot.min_potential_millionths, -MILLION);
     }
 
     #[test]

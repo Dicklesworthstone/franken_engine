@@ -1022,11 +1022,15 @@ mod tests {
 
     #[test]
     fn default_thresholds_reasonable() {
-        assert!(DEFAULT_MAX_DRIFT_MILLIONTHS > 0);
-        assert!(DEFAULT_MAX_DRIFT_MILLIONTHS < MILLION);
-        assert!(DEFAULT_MAX_TRANSITIONS > 0);
-        assert!(DEFAULT_MAX_STALENESS_EPOCHS > 0);
-        assert!(MIN_OBSERVATIONS_FOR_DRIFT > 0);
+        let dmd = DEFAULT_MAX_DRIFT_MILLIONTHS;
+        let dmt = DEFAULT_MAX_TRANSITIONS;
+        let dms = DEFAULT_MAX_STALENESS_EPOCHS;
+        let mofd = MIN_OBSERVATIONS_FOR_DRIFT;
+        assert!(dmd > 0);
+        assert!(dmd < MILLION);
+        assert!(dmt > 0);
+        assert!(dms > 0);
+        assert!(mofd > 0);
     }
 
     // --- SignatureSnapshot ---

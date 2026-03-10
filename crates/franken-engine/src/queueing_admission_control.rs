@@ -860,15 +860,16 @@ impl AdmissionController {
 
         // Check stage-specific queue depth
         if let Some(partition) = self.partitions.get(&stage)
-            && partition.is_full() {
-                return AdmissionDecision::Shed {
-                    reason: ShedReason::StageBudgetExhausted {
-                        stage,
-                        stage_queue_depth: partition.current_depth,
-                        stage_max_depth: partition.max_depth,
-                    },
-                };
-            }
+            && partition.is_full()
+        {
+            return AdmissionDecision::Shed {
+                reason: ShedReason::StageBudgetExhausted {
+                    stage,
+                    stage_queue_depth: partition.current_depth,
+                    stage_max_depth: partition.max_depth,
+                },
+            };
+        }
 
         // Check token bucket
         if self.token_bucket.available < self.policy.tokens_per_admission {
@@ -1196,8 +1197,10 @@ mod tests {
     #[test]
     fn test_policy_hash_varies() {
         let p1 = AdmissionControlPolicy::default();
-        let mut p2 = AdmissionControlPolicy::default();
-        p2.max_queue_depth = 512;
+        let p2 = AdmissionControlPolicy {
+            max_queue_depth: 512,
+            ..Default::default()
+        };
         assert_ne!(p1.policy_hash(), p2.policy_hash());
     }
 

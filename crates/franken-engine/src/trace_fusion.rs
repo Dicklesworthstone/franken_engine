@@ -2020,8 +2020,10 @@ mod tests {
 
     #[test]
     fn test_policy_allow_effectful() {
-        let mut policy = FusionPolicy::default();
-        policy.allow_effectful_fusion = true;
+        let policy = FusionPolicy {
+            allow_effectful_fusion: true,
+            ..Default::default()
+        };
         let mut motif = FusionMotif::new(
             MotifKind::HostcallSequence,
             vec!["HostCall".into(), "HostCall".into()],
@@ -2494,9 +2496,11 @@ mod tests {
 
     #[test]
     fn test_engine_custom_policy() {
-        let mut policy = FusionPolicy::default();
-        policy.min_observation_count = 50;
-        policy.require_proof_lineage = false;
+        let policy = FusionPolicy {
+            min_observation_count: 50,
+            require_proof_lineage: false,
+            ..Default::default()
+        };
         let mut engine = TraceFusionEngine::with_policy(policy, test_epoch());
         let entries = arith_entries(4, 60);
         let outcome = engine.fuse("fn_test", &entries, None);

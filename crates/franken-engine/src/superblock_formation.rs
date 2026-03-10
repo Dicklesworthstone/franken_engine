@@ -20,10 +20,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::quickening_feedback_lattice::{QuickeningLevel, QuickeningProfile};
+use crate::stage_envelope_certificate::ExecutionStage;
+use crate::tier_up_profiler::{TierUpCandidate, TierUpDecision};
 
 pub const COMPONENT: &str = "superblock_formation";
 pub const SUPERBLOCK_SCHEMA_VERSION: &str = "franken-engine.superblock.v1";
 pub const TRACE_TREE_SCHEMA_VERSION: &str = "franken-engine.trace-tree.v1";
+pub const OPTIMIZED_TIER_PLAN_SCHEMA_VERSION: &str = "franken-engine.optimized-tier-plan.v1";
 
 // ---------------------------------------------------------------------------
 // SuperblockPolicy — formation thresholds
@@ -241,6 +244,269 @@ impl fmt::Display for SideExitReason {
 }
 
 // ---------------------------------------------------------------------------
+// Optimized-tier planning artifacts
+// ---------------------------------------------------------------------------
+
+/// Backend selected for optimized tier compilation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OptimizedTierBackend {
+    Cranelift,
+}
+
+impl fmt::Display for OptimizedTierBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cranelift => write!(f, "cranelift"),
+        }
+    }
+}
+
+/// Runtime tier used when a guard fails and optimized execution must resume safely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FallbackTier {
+    BaselineInterpreter,
+}
+
+impl fmt::Display for FallbackTier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BaselineInterpreter => write!(f, "baseline_interpreter"),
+        }
+    }
+}
+
+/// Deterministic continuation point when an optimized guard fails.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeoptContinuation {
+    pub checkpoint_id: String,
+    pub guard_position: u32,
+    pub source_offset: u32,
+    pub guard_kind: GuardKind,
+    pub side_exit_id: String,
+    pub resume_offset: u32,
+    pub fallback_tier: FallbackTier,
+    pub reason: SideExitReason,
+    pub factored: bool,
+}
+
+impl DeoptContinuation {
+    fn from_guard(guard: &SuperblockGuard, exit: &SideExit) -> Self {
+        #[derive(Serialize)]
+        struct CheckpointEnvelope<'a> {
+            guard_position: u32,
+            source_offset: u32,
+            guard_kind: &'a GuardKind,
+            side_exit_id: &'a str,
+            resume_offset: u32,
+            reason: &'a SideExitReason,
+            factored: bool,
+        }
+
+        let digest = Sha256::digest(
+            serde_json::to_vec(&CheckpointEnvelope {
+                guard_position: guard.position,
+                source_offset: guard.source_offset,
+                guard_kind: &guard.kind,
+                side_exit_id: &guard.side_exit_id,
+                resume_offset: exit.resume_offset,
+                reason: &exit.reason,
+                factored: guard.factored,
+            })
+            .expect("deopt checkpoint payload must serialize"),
+        );
+
+        Self {
+            checkpoint_id: format!("deopt-{}", &hex::encode(digest)[..16]),
+            guard_position: guard.position,
+            source_offset: guard.source_offset,
+            guard_kind: guard.kind.clone(),
+            side_exit_id: guard.side_exit_id.clone(),
+            resume_offset: exit.resume_offset,
+            fallback_tier: FallbackTier::BaselineInterpreter,
+            reason: exit.reason.clone(),
+            factored: guard.factored,
+        }
+    }
+}
+
+/// Reason an optimized compilation candidate was rejected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompilationRejectReason {
+    TierUpIneligible,
+    SuperblockFormationRejected,
+    DuplicateCandidateOffset,
+}
+
+/// Deterministic rejection record for one compilation candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptimizedCompilationReject {
+    pub candidate_id: String,
+    pub candidate: TierUpCandidate,
+    pub reason: CompilationRejectReason,
+    pub formation_outcome: Option<FormationOutcome>,
+    pub detail: String,
+}
+
+/// One optimized compilation unit ready for backend lowering and validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptimizedCompilationUnit {
+    pub compilation_unit_id: String,
+    pub candidate_id: String,
+    pub backend: OptimizedTierBackend,
+    pub stage: ExecutionStage,
+    pub candidate: TierUpCandidate,
+    pub block: Superblock,
+    pub deopt_continuations: Vec<DeoptContinuation>,
+    pub requires_differential_equivalence: bool,
+}
+
+impl OptimizedCompilationUnit {
+    fn from_candidate(trace_id: &str, candidate: TierUpCandidate, block: Superblock) -> Self {
+        #[derive(Serialize)]
+        struct UnitEnvelope<'a> {
+            trace_id: &'a str,
+            candidate_id: &'a str,
+            block_id: &'a str,
+            backend: OptimizedTierBackend,
+            stage: ExecutionStage,
+        }
+
+        let candidate_id = candidate.candidate_id(trace_id);
+        let digest = Sha256::digest(
+            serde_json::to_vec(&UnitEnvelope {
+                trace_id,
+                candidate_id: &candidate_id,
+                block_id: &block.block_id,
+                backend: OptimizedTierBackend::Cranelift,
+                stage: ExecutionStage::CompileOptimized,
+            })
+            .expect("optimized compilation unit payload must serialize"),
+        );
+
+        Self {
+            compilation_unit_id: format!("ocu-{}", &hex::encode(digest)[..16]),
+            candidate_id,
+            backend: OptimizedTierBackend::Cranelift,
+            stage: ExecutionStage::CompileOptimized,
+            deopt_continuations: block.deopt_continuations(),
+            candidate,
+            block,
+            requires_differential_equivalence: true,
+        }
+    }
+}
+
+/// End-to-end optimized-tier plan tying tier-up to backend compilation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptimizedTierCompilationPlan {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub function_id: String,
+    pub tier_up_eligible: bool,
+    pub backend: OptimizedTierBackend,
+    pub stage: ExecutionStage,
+    pub tier_up_decision_hash: String,
+    pub tier_up_policy_hash: String,
+    pub superblock_policy_hash: String,
+    pub formation_epoch: u64,
+    pub units: Vec<OptimizedCompilationUnit>,
+    pub rejected_candidates: Vec<OptimizedCompilationReject>,
+    pub requires_differential_equivalence: bool,
+    pub plan_hash: String,
+}
+
+impl OptimizedTierCompilationPlan {
+    pub fn build(
+        decision: &TierUpDecision,
+        profile: &QuickeningProfile,
+        policy: &SuperblockPolicy,
+        formation_epoch: u64,
+    ) -> Self {
+        let mut units = Vec::new();
+        let mut rejected_candidates = Vec::new();
+        let mut seen_offsets = BTreeSet::new();
+
+        if decision.eligible {
+            for candidate in &decision.selected_candidates {
+                let candidate_id = candidate.candidate_id(&decision.trace_id);
+                if !seen_offsets.insert(candidate.ip) {
+                    rejected_candidates.push(OptimizedCompilationReject {
+                        candidate_id,
+                        candidate: candidate.clone(),
+                        reason: CompilationRejectReason::DuplicateCandidateOffset,
+                        formation_outcome: None,
+                        detail: format!("duplicate candidate offset {}", candidate.ip),
+                    });
+                    continue;
+                }
+
+                let record = form_superblock(profile, candidate.ip, policy, formation_epoch);
+                match record.outcome {
+                    FormationOutcome::Formed => {
+                        let block = record
+                            .block
+                            .expect("formed superblock records must include a block");
+                        units.push(OptimizedCompilationUnit::from_candidate(
+                            &decision.trace_id,
+                            candidate.clone(),
+                            block,
+                        ));
+                    }
+                    outcome => {
+                        rejected_candidates.push(OptimizedCompilationReject {
+                            candidate_id,
+                            candidate: candidate.clone(),
+                            reason: CompilationRejectReason::SuperblockFormationRejected,
+                            formation_outcome: Some(outcome.clone()),
+                            detail: format!(
+                                "candidate entry@{} rejected during superblock formation: {}",
+                                candidate.ip, outcome
+                            ),
+                        });
+                    }
+                }
+            }
+        } else {
+            rejected_candidates.extend(decision.selected_candidates.iter().cloned().map(
+                |candidate| OptimizedCompilationReject {
+                    candidate_id: candidate.candidate_id(&decision.trace_id),
+                    candidate,
+                    reason: CompilationRejectReason::TierUpIneligible,
+                    formation_outcome: None,
+                    detail: "tier-up decision was not eligible".to_string(),
+                },
+            ));
+        }
+
+        let mut plan = Self {
+            schema_version: OPTIMIZED_TIER_PLAN_SCHEMA_VERSION.to_string(),
+            trace_id: decision.trace_id.clone(),
+            function_id: profile.function_id.clone(),
+            tier_up_eligible: decision.eligible,
+            backend: OptimizedTierBackend::Cranelift,
+            stage: ExecutionStage::CompileOptimized,
+            tier_up_decision_hash: decision.decision_hash.clone(),
+            tier_up_policy_hash: decision.policy_hash.clone(),
+            superblock_policy_hash: policy.policy_hash(),
+            formation_epoch,
+            units,
+            rejected_candidates,
+            requires_differential_equivalence: true,
+            plan_hash: String::new(),
+        };
+        plan.plan_hash = compute_optimized_tier_plan_hash(&plan);
+        plan
+    }
+
+    pub fn compilable_unit_count(&self) -> usize {
+        self.units.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SuperblockEntry — instruction within a superblock
 // ---------------------------------------------------------------------------
 
@@ -329,6 +595,28 @@ impl Superblock {
             .iter()
             .filter(|e| e.is_hot(threshold))
             .collect()
+    }
+
+    /// Ordered deoptimization continuations derived from guards and side exits.
+    pub fn deopt_continuations(&self) -> Vec<DeoptContinuation> {
+        let mut continuations = self
+            .guards
+            .iter()
+            .filter_map(|guard| {
+                self.side_exits
+                    .iter()
+                    .find(|exit| exit.exit_id == guard.side_exit_id)
+                    .map(|exit| DeoptContinuation::from_guard(guard, exit))
+            })
+            .collect::<Vec<_>>();
+
+        continuations.sort_by(|left, right| {
+            left.guard_position
+                .cmp(&right.guard_position)
+                .then_with(|| left.resume_offset.cmp(&right.resume_offset))
+                .then_with(|| left.checkpoint_id.cmp(&right.checkpoint_id))
+        });
+        continuations
     }
 }
 
@@ -829,6 +1117,45 @@ impl FormationDecision {
     }
 }
 
+fn compute_optimized_tier_plan_hash(plan: &OptimizedTierCompilationPlan) -> String {
+    #[derive(Serialize)]
+    struct PlanEnvelope<'a> {
+        schema_version: &'a str,
+        trace_id: &'a str,
+        function_id: &'a str,
+        tier_up_eligible: bool,
+        backend: OptimizedTierBackend,
+        stage: ExecutionStage,
+        tier_up_decision_hash: &'a str,
+        tier_up_policy_hash: &'a str,
+        superblock_policy_hash: &'a str,
+        formation_epoch: u64,
+        units: &'a [OptimizedCompilationUnit],
+        rejected_candidates: &'a [OptimizedCompilationReject],
+        requires_differential_equivalence: bool,
+    }
+
+    let digest = Sha256::digest(
+        serde_json::to_vec(&PlanEnvelope {
+            schema_version: &plan.schema_version,
+            trace_id: &plan.trace_id,
+            function_id: &plan.function_id,
+            tier_up_eligible: plan.tier_up_eligible,
+            backend: plan.backend,
+            stage: plan.stage,
+            tier_up_decision_hash: &plan.tier_up_decision_hash,
+            tier_up_policy_hash: &plan.tier_up_policy_hash,
+            superblock_policy_hash: &plan.superblock_policy_hash,
+            formation_epoch: plan.formation_epoch,
+            units: &plan.units,
+            rejected_candidates: &plan.rejected_candidates,
+            requires_differential_equivalence: plan.requires_differential_equivalence,
+        })
+        .expect("optimized tier plan payload must serialize"),
+    );
+    hex::encode(digest)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -839,6 +1166,7 @@ mod tests {
     use crate::quickening_feedback_lattice::{
         ObservedType, QuickeningPolicy as QPolicy, QuickeningProfile,
     };
+    use crate::tier_up_profiler::HotPathProfile;
 
     fn make_hot_profile() -> (QuickeningProfile, QPolicy) {
         let qpolicy = QPolicy {
@@ -1616,9 +1944,108 @@ mod tests {
     }
 
     #[test]
+    fn optimized_tier_plan_builds_cranelift_unit() {
+        let (profile, _qp) = make_hot_profile();
+        let decision = TierUpDecision {
+            schema_version: "franken-engine.tier-up-policy.v1".into(),
+            trace_id: "trace-opt".into(),
+            policy_hash: "policy-hash".into(),
+            eligible: true,
+            selected_candidates: vec![TierUpCandidate {
+                ip: 0,
+                opcode: "op_0".into(),
+                invocations: 100,
+                cache_hit_rate_millionths: 950_000,
+                rationale: "hot_path_meets_tier_up_thresholds".into(),
+            }],
+            rejected_paths: Vec::new(),
+            profile: HotPathProfile {
+                trace_id: "trace-opt".into(),
+                total_steps: 100,
+                observed_instruction_events: 100,
+                top_paths: Vec::new(),
+                profile_hash: "profile-hash".into(),
+            },
+            decision_hash: "decision-hash".into(),
+            events: Vec::new(),
+        };
+
+        let plan = OptimizedTierCompilationPlan::build(
+            &decision,
+            &profile,
+            &SuperblockPolicy::default(),
+            9,
+        );
+        assert_eq!(plan.compilable_unit_count(), 1);
+        assert!(plan.rejected_candidates.is_empty());
+        assert_eq!(plan.backend, OptimizedTierBackend::Cranelift);
+        assert_eq!(plan.stage, ExecutionStage::CompileOptimized);
+        assert!(plan.requires_differential_equivalence);
+        assert!(!plan.plan_hash.is_empty());
+
+        let unit = &plan.units[0];
+        assert_eq!(
+            unit.candidate_id,
+            decision.selected_candidates[0].candidate_id("trace-opt")
+        );
+        assert!(!unit.deopt_continuations.is_empty());
+        assert!(
+            unit.deopt_continuations
+                .windows(2)
+                .all(|pair| pair[0].guard_position <= pair[1].guard_position)
+        );
+    }
+
+    #[test]
+    fn optimized_tier_plan_rejects_unformable_candidate() {
+        let profile = QuickeningProfile::new("cold_fn");
+        let decision = TierUpDecision {
+            schema_version: "franken-engine.tier-up-policy.v1".into(),
+            trace_id: "trace-cold".into(),
+            policy_hash: "policy-hash".into(),
+            eligible: true,
+            selected_candidates: vec![TierUpCandidate {
+                ip: 0,
+                opcode: "cold_op".into(),
+                invocations: 100,
+                cache_hit_rate_millionths: 950_000,
+                rationale: "hot_path_meets_tier_up_thresholds".into(),
+            }],
+            rejected_paths: Vec::new(),
+            profile: HotPathProfile {
+                trace_id: "trace-cold".into(),
+                total_steps: 100,
+                observed_instruction_events: 100,
+                top_paths: Vec::new(),
+                profile_hash: "profile-hash".into(),
+            },
+            decision_hash: "decision-hash".into(),
+            events: Vec::new(),
+        };
+
+        let plan = OptimizedTierCompilationPlan::build(
+            &decision,
+            &profile,
+            &SuperblockPolicy::default(),
+            1,
+        );
+        assert!(plan.units.is_empty());
+        assert_eq!(plan.rejected_candidates.len(), 1);
+        assert_eq!(
+            plan.rejected_candidates[0].reason,
+            CompilationRejectReason::SuperblockFormationRejected
+        );
+        assert_eq!(
+            plan.rejected_candidates[0].formation_outcome,
+            Some(FormationOutcome::NoEligibleInstructions)
+        );
+    }
+
+    #[test]
     fn constants_defined() {
         assert!(!COMPONENT.is_empty());
         assert!(SUPERBLOCK_SCHEMA_VERSION.contains("superblock"));
         assert!(TRACE_TREE_SCHEMA_VERSION.contains("trace-tree"));
+        assert!(OPTIMIZED_TIER_PLAN_SCHEMA_VERSION.contains("optimized-tier-plan"));
     }
 }

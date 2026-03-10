@@ -1755,9 +1755,12 @@ mod tests {
         assert_eq!(COMPONENT, "capability_pruned_dispatch");
         assert!(!DISPATCH_SCHEMA_VERSION.is_empty());
         assert!(!REGION_SCHEMA_VERSION.is_empty());
-        assert!(DEFAULT_MAX_FAST_PATH_SITES > 0);
-        assert!(DEFAULT_MIN_ELISION_CONFIDENCE > 0);
-        assert!(DEFAULT_MAX_REGION_SPAN > 0);
+        let fps = DEFAULT_MAX_FAST_PATH_SITES;
+        let elc = DEFAULT_MIN_ELISION_CONFIDENCE;
+        let mrs = DEFAULT_MAX_REGION_SPAN;
+        assert!(fps > 0);
+        assert!(elc > 0);
+        assert!(mrs > 0);
     }
 
     // --- Edge cases ---

@@ -449,8 +449,7 @@ impl WitnessMinimizationResult {
         if original_steps == 0 {
             return 0;
         }
-        let ratio = (self.steps_removed as i128 * MILLIONTHS as i128)
-            / original_steps as i128;
+        let ratio = (self.steps_removed as i128 * MILLIONTHS as i128) / original_steps as i128;
         ratio as i64
     }
 }
@@ -460,9 +459,7 @@ impl fmt::Display for WitnessMinimizationResult {
         write!(
             f,
             "minimization[{} -> {}]: steps_removed={}",
-            self.original_witness_id,
-            self.minimized_witness.witness_id,
-            self.steps_removed,
+            self.original_witness_id, self.minimized_witness.witness_id, self.steps_removed,
         )
     }
 }
@@ -530,7 +527,11 @@ impl BrittlenessReport {
 
     /// Returns the maximum magnitude across all witnesses.
     pub fn max_magnitude(&self) -> u64 {
-        self.witnesses.iter().map(|w| w.magnitude()).max().unwrap_or(0)
+        self.witnesses
+            .iter()
+            .map(|w| w.magnitude())
+            .max()
+            .unwrap_or(0)
     }
 
     /// Returns all witnesses grouped by boundary ID.
@@ -583,10 +584,18 @@ pub enum WitnessError {
 impl fmt::Display for WitnessError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoBoundaryDetected => write!(f, "no phase boundary detected between the given points"),
-            Self::MinimizationFailed => write!(f, "witness minimization failed: all replay steps are essential"),
+            Self::NoBoundaryDetected => {
+                write!(f, "no phase boundary detected between the given points")
+            }
+            Self::MinimizationFailed => write!(
+                f,
+                "witness minimization failed: all replay steps are essential"
+            ),
             Self::RegionClassificationAmbiguous => {
-                write!(f, "region classification is ambiguous: metric too close to threshold")
+                write!(
+                    f,
+                    "region classification is ambiguous: metric too close to threshold"
+                )
             }
             Self::InputTooLarge => write!(f, "triggering input exceeds maximum allowed size"),
             Self::InternalError(msg) => write!(f, "internal error: {msg}"),
@@ -680,7 +689,8 @@ pub fn detect_boundary(
     }
 
     // Generate boundary ID.
-    let boundary_id = generate_boundary_id(source_coords, target_coords, source_metric, target_metric);
+    let boundary_id =
+        generate_boundary_id(source_coords, target_coords, source_metric, target_metric);
 
     let mut boundary = PhaseBoundary {
         boundary_id,
@@ -824,10 +834,8 @@ pub fn build_brittleness_report(
     let brittle_region_count = seen_brittle.len() as u64;
 
     // Sum sharpness.
-    let total_boundary_sharpness_millionths: u64 = boundaries
-        .iter()
-        .map(|b| b.sharpness_millionths)
-        .sum();
+    let total_boundary_sharpness_millionths: u64 =
+        boundaries.iter().map(|b| b.sharpness_millionths).sum();
 
     let report_id = generate_report_id(&epoch, &boundaries, &witnesses);
 
@@ -961,7 +969,7 @@ pub fn franken_engine_catastrophe_manifest() -> BrittlenessReport {
     let report_id = format!(
         "manifest-report-{}-{}",
         BEAD_ID,
-        hex_encode(&sha256_bytes(POLICY_ID.as_bytes()))[..8].to_string(),
+        &hex_encode(&sha256_bytes(POLICY_ID.as_bytes()))[..8],
     );
 
     let mut report = BrittlenessReport {
@@ -1031,11 +1039,7 @@ fn integer_sqrt_ceil(n: u64) -> u64 {
         return 0;
     }
     let floor = integer_sqrt_u64(n);
-    if floor * floor == n {
-        floor
-    } else {
-        floor + 1
-    }
+    if floor * floor == n { floor } else { floor + 1 }
 }
 
 /// Integer square root (floor) for u64.
@@ -1044,7 +1048,7 @@ fn integer_sqrt_u64(n: u64) -> u64 {
         return 0;
     }
     let mut x = n;
-    let mut y = (x + 1) / 2;
+    let mut y = x.div_ceil(2);
     while y < x {
         x = y;
         y = (x + n / x) / 2;
@@ -1623,11 +1627,7 @@ mod tests {
         let witness = make_witness(&boundary, 500_000, -200_000);
         let epoch = SecurityEpoch::from_raw(5);
 
-        let result = build_brittleness_report(
-            epoch,
-            vec![boundary],
-            vec![witness],
-        );
+        let result = build_brittleness_report(epoch, vec![boundary], vec![witness]);
         assert!(result.is_ok());
         let report = result.unwrap();
         assert_eq!(report.epoch, epoch);
@@ -1667,11 +1667,7 @@ mod tests {
         );
         let w1 = make_witness(&b1, 500_000, -200_000);
 
-        let result = build_brittleness_report(
-            SecurityEpoch::from_raw(1),
-            vec![b1, b2],
-            vec![w1],
-        );
+        let result = build_brittleness_report(SecurityEpoch::from_raw(1), vec![b1, b2], vec![w1]);
         assert!(result.is_ok());
         let report = result.unwrap();
         assert_eq!(report.boundaries.len(), 2);
@@ -1687,12 +1683,8 @@ mod tests {
             PhaseRegion::BrittleLoss,
             5_000_000,
         );
-        let report = build_brittleness_report(
-            SecurityEpoch::from_raw(1),
-            vec![critical],
-            vec![],
-        )
-        .unwrap();
+        let report =
+            build_brittleness_report(SecurityEpoch::from_raw(1), vec![critical], vec![]).unwrap();
         assert!(report.has_critical_boundaries());
     }
 
@@ -1705,12 +1697,9 @@ mod tests {
             PhaseRegion::Neutral,
             1_000_000,
         );
-        let report = build_brittleness_report(
-            SecurityEpoch::from_raw(1),
-            vec![non_critical],
-            vec![],
-        )
-        .unwrap();
+        let report =
+            build_brittleness_report(SecurityEpoch::from_raw(1), vec![non_critical], vec![])
+                .unwrap();
         // BrittleWin -> Neutral: source is win, target is not win => critical
         assert!(report.has_critical_boundaries());
     }
@@ -1727,12 +1716,9 @@ mod tests {
         let w1 = make_witness(&boundary, 500_000, -200_000); // regression
         let w2 = make_witness(&boundary, -200_000, 500_000); // not regression
 
-        let report = build_brittleness_report(
-            SecurityEpoch::from_raw(1),
-            vec![boundary],
-            vec![w1, w2],
-        )
-        .unwrap();
+        let report =
+            build_brittleness_report(SecurityEpoch::from_raw(1), vec![boundary], vec![w1, w2])
+                .unwrap();
         // w1 has negative delta, w2 has positive
         assert_eq!(report.regression_count(), 1);
     }
@@ -1749,12 +1735,9 @@ mod tests {
         let w1 = make_witness(&boundary, 1_000_000, -5_000_000); // magnitude 6M
         let w2 = make_witness(&boundary, 500_000, -200_000); // magnitude 700K
 
-        let report = build_brittleness_report(
-            SecurityEpoch::from_raw(1),
-            vec![boundary],
-            vec![w1, w2],
-        )
-        .unwrap();
+        let report =
+            build_brittleness_report(SecurityEpoch::from_raw(1), vec![boundary], vec![w1, w2])
+                .unwrap();
         assert_eq!(report.max_magnitude(), 6_000_000);
     }
 
@@ -1770,18 +1753,9 @@ mod tests {
         let witness = make_witness(&boundary, 500_000, -200_000);
         let epoch = SecurityEpoch::from_raw(1);
 
-        let r1 = build_brittleness_report(
-            epoch,
-            vec![boundary.clone()],
-            vec![witness.clone()],
-        )
-        .unwrap();
-        let r2 = build_brittleness_report(
-            epoch,
-            vec![boundary],
-            vec![witness],
-        )
-        .unwrap();
+        let r1 =
+            build_brittleness_report(epoch, vec![boundary.clone()], vec![witness.clone()]).unwrap();
+        let r2 = build_brittleness_report(epoch, vec![boundary], vec![witness]).unwrap();
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1877,7 +1851,7 @@ mod tests {
             PhaseRegion::Neutral,
             0,
         );
-        let mut w = make_witness(&boundary, 0, 0);
+        let w = make_witness(&boundary, 0, 0);
         assert_eq!(w.delta_millionths, 0);
         assert!(!w.is_regression());
         assert_eq!(w.magnitude(), 0);
@@ -2051,12 +2025,9 @@ mod tests {
             3_000_000,
         );
         let witness = make_witness(&boundary, 500_000, -200_000);
-        let report = build_brittleness_report(
-            SecurityEpoch::from_raw(1),
-            vec![boundary],
-            vec![witness],
-        )
-        .unwrap();
+        let report =
+            build_brittleness_report(SecurityEpoch::from_raw(1), vec![boundary], vec![witness])
+                .unwrap();
         let s = format!("{report}");
         assert!(s.contains("brittleness_report"));
         assert!(s.contains("epoch:1"));
@@ -2118,12 +2089,9 @@ mod tests {
         let w2 = make_witness(&b2, 1_000_000, -5_000_000);
         let w3 = make_witness(&b1, 300_000, -400_000);
 
-        let report = build_brittleness_report(
-            SecurityEpoch::from_raw(1),
-            vec![b1, b2],
-            vec![w1, w2, w3],
-        )
-        .unwrap();
+        let report =
+            build_brittleness_report(SecurityEpoch::from_raw(1), vec![b1, b2], vec![w1, w2, w3])
+                .unwrap();
         let grouped = report.witnesses_by_boundary();
         assert_eq!(grouped.len(), 2);
         assert_eq!(grouped["wb1"].len(), 2);
@@ -2134,7 +2102,10 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(SCHEMA_VERSION, "franken-engine.catastrophe_witness_generator.v1");
+        assert_eq!(
+            SCHEMA_VERSION,
+            "franken-engine.catastrophe_witness_generator.v1"
+        );
         assert_eq!(BEAD_ID, "bd-1lsy.7.19.2");
         assert_eq!(COMPONENT, "catastrophe_witness_generator");
         assert_eq!(POLICY_ID, "RGC-619B");
@@ -2200,6 +2171,6 @@ mod tests {
     #[test]
     fn test_integer_sqrt_ceil_non_perfect() {
         assert_eq!(integer_sqrt_ceil(10), 4); // floor(sqrt(10))=3, ceil=4
-        assert_eq!(integer_sqrt_ceil(2), 2);  // floor(sqrt(2))=1, ceil=2
+        assert_eq!(integer_sqrt_ceil(2), 2); // floor(sqrt(2))=1, ceil=2
     }
 }

@@ -618,11 +618,7 @@ pub fn select_experiments(
     }
 
     let gain_hex = hex_encode(&total_gain.to_le_bytes());
-    let plan_id = format!(
-        "plan-{}-{}",
-        BEAD_ID,
-        &gain_hex[..8]
-    );
+    let plan_id = format!("plan-{}-{}", BEAD_ID, &gain_hex[..8]);
 
     let mut plan = ExperimentPlan {
         plan_id,
@@ -642,10 +638,7 @@ pub fn select_experiments(
 ///
 /// Compares the actual information gain against the prediction in the
 /// proposal and computes surprise (absolute error) and regret.
-pub fn record_outcome(
-    proposal: &ExperimentProposal,
-    actual_gain: u64,
-) -> ExperimentOutcome {
+pub fn record_outcome(proposal: &ExperimentProposal, actual_gain: u64) -> ExperimentOutcome {
     let surprise = abs_diff(proposal.expected_information_gain_millionths, actual_gain);
     let regret = compute_regret(proposal.expected_information_gain_millionths, actual_gain);
 
@@ -683,7 +676,12 @@ pub fn calibrate_oracle(
     // Build a lookup from proposal_id -> expected gain.
     let expected_map: BTreeMap<&str, u64> = proposals
         .iter()
-        .map(|p| (p.proposal_id.as_str(), p.expected_information_gain_millionths))
+        .map(|p| {
+            (
+                p.proposal_id.as_str(),
+                p.expected_information_gain_millionths,
+            )
+        })
         .collect();
 
     let mut total_abs_error: u64 = 0;
@@ -696,8 +694,8 @@ pub fn calibrate_oracle(
             total_abs_error = total_abs_error.saturating_add(abs_err);
 
             // Bias: positive = over-prediction, negative = under-prediction.
-            let signed_err = (expected as i64)
-                .saturating_sub(outcome.actual_information_gain_millionths as i64);
+            let signed_err =
+                (expected as i64).saturating_sub(outcome.actual_information_gain_millionths as i64);
             total_signed_error = total_signed_error.saturating_add(signed_err);
             matched_count += 1;
         }
@@ -718,10 +716,7 @@ pub fn calibrate_oracle(
     };
 
     let mut cal = OracleCalibration {
-        calibration_id: format!(
-            "cal-{}-n{}",
-            BEAD_ID, matched_count
-        ),
+        calibration_id: format!("cal-{}-n{}", BEAD_ID, matched_count),
         predictions_count: matched_count,
         mean_absolute_error_millionths: mae,
         bias_millionths: bias,
@@ -784,9 +779,9 @@ pub fn franken_engine_acquisition_manifest() -> ExperimentPlan {
             kind,
             format!("cell-{}", kind.as_str()),
             vec![(signal, 800_000)],
-            500_000,   // expected gain: 0.5
-            300_000,   // uncertainty reduction: 0.3
-            100_000,   // cost: 0.1
+            500_000, // expected gain: 0.5
+            300_000, // uncertainty reduction: 0.3
+            100_000, // cost: 0.1
             justification.to_string(),
         );
         proposals.push(proposal);
@@ -915,10 +910,7 @@ pub fn find_dominant_signal(proposals: &[ExperimentProposal]) -> Option<Acquisit
             *totals.entry(*signal).or_insert(0) += strength;
         }
     }
-    totals
-        .into_iter()
-        .max_by_key(|&(_, v)| v)
-        .map(|(k, _)| k)
+    totals.into_iter().max_by_key(|&(_, v)| v).map(|(k, _)| k)
 }
 
 /// Create a budget allocation across experiment kinds.
@@ -1060,9 +1052,7 @@ pub fn summarise_plan(plan: &ExperimentPlan) -> String {
             proposal.target_cell,
             proposal.expected_information_gain_millionths,
             proposal.estimated_cost_millionths,
-            score
-                .map(|s| s.cost_adjusted_millionths)
-                .unwrap_or(0),
+            score.map(|s| s.cost_adjusted_millionths).unwrap_or(0),
         ));
         if !proposal.justification.is_empty() {
             lines.push(format!("        Justification: {}", proposal.justification));
@@ -1996,14 +1986,8 @@ mod tests {
         let binding = [p1, p2, p3];
         let partitioned = partition_by_kind(&binding);
         assert_eq!(partitioned.len(), 2);
-        assert_eq!(
-            partitioned[&ExperimentKind::BoardCellProbe].len(),
-            2
-        );
-        assert_eq!(
-            partitioned[&ExperimentKind::CorpusAddition].len(),
-            1
-        );
+        assert_eq!(partitioned[&ExperimentKind::BoardCellProbe].len(), 2);
+        assert_eq!(partitioned[&ExperimentKind::CorpusAddition].len(), 1);
     }
 
     #[test]

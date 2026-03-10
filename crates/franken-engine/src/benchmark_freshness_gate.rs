@@ -225,7 +225,10 @@ impl ShiftAlarm {
 
     /// Whether this alarm is stale (older than max age from current epoch).
     pub fn is_stale(&self, current_epoch: SecurityEpoch, max_age: u64) -> bool {
-        current_epoch.as_u64().saturating_sub(self.raised_epoch.as_u64()) > max_age
+        current_epoch
+            .as_u64()
+            .saturating_sub(self.raised_epoch.as_u64())
+            > max_age
     }
 }
 
@@ -303,11 +306,10 @@ impl AcquisitionEvidence {
         last_activity_epoch: SecurityEpoch,
         acquisition_velocity: u64,
     ) -> Self {
-        let burndown_ratio = if samples_needed == 0 {
-            FIXED_ONE
-        } else {
-            samples_acquired.saturating_mul(FIXED_ONE) / samples_needed
-        };
+        let burndown_ratio = samples_acquired
+            .saturating_mul(FIXED_ONE)
+            .checked_div(samples_needed)
+            .unwrap_or(FIXED_ONE);
         let mut hasher = Sha256::new();
         hasher.update(b"acquisition_evidence");
         hasher.update(samples_acquired.to_le_bytes());
@@ -333,12 +335,9 @@ impl AcquisitionEvidence {
 
     /// Estimated epochs to completion at current velocity.
     pub fn estimated_epochs_to_completion(&self) -> Option<u64> {
-        if self.acquisition_velocity == 0 {
-            return None;
-        }
         let remaining = self.samples_needed.saturating_sub(self.samples_acquired);
         let remaining_scaled = remaining.saturating_mul(FIXED_ONE);
-        Some(remaining_scaled / self.acquisition_velocity)
+        remaining_scaled.checked_div(self.acquisition_velocity)
     }
 }
 
@@ -521,12 +520,11 @@ impl FreshnessVerdict {
 
     /// Downgrade fraction in millionths.
     pub fn downgrade_fraction(&self) -> u64 {
-        if self.original_confidence == 0 {
-            return 0;
-        }
-        FIXED_ONE.saturating_sub(
-            self.adjusted_confidence.saturating_mul(FIXED_ONE) / self.original_confidence,
-        )
+        self.adjusted_confidence
+            .saturating_mul(FIXED_ONE)
+            .checked_div(self.original_confidence)
+            .map(|ratio| FIXED_ONE.saturating_sub(ratio))
+            .unwrap_or(0)
     }
 }
 
@@ -981,7 +979,10 @@ impl FreshnessGate {
                 .all(|a| {
                     self.acquisition_ledger
                         .get_domain_evidence(a.domain)
-                        .is_some_and(|e| e.status.is_healthy() && e.burndown_ratio >= self.config.min_burndown_ratio)
+                        .is_some_and(|e| {
+                            e.status.is_healthy()
+                                && e.burndown_ratio >= self.config.min_burndown_ratio
+                        })
                 });
             if !all_addressed {
                 return FreshnessLevel::Invalid;
@@ -1006,10 +1007,9 @@ impl FreshnessGate {
         if !self
             .acquisition_ledger
             .all_domains_healthy(&self.config.required_active_domains)
+            && worst < FreshnessLevel::Aging
         {
-            if worst < FreshnessLevel::Aging {
-                worst = FreshnessLevel::Aging;
-            }
+            worst = FreshnessLevel::Aging;
         }
 
         worst
@@ -1040,12 +1040,10 @@ impl FreshnessGate {
                     _ => FreshnessLevel::Stale,
                 }
             }
-            Some(ShiftSeverity::Warning) => {
-                match acquisition {
-                    Some(ev) if ev.status.is_healthy() => FreshnessLevel::Aging,
-                    _ => FreshnessLevel::Stale,
-                }
-            }
+            Some(ShiftSeverity::Warning) => match acquisition {
+                Some(ev) if ev.status.is_healthy() => FreshnessLevel::Aging,
+                _ => FreshnessLevel::Stale,
+            },
             Some(ShiftSeverity::Info) => FreshnessLevel::Aging,
             None => FreshnessLevel::Fresh,
         }
@@ -1057,8 +1055,7 @@ impl FreshnessGate {
 
         let freshness = self.determine_freshness(&claim.dependent_domains);
         let multiplier = freshness.confidence_multiplier();
-        let adjusted_confidence =
-            claim.original_confidence.saturating_mul(multiplier) / FIXED_ONE;
+        let adjusted_confidence = claim.original_confidence.saturating_mul(multiplier) / FIXED_ONE;
 
         let rollout_trust =
             RolloutTrustLevel::from_freshness(freshness, self.config.permit_rollout_when_aging);
@@ -1473,7 +1470,11 @@ mod tests {
     #[test]
     fn test_claim_with_domains_bulk() {
         let claim = BenchmarkClaim::new("c1", ClaimSurface::Supremacy, 950_000, epoch(1), "sup")
-            .with_domains([ShiftDomain::General, ShiftDomain::ControlFlow, ShiftDomain::IoPattern]);
+            .with_domains([
+                ShiftDomain::General,
+                ShiftDomain::ControlFlow,
+                ShiftDomain::IoPattern,
+            ]);
         assert_eq!(claim.dependent_domains.len(), 3);
     }
 
@@ -1489,7 +1490,12 @@ mod tests {
     #[test]
     fn test_ledger_record_alarm() {
         let mut ledger = AlarmLedger::new();
-        ledger.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Warning, 1));
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Warning,
+            1,
+        ));
         assert_eq!(ledger.active_count(), 1);
         assert_eq!(ledger.total_alarms_recorded, 1);
         assert!(ledger.cumulative_severity > 0);
@@ -1498,7 +1504,12 @@ mod tests {
     #[test]
     fn test_ledger_resolve_alarm() {
         let mut ledger = AlarmLedger::new();
-        ledger.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Info, 1));
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            1,
+        ));
         assert!(ledger.resolve_alarm("a1", 5));
         assert_eq!(ledger.active_count(), 0);
         assert!(!ledger.resolve_alarm("a1", 6)); // already resolved
@@ -1507,8 +1518,18 @@ mod tests {
     #[test]
     fn test_ledger_prune_stale() {
         let mut ledger = AlarmLedger::new();
-        ledger.record_alarm(make_alarm("old", ShiftDomain::General, ShiftSeverity::Info, 1));
-        ledger.record_alarm(make_alarm("new", ShiftDomain::General, ShiftSeverity::Info, 90));
+        ledger.record_alarm(make_alarm(
+            "old",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            1,
+        ));
+        ledger.record_alarm(make_alarm(
+            "new",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            90,
+        ));
         let pruned = ledger.prune_stale(epoch(110), 50);
         assert_eq!(pruned, 1); // only "old" is stale
         assert_eq!(ledger.active_count(), 1);
@@ -1517,9 +1538,24 @@ mod tests {
     #[test]
     fn test_ledger_domain_count() {
         let mut ledger = AlarmLedger::new();
-        ledger.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Info, 1));
-        ledger.record_alarm(make_alarm("a2", ShiftDomain::ApiUsage, ShiftSeverity::Warning, 2));
-        ledger.record_alarm(make_alarm("a3", ShiftDomain::General, ShiftSeverity::Info, 3));
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Info,
+            1,
+        ));
+        ledger.record_alarm(make_alarm(
+            "a2",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Warning,
+            2,
+        ));
+        ledger.record_alarm(make_alarm(
+            "a3",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            3,
+        ));
         assert_eq!(ledger.active_count_in_domain(ShiftDomain::ApiUsage), 2);
         assert_eq!(ledger.active_count_in_domain(ShiftDomain::General), 1);
         assert_eq!(ledger.active_count_in_domain(ShiftDomain::IoPattern), 0);
@@ -1528,8 +1564,18 @@ mod tests {
     #[test]
     fn test_ledger_worst_severity() {
         let mut ledger = AlarmLedger::new();
-        ledger.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Info, 1));
-        ledger.record_alarm(make_alarm("a2", ShiftDomain::ApiUsage, ShiftSeverity::Critical, 2));
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Info,
+            1,
+        ));
+        ledger.record_alarm(make_alarm(
+            "a2",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Critical,
+            2,
+        ));
         assert_eq!(
             ledger.worst_severity_in_domain(ShiftDomain::ApiUsage),
             Some(ShiftSeverity::Critical)
@@ -1539,9 +1585,19 @@ mod tests {
     #[test]
     fn test_ledger_immediate_downgrade() {
         let mut ledger = AlarmLedger::new();
-        ledger.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Warning, 1));
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Warning,
+            1,
+        ));
         assert!(!ledger.has_immediate_downgrade_alarm());
-        ledger.record_alarm(make_alarm("a2", ShiftDomain::General, ShiftSeverity::Critical, 2));
+        ledger.record_alarm(make_alarm(
+            "a2",
+            ShiftDomain::General,
+            ShiftSeverity::Critical,
+            2,
+        ));
         assert!(ledger.has_immediate_downgrade_alarm());
     }
 
@@ -1549,8 +1605,18 @@ mod tests {
     fn test_ledger_content_hash_deterministic() {
         let mut l1 = AlarmLedger::new();
         let mut l2 = AlarmLedger::new();
-        l1.record_alarm(make_alarm("a", ShiftDomain::General, ShiftSeverity::Info, 1));
-        l2.record_alarm(make_alarm("a", ShiftDomain::General, ShiftSeverity::Info, 1));
+        l1.record_alarm(make_alarm(
+            "a",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            1,
+        ));
+        l2.record_alarm(make_alarm(
+            "a",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            1,
+        ));
         assert_eq!(l1.content_hash(), l2.content_hash());
     }
 
@@ -1567,7 +1633,10 @@ mod tests {
     fn test_acq_ledger_record_evidence() {
         let mut ledger = AcquisitionLedger::new();
         ledger.record_evidence(make_acquisition(
-            ShiftDomain::ApiUsage, 50, 100, AcquisitionStatus::Active,
+            ShiftDomain::ApiUsage,
+            50,
+            100,
+            AcquisitionStatus::Active,
         ));
         assert_eq!(ledger.evidence.len(), 1);
         assert_eq!(ledger.overall_burndown_ratio, 500_000);
@@ -1577,11 +1646,17 @@ mod tests {
     fn test_acq_ledger_replace_domain() {
         let mut ledger = AcquisitionLedger::new();
         ledger.record_evidence(make_acquisition(
-            ShiftDomain::General, 10, 100, AcquisitionStatus::Active,
+            ShiftDomain::General,
+            10,
+            100,
+            AcquisitionStatus::Active,
         ));
         assert_eq!(ledger.overall_burndown_ratio, 100_000);
         ledger.record_evidence(make_acquisition(
-            ShiftDomain::General, 80, 100, AcquisitionStatus::Active,
+            ShiftDomain::General,
+            80,
+            100,
+            AcquisitionStatus::Active,
         ));
         assert_eq!(ledger.evidence.len(), 1);
         assert_eq!(ledger.overall_burndown_ratio, 800_000);
@@ -1591,7 +1666,10 @@ mod tests {
     fn test_acq_ledger_stalled_domains() {
         let mut ledger = AcquisitionLedger::new();
         ledger.record_evidence(make_acquisition(
-            ShiftDomain::General, 10, 100, AcquisitionStatus::Stalled,
+            ShiftDomain::General,
+            10,
+            100,
+            AcquisitionStatus::Stalled,
         ));
         assert!(ledger.has_stalled_domains());
         assert!(ledger.stalled_domains.contains("general"));
@@ -1604,7 +1682,10 @@ mod tests {
         required.insert(ShiftDomain::General);
         assert!(!ledger.all_domains_healthy(&required));
         ledger.record_evidence(make_acquisition(
-            ShiftDomain::General, 50, 100, AcquisitionStatus::Active,
+            ShiftDomain::General,
+            50,
+            100,
+            AcquisitionStatus::Active,
         ));
         assert!(ledger.all_domains_healthy(&required));
     }
@@ -1686,7 +1767,12 @@ mod tests {
     fn test_gate_downgrade_on_warning() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Warning, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Warning,
+            9,
+        ));
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::ApiUsage]);
         let verdict = gate.evaluate_claim(&claim);
         // Warning without acquisition -> Stale
@@ -1699,9 +1785,17 @@ mod tests {
     fn test_gate_aging_with_acquisition() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Warning, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Warning,
+            9,
+        ));
         gate.record_acquisition(make_acquisition(
-            ShiftDomain::ApiUsage, 50, 100, AcquisitionStatus::Active,
+            ShiftDomain::ApiUsage,
+            50,
+            100,
+            AcquisitionStatus::Active,
         ));
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::ApiUsage]);
         let verdict = gate.evaluate_claim(&claim);
@@ -1715,7 +1809,10 @@ mod tests {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
         gate.record_alarm(make_alarm(
-            "a1", ShiftDomain::General, ShiftSeverity::Emergency, 9,
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Emergency,
+            9,
         ));
         let claim = make_claim("c1", ClaimSurface::Supremacy, &[ShiftDomain::General]);
         let verdict = gate.evaluate_claim(&claim);
@@ -1728,7 +1825,8 @@ mod tests {
     fn test_gate_silence_degrades() {
         let mut gate = FreshnessGate::new(epoch(100));
         // No signals ever recorded, silence timeout triggers
-        gate.silence_tracker.check_silence(epoch(100), gate.config.silence_timeout_epochs);
+        gate.silence_tracker
+            .check_silence(epoch(100), gate.config.silence_timeout_epochs);
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
         let verdict = gate.evaluate_claim(&claim);
         assert_eq!(verdict.freshness, FreshnessLevel::Stale);
@@ -1738,7 +1836,12 @@ mod tests {
     fn test_gate_resolve_alarm_improves_freshness() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Warning, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Warning,
+            9,
+        ));
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
 
         let v1 = gate.evaluate_claim(&claim);
@@ -1752,7 +1855,12 @@ mod tests {
     #[test]
     fn test_gate_advance_epoch_prunes() {
         let mut gate = FreshnessGate::new(epoch(1));
-        gate.record_alarm(make_alarm("old", ShiftDomain::General, ShiftSeverity::Info, 1));
+        gate.record_alarm(make_alarm(
+            "old",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            1,
+        ));
         gate.advance_epoch(epoch(200));
         assert_eq!(gate.alarm_ledger.active_count(), 0);
     }
@@ -1761,7 +1869,12 @@ mod tests {
     fn test_gate_multiple_domains() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Info, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Info,
+            9,
+        ));
         // ApiUsage has alarm -> Aging, General is Fresh
         let claim = make_claim(
             "c1",
@@ -1777,7 +1890,12 @@ mod tests {
     fn test_gate_batch_evaluation() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Warning, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Warning,
+            9,
+        ));
 
         let claims = vec![
             make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]),
@@ -1805,9 +1923,17 @@ mod tests {
     fn test_gate_critical_with_good_acquisition() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Critical, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Critical,
+            9,
+        ));
         gate.record_acquisition(make_acquisition(
-            ShiftDomain::General, 60, 100, AcquisitionStatus::Active,
+            ShiftDomain::General,
+            60,
+            100,
+            AcquisitionStatus::Active,
         ));
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
         let verdict = gate.evaluate_claim(&claim);
@@ -1819,7 +1945,12 @@ mod tests {
     fn test_gate_critical_without_acquisition() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Critical, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Critical,
+            9,
+        ));
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
         let verdict = gate.evaluate_claim(&claim);
         // Critical without acquisition -> Invalid
@@ -1859,7 +1990,12 @@ mod tests {
     fn test_verdict_downgrade_fraction_nonzero() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Info, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            9,
+        ));
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
         let verdict = gate.evaluate_claim(&claim);
         assert!(verdict.downgrade_fraction() > 0);
@@ -1904,7 +2040,12 @@ mod tests {
     #[test]
     fn test_summary_unhealthy_with_alarms() {
         let mut gate = FreshnessGate::new(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Warning, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Warning,
+            9,
+        ));
         let summary = gate.summary();
         assert!(!summary.is_healthy());
         assert_eq!(summary.active_alarms, 1);
@@ -1958,7 +2099,12 @@ mod tests {
     #[test]
     fn test_gate_serde_roundtrip() {
         let mut gate = FreshnessGate::new(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Info, 5));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            5,
+        ));
         let json = serde_json::to_string(&gate).unwrap();
         let back: FreshnessGate = serde_json::from_str(&json).unwrap();
         assert_eq!(back.alarm_ledger.active_count(), 1);
@@ -1993,7 +2139,12 @@ mod tests {
     fn test_claim_no_domains_always_fresh() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Critical, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Critical,
+            9,
+        ));
         let claim = make_claim("c1", ClaimSurface::Performance, &[]);
         let verdict = gate.evaluate_claim(&claim);
         // Claim has no dependent domains, but gate has critical alarm -> Invalid via immediate downgrade
@@ -2045,8 +2196,18 @@ mod tests {
     fn test_contributing_alarms_in_verdict() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Info, 9));
-        gate.record_alarm(make_alarm("a2", ShiftDomain::General, ShiftSeverity::Info, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Info,
+            9,
+        ));
+        gate.record_alarm(make_alarm(
+            "a2",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            9,
+        ));
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::ApiUsage]);
         let verdict = gate.evaluate_claim(&claim);
         assert_eq!(verdict.contributing_alarms.len(), 1);
@@ -2057,7 +2218,12 @@ mod tests {
     fn test_domain_freshness_map_in_verdict() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Info, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Info,
+            9,
+        ));
         let claim = make_claim(
             "c1",
             ClaimSurface::Performance,
@@ -2100,7 +2266,12 @@ mod tests {
     fn test_batch_overall_freshness_worst_of_all() {
         let mut gate = FreshnessGate::new(epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
-        gate.record_alarm(make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Emergency, 9));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Emergency,
+            9,
+        ));
         let claims = vec![
             make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]),
             make_claim("c2", ClaimSurface::Memory, &[ShiftDomain::ApiUsage]),

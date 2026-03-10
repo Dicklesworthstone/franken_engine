@@ -683,10 +683,10 @@ pub fn build_complex(simplices: Vec<Simplex>) -> Result<FrontierComplex, Cartogr
         // Generate all faces (subsets of size `dim`).
         let faces = generate_faces(&sorted_verts);
         for face in &faces {
-            if let Some(&face_filt) = vertex_set_to_filt.get(face) {
-                if face_filt > s.filtration_value_millionths {
-                    return Err(CartographyError::FiltrationViolation);
-                }
+            if let Some(&face_filt) = vertex_set_to_filt.get(face)
+                && face_filt > s.filtration_value_millionths
+            {
+                return Err(CartographyError::FiltrationViolation);
             }
             // If a face is not present, that is allowed: we do not require
             // a complete simplicial complex, only that present faces
@@ -1065,11 +1065,9 @@ pub fn bottleneck_distance_approx(a: &PersistenceDiagram, b: &PersistenceDiagram
     }
     let mut max_dist: u64 = 0;
     for (pa, pb) in a.pairs.iter().zip(b.pairs.iter()) {
-        let birth_diff = if pa.birth_filtration_millionths >= pb.birth_filtration_millionths {
-            pa.birth_filtration_millionths - pb.birth_filtration_millionths
-        } else {
-            pb.birth_filtration_millionths - pa.birth_filtration_millionths
-        };
+        let birth_diff = pa
+            .birth_filtration_millionths
+            .abs_diff(pb.birth_filtration_millionths);
         let death_diff = if pa.is_essential() || pb.is_essential() {
             // If either is essential, we use a large sentinel.
             if pa.is_essential() && pb.is_essential() {
@@ -1077,10 +1075,9 @@ pub fn bottleneck_distance_approx(a: &PersistenceDiagram, b: &PersistenceDiagram
             } else {
                 u64::MAX
             }
-        } else if pa.death_filtration_millionths >= pb.death_filtration_millionths {
-            pa.death_filtration_millionths - pb.death_filtration_millionths
         } else {
-            pb.death_filtration_millionths - pa.death_filtration_millionths
+            pa.death_filtration_millionths
+                .abs_diff(pb.death_filtration_millionths)
         };
         let pair_dist = birth_diff.max(death_diff);
         if pair_dist > max_dist {

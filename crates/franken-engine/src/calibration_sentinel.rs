@@ -561,9 +561,7 @@ fn classify_state_directed(value: u64, threshold: u64, upper_bound: bool) -> Sen
     if upper_bound {
         // Upper-bound: value should be below threshold.
         // Yellow zone: value > 80% of threshold but <= threshold.
-        let yellow_boundary = threshold
-            .saturating_mul(YELLOW_FRACTION_MILLIONTHS)
-            / MILLIONTHS;
+        let yellow_boundary = threshold.saturating_mul(YELLOW_FRACTION_MILLIONTHS) / MILLIONTHS;
 
         if value > threshold {
             SentinelState::Red
@@ -617,11 +615,7 @@ pub fn create_sentinel(id: &str, kind: SentinelKind, threshold: u64) -> Calibrat
 pub fn update_sentinel(sentinel: &mut CalibrationSentinel, value: u64) -> SentinelState {
     sentinel.current_value_millionths = value;
     let upper_bound = sentinel.kind.is_upper_bound();
-    sentinel.state = classify_state_directed(
-        value,
-        sentinel.threshold_millionths,
-        upper_bound,
-    );
+    sentinel.state = classify_state_directed(value, sentinel.threshold_millionths, upper_bound);
     sentinel.content_hash = sentinel.compute_hash();
     sentinel.state
 }
@@ -737,10 +731,7 @@ pub fn evaluate_promotion(cell: &ObservabilityCell) -> PromotionDecision {
 /// Build a sentinel report from an epoch and a set of observability cells.
 ///
 /// Evaluates promotion for each cell and aggregates green/red counts.
-pub fn build_report(
-    epoch: SecurityEpoch,
-    cells: Vec<ObservabilityCell>,
-) -> SentinelReport {
+pub fn build_report(epoch: SecurityEpoch, cells: Vec<ObservabilityCell>) -> SentinelReport {
     let capped = if cells.len() > MAX_CELLS_PER_REPORT {
         cells[..MAX_CELLS_PER_REPORT].to_vec()
     } else {
@@ -814,7 +805,11 @@ pub fn franken_engine_sentinel_manifest() -> SentinelReport {
     );
 
     // Cell 3: SuppressClaim, one red sentinel.
-    let mut s5 = create_sentinel("manifest-s5-completeness", SentinelKind::Completeness, 900_000);
+    let mut s5 = create_sentinel(
+        "manifest-s5-completeness",
+        SentinelKind::Completeness,
+        900_000,
+    );
     update_sentinel(&mut s5, 400_000); // Red: below threshold
 
     let cell3 = build_cell(
@@ -894,11 +889,7 @@ fn collect_non_green_reasons(cell: &ObservabilityCell, reasons: &mut Vec<String>
         if s.state != SentinelState::Green {
             reasons.push(format!(
                 "sentinel {} ({}) is {} (value={}, threshold={})",
-                s.sentinel_id,
-                s.kind,
-                s.state,
-                s.current_value_millionths,
-                s.threshold_millionths,
+                s.sentinel_id, s.kind, s.state, s.current_value_millionths, s.threshold_millionths,
             ));
         }
     }
@@ -910,10 +901,7 @@ fn collect_yellow_warnings(cell: &ObservabilityCell, reasons: &mut Vec<String>) 
         if s.state == SentinelState::Yellow {
             reasons.push(format!(
                 "sentinel {} ({}) is yellow (value={}, threshold={})",
-                s.sentinel_id,
-                s.kind,
-                s.current_value_millionths,
-                s.threshold_millionths,
+                s.sentinel_id, s.kind, s.current_value_millionths, s.threshold_millionths,
             ));
         }
     }
@@ -962,7 +950,7 @@ fn generate_report_id(
 
 /// Hex-encode the first `n` hex chars (n/2 bytes) of a byte slice.
 fn hex_encode_prefix(bytes: &[u8], hex_chars: usize) -> String {
-    let byte_count = (hex_chars + 1) / 2;
+    let byte_count = hex_chars.div_ceil(2);
     let mut s = String::with_capacity(hex_chars);
     for &b in bytes.iter().take(byte_count) {
         s.push_str(&format!("{b:02x}"));
@@ -972,6 +960,7 @@ fn hex_encode_prefix(bytes: &[u8], hex_chars: usize) -> String {
 }
 
 /// Full hex encoding of a byte slice.
+#[cfg(test)]
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
@@ -981,6 +970,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Compute a SHA-256 digest and return raw bytes.
+#[cfg(test)]
 fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -1000,7 +990,12 @@ mod tests {
 
     // -- Helper functions ---------------------------------------------------
 
-    fn make_sentinel(id: &str, kind: SentinelKind, threshold: u64, value: u64) -> CalibrationSentinel {
+    fn make_sentinel(
+        id: &str,
+        kind: SentinelKind,
+        threshold: u64,
+        value: u64,
+    ) -> CalibrationSentinel {
         let mut s = create_sentinel(id, kind, threshold);
         update_sentinel(&mut s, value);
         s
@@ -1063,16 +1058,28 @@ mod tests {
     #[test]
     fn test_promotion_rule_as_str() {
         assert_eq!(PromotionRule::FailClosed.as_str(), "fail_closed");
-        assert_eq!(PromotionRule::RequireCalibration.as_str(), "require_calibration");
-        assert_eq!(PromotionRule::RequireObservability.as_str(), "require_observability");
+        assert_eq!(
+            PromotionRule::RequireCalibration.as_str(),
+            "require_calibration"
+        );
+        assert_eq!(
+            PromotionRule::RequireObservability.as_str(),
+            "require_observability"
+        );
         assert_eq!(PromotionRule::SuppressClaim.as_str(), "suppress_claim");
-        assert_eq!(PromotionRule::AllowWithWarning.as_str(), "allow_with_warning");
+        assert_eq!(
+            PromotionRule::AllowWithWarning.as_str(),
+            "allow_with_warning"
+        );
     }
 
     #[test]
     fn test_promotion_rule_display() {
         assert_eq!(format!("{}", PromotionRule::FailClosed), "fail_closed");
-        assert_eq!(format!("{}", PromotionRule::AllowWithWarning), "allow_with_warning");
+        assert_eq!(
+            format!("{}", PromotionRule::AllowWithWarning),
+            "allow_with_warning"
+        );
     }
 
     // -- SentinelState tests ------------------------------------------------
@@ -1802,7 +1809,12 @@ mod tests {
     fn test_require_calibration_unknown_blocks() {
         // Unknown state should block under RequireCalibration.
         let s = create_sentinel("unk", SentinelKind::Coverage, 800_000);
-        let cell = build_cell("unk-cell", "test", vec![s], PromotionRule::RequireCalibration);
+        let cell = build_cell(
+            "unk-cell",
+            "test",
+            vec![s],
+            PromotionRule::RequireCalibration,
+        );
         assert_eq!(cell.overall_state, SentinelState::Unknown);
         let decision = evaluate_promotion(&cell);
         assert!(!decision.allowed);
@@ -1811,7 +1823,12 @@ mod tests {
     #[test]
     fn test_require_observability_unknown_blocks() {
         let s = create_sentinel("unk2", SentinelKind::ErrorBound, 500_000);
-        let cell = build_cell("unk2-cell", "test", vec![s], PromotionRule::RequireObservability);
+        let cell = build_cell(
+            "unk2-cell",
+            "test",
+            vec![s],
+            PromotionRule::RequireObservability,
+        );
         let decision = evaluate_promotion(&cell);
         assert!(!decision.allowed);
     }
@@ -1819,7 +1836,12 @@ mod tests {
     #[test]
     fn test_allow_with_warning_unknown_allows() {
         let s = create_sentinel("unk3", SentinelKind::Freshness, MILLIONTHS);
-        let cell = build_cell("unk3-cell", "test", vec![s], PromotionRule::AllowWithWarning);
+        let cell = build_cell(
+            "unk3-cell",
+            "test",
+            vec![s],
+            PromotionRule::AllowWithWarning,
+        );
         let decision = evaluate_promotion(&cell);
         assert!(decision.allowed);
     }

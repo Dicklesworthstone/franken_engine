@@ -71,6 +71,7 @@ pub const MAX_CONSECUTIVE_ROLLBACKS: u32 = 3;
 // Helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -1220,10 +1221,10 @@ impl ElisionGateEvaluator {
         if input.gc_assessment.sample_count < self.config.min_sample_count {
             denial_reasons.push(DenialReason::InsufficientSamples);
         }
-        if input.latency_evidence.sample_count < self.config.min_sample_count {
-            if !denial_reasons.contains(&DenialReason::InsufficientSamples) {
-                denial_reasons.push(DenialReason::InsufficientSamples);
-            }
+        if input.latency_evidence.sample_count < self.config.min_sample_count
+            && !denial_reasons.contains(&DenialReason::InsufficientSamples)
+        {
+            denial_reasons.push(DenialReason::InsufficientSamples);
         }
 
         // Check GC impact.
@@ -1366,10 +1367,7 @@ impl ElisionGateEvaluator {
     }
 
     /// Process a deopt witness, potentially triggering rollback.
-    pub fn process_deopt(
-        &mut self,
-        witness: &DeoptWitness,
-    ) -> Option<RollbackRecord> {
+    pub fn process_deopt(&mut self, witness: &DeoptWitness) -> Option<RollbackRecord> {
         let site_key = witness.site_id.as_str().to_string();
 
         let state = self.site_states.get_mut(&site_key)?;
@@ -1428,6 +1426,7 @@ impl ElisionGateEvaluator {
     }
 
     /// Generate a savings report for a lane.
+    #[allow(clippy::too_many_arguments)]
     pub fn generate_savings_report(
         &self,
         lane_id: &LaneId,
@@ -1443,7 +1442,12 @@ impl ElisionGateEvaluator {
         let approved = self
             .site_states
             .values()
-            .filter(|s| matches!(s.verdict, ElisionVerdict::Approved | ElisionVerdict::Conditional))
+            .filter(|s| {
+                matches!(
+                    s.verdict,
+                    ElisionVerdict::Approved | ElisionVerdict::Conditional
+                )
+            })
             .count() as u64;
         let denied = self
             .site_states
@@ -1476,10 +1480,7 @@ impl ElisionGateEvaluator {
     }
 
     /// Bulk evaluate multiple sites, returning all results.
-    pub fn evaluate_batch(
-        &mut self,
-        inputs: &[ElisionEvalInput],
-    ) -> Vec<ElisionEvalResult> {
+    pub fn evaluate_batch(&mut self, inputs: &[ElisionEvalInput]) -> Vec<ElisionEvalResult> {
         let mut results = Vec::with_capacity(inputs.len());
         for input in inputs {
             results.push(self.evaluate(input));
@@ -1557,6 +1558,7 @@ pub struct ElisionEvidenceBundle {
 
 impl ElisionEvidenceBundle {
     /// Create a new bundle from components.
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         lane_id: LaneId,
         receipts: Vec<ElisionDecisionReceipt>,
@@ -2049,7 +2051,12 @@ mod tests {
         let mut s = SiteElisionState::new(site("s1"), epoch(1));
         let mut assumptions = BTreeSet::new();
         assumptions.insert("no_escape".to_string());
-        s.record_approval(ElisionVerdict::Approved, assumptions.clone(), 5_000, epoch(2));
+        s.record_approval(
+            ElisionVerdict::Approved,
+            assumptions.clone(),
+            5_000,
+            epoch(2),
+        );
         assert_eq!(s.verdict, ElisionVerdict::Approved);
         assert_eq!(s.active_assumptions, assumptions);
         assert_eq!(s.verdict_epoch, epoch(2));
@@ -2082,7 +2089,11 @@ mod tests {
         input.gc_assessment = bad_gc_assessment();
         let result = ev.evaluate(&input);
         assert_eq!(result.verdict, ElisionVerdict::Denied);
-        assert!(result.denial_reasons.contains(&DenialReason::GcPauseRegression));
+        assert!(
+            result
+                .denial_reasons
+                .contains(&DenialReason::GcPauseRegression)
+        );
     }
 
     #[test]
@@ -2092,9 +2103,11 @@ mod tests {
         input.latency_evidence = bad_latency_evidence();
         let result = ev.evaluate(&input);
         assert_eq!(result.verdict, ElisionVerdict::Denied);
-        assert!(result
-            .denial_reasons
-            .contains(&DenialReason::TailLatencyRegression));
+        assert!(
+            result
+                .denial_reasons
+                .contains(&DenialReason::TailLatencyRegression)
+        );
     }
 
     #[test]
@@ -2104,9 +2117,11 @@ mod tests {
         input.has_escape_certificate = false;
         let result = ev.evaluate(&input);
         assert_eq!(result.verdict, ElisionVerdict::Denied);
-        assert!(result
-            .denial_reasons
-            .contains(&DenialReason::MissingEscapeCertificate));
+        assert!(
+            result
+                .denial_reasons
+                .contains(&DenialReason::MissingEscapeCertificate)
+        );
     }
 
     #[test]
@@ -2116,9 +2131,11 @@ mod tests {
         input.gc_assessment.sample_count = 5;
         let result = ev.evaluate(&input);
         assert_eq!(result.verdict, ElisionVerdict::Denied);
-        assert!(result
-            .denial_reasons
-            .contains(&DenialReason::InsufficientSamples));
+        assert!(
+            result
+                .denial_reasons
+                .contains(&DenialReason::InsufficientSamples)
+        );
     }
 
     #[test]
@@ -2128,9 +2145,11 @@ mod tests {
         input.support_contract = Some(bad_support_contract());
         let result = ev.evaluate(&input);
         assert_eq!(result.verdict, ElisionVerdict::Denied);
-        assert!(result
-            .denial_reasons
-            .contains(&DenialReason::InsufficientSupportCoverage));
+        assert!(
+            result
+                .denial_reasons
+                .contains(&DenialReason::InsufficientSupportCoverage)
+        );
     }
 
     #[test]
@@ -2140,9 +2159,11 @@ mod tests {
         input.support_contract = None;
         let result = ev.evaluate(&input);
         assert_eq!(result.verdict, ElisionVerdict::Denied);
-        assert!(result
-            .denial_reasons
-            .contains(&DenialReason::InsufficientSupportCoverage));
+        assert!(
+            result
+                .denial_reasons
+                .contains(&DenialReason::InsufficientSupportCoverage)
+        );
     }
 
     #[test]
@@ -2152,9 +2173,11 @@ mod tests {
         input.observability = Some(unhealthy_observability());
         let result = ev.evaluate(&input);
         assert_eq!(result.verdict, ElisionVerdict::Denied);
-        assert!(result
-            .denial_reasons
-            .contains(&DenialReason::ObservabilityUnhealthy));
+        assert!(
+            result
+                .denial_reasons
+                .contains(&DenialReason::ObservabilityUnhealthy)
+        );
     }
 
     #[test]
@@ -2164,9 +2187,11 @@ mod tests {
         input.observability = None;
         let result = ev.evaluate(&input);
         assert_eq!(result.verdict, ElisionVerdict::Denied);
-        assert!(result
-            .denial_reasons
-            .contains(&DenialReason::ObservabilityUnhealthy));
+        assert!(
+            result
+                .denial_reasons
+                .contains(&DenialReason::ObservabilityUnhealthy)
+        );
     }
 
     #[test]
@@ -2197,13 +2222,14 @@ mod tests {
     #[test]
     fn evaluator_batch_evaluation() {
         let mut ev = ElisionGateEvaluator::with_defaults();
-        let inputs = vec![
-            make_good_input("site-m"),
-            make_good_input("site-n"),
-        ];
+        let inputs = vec![make_good_input("site-m"), make_good_input("site-n")];
         let results = ev.evaluate_batch(&inputs);
         assert_eq!(results.len(), 2);
-        assert!(results.iter().all(|r| r.verdict == ElisionVerdict::Approved));
+        assert!(
+            results
+                .iter()
+                .all(|r| r.verdict == ElisionVerdict::Approved)
+        );
         assert_eq!(ev.tracked_site_count(), 2);
     }
 
@@ -2356,10 +2382,12 @@ mod tests {
         let input = make_good_input("site-v");
         let result = ev.evaluate(&input);
         assert!(!result.diagnostics.is_empty());
-        assert!(result
-            .diagnostics
-            .iter()
-            .any(|d| d.kind == DiagnosticKind::ElisionApproved));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::ElisionApproved)
+        );
     }
 
     #[test]
@@ -2368,10 +2396,12 @@ mod tests {
         let mut input = make_good_input("site-w");
         input.gc_assessment = bad_gc_assessment();
         let result = ev.evaluate(&input);
-        assert!(result
-            .diagnostics
-            .iter()
-            .any(|d| d.kind == DiagnosticKind::ElisionDenied));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::ElisionDenied)
+        );
     }
 
     #[test]
@@ -2750,11 +2780,11 @@ mod tests {
         assert_eq!(bad_result.verdict, ElisionVerdict::Denied);
 
         // Good site unaffected.
-        assert_eq!(ev.site_verdict("good-site"), Some(&ElisionVerdict::Approved));
         assert_eq!(
-            ev.site_verdict("bad-site"),
-            Some(&ElisionVerdict::Denied)
+            ev.site_verdict("good-site"),
+            Some(&ElisionVerdict::Approved)
         );
+        assert_eq!(ev.site_verdict("bad-site"), Some(&ElisionVerdict::Denied));
     }
 
     // --- Hex encode ---

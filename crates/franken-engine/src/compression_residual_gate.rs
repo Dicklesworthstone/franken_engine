@@ -180,8 +180,8 @@ impl ArtifactRecord {
         if self.original_size_bytes == 0 {
             return MILLION;
         }
-        (self.compressed_size_bytes as i128 * MILLION as i128
-            / self.original_size_bytes as i128) as i64
+        (self.compressed_size_bytes as i128 * MILLION as i128 / self.original_size_bytes as i128)
+            as i64
     }
 
     /// Space savings in millionths (1_000_000 = 100% savings).
@@ -236,8 +236,8 @@ impl CompressionPassResult {
         if self.total_original_bytes == 0 {
             return MILLION;
         }
-        (self.total_compressed_bytes as i128 * MILLION as i128
-            / self.total_original_bytes as i128) as i64
+        (self.total_compressed_bytes as i128 * MILLION as i128 / self.total_original_bytes as i128)
+            as i64
     }
 
     /// Aggregate space savings in millionths.
@@ -287,8 +287,7 @@ impl HiddenExpansionRecord {
             }
             return 0;
         }
-        (self.hidden_cost_bytes as i128 * MILLION as i128
-            / self.memory_saved_bytes as i128) as i64
+        (self.hidden_cost_bytes as i128 * MILLION as i128 / self.memory_saved_bytes as i128) as i64
     }
 
     /// Whether this record shows net savings (true) or net expansion (false).
@@ -587,6 +586,33 @@ pub struct ResidualLedgerEntry {
 
 // ── Residual ledger ───────────────────────────────────────────────────
 
+/// Input for appending a new entry to the residual ledger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerAppendInput {
+    /// Artifact identifier.
+    pub artifact_id: String,
+    /// Kind of compression pass.
+    pub pass_kind: CompressionPassKind,
+    /// Original size in bytes.
+    pub original_size_bytes: u64,
+    /// Compressed size in bytes.
+    pub compressed_size_bytes: u64,
+    /// Bytes of duplicate mass removed.
+    pub duplicate_mass_removed_bytes: u64,
+    /// Bytes of duplicate mass remaining.
+    pub duplicate_mass_remaining_bytes: u64,
+    /// Whether the artifact is fully reversible.
+    pub reversible: bool,
+    /// Bytes lost (irreversible data).
+    pub bytes_lost: u64,
+    /// Restoration overhead in microseconds.
+    pub restoration_overhead_us: u64,
+    /// Security epoch.
+    pub epoch: SecurityEpoch,
+    /// Timestamp in nanoseconds.
+    pub timestamp_ns: u64,
+}
+
 /// Persistent append-only ledger of compression residuals.
 ///
 /// Records what was compressed, what remains, and what was lost.
@@ -636,20 +662,7 @@ impl ResidualLedger {
     }
 
     /// Append an entry to the ledger. Returns the assigned sequence number.
-    pub fn append(
-        &mut self,
-        artifact_id: String,
-        pass_kind: CompressionPassKind,
-        original_size_bytes: u64,
-        compressed_size_bytes: u64,
-        duplicate_mass_removed_bytes: u64,
-        duplicate_mass_remaining_bytes: u64,
-        reversible: bool,
-        bytes_lost: u64,
-        restoration_overhead_us: u64,
-        epoch: SecurityEpoch,
-        timestamp_ns: u64,
-    ) -> Result<u64, CompressionResidualError> {
+    pub fn append(&mut self, input: &LedgerAppendInput) -> Result<u64, CompressionResidualError> {
         if self.entries.len() >= MAX_LEDGER_ENTRIES {
             return Err(CompressionResidualError::LedgerFull {
                 count: self.entries.len(),
@@ -660,39 +673,49 @@ impl ResidualLedger {
         let seq = self.next_sequence;
         let hash_input = format!(
             "{}:{}:{}:{}:{}:{}:{}:{}",
-            seq, artifact_id, pass_kind, original_size_bytes,
-            compressed_size_bytes, bytes_lost, epoch, timestamp_ns,
+            seq,
+            input.artifact_id,
+            input.pass_kind,
+            input.original_size_bytes,
+            input.compressed_size_bytes,
+            input.bytes_lost,
+            input.epoch,
+            input.timestamp_ns,
         );
         let entry_hash = ContentHash::compute(hash_input.as_bytes());
 
         let entry = ResidualLedgerEntry {
             sequence: seq,
-            artifact_id: artifact_id.clone(),
-            pass_kind,
-            original_size_bytes,
-            compressed_size_bytes,
-            duplicate_mass_removed_bytes,
-            duplicate_mass_remaining_bytes,
-            reversible,
-            bytes_lost,
-            restoration_overhead_us,
-            epoch,
-            timestamp_ns,
+            artifact_id: input.artifact_id.clone(),
+            pass_kind: input.pass_kind,
+            original_size_bytes: input.original_size_bytes,
+            compressed_size_bytes: input.compressed_size_bytes,
+            duplicate_mass_removed_bytes: input.duplicate_mass_removed_bytes,
+            duplicate_mass_remaining_bytes: input.duplicate_mass_remaining_bytes,
+            reversible: input.reversible,
+            bytes_lost: input.bytes_lost,
+            restoration_overhead_us: input.restoration_overhead_us,
+            epoch: input.epoch,
+            timestamp_ns: input.timestamp_ns,
             entry_hash,
         };
 
-        self.total_original_bytes = self.total_original_bytes.saturating_add(original_size_bytes);
-        self.total_compressed_bytes = self.total_compressed_bytes.saturating_add(compressed_size_bytes);
-        self.total_bytes_lost = self.total_bytes_lost.saturating_add(bytes_lost);
+        self.total_original_bytes = self
+            .total_original_bytes
+            .saturating_add(input.original_size_bytes);
+        self.total_compressed_bytes = self
+            .total_compressed_bytes
+            .saturating_add(input.compressed_size_bytes);
+        self.total_bytes_lost = self.total_bytes_lost.saturating_add(input.bytes_lost);
         self.total_duplicate_mass_removed = self
             .total_duplicate_mass_removed
-            .saturating_add(duplicate_mass_removed_bytes);
+            .saturating_add(input.duplicate_mass_removed_bytes);
         self.total_duplicate_mass_remaining = self
             .total_duplicate_mass_remaining
-            .saturating_add(duplicate_mass_remaining_bytes);
+            .saturating_add(input.duplicate_mass_remaining_bytes);
 
         self.artifact_index
-            .entry(artifact_id)
+            .entry(input.artifact_id.clone())
             .or_default()
             .push(seq);
 
@@ -737,8 +760,8 @@ impl ResidualLedger {
         if self.total_original_bytes == 0 {
             return MILLION;
         }
-        (self.total_compressed_bytes as i128 * MILLION as i128
-            / self.total_original_bytes as i128) as i64
+        (self.total_compressed_bytes as i128 * MILLION as i128 / self.total_original_bytes as i128)
+            as i64
     }
 
     /// Aggregate remaining duplicate mass ratio in millionths.
@@ -769,10 +792,7 @@ impl ResidualLedger {
 
     /// Total restoration overhead across all entries (microseconds).
     pub fn total_restoration_overhead_us(&self) -> u64 {
-        self.entries
-            .iter()
-            .map(|e| e.restoration_overhead_us)
-            .sum()
+        self.entries.iter().map(|e| e.restoration_overhead_us).sum()
     }
 }
 
@@ -994,11 +1014,7 @@ impl CompressionResidualGate {
         input: &GateInput,
     ) -> Result<DecisionReceipt, CompressionResidualError> {
         // Validate input sizes.
-        let total_artifacts: usize = input
-            .pass_results
-            .iter()
-            .map(|p| p.artifacts.len())
-            .sum();
+        let total_artifacts: usize = input.pass_results.iter().map(|p| p.artifacts.len()).sum();
         if total_artifacts > MAX_ARTIFACTS_PER_PASS {
             return Err(CompressionResidualError::TooManyArtifacts {
                 count: total_artifacts,
@@ -1067,7 +1083,12 @@ impl CompressionResidualGate {
         // Surface-specific checks.
         match input.surface {
             ClaimSurface::ColdStart => {
-                self.evaluate_cold_start(input, agg_restoration_us, &mut blocking_reasons, &mut caveats);
+                self.evaluate_cold_start(
+                    input,
+                    agg_restoration_us,
+                    &mut blocking_reasons,
+                    &mut caveats,
+                );
             }
             ClaimSurface::Memory => {
                 self.evaluate_memory(input, &mut blocking_reasons, &mut caveats);
@@ -1087,11 +1108,8 @@ impl CompressionResidualGate {
         self.evaluate_reversibility(input, &mut blocking_reasons);
 
         // Check support costs.
-        let agg_support_overhead = self.evaluate_support_costs(
-            input,
-            &mut blocking_reasons,
-            &mut caveats,
-        );
+        let agg_support_overhead =
+            self.evaluate_support_costs(input, &mut blocking_reasons, &mut caveats);
 
         // Determine pass/fail counts for reversibility.
         let rev_pass = input
@@ -1164,25 +1182,25 @@ impl CompressionResidualGate {
         // Record pass results into the ledger.
         for pass in &input.pass_results {
             for artifact in &pass.artifacts {
-                let _ = self.ledger.append(
-                    artifact.artifact_id.clone(),
-                    artifact.pass_kind,
-                    artifact.original_size_bytes,
-                    artifact.compressed_size_bytes,
-                    artifact.duplicates_removed,
-                    artifact.duplicates_remaining,
-                    artifact.reversible,
-                    if artifact.reversible {
+                let _ = self.ledger.append(&LedgerAppendInput {
+                    artifact_id: artifact.artifact_id.clone(),
+                    pass_kind: artifact.pass_kind,
+                    original_size_bytes: artifact.original_size_bytes,
+                    compressed_size_bytes: artifact.compressed_size_bytes,
+                    duplicate_mass_removed_bytes: artifact.duplicates_removed,
+                    duplicate_mass_remaining_bytes: artifact.duplicates_remaining,
+                    reversible: artifact.reversible,
+                    bytes_lost: if artifact.reversible {
                         0
                     } else {
                         artifact
                             .original_size_bytes
                             .saturating_sub(artifact.compressed_size_bytes)
                     },
-                    artifact.restoration_overhead_us,
-                    input.epoch,
-                    input.timestamp_ns,
-                );
+                    restoration_overhead_us: artifact.restoration_overhead_us,
+                    epoch: input.epoch,
+                    timestamp_ns: input.timestamp_ns,
+                });
             }
         }
 
@@ -1201,16 +1219,13 @@ impl CompressionResidualGate {
         // Check decompression cost against cold-start budget.
         if input.cold_start_total_budget_us > 0 {
             let decompression_ratio = (agg_restoration_us as i128 * MILLION as i128
-                / input.cold_start_total_budget_us as i128) as i64;
+                / input.cold_start_total_budget_us as i128)
+                as i64;
             if decompression_ratio > self.config.cold_start_decompression_budget_millionths {
-                blocking_reasons.push(
-                    ClaimBlockingReason::DecompressionCostExceedsBudget {
-                        observed_millionths: decompression_ratio,
-                        budget_millionths: self
-                            .config
-                            .cold_start_decompression_budget_millionths,
-                    },
-                );
+                blocking_reasons.push(ClaimBlockingReason::DecompressionCostExceedsBudget {
+                    observed_millionths: decompression_ratio,
+                    budget_millionths: self.config.cold_start_decompression_budget_millionths,
+                });
             } else if decompression_ratio
                 > self.config.cold_start_decompression_budget_millionths * 3 / 4
             {
@@ -1259,14 +1274,10 @@ impl CompressionResidualGate {
             let expansion_ratio =
                 (total_hidden as i128 * MILLION as i128 / total_saved as i128) as i64;
             if expansion_ratio > self.config.memory_hidden_expansion_threshold_millionths {
-                blocking_reasons.push(
-                    ClaimBlockingReason::HiddenExpansionExceedsThreshold {
-                        observed_millionths: expansion_ratio,
-                        threshold_millionths: self
-                            .config
-                            .memory_hidden_expansion_threshold_millionths,
-                    },
-                );
+                blocking_reasons.push(ClaimBlockingReason::HiddenExpansionExceedsThreshold {
+                    observed_millionths: expansion_ratio,
+                    threshold_millionths: self.config.memory_hidden_expansion_threshold_millionths,
+                });
             } else if expansion_ratio
                 > self.config.memory_hidden_expansion_threshold_millionths * 3 / 4
                 && !net_expansion_detected
@@ -1305,11 +1316,7 @@ impl CompressionResidualGate {
             // Overhead = (compressed_size + metadata) - original_size_claim
             // We approximate metadata overhead as: compressed / original ratio
             // above what was claimed. If compressed > original, that's pure overhead.
-            let overhead_bytes = if agg_compressed_bytes > agg_original_bytes {
-                agg_compressed_bytes - agg_original_bytes
-            } else {
-                0
-            };
+            let overhead_bytes = agg_compressed_bytes.saturating_sub(agg_original_bytes);
             let overhead_ratio = (overhead_bytes as i128 * MILLION as i128
                 / input.proof_total_size_bytes as i128) as i64;
 
@@ -1370,8 +1377,7 @@ impl CompressionResidualGate {
 
         for cost in &input.support_costs {
             total_baseline = total_baseline.saturating_add(cost.baseline_cost_millionths);
-            total_overhead =
-                total_overhead.saturating_add(cost.compression_overhead_millionths);
+            total_overhead = total_overhead.saturating_add(cost.compression_overhead_millionths);
 
             if self.config.require_stack_trace_accuracy && !cost.stack_traces_accurate {
                 blocking_reasons.push(ClaimBlockingReason::StackTraceAccuracyLost {
@@ -1405,29 +1411,25 @@ impl CompressionResidualGate {
     }
 
     /// Evaluate all three surfaces and return receipts for each.
+    ///
+    /// The `template` input's `surface` field is ignored; all three surfaces
+    /// are evaluated using the remaining fields from the template.
     pub fn evaluate_all_surfaces(
         &mut self,
-        pass_results: &[CompressionPassResult],
-        hidden_expansions: &[HiddenExpansionRecord],
-        support_costs: &[SupportCostRecord],
-        reversibility_checks: &[ReversibilityCheck],
-        epoch: SecurityEpoch,
-        timestamp_ns: u64,
-        cold_start_total_budget_us: u64,
-        proof_total_size_bytes: u64,
+        template: &GateInput,
     ) -> Result<Vec<DecisionReceipt>, CompressionResidualError> {
         let mut results = Vec::new();
         for surface in ClaimSurface::ALL {
             let input = GateInput {
                 surface,
-                pass_results: pass_results.to_vec(),
-                hidden_expansions: hidden_expansions.to_vec(),
-                support_costs: support_costs.to_vec(),
-                reversibility_checks: reversibility_checks.to_vec(),
-                epoch,
-                timestamp_ns,
-                cold_start_total_budget_us,
-                proof_total_size_bytes,
+                pass_results: template.pass_results.clone(),
+                hidden_expansions: template.hidden_expansions.clone(),
+                support_costs: template.support_costs.clone(),
+                reversibility_checks: template.reversibility_checks.clone(),
+                epoch: template.epoch,
+                timestamp_ns: template.timestamp_ns,
+                cold_start_total_budget_us: template.cold_start_total_budget_us,
+                proof_total_size_bytes: template.proof_total_size_bytes,
             };
             results.push(self.evaluate(&input)?);
         }
@@ -1486,32 +1488,44 @@ pub struct GateSummary {
 
 // ── Helper: build test fixtures ───────────────────────────────────────
 
+/// Input for building a simple artifact record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildArtifactInput {
+    /// Artifact identifier.
+    pub artifact_id: String,
+    /// Original size in bytes.
+    pub original_size: u64,
+    /// Compressed size in bytes.
+    pub compressed_size: u64,
+    /// Compression pass kind.
+    pub pass_kind: CompressionPassKind,
+    /// Whether the artifact is reversible.
+    pub reversible: bool,
+    /// Restoration overhead in microseconds.
+    pub restoration_us: u64,
+    /// Number of duplicate fragments removed.
+    pub duplicates_removed: u64,
+    /// Number of duplicate fragments remaining.
+    pub duplicates_remaining: u64,
+}
+
 /// Build a simple artifact record for testing/construction.
-pub fn build_artifact_record(
-    artifact_id: &str,
-    original_size: u64,
-    compressed_size: u64,
-    pass_kind: CompressionPassKind,
-    reversible: bool,
-    restoration_us: u64,
-    duplicates_removed: u64,
-    duplicates_remaining: u64,
-) -> ArtifactRecord {
+pub fn build_artifact_record(input: &BuildArtifactInput) -> ArtifactRecord {
     ArtifactRecord {
-        artifact_id: artifact_id.to_string(),
-        original_size_bytes: original_size,
-        compressed_size_bytes: compressed_size,
+        artifact_id: input.artifact_id.clone(),
+        original_size_bytes: input.original_size,
+        compressed_size_bytes: input.compressed_size,
         original_hash: ContentHash::compute(
-            format!("orig:{artifact_id}:{original_size}").as_bytes(),
+            format!("orig:{}:{}", input.artifact_id, input.original_size).as_bytes(),
         ),
         compressed_hash: ContentHash::compute(
-            format!("comp:{artifact_id}:{compressed_size}").as_bytes(),
+            format!("comp:{}:{}", input.artifact_id, input.compressed_size).as_bytes(),
         ),
-        pass_kind,
-        reversible,
-        restoration_overhead_us: restoration_us,
-        duplicates_removed,
-        duplicates_remaining,
+        pass_kind: input.pass_kind,
+        reversible: input.reversible,
+        restoration_overhead_us: input.restoration_us,
+        duplicates_removed: input.duplicates_removed,
+        duplicates_remaining: input.duplicates_remaining,
     }
 }
 
@@ -1562,16 +1576,16 @@ mod tests {
     }
 
     fn simple_artifact(id: &str, orig: u64, comp: u64, reversible: bool) -> ArtifactRecord {
-        build_artifact_record(
-            id,
-            orig,
-            comp,
-            CompressionPassKind::Deduplication,
+        build_artifact_record(&BuildArtifactInput {
+            artifact_id: id.to_string(),
+            original_size: orig,
+            compressed_size: comp,
+            pass_kind: CompressionPassKind::Deduplication,
             reversible,
-            100,
-            10,
-            2,
-        )
+            restoration_us: 100,
+            duplicates_removed: 10,
+            duplicates_remaining: 2,
+        })
     }
 
     fn simple_pass(artifacts: Vec<ArtifactRecord>) -> CompressionPassResult {
@@ -1622,6 +1636,34 @@ mod tests {
             debug_readable: true,
             stack_traces_accurate: true,
             explanation: "test".to_string(),
+        }
+    }
+
+    fn ledger_input(
+        artifact_id: &str,
+        pass_kind: CompressionPassKind,
+        original_size_bytes: u64,
+        compressed_size_bytes: u64,
+        dup_removed: u64,
+        dup_remaining: u64,
+        reversible: bool,
+    ) -> LedgerAppendInput {
+        LedgerAppendInput {
+            artifact_id: artifact_id.to_string(),
+            pass_kind,
+            original_size_bytes,
+            compressed_size_bytes,
+            duplicate_mass_removed_bytes: dup_removed,
+            duplicate_mass_remaining_bytes: dup_remaining,
+            reversible,
+            bytes_lost: if reversible {
+                0
+            } else {
+                original_size_bytes.saturating_sub(compressed_size_bytes)
+            },
+            restoration_overhead_us: 100,
+            epoch: epoch(),
+            timestamp_ns: ts(),
         }
     }
 
@@ -1694,24 +1736,30 @@ mod tests {
 
     #[test]
     fn test_gate_invalid_config_negative_budget() {
-        let mut config = GateConfig::default();
-        config.cold_start_decompression_budget_millionths = -1;
+        let config = GateConfig {
+            cold_start_decompression_budget_millionths: -1,
+            ..GateConfig::default()
+        };
         let result = CompressionResidualGate::with_config(config);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_gate_invalid_config_bad_reversibility() {
-        let mut config = GateConfig::default();
-        config.reversibility_threshold_millionths = MILLION + 1;
+        let config = GateConfig {
+            reversibility_threshold_millionths: MILLION + 1,
+            ..GateConfig::default()
+        };
         let result = CompressionResidualGate::with_config(config);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_gate_invalid_config_negative_dup_mass() {
-        let mut config = GateConfig::default();
-        config.max_duplicate_mass_millionths = -5;
+        let config = GateConfig {
+            max_duplicate_mass_millionths: -5,
+            ..GateConfig::default()
+        };
         let result = CompressionResidualGate::with_config(config);
         assert!(result.is_err());
     }
@@ -1766,20 +1814,32 @@ mod tests {
 
     #[test]
     fn test_artifact_remaining_duplicate_mass() {
-        let art = build_artifact_record(
-            "a1", 1000, 500,
-            CompressionPassKind::Deduplication, true, 100, 8, 2,
-        );
+        let art = build_artifact_record(&BuildArtifactInput {
+            artifact_id: "a1".to_string(),
+            original_size: 1000,
+            compressed_size: 500,
+            pass_kind: CompressionPassKind::Deduplication,
+            reversible: true,
+            restoration_us: 100,
+            duplicates_removed: 8,
+            duplicates_remaining: 2,
+        });
         // 2 / (8+2) = 0.2 = 200_000 millionths
         assert_eq!(art.remaining_duplicate_mass_millionths(), 200_000);
     }
 
     #[test]
     fn test_artifact_no_duplicates() {
-        let art = build_artifact_record(
-            "a1", 1000, 500,
-            CompressionPassKind::EntropyCoding, true, 50, 0, 0,
-        );
+        let art = build_artifact_record(&BuildArtifactInput {
+            artifact_id: "a1".to_string(),
+            original_size: 1000,
+            compressed_size: 500,
+            pass_kind: CompressionPassKind::EntropyCoding,
+            reversible: true,
+            restoration_us: 50,
+            duplicates_removed: 0,
+            duplicates_remaining: 0,
+        });
         assert_eq!(art.remaining_duplicate_mass_millionths(), 0);
     }
 
@@ -2031,12 +2091,15 @@ mod tests {
     fn test_ledger_append_and_query() {
         let mut ledger = ResidualLedger::new();
         let seq = ledger
-            .append(
-                "art-1".into(),
+            .append(&ledger_input(
+                "art-1",
                 CompressionPassKind::Deduplication,
-                1000, 500, 10, 2, true, 0, 100,
-                epoch(), ts(),
-            )
+                1000,
+                500,
+                10,
+                2,
+                true,
+            ))
             .unwrap();
         assert_eq!(seq, 0);
         assert_eq!(ledger.len(), 1);
@@ -2046,12 +2109,45 @@ mod tests {
     #[test]
     fn test_ledger_entries_for_artifact() {
         let mut ledger = ResidualLedger::new();
-        ledger.append("art-1".into(), CompressionPassKind::Deduplication,
-            1000, 500, 10, 2, true, 0, 100, epoch(), ts()).unwrap();
-        ledger.append("art-2".into(), CompressionPassKind::EntropyCoding,
-            2000, 800, 5, 1, true, 0, 200, epoch(), ts()).unwrap();
-        ledger.append("art-1".into(), CompressionPassKind::DeltaEncoding,
-            500, 200, 3, 1, true, 0, 50, epoch(), ts()).unwrap();
+        ledger
+            .append(&ledger_input(
+                "art-1",
+                CompressionPassKind::Deduplication,
+                1000,
+                500,
+                10,
+                2,
+                true,
+            ))
+            .unwrap();
+        ledger
+            .append(&LedgerAppendInput {
+                restoration_overhead_us: 200,
+                ..ledger_input(
+                    "art-2",
+                    CompressionPassKind::EntropyCoding,
+                    2000,
+                    800,
+                    5,
+                    1,
+                    true,
+                )
+            })
+            .unwrap();
+        ledger
+            .append(&LedgerAppendInput {
+                restoration_overhead_us: 50,
+                ..ledger_input(
+                    "art-1",
+                    CompressionPassKind::DeltaEncoding,
+                    500,
+                    200,
+                    3,
+                    1,
+                    true,
+                )
+            })
+            .unwrap();
 
         let entries = ledger.entries_for_artifact("art-1");
         assert_eq!(entries.len(), 2);
@@ -2064,10 +2160,31 @@ mod tests {
     #[test]
     fn test_ledger_aggregates() {
         let mut ledger = ResidualLedger::new();
-        ledger.append("a".into(), CompressionPassKind::Deduplication,
-            1000, 500, 10, 2, true, 0, 100, epoch(), ts()).unwrap();
-        ledger.append("b".into(), CompressionPassKind::Deduplication,
-            2000, 800, 20, 4, true, 0, 200, epoch(), ts()).unwrap();
+        ledger
+            .append(&ledger_input(
+                "a",
+                CompressionPassKind::Deduplication,
+                1000,
+                500,
+                10,
+                2,
+                true,
+            ))
+            .unwrap();
+        ledger
+            .append(&LedgerAppendInput {
+                restoration_overhead_us: 200,
+                ..ledger_input(
+                    "b",
+                    CompressionPassKind::Deduplication,
+                    2000,
+                    800,
+                    20,
+                    4,
+                    true,
+                )
+            })
+            .unwrap();
 
         assert_eq!(ledger.total_original_bytes(), 3000);
         assert_eq!(ledger.total_compressed_bytes(), 1300);
@@ -2078,16 +2195,40 @@ mod tests {
     #[test]
     fn test_ledger_compression_ratio() {
         let mut ledger = ResidualLedger::new();
-        ledger.append("a".into(), CompressionPassKind::Deduplication,
-            1000, 500, 0, 0, true, 0, 0, epoch(), ts()).unwrap();
+        ledger
+            .append(&LedgerAppendInput {
+                restoration_overhead_us: 0,
+                ..ledger_input(
+                    "a",
+                    CompressionPassKind::Deduplication,
+                    1000,
+                    500,
+                    0,
+                    0,
+                    true,
+                )
+            })
+            .unwrap();
         assert_eq!(ledger.aggregate_compression_ratio_millionths(), 500_000);
     }
 
     #[test]
     fn test_ledger_duplicate_mass() {
         let mut ledger = ResidualLedger::new();
-        ledger.append("a".into(), CompressionPassKind::Deduplication,
-            1000, 500, 80, 20, true, 0, 0, epoch(), ts()).unwrap();
+        ledger
+            .append(&LedgerAppendInput {
+                restoration_overhead_us: 0,
+                ..ledger_input(
+                    "a",
+                    CompressionPassKind::Deduplication,
+                    1000,
+                    500,
+                    80,
+                    20,
+                    true,
+                )
+            })
+            .unwrap();
         // 20 / (80+20) = 200_000
         assert_eq!(ledger.aggregate_duplicate_mass_millionths(), 200_000);
     }
@@ -2095,13 +2236,38 @@ mod tests {
     #[test]
     fn test_ledger_irreversible_tracking() {
         let mut ledger = ResidualLedger::new();
-        ledger.append("a".into(), CompressionPassKind::Deduplication,
-            1000, 500, 0, 0, true, 0, 0, epoch(), ts()).unwrap();
+        ledger
+            .append(&LedgerAppendInput {
+                restoration_overhead_us: 0,
+                ..ledger_input(
+                    "a",
+                    CompressionPassKind::Deduplication,
+                    1000,
+                    500,
+                    0,
+                    0,
+                    true,
+                )
+            })
+            .unwrap();
         assert!(!ledger.has_irreversible_entries());
         assert_eq!(ledger.irreversible_count(), 0);
 
-        ledger.append("b".into(), CompressionPassKind::ProofCompaction,
-            2000, 800, 0, 0, false, 200, 0, epoch(), ts()).unwrap();
+        ledger
+            .append(&LedgerAppendInput {
+                bytes_lost: 200,
+                restoration_overhead_us: 0,
+                ..ledger_input(
+                    "b",
+                    CompressionPassKind::ProofCompaction,
+                    2000,
+                    800,
+                    0,
+                    0,
+                    false,
+                )
+            })
+            .unwrap();
         assert!(ledger.has_irreversible_entries());
         assert_eq!(ledger.irreversible_count(), 1);
     }
@@ -2109,10 +2275,31 @@ mod tests {
     #[test]
     fn test_ledger_restoration_overhead() {
         let mut ledger = ResidualLedger::new();
-        ledger.append("a".into(), CompressionPassKind::Deduplication,
-            1000, 500, 0, 0, true, 0, 100, epoch(), ts()).unwrap();
-        ledger.append("b".into(), CompressionPassKind::Deduplication,
-            1000, 500, 0, 0, true, 0, 250, epoch(), ts()).unwrap();
+        ledger
+            .append(&ledger_input(
+                "a",
+                CompressionPassKind::Deduplication,
+                1000,
+                500,
+                0,
+                0,
+                true,
+            ))
+            .unwrap();
+        ledger
+            .append(&LedgerAppendInput {
+                restoration_overhead_us: 250,
+                ..ledger_input(
+                    "b",
+                    CompressionPassKind::Deduplication,
+                    1000,
+                    500,
+                    0,
+                    0,
+                    true,
+                )
+            })
+            .unwrap();
         assert_eq!(ledger.total_restoration_overhead_us(), 350);
     }
 
@@ -2146,12 +2333,16 @@ mod tests {
         let mut gate = CompressionResidualGate::new();
         // Restoration: 100_000us out of 1_000_000us budget = 100_000 millionths = 10%
         // Budget is 50_000 = 5%, so this should block.
-        let arts = vec![build_artifact_record(
-            "a1", 1000, 500,
-            CompressionPassKind::Deduplication, true,
-            100_000, // 100ms restoration
-            10, 2,
-        )];
+        let arts = vec![build_artifact_record(&BuildArtifactInput {
+            artifact_id: "a1".to_string(),
+            original_size: 1000,
+            compressed_size: 500,
+            pass_kind: CompressionPassKind::Deduplication,
+            reversible: true,
+            restoration_us: 100_000, // 100ms restoration
+            duplicates_removed: 10,
+            duplicates_remaining: 2,
+        })];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         let receipt = gate.evaluate(&input).unwrap();
@@ -2164,16 +2355,23 @@ mod tests {
         let mut gate = CompressionResidualGate::new();
         // 40_000 / 1_000_000 = 40_000 millionths. Budget is 50_000.
         // 40_000 > 50_000 * 3/4 = 37_500, so caveat.
-        let arts = vec![build_artifact_record(
-            "a1", 1000, 500,
-            CompressionPassKind::Deduplication, true,
-            40_000,
-            10, 2,
-        )];
+        let arts = vec![build_artifact_record(&BuildArtifactInput {
+            artifact_id: "a1".to_string(),
+            original_size: 1000,
+            compressed_size: 500,
+            pass_kind: CompressionPassKind::Deduplication,
+            reversible: true,
+            restoration_us: 40_000,
+            duplicates_removed: 10,
+            duplicates_remaining: 2,
+        })];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         let receipt = gate.evaluate(&input).unwrap();
-        assert_eq!(receipt.verdict, CompressionClaimVerdict::ApprovedWithCaveats);
+        assert_eq!(
+            receipt.verdict,
+            CompressionClaimVerdict::ApprovedWithCaveats
+        );
         assert!(!receipt.caveats.is_empty());
     }
 
@@ -2299,7 +2497,9 @@ mod tests {
         let pass = simple_pass(arts);
         let mut input = cold_start_input(pass);
         // overhead / baseline = 500_000 / 1_000_000 = 500_000 millionths > 200_000 ceiling
-        input.support_costs.push(simple_support_cost("s1", 1_000_000, 500_000));
+        input
+            .support_costs
+            .push(simple_support_cost("s1", 1_000_000, 500_000));
         let receipt = gate.evaluate(&input).unwrap();
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
@@ -2329,10 +2529,16 @@ mod tests {
     fn test_duplicate_mass_blocks() {
         let mut gate = CompressionResidualGate::new();
         // 50 / (50+50) = 500_000 > 200_000 threshold
-        let arts = vec![build_artifact_record(
-            "a1", 1000, 500,
-            CompressionPassKind::Deduplication, true, 100, 50, 50,
-        )];
+        let arts = vec![build_artifact_record(&BuildArtifactInput {
+            artifact_id: "a1".to_string(),
+            original_size: 1000,
+            compressed_size: 500,
+            pass_kind: CompressionPassKind::Deduplication,
+            reversible: true,
+            restoration_us: 100,
+            duplicates_removed: 50,
+            duplicates_remaining: 50,
+        })];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         let receipt = gate.evaluate(&input).unwrap();
@@ -2374,17 +2580,20 @@ mod tests {
 
     #[test]
     fn test_irreversible_artifact_ok_when_not_required() {
-        let mut config = GateConfig::default();
-        config.require_full_reversibility = false;
+        let config = GateConfig {
+            require_full_reversibility: false,
+            ..GateConfig::default()
+        };
         let mut gate = CompressionResidualGate::with_config(config).unwrap();
         let arts = vec![simple_artifact("a1", 1000, 500, false)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         let receipt = gate.evaluate(&input).unwrap();
         // Not blocked by irreversibility (other checks may still pass)
-        let has_irreversible_block = receipt.blocking_reasons.iter().any(|r| {
-            matches!(r, ClaimBlockingReason::IrreversibleArtifact { .. })
-        });
+        let has_irreversible_block = receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| matches!(r, ClaimBlockingReason::IrreversibleArtifact { .. }));
         assert!(!has_irreversible_block);
     }
 
@@ -2395,18 +2604,18 @@ mod tests {
         let mut gate = CompressionResidualGate::new();
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
-        let results = gate
-            .evaluate_all_surfaces(
-                &[pass],
-                &[simple_hidden_expansion("s1", 1000, 10)],
-                &[],
-                &[],
-                epoch(),
-                ts(),
-                1_000_000,
-                10_000,
-            )
-            .unwrap();
+        let template = GateInput {
+            surface: ClaimSurface::ColdStart, // ignored by evaluate_all_surfaces
+            pass_results: vec![pass],
+            hidden_expansions: vec![simple_hidden_expansion("s1", 1000, 10)],
+            support_costs: Vec::new(),
+            reversibility_checks: Vec::new(),
+            epoch: epoch(),
+            timestamp_ns: ts(),
+            cold_start_total_budget_us: 1_000_000,
+            proof_total_size_bytes: 10_000,
+        };
+        let results = gate.evaluate_all_surfaces(&template).unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].surface, ClaimSurface::ColdStart);
         assert_eq!(results[1].surface, ClaimSurface::Memory);
@@ -2579,8 +2788,17 @@ mod tests {
     #[test]
     fn test_serde_round_trip_ledger_entry() {
         let mut ledger = ResidualLedger::new();
-        ledger.append("art-1".into(), CompressionPassKind::Deduplication,
-            1000, 500, 10, 2, true, 0, 100, epoch(), ts()).unwrap();
+        ledger
+            .append(&ledger_input(
+                "art-1",
+                CompressionPassKind::Deduplication,
+                1000,
+                500,
+                10,
+                2,
+                true,
+            ))
+            .unwrap();
         let entry = &ledger.entries()[0];
         let json = serde_json::to_string(entry).unwrap();
         let entry2: ResidualLedgerEntry = serde_json::from_str(&json).unwrap();
@@ -2589,7 +2807,7 @@ mod tests {
 
     #[test]
     fn test_serde_round_trip_gate_summary() {
-        let mut gate = CompressionResidualGate::new();
+        let gate = CompressionResidualGate::new();
         let summary = gate.summary();
         let json = serde_json::to_string(&summary).unwrap();
         let summary2: GateSummary = serde_json::from_str(&json).unwrap();
@@ -2634,10 +2852,16 @@ mod tests {
     #[test]
     fn test_large_artifact_sizes() {
         let mut gate = CompressionResidualGate::new();
-        let arts = vec![build_artifact_record(
-            "big", u64::MAX / 2, u64::MAX / 4,
-            CompressionPassKind::Deduplication, true, 100, 10, 2,
-        )];
+        let arts = vec![build_artifact_record(&BuildArtifactInput {
+            artifact_id: "big".to_string(),
+            original_size: u64::MAX / 2,
+            compressed_size: u64::MAX / 4,
+            pass_kind: CompressionPassKind::Deduplication,
+            reversible: true,
+            restoration_us: 100,
+            duplicates_removed: 10,
+            duplicates_remaining: 2,
+        })];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         let receipt = gate.evaluate(&input).unwrap();
@@ -2649,22 +2873,29 @@ mod tests {
 
     #[test]
     fn test_relaxed_config_allows_more() {
-        let mut config = GateConfig::default();
-        config.max_duplicate_mass_millionths = MILLION; // allow 100%
-        config.require_full_reversibility = false;
-        config.require_debug_readability = false;
-        config.require_stack_trace_accuracy = false;
-        config.cold_start_decompression_budget_millionths = MILLION;
-        config.support_cost_ceiling_millionths = MILLION * 2;
-        config.reversibility_threshold_millionths = 0;
-        config.max_cold_start_restoration_us = u64::MAX;
+        let config = GateConfig {
+            max_duplicate_mass_millionths: MILLION, // allow 100%
+            require_full_reversibility: false,
+            require_debug_readability: false,
+            require_stack_trace_accuracy: false,
+            cold_start_decompression_budget_millionths: MILLION,
+            support_cost_ceiling_millionths: MILLION * 2,
+            reversibility_threshold_millionths: 0,
+            max_cold_start_restoration_us: u64::MAX,
+            ..GateConfig::default()
+        };
 
         let mut gate = CompressionResidualGate::with_config(config).unwrap();
-        let arts = vec![build_artifact_record(
-            "a1", 1000, 500,
-            CompressionPassKind::Deduplication, false,
-            999_999, 50, 50,
-        )];
+        let arts = vec![build_artifact_record(&BuildArtifactInput {
+            artifact_id: "a1".to_string(),
+            original_size: 1000,
+            compressed_size: 500,
+            pass_kind: CompressionPassKind::Deduplication,
+            reversible: false,
+            restoration_us: 999_999,
+            duplicates_removed: 50,
+            duplicates_remaining: 50,
+        })];
         let pass = simple_pass(arts);
         let mut input = cold_start_input(pass);
         input.support_costs.push(SupportCostRecord {
@@ -2677,7 +2908,11 @@ mod tests {
             explanation: "everything broken".to_string(),
         });
         let receipt = gate.evaluate(&input).unwrap();
-        assert_eq!(receipt.verdict, CompressionClaimVerdict::Approved);
+        // Caveat expected: decompression ratio 999_999 > budget * 3/4 = 750_000.
+        assert_eq!(
+            receipt.verdict,
+            CompressionClaimVerdict::ApprovedWithCaveats
+        );
     }
 
     // ── Default trait ─────────────────────────────────────────────────
@@ -2738,14 +2973,26 @@ mod tests {
 
     #[test]
     fn test_build_artifact_record_hashes_differ() {
-        let a1 = build_artifact_record(
-            "a1", 1000, 500,
-            CompressionPassKind::Deduplication, true, 100, 10, 2,
-        );
-        let a2 = build_artifact_record(
-            "a2", 1000, 500,
-            CompressionPassKind::Deduplication, true, 100, 10, 2,
-        );
+        let a1 = build_artifact_record(&BuildArtifactInput {
+            artifact_id: "a1".to_string(),
+            original_size: 1000,
+            compressed_size: 500,
+            pass_kind: CompressionPassKind::Deduplication,
+            reversible: true,
+            restoration_us: 100,
+            duplicates_removed: 10,
+            duplicates_remaining: 2,
+        });
+        let a2 = build_artifact_record(&BuildArtifactInput {
+            artifact_id: "a2".to_string(),
+            original_size: 1000,
+            compressed_size: 500,
+            pass_kind: CompressionPassKind::Deduplication,
+            reversible: true,
+            restoration_us: 100,
+            duplicates_removed: 10,
+            duplicates_remaining: 2,
+        });
         assert_ne!(a1.original_hash, a2.original_hash);
     }
 

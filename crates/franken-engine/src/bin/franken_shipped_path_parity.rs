@@ -12,8 +12,10 @@ use frankenengine_engine::execution_orchestrator::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
-use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
-use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
+use frankenengine_engine::lowering_pipeline::{
+    LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
+};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 use frankenengine_engine::rgc_test_harness::{
     DeterministicTestContext, EventInput, HarnessLane, HarnessRunManifest, write_artifact_triad,
 };
@@ -43,6 +45,7 @@ struct CliArgs {
 enum ParityCommandFamily {
     Compile,
     Run,
+    VerifyCompileArtifact,
 }
 
 impl ParityCommandFamily {
@@ -50,6 +53,7 @@ impl ParityCommandFamily {
         match self {
             Self::Compile => "compile",
             Self::Run => "run",
+            Self::VerifyCompileArtifact => "verify_compile_artifact",
         }
     }
 }
@@ -59,6 +63,12 @@ impl ParityCommandFamily {
 enum ExpectedOutcome {
     Success,
     Failure,
+}
+
+impl ExpectedOutcome {
+    const fn is_success(self) -> bool {
+        matches!(self, Self::Success)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +81,7 @@ enum ParityVerdict {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum MismatchKind {
+    UnexpectedOutcome,
     ExitCode,
     FailureClass,
     ParseGoal,
@@ -80,6 +91,8 @@ enum MismatchKind {
     ExecutionValue,
     Lane,
     ContainmentAction,
+    VerificationPassed,
+    VerificationErrors,
     ArtifactMissing,
 }
 
@@ -104,6 +117,12 @@ struct ParitySpecimen {
     source: &'static str,
     parse_goal: ParseGoal,
     expected_outcome: ExpectedOutcome,
+    artifact_mutation: Option<ArtifactMutation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtifactMutation {
+    Ir3HashMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +155,12 @@ struct RunComparable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct VerifyCompileArtifactComparable {
+    passed: bool,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct InvocationRecord {
     entrypoint: String,
     success: bool,
@@ -148,6 +173,8 @@ struct InvocationRecord {
     compile: Option<CompileComparable>,
     #[serde(skip_serializing_if = "Option::is_none")]
     run: Option<RunComparable>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verify_compile_artifact: Option<VerifyCompileArtifactComparable>,
     #[serde(skip_serializing_if = "Option::is_none")]
     artifact_path: Option<String>,
 }
@@ -166,6 +193,7 @@ impl InvocationRecord {
             error_detail: None,
             compile: Some(compile),
             run: None,
+            verify_compile_artifact: None,
             artifact_path: artifact_path.map(|path| path.display().to_string()),
         }
     }
@@ -179,6 +207,26 @@ impl InvocationRecord {
             error_detail: None,
             compile: None,
             run: Some(run),
+            verify_compile_artifact: None,
+            artifact_path: artifact_path.map(|path| path.display().to_string()),
+        }
+    }
+
+    fn success_verify_compile_artifact(
+        entrypoint: &str,
+        verify_compile_artifact: VerifyCompileArtifactComparable,
+        exit_code: i32,
+        artifact_path: Option<&Path>,
+    ) -> Self {
+        Self {
+            entrypoint: entrypoint.to_string(),
+            success: true,
+            exit_code,
+            failure_class: None,
+            error_detail: None,
+            compile: None,
+            run: None,
+            verify_compile_artifact: Some(verify_compile_artifact),
             artifact_path: artifact_path.map(|path| path.display().to_string()),
         }
     }
@@ -198,6 +246,7 @@ impl InvocationRecord {
             error_detail: Some(error_detail.into()),
             compile: None,
             run: None,
+            verify_compile_artifact: None,
             artifact_path: artifact_path.map(|path| path.display().to_string()),
         }
     }
@@ -257,9 +306,6 @@ struct CliOutputSummary {
 
 #[derive(Debug, Deserialize)]
 struct CliCompileStdout {
-    parse_goal: String,
-    source_ingestion: SourceIngestionSummary,
-    hashes: ComparableCompileHashes,
     lowering_event_count: u64,
     lowering_witness_count: u64,
 }
@@ -280,6 +326,29 @@ struct CliRunOutput {
     execution_value: String,
     expected_loss_millionths: i64,
     instructions_executed: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CliCompileArtifactVerificationOutput {
+    passed: bool,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VerifiableCompileArtifact {
+    schema_version: String,
+    generated_unix_ns: u64,
+    source_path: String,
+    parse_goal: String,
+    #[serde(default)]
+    source_ingestion: SourceIngestionSummary,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    hashes: ComparableCompileHashes,
+    parse_event_ir: ParseEventIr,
+    ir0: Ir0Module,
+    lowering: LoweringPipelineOutput,
 }
 
 fn main() {
@@ -539,9 +608,29 @@ fn run_specimen(
                 run_cli_run(args, specimen, &source_path, &report_path, commands)?,
             )
         }
+        ParityCommandFamily::VerifyCompileArtifact => {
+            let artifact_path =
+                run_dir.join(format!("{}-verify-artifact.json", specimen.specimen_id));
+            prepare_verify_compile_artifact_input(
+                args,
+                specimen,
+                &source_path,
+                &artifact_path,
+                commands,
+            )?;
+            (
+                run_library_verify_compile_artifact(&artifact_path),
+                run_cli_verify_compile_artifact(args, &artifact_path, commands)?,
+            )
+        }
     };
 
-    let (verdict, mismatch_kind) = compare_records(specimen.command_family, &library, &cli);
+    let (verdict, mismatch_kind) = compare_records(
+        specimen.command_family,
+        specimen.expected_outcome,
+        &library,
+        &cli,
+    );
     Ok(SpecimenParityRecord {
         specimen_id: specimen.specimen_id.to_string(),
         description: specimen.description.to_string(),
@@ -816,9 +905,17 @@ fn run_command(command: &[String]) -> Result<Output, String> {
 
 fn compare_records(
     command_family: ParityCommandFamily,
+    expected_outcome: ExpectedOutcome,
     library: &InvocationRecord,
     cli: &InvocationRecord,
 ) -> (ParityVerdict, Option<MismatchKind>) {
+    let expected_success = expected_outcome.is_success();
+    if library.success != expected_success || cli.success != expected_success {
+        return (
+            ParityVerdict::Mismatch,
+            Some(MismatchKind::UnexpectedOutcome),
+        );
+    }
     if library.exit_code != cli.exit_code {
         return (ParityVerdict::Mismatch, Some(MismatchKind::ExitCode));
     }
@@ -835,6 +932,9 @@ fn compare_records(
     match command_family {
         ParityCommandFamily::Compile => compare_compile_records(library, cli),
         ParityCommandFamily::Run => compare_run_records(library, cli),
+        ParityCommandFamily::VerifyCompileArtifact => {
+            compare_verify_compile_artifact_records(library, cli)
+        }
     }
 }
 
@@ -894,6 +994,32 @@ fn compare_run_records(
         || library_run.instructions_executed != cli_run.instructions_executed
     {
         return (ParityVerdict::Mismatch, Some(MismatchKind::ExecutionValue));
+    }
+    (ParityVerdict::Match, None)
+}
+
+fn compare_verify_compile_artifact_records(
+    library: &InvocationRecord,
+    cli: &InvocationRecord,
+) -> (ParityVerdict, Option<MismatchKind>) {
+    let Some(library_verify) = library.verify_compile_artifact.as_ref() else {
+        return (ParityVerdict::Mismatch, Some(MismatchKind::ArtifactMissing));
+    };
+    let Some(cli_verify) = cli.verify_compile_artifact.as_ref() else {
+        return (ParityVerdict::Mismatch, Some(MismatchKind::ArtifactMissing));
+    };
+
+    if library_verify.passed != cli_verify.passed {
+        return (
+            ParityVerdict::Mismatch,
+            Some(MismatchKind::VerificationPassed),
+        );
+    }
+    if library_verify.errors != cli_verify.errors {
+        return (
+            ParityVerdict::Mismatch,
+            Some(MismatchKind::VerificationErrors),
+        );
     }
     (ParityVerdict::Match, None)
 }
@@ -976,6 +1102,182 @@ fn source_ingestion_metadata(
     metadata
 }
 
+fn prepare_verify_compile_artifact_input(
+    args: &CliArgs,
+    specimen: &ParitySpecimen,
+    source_path: &Path,
+    artifact_path: &Path,
+    commands: &mut Vec<String>,
+) -> Result<(), String> {
+    let compile_record = run_cli_compile(args, specimen, source_path, artifact_path, commands)?;
+    if !compile_record.success {
+        return Err(format!(
+            "failed to prepare verify input artifact for `{}`: {}",
+            specimen.specimen_id,
+            compile_record
+                .error_detail
+                .unwrap_or_else(|| "compile preparation failed".to_string())
+        ));
+    }
+    if let Some(mutation) = specimen.artifact_mutation {
+        apply_artifact_mutation(artifact_path, mutation)?;
+    }
+    Ok(())
+}
+
+fn apply_artifact_mutation(path: &Path, mutation: ArtifactMutation) -> Result<(), String> {
+    let mut artifact: VerifiableCompileArtifact =
+        parse_json_file(path, "compile artifact mutation input")?;
+    match mutation {
+        ArtifactMutation::Ir3HashMismatch => {
+            artifact.hashes.ir3 = "sha256:deadbeef".to_string();
+        }
+    }
+    write_json_file(path, &artifact)
+}
+
+fn run_library_verify_compile_artifact(artifact_path: &Path) -> InvocationRecord {
+    let artifact = match parse_json_file::<VerifiableCompileArtifact>(
+        artifact_path,
+        "library verify compile artifact input",
+    ) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            return InvocationRecord::failure(
+                "library_verify_compile_artifact",
+                1,
+                FailureClass::Io,
+                error,
+                Some(artifact_path),
+            );
+        }
+    };
+    let errors = validate_compile_artifact_contract(&artifact);
+    let passed = errors.is_empty();
+    InvocationRecord::success_verify_compile_artifact(
+        "library_verify_compile_artifact",
+        VerifyCompileArtifactComparable { passed, errors },
+        if passed { 0 } else { 25 },
+        Some(artifact_path),
+    )
+}
+
+fn run_cli_verify_compile_artifact(
+    args: &CliArgs,
+    artifact_path: &Path,
+    commands: &mut Vec<String>,
+) -> Result<InvocationRecord, String> {
+    let command = vec![
+        args.frankenctl_bin.display().to_string(),
+        "verify".to_string(),
+        "compile-artifact".to_string(),
+        "--input".to_string(),
+        artifact_path.display().to_string(),
+    ];
+    commands.push(command.join(" "));
+    let output = run_command(command.as_slice())?;
+
+    match parse_json_bytes::<CliCompileArtifactVerificationOutput>(
+        &output.stdout,
+        "frankenctl verify compile-artifact stdout",
+    ) {
+        Ok(stdout_json) => Ok(InvocationRecord::success_verify_compile_artifact(
+            "frankenctl_verify_compile_artifact",
+            VerifyCompileArtifactComparable {
+                passed: stdout_json.passed,
+                errors: stdout_json.errors,
+            },
+            output.status.code().unwrap_or(1),
+            Some(artifact_path),
+        )),
+        Err(parse_error) => {
+            let detail = stderr_or_fallback(&output);
+            Ok(InvocationRecord::failure(
+                "frankenctl_verify_compile_artifact",
+                output.status.code().unwrap_or(1),
+                if output.stdout.is_empty() {
+                    classify_failure_detail(&detail)
+                } else {
+                    FailureClass::Infrastructure
+                },
+                format!("{detail}; {parse_error}"),
+                Some(artifact_path),
+            ))
+        }
+    }
+}
+
+fn validate_compile_artifact_contract(artifact: &VerifiableCompileArtifact) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    let expected_parse_hash = artifact.parse_event_ir.canonical_hash();
+    if artifact.hashes.parse_event_ir != expected_parse_hash {
+        errors.push(format!(
+            "parse_event_ir hash mismatch: expected `{expected_parse_hash}`, got `{}`",
+            artifact.hashes.parse_event_ir
+        ));
+    }
+
+    let expected_ir0_hash = artifact.ir0.content_hash().to_string();
+    if artifact.hashes.ir0 != expected_ir0_hash {
+        errors.push(format!(
+            "ir0 hash mismatch: expected `{expected_ir0_hash}`, got `{}`",
+            artifact.hashes.ir0
+        ));
+    }
+
+    let expected_ir1_hash = artifact.lowering.ir1.content_hash().to_string();
+    if artifact.hashes.ir1 != expected_ir1_hash {
+        errors.push(format!(
+            "ir1 hash mismatch: expected `{expected_ir1_hash}`, got `{}`",
+            artifact.hashes.ir1
+        ));
+    }
+
+    let expected_ir2_hash = artifact.lowering.ir2.content_hash().to_string();
+    if artifact.hashes.ir2 != expected_ir2_hash {
+        errors.push(format!(
+            "ir2 hash mismatch: expected `{expected_ir2_hash}`, got `{}`",
+            artifact.hashes.ir2
+        ));
+    }
+
+    let expected_ir3_hash = artifact.lowering.ir3.content_hash().to_string();
+    if artifact.hashes.ir3 != expected_ir3_hash {
+        errors.push(format!(
+            "ir3 hash mismatch: expected `{expected_ir3_hash}`, got `{}`",
+            artifact.hashes.ir3
+        ));
+    }
+
+    for event in &artifact.parse_event_ir.events {
+        if event.trace_id.trim().is_empty()
+            || event.decision_id.trim().is_empty()
+            || event.policy_id.trim().is_empty()
+            || event.component.trim().is_empty()
+            || event.outcome.trim().is_empty()
+        {
+            errors.push("parse_event_ir contains event with missing structured fields".to_string());
+            break;
+        }
+    }
+
+    for event in &artifact.lowering.events {
+        if event.trace_id.trim().is_empty()
+            || event.decision_id.trim().is_empty()
+            || event.policy_id.trim().is_empty()
+            || event.component.trim().is_empty()
+            || event.event.trim().is_empty()
+            || event.outcome.trim().is_empty()
+        {
+            errors.push("lowering event contains missing structured fields".to_string());
+            break;
+        }
+    }
+
+    errors
+}
+
 fn specimen_corpus() -> Vec<ParitySpecimen> {
     vec![
         ParitySpecimen {
@@ -986,6 +1288,7 @@ fn specimen_corpus() -> Vec<ParitySpecimen> {
             source: "const answer = 40 + 2;\n",
             parse_goal: ParseGoal::Script,
             expected_outcome: ExpectedOutcome::Success,
+            artifact_mutation: None,
         },
         ParitySpecimen {
             specimen_id: "compile_ts_success",
@@ -995,6 +1298,7 @@ fn specimen_corpus() -> Vec<ParitySpecimen> {
             source: "const answer: number = 40 + 2;\n",
             parse_goal: ParseGoal::Script,
             expected_outcome: ExpectedOutcome::Success,
+            artifact_mutation: None,
         },
         ParitySpecimen {
             specimen_id: "compile_parse_failure",
@@ -1004,6 +1308,7 @@ fn specimen_corpus() -> Vec<ParitySpecimen> {
             source: "const broken = ;\n",
             parse_goal: ParseGoal::Script,
             expected_outcome: ExpectedOutcome::Failure,
+            artifact_mutation: None,
         },
         ParitySpecimen {
             specimen_id: "run_js_success",
@@ -1013,6 +1318,7 @@ fn specimen_corpus() -> Vec<ParitySpecimen> {
             source: "let value = 2 + 3;\n",
             parse_goal: ParseGoal::Script,
             expected_outcome: ExpectedOutcome::Success,
+            artifact_mutation: None,
         },
         ParitySpecimen {
             specimen_id: "run_ts_success",
@@ -1022,6 +1328,7 @@ fn specimen_corpus() -> Vec<ParitySpecimen> {
             source: "const value: number = 2 + 3;\n",
             parse_goal: ParseGoal::Script,
             expected_outcome: ExpectedOutcome::Success,
+            artifact_mutation: None,
         },
         ParitySpecimen {
             specimen_id: "run_parse_failure",
@@ -1031,6 +1338,37 @@ fn specimen_corpus() -> Vec<ParitySpecimen> {
             source: "let broken = ;\n",
             parse_goal: ParseGoal::Script,
             expected_outcome: ExpectedOutcome::Failure,
+            artifact_mutation: None,
+        },
+        ParitySpecimen {
+            specimen_id: "verify_compile_js_success",
+            description: "verify compile-artifact accepts valid JavaScript compile artifacts",
+            command_family: ParityCommandFamily::VerifyCompileArtifact,
+            source_file_name: "verify_compile_js_success.js",
+            source: "const answer = 40 + 2;\n",
+            parse_goal: ParseGoal::Script,
+            expected_outcome: ExpectedOutcome::Success,
+            artifact_mutation: None,
+        },
+        ParitySpecimen {
+            specimen_id: "verify_compile_ts_success",
+            description: "verify compile-artifact accepts valid TypeScript compile artifacts",
+            command_family: ParityCommandFamily::VerifyCompileArtifact,
+            source_file_name: "verify_compile_ts_success.ts",
+            source: "const answer: number = 40 + 2;\n",
+            parse_goal: ParseGoal::Script,
+            expected_outcome: ExpectedOutcome::Success,
+            artifact_mutation: None,
+        },
+        ParitySpecimen {
+            specimen_id: "verify_compile_hash_mismatch",
+            description: "verify compile-artifact classifies tampered artifact hashes consistently",
+            command_family: ParityCommandFamily::VerifyCompileArtifact,
+            source_file_name: "verify_compile_hash_mismatch.js",
+            source: "const answer = 40 + 2;\n",
+            parse_goal: ParseGoal::Script,
+            expected_outcome: ExpectedOutcome::Success,
+            artifact_mutation: Some(ArtifactMutation::Ir3HashMismatch),
         },
     ]
 }
@@ -1130,6 +1468,28 @@ mod tests {
         )
     }
 
+    fn verify_record(passed: bool, errors: &[&str]) -> InvocationRecord {
+        InvocationRecord::success_verify_compile_artifact(
+            "library_verify_compile_artifact",
+            VerifyCompileArtifactComparable {
+                passed,
+                errors: errors.iter().map(|error| (*error).to_string()).collect(),
+            },
+            if passed { 0 } else { 25 },
+            None,
+        )
+    }
+
+    fn failure_record(failure_class: FailureClass) -> InvocationRecord {
+        InvocationRecord::failure(
+            "library_failure",
+            1,
+            failure_class,
+            "expected failure",
+            None,
+        )
+    }
+
     #[test]
     fn corpus_covers_js_and_ts_inputs() {
         let corpus = specimen_corpus();
@@ -1171,7 +1531,12 @@ mod tests {
     fn compile_comparison_detects_hash_mismatch() {
         let library = compile_record_with_hash("aaa");
         let cli = compile_record_with_hash("bbb");
-        let comparison = compare_records(ParityCommandFamily::Compile, &library, &cli);
+        let comparison = compare_records(
+            ParityCommandFamily::Compile,
+            ExpectedOutcome::Success,
+            &library,
+            &cli,
+        );
         assert_eq!(
             comparison,
             (ParityVerdict::Mismatch, Some(MismatchKind::Hashes))
@@ -1182,10 +1547,72 @@ mod tests {
     fn run_comparison_detects_execution_value_mismatch() {
         let library = run_record_with_value("5");
         let cli = run_record_with_value("6");
-        let comparison = compare_records(ParityCommandFamily::Run, &library, &cli);
+        let comparison = compare_records(
+            ParityCommandFamily::Run,
+            ExpectedOutcome::Success,
+            &library,
+            &cli,
+        );
         assert_eq!(
             comparison,
             (ParityVerdict::Mismatch, Some(MismatchKind::ExecutionValue))
+        );
+    }
+
+    #[test]
+    fn verify_comparison_detects_error_mismatch() {
+        let library = verify_record(false, &["ir3 hash mismatch"]);
+        let cli = verify_record(false, &["ir2 hash mismatch"]);
+        let comparison = compare_records(
+            ParityCommandFamily::VerifyCompileArtifact,
+            ExpectedOutcome::Success,
+            &library,
+            &cli,
+        );
+        assert_eq!(
+            comparison,
+            (
+                ParityVerdict::Mismatch,
+                Some(MismatchKind::VerificationErrors)
+            )
+        );
+    }
+
+    #[test]
+    fn shared_failure_is_rejected_when_success_is_expected() {
+        let library = failure_record(FailureClass::Parse);
+        let cli = failure_record(FailureClass::Parse);
+        let comparison = compare_records(
+            ParityCommandFamily::Compile,
+            ExpectedOutcome::Success,
+            &library,
+            &cli,
+        );
+        assert_eq!(
+            comparison,
+            (
+                ParityVerdict::Mismatch,
+                Some(MismatchKind::UnexpectedOutcome)
+            )
+        );
+    }
+
+    #[test]
+    fn shared_success_is_rejected_when_failure_is_expected() {
+        let library = compile_record_with_hash("aaa");
+        let cli = compile_record_with_hash("aaa");
+        let comparison = compare_records(
+            ParityCommandFamily::Compile,
+            ExpectedOutcome::Failure,
+            &library,
+            &cli,
+        );
+        assert_eq!(
+            comparison,
+            (
+                ParityVerdict::Mismatch,
+                Some(MismatchKind::UnexpectedOutcome)
+            )
         );
     }
 }

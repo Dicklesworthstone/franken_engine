@@ -20,7 +20,7 @@
 //!   space (distance from explored frontier, persistent homology holes).
 //! - **Ecosystem relevance** — weights novelty by real-world package
 //!   prevalence and workload frequency to avoid optimizing for theatrics.
-//! - **Composite score** uses fixed-point millionths (1_000_000 = 1.0)
+//! - **Composite score** uses fixed-point millionths (`1_000_000` = 1.0)
 //!   with explicit weight vectors and abstention semantics.
 
 use std::collections::BTreeSet;
@@ -345,11 +345,7 @@ impl fmt::Display for NoveltyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidWeights { expected, actual } => {
-                write!(
-                    f,
-                    "invalid weights: expected sum {}, got {}",
-                    expected, actual
-                )
+                write!(f, "invalid weights: expected sum {expected}, got {actual}")
             }
             Self::EmptyCandidateSet => write!(f, "empty candidate set"),
             Self::InvalidFeatureVector {
@@ -358,8 +354,7 @@ impl fmt::Display for NoveltyError {
             } => {
                 write!(
                     f,
-                    "invalid feature vector: expected {} dims, got {}",
-                    expected_dims, actual_dims
+                    "invalid feature vector: expected {expected_dims} dims, got {actual_dims}"
                 )
             }
             Self::MdlBaselineZero => write!(f, "MDL baseline must be non-zero"),
@@ -455,7 +450,7 @@ impl NoveltyCertificate {
     /// Compute the certificate hash from the certificate contents.
     fn compute_hash(
         candidate_id: &str,
-        verdict: &NoveltyVerdict,
+        verdict: NoveltyVerdict,
         score: &NoveltyScore,
         config_hash: &ContentHash,
     ) -> ContentHash {
@@ -550,10 +545,7 @@ impl NoveltyBatch {
 
     /// The highest composite score in the batch (millionths), or 0 if empty.
     pub fn max_score(&self) -> u64 {
-        self.scores
-            .first()
-            .map(|s| s.composite_millionths)
-            .unwrap_or(0)
+        self.scores.first().map_or(0, |s| s.composite_millionths)
     }
 
     /// Fraction of candidates that are inconclusive (millionths).
@@ -634,12 +626,11 @@ impl fmt::Display for AbstentionReason {
                 required,
             } => write!(
                 f,
-                "insufficient sample size: {} available, {} required",
-                available, required
+                "insufficient sample size: {available} available, {required} required"
             ),
             Self::EmptyReferenceBoard => write!(f, "empty reference board"),
             Self::OpaqueCandidate { region_label } => {
-                write!(f, "opaque candidate region: {}", region_label)
+                write!(f, "opaque candidate region: {region_label}")
             }
             Self::UncalibratedModel => write!(f, "uncalibrated model"),
             Self::DisabledByPolicy => write!(f, "disabled by policy"),
@@ -658,7 +649,7 @@ impl fmt::Display for AbstentionReason {
 pub enum DimensionScore {
     /// The dimension was scored successfully.
     Scored {
-        /// The raw score in millionths (0 = no novelty, 1_000_000 = max novelty).
+        /// The raw score in millionths (0 = no novelty, `1_000_000` = max novelty).
         score_millionths: u64,
         /// Confidence in the score, in millionths.
         confidence_millionths: u64,
@@ -921,7 +912,7 @@ impl fmt::Display for CompositeVerdict {
 pub const HIGH_NOVELTY_THRESHOLD: u64 = 700_000; // 70%
 
 /// Moderate-novelty threshold (millionths).  Scores in
-/// [MODERATE_NOVELTY_THRESHOLD, HIGH_NOVELTY_THRESHOLD) receive
+/// [`MODERATE_NOVELTY_THRESHOLD`, `HIGH_NOVELTY_THRESHOLD`) receive
 /// `ModerateNovelty`.
 pub const MODERATE_NOVELTY_THRESHOLD: u64 = 400_000; // 40%
 
@@ -944,7 +935,6 @@ pub struct CompositeNoveltyScore {
 
 impl CompositeNoveltyScore {
     /// Compute a composite score from a profile and weight vector.
-    #[allow(clippy::collapsible_if)]
     pub fn compute(
         profile: &NoveltyProfile,
         weights: &[DimensionWeight],
@@ -959,13 +949,13 @@ impl CompositeNoveltyScore {
             let mut weight_total: u64 = 0;
 
             for w in weights {
-                if let Some(score) = profile.score_for(w.dimension) {
-                    if let Some(raw) = score.raw_score() {
-                        // weighted_sum += raw * weight / MILLION
-                        weighted_sum = weighted_sum
-                            .saturating_add(raw.saturating_mul(w.weight_millionths) / MILLION);
-                        weight_total = weight_total.saturating_add(w.weight_millionths);
-                    }
+                if let Some(score) = profile.score_for(w.dimension)
+                    && let Some(raw) = score.raw_score()
+                {
+                    // weighted_sum += raw * weight / MILLION
+                    weighted_sum = weighted_sum
+                        .saturating_add(raw.saturating_mul(w.weight_millionths) / MILLION);
+                    weight_total = weight_total.saturating_add(w.weight_millionths);
                 }
             }
 
@@ -1154,8 +1144,7 @@ pub fn score_candidate(
         let dim_val = dimension_scores
             .iter()
             .find(|(d, _)| *d == weight.dimension)
-            .map(|(_, v)| *v)
-            .unwrap_or(0);
+            .map_or(0, |(_, v)| *v);
         weighted_sum = weighted_sum
             .saturating_add(dim_val.saturating_mul(weight.weight_millionths) / MILLIONTHS);
         weight_total = weight_total.saturating_add(weight.weight_millionths);
@@ -1273,7 +1262,7 @@ pub fn certify_candidate(
     let config_hash = config.content_hash();
 
     let certificate_hash =
-        NoveltyCertificate::compute_hash(&candidate.candidate_id, &verdict, score, &config_hash);
+        NoveltyCertificate::compute_hash(&candidate.candidate_id, verdict, score, &config_hash);
 
     NoveltyCertificate {
         schema_version: NOVELTY_SCHEMA_VERSION.to_string(),
@@ -1885,7 +1874,7 @@ mod tests {
 
     #[test]
     fn abstention_reason_tags_unique() {
-        let reasons = vec![
+        let reasons = [
             AbstentionReason::InsufficientSampleSize {
                 available: 5,
                 required: 10,
@@ -2301,6 +2290,7 @@ mod tests {
     // --- Constants tests ---
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn constants_valid() {
         assert!(!SCHEMA_VERSION.is_empty());
         assert!(!BEAD_ID.is_empty());
@@ -2309,13 +2299,12 @@ mod tests {
         assert!(!NOVELTY_COMPONENT.is_empty());
         assert!(!NOVELTY_POLICY_ID.is_empty());
         assert_eq!(NOVELTY_POLICY_ID, "RGC-707A");
-        assert!(MAX_DIMENSIONS > 0);
-        assert!(MIN_SAMPLE_SIZE > 0);
-        assert!(DEFAULT_ABSTENTION_THRESHOLD > 0);
-        assert!(DEFAULT_ABSTENTION_THRESHOLD <= MILLION);
-        assert!(MAX_DESCRIPTION_LENGTH > 0);
-        assert!(HIGH_NOVELTY_THRESHOLD > MODERATE_NOVELTY_THRESHOLD);
-        assert!(MODERATE_NOVELTY_THRESHOLD > 0);
+        assert_eq!(MAX_DIMENSIONS, 16);
+        assert_eq!(MIN_SAMPLE_SIZE, 10);
+        assert_eq!(DEFAULT_ABSTENTION_THRESHOLD, 300_000);
+        assert_eq!(MAX_DESCRIPTION_LENGTH, 10_000_000);
+        assert_eq!(HIGH_NOVELTY_THRESHOLD, 700_000);
+        assert_eq!(MODERATE_NOVELTY_THRESHOLD, 400_000);
     }
 
     #[test]

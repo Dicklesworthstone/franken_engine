@@ -562,7 +562,8 @@ impl StallBudget {
 
     /// Remaining stall-cycle headroom.
     pub fn remaining_cycles(&self) -> u64 {
-        self.max_stall_cycles.saturating_sub(self.accumulated_cycles)
+        self.max_stall_cycles
+            .saturating_sub(self.accumulated_cycles)
     }
 
     /// Remaining I-cache miss headroom.
@@ -856,9 +857,7 @@ impl LayoutPolicy {
             return MILLION;
         }
         clamp_millionths(
-            self.padding_spent_bytes
-                .saturating_mul(MILLION)
-                / self.alignment_budget_bytes,
+            self.padding_spent_bytes.saturating_mul(MILLION) / self.alignment_budget_bytes,
         )
     }
 
@@ -1348,11 +1347,7 @@ impl ParityCheckResult {
 
 impl fmt::Display for ParityCheckResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "parity({}, verdict={})",
-            self.region_id, self.verdict,
-        )
+        write!(f, "parity({}, verdict={})", self.region_id, self.verdict,)
     }
 }
 
@@ -1679,17 +1674,25 @@ impl LayoutEvaluator {
         platform: &str,
     ) -> (AlignmentStrategy, LayoutDecisionKind) {
         if self.policy.budget_exhausted() {
-            return (AlignmentStrategy::natural(), LayoutDecisionKind::BudgetExhausted);
+            return (
+                AlignmentStrategy::natural(),
+                LayoutDecisionKind::BudgetExhausted,
+            );
         }
         let effective = self.policy.effective_alignment(platform);
         match region.heat {
             RegionHeat::Cold => (AlignmentStrategy::natural(), LayoutDecisionKind::ColdPack),
-            RegionHeat::Warm => (AlignmentStrategy::natural(), LayoutDecisionKind::KeepNatural),
+            RegionHeat::Warm => (
+                AlignmentStrategy::natural(),
+                LayoutDecisionKind::KeepNatural,
+            ),
             RegionHeat::Hot => {
                 if effective.target == AlignmentTarget::PageBoundary {
                     // Hot regions get cache-line, not full page.
                     (
-                        AlignmentStrategy::cache_line(effective.alignment_bytes.min(DEFAULT_CACHE_LINE_BYTES)),
+                        AlignmentStrategy::cache_line(
+                            effective.alignment_bytes.min(DEFAULT_CACHE_LINE_BYTES),
+                        ),
                         LayoutDecisionKind::AlignCacheLine,
                     )
                 } else {
@@ -1718,9 +1721,7 @@ impl LayoutEvaluator {
         platform: &str,
     ) -> LayoutDecisionReceipt {
         let (alignment, kind) = self.select_alignment(region, platform);
-        let padding = alignment
-            .padding_for(region.base_address)
-            .unwrap_or(0);
+        let padding = alignment.padding_for(region.base_address).unwrap_or(0);
         let capped_kind = if alignment.exceeds_budget(padding) {
             LayoutDecisionKind::BudgetExhausted
         } else {
@@ -1841,7 +1842,9 @@ impl LayoutEvaluator {
         reference_hash: ContentHash,
         candidate_hash: ContentHash,
     ) -> ParityVerdict {
-        let verdict = self.parity_checker.check(region_id, reference_hash, candidate_hash);
+        let verdict = self
+            .parity_checker
+            .check(region_id, reference_hash, candidate_hash);
         if verdict == ParityVerdict::Divergent {
             let record = RollbackRecord::new(
                 RollbackReason::ParityFailure,
@@ -1868,14 +1871,19 @@ impl LayoutEvaluator {
     pub fn receipt_summary(&self) -> BTreeMap<String, usize> {
         let mut summary = BTreeMap::new();
         for receipt in &self.receipts {
-            *summary.entry(receipt.kind.as_str().to_string()).or_insert(0) += 1;
+            *summary
+                .entry(receipt.kind.as_str().to_string())
+                .or_insert(0) += 1;
         }
         summary
     }
 
     /// Total padding bytes across all receipts.
     pub fn total_padding_bytes(&self) -> u64 {
-        self.receipts.iter().map(|r| u64::from(r.padding_bytes)).sum()
+        self.receipts
+            .iter()
+            .map(|r| u64::from(r.padding_bytes))
+            .sum()
     }
 
     /// Content hash of the entire evaluation.
@@ -2394,12 +2402,22 @@ mod tests {
     #[test]
     fn receipt_deterministic_hash() {
         let r1 = LayoutDecisionReceipt::new(
-            "r", LayoutDecisionKind::KeepNatural,
-            AlignmentStrategy::natural(), 0, "p", SecurityEpoch::GENESIS, "test",
+            "r",
+            LayoutDecisionKind::KeepNatural,
+            AlignmentStrategy::natural(),
+            0,
+            "p",
+            SecurityEpoch::GENESIS,
+            "test",
         );
         let r2 = LayoutDecisionReceipt::new(
-            "r", LayoutDecisionKind::KeepNatural,
-            AlignmentStrategy::natural(), 0, "p", SecurityEpoch::GENESIS, "test",
+            "r",
+            LayoutDecisionKind::KeepNatural,
+            AlignmentStrategy::natural(),
+            0,
+            "p",
+            SecurityEpoch::GENESIS,
+            "test",
         );
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
@@ -2407,8 +2425,13 @@ mod tests {
     #[test]
     fn receipt_display() {
         let r = LayoutDecisionReceipt::new(
-            "r1", LayoutDecisionKind::ColdPack,
-            AlignmentStrategy::natural(), 0, "arm64", SecurityEpoch::GENESIS, "cold",
+            "r1",
+            LayoutDecisionKind::ColdPack,
+            AlignmentStrategy::natural(),
+            0,
+            "arm64",
+            SecurityEpoch::GENESIS,
+            "cold",
         );
         let s = format!("{r}");
         assert!(s.contains("r1"));
@@ -2681,7 +2704,11 @@ mod tests {
     fn diagnostic_report_counts() {
         let mut r = DiagnosticReport::new("p1", SecurityEpoch::GENESIS);
         r.add(LayoutDiagnostic::new(DiagnosticSeverity::Info, "ok", ""));
-        r.add(LayoutDiagnostic::new(DiagnosticSeverity::Warning, "hmm", ""));
+        r.add(LayoutDiagnostic::new(
+            DiagnosticSeverity::Warning,
+            "hmm",
+            "",
+        ));
         r.add(LayoutDiagnostic::new(DiagnosticSeverity::Error, "bad", ""));
         assert_eq!(r.len(), 3);
         assert_eq!(r.count_at_or_above(DiagnosticSeverity::Warning), 2);
@@ -2701,18 +2728,12 @@ mod tests {
     fn make_test_policy() -> LayoutPolicy {
         let mut p = LayoutPolicy::new("test_policy", SecurityEpoch::from_raw(1));
         p.activate();
-        p.add_region(
-            CodeRegion::new("cold_fn", RegionHeat::Cold, 64).with_base_address(0x100),
-        );
-        p.add_region(
-            CodeRegion::new("hot_loop", RegionHeat::Hot, 256).with_base_address(0x200),
-        );
+        p.add_region(CodeRegion::new("cold_fn", RegionHeat::Cold, 64).with_base_address(0x100));
+        p.add_region(CodeRegion::new("hot_loop", RegionHeat::Hot, 256).with_base_address(0x200));
         p.add_region(
             CodeRegion::new("traced_fn", RegionHeat::Traced, 512).with_base_address(0x400),
         );
-        p.add_region(
-            CodeRegion::new("warm_fn", RegionHeat::Warm, 128).with_base_address(0x300),
-        );
+        p.add_region(CodeRegion::new("warm_fn", RegionHeat::Warm, 128).with_base_address(0x300));
         p
     }
 
@@ -2936,12 +2957,8 @@ mod tests {
     fn multiple_regions_spend_budget() {
         let mut policy = LayoutPolicy::new("pipe3", SecurityEpoch::from_raw(1));
         policy.alignment_budget_bytes = 100;
-        policy.add_region(
-            CodeRegion::new("h1", RegionHeat::Hot, 128).with_base_address(0x1001),
-        );
-        policy.add_region(
-            CodeRegion::new("h2", RegionHeat::Hot, 128).with_base_address(0x2001),
-        );
+        policy.add_region(CodeRegion::new("h1", RegionHeat::Hot, 128).with_base_address(0x1001));
+        policy.add_region(CodeRegion::new("h2", RegionHeat::Hot, 128).with_base_address(0x2001));
         let mut e = LayoutEvaluator::new(policy);
         let receipts = e.evaluate_all("x86_64");
         assert_eq!(receipts.len(), 2);
@@ -2958,9 +2975,7 @@ mod tests {
             "arm64",
             AlignmentStrategy::page_boundary(4096),
         ));
-        policy.add_region(
-            CodeRegion::new("t1", RegionHeat::Traced, 512).with_base_address(0x1000),
-        );
+        policy.add_region(CodeRegion::new("t1", RegionHeat::Traced, 512).with_base_address(0x1000));
         let mut e = LayoutEvaluator::new(policy);
         let receipts = e.evaluate_all("arm64");
         assert_eq!(receipts[0].kind, LayoutDecisionKind::AlignPageBoundary);

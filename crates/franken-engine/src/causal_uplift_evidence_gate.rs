@@ -243,10 +243,7 @@ impl fmt::Display for RejectionReason {
             Self::IntervalSpansZero {
                 lower_millionths,
                 upper_millionths,
-            } => write!(
-                f,
-                "CI [{lower_millionths}, {upper_millionths}] spans zero"
-            ),
+            } => write!(f, "CI [{lower_millionths}, {upper_millionths}] spans zero"),
             Self::IntervalTooWide {
                 width_millionths,
                 effect_millionths,
@@ -404,11 +401,7 @@ impl fmt::Display for GateVerdict {
             ),
             Self::Rejected {
                 claim_id, reasons, ..
-            } => write!(
-                f,
-                "REJECTED {claim_id}: {} reason(s)",
-                reasons.len()
-            ),
+            } => write!(f, "REJECTED {claim_id}: {} reason(s)", reasons.len()),
             Self::NoBacking { claim_id } => write!(f, "NO_BACKING {claim_id}"),
         }
     }
@@ -516,7 +509,9 @@ impl EvidenceGate {
         }
 
         // 2. Effect must be positive and above threshold.
-        if backing.effect_millionths <= 0 || (backing.effect_millionths as u64) < self.config.min_effect_threshold {
+        if backing.effect_millionths <= 0
+            || (backing.effect_millionths as u64) < self.config.min_effect_threshold
+        {
             reasons.push(RejectionReason::EffectBelowThreshold {
                 effect_millionths: backing.effect_millionths.unsigned_abs(),
                 threshold_millionths: self.config.min_effect_threshold,
@@ -779,10 +774,14 @@ mod tests {
 
     #[test]
     fn threshold_invariants() {
-        assert!(MIN_EFFECT_THRESHOLD > 0);
-        assert!(MIN_IDENTIFICATION_CONFIDENCE > 0);
-        assert!(MAX_RELATIVE_CI_WIDTH > 0);
-        assert!(DEFAULT_MAX_BATCH_SIZE > 0);
+        let met = MIN_EFFECT_THRESHOLD;
+        let mic = MIN_IDENTIFICATION_CONFIDENCE;
+        let mrw = MAX_RELATIVE_CI_WIDTH;
+        let dmb = DEFAULT_MAX_BATCH_SIZE;
+        assert!(met > 0);
+        assert!(mic > 0);
+        assert!(mrw > 0);
+        assert!(dmb > 0);
     }
 
     // --- ClaimCategory ---
@@ -823,7 +822,10 @@ mod tests {
 
     #[test]
     fn method_names_unique() {
-        let names: BTreeSet<&str> = IdentificationMethod::ALL.iter().map(|m| m.as_str()).collect();
+        let names: BTreeSet<&str> = IdentificationMethod::ALL
+            .iter()
+            .map(|m| m.as_str())
+            .collect();
         assert_eq!(names.len(), IdentificationMethod::ALL.len());
     }
 
@@ -845,17 +847,21 @@ mod tests {
 
     #[test]
     fn method_strength_ordering() {
-        assert!(IdentificationMethod::Randomized.strength_rank()
-            > IdentificationMethod::ExpertAssertion.strength_rank());
-        assert!(IdentificationMethod::InstrumentalVariable.strength_rank()
-            > IdentificationMethod::DifferenceInDifferences.strength_rank());
+        assert!(
+            IdentificationMethod::Randomized.strength_rank()
+                > IdentificationMethod::ExpertAssertion.strength_rank()
+        );
+        assert!(
+            IdentificationMethod::InstrumentalVariable.strength_rank()
+                > IdentificationMethod::DifferenceInDifferences.strength_rank()
+        );
     }
 
     // --- RejectionReason ---
 
     #[test]
     fn rejection_reason_tags_unique() {
-        let reasons = vec![
+        let reasons = [
             RejectionReason::IdentificationAbstained,
             RejectionReason::EffectBelowThreshold {
                 effect_millionths: 0,

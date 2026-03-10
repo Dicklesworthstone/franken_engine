@@ -195,6 +195,34 @@ impl fmt::Display for SideEffectKind {
 }
 
 // ---------------------------------------------------------------------------
+// KernelSchemaInput
+// ---------------------------------------------------------------------------
+
+/// Input parameters for constructing a [`KernelSchema`].
+///
+/// Groups the creation parameters into a single struct to keep the
+/// constructor signature concise (avoids clippy::too_many_arguments).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelSchemaInput {
+    /// Unique schema identifier.
+    pub schema_id: String,
+    /// Operation mix: kind -> count.
+    pub operation_counts: BTreeMap<OperationKind, u32>,
+    /// Maximum branch nesting depth.
+    pub branch_depth: u32,
+    /// Side effects observed.
+    pub side_effects: BTreeSet<SideEffectKind>,
+    /// Input shape stability (millionths): how consistently shaped are inputs.
+    pub input_shape_stability: u64,
+    /// Output shape stability (millionths).
+    pub output_shape_stability: u64,
+    /// Number of distinct input shapes observed.
+    pub input_shape_count: u32,
+    /// Number of distinct output shapes observed.
+    pub output_shape_count: u32,
+}
+
+// ---------------------------------------------------------------------------
 // KernelSchema
 // ---------------------------------------------------------------------------
 
@@ -225,18 +253,17 @@ pub struct KernelSchema {
 
 impl KernelSchema {
     /// Create a new kernel schema with computed content hash.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        schema_id: impl Into<String>,
-        operation_counts: BTreeMap<OperationKind, u32>,
-        branch_depth: u32,
-        side_effects: BTreeSet<SideEffectKind>,
-        input_shape_stability: u64,
-        output_shape_stability: u64,
-        input_shape_count: u32,
-        output_shape_count: u32,
-    ) -> Self {
-        let schema_id = schema_id.into();
+    pub fn new(input: KernelSchemaInput) -> Self {
+        let KernelSchemaInput {
+            schema_id,
+            operation_counts,
+            branch_depth,
+            side_effects,
+            input_shape_stability,
+            output_shape_stability,
+            input_shape_count,
+            output_shape_count,
+        } = input;
         let total_ops: u32 = operation_counts.values().sum();
 
         let mut h = Sha256::new();
@@ -714,7 +741,16 @@ mod tests {
         ops.insert(OperationKind::Arithmetic, 10);
         ops.insert(OperationKind::Load, 5);
         ops.insert(OperationKind::Comparison, 2);
-        KernelSchema::new(id, ops, 2, BTreeSet::new(), 950_000, 980_000, 1, 1)
+        KernelSchema::new(KernelSchemaInput {
+            schema_id: id.into(),
+            operation_counts: ops,
+            branch_depth: 2,
+            side_effects: BTreeSet::new(),
+            input_shape_stability: 950_000,
+            output_shape_stability: 980_000,
+            input_shape_count: 1,
+            output_shape_count: 1,
+        })
     }
 
     fn side_effect_schema(id: &str) -> KernelSchema {
@@ -722,13 +758,31 @@ mod tests {
         ops.insert(OperationKind::Arithmetic, 5);
         ops.insert(OperationKind::Store, 3);
         let effects = BTreeSet::from([SideEffectKind::PropertyWrite, SideEffectKind::ArrayWrite]);
-        KernelSchema::new(id, ops, 1, effects, 920_000, 950_000, 2, 1)
+        KernelSchema::new(KernelSchemaInput {
+            schema_id: id.into(),
+            operation_counts: ops,
+            branch_depth: 1,
+            side_effects: effects,
+            input_shape_stability: 920_000,
+            output_shape_stability: 950_000,
+            input_shape_count: 2,
+            output_shape_count: 1,
+        })
     }
 
     fn oversized_schema(id: &str) -> KernelSchema {
         let mut ops = BTreeMap::new();
         ops.insert(OperationKind::Arithmetic, 300);
-        KernelSchema::new(id, ops, 10, BTreeSet::new(), 500_000, 500_000, 5, 5)
+        KernelSchema::new(KernelSchemaInput {
+            schema_id: id.into(),
+            operation_counts: ops,
+            branch_depth: 10,
+            side_effects: BTreeSet::new(),
+            input_shape_stability: 500_000,
+            output_shape_stability: 500_000,
+            input_shape_count: 5,
+            output_shape_count: 5,
+        })
     }
 
     // --- Constants ---
@@ -755,12 +809,20 @@ mod tests {
 
     #[test]
     fn thresholds_positive() {
-        assert!(MAX_SYNTHESIZABLE_BRANCH_DEPTH > 0);
-        assert!(MAX_SYNTHESIZABLE_OPS > 0);
-        assert!(HOT_SCHEMA_THRESHOLD > 0);
-        assert!(MAX_SIDE_EFFECTS > 0);
-        assert!(MIN_SHAPE_STABILITY > 0);
-        assert!(MIN_SHAPE_STABILITY <= MILLION);
+        let branch_depth = MAX_SYNTHESIZABLE_BRANCH_DEPTH;
+        assert!(branch_depth > 0, "branch depth must be positive");
+        let max_ops = MAX_SYNTHESIZABLE_OPS;
+        assert!(max_ops > 0, "max ops must be positive");
+        let hot_thresh = HOT_SCHEMA_THRESHOLD;
+        assert!(hot_thresh > 0, "hot schema threshold must be positive");
+        let max_se = MAX_SIDE_EFFECTS;
+        assert!(max_se > 0, "max side effects must be positive");
+        let min_stability = MIN_SHAPE_STABILITY;
+        assert!(min_stability > 0, "min shape stability must be positive");
+        assert!(
+            min_stability <= MILLION,
+            "min shape stability must not exceed 1.0"
+        );
     }
 
     // --- OperationKind ---
@@ -885,7 +947,7 @@ mod tests {
 
     #[test]
     fn rejection_tags_unique() {
-        let reasons = vec![
+        let reasons = [
             RejectionReason::TooManyOps {
                 count: 300,
                 limit: 256,
@@ -1027,7 +1089,16 @@ mod tests {
         let mut ops = BTreeMap::new();
         ops.insert(OperationKind::Store, 1);
         let effects = BTreeSet::from([SideEffectKind::GlobalMutation]);
-        let s = KernelSchema::new("gm", ops, 1, effects, 950_000, 950_000, 1, 1);
+        let s = KernelSchema::new(KernelSchemaInput {
+            schema_id: "gm".into(),
+            operation_counts: ops,
+            branch_depth: 1,
+            side_effects: effects,
+            input_shape_stability: 950_000,
+            output_shape_stability: 950_000,
+            input_shape_count: 1,
+            output_shape_count: 1,
+        });
         let v = evaluate_eligibility(&s, 100_000);
         assert!(v.is_rejected());
     }

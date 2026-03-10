@@ -269,9 +269,13 @@ pub enum ObstructionError {
 impl fmt::Display for ObstructionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyWitness => write!(f, "empty witness: program source or description is empty"),
+            Self::EmptyWitness => {
+                write!(f, "empty witness: program source or description is empty")
+            }
             Self::InvalidSurface => write!(f, "invalid surface configuration"),
-            Self::MinimizationFailed => write!(f, "witness minimization failed: reduction budget exhausted"),
+            Self::MinimizationFailed => {
+                write!(f, "witness minimization failed: reduction budget exhausted")
+            }
             Self::SeamNotFound => write!(f, "seam not found in current surface topology"),
             Self::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
@@ -388,12 +392,7 @@ pub fn emit_witness(
     }
 
     let content_hash = witness_content_hash(&surface, &kind, program, failure, seam);
-    let witness_id = format!(
-        "ow-{}-{}-{}",
-        surface,
-        kind,
-        &content_hash.to_hex()[..16]
-    );
+    let witness_id = format!("ow-{}-{}-{}", surface, kind, &content_hash.to_hex()[..16]);
 
     Ok(ObstructionWitness {
         witness_id,
@@ -499,12 +498,7 @@ pub fn detect_nongluable(
     right_interp: &str,
 ) -> NongluableProgram {
     let content_hash = nongluable_content_hash(source, &left, &right, left_interp, right_interp);
-    let program_id = format!(
-        "ng-{}-{}-{}",
-        left,
-        right,
-        &content_hash.to_hex()[..16]
-    );
+    let program_id = format!("ng-{}-{}-{}", left, right, &content_hash.to_hex()[..16]);
 
     let divergence_description = format!(
         "Left surface ({left}) interprets as: {left_interp}; \
@@ -565,13 +559,9 @@ pub fn diagnose_seam(
             "Critical seam between {left} and {right}: consider splitting into isolated surfaces"
         )
     } else if severity_millionths >= 400_000 {
-        format!(
-            "Moderate seam between {left} and {right}: adapter injection recommended"
-        )
+        format!("Moderate seam between {left} and {right}: adapter injection recommended")
     } else {
-        format!(
-            "Low-severity seam between {left} and {right}: monitor and document"
-        )
+        format!("Low-severity seam between {left} and {right}: monitor and document")
     };
 
     let seam_id = format!("seam-{left}-{right}");
@@ -626,14 +616,14 @@ pub fn build_report(
 
     let total_obstructions = witnesses.len() as u64;
 
-    let report_id = format!(
-        "report-{COMPONENT}-epoch-{}",
-        epoch.as_u64()
-    );
+    let report_id = format!("report-{COMPONENT}-epoch-{}", epoch.as_u64());
 
-    let witness_hashes: Vec<ContentHash> = witnesses.iter().map(|w| w.content_hash.clone()).collect();
-    let program_hashes: Vec<ContentHash> = programs.iter().map(|p| p.content_hash.clone()).collect();
-    let diagnosis_hashes: Vec<ContentHash> = diagnoses.iter().map(|d| d.content_hash.clone()).collect();
+    let witness_hashes: Vec<ContentHash> =
+        witnesses.iter().map(|w| w.content_hash.clone()).collect();
+    let program_hashes: Vec<ContentHash> =
+        programs.iter().map(|p| p.content_hash.clone()).collect();
+    let diagnosis_hashes: Vec<ContentHash> =
+        diagnoses.iter().map(|d| d.content_hash.clone()).collect();
 
     let content_hash = report_content_hash(
         &report_id,
@@ -761,16 +751,8 @@ pub fn franken_engine_obstruction_manifest() -> ObstructionReport {
         SupportSurface::Parser,
         SupportSurface::Lowering,
     );
-    let d2 = diagnose_seam(
-        &[w2, w3],
-        SupportSurface::Lowering,
-        SupportSurface::Runtime,
-    );
-    let d3 = diagnose_seam(
-        &[w5, w6],
-        SupportSurface::TypeScript,
-        SupportSurface::React,
-    );
+    let d2 = diagnose_seam(&[w2, w3], SupportSurface::Lowering, SupportSurface::Runtime);
+    let d3 = diagnose_seam(&[w5, w6], SupportSurface::TypeScript, SupportSurface::React);
 
     let diagnoses = vec![d1, d2, d3];
 
@@ -788,18 +770,8 @@ mod tests {
 
     // -- Helper ---------------------------------------------------------
 
-    fn make_witness(
-        surface: SupportSurface,
-        kind: ObstructionKind,
-    ) -> ObstructionWitness {
-        emit_witness(
-            surface,
-            kind,
-            "let x = 1;",
-            "test failure",
-            "test-seam",
-        )
-        .unwrap()
+    fn make_witness(surface: SupportSurface, kind: ObstructionKind) -> ObstructionWitness {
+        emit_witness(surface, kind, "let x = 1;", "test failure", "test-seam").unwrap()
     }
 
     // -- Constants ------------------------------------------------------
@@ -854,13 +826,22 @@ mod tests {
             ObstructionKind::BoundaryIncompatibility.to_string(),
             "boundary-incompatibility"
         );
-        assert_eq!(ObstructionKind::ResourceViolation.to_string(), "resource-violation");
-        assert_eq!(ObstructionKind::TimingDependence.to_string(), "timing-dependence");
+        assert_eq!(
+            ObstructionKind::ResourceViolation.to_string(),
+            "resource-violation"
+        );
+        assert_eq!(
+            ObstructionKind::TimingDependence.to_string(),
+            "timing-dependence"
+        );
         assert_eq!(
             ObstructionKind::NondeterministicBehavior.to_string(),
             "nondeterministic-behavior"
         );
-        assert_eq!(ObstructionKind::UnsupportedFeature.to_string(), "unsupported-feature");
+        assert_eq!(
+            ObstructionKind::UnsupportedFeature.to_string(),
+            "unsupported-feature"
+        );
     }
 
     // -- ObstructionError Display ---------------------------------------
@@ -1034,14 +1015,8 @@ mod tests {
             ObstructionKind::UnsupportedFeature,
         ];
         for k in kinds {
-            let w = emit_witness(
-                SupportSurface::Runtime,
-                k.clone(),
-                "code",
-                "fail",
-                "seam",
-            )
-            .unwrap();
+            let w =
+                emit_witness(SupportSurface::Runtime, k.clone(), "code", "fail", "seam").unwrap();
             assert_eq!(w.kind, k);
         }
     }
@@ -1221,7 +1196,10 @@ mod tests {
     fn test_diagnose_seam_severity_capped_at_million() {
         let mut witnesses = Vec::new();
         for _ in 0..100 {
-            witnesses.push(make_witness(SupportSurface::Runtime, ObstructionKind::TypeMismatch));
+            witnesses.push(make_witness(
+                SupportSurface::Runtime,
+                ObstructionKind::TypeMismatch,
+            ));
         }
         let d = diagnose_seam(&witnesses, SupportSurface::Runtime, SupportSurface::Module);
         assert_eq!(d.severity_millionths, MILLIONTHS);
@@ -1239,11 +1217,7 @@ mod tests {
         );
 
         let w3 = make_witness(SupportSurface::Lowering, ObstructionKind::TypeMismatch);
-        let d_uniform = diagnose_seam(
-            &[w1, w3],
-            SupportSurface::Lowering,
-            SupportSurface::Runtime,
-        );
+        let d_uniform = diagnose_seam(&[w1, w3], SupportSurface::Lowering, SupportSurface::Runtime);
 
         // Same count but diverse has more distinct kinds -> higher severity.
         assert!(d_diverse.severity_millionths > d_uniform.severity_millionths);
@@ -1255,7 +1229,10 @@ mod tests {
         // 16 * 50_000 = 800_000 base + kind diversity.
         let mut witnesses = Vec::new();
         for _ in 0..16 {
-            witnesses.push(make_witness(SupportSurface::Parser, ObstructionKind::TypeMismatch));
+            witnesses.push(make_witness(
+                SupportSurface::Parser,
+                ObstructionKind::TypeMismatch,
+            ));
         }
         let d = diagnose_seam(&witnesses, SupportSurface::Parser, SupportSurface::Lowering);
         assert!(d.severity_millionths >= 800_000);
@@ -1267,7 +1244,10 @@ mod tests {
         // 6 * 50_000 + 1 * 100_000 = 400_000.
         let mut witnesses = Vec::new();
         for _ in 0..6 {
-            witnesses.push(make_witness(SupportSurface::Parser, ObstructionKind::SemanticGap));
+            witnesses.push(make_witness(
+                SupportSurface::Parser,
+                ObstructionKind::SemanticGap,
+            ));
         }
         let d = diagnose_seam(&witnesses, SupportSurface::Parser, SupportSurface::Lowering);
         assert!(d.severity_millionths >= 400_000);
@@ -1283,7 +1263,11 @@ mod tests {
     #[test]
     fn test_diagnose_seam_deterministic() {
         let w = make_witness(SupportSurface::Parser, ObstructionKind::SemanticGap);
-        let d1 = diagnose_seam(&[w.clone()], SupportSurface::Parser, SupportSurface::Lowering);
+        let d1 = diagnose_seam(
+            std::slice::from_ref(&w),
+            SupportSurface::Parser,
+            SupportSurface::Lowering,
+        );
         let d2 = diagnose_seam(&[w], SupportSurface::Parser, SupportSurface::Lowering);
         assert_eq!(d1.content_hash, d2.content_hash);
     }
@@ -1292,13 +1276,7 @@ mod tests {
 
     #[test]
     fn test_build_report_empty() {
-        let report = build_report(
-            SecurityEpoch::from_raw(1),
-            vec![],
-            vec![],
-            vec![],
-        )
-        .unwrap();
+        let report = build_report(SecurityEpoch::from_raw(1), vec![], vec![], vec![]).unwrap();
         assert_eq!(report.total_obstructions, 0);
         assert!(report.report_id.contains("obstruction_witness_emitter"));
     }
@@ -1306,13 +1284,7 @@ mod tests {
     #[test]
     fn test_build_report_with_witnesses() {
         let w = make_witness(SupportSurface::Parser, ObstructionKind::TypeMismatch);
-        let report = build_report(
-            SecurityEpoch::from_raw(5),
-            vec![w],
-            vec![],
-            vec![],
-        )
-        .unwrap();
+        let report = build_report(SecurityEpoch::from_raw(5), vec![w], vec![], vec![]).unwrap();
         assert_eq!(report.total_obstructions, 1);
         assert_eq!(report.witnesses.len(), 1);
     }
@@ -1320,20 +1292,8 @@ mod tests {
     #[test]
     fn test_build_report_deterministic() {
         let w = make_witness(SupportSurface::Runtime, ObstructionKind::ResourceViolation);
-        let r1 = build_report(
-            SecurityEpoch::from_raw(2),
-            vec![w.clone()],
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let r2 = build_report(
-            SecurityEpoch::from_raw(2),
-            vec![w],
-            vec![],
-            vec![],
-        )
-        .unwrap();
+        let r1 = build_report(SecurityEpoch::from_raw(2), vec![w.clone()], vec![], vec![]).unwrap();
+        let r2 = build_report(SecurityEpoch::from_raw(2), vec![w], vec![], vec![]).unwrap();
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1354,13 +1314,7 @@ mod tests {
             "b",
         );
         let d = diagnose_seam(&[], SupportSurface::Parser, SupportSurface::Lowering);
-        let report = build_report(
-            SecurityEpoch::from_raw(1),
-            vec![],
-            vec![ng],
-            vec![d],
-        )
-        .unwrap();
+        let report = build_report(SecurityEpoch::from_raw(1), vec![], vec![ng], vec![d]).unwrap();
         assert_eq!(report.nongluable_programs.len(), 1);
         assert_eq!(report.seam_diagnoses.len(), 1);
     }
@@ -1448,7 +1402,10 @@ mod tests {
     fn test_serde_roundtrip_report() {
         let report = build_report(
             SecurityEpoch::from_raw(1),
-            vec![make_witness(SupportSurface::Runtime, ObstructionKind::TypeMismatch)],
+            vec![make_witness(
+                SupportSurface::Runtime,
+                ObstructionKind::TypeMismatch,
+            )],
             vec![],
             vec![],
         )
@@ -1506,20 +1463,17 @@ mod tests {
     fn test_diagnose_seam_with_cross_surface_witnesses() {
         // Witnesses whose surface is CrossSurface — neither matches
         // left nor right, so they count as nongluable.
-        let w = make_witness(SupportSurface::CrossSurface, ObstructionKind::TimingDependence);
+        let w = make_witness(
+            SupportSurface::CrossSurface,
+            ObstructionKind::TimingDependence,
+        );
         let d = diagnose_seam(&[w], SupportSurface::Parser, SupportSurface::Lowering);
         assert_eq!(d.nongluable_count, 1);
     }
 
     #[test]
     fn test_report_id_contains_epoch() {
-        let report = build_report(
-            SecurityEpoch::from_raw(99),
-            vec![],
-            vec![],
-            vec![],
-        )
-        .unwrap();
+        let report = build_report(SecurityEpoch::from_raw(99), vec![], vec![], vec![]).unwrap();
         assert!(report.report_id.contains("99"));
     }
 }

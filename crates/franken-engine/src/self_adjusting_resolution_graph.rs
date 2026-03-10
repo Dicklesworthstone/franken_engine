@@ -427,7 +427,10 @@ fn generate_receipt_id(trigger: &str, graph_hash: &ContentHash) -> String {
     hasher.update(trigger.as_bytes());
     hasher.update(graph_hash.as_bytes());
     let digest = hasher.finalize();
-    format!("rcpt-{:02x}{:02x}{:02x}{:02x}", digest[0], digest[1], digest[2], digest[3])
+    format!(
+        "rcpt-{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    )
 }
 
 /// Generate a checkpoint ID from the graph hash and epoch.
@@ -437,7 +440,10 @@ fn generate_checkpoint_id(graph_hash: &ContentHash, epoch: SecurityEpoch) -> Str
     hasher.update(graph_hash.as_bytes());
     hasher.update(epoch.as_u64().to_le_bytes());
     let digest = hasher.finalize();
-    format!("ckpt-{:02x}{:02x}{:02x}{:02x}", digest[0], digest[1], digest[2], digest[3])
+    format!(
+        "ckpt-{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    )
 }
 
 /// Validate that an import specifier is non-empty and contains no null bytes.
@@ -557,8 +563,7 @@ pub fn build_graph(
         let digest = hasher.finalize();
         format!(
             "rg-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-            digest[0], digest[1], digest[2], digest[3],
-            digest[4], digest[5], digest[6], digest[7],
+            digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
         )
     };
 
@@ -798,9 +803,7 @@ fn detect_cycles_dfs(
 ///
 /// Returns an error if the graph contains a cycle.  Uses Kahn's algorithm
 /// for deterministic ordering (BTreeMap iteration order).
-pub fn topological_order(
-    graph: &ResolutionGraph,
-) -> Result<Vec<String>, ResolutionGraphError> {
+pub fn topological_order(graph: &ResolutionGraph) -> Result<Vec<String>, ResolutionGraphError> {
     let forward = build_forward_index(&graph.edges);
 
     // Compute in-degree for each node.
@@ -994,24 +997,14 @@ pub fn franken_engine_resolution_manifest() -> ResolutionGraph {
             "/node_modules/react-dom/index.js",
             "18.3.0",
         ),
-        make_node(
-            "utils",
-            "./src/utils",
-            "/src/utils.ts",
-            "0.0.0",
-        ),
+        make_node("utils", "./src/utils", "/src/utils.ts", "0.0.0"),
         make_node(
             "scheduler",
             "scheduler",
             "/node_modules/scheduler/index.js",
             "0.23.0",
         ),
-        make_node(
-            "types",
-            "./src/types",
-            "/src/types.ts",
-            "0.0.0",
-        ),
+        make_node("types", "./src/types", "/src/types.ts", "0.0.0"),
     ];
 
     let edges = vec![
@@ -1187,7 +1180,10 @@ mod tests {
         let mut node = make_node("a");
         node.specifier = String::new();
         let result = build_graph(vec![node], vec![], vec![]);
-        assert!(matches!(result, Err(ResolutionGraphError::InvalidSpecifier)));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::InvalidSpecifier)
+        ));
     }
 
     #[test]
@@ -1195,7 +1191,10 @@ mod tests {
         let mut node = make_node("a");
         node.specifier = "foo\0bar".to_string();
         let result = build_graph(vec![node], vec![], vec![]);
-        assert!(matches!(result, Err(ResolutionGraphError::InvalidSpecifier)));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::InvalidSpecifier)
+        ));
     }
 
     #[test]
@@ -1226,7 +1225,10 @@ mod tests {
     fn test_build_graph_missing_root() {
         let nodes = vec![make_node("a")];
         let result = build_graph(nodes, vec![], vec!["missing".to_string()]);
-        assert!(matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::ModuleNotFound(_))
+        ));
     }
 
     // Add module ------------------------------------------------------------
@@ -1262,7 +1264,10 @@ mod tests {
         let mut node = make_node("d");
         node.specifier = String::new();
         let result = add_module(&mut graph, node);
-        assert!(matches!(result, Err(ResolutionGraphError::InvalidSpecifier)));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::InvalidSpecifier)
+        ));
     }
 
     // Remove module ---------------------------------------------------------
@@ -1292,7 +1297,10 @@ mod tests {
     fn test_remove_module_not_found() {
         let mut graph = simple_graph();
         let result = remove_module(&mut graph, "nonexistent");
-        assert!(matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::ModuleNotFound(_))
+        ));
     }
 
     #[test]
@@ -1337,7 +1345,10 @@ mod tests {
     fn test_invalidate_module_not_found() {
         let graph = simple_graph();
         let result = invalidate_module(&graph, "z");
-        assert!(matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::ModuleNotFound(_))
+        ));
     }
 
     #[test]
@@ -1450,8 +1461,7 @@ mod tests {
 
     #[test]
     fn test_topological_order_single_node() {
-        let graph =
-            build_graph(vec![make_node("x")], vec![], vec!["x".to_string()]).unwrap();
+        let graph = build_graph(vec![make_node("x")], vec![], vec!["x".to_string()]).unwrap();
         let order = topological_order(&graph).unwrap();
         assert_eq!(order, vec!["x".to_string()]);
     }
@@ -1497,7 +1507,10 @@ mod tests {
         let mut checkpoint = create_checkpoint(&graph);
         checkpoint.content_hash = ContentHash::default();
         let result = verify_checkpoint(&graph, &checkpoint);
-        assert!(matches!(result, Err(ResolutionGraphError::SnapshotCorrupted)));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::SnapshotCorrupted)
+        ));
     }
 
     // Add edge --------------------------------------------------------------
@@ -1516,7 +1529,10 @@ mod tests {
         let mut graph = simple_graph();
         let edge = make_edge("z", "a");
         let result = add_edge(&mut graph, edge);
-        assert!(matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::ModuleNotFound(_))
+        ));
     }
 
     #[test]
@@ -1529,9 +1545,12 @@ mod tests {
 
     #[test]
     fn test_add_edge_same_endpoints_different_kind() {
-        let mut graph =
-            build_graph(vec![make_node("a"), make_node("b")], vec![make_edge("a", "b")], vec![])
-                .unwrap();
+        let mut graph = build_graph(
+            vec![make_node("a"), make_node("b")],
+            vec![make_edge("a", "b")],
+            vec![],
+        )
+        .unwrap();
         let edge = make_edge_with_kind("a", "b", EdgeKind::TypeOnly);
         assert!(add_edge(&mut graph, edge).is_ok());
         assert_eq!(graph.edge_count(), 2);
@@ -1558,7 +1577,10 @@ mod tests {
     fn test_connected_component_not_found() {
         let graph = simple_graph();
         let result = connected_component(&graph, "nope");
-        assert!(matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))));
+        assert!(matches!(
+            result,
+            Err(ResolutionGraphError::ModuleNotFound(_))
+        ));
     }
 
     // Graph depth -----------------------------------------------------------
@@ -1773,8 +1795,14 @@ mod tests {
 
     #[test]
     fn test_invalidation_scope_display() {
-        assert_eq!(format!("{}", InvalidationScope::SingleModule), "single-module");
-        assert_eq!(format!("{}", InvalidationScope::SubtreeFromModule), "subtree");
+        assert_eq!(
+            format!("{}", InvalidationScope::SingleModule),
+            "single-module"
+        );
+        assert_eq!(
+            format!("{}", InvalidationScope::SubtreeFromModule),
+            "subtree"
+        );
         assert_eq!(
             format!("{}", InvalidationScope::ConnectedComponent),
             "connected-component",
@@ -1873,9 +1901,7 @@ mod tests {
     #[test]
     fn test_large_linear_graph() {
         let count = 100;
-        let nodes: Vec<ModuleNode> = (0..count)
-            .map(|i| make_node(&format!("n{i}")))
-            .collect();
+        let nodes: Vec<ModuleNode> = (0..count).map(|i| make_node(&format!("n{i}"))).collect();
         let edges: Vec<DependencyEdge> = (0..count - 1)
             .map(|i| make_edge(&format!("n{i}"), &format!("n{}", i + 1)))
             .collect();

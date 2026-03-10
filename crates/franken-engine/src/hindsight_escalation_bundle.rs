@@ -1291,8 +1291,10 @@ mod tests {
 
     #[test]
     fn pipeline_budget_depletes() {
-        let mut policy = EscalationPolicy::default();
-        policy.cost_budget_millionths = 10_000; // very small budget
+        let policy = EscalationPolicy {
+            cost_budget_millionths: 10_000, // very small budget
+            ..Default::default()
+        };
         let mut pipeline = EscalationPipeline::new(policy, test_epoch());
 
         // First trigger should escalate and consume budget

@@ -76,7 +76,10 @@ fn saturating_div_millionths(numerator: u64, denominator: u64) -> u64 {
     if denominator == 0 {
         return 0;
     }
-    numerator.saturating_mul(MILLION).checked_div(denominator).unwrap_or(0)
+    numerator
+        .saturating_mul(MILLION)
+        .checked_div(denominator)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -138,11 +141,8 @@ pub enum CacheSegment {
 
 impl CacheSegment {
     /// All segment variants.
-    pub const ALL: &'static [CacheSegment] = &[
-        CacheSegment::Small,
-        CacheSegment::Main,
-        CacheSegment::Ghost,
-    ];
+    pub const ALL: &'static [CacheSegment] =
+        &[CacheSegment::Small, CacheSegment::Main, CacheSegment::Ghost];
 }
 
 impl fmt::Display for CacheSegment {
@@ -557,7 +557,10 @@ pub enum RollbackTrigger {
     /// Operator-initiated rollback.
     OperatorInitiated { operator_id: String, reason: String },
     /// Epoch boundary forces re-evaluation.
-    EpochBoundary { old_epoch: SecurityEpoch, new_epoch: SecurityEpoch },
+    EpochBoundary {
+        old_epoch: SecurityEpoch,
+        new_epoch: SecurityEpoch,
+    },
 }
 
 impl RollbackTrigger {
@@ -746,12 +749,12 @@ impl Default for S3FifoCacheConfig {
             parity_tolerance_millionths: DEFAULT_PARITY_TOLERANCE_MILLIONTHS,
             reference_policy: ReferencePolicyKind::Lru,
             admission_policy: AdmissionPolicy::AcceptAll,
-            min_hit_rate_millionths: 200_000, // 20%
+            min_hit_rate_millionths: 200_000,          // 20%
             max_latency_ns_millionths: 10_000_000_000, // 10s in ns-millionths
             rollback_cooldown_ops: DEFAULT_ROLLBACK_COOLDOWN_OPS,
             auto_adapt_split: false,
-            min_small_ratio_millionths: 50_000,   // 5%
-            max_small_ratio_millionths: 300_000,   // 30%
+            min_small_ratio_millionths: 50_000,  // 5%
+            max_small_ratio_millionths: 300_000, // 30%
         }
     }
 }
@@ -773,8 +776,7 @@ impl S3FifoCacheConfig {
 
     /// Compute the ghost queue capacity.
     pub fn ghost_capacity(&self) -> usize {
-        (self.total_capacity as u64)
-            .saturating_mul(self.ghost_multiplier) as usize
+        (self.total_capacity as u64).saturating_mul(self.ghost_multiplier) as usize
     }
 }
 
@@ -814,10 +816,11 @@ impl LruReference {
         } else {
             self.misses += 1;
             // Insert.
-            if self.order.len() >= self.capacity && self.capacity > 0 {
-                if let Some(evicted) = self.order.pop_front() {
-                    self.present.remove(&evicted);
-                }
+            if self.order.len() >= self.capacity
+                && self.capacity > 0
+                && let Some(evicted) = self.order.pop_front()
+            {
+                self.present.remove(&evicted);
             }
             self.order.push_back(key.to_string());
             self.present.insert(key.to_string());
@@ -830,6 +833,7 @@ impl LruReference {
         saturating_div_millionths(self.hits, total)
     }
 
+    #[allow(dead_code)]
     fn total_ops(&self) -> u64 {
         self.hits + self.misses
     }
@@ -911,6 +915,7 @@ impl ClockReference {
         saturating_div_millionths(self.hits, total)
     }
 
+    #[allow(dead_code)]
     fn total_ops(&self) -> u64 {
         self.hits + self.misses
     }
@@ -932,27 +937,17 @@ impl ClockReference {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum S3FifoGateError {
     /// Cache is disabled due to a previous rollback (cooldown active).
-    RollbackCooldownActive {
-        remaining_ops: u64,
-    },
+    RollbackCooldownActive { remaining_ops: u64 },
     /// Admission rejected by policy.
-    AdmissionRejected {
-        reason: String,
-    },
+    AdmissionRejected { reason: String },
     /// Cache capacity is zero.
     ZeroCapacity,
     /// Artifact not found in cache.
-    ArtifactNotFound {
-        key: String,
-    },
+    ArtifactNotFound { key: String },
     /// Rollback failed.
-    RollbackFailed {
-        reason: String,
-    },
+    RollbackFailed { reason: String },
     /// Configuration invalid.
-    InvalidConfig {
-        reason: String,
-    },
+    InvalidConfig { reason: String },
 }
 
 impl fmt::Display for S3FifoGateError {
@@ -1067,8 +1062,7 @@ impl S3FifoCacheGate {
 
     /// Create with default configuration.
     pub fn with_defaults(epoch: SecurityEpoch) -> Self {
-        Self::new(S3FifoCacheConfig::default(), epoch)
-            .expect("default config is valid")
+        Self::new(S3FifoCacheConfig::default(), epoch).expect("default config is valid")
     }
 
     // -- Capacity helpers --
@@ -1082,7 +1076,9 @@ impl S3FifoCacheGate {
     }
 
     fn effective_main_capacity(&self) -> usize {
-        self.config.total_capacity.saturating_sub(self.effective_small_capacity())
+        self.config
+            .total_capacity
+            .saturating_sub(self.effective_small_capacity())
     }
 
     fn ghost_capacity(&self) -> usize {
@@ -1161,7 +1157,10 @@ impl S3FifoCacheGate {
 
         // Admission control.
         let ghost_entry = self.ghost_entries.get(&key);
-        let decision = self.config.admission_policy.should_admit(size_bytes, ghost_entry);
+        let decision = self
+            .config
+            .admission_policy
+            .should_admit(size_bytes, ghost_entry);
         if !decision.is_admit() {
             return Ok(decision);
         }
@@ -1180,7 +1179,8 @@ impl S3FifoCacheGate {
         if is_ghost_hit {
             // Ghost hit: insert directly into main queue.
             self.evict_main_if_needed();
-            let mut entry = CacheEntry::new_small(artifact_id, size_bytes, payload_hash, seq, epoch);
+            let mut entry =
+                CacheEntry::new_small(artifact_id, size_bytes, payload_hash, seq, epoch);
             entry.promote_to_main(seq);
             self.main_queue.push_back(key.clone());
             self.entries.insert(key, entry);
@@ -1301,16 +1301,13 @@ impl S3FifoCacheGate {
             ReferencePolicyKind::Lru => {
                 (self.lru_ref.hit_rate_millionths(), ReferencePolicyKind::Lru)
             }
-            ReferencePolicyKind::Clock => {
-                (self.clock_ref.hit_rate_millionths(), ReferencePolicyKind::Clock)
-            }
+            ReferencePolicyKind::Clock => (
+                self.clock_ref.hit_rate_millionths(),
+                ReferencePolicyKind::Clock,
+            ),
         };
 
-        let delta = if s3_hit_rate >= ref_hit_rate {
-            s3_hit_rate - ref_hit_rate
-        } else {
-            ref_hit_rate - s3_hit_rate
-        };
+        let delta = s3_hit_rate.abs_diff(ref_hit_rate);
 
         let verdict = if delta <= self.config.parity_tolerance_millionths {
             ParityVerdict::WithinTolerance
@@ -1535,7 +1532,10 @@ impl S3FifoCacheGate {
             self.emit_receipt(kind)
         } else {
             // Rollback already emitted a receipt; retrieve the last one.
-            self.receipts.last().cloned().unwrap_or_else(|| self.emit_receipt(kind))
+            self.receipts
+                .last()
+                .cloned()
+                .unwrap_or_else(|| self.emit_receipt(kind))
         };
 
         GateEvaluation {
@@ -1616,7 +1616,7 @@ impl S3FifoCacheGate {
 
     /// Advance to a new epoch, potentially triggering re-evaluation.
     pub fn advance_epoch(&mut self, new_epoch: SecurityEpoch) {
-        let old = self.current_epoch;
+        let _old = self.current_epoch;
         self.current_epoch = new_epoch;
         self.benchmark.epoch = new_epoch;
 
@@ -1724,11 +1724,7 @@ mod tests {
     }
 
     fn artifact(label: &str) -> CacheArtifactId {
-        CacheArtifactId::new(
-            ContentHash::compute(label.as_bytes()),
-            1,
-            label.to_string(),
-        )
+        CacheArtifactId::new(ContentHash::compute(label.as_bytes()), 1, label.to_string())
     }
 
     fn payload(label: &str) -> ContentHash {
@@ -1778,7 +1774,10 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let result = S3FifoCacheGate::new(config, epoch(1));
-        assert!(matches!(result.unwrap_err(), S3FifoGateError::InvalidConfig { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            S3FifoGateError::InvalidConfig { .. }
+        ));
     }
 
     #[test]
@@ -2063,7 +2062,9 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
-        let d = gate.insert(artifact("new_item"), 100, payload("new_item")).unwrap();
+        let d = gate
+            .insert(artifact("new_item"), 100, payload("new_item"))
+            .unwrap();
         assert!(!d.is_admit());
     }
 
@@ -2091,8 +2092,10 @@ mod tests {
         }
         let parity = gate.evaluate_parity();
         // With same access pattern, delta should be small.
-        assert!(parity.hit_rate_delta_millionths <= gate.config().parity_tolerance_millionths
-            || parity.passed());
+        assert!(
+            parity.hit_rate_delta_millionths <= gate.config().parity_tolerance_millionths
+                || parity.passed()
+        );
     }
 
     #[test]
@@ -2175,7 +2178,10 @@ mod tests {
         let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         let result = gate.re_enable();
-        assert!(matches!(result, Err(S3FifoGateError::RollbackCooldownActive { .. })));
+        assert!(matches!(
+            result,
+            Err(S3FifoGateError::RollbackCooldownActive { .. })
+        ));
     }
 
     #[test]
@@ -2567,13 +2573,7 @@ mod tests {
 
     #[test]
     fn test_cache_entry_new_small() {
-        let entry = CacheEntry::new_small(
-            artifact("test"),
-            512,
-            payload("test"),
-            0,
-            epoch(1),
-        );
+        let entry = CacheEntry::new_small(artifact("test"), 512, payload("test"), 0, epoch(1));
         assert_eq!(entry.segment, CacheSegment::Small);
         assert_eq!(entry.frequency, 0);
         assert_eq!(entry.size_bytes, 512);
@@ -2581,13 +2581,7 @@ mod tests {
 
     #[test]
     fn test_cache_entry_promote() {
-        let mut entry = CacheEntry::new_small(
-            artifact("test"),
-            512,
-            payload("test"),
-            0,
-            epoch(1),
-        );
+        let mut entry = CacheEntry::new_small(artifact("test"), 512, payload("test"), 0, epoch(1));
         entry.record_access();
         entry.record_access();
         assert_eq!(entry.frequency, 2);
@@ -2647,7 +2641,10 @@ mod tests {
     #[test]
     fn test_admission_policy_display() {
         assert_eq!(format!("{}", AdmissionPolicy::AcceptAll), "accept_all");
-        assert_eq!(format!("{}", AdmissionPolicy::FrequencyAware), "frequency_aware");
+        assert_eq!(
+            format!("{}", AdmissionPolicy::FrequencyAware),
+            "frequency_aware"
+        );
         let va = AdmissionPolicy::ValueAware { max_size_bytes: 42 };
         assert!(format!("{va}").contains("42"));
     }
@@ -2658,7 +2655,9 @@ mod tests {
     fn test_error_display() {
         let e = S3FifoGateError::ZeroCapacity;
         assert!(format!("{e}").contains("zero"));
-        let e2 = S3FifoGateError::AdmissionRejected { reason: "too_big".into() };
+        let e2 = S3FifoGateError::AdmissionRejected {
+            reason: "too_big".into(),
+        };
         assert!(format!("{e2}").contains("too_big"));
         let e3 = S3FifoGateError::ArtifactNotFound { key: "k".into() };
         assert!(format!("{e3}").contains("k"));
@@ -2823,7 +2822,9 @@ mod tests {
         assert!(gate.is_active());
 
         // Insert should work again.
-        let d = gate.insert(artifact("recovery"), 10, payload("recovery")).unwrap();
+        let d = gate
+            .insert(artifact("recovery"), 10, payload("recovery"))
+            .unwrap();
         assert!(d.is_admit());
     }
 

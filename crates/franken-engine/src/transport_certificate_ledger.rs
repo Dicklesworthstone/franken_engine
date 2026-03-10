@@ -124,10 +124,7 @@ impl ArtifactKind {
     pub fn is_arch_sensitive(self) -> bool {
         matches!(
             self,
-            Self::AotModule
-                | Self::SynthesizedKernel
-                | Self::CodeLayout
-                | Self::SpeculationGuard
+            Self::AotModule | Self::SynthesizedKernel | Self::CodeLayout | Self::SpeculationGuard
         )
     }
 }
@@ -612,9 +609,9 @@ impl ResidualLedger {
             .map(|c| c.transported_contribution_millionths)
             .sum();
         sum_source == self.total_source_millionths
-            && sum_transported
-                .saturating_add(self.unexplained_remainder_millionths)
-                == self.total_transported_millionths
+            && sum_transported.saturating_add(self.unexplained_remainder_millionths)
+                == self
+                    .total_transported_millionths
                     .saturating_add(self.unexplained_remainder_millionths)
     }
 
@@ -712,7 +709,8 @@ pub fn compute_residual_fraction(source_perf: u64, target_perf: u64) -> u64 {
     if source_perf == 0 {
         return MILLIONTHS;
     }
-    let fraction = target_perf.saturating_mul(MILLIONTHS)
+    let fraction = target_perf
+        .saturating_mul(MILLIONTHS)
         .checked_div(source_perf)
         .unwrap_or(0);
     // Cap at MILLIONTHS (target cannot exceed source for residual purposes).
@@ -765,19 +763,13 @@ pub fn evaluate_transport(
 
     // Classify the outcome.  If cells are from different arch families
     // and the artifact is arch-sensitive, mark as Incompatible.
-    let outcome =
-        if !source.same_arch_family(target) && artifact_kind.is_arch_sensitive() {
-            TransportOutcome::Incompatible
-        } else {
-            classify_outcome(residual_fraction)
-        };
+    let outcome = if !source.same_arch_family(target) && artifact_kind.is_arch_sensitive() {
+        TransportOutcome::Incompatible
+    } else {
+        classify_outcome(residual_fraction)
+    };
 
-    let certificate_id = generate_certificate_id(
-        &artifact_kind,
-        &artifact_hash,
-        source,
-        target,
-    );
+    let certificate_id = generate_certificate_id(&artifact_kind, &artifact_hash, source, target);
 
     let content_hash = TransportCertificate::compute_content_hash(
         &certificate_id,
@@ -836,7 +828,9 @@ pub fn build_residual_ledger(
 
     // The unexplained remainder is the difference between what the
     // certificate says was transported and what the components account for.
-    let unexplained = cert.target_perf_millionths.saturating_sub(total_transported);
+    let unexplained = cert
+        .target_perf_millionths
+        .saturating_sub(total_transported);
 
     // Validate: component source total should not exceed certificate source.
     if total_source > cert.source_perf_millionths {
@@ -1148,9 +1142,7 @@ impl TransportManifestSummary {
         }
 
         let avg_residual = if total > 0 {
-            sum_residual
-                .checked_div(total as u64)
-                .unwrap_or(0)
+            sum_residual.checked_div(total as u64).unwrap_or(0)
         } else {
             0
         };
@@ -1194,9 +1186,7 @@ impl TransportManifestSummary {
         if self.total_certificates == 0 {
             return 0;
         }
-        let usable = self.full_transport_count
-            + self.partial_transport_count
-            + self.degraded_count;
+        let usable = self.full_transport_count + self.partial_transport_count + self.degraded_count;
         (usable as u64)
             .saturating_mul(MILLIONTHS)
             .checked_div(self.total_certificates as u64)
@@ -1310,11 +1300,7 @@ impl fmt::Display for TransportEvent {
         write!(
             f,
             "event:{}(cert={}, {} -> {}, outcome={})",
-            self.kind,
-            self.certificate_id,
-            self.source_cell_id,
-            self.target_cell_id,
-            self.outcome,
+            self.kind, self.certificate_id, self.source_cell_id, self.target_cell_id, self.outcome,
         )
     }
 }
@@ -1502,10 +1488,19 @@ mod tests {
 
     #[test]
     fn degradation_reason_penalties() {
-        assert_eq!(DegradationReason::MicroarchMismatch.penalty_millionths(), 100_000);
+        assert_eq!(
+            DegradationReason::MicroarchMismatch.penalty_millionths(),
+            100_000
+        );
         assert_eq!(DegradationReason::IsaMissing.penalty_millionths(), 500_000);
-        assert_eq!(DegradationReason::CachePressure.penalty_millionths(), 80_000);
-        assert_eq!(DegradationReason::AlignmentPenalty.penalty_millionths(), 50_000);
+        assert_eq!(
+            DegradationReason::CachePressure.penalty_millionths(),
+            80_000
+        );
+        assert_eq!(
+            DegradationReason::AlignmentPenalty.penalty_millionths(),
+            50_000
+        );
         assert_eq!(
             DegradationReason::BranchPredictionDrift.penalty_millionths(),
             60_000
@@ -1514,7 +1509,10 @@ mod tests {
             DegradationReason::VectorizationUnavailable.penalty_millionths(),
             200_000
         );
-        assert_eq!(DegradationReason::MemoryModelWeaker.penalty_millionths(), 150_000);
+        assert_eq!(
+            DegradationReason::MemoryModelWeaker.penalty_millionths(),
+            150_000
+        );
         assert_eq!(
             DegradationReason::UnknownReason("x".into()).penalty_millionths(),
             100_000
@@ -1583,7 +1581,10 @@ mod tests {
 
     #[test]
     fn classify_outcome_full_transport() {
-        assert_eq!(classify_outcome(MILLIONTHS), TransportOutcome::FullTransport);
+        assert_eq!(
+            classify_outcome(MILLIONTHS),
+            TransportOutcome::FullTransport
+        );
         assert_eq!(
             classify_outcome(FULL_TRANSPORT_THRESHOLD),
             TransportOutcome::FullTransport
@@ -1601,7 +1602,10 @@ mod tests {
             classify_outcome(PARTIAL_TRANSPORT_THRESHOLD),
             TransportOutcome::PartialTransport
         );
-        assert_eq!(classify_outcome(800_000), TransportOutcome::PartialTransport);
+        assert_eq!(
+            classify_outcome(800_000),
+            TransportOutcome::PartialTransport
+        );
     }
 
     #[test]
@@ -1639,10 +1643,7 @@ mod tests {
 
     #[test]
     fn residual_fraction_half_perf() {
-        assert_eq!(
-            compute_residual_fraction(MILLIONTHS, 500_000),
-            500_000
-        );
+        assert_eq!(compute_residual_fraction(MILLIONTHS, 500_000), 500_000);
     }
 
     #[test]
@@ -1659,10 +1660,7 @@ mod tests {
     #[test]
     fn residual_fraction_target_exceeds_source() {
         // Capped at MILLIONTHS.
-        assert_eq!(
-            compute_residual_fraction(500_000, MILLIONTHS),
-            MILLIONTHS
-        );
+        assert_eq!(compute_residual_fraction(500_000, MILLIONTHS), MILLIONTHS);
     }
 
     #[test]
@@ -1714,7 +1712,7 @@ mod tests {
     #[test]
     fn detect_degradation_no_alignment_when_target_smaller() {
         let source = cell_arm_wide_cache(); // 128-byte
-        let target = cell_arm_nv2();        // 64-byte
+        let target = cell_arm_nv2(); // 64-byte
         let reasons = detect_degradation(&source, &target);
         assert!(reasons.contains(&DegradationReason::CachePressure));
         // No alignment penalty when target cache line is smaller.
@@ -1755,7 +1753,10 @@ mod tests {
         .unwrap();
         assert_eq!(cert.outcome, TransportOutcome::PartialTransport);
         assert_eq!(cert.residual_fraction_millionths, 850_000);
-        assert!(cert.degradation_reasons.contains(&DegradationReason::MicroarchMismatch));
+        assert!(
+            cert.degradation_reasons
+                .contains(&DegradationReason::MicroarchMismatch)
+        );
     }
 
     #[test]
@@ -2178,7 +2179,9 @@ mod tests {
     fn manifest_has_full_transport() {
         let certs = franken_engine_transport_manifest();
         assert!(
-            certs.iter().any(|c| c.outcome == TransportOutcome::FullTransport),
+            certs
+                .iter()
+                .any(|c| c.outcome == TransportOutcome::FullTransport),
             "manifest should contain a FullTransport"
         );
     }
@@ -2187,7 +2190,9 @@ mod tests {
     fn manifest_has_incompatible() {
         let certs = franken_engine_transport_manifest();
         assert!(
-            certs.iter().any(|c| c.outcome == TransportOutcome::Incompatible),
+            certs
+                .iter()
+                .any(|c| c.outcome == TransportOutcome::Incompatible),
             "manifest should contain an Incompatible"
         );
     }
@@ -2195,8 +2200,7 @@ mod tests {
     #[test]
     fn manifest_has_diverse_artifact_kinds() {
         let certs = franken_engine_transport_manifest();
-        let kinds: std::collections::BTreeSet<_> =
-            certs.iter().map(|c| c.artifact_kind).collect();
+        let kinds: std::collections::BTreeSet<_> = certs.iter().map(|c| c.artifact_kind).collect();
         assert!(
             kinds.len() >= 5,
             "manifest should cover at least 5 artifact kinds"
@@ -2314,11 +2318,8 @@ mod tests {
             800_000,
         )
         .unwrap();
-        let evt = TransportEvent::from_certificate(
-            &cert,
-            TransportEventKind::LedgerBuilt,
-            test_epoch(),
-        );
+        let evt =
+            TransportEvent::from_certificate(&cert, TransportEventKind::LedgerBuilt, test_epoch());
         let json = serde_json::to_string(&evt).unwrap();
         let back: TransportEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(evt, back);

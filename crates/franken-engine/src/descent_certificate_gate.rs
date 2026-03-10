@@ -716,10 +716,13 @@ mod tests {
 
     #[test]
     fn threshold_invariants() {
-        assert!(MIN_DESCENT_COVERAGE > 0);
-        assert!(MIN_DESCENT_COVERAGE <= 1_000_000);
-        assert!(MIN_DESCENT_CONFIDENCE > 0);
-        assert_eq!(MAX_OBSTRUCTIONS_ALLOWED, 0);
+        let mdc = MIN_DESCENT_COVERAGE;
+        let mdc2 = MIN_DESCENT_CONFIDENCE;
+        let moa = MAX_OBSTRUCTIONS_ALLOWED;
+        assert!(mdc > 0);
+        assert!(mdc <= 1_000_000);
+        assert!(mdc2 > 0);
+        assert_eq!(moa, 0);
     }
 
     // --- SupportSurface ---
@@ -828,7 +831,7 @@ mod tests {
 
     #[test]
     fn rejection_tags_unique() {
-        let rejections = vec![
+        let rejections = [
             GateRejection::NoCertificate,
             GateRejection::SurfaceMismatch {
                 claim_surface: SupportSurface::Latency,
@@ -918,7 +921,11 @@ mod tests {
     #[test]
     fn gate_supports_clean_cert() {
         let gate = DescentGate::with_defaults();
-        let v = gate.evaluate(&latency_claim(), Some(&clean_cert(SupportSurface::Latency)), false);
+        let v = gate.evaluate(
+            &latency_claim(),
+            Some(&clean_cert(SupportSurface::Latency)),
+            false,
+        );
         assert!(v.is_supported());
     }
 

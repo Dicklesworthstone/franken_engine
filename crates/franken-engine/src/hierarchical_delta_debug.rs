@@ -1473,9 +1473,12 @@ mod tests {
     fn constants_set() {
         assert_eq!(COMPONENT, "hierarchical_delta_debug");
         assert!(!REDUCTION_SCHEMA_VERSION.is_empty());
-        assert!(DEFAULT_MAX_REDUCTION_STEPS > 0);
-        assert!(DEFAULT_MIN_PROGRAM_SIZE > 0);
-        assert!(DEFAULT_MAX_REDUCTION_TIME_MS > 0);
+        let dmrs = DEFAULT_MAX_REDUCTION_STEPS;
+        let dmps = DEFAULT_MIN_PROGRAM_SIZE;
+        let dmrt = DEFAULT_MAX_REDUCTION_TIME_MS;
+        assert!(dmrs > 0);
+        assert!(dmps > 0);
+        assert!(dmrt > 0);
     }
 
     // --- ReductionSummary ---

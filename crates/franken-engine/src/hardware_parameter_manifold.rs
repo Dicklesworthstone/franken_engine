@@ -1094,18 +1094,21 @@ mod tests {
 
     #[test]
     fn max_axes_positive() {
-        assert!(MAX_HARDWARE_AXES > 0);
+        let mha = MAX_HARDWARE_AXES;
+        assert!(mha > 0);
     }
 
     #[test]
     fn max_class_size_positive() {
-        assert!(MAX_CLASS_SIZE > 0);
+        let mcs = MAX_CLASS_SIZE;
+        assert!(mcs > 0);
     }
 
     #[test]
     fn default_threshold_range() {
-        assert!(DEFAULT_SIMILARITY_THRESHOLD > 0);
-        assert!(DEFAULT_SIMILARITY_THRESHOLD < MILLION);
+        let dst = DEFAULT_SIMILARITY_THRESHOLD;
+        assert!(dst > 0);
+        assert!(dst < MILLION);
     }
 
     // --- HardwareAxisDomain ---
@@ -1239,7 +1242,7 @@ mod tests {
 
     #[test]
     fn symmetry_reason_tags_unique() {
-        let reasons = vec![
+        let reasons = [
             SymmetryReason::WithinThreshold {
                 max_distance_millionths: 1000,
                 threshold_millionths: 50_000,

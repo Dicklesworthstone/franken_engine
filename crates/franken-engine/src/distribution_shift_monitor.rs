@@ -737,8 +737,7 @@ mod tests {
             source_hash: ContentHash::compute(
                 &dims
                     .iter()
-                    .map(|d| d.to_le_bytes())
-                    .flatten()
+                    .flat_map(|d| d.to_le_bytes())
                     .collect::<Vec<u8>>(),
             ),
         }

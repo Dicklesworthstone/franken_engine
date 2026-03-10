@@ -1036,7 +1036,7 @@ mod tests {
 
     #[test]
     fn refusal_reason_display_unique() {
-        let reasons = vec![
+        let reasons = [
             RefusalReason::InsufficientStrength {
                 actual: LawStrength::Heuristic,
                 minimum: LawStrength::Conditional,
@@ -1084,7 +1084,7 @@ mod tests {
 
     #[test]
     fn error_display_unique() {
-        let errors = vec![
+        let errors = [
             LifecycleError::LawNotFound {
                 law_id: "a".to_string(),
             },

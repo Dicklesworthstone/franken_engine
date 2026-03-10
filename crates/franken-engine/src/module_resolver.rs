@@ -1489,8 +1489,14 @@ mod tests {
         assert_eq!(
             outcome.module.probe_sequence,
             vec![
+                "pkg",
+                "pkg.cjs",
+                "pkg.js",
+                "pkg/index.cjs",
+                "pkg/index.js",
                 "/repo/pkg",
                 "/repo/pkg.cjs",
+                "/repo/pkg.js",
                 "/repo/pkg/index.cjs",
                 "/repo/pkg/index.js"
             ]

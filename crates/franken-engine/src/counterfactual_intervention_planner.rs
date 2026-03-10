@@ -513,10 +513,7 @@ pub fn plan_wave(
     // Build priority order: re-validate topological sort for selected passes.
     let priority_order = validate_pass_ordering(&selected)?;
 
-    let wave_id = derive_id(
-        "wave",
-        priority_order.join(",").as_bytes(),
-    );
+    let wave_id = derive_id("wave", priority_order.join(",").as_bytes());
 
     let mut wave = WaveDefinition {
         wave_id,
@@ -874,7 +871,10 @@ mod tests {
         ];
         for (err, expected_substr) in errors {
             let msg = err.to_string();
-            assert!(msg.contains(expected_substr), "'{msg}' should contain '{expected_substr}'");
+            assert!(
+                msg.contains(expected_substr),
+                "'{msg}' should contain '{expected_substr}'"
+            );
         }
     }
 
@@ -1047,8 +1047,16 @@ mod tests {
     fn plan_wave_aggregates_correct() {
         let passes = sample_passes();
         let wave = plan_wave(passes, MILLIONTHS).unwrap();
-        let sum_uplift: u64 = wave.passes.iter().map(|p| p.estimated_uplift_millionths).sum();
-        let sum_risk: u64 = wave.passes.iter().map(|p| p.estimated_risk_millionths).sum();
+        let sum_uplift: u64 = wave
+            .passes
+            .iter()
+            .map(|p| p.estimated_uplift_millionths)
+            .sum();
+        let sum_risk: u64 = wave
+            .passes
+            .iter()
+            .map(|p| p.estimated_risk_millionths)
+            .sum();
         assert_eq!(wave.total_expected_uplift_millionths, sum_uplift);
         assert_eq!(wave.total_risk_millionths, sum_risk);
     }
@@ -1068,7 +1076,11 @@ mod tests {
             make_pass_with_prereqs("derived", 400_000, 50_000, 20_000, vec!["base"]),
         ];
         let wave = plan_wave(passes, MILLIONTHS).unwrap();
-        let pos_base = wave.priority_order.iter().position(|x| x == "base").unwrap();
+        let pos_base = wave
+            .priority_order
+            .iter()
+            .position(|x| x == "base")
+            .unwrap();
         let pos_derived = wave
             .priority_order
             .iter()

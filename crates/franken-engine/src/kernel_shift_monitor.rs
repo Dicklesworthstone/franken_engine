@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn abstention_tags_unique() {
-        let reasons = vec![
+        let reasons = [
             MonitorAbstention::InsufficientSamples {
                 available: 10,
                 required: 32,
@@ -976,13 +976,19 @@ mod tests {
         assert!(!SCHEMA_VERSION.is_empty());
         assert!(!BEAD_ID.is_empty());
         assert!(!COMPONENT.is_empty());
-        assert!(DEFAULT_WINDOW_SIZE >= MIN_WINDOW_SIZE);
-        assert!(MIN_WINDOW_SIZE > 0);
-        assert!(DEFAULT_MMD_THRESHOLD > 0);
-        assert!(DEFAULT_MMD_THRESHOLD <= MILLION);
-        assert!(MAX_MONITORS > 0);
-        assert!(DEFAULT_FALSE_ALARM_BUDGET > 0);
-        assert!(DEFAULT_FALSE_ALARM_BUDGET <= MILLION);
+        let win = DEFAULT_WINDOW_SIZE;
+        let min_win = MIN_WINDOW_SIZE;
+        let mmd_thresh = DEFAULT_MMD_THRESHOLD;
+        let max_mon = MAX_MONITORS;
+        let fa_budget = DEFAULT_FALSE_ALARM_BUDGET;
+        let mill = MILLION;
+        assert!(win >= min_win);
+        assert!(min_win > 0);
+        assert!(mmd_thresh > 0);
+        assert!(mmd_thresh <= mill);
+        assert!(max_mon > 0);
+        assert!(fa_budget > 0);
+        assert!(fa_budget <= mill);
     }
 
     #[test]

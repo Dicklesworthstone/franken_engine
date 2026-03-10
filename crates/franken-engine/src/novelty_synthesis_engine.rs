@@ -683,7 +683,9 @@ pub fn build_batch(
         let out = h.finalize();
         format!(
             "batch-{:016x}",
-            u64::from_le_bytes([out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],])
+            u64::from_le_bytes([
+                out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],
+            ])
         )
     };
 

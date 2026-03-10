@@ -636,11 +636,15 @@ mod tests {
 
     #[test]
     fn thresholds_valid() {
-        assert!(DEFAULT_MAX_CANDIDATES > 0);
-        assert!(DEFAULT_SEARCH_BUDGET > 0);
-        assert!(MAX_COUNTEREXAMPLES > 0);
-        assert!(MIN_SPEEDUP_THRESHOLD > 0);
-        assert!(MIN_SPEEDUP_THRESHOLD < MILLION);
+        let max_cand = DEFAULT_MAX_CANDIDATES;
+        let search_b = DEFAULT_SEARCH_BUDGET;
+        let max_cx = MAX_COUNTEREXAMPLES;
+        let min_sp = MIN_SPEEDUP_THRESHOLD;
+        assert!(max_cand > 0);
+        assert!(search_b > 0);
+        assert!(max_cx > 0);
+        assert!(min_sp > 0);
+        assert!(min_sp < MILLION);
     }
 
     // --- ProofStatus ---

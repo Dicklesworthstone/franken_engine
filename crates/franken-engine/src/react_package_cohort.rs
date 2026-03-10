@@ -41,8 +41,7 @@ pub const REACT_COHORT_SCHEMA_VERSION: &str = "franken-engine.react-package-coho
 pub const REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.react-package-cohort.run-manifest.v1";
 /// Schema version for react package cohort structured events.
-pub const REACT_COHORT_EVENT_SCHEMA_VERSION: &str =
-    "franken-engine.react-package-cohort.event.v1";
+pub const REACT_COHORT_EVENT_SCHEMA_VERSION: &str = "franken-engine.react-package-cohort.event.v1";
 /// Schema version for the stable trace-id artifact.
 pub const REACT_COHORT_TRACE_IDS_SCHEMA_VERSION: &str =
     "franken-engine.react-package-cohort.trace-ids.v1";
@@ -204,11 +203,8 @@ pub enum ModuleFormat {
 
 impl ModuleFormat {
     /// All variants for exhaustive iteration.
-    pub const ALL: &'static [ModuleFormat] = &[
-        ModuleFormat::Esm,
-        ModuleFormat::Cjs,
-        ModuleFormat::Dual,
-    ];
+    pub const ALL: &'static [ModuleFormat] =
+        &[ModuleFormat::Esm, ModuleFormat::Cjs, ModuleFormat::Dual];
 
     /// Human-readable label.
     pub const fn as_str(self) -> &'static str {
@@ -700,7 +696,7 @@ fn compute_manifest_hash(
     hasher.update(version.as_bytes());
     for entry in subpaths {
         hasher.update(b"|");
-        hasher.update(&entry.fingerprint_bytes());
+        hasher.update(entry.fingerprint_bytes());
     }
     for (k, v) in aliases {
         hasher.update(b"@");
@@ -755,17 +751,17 @@ pub fn resolve_subpath_with_fallbacks<'a>(
     Err(CohortError::SubpathMissing(format!(
         "{} under conditions {:?}",
         subpath,
-        conditions.iter().map(|c| c.condition_key()).collect::<Vec<_>>()
+        conditions
+            .iter()
+            .map(|c| c.condition_key())
+            .collect::<Vec<_>>()
     )))
 }
 
 /// Build a [`CohortMatrix`] from an epoch and a set of package manifests.
 ///
 /// Computes the total subpath count and a matrix-level content hash.
-pub fn build_cohort_matrix(
-    epoch: SecurityEpoch,
-    packages: Vec<PackageManifest>,
-) -> CohortMatrix {
+pub fn build_cohort_matrix(epoch: SecurityEpoch, packages: Vec<PackageManifest>) -> CohortMatrix {
     build_cohort_matrix_with_edges(epoch, packages, Vec::new())
 }
 
@@ -840,28 +836,22 @@ pub fn detect_alias_loops(manifest: &PackageManifest) -> Vec<Vec<String>> {
         let mut current = start_key.as_str();
         visited.push(current.to_string());
 
-        loop {
-            match manifest.aliases.get(current) {
-                Some(next) => {
-                    if let Some(pos) = visited.iter().position(|v| v == next) {
-                        // Found a cycle — extract the loop portion.
-                        let cycle: Vec<String> = visited[pos..].to_vec();
-                        // Only record if we haven't already captured an
-                        // equivalent cycle (normalise by smallest element).
-                        let is_duplicate = loops.iter().any(|existing: &Vec<String>| {
-                            existing.len() == cycle.len()
-                                && cycle.iter().all(|c| existing.contains(c))
-                        });
-                        if !is_duplicate {
-                            loops.push(cycle);
-                        }
-                        break;
-                    }
-                    visited.push(next.to_string());
-                    current = next.as_str();
+        while let Some(next) = manifest.aliases.get(current) {
+            if let Some(pos) = visited.iter().position(|v| v == next) {
+                // Found a cycle — extract the loop portion.
+                let cycle: Vec<String> = visited[pos..].to_vec();
+                // Only record if we haven't already captured an
+                // equivalent cycle (normalise by smallest element).
+                let is_duplicate = loops.iter().any(|existing: &Vec<String>| {
+                    existing.len() == cycle.len() && cycle.iter().all(|c| existing.contains(c))
+                });
+                if !is_duplicate {
+                    loops.push(cycle);
                 }
-                None => break, // chain terminates without a loop
+                break;
             }
+            visited.push(next.to_string());
+            current = next.as_str();
         }
     }
 
@@ -910,11 +900,10 @@ pub fn validate_cohort(matrix: &CohortMatrix) -> CohortValidationReport {
 
     let edge_pass_count = matrix.passed_edge_cases() as u64;
     let edge_total = matrix.edge_cases.len() as u64;
-    let pass_rate = if edge_total == 0 {
-        MILLIONTHS
-    } else {
-        edge_pass_count.saturating_mul(MILLIONTHS) / edge_total
-    };
+    let pass_rate = edge_pass_count
+        .saturating_mul(MILLIONTHS)
+        .checked_div(edge_total)
+        .unwrap_or(MILLIONTHS);
 
     let passed = all_loops.is_empty() && (edge_total == 0 || edge_pass_count == edge_total);
 
@@ -946,35 +935,130 @@ pub fn franken_engine_react_cohort_manifest() -> CohortMatrix {
 
     // --- react ---
     let react_subpaths = vec![
-        SubpathEntry::new(".", vec![ExportCondition::Import], "./esm/react.js", ModuleFormat::Esm),
-        SubpathEntry::new(".", vec![ExportCondition::Require], "./cjs/react.js", ModuleFormat::Cjs),
-        SubpathEntry::new(".", vec![ExportCondition::Default], "./cjs/react.js", ModuleFormat::Cjs),
-        SubpathEntry::new("./jsx-runtime", vec![ExportCondition::Import], "./esm/jsx-runtime.js", ModuleFormat::Esm),
-        SubpathEntry::new("./jsx-runtime", vec![ExportCondition::Require], "./cjs/jsx-runtime.js", ModuleFormat::Cjs),
-        SubpathEntry::new("./jsx-dev-runtime", vec![ExportCondition::Import], "./esm/jsx-dev-runtime.js", ModuleFormat::Esm),
-        SubpathEntry::new("./jsx-dev-runtime", vec![ExportCondition::Require], "./cjs/jsx-dev-runtime.js", ModuleFormat::Cjs),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Import],
+            "./esm/react.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Require],
+            "./cjs/react.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Default],
+            "./cjs/react.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            "./jsx-runtime",
+            vec![ExportCondition::Import],
+            "./esm/jsx-runtime.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            "./jsx-runtime",
+            vec![ExportCondition::Require],
+            "./cjs/jsx-runtime.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            "./jsx-dev-runtime",
+            vec![ExportCondition::Import],
+            "./esm/jsx-dev-runtime.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            "./jsx-dev-runtime",
+            vec![ExportCondition::Require],
+            "./cjs/jsx-dev-runtime.js",
+            ModuleFormat::Cjs,
+        ),
     ];
     let react_manifest = build_manifest(ReactPackage::React, "18.3.1", react_subpaths);
 
     // --- react-dom ---
     let react_dom_subpaths = vec![
-        SubpathEntry::new(".", vec![ExportCondition::Import], "./esm/react-dom.js", ModuleFormat::Esm),
-        SubpathEntry::new(".", vec![ExportCondition::Require], "./cjs/react-dom.js", ModuleFormat::Cjs),
-        SubpathEntry::new(".", vec![ExportCondition::Default], "./cjs/react-dom.js", ModuleFormat::Cjs),
-        SubpathEntry::new("./client", vec![ExportCondition::Import], "./esm/react-dom-client.js", ModuleFormat::Esm),
-        SubpathEntry::new("./client", vec![ExportCondition::Require], "./cjs/react-dom-client.js", ModuleFormat::Cjs),
-        SubpathEntry::new("./server", vec![ExportCondition::Import, ExportCondition::Node], "./esm/react-dom-server.node.js", ModuleFormat::Esm),
-        SubpathEntry::new("./server", vec![ExportCondition::Require], "./cjs/react-dom-server.node.js", ModuleFormat::Cjs),
-        SubpathEntry::new("./server", vec![ExportCondition::Browser], "./esm/react-dom-server.browser.js", ModuleFormat::Esm),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Import],
+            "./esm/react-dom.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Require],
+            "./cjs/react-dom.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Default],
+            "./cjs/react-dom.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            "./client",
+            vec![ExportCondition::Import],
+            "./esm/react-dom-client.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            "./client",
+            vec![ExportCondition::Require],
+            "./cjs/react-dom-client.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            "./server",
+            vec![ExportCondition::Import, ExportCondition::Node],
+            "./esm/react-dom-server.node.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            "./server",
+            vec![ExportCondition::Require],
+            "./cjs/react-dom-server.node.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            "./server",
+            vec![ExportCondition::Browser],
+            "./esm/react-dom-server.browser.js",
+            ModuleFormat::Esm,
+        ),
     ];
     let react_dom_manifest = build_manifest(ReactPackage::ReactDom, "18.3.1", react_dom_subpaths);
 
     // --- react-dom/server (logical) ---
     let react_dom_server_subpaths = vec![
-        SubpathEntry::new(".", vec![ExportCondition::Import, ExportCondition::Node], "./esm/react-dom-server.node.js", ModuleFormat::Esm),
-        SubpathEntry::new(".", vec![ExportCondition::Require], "./cjs/react-dom-server.node.js", ModuleFormat::Cjs),
-        SubpathEntry::new(".", vec![ExportCondition::Browser], "./esm/react-dom-server.browser.js", ModuleFormat::Esm),
-        SubpathEntry::new(".", vec![ExportCondition::ReactServer], "./esm/react-dom-server.edge.js", ModuleFormat::Esm),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Import, ExportCondition::Node],
+            "./esm/react-dom-server.node.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Require],
+            "./cjs/react-dom-server.node.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Browser],
+            "./esm/react-dom-server.browser.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::ReactServer],
+            "./esm/react-dom-server.edge.js",
+            ModuleFormat::Esm,
+        ),
     ];
     let react_dom_server_manifest = build_manifest(
         ReactPackage::ReactDomServer,
@@ -984,9 +1068,24 @@ pub fn franken_engine_react_cohort_manifest() -> CohortMatrix {
 
     // --- react/jsx-runtime ---
     let jsx_runtime_subpaths = vec![
-        SubpathEntry::new(".", vec![ExportCondition::Import], "./esm/jsx-runtime.js", ModuleFormat::Esm),
-        SubpathEntry::new(".", vec![ExportCondition::Require], "./cjs/jsx-runtime.js", ModuleFormat::Cjs),
-        SubpathEntry::new(".", vec![ExportCondition::Default], "./cjs/jsx-runtime.js", ModuleFormat::Cjs),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Import],
+            "./esm/jsx-runtime.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Require],
+            "./cjs/jsx-runtime.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Default],
+            "./cjs/jsx-runtime.js",
+            ModuleFormat::Cjs,
+        ),
     ];
     let jsx_runtime_manifest = build_manifest(
         ReactPackage::ReactJsxRuntime,
@@ -996,9 +1095,24 @@ pub fn franken_engine_react_cohort_manifest() -> CohortMatrix {
 
     // --- react/jsx-dev-runtime ---
     let jsx_dev_runtime_subpaths = vec![
-        SubpathEntry::new(".", vec![ExportCondition::Import], "./esm/jsx-dev-runtime.js", ModuleFormat::Esm),
-        SubpathEntry::new(".", vec![ExportCondition::Require], "./cjs/jsx-dev-runtime.js", ModuleFormat::Cjs),
-        SubpathEntry::new(".", vec![ExportCondition::Default], "./cjs/jsx-dev-runtime.js", ModuleFormat::Cjs),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Import],
+            "./esm/jsx-dev-runtime.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Require],
+            "./cjs/jsx-dev-runtime.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Default],
+            "./cjs/jsx-dev-runtime.js",
+            ModuleFormat::Cjs,
+        ),
     ];
     let jsx_dev_runtime_manifest = build_manifest(
         ReactPackage::ReactJsxDevRuntime,
@@ -1008,23 +1122,50 @@ pub fn franken_engine_react_cohort_manifest() -> CohortMatrix {
 
     // --- scheduler ---
     let scheduler_subpaths = vec![
-        SubpathEntry::new(".", vec![ExportCondition::Import], "./esm/scheduler.js", ModuleFormat::Esm),
-        SubpathEntry::new(".", vec![ExportCondition::Require], "./cjs/scheduler.js", ModuleFormat::Cjs),
-        SubpathEntry::new(".", vec![ExportCondition::Default], "./cjs/scheduler.js", ModuleFormat::Cjs),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Import],
+            "./esm/scheduler.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Require],
+            "./cjs/scheduler.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Default],
+            "./cjs/scheduler.js",
+            ModuleFormat::Cjs,
+        ),
     ];
     let scheduler_manifest = build_manifest(ReactPackage::Scheduler, "0.23.0", scheduler_subpaths);
 
     // --- react-reconciler ---
     let reconciler_subpaths = vec![
-        SubpathEntry::new(".", vec![ExportCondition::Import], "./esm/react-reconciler.js", ModuleFormat::Esm),
-        SubpathEntry::new(".", vec![ExportCondition::Require], "./cjs/react-reconciler.js", ModuleFormat::Cjs),
-        SubpathEntry::new(".", vec![ExportCondition::Default], "./cjs/react-reconciler.js", ModuleFormat::Cjs),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Import],
+            "./esm/react-reconciler.js",
+            ModuleFormat::Esm,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Require],
+            "./cjs/react-reconciler.js",
+            ModuleFormat::Cjs,
+        ),
+        SubpathEntry::new(
+            ".",
+            vec![ExportCondition::Default],
+            "./cjs/react-reconciler.js",
+            ModuleFormat::Cjs,
+        ),
     ];
-    let reconciler_manifest = build_manifest(
-        ReactPackage::ReactReconciler,
-        "0.29.0",
-        reconciler_subpaths,
-    );
+    let reconciler_manifest =
+        build_manifest(ReactPackage::ReactReconciler, "0.29.0", reconciler_subpaths);
 
     // --- edge cases ---
     let mut ec1 = EdgeCase::pending(
@@ -1423,17 +1564,47 @@ mod tests {
     // Helpers
     // -----------------------------------------------------------------------
 
-    fn sample_subpath(sub: &str, cond: ExportCondition, path: &str, fmt: ModuleFormat) -> SubpathEntry {
+    fn sample_subpath(
+        sub: &str,
+        cond: ExportCondition,
+        path: &str,
+        fmt: ModuleFormat,
+    ) -> SubpathEntry {
         SubpathEntry::new(sub, vec![cond], path, fmt)
     }
 
     fn sample_react_manifest() -> PackageManifest {
         let subpaths = vec![
-            sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Esm),
-            sample_subpath(".", ExportCondition::Require, "./cjs/react.js", ModuleFormat::Cjs),
-            sample_subpath(".", ExportCondition::Default, "./cjs/react.js", ModuleFormat::Cjs),
-            sample_subpath("./jsx-runtime", ExportCondition::Import, "./esm/jsx-runtime.js", ModuleFormat::Esm),
-            sample_subpath("./jsx-runtime", ExportCondition::Require, "./cjs/jsx-runtime.js", ModuleFormat::Cjs),
+            sample_subpath(
+                ".",
+                ExportCondition::Import,
+                "./esm/react.js",
+                ModuleFormat::Esm,
+            ),
+            sample_subpath(
+                ".",
+                ExportCondition::Require,
+                "./cjs/react.js",
+                ModuleFormat::Cjs,
+            ),
+            sample_subpath(
+                ".",
+                ExportCondition::Default,
+                "./cjs/react.js",
+                ModuleFormat::Cjs,
+            ),
+            sample_subpath(
+                "./jsx-runtime",
+                ExportCondition::Import,
+                "./esm/jsx-runtime.js",
+                ModuleFormat::Esm,
+            ),
+            sample_subpath(
+                "./jsx-runtime",
+                ExportCondition::Require,
+                "./cjs/jsx-runtime.js",
+                ModuleFormat::Cjs,
+            ),
         ];
         build_manifest(ReactPackage::React, "18.3.1", subpaths)
     }
@@ -1538,7 +1709,12 @@ mod tests {
 
     #[test]
     fn test_subpath_entry_matches_exact() {
-        let entry = sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Esm);
+        let entry = sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./esm/react.js",
+            ModuleFormat::Esm,
+        );
         assert!(entry.matches(".", &ExportCondition::Import));
         assert!(!entry.matches(".", &ExportCondition::Require));
         assert!(!entry.matches("./other", &ExportCondition::Import));
@@ -1559,7 +1735,12 @@ mod tests {
 
     #[test]
     fn test_subpath_entry_display() {
-        let entry = sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Esm);
+        let entry = sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./esm/react.js",
+            ModuleFormat::Esm,
+        );
         let display = entry.to_string();
         assert!(display.contains("./esm/react.js"));
         assert!(display.contains("esm"));
@@ -1567,15 +1748,35 @@ mod tests {
 
     #[test]
     fn test_subpath_entry_fingerprint_deterministic() {
-        let e1 = sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Esm);
-        let e2 = sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Esm);
+        let e1 = sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./esm/react.js",
+            ModuleFormat::Esm,
+        );
+        let e2 = sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./esm/react.js",
+            ModuleFormat::Esm,
+        );
         assert_eq!(e1.fingerprint_bytes(), e2.fingerprint_bytes());
     }
 
     #[test]
     fn test_subpath_entry_fingerprint_differs_for_different_formats() {
-        let e1 = sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Esm);
-        let e2 = sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Cjs);
+        let e1 = sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./esm/react.js",
+            ModuleFormat::Esm,
+        );
+        let e2 = sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./esm/react.js",
+            ModuleFormat::Cjs,
+        );
         assert_ne!(e1.fingerprint_bytes(), e2.fingerprint_bytes());
     }
 
@@ -1601,9 +1802,12 @@ mod tests {
 
     #[test]
     fn test_build_manifest_different_versions_different_hash() {
-        let subpaths = vec![
-            sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Esm),
-        ];
+        let subpaths = vec![sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./esm/react.js",
+            ModuleFormat::Esm,
+        )];
         let m1 = build_manifest(ReactPackage::React, "18.3.0", subpaths.clone());
         let m2 = build_manifest(ReactPackage::React, "18.3.1", subpaths);
         assert_ne!(m1.content_hash, m2.content_hash);
@@ -1611,17 +1815,16 @@ mod tests {
 
     #[test]
     fn test_build_manifest_with_aliases() {
-        let subpaths = vec![
-            sample_subpath("./server.browser", ExportCondition::Import, "./esm/server.browser.js", ModuleFormat::Esm),
-        ];
+        let subpaths = vec![sample_subpath(
+            "./server.browser",
+            ExportCondition::Import,
+            "./esm/server.browser.js",
+            ModuleFormat::Esm,
+        )];
         let mut aliases = BTreeMap::new();
         aliases.insert("./server".to_string(), "./server.browser".to_string());
-        let manifest = build_manifest_with_aliases(
-            ReactPackage::ReactDomServer,
-            "18.3.1",
-            subpaths,
-            aliases,
-        );
+        let manifest =
+            build_manifest_with_aliases(ReactPackage::ReactDomServer, "18.3.1", subpaths, aliases);
         assert_eq!(manifest.alias_count(), 1);
     }
 
@@ -1675,17 +1878,16 @@ mod tests {
 
     #[test]
     fn test_resolve_subpath_via_alias() {
-        let subpaths = vec![
-            sample_subpath("./server.browser", ExportCondition::Import, "./esm/server.browser.js", ModuleFormat::Esm),
-        ];
+        let subpaths = vec![sample_subpath(
+            "./server.browser",
+            ExportCondition::Import,
+            "./esm/server.browser.js",
+            ModuleFormat::Esm,
+        )];
         let mut aliases = BTreeMap::new();
         aliases.insert("./server".to_string(), "./server.browser".to_string());
-        let manifest = build_manifest_with_aliases(
-            ReactPackage::ReactDomServer,
-            "18.3.1",
-            subpaths,
-            aliases,
-        );
+        let manifest =
+            build_manifest_with_aliases(ReactPackage::ReactDomServer, "18.3.1", subpaths, aliases);
         let entry = resolve_subpath(&manifest, "./server", &ExportCondition::Import).unwrap();
         assert_eq!(entry.resolved_path, "./esm/server.browser.js");
     }
@@ -1749,7 +1951,13 @@ mod tests {
 
     #[test]
     fn test_cohort_matrix_pass_rate_all_pass() {
-        let mut ec = EdgeCase::pending("ec-1", "test", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+        let mut ec = EdgeCase::pending(
+            "ec-1",
+            "test",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
+        );
         ec.resolve("./esm/react.js");
         let matrix = build_cohort_matrix_with_edges(
             SecurityEpoch::from_raw(1),
@@ -1761,9 +1969,21 @@ mod tests {
 
     #[test]
     fn test_cohort_matrix_pass_rate_partial() {
-        let mut ec1 = EdgeCase::pending("ec-1", "passes", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+        let mut ec1 = EdgeCase::pending(
+            "ec-1",
+            "passes",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
+        );
         ec1.resolve("./esm/react.js");
-        let mut ec2 = EdgeCase::pending("ec-2", "fails", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+        let mut ec2 = EdgeCase::pending(
+            "ec-2",
+            "fails",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
+        );
         ec2.resolve("./wrong.js");
         let matrix = build_cohort_matrix_with_edges(
             SecurityEpoch::from_raw(1),
@@ -1804,14 +2024,26 @@ mod tests {
 
     #[test]
     fn test_edge_case_pending() {
-        let ec = EdgeCase::pending("ec-1", "test case", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+        let ec = EdgeCase::pending(
+            "ec-1",
+            "test case",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
+        );
         assert!(!ec.passed);
         assert!(ec.actual_resolution.is_none());
     }
 
     #[test]
     fn test_edge_case_resolve_pass() {
-        let mut ec = EdgeCase::pending("ec-1", "test case", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+        let mut ec = EdgeCase::pending(
+            "ec-1",
+            "test case",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
+        );
         ec.resolve("./esm/react.js");
         assert!(ec.passed);
         assert_eq!(ec.actual_resolution.as_deref(), Some("./esm/react.js"));
@@ -1819,7 +2051,13 @@ mod tests {
 
     #[test]
     fn test_edge_case_resolve_fail() {
-        let mut ec = EdgeCase::pending("ec-1", "test case", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+        let mut ec = EdgeCase::pending(
+            "ec-1",
+            "test case",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
+        );
         ec.resolve("./wrong/path.js");
         assert!(!ec.passed);
         assert_eq!(ec.actual_resolution.as_deref(), Some("./wrong/path.js"));
@@ -1827,7 +2065,13 @@ mod tests {
 
     #[test]
     fn test_edge_case_mark_failed() {
-        let mut ec = EdgeCase::pending("ec-1", "test case", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+        let mut ec = EdgeCase::pending(
+            "ec-1",
+            "test case",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
+        );
         ec.resolve("./esm/react.js");
         assert!(ec.passed);
         ec.mark_failed();
@@ -1837,7 +2081,13 @@ mod tests {
 
     #[test]
     fn test_edge_case_display() {
-        let mut ec = EdgeCase::pending("ec-1", "test case", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+        let mut ec = EdgeCase::pending(
+            "ec-1",
+            "test case",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
+        );
         ec.resolve("./esm/react.js");
         let display = ec.to_string();
         assert!(display.contains("PASS"));
@@ -1906,12 +2156,8 @@ mod tests {
         let mut aliases = BTreeMap::new();
         aliases.insert("a".to_string(), "b".to_string());
         aliases.insert("b".to_string(), "a".to_string());
-        let manifest = build_manifest_with_aliases(
-            ReactPackage::React,
-            "18.3.1",
-            Vec::new(),
-            aliases,
-        );
+        let manifest =
+            build_manifest_with_aliases(ReactPackage::React, "18.3.1", Vec::new(), aliases);
         let loops = detect_alias_loops(&manifest);
         assert!(!loops.is_empty());
         // The cycle should contain both "a" and "b".
@@ -1926,12 +2172,8 @@ mod tests {
         aliases.insert("x".to_string(), "y".to_string());
         aliases.insert("y".to_string(), "z".to_string());
         aliases.insert("z".to_string(), "x".to_string());
-        let manifest = build_manifest_with_aliases(
-            ReactPackage::React,
-            "18.3.1",
-            Vec::new(),
-            aliases,
-        );
+        let manifest =
+            build_manifest_with_aliases(ReactPackage::React, "18.3.1", Vec::new(), aliases);
         let loops = detect_alias_loops(&manifest);
         assert!(!loops.is_empty());
         let cycle = &loops[0];
@@ -1946,12 +2188,8 @@ mod tests {
         aliases.insert("a".to_string(), "b".to_string());
         aliases.insert("b".to_string(), "c".to_string());
         // "c" is not in aliases, so no loop.
-        let manifest = build_manifest_with_aliases(
-            ReactPackage::React,
-            "18.3.1",
-            Vec::new(),
-            aliases,
-        );
+        let manifest =
+            build_manifest_with_aliases(ReactPackage::React, "18.3.1", Vec::new(), aliases);
         let loops = detect_alias_loops(&manifest);
         assert!(loops.is_empty());
     }
@@ -2031,8 +2269,18 @@ mod tests {
     #[test]
     fn test_verify_format_consistency_conflict() {
         let subpaths = vec![
-            sample_subpath(".", ExportCondition::Import, "./shared/index.js", ModuleFormat::Esm),
-            sample_subpath(".", ExportCondition::Require, "./shared/index.js", ModuleFormat::Cjs),
+            sample_subpath(
+                ".",
+                ExportCondition::Import,
+                "./shared/index.js",
+                ModuleFormat::Esm,
+            ),
+            sample_subpath(
+                ".",
+                ExportCondition::Require,
+                "./shared/index.js",
+                ModuleFormat::Cjs,
+            ),
         ];
         let manifest = build_manifest(ReactPackage::React, "18.3.1", subpaths);
         let errors = verify_format_consistency(&manifest);
@@ -2087,13 +2335,16 @@ mod tests {
     #[test]
     fn test_validate_cohort_clean() {
         let manifest = sample_react_manifest();
-        let mut ec = EdgeCase::pending("ec-1", "test", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
-        ec.resolve("./esm/react.js");
-        let matrix = build_cohort_matrix_with_edges(
-            SecurityEpoch::from_raw(1),
-            vec![manifest],
-            vec![ec],
+        let mut ec = EdgeCase::pending(
+            "ec-1",
+            "test",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
         );
+        ec.resolve("./esm/react.js");
+        let matrix =
+            build_cohort_matrix_with_edges(SecurityEpoch::from_raw(1), vec![manifest], vec![ec]);
         let report = validate_cohort(&matrix);
         assert!(report.passed);
         assert_eq!(report.pass_rate_millionths, MILLIONTHS);
@@ -2103,13 +2354,16 @@ mod tests {
     #[test]
     fn test_validate_cohort_with_failed_edge_case() {
         let manifest = sample_react_manifest();
-        let mut ec = EdgeCase::pending("ec-1", "test", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
-        ec.resolve("./wrong.js");
-        let matrix = build_cohort_matrix_with_edges(
-            SecurityEpoch::from_raw(1),
-            vec![manifest],
-            vec![ec],
+        let mut ec = EdgeCase::pending(
+            "ec-1",
+            "test",
+            ReactPackage::React,
+            ExportCondition::Import,
+            "./esm/react.js",
         );
+        ec.resolve("./wrong.js");
+        let matrix =
+            build_cohort_matrix_with_edges(SecurityEpoch::from_raw(1), vec![manifest], vec![ec]);
         let report = validate_cohort(&matrix);
         assert!(!report.passed);
     }
@@ -2119,12 +2373,8 @@ mod tests {
         let mut aliases = BTreeMap::new();
         aliases.insert("a".to_string(), "b".to_string());
         aliases.insert("b".to_string(), "a".to_string());
-        let manifest = build_manifest_with_aliases(
-            ReactPackage::React,
-            "18.3.1",
-            Vec::new(),
-            aliases,
-        );
+        let manifest =
+            build_manifest_with_aliases(ReactPackage::React, "18.3.1", Vec::new(), aliases);
         let matrix = build_cohort_matrix(SecurityEpoch::from_raw(1), vec![manifest]);
         let report = validate_cohort(&matrix);
         assert!(!report.passed);

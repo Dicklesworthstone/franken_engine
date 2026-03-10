@@ -50,7 +50,6 @@ const MAX_SITES: usize = 4096;
 /// Default budget for new telemetry sites.
 const DEFAULT_BUDGET: u64 = 100_000;
 
-
 // ---------------------------------------------------------------------------
 // SketchKind — sketch algorithm selector
 // ---------------------------------------------------------------------------
@@ -184,7 +183,10 @@ impl TelemetrySite {
             return MILLION;
         }
         let consumed = original_budget.saturating_sub(self.budget_remaining);
-        consumed.saturating_mul(MILLION).checked_div(original_budget).unwrap_or(MILLION)
+        consumed
+            .saturating_mul(MILLION)
+            .checked_div(original_budget)
+            .unwrap_or(MILLION)
     }
 }
 
@@ -548,10 +550,7 @@ pub fn build_inventory(mut sites: Vec<TelemetrySite>) -> SiteInventory {
     let active_sites = sites.iter().filter(|s| s.has_budget()).count() as u64;
     let content_hash = compute_inventory_hash(&sites);
 
-    let inventory_id = format!(
-        "inv-{}",
-        hex::encode(&content_hash.as_bytes()[..8])
-    );
+    let inventory_id = format!("inv-{}", hex::encode(&content_hash.as_bytes()[..8]));
 
     SiteInventory {
         inventory_id,
@@ -592,11 +591,7 @@ pub fn record_update(
 /// count.  If both are zero, the error is zero and the calibration passes.
 /// The calibration passes when the relative error is at or below the
 /// default threshold (5%).
-pub fn calibrate_site(
-    site: &TelemetrySite,
-    exact_count: u64,
-    estimate: u64,
-) -> CalibrationResult {
+pub fn calibrate_site(site: &TelemetrySite, exact_count: u64, estimate: u64) -> CalibrationResult {
     let relative_error_millionths = compute_relative_error(exact_count, estimate);
     let passed = relative_error_millionths <= CalibrationResult::DEFAULT_ERROR_THRESHOLD;
 
@@ -644,7 +639,10 @@ pub fn compute_sampling_rate(budget: u64, expected_events: u64) -> u64 {
         return MILLION;
     }
     // rate = budget / expected_events, scaled to millionths.
-    budget.saturating_mul(MILLION).checked_div(expected_events).unwrap_or(MILLION)
+    budget
+        .saturating_mul(MILLION)
+        .checked_div(expected_events)
+        .unwrap_or(MILLION)
 }
 
 /// Build a default telemetry manifest with canonical site definitions.
@@ -653,14 +651,62 @@ pub fn compute_sampling_rate(budget: u64, expected_events: u64) -> u64 {
 /// telemetry sites for the FrankenEngine runtime.
 pub fn franken_engine_telemetry_manifest() -> SiteInventory {
     let sites = vec![
-        create_site("hot_loop_entry", "runtime/hot_loop", SketchKind::CountMin, MILLION, DEFAULT_BUDGET),
-        create_site("gc_pause_duration", "gc/pause", SketchKind::Quantile, 500_000, DEFAULT_BUDGET),
-        create_site("ir_lowering_ops", "compiler/ir_lower", SketchKind::Histogram, MILLION, DEFAULT_BUDGET),
-        create_site("hostcall_dispatch", "hostcall/dispatch", SketchKind::FrequencyMoment, 250_000, DEFAULT_BUDGET),
-        create_site("bytecode_cache_hit", "cache/bytecode", SketchKind::HeavyHitter, MILLION, DEFAULT_BUDGET),
-        create_site("extension_load_time", "extension/load", SketchKind::Quantile, 750_000, DEFAULT_BUDGET),
-        create_site("policy_eval_count", "policy/eval", SketchKind::CountMin, MILLION, DEFAULT_BUDGET),
-        create_site("top_k_opcodes", "runtime/opcodes", SketchKind::TopK, MILLION, DEFAULT_BUDGET),
+        create_site(
+            "hot_loop_entry",
+            "runtime/hot_loop",
+            SketchKind::CountMin,
+            MILLION,
+            DEFAULT_BUDGET,
+        ),
+        create_site(
+            "gc_pause_duration",
+            "gc/pause",
+            SketchKind::Quantile,
+            500_000,
+            DEFAULT_BUDGET,
+        ),
+        create_site(
+            "ir_lowering_ops",
+            "compiler/ir_lower",
+            SketchKind::Histogram,
+            MILLION,
+            DEFAULT_BUDGET,
+        ),
+        create_site(
+            "hostcall_dispatch",
+            "hostcall/dispatch",
+            SketchKind::FrequencyMoment,
+            250_000,
+            DEFAULT_BUDGET,
+        ),
+        create_site(
+            "bytecode_cache_hit",
+            "cache/bytecode",
+            SketchKind::HeavyHitter,
+            MILLION,
+            DEFAULT_BUDGET,
+        ),
+        create_site(
+            "extension_load_time",
+            "extension/load",
+            SketchKind::Quantile,
+            750_000,
+            DEFAULT_BUDGET,
+        ),
+        create_site(
+            "policy_eval_count",
+            "policy/eval",
+            SketchKind::CountMin,
+            MILLION,
+            DEFAULT_BUDGET,
+        ),
+        create_site(
+            "top_k_opcodes",
+            "runtime/opcodes",
+            SketchKind::TopK,
+            MILLION,
+            DEFAULT_BUDGET,
+        ),
     ];
     build_inventory(sites)
 }
@@ -718,7 +764,10 @@ pub fn evaluate_sampling(
             let hash_val = content_hash_modulo(key, MILLION);
             let accepted = hash_val < sampling_rate;
             let adjusted_weight = if accepted && sampling_rate > 0 {
-                weight.saturating_mul(MILLION).checked_div(sampling_rate).unwrap_or(weight)
+                weight
+                    .saturating_mul(MILLION)
+                    .checked_div(sampling_rate)
+                    .unwrap_or(weight)
             } else {
                 weight
             };
@@ -755,7 +804,10 @@ pub fn evaluate_sampling(
             let hash_val = content_hash_modulo(key, MILLION);
             let accepted = hash_val < effective_rate;
             let adjusted_weight = if accepted && effective_rate > 0 {
-                weight.saturating_mul(MILLION).checked_div(effective_rate).unwrap_or(weight)
+                weight
+                    .saturating_mul(MILLION)
+                    .checked_div(effective_rate)
+                    .unwrap_or(weight)
             } else {
                 weight
             };
@@ -911,10 +963,7 @@ pub fn calibrate_inventory(
 ///
 /// The quality bar requires all sites to pass and the mean error to be
 /// below a given threshold (in millionths).
-pub fn meets_quality_bar(
-    report: &CalibrationReport,
-    max_mean_error_millionths: u64,
-) -> bool {
+pub fn meets_quality_bar(report: &CalibrationReport, max_mean_error_millionths: u64) -> bool {
     report.all_passed() && report.mean_error_millionths <= max_mean_error_millionths
 }
 
@@ -965,12 +1014,10 @@ fn compute_relative_error(exact: u64, estimate: u64) -> u64 {
         // Infinite relative error; cap at MILLION (100%).
         return MILLION;
     }
-    let diff = if estimate > exact {
-        estimate - exact
-    } else {
-        exact - estimate
-    };
-    diff.saturating_mul(MILLION).checked_div(exact).unwrap_or(MILLION)
+    let diff = estimate.abs_diff(exact);
+    diff.saturating_mul(MILLION)
+        .checked_div(exact)
+        .unwrap_or(MILLION)
 }
 
 /// Compute mean and max error from calibration results.
@@ -978,10 +1025,7 @@ fn compute_error_stats(results: &[CalibrationResult]) -> (u64, u64) {
     if results.is_empty() {
         return (0, 0);
     }
-    let total: u64 = results
-        .iter()
-        .map(|r| r.relative_error_millionths)
-        .sum();
+    let total: u64 = results.iter().map(|r| r.relative_error_millionths).sum();
     let mean = total.checked_div(results.len() as u64).unwrap_or(0);
     let max = results
         .iter()
@@ -1002,8 +1046,7 @@ fn content_hash_modulo(key: &str, modulus: u64) -> u64 {
     let hash = ContentHash::compute(key.as_bytes());
     let bytes = hash.as_bytes();
     let val = u64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]);
     val % modulus
 }
@@ -1037,11 +1080,23 @@ mod tests {
     }
 
     fn make_site_with_budget(id: &str, budget: u64) -> TelemetrySite {
-        create_site(id, &format!("test/{}", id), SketchKind::CountMin, MILLION, budget)
+        create_site(
+            id,
+            &format!("test/{}", id),
+            SketchKind::CountMin,
+            MILLION,
+            budget,
+        )
     }
 
     fn make_site_with_rate(id: &str, rate: u64) -> TelemetrySite {
-        create_site(id, &format!("test/{}", id), SketchKind::CountMin, rate, DEFAULT_BUDGET)
+        create_site(
+            id,
+            &format!("test/{}", id),
+            SketchKind::CountMin,
+            rate,
+            DEFAULT_BUDGET,
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -1088,8 +1143,14 @@ mod tests {
     fn sampling_strategy_display() {
         assert_eq!(SamplingStrategy::Deterministic.to_string(), "deterministic");
         assert_eq!(SamplingStrategy::ReplayStable.to_string(), "replay_stable");
-        assert_eq!(SamplingStrategy::PriorityBased.to_string(), "priority_based");
-        assert_eq!(SamplingStrategy::BudgetAdaptive.to_string(), "budget_adaptive");
+        assert_eq!(
+            SamplingStrategy::PriorityBased.to_string(),
+            "priority_based"
+        );
+        assert_eq!(
+            SamplingStrategy::BudgetAdaptive.to_string(),
+            "budget_adaptive"
+        );
     }
 
     #[test]
@@ -1577,7 +1638,7 @@ mod tests {
             "key",
             MILLION,
             0,
-            0,  // no budget remaining
+            0, // no budget remaining
             100,
         );
         assert!(!decision.accepted);
@@ -1894,6 +1955,7 @@ mod tests {
         // if period wraps — but we use u64::MAX as period so only multiples accept).
         // event_sequence=0 is a multiple of any period, so it accepts.
         // This is intentional: even at zero rate, the 0th event is sampled.
-        assert!(decision.accepted || !decision.accepted); // no panic
+        // Zero rate with event_sequence=0 is a boundary case; just verify no panic.
+        let _ = decision.accepted;
     }
 }

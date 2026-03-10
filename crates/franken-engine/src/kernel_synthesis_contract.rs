@@ -467,8 +467,7 @@ pub fn validate_schemas(schemas: &[KernelSchema]) -> Result<(), KernelSynthError
 /// Build the canonical FrankenEngine kernel corpus with 10+ realistic schemas.
 pub fn mine_canonical_kernels() -> KernelCorpus {
     let schemas = canonical_schemas();
-    let decisions: Vec<EligibilityDecision> =
-        schemas.iter().map(evaluate_eligibility).collect();
+    let decisions: Vec<EligibilityDecision> = schemas.iter().map(evaluate_eligibility).collect();
 
     let mut corpus_bytes = Vec::new();
     for s in &schemas {

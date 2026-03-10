@@ -18,7 +18,12 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fmt;
+use std::fs;
+use std::io::{self, ErrorKind};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -32,6 +37,15 @@ use crate::security_epoch::SecurityEpoch;
 
 /// Schema version for the react package cohort contract.
 pub const REACT_COHORT_SCHEMA_VERSION: &str = "franken-engine.react-package-cohort.v1";
+/// Schema version for the react package cohort run manifest.
+pub const REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.react-package-cohort.run-manifest.v1";
+/// Schema version for react package cohort structured events.
+pub const REACT_COHORT_EVENT_SCHEMA_VERSION: &str =
+    "franken-engine.react-package-cohort.event.v1";
+/// Schema version for the stable trace-id artifact.
+pub const REACT_COHORT_TRACE_IDS_SCHEMA_VERSION: &str =
+    "franken-engine.react-package-cohort.trace-ids.v1";
 
 /// Bead identifier originating this module.
 pub const REACT_COHORT_BEAD_ID: &str = "bd-1lsy.5.7.1";
@@ -44,6 +58,7 @@ pub const REACT_COHORT_COMPONENT: &str = "react_package_cohort";
 
 /// Fixed-point scale: 1_000_000 millionths = 1.0.
 const MILLIONTHS: u64 = 1_000_000;
+static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // ReactPackage
@@ -551,6 +566,93 @@ impl fmt::Display for CohortValidationReport {
 }
 
 // ---------------------------------------------------------------------------
+// Bundle artifacts
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactCohortArtifactPaths {
+    pub react_package_cohort_matrix: String,
+    pub run_manifest: String,
+    pub events_jsonl: String,
+    pub commands_txt: String,
+    pub trace_ids: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactCohortRunManifest {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub matrix_hash: String,
+    pub package_count: u64,
+    pub edge_case_count: u64,
+    pub pass_count: u64,
+    pub fail_count: u64,
+    pub pass_rate_millionths: u64,
+    pub contract_satisfied: bool,
+    pub artifact_paths: ReactCohortArtifactPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactCohortEvent {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub event: String,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactCohortTraceIds {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactCohortBundleArtifacts {
+    pub out_dir: PathBuf,
+    pub matrix_path: PathBuf,
+    pub run_manifest_path: PathBuf,
+    pub events_path: PathBuf,
+    pub commands_path: PathBuf,
+    pub trace_ids_path: PathBuf,
+    pub matrix_hash: String,
+    pub package_count: usize,
+    pub edge_case_count: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReactCohortWriteError {
+    #[error("failed to serialize `{path}`: {source}")]
+    Json {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("failed to write `{path}`: {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("bundle output directory is already locked by another writer: `{path}`")]
+    Busy { path: String },
+}
+
+// ---------------------------------------------------------------------------
 // Core functions
 // ---------------------------------------------------------------------------
 
@@ -1038,6 +1140,275 @@ pub fn cohort_coverage_millionths(packages: &[PackageManifest]) -> u64 {
     }
     let hit = covered.len() as u64;
     hit.saturating_mul(MILLIONTHS) / total
+}
+
+pub fn write_react_package_cohort_bundle(
+    out_dir: impl AsRef<Path>,
+    command_lines: &[String],
+) -> Result<ReactCohortBundleArtifacts, ReactCohortWriteError> {
+    let out_dir = out_dir.as_ref().to_path_buf();
+    fs::create_dir_all(&out_dir).map_err(|source| ReactCohortWriteError::Io {
+        path: out_dir.display().to_string(),
+        source,
+    })?;
+
+    let matrix = franken_engine_react_cohort_manifest();
+    let report = validate_cohort(&matrix);
+
+    let matrix_path = out_dir.join("react_package_cohort_matrix.json");
+    let run_manifest_path = out_dir.join("run_manifest.json");
+    let events_path = out_dir.join("events.jsonl");
+    let commands_path = out_dir.join("commands.txt");
+    let trace_ids_path = out_dir.join("trace_ids.json");
+
+    let matrix_bytes = canonical_json_bytes(&matrix, &matrix_path)?;
+    let matrix_hash = sha256_hex(&matrix_bytes);
+    let short_hash = matrix_hash.chars().take(16).collect::<String>();
+
+    let trace_ids = ReactCohortTraceIds {
+        schema_version: REACT_COHORT_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        component: REACT_COHORT_COMPONENT.to_string(),
+        trace_id: format!("trace-react-package-cohort-{short_hash}"),
+        decision_id: format!("decision-react-package-cohort-{short_hash}"),
+        policy_id: REACT_COHORT_POLICY_ID.to_string(),
+    };
+    let trace_ids_bytes = canonical_json_bytes(&trace_ids, &trace_ids_path)?;
+
+    let manifest = ReactCohortRunManifest {
+        schema_version: REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+        component: REACT_COHORT_COMPONENT.to_string(),
+        trace_id: trace_ids.trace_id.clone(),
+        decision_id: trace_ids.decision_id.clone(),
+        policy_id: REACT_COHORT_POLICY_ID.to_string(),
+        matrix_hash: matrix_hash.clone(),
+        package_count: matrix.package_count() as u64,
+        edge_case_count: matrix.edge_cases.len() as u64,
+        pass_count: matrix.passed_edge_cases() as u64,
+        fail_count: matrix.failed_edge_cases() as u64,
+        pass_rate_millionths: report.pass_rate_millionths,
+        contract_satisfied: report.passed,
+        artifact_paths: ReactCohortArtifactPaths {
+            react_package_cohort_matrix: "react_package_cohort_matrix.json".to_string(),
+            run_manifest: "run_manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+            trace_ids: "trace_ids.json".to_string(),
+        },
+    };
+    let manifest_bytes = canonical_json_bytes(&manifest, &run_manifest_path)?;
+
+    let events = build_cohort_events(&matrix, &report, &trace_ids);
+    let mut events_jsonl = String::new();
+    for event in &events {
+        let line = serde_json::to_string(event).map_err(|source| ReactCohortWriteError::Json {
+            path: events_path.display().to_string(),
+            source,
+        })?;
+        events_jsonl.push_str(&line);
+        events_jsonl.push('\n');
+    }
+
+    let mut commands_buf = String::new();
+    for command in command_lines {
+        commands_buf.push_str(command);
+        commands_buf.push('\n');
+    }
+
+    let _bundle_lock = acquire_bundle_write_lock(&out_dir)?;
+    remove_commit_marker(&run_manifest_path)?;
+    write_atomic(&matrix_path, &matrix_bytes)?;
+    write_atomic(&trace_ids_path, &trace_ids_bytes)?;
+    write_atomic(&events_path, events_jsonl.as_bytes())?;
+    write_atomic(&commands_path, commands_buf.as_bytes())?;
+    write_atomic(&run_manifest_path, &manifest_bytes)?;
+
+    Ok(ReactCohortBundleArtifacts {
+        out_dir,
+        matrix_path,
+        run_manifest_path,
+        events_path,
+        commands_path,
+        trace_ids_path,
+        matrix_hash,
+        package_count: matrix.package_count(),
+        edge_case_count: matrix.edge_cases.len(),
+    })
+}
+
+fn build_cohort_events(
+    matrix: &CohortMatrix,
+    report: &CohortValidationReport,
+    trace_ids: &ReactCohortTraceIds,
+) -> Vec<ReactCohortEvent> {
+    let mut events = vec![ReactCohortEvent {
+        schema_version: REACT_COHORT_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_ids.trace_id.clone(),
+        decision_id: trace_ids.decision_id.clone(),
+        policy_id: trace_ids.policy_id.clone(),
+        component: REACT_COHORT_COMPONENT.to_string(),
+        event: "cohort_generation_started".to_string(),
+        outcome: "started".to_string(),
+        package: None,
+        case_id: None,
+        detail: Some(format!(
+            "{} packages, {} edge cases",
+            matrix.package_count(),
+            matrix.edge_cases.len()
+        )),
+    }];
+
+    events.extend(matrix.packages.iter().map(|manifest| ReactCohortEvent {
+        schema_version: REACT_COHORT_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_ids.trace_id.clone(),
+        decision_id: trace_ids.decision_id.clone(),
+        policy_id: trace_ids.policy_id.clone(),
+        component: REACT_COHORT_COMPONENT.to_string(),
+        event: "package_manifest_recorded".to_string(),
+        outcome: "recorded".to_string(),
+        package: Some(manifest.package.as_str().to_string()),
+        case_id: None,
+        detail: Some(format!(
+            "subpaths={} aliases={} coverage_millionths={}",
+            manifest.subpath_count(),
+            manifest.alias_count(),
+            manifest.condition_coverage_millionths()
+        )),
+    }));
+
+    events.extend(matrix.edge_cases.iter().map(|edge_case| ReactCohortEvent {
+        schema_version: REACT_COHORT_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_ids.trace_id.clone(),
+        decision_id: trace_ids.decision_id.clone(),
+        policy_id: trace_ids.policy_id.clone(),
+        component: REACT_COHORT_COMPONENT.to_string(),
+        event: "edge_case_evaluated".to_string(),
+        outcome: if edge_case.passed { "pass" } else { "fail" }.to_string(),
+        package: Some(edge_case.source_package.as_str().to_string()),
+        case_id: Some(edge_case.case_id.clone()),
+        detail: Some(format!(
+            "expected={} actual={}",
+            edge_case.expected_resolution,
+            edge_case.actual_resolution.as_deref().unwrap_or("<missing>")
+        )),
+    }));
+
+    events.push(ReactCohortEvent {
+        schema_version: REACT_COHORT_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_ids.trace_id.clone(),
+        decision_id: trace_ids.decision_id.clone(),
+        policy_id: trace_ids.policy_id.clone(),
+        component: REACT_COHORT_COMPONENT.to_string(),
+        event: "cohort_generation_completed".to_string(),
+        outcome: if report.passed { "pass" } else { "fail" }.to_string(),
+        package: None,
+        case_id: None,
+        detail: Some(format!(
+            "pass_rate_millionths={} alias_loops_detected={}",
+            report.pass_rate_millionths,
+            report.alias_loops_detected.len()
+        )),
+    });
+
+    events
+}
+
+fn canonical_json_bytes<T: Serialize>(
+    value: &T,
+    path: &Path,
+) -> Result<Vec<u8>, ReactCohortWriteError> {
+    serde_json::to_vec(value).map_err(|source| ReactCohortWriteError::Json {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+fn acquire_bundle_write_lock(out_dir: &Path) -> Result<BundleWriteLock, ReactCohortWriteError> {
+    let lock_path = out_dir.join(".react_package_cohort.lock");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => Ok(BundleWriteLock { path: lock_path }),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+            Err(ReactCohortWriteError::Busy {
+                path: lock_path.display().to_string(),
+            })
+        }
+        Err(source) => Err(ReactCohortWriteError::Io {
+            path: lock_path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn remove_commit_marker(path: &Path) -> Result<(), ReactCohortWriteError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ReactCohortWriteError::Io {
+            path: path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ReactCohortWriteError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ReactCohortWriteError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+
+    let temp_path = unique_temp_path(path);
+    fs::write(&temp_path, bytes).map_err(|source| ReactCohortWriteError::Io {
+        path: temp_path.display().to_string(),
+        source,
+    })?;
+    if let Err(source) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ReactCohortWriteError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let sequence = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    let mut temp_name = OsString::from(".");
+    match path.file_name() {
+        Some(file_name) => temp_name.push(file_name),
+        None => temp_name.push("artifact"),
+    }
+    temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(temp_name)
+}
+
+#[derive(Debug)]
+struct BundleWriteLock {
+    path: PathBuf,
+}
+
+impl Drop for BundleWriteLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 // ===========================================================================

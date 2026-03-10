@@ -34,6 +34,10 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
 fn write_source(path: &Path, source: &str) {
     fs::write(path, source).expect("source fixture should write");
 }
@@ -288,6 +292,45 @@ fn frankenctl_react_build_fails_closed_with_contract_guidance() {
 
     let _ = fs::remove_file(entry_path);
     let _ = fs::remove_file(report_path);
+}
+
+#[test]
+fn frankenctl_react_cli_workflow_script_emits_expected_artifacts_and_routes() {
+    let script =
+        fs::read_to_string(repo_root().join("scripts/e2e/frankenctl_react_cli_workflow.sh"))
+            .expect("react cli workflow script should exist");
+
+    assert!(script.contains("source \"${root_dir}/scripts/e2e/parser_deterministic_env.sh\""));
+    assert!(script.contains("parser_frontier_bootstrap_env"));
+    assert!(script.contains(
+        "artifact_root=\"${FRANKENCTL_REACT_CLI_ARTIFACT_ROOT:-artifacts/frankenctl_react_cli_workflow}\""
+    ));
+    assert!(script.contains("run_manifest.json"));
+    assert!(script.contains("events.jsonl"));
+    assert!(script.contains("commands.txt"));
+    assert!(script.contains("trace_ids.json"));
+    assert!(script.contains("react_cli_contract.json"));
+    assert!(script.contains("react_compile_report.json"));
+    assert!(script.contains("react_build_report.json"));
+    assert!(script.contains("doctor_input.json"));
+    assert!(script.contains("support_bundle/preflight_report.json"));
+    assert!(script.contains("support_bundle/onboarding_scorecard.json"));
+    assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
+    assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
+    assert!(
+        script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react contract")
+    );
+    assert!(
+        script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react compile")
+    );
+    assert!(
+        script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react build")
+    );
+    assert!(script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- doctor"));
+    assert!(script.contains("frankenctl react --help"));
+    assert!(script.contains("rch exec"));
+    assert!(script.contains("falling back to local"));
+    assert!(script.contains("usage: $0 [artifacts|check|test|clippy|ci]"));
 }
 
 #[test]

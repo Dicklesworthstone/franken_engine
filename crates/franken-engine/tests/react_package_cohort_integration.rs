@@ -2,16 +2,21 @@
 //! behaviour module (RGC-405A).
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use frankenengine_engine::react_package_cohort::{
     build_cohort_matrix, build_cohort_matrix_with_edges, build_manifest,
     build_manifest_with_aliases, cohort_coverage_millionths, detect_alias_loops, format_compatible,
     franken_engine_react_cohort_manifest, resolve_alias_chain, resolve_subpath,
-    resolve_subpath_with_fallbacks, validate_cohort, validate_edge_case,
-    verify_format_consistency, CohortError, CohortMatrix, CohortValidationReport, EdgeCase,
-    ExportCondition, ModuleFormat, PackageManifest, ReactPackage, SubpathEntry,
-    REACT_COHORT_BEAD_ID, REACT_COHORT_COMPONENT, REACT_COHORT_POLICY_ID,
-    REACT_COHORT_SCHEMA_VERSION,
+    resolve_subpath_with_fallbacks, validate_cohort, validate_edge_case, verify_format_consistency,
+    write_react_package_cohort_bundle, CohortError, CohortMatrix, CohortValidationReport, EdgeCase,
+    ExportCondition, ModuleFormat, PackageManifest, ReactCohortEvent, ReactCohortRunManifest,
+    ReactCohortTraceIds, ReactCohortWriteError, ReactPackage, SubpathEntry,
+    REACT_COHORT_BEAD_ID, REACT_COHORT_COMPONENT, REACT_COHORT_EVENT_SCHEMA_VERSION,
+    REACT_COHORT_POLICY_ID, REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION, REACT_COHORT_SCHEMA_VERSION,
+    REACT_COHORT_TRACE_IDS_SCHEMA_VERSION,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -19,8 +24,21 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 // Helpers
 // ---------------------------------------------------------------------------
 
+static NEXT_TEMP_DIR_ID: AtomicU64 = AtomicU64::new(0);
+
 fn test_epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(1)
+}
+
+fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+    let sequence = NEXT_TEMP_DIR_ID.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "franken-react-package-cohort-{prefix}-{}-{sequence}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create temp dir");
+    dir
 }
 
 fn sample_subpath(
@@ -736,6 +754,196 @@ fn test_golden_manifest_full_serde_roundtrip() {
 }
 
 // ---------------------------------------------------------------------------
+// Artifact bundle / CLI
+// ---------------------------------------------------------------------------
+
+#[test]
+fn write_bundle_creates_expected_files_and_manifest() {
+    let out_dir = unique_temp_dir("bundle-files");
+    let commands = vec![
+        "franken_react_package_cohort".to_string(),
+        "--out-dir".to_string(),
+        out_dir.display().to_string(),
+    ];
+
+    let artifacts = write_react_package_cohort_bundle(&out_dir, &commands).expect("write bundle");
+
+    assert!(artifacts.matrix_path.exists());
+    assert!(artifacts.run_manifest_path.exists());
+    assert!(artifacts.events_path.exists());
+    assert!(artifacts.commands_path.exists());
+    assert!(artifacts.trace_ids_path.exists());
+    assert_eq!(artifacts.package_count, 7);
+
+    let manifest: ReactCohortRunManifest =
+        serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    assert_eq!(
+        manifest.schema_version,
+        REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION
+    );
+    assert_eq!(manifest.component, REACT_COHORT_COMPONENT);
+    assert_eq!(manifest.policy_id, REACT_COHORT_POLICY_ID);
+    assert_eq!(manifest.package_count, artifacts.package_count as u64);
+    assert_eq!(manifest.edge_case_count, artifacts.edge_case_count as u64);
+    assert_eq!(
+        manifest.artifact_paths.react_package_cohort_matrix,
+        "react_package_cohort_matrix.json"
+    );
+    assert_eq!(manifest.artifact_paths.run_manifest, "run_manifest.json");
+    assert_eq!(manifest.artifact_paths.events_jsonl, "events.jsonl");
+    assert_eq!(manifest.artifact_paths.commands_txt, "commands.txt");
+    assert_eq!(manifest.artifact_paths.trace_ids, "trace_ids.json");
+}
+
+#[test]
+fn write_bundle_events_trace_ids_and_commands_are_structured() {
+    let out_dir = unique_temp_dir("bundle-structured");
+    let commands = vec![
+        "franken_react_package_cohort".to_string(),
+        "--out-dir".to_string(),
+        "/tmp/react-package-cohort".to_string(),
+    ];
+
+    let artifacts = write_react_package_cohort_bundle(&out_dir, &commands).expect("write bundle");
+
+    let events_text = fs::read_to_string(&artifacts.events_path).expect("read events");
+    let events: Vec<ReactCohortEvent> = events_text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("parse event"))
+        .collect();
+    assert_eq!(events.len(), artifacts.package_count + artifacts.edge_case_count + 2);
+    assert_eq!(events.first().unwrap().event, "cohort_generation_started");
+    assert_eq!(events.last().unwrap().event, "cohort_generation_completed");
+    assert!(
+        events
+            .iter()
+            .all(|event| event.schema_version == REACT_COHORT_EVENT_SCHEMA_VERSION)
+    );
+
+    let trace_ids: ReactCohortTraceIds =
+        serde_json::from_slice(&fs::read(&artifacts.trace_ids_path).expect("read trace ids"))
+            .expect("parse trace ids");
+    let short_hash = &artifacts.matrix_hash[..16];
+    assert_eq!(trace_ids.schema_version, REACT_COHORT_TRACE_IDS_SCHEMA_VERSION);
+    assert!(trace_ids.trace_id.contains(short_hash));
+    assert!(trace_ids.decision_id.contains(short_hash));
+    assert_eq!(trace_ids.policy_id, REACT_COHORT_POLICY_ID);
+
+    let commands_txt = fs::read_to_string(&artifacts.commands_path).expect("read commands");
+    for command in &commands {
+        assert!(commands_txt.contains(command), "commands should contain {command}");
+    }
+}
+
+#[test]
+fn write_bundle_is_deterministic_across_output_directories() {
+    let out_dir_a = unique_temp_dir("bundle-det-a");
+    let out_dir_b = unique_temp_dir("bundle-det-b");
+    let commands = vec![
+        "franken_react_package_cohort".to_string(),
+        "--out-dir".to_string(),
+        "/tmp/react-package-cohort".to_string(),
+    ];
+
+    let bundle_a = write_react_package_cohort_bundle(&out_dir_a, &commands).expect("write A");
+    let bundle_b = write_react_package_cohort_bundle(&out_dir_b, &commands).expect("write B");
+
+    assert_eq!(bundle_a.matrix_hash, bundle_b.matrix_hash);
+    assert_eq!(
+        fs::read(&bundle_a.matrix_path).expect("read matrix A"),
+        fs::read(&bundle_b.matrix_path).expect("read matrix B")
+    );
+    assert_eq!(
+        fs::read(&bundle_a.run_manifest_path).expect("read manifest A"),
+        fs::read(&bundle_b.run_manifest_path).expect("read manifest B")
+    );
+    assert_eq!(
+        fs::read_to_string(&bundle_a.events_path).expect("read events A"),
+        fs::read_to_string(&bundle_b.events_path).expect("read events B")
+    );
+    assert_eq!(
+        fs::read(&bundle_a.trace_ids_path).expect("read trace ids A"),
+        fs::read(&bundle_b.trace_ids_path).expect("read trace ids B")
+    );
+    assert_eq!(
+        fs::read_to_string(&bundle_a.commands_path).expect("read commands A"),
+        fs::read_to_string(&bundle_b.commands_path).expect("read commands B")
+    );
+}
+
+#[test]
+fn write_bundle_busy_error_reports_lock_path() {
+    let out_dir = unique_temp_dir("bundle-busy");
+    let lock_path = out_dir.join(".react_package_cohort.lock");
+    fs::write(&lock_path, "held").expect("write lock");
+
+    let err = write_react_package_cohort_bundle(&out_dir, &["test".to_string()])
+        .expect_err("lock should reject concurrent writer");
+    match err {
+        ReactCohortWriteError::Busy { path } => {
+            assert_eq!(path, lock_path.display().to_string());
+        }
+        other => panic!("expected Busy error, got {other:?}"),
+    }
+}
+
+#[test]
+fn write_bundle_releases_lock_after_success() {
+    let out_dir = unique_temp_dir("bundle-lock-release");
+    write_react_package_cohort_bundle(&out_dir, &["test".to_string()]).expect("write bundle");
+    assert!(!out_dir.join(".react_package_cohort.lock").exists());
+}
+
+#[test]
+fn franken_react_package_cohort_cli_writes_bundle() {
+    let out_dir = unique_temp_dir("cli");
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_react_package_cohort"))
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("run franken_react_package_cohort");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse cli stdout");
+    assert_eq!(
+        summary["schema_version"].as_str(),
+        Some("franken-engine.franken_react_package_cohort.v1")
+    );
+    assert_eq!(summary["out_dir"].as_str(), Some(out_dir.to_str().unwrap()));
+    assert_eq!(
+        summary["trace_ids"].as_str(),
+        Some(out_dir.join("trace_ids.json").to_str().unwrap())
+    );
+    assert_eq!(
+        summary["run_manifest"].as_str(),
+        Some(out_dir.join("run_manifest.json").to_str().unwrap())
+    );
+    assert_eq!(
+        summary["events_jsonl"].as_str(),
+        Some(out_dir.join("events.jsonl").to_str().unwrap())
+    );
+    assert_eq!(
+        summary["commands_txt"].as_str(),
+        Some(out_dir.join("commands.txt").to_str().unwrap())
+    );
+
+    let manifest: ReactCohortRunManifest =
+        serde_json::from_slice(&fs::read(out_dir.join("run_manifest.json")).expect("read manifest"))
+            .expect("parse manifest");
+    assert_eq!(
+        manifest.schema_version,
+        REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Schema constants
 // ---------------------------------------------------------------------------
 
@@ -743,6 +951,9 @@ fn test_golden_manifest_full_serde_roundtrip() {
 fn test_schema_constants() {
     assert!(!REACT_COHORT_SCHEMA_VERSION.is_empty());
     assert!(REACT_COHORT_SCHEMA_VERSION.contains("react-package-cohort"));
+    assert!(REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION.contains("react-package-cohort"));
+    assert!(REACT_COHORT_EVENT_SCHEMA_VERSION.contains("react-package-cohort"));
+    assert!(REACT_COHORT_TRACE_IDS_SCHEMA_VERSION.contains("react-package-cohort"));
     assert!(!REACT_COHORT_BEAD_ID.is_empty());
     assert!(!REACT_COHORT_POLICY_ID.is_empty());
     assert!(!REACT_COHORT_COMPONENT.is_empty());

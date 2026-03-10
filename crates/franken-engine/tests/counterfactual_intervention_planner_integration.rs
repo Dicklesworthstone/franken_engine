@@ -1,9 +1,21 @@
 //! Integration tests for the counterfactual intervention planner (RGC-615B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::counterfactual_intervention_planner::{
-    self, CounterfactualScenario, InterventionKind, OptimizationPass,
-    PlannerError, UpliftCertificate, WaveDefinition,
-    SCHEMA_VERSION, BEAD_ID, COMPONENT, POLICY_ID, MILLIONTHS,
+    self, BEAD_ID, COMPONENT, CounterfactualScenario, InterventionKind, MILLIONTHS,
+    OptimizationPass, POLICY_ID, PlannerError, SCHEMA_VERSION, UpliftCertificate, WaveDefinition,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 
@@ -23,7 +35,11 @@ fn make_pass(id: &str, uplift: u64, risk: u64, cost: u64) -> OptimizationPass {
 }
 
 fn make_pass_with_prereqs(
-    id: &str, uplift: u64, risk: u64, cost: u64, prereqs: Vec<String>,
+    id: &str,
+    uplift: u64,
+    risk: u64,
+    cost: u64,
+    prereqs: Vec<String>,
 ) -> OptimizationPass {
     OptimizationPass {
         pass_id: id.to_string(),
@@ -115,8 +131,14 @@ fn test_intervention_kind_as_str() {
     assert_eq!(InterventionKind::EnablePass.as_str(), "enable_pass");
     assert_eq!(InterventionKind::DisablePass.as_str(), "disable_pass");
     assert_eq!(InterventionKind::ReorderPasses.as_str(), "reorder_passes");
-    assert_eq!(InterventionKind::AdjustParameter.as_str(), "adjust_parameter");
-    assert_eq!(InterventionKind::CompareVariants.as_str(), "compare_variants");
+    assert_eq!(
+        InterventionKind::AdjustParameter.as_str(),
+        "adjust_parameter"
+    );
+    assert_eq!(
+        InterventionKind::CompareVariants.as_str(),
+        "compare_variants"
+    );
 }
 
 #[test]
@@ -271,9 +293,7 @@ fn test_plan_wave_empty_error() {
 
 #[test]
 fn test_plan_wave_budget_exceeded() {
-    let passes = vec![
-        make_pass("a", 500_000, 300_000, 50_000),
-    ];
+    let passes = vec![make_pass("a", 500_000, 300_000, 50_000)];
     let result = counterfactual_intervention_planner::plan_wave(passes, 100_000);
     assert!(matches!(result, Err(PlannerError::RiskExceedsBudget)));
 }
@@ -334,9 +354,7 @@ fn test_wave_total_cost() {
 fn test_counterfactual_scenario_seal() {
     let mut scenario = CounterfactualScenario {
         scenario_id: "s1".to_string(),
-        interventions: vec![
-            (InterventionKind::EnablePass, "a".to_string()),
-        ],
+        interventions: vec![(InterventionKind::EnablePass, "a".to_string())],
         expected_outcome_millionths: 500_000,
         confidence_millionths: 800_000,
         content_hash: ContentHash::compute(b""),
@@ -349,9 +367,7 @@ fn test_counterfactual_scenario_seal() {
 fn test_counterfactual_scenario_serde_roundtrip() {
     let mut scenario = CounterfactualScenario {
         scenario_id: "s1".to_string(),
-        interventions: vec![
-            (InterventionKind::DisablePass, "b".to_string()),
-        ],
+        interventions: vec![(InterventionKind::DisablePass, "b".to_string())],
         expected_outcome_millionths: -200_000,
         confidence_millionths: 700_000,
         content_hash: ContentHash::compute(b""),
@@ -411,7 +427,9 @@ fn test_build_counterfactual() {
     ];
     let wave = counterfactual_intervention_planner::plan_wave(passes, 500_000).unwrap();
     let scenario = counterfactual_intervention_planner::build_counterfactual(
-        &wave, InterventionKind::EnablePass, "a",
+        &wave,
+        InterventionKind::EnablePass,
+        "a",
     );
     assert!(!scenario.scenario_id.is_empty());
     assert!(!scenario.interventions.is_empty());
@@ -423,16 +441,15 @@ fn test_build_counterfactual() {
 
 #[test]
 fn test_estimate_causal_effect() {
-    let passes = vec![
-        make_pass("a", 500_000, 100_000, 50_000),
-    ];
+    let passes = vec![make_pass("a", 500_000, 100_000, 50_000)];
     let wave = counterfactual_intervention_planner::plan_wave(passes, 500_000).unwrap();
     let scenario = counterfactual_intervention_planner::build_counterfactual(
-        &wave, InterventionKind::EnablePass, "a",
+        &wave,
+        InterventionKind::EnablePass,
+        "a",
     );
-    let cert = counterfactual_intervention_planner::estimate_causal_effect(
-        &scenario, 100_000, 600_000,
-    );
+    let cert =
+        counterfactual_intervention_planner::estimate_causal_effect(&scenario, 100_000, 600_000);
     assert!(!cert.certificate_id.is_empty());
     assert_eq!(cert.observed_uplift_millionths, 600_000);
     assert_eq!(cert.counterfactual_baseline_millionths, 100_000);
@@ -461,9 +478,7 @@ fn test_select_best_wave() {
             priority_order: vec!["b".to_string()],
         },
     ];
-    let decision = counterfactual_intervention_planner::select_best_wave(
-        waves, 500_000,
-    ).unwrap();
+    let decision = counterfactual_intervention_planner::select_best_wave(waves, 500_000).unwrap();
     assert!(!decision.decision_id.is_empty());
     assert!(decision.is_informative());
 }

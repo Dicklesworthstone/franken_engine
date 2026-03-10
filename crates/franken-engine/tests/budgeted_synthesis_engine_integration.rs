@@ -3,6 +3,19 @@
 //! Validates public API, serde contracts, determinism, candidate admission,
 //! report aggregation, counterexample archiving, and budget enforcement.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeSet;
 
 use frankenengine_engine::budgeted_synthesis_engine::*;
@@ -117,6 +130,7 @@ fn policy_id_format() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn threshold_invariants() {
     assert!(DEFAULT_MAX_CANDIDATES > 0);
     assert!(DEFAULT_SEARCH_BUDGET > 0);

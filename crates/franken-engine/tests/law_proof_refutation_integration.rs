@@ -1,3 +1,16 @@
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::law_mining::{CandidateKind, LawCandidate};
 use frankenengine_engine::law_proof_refutation::{
@@ -456,7 +469,7 @@ fn pipeline_custom_threshold() {
 
 #[test]
 fn error_variants_display_unique() {
-    let errors = vec![
+    let errors = [
         ProofRefutationError::CandidateNotFound {
             candidate_id: "c".to_string(),
         },

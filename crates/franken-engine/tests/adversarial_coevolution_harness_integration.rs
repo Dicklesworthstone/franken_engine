@@ -4,6 +4,19 @@
 //! the crate boundary: strategy identifiers, payoff matrices, tournament
 //! configuration, the EXP3-based coevolution harness, and error paths.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::adversarial_coevolution_harness::{
     COEVOLUTION_COMPONENT, COEVOLUTION_SCHEMA_VERSION, CoevolutionError, CoevolutionHarness,
     ConvergenceDiagnostic, ExploitClass, PayoffEntry, PayoffMatrix, PlayerRole, PolicyDelta,

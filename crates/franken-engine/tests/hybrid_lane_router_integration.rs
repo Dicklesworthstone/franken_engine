@@ -6,6 +6,19 @@
 //! RiskBudget, RiskAccumulator, AdaptiveWeights, compute_reward,
 //! RoutingDecisionTrace, RouterConfig, HybridLaneRouter, RouterSummary.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::hybrid_lane_router::{
     AdaptiveWeights, ChangePointConfig, ChangePointMonitor, ConformalConfig, ConformalState,
     DemotionReason, HybridLaneRouter, LaneChoice, LaneObservation, PolicyTransition,

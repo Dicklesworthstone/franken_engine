@@ -1,5 +1,18 @@
 //! Integration tests for the `control_plane` adapter module.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::control_plane::mocks::{
     MockBudget, MockCx, MockDecisionContract, MockEvidenceEmitter, MockFailureMode,
     decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
@@ -74,6 +87,7 @@ fn verdict_debug_contains_variant_name() {
 }
 
 #[test]
+#[allow(clippy::clone_on_copy)]
 fn verdict_clone_and_copy_semantics() {
     let v = DecisionVerdict::Deny;
     let cloned = v.clone();

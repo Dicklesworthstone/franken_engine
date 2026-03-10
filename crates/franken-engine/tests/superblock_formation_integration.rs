@@ -1,13 +1,31 @@
 //! Integration tests for superblock formation and trace-tree construction.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
+use frankenengine_engine::bytecode_vm::{BytecodeVm, Instruction, Program, Register, Value};
 use frankenengine_engine::quickening_feedback_lattice::{
     ObservedType, QuickeningLevel, QuickeningPolicy, QuickeningProfile,
 };
+use frankenengine_engine::stage_envelope_certificate::ExecutionStage;
 use frankenengine_engine::superblock_formation::{
-    COMPONENT, FormationOutcome, GuardKind, SUPERBLOCK_SCHEMA_VERSION, SideExit, SideExitReason,
-    Superblock, SuperblockEntry, SuperblockGuard, SuperblockPolicy, TRACE_TREE_SCHEMA_VERSION,
-    TraceTree, TraceTreeSummary, form_superblock,
+    COMPONENT, CompilationRejectReason, FormationOutcome, GuardKind,
+    OPTIMIZED_TIER_PLAN_SCHEMA_VERSION, OptimizedTierBackend, OptimizedTierCompilationPlan,
+    SUPERBLOCK_SCHEMA_VERSION, SideExit, SideExitReason, Superblock, SuperblockEntry,
+    SuperblockGuard, SuperblockPolicy, TRACE_TREE_SCHEMA_VERSION, TraceTree, TraceTreeSummary,
+    form_superblock,
 };
+use frankenengine_engine::tier_up_profiler::{TierUpPolicy, evaluate_tier_up_eligibility};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -22,6 +40,10 @@ fn aggressive_quickening_policy() -> QuickeningPolicy {
         max_polymorphic_types: 3,
         deopt_resets_to_cold: true,
     }
+}
+
+fn r(index: u16) -> Register {
+    Register(index)
 }
 
 fn make_hot_profile(function_id: &str, offsets_and_opcodes: &[(u32, &str)]) -> QuickeningProfile {
@@ -314,6 +336,184 @@ fn form_superblock_no_instructions_at_offset() {
     assert_eq!(record.outcome, FormationOutcome::NoEligibleInstructions);
 }
 
+#[test]
+fn optimized_tier_plan_bridges_tier_up_and_superblock_formation() {
+    let program = Program {
+        constants: vec![Value::Int(42), Value::Int(50), Value::Int(1)],
+        property_pool: vec!["answer".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(4),
+                const_index: 2,
+            },
+            Instruction::Sub {
+                dst: r(3),
+                lhs: r(3),
+                rhs: r(4),
+            },
+            Instruction::JumpIfFalse {
+                condition: r(3),
+                target: 9,
+            },
+            Instruction::Jump { target: 4 },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-opt-plan", 8, 1024);
+    let report = vm.execute(&program).unwrap();
+    let decision = evaluate_tier_up_eligibility(
+        &report,
+        &TierUpPolicy {
+            min_total_steps: 10,
+            min_invocations_per_path: 5,
+            min_cache_hit_rate_millionths: 500_000,
+            max_candidates: 4,
+            profile_top_k: 16,
+            require_cache_signal: true,
+            ..TierUpPolicy::default()
+        },
+    );
+    assert!(decision.eligible);
+
+    let candidate = decision
+        .selected_candidates
+        .iter()
+        .find(|c| c.opcode == "load_prop_cached")
+        .unwrap();
+    let profile = make_hot_profile(
+        "fn_opt_plan",
+        &[
+            (candidate.ip, "load_prop_cached"),
+            (candidate.ip + 4, "sub"),
+            (candidate.ip + 8, "jump_if_false"),
+        ],
+    );
+
+    let plan =
+        OptimizedTierCompilationPlan::build(&decision, &profile, &SuperblockPolicy::default(), 7);
+
+    assert_eq!(plan.schema_version, OPTIMIZED_TIER_PLAN_SCHEMA_VERSION);
+    assert_eq!(plan.backend, OptimizedTierBackend::Cranelift);
+    assert_eq!(plan.stage, ExecutionStage::CompileOptimized);
+    assert!(plan.requires_differential_equivalence);
+    assert_eq!(plan.compilable_unit_count(), 1);
+
+    let unit = &plan.units[0];
+    assert_eq!(unit.candidate.ip, candidate.ip);
+    assert!(unit.requires_differential_equivalence);
+    assert!(!unit.deopt_continuations.is_empty());
+    assert!(
+        unit.deopt_continuations
+            .iter()
+            .all(|continuation| continuation.fallback_tier.to_string() == "baseline_interpreter")
+    );
+}
+
+#[test]
+fn optimized_tier_plan_reports_superblock_rejection_deterministically() {
+    let program = Program {
+        constants: vec![Value::Int(42), Value::Int(12), Value::Int(1)],
+        property_pool: vec!["answer".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(4),
+                const_index: 2,
+            },
+            Instruction::Sub {
+                dst: r(3),
+                lhs: r(3),
+                rhs: r(4),
+            },
+            Instruction::JumpIfFalse {
+                condition: r(3),
+                target: 9,
+            },
+            Instruction::Jump { target: 4 },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-opt-reject", 8, 1024);
+    let report = vm.execute(&program).unwrap();
+    let decision = evaluate_tier_up_eligibility(
+        &report,
+        &TierUpPolicy {
+            min_total_steps: 10,
+            min_invocations_per_path: 5,
+            min_cache_hit_rate_millionths: 500_000,
+            max_candidates: 4,
+            profile_top_k: 16,
+            require_cache_signal: true,
+            ..TierUpPolicy::default()
+        },
+    );
+    assert!(decision.eligible);
+
+    let candidate = decision
+        .selected_candidates
+        .iter()
+        .find(|c| c.opcode == "load_prop_cached")
+        .unwrap();
+    let profile = make_hot_profile("fn_opt_reject", &[(candidate.ip, "load_prop_cached")]);
+    let plan =
+        OptimizedTierCompilationPlan::build(&decision, &profile, &SuperblockPolicy::default(), 3);
+
+    assert!(plan.units.is_empty());
+    assert_eq!(plan.rejected_candidates.len(), 1);
+    assert_eq!(
+        plan.rejected_candidates[0].reason,
+        CompilationRejectReason::SuperblockFormationRejected
+    );
+    assert_eq!(
+        plan.rejected_candidates[0].formation_outcome,
+        Some(FormationOutcome::InsufficientHotInstructions)
+    );
+    assert!(
+        plan.rejected_candidates[0]
+            .detail
+            .contains("superblock formation")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // TraceTree tests
 // ---------------------------------------------------------------------------
@@ -470,4 +670,5 @@ fn constants_set() {
     assert_eq!(COMPONENT, "superblock_formation");
     assert!(!SUPERBLOCK_SCHEMA_VERSION.is_empty());
     assert!(!TRACE_TREE_SCHEMA_VERSION.is_empty());
+    assert!(!OPTIMIZED_TIER_PLAN_SCHEMA_VERSION.is_empty());
 }

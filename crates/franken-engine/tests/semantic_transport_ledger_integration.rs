@@ -5,6 +5,18 @@
 //! boundary: entry specs, morphisms, verdicts, regression masks, budget
 //! exhaustion, gate helpers, and report rendering.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;

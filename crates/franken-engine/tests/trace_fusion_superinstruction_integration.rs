@@ -1,13 +1,26 @@
 //! Integration tests for the trace fusion superinstruction module (RGC-604B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::trace_fusion_superinstruction::{
     FusionCandidate, FusionCertificate, FusionDecision, FusionProof, FusionRejectReason,
-    MotifKind, SideEffectKind, SideExitDescriptor, Superinstruction, TraceFusionConfig,
-    TraceFusionError, TraceFusionEvidenceManifest, TraceSegment, MILLIONTHS,
-    TRACE_FUSION_COMPONENT, TRACE_FUSION_POLICY_ID, TRACE_FUSION_SCHEMA_VERSION,
-    build_proof, build_superinstruction, can_fuse_segments, certify_fusion,
-    evaluate_candidate, run_trace_fusion_evidence, validate_candidate,
+    MILLIONTHS, MotifKind, SideEffectKind, SideExitDescriptor, Superinstruction,
+    TRACE_FUSION_COMPONENT, TRACE_FUSION_POLICY_ID, TRACE_FUSION_SCHEMA_VERSION, TraceFusionConfig,
+    TraceFusionError, TraceFusionEvidenceManifest, TraceSegment, build_proof,
+    build_superinstruction, can_fuse_segments, certify_fusion, evaluate_candidate,
+    run_trace_fusion_evidence, validate_candidate,
 };
 
 // ---------------------------------------------------------------------------
@@ -165,9 +178,7 @@ fn integration_fusion_decision_serde_all_variants() {
 fn integration_error_serde_roundtrip() {
     let errors = vec![
         TraceFusionError::EmptyCandidate,
-        TraceFusionError::DuplicateSegment {
-            id: "seg1".into(),
-        },
+        TraceFusionError::DuplicateSegment { id: "seg1".into() },
         TraceFusionError::InvalidConfig {
             reason: "bad".into(),
         },
@@ -184,7 +195,10 @@ fn integration_error_serde_roundtrip() {
 
 #[test]
 fn integration_error_display() {
-    assert_eq!(TraceFusionError::EmptyCandidate.to_string(), "empty candidate");
+    assert_eq!(
+        TraceFusionError::EmptyCandidate.to_string(),
+        "empty candidate"
+    );
     let ds = TraceFusionError::DuplicateSegment { id: "seg1".into() };
     assert!(ds.to_string().contains("seg1"));
 }
@@ -214,9 +228,7 @@ fn integration_candidate_compute_hash_determinism() {
 
 #[test]
 fn integration_candidate_serde_roundtrip() {
-    let candidate = make_candidate(vec![
-        policy_legal_segment("s1", MotifKind::ArithmeticChain),
-    ]);
+    let candidate = make_candidate(vec![policy_legal_segment("s1", MotifKind::ArithmeticChain)]);
     let json = serde_json::to_string(&candidate).unwrap();
     let back: FusionCandidate = serde_json::from_str(&json).unwrap();
     assert_eq!(candidate, back);
@@ -367,9 +379,7 @@ fn integration_can_fuse_memory_write_plus_allocation() {
 
 #[test]
 fn integration_build_proof_policy_legal_candidate() {
-    let candidate = make_candidate(vec![
-        policy_legal_segment("p1", MotifKind::ArithmeticChain),
-    ]);
+    let candidate = make_candidate(vec![policy_legal_segment("p1", MotifKind::ArithmeticChain)]);
     let proof = build_proof(&candidate);
     assert!(proof.policy_check_passed);
     assert!(proof.determinism_verified);
@@ -379,9 +389,7 @@ fn integration_build_proof_policy_legal_candidate() {
 
 #[test]
 fn integration_build_proof_hash_determinism() {
-    let candidate = make_candidate(vec![
-        policy_legal_segment("p2", MotifKind::ArithmeticChain),
-    ]);
+    let candidate = make_candidate(vec![policy_legal_segment("p2", MotifKind::ArithmeticChain)]);
     let proof1 = build_proof(&candidate);
     let proof2 = build_proof(&candidate);
     assert_eq!(proof1.proof_hash, proof2.proof_hash);
@@ -389,9 +397,7 @@ fn integration_build_proof_hash_determinism() {
 
 #[test]
 fn integration_build_proof_serde_roundtrip() {
-    let candidate = make_candidate(vec![
-        policy_legal_segment("p3", MotifKind::ArithmeticChain),
-    ]);
+    let candidate = make_candidate(vec![policy_legal_segment("p3", MotifKind::ArithmeticChain)]);
     let proof = build_proof(&candidate);
     let json = serde_json::to_string(&proof).unwrap();
     let back: FusionProof = serde_json::from_str(&json).unwrap();
@@ -414,15 +420,19 @@ fn integration_build_superinstruction_sets_fields() {
     assert_eq!(si.fused_segments.len(), 2);
     assert_eq!(si.side_exits.len(), 2);
     assert!(si.disable_token.is_some());
-    assert_eq!(si.total_speedup_millionths, candidate.estimated_speedup_millionths);
+    assert_eq!(
+        si.total_speedup_millionths,
+        candidate.estimated_speedup_millionths
+    );
     assert_eq!(si.proof_hash, proof.proof_hash);
 }
 
 #[test]
 fn integration_superinstruction_serde_roundtrip() {
-    let candidate = make_candidate(vec![
-        policy_legal_segment("si3", MotifKind::ArithmeticChain),
-    ]);
+    let candidate = make_candidate(vec![policy_legal_segment(
+        "si3",
+        MotifKind::ArithmeticChain,
+    )]);
     let proof = build_proof(&candidate);
     let si = build_superinstruction(&candidate, &proof);
     let json = serde_json::to_string(&si).unwrap();
@@ -436,9 +446,10 @@ fn integration_superinstruction_serde_roundtrip() {
 
 #[test]
 fn integration_certify_fusion_accepted() {
-    let candidate = make_candidate(vec![
-        policy_legal_segment("cf1", MotifKind::ArithmeticChain),
-    ]);
+    let candidate = make_candidate(vec![policy_legal_segment(
+        "cf1",
+        MotifKind::ArithmeticChain,
+    )]);
     let cert = certify_fusion(&candidate, &default_config());
     assert_eq!(cert.schema_version, TRACE_FUSION_SCHEMA_VERSION);
     assert!(matches!(cert.decision, FusionDecision::Fuse { .. }));
@@ -459,9 +470,10 @@ fn integration_certify_fusion_rejected() {
 
 #[test]
 fn integration_certify_fusion_hash_determinism() {
-    let candidate = make_candidate(vec![
-        policy_legal_segment("cf3", MotifKind::ArithmeticChain),
-    ]);
+    let candidate = make_candidate(vec![policy_legal_segment(
+        "cf3",
+        MotifKind::ArithmeticChain,
+    )]);
     let c1 = certify_fusion(&candidate, &default_config());
     let c2 = certify_fusion(&candidate, &default_config());
     assert_eq!(c1.certificate_hash, c2.certificate_hash);
@@ -469,9 +481,10 @@ fn integration_certify_fusion_hash_determinism() {
 
 #[test]
 fn integration_certify_fusion_serde_roundtrip() {
-    let candidate = make_candidate(vec![
-        policy_legal_segment("cf4", MotifKind::ArithmeticChain),
-    ]);
+    let candidate = make_candidate(vec![policy_legal_segment(
+        "cf4",
+        MotifKind::ArithmeticChain,
+    )]);
     let cert = certify_fusion(&candidate, &default_config());
     let json = serde_json::to_string(&cert).unwrap();
     let back: FusionCertificate = serde_json::from_str(&json).unwrap();

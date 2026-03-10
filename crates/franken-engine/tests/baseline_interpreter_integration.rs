@@ -5,6 +5,19 @@
 //! `V8Lane`, `LaneRouter`, `LaneChoice`, `LaneReason`, and `RoutedResult`
 //! from outside the crate boundary.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeSet;
 
 use frankenengine_engine::baseline_interpreter::{
@@ -1657,7 +1670,7 @@ fn comparison_and_equality_ops_execute_across_lanes() {
 }
 
 #[test]
-fn in_operator_fails_closed_without_prototype_model_across_lanes() {
+fn in_operator_checks_own_properties_across_lanes() {
     let m = test_module_with_pool(
         vec![
             Ir3Instruction::NewObject { dst: 0 },
@@ -1677,18 +1690,8 @@ fn in_operator_fails_closed_without_prototype_model_across_lanes() {
         ],
         vec![],
     );
-    assert_eq!(
-        qjs_run(&m).unwrap_err(),
-        InterpreterError::UnsupportedMembershipSemantics {
-            operator: "in".into(),
-        }
-    );
-    assert_eq!(
-        v8_run(&m).unwrap_err(),
-        InterpreterError::UnsupportedMembershipSemantics {
-            operator: "in".into(),
-        }
-    );
+    assert_eq!(qjs_run(&m).unwrap().value, Value::Bool(true));
+    assert_eq!(v8_run(&m).unwrap().value, Value::Bool(true));
 }
 
 #[test]
@@ -1712,4 +1715,58 @@ fn instanceof_requires_function_rhs() {
         v8_run(&m).unwrap_err(),
         InterpreterError::TypeError { .. }
     ));
+}
+
+#[test]
+fn instanceof_returns_false_for_primitive_lhs_across_lanes() {
+    let m = test_module_with_functions(
+        vec![
+            Ir3Instruction::LoadInt { dst: 1, value: 7 },
+            Ir3Instruction::InstanceOf {
+                dst: 2,
+                lhs: 1,
+                rhs: 0,
+            },
+            Ir3Instruction::Return { value: 2 },
+            Ir3Instruction::LoadUndefined { dst: 1 },
+            Ir3Instruction::Return { value: 1 },
+        ],
+        vec![Ir3FunctionDesc {
+            name: Some("Ctor".to_string()),
+            entry: 3,
+            arity: 0,
+            frame_size: 4,
+        }],
+    );
+
+    assert_both_lanes_value(&m, Value::Bool(false), "instanceof_primitive");
+}
+
+#[test]
+fn constructed_object_is_instanceof_constructor_across_lanes() {
+    let m = test_module_with_functions(
+        vec![
+            Ir3Instruction::Construct {
+                callee: 0,
+                args: RegRange { start: 1, count: 0 },
+                dst: 1,
+            },
+            Ir3Instruction::InstanceOf {
+                dst: 2,
+                lhs: 1,
+                rhs: 0,
+            },
+            Ir3Instruction::Return { value: 2 },
+            Ir3Instruction::LoadUndefined { dst: 1 },
+            Ir3Instruction::Return { value: 1 },
+        ],
+        vec![Ir3FunctionDesc {
+            name: Some("Ctor".to_string()),
+            entry: 3,
+            arity: 1,
+            frame_size: 8,
+        }],
+    );
+
+    assert_both_lanes_value(&m, Value::Bool(true), "construct_instanceof");
 }

@@ -1,10 +1,23 @@
 //! Integration tests for the distribution shift monitor module (RGC-706A).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::distribution_shift_monitor::{
-    EmbeddingVector, KernelKind, MmdResult, MonitorConfig, MonitorState, ShiftCertificate,
-    ShiftError, ShiftEvidenceManifest, ShiftVerdict, StreamKind, StreamWindow, WindowConfig,
-    SHIFT_MONITOR_COMPONENT, SHIFT_MONITOR_POLICY_ID, SHIFT_MONITOR_SCHEMA_VERSION,
-    build_window, compute_kernel_value, compute_mmd_squared, detect_shift, run_shift_evidence,
+    EmbeddingVector, KernelKind, MmdResult, MonitorConfig, MonitorState, SHIFT_MONITOR_COMPONENT,
+    SHIFT_MONITOR_POLICY_ID, SHIFT_MONITOR_SCHEMA_VERSION, ShiftCertificate, ShiftError,
+    ShiftEvidenceManifest, ShiftVerdict, StreamKind, StreamWindow, WindowConfig, build_window,
+    compute_kernel_value, compute_mmd_squared, detect_shift, run_shift_evidence,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 
@@ -289,11 +302,7 @@ fn integration_build_window_serde_roundtrip() {
 #[test]
 fn integration_detect_shift_no_shift_similar_distributions() {
     let config = small_config();
-    let bench = build_window(
-        StreamKind::Benchmark,
-        uniform_embeddings(500_000, 2, 5),
-        0,
-    );
+    let bench = build_window(StreamKind::Benchmark, uniform_embeddings(500_000, 2, 5), 0);
     let live = build_window(
         StreamKind::LiveWorkload,
         uniform_embeddings(500_000, 2, 5),
@@ -317,11 +326,7 @@ fn integration_detect_shift_insufficient_samples() {
         min_effect_size_millionths: 10_000,
         abstention_sample_floor: 100,
     };
-    let bench = build_window(
-        StreamKind::Benchmark,
-        uniform_embeddings(500_000, 2, 3),
-        0,
-    );
+    let bench = build_window(StreamKind::Benchmark, uniform_embeddings(500_000, 2, 3), 0);
     let live = build_window(
         StreamKind::LiveWorkload,
         uniform_embeddings(600_000, 2, 3),
@@ -337,11 +342,7 @@ fn integration_detect_shift_abstention_sample_floor() {
         abstention_sample_floor: 1000,
         ..small_config()
     };
-    let bench = build_window(
-        StreamKind::Benchmark,
-        uniform_embeddings(500_000, 2, 3),
-        0,
-    );
+    let bench = build_window(StreamKind::Benchmark, uniform_embeddings(500_000, 2, 3), 0);
     let live = build_window(
         StreamKind::LiveWorkload,
         uniform_embeddings(600_000, 2, 3),
@@ -355,11 +356,7 @@ fn integration_detect_shift_abstention_sample_floor() {
 #[test]
 fn integration_detect_shift_certificate_hash_determinism() {
     let config = small_config();
-    let bench = build_window(
-        StreamKind::Benchmark,
-        uniform_embeddings(500_000, 2, 5),
-        0,
-    );
+    let bench = build_window(StreamKind::Benchmark, uniform_embeddings(500_000, 2, 5), 0);
     let live = build_window(
         StreamKind::LiveWorkload,
         uniform_embeddings(500_000, 2, 5),
@@ -373,11 +370,7 @@ fn integration_detect_shift_certificate_hash_determinism() {
 #[test]
 fn integration_detect_shift_certificate_serde_roundtrip() {
     let config = small_config();
-    let bench = build_window(
-        StreamKind::Benchmark,
-        uniform_embeddings(500_000, 2, 5),
-        0,
-    );
+    let bench = build_window(StreamKind::Benchmark, uniform_embeddings(500_000, 2, 5), 0);
     let live = build_window(
         StreamKind::LiveWorkload,
         uniform_embeddings(500_000, 2, 5),
@@ -447,7 +440,11 @@ fn integration_shift_error_display() {
         actual: 2,
     };
     assert!(dm.to_string().contains("dimension mismatch"));
-    assert!(ShiftError::InsufficientData.to_string().contains("insufficient"));
+    assert!(
+        ShiftError::InsufficientData
+            .to_string()
+            .contains("insufficient")
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,19 @@
 //! checks with neighborhood certificates, drift monitoring with budget
 //! enforcement, revocation receipts, and evidence inventory generation.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::workload_transfer_prior::*;
@@ -40,13 +53,33 @@ fn engine_default(ep: u64) -> TransferEngine {
     TransferEngine::with_defaults(epoch(ep))
 }
 
+fn tinput<'a>(
+    transfer_id: &'a str,
+    prior_id: &'a str,
+    target_embedding_id: &'a str,
+    certificate_id: &'a str,
+) -> ExecuteTransferInput<'a> {
+    ExecuteTransferInput {
+        transfer_id,
+        prior_id,
+        target_embedding_id,
+        certificate_id,
+        certificate_near: true,
+        certificate_marginal: false,
+        certificate_abstained: false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Schema constants
 // ---------------------------------------------------------------------------
 
 #[test]
 fn schema_version_is_stable() {
-    assert_eq!(TRANSFER_PRIOR_SCHEMA_VERSION, "franken-engine.workload-transfer-prior.v1");
+    assert_eq!(
+        TRANSFER_PRIOR_SCHEMA_VERSION,
+        "franken-engine.workload-transfer-prior.v1"
+    );
 }
 
 #[test]
@@ -373,8 +406,12 @@ fn drift_verdict_serde_roundtrip() {
 #[test]
 fn transfer_error_display_variants() {
     let errors: Vec<TransferError> = vec![
-        TransferError::PriorNotFound { prior_id: "p1".into() },
-        TransferError::TransferNotFound { transfer_id: "t1".into() },
+        TransferError::PriorNotFound {
+            prior_id: "p1".into(),
+        },
+        TransferError::TransferNotFound {
+            transfer_id: "t1".into(),
+        },
         TransferError::TransferNotActive {
             transfer_id: "t1".into(),
             status: TransferStatus::Completed,
@@ -382,9 +419,15 @@ fn transfer_error_display_variants() {
         TransferError::PolicyViolation {
             reason: TransferDenialReason::StalePrior,
         },
-        TransferError::DuplicateTransfer { transfer_id: "t1".into() },
-        TransferError::DuplicatePrior { prior_id: "p1".into() },
-        TransferError::CertificateRejection { certificate_id: "c1".into() },
+        TransferError::DuplicateTransfer {
+            transfer_id: "t1".into(),
+        },
+        TransferError::DuplicatePrior {
+            prior_id: "p1".into(),
+        },
+        TransferError::CertificateRejection {
+            certificate_id: "c1".into(),
+        },
     ];
     for e in &errors {
         assert!(!e.to_string().is_empty());
@@ -497,9 +540,13 @@ fn engine_register_multiple_priors() {
 #[test]
 fn eligibility_near_certificate_allowed() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", true, false, false).unwrap();
+    let e = engine
+        .check_eligibility("p1", "tgt1", true, false, false)
+        .unwrap();
     assert!(e.is_eligible());
     assert!(!e.is_marginal());
     assert_eq!(e.confidence(), Some(900_000));
@@ -508,9 +555,13 @@ fn eligibility_near_certificate_allowed() {
 #[test]
 fn eligibility_marginal_certificate_discounted() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", false, true, false).unwrap();
+    let e = engine
+        .check_eligibility("p1", "tgt1", false, true, false)
+        .unwrap();
     assert!(e.is_eligible());
     assert!(e.is_marginal());
     assert_eq!(e.confidence(), Some(700_000)); // 900k - 200k
@@ -520,43 +571,68 @@ fn eligibility_marginal_certificate_discounted() {
 fn eligibility_marginal_below_floor_denied() {
     let mut engine = engine_default(5);
     // Confidence at 800k, marginal discount 200k -> 600k < 700k floor
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 800_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 800_000, 10))
+        .unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", false, true, false).unwrap();
+    let e = engine
+        .check_eligibility("p1", "tgt1", false, true, false)
+        .unwrap();
     assert!(!e.is_eligible());
 }
 
 #[test]
 fn eligibility_distant_denied() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", false, false, false).unwrap();
-    assert!(matches!(e, TransferEligibility::Denied {
-        reason: TransferDenialReason::DistantWorkloads
-    }));
+    let e = engine
+        .check_eligibility("p1", "tgt1", false, false, false)
+        .unwrap();
+    assert!(matches!(
+        e,
+        TransferEligibility::Denied {
+            reason: TransferDenialReason::DistantWorkloads
+        }
+    ));
 }
 
 #[test]
 fn eligibility_abstained_denied() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", false, false, true).unwrap();
-    assert!(matches!(e, TransferEligibility::Denied {
-        reason: TransferDenialReason::CertificateAbstained
-    }));
+    let e = engine
+        .check_eligibility("p1", "tgt1", false, false, true)
+        .unwrap();
+    assert!(matches!(
+        e,
+        TransferEligibility::Denied {
+            reason: TransferDenialReason::CertificateAbstained
+        }
+    ));
 }
 
 #[test]
 fn eligibility_stale_prior_denied() {
     let mut engine = engine_default(100);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", true, false, false).unwrap();
-    assert!(matches!(e, TransferEligibility::Denied {
-        reason: TransferDenialReason::StalePrior
-    }));
+    let e = engine
+        .check_eligibility("p1", "tgt1", true, false, false)
+        .unwrap();
+    assert!(matches!(
+        e,
+        TransferEligibility::Denied {
+            reason: TransferDenialReason::StalePrior
+        }
+    ));
 }
 
 #[test]
@@ -566,21 +642,33 @@ fn eligibility_revoked_prior_denied() {
     p.revoked = true;
     engine.register_prior(p).unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", true, false, false).unwrap();
-    assert!(matches!(e, TransferEligibility::Denied {
-        reason: TransferDenialReason::RevokedPrior
-    }));
+    let e = engine
+        .check_eligibility("p1", "tgt1", true, false, false)
+        .unwrap();
+    assert!(matches!(
+        e,
+        TransferEligibility::Denied {
+            reason: TransferDenialReason::RevokedPrior
+        }
+    ));
 }
 
 #[test]
 fn eligibility_low_confidence_denied() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 500_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 500_000, 10))
+        .unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", true, false, false).unwrap();
-    assert!(matches!(e, TransferEligibility::Denied {
-        reason: TransferDenialReason::InsufficientConfidence
-    }));
+    let e = engine
+        .check_eligibility("p1", "tgt1", true, false, false)
+        .unwrap();
+    assert!(matches!(
+        e,
+        TransferEligibility::Denied {
+            reason: TransferDenialReason::InsufficientConfidence
+        }
+    ));
 }
 
 #[test]
@@ -588,18 +676,29 @@ fn eligibility_kind_not_permitted() {
     let mut policy = TransferPolicy::default();
     policy.permitted_kinds.remove(&TransferKind::GcTuningPrior);
     let mut engine = TransferEngine::new(policy, epoch(5));
-    engine.register_prior(prior("p1", TransferKind::GcTuningPrior, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::GcTuningPrior, 3, 900_000, 10))
+        .unwrap();
 
-    let e = engine.check_eligibility("p1", "tgt1", true, false, false).unwrap();
-    assert!(matches!(e, TransferEligibility::Denied {
-        reason: TransferDenialReason::KindNotPermitted
-    }));
+    let e = engine
+        .check_eligibility("p1", "tgt1", true, false, false)
+        .unwrap();
+    assert!(matches!(
+        e,
+        TransferEligibility::Denied {
+            reason: TransferDenialReason::KindNotPermitted
+        }
+    ));
 }
 
 #[test]
 fn eligibility_prior_not_found() {
     let engine = engine_default(5);
-    assert!(engine.check_eligibility("nope", "tgt1", true, false, false).is_err());
+    assert!(
+        engine
+            .check_eligibility("nope", "tgt1", true, false, false)
+            .is_err()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -609,9 +708,13 @@ fn eligibility_prior_not_found() {
 #[test]
 fn execute_transfer_success_probationary() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
 
-    let r = engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    let r = engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
     assert_eq!(r.status, TransferStatus::Probationary);
     assert_eq!(r.rules_transferred, 10);
     assert_eq!(engine.active_transfer_count(), 1);
@@ -622,27 +725,45 @@ fn execute_transfer_no_monitoring_active() {
     let mut policy = TransferPolicy::default();
     policy.require_drift_monitoring = false;
     let mut engine = TransferEngine::new(policy, epoch(5));
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
 
-    let r = engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    let r = engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
     assert_eq!(r.status, TransferStatus::Active);
 }
 
 #[test]
 fn execute_transfer_duplicate_fails() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
-    assert!(engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).is_err());
+    assert!(
+        engine
+            .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+            .is_err()
+    );
 }
 
 #[test]
 fn execute_transfer_policy_violation() {
     let mut engine = engine_default(100); // prior will be stale
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
 
-    assert!(engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).is_err());
+    assert!(
+        engine
+            .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+            .is_err()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -652,8 +773,12 @@ fn execute_transfer_policy_violation() {
 #[test]
 fn drift_monitoring_within_budget() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     let obs = DriftObservation::new("t1", "exec_time", 500_000, 510_000, epoch(5), 1);
     let v = engine.record_drift(obs).unwrap();
@@ -666,8 +791,12 @@ fn drift_monitoring_budget_exceeded_revokes() {
     policy.drift_budget_millionths = 50_000;
     policy.require_drift_monitoring = false;
     let mut engine = TransferEngine::new(policy, epoch(5));
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     let obs = DriftObservation::new("t1", "exec_time", 500_000, 700_000, epoch(5), 1);
     let v = engine.record_drift(obs).unwrap();
@@ -681,8 +810,12 @@ fn drift_monitoring_budget_exceeded_revokes() {
 #[test]
 fn drift_monitoring_not_active_fails() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
     engine.revoke_transfer("t1").unwrap();
 
     let obs = DriftObservation::new("t1", "exec_time", 500_000, 510_000, epoch(5), 1);
@@ -692,8 +825,12 @@ fn drift_monitoring_not_active_fails() {
 #[test]
 fn drift_monitoring_multiple_observations() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     for i in 0..10 {
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 505_000, epoch(5), i);
@@ -713,12 +850,22 @@ fn drift_monitoring_multiple_observations() {
 #[test]
 fn promote_probationary_to_active() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
-    assert_eq!(engine.get_transfer("t1").unwrap().status, TransferStatus::Probationary);
+    assert_eq!(
+        engine.get_transfer("t1").unwrap().status,
+        TransferStatus::Probationary
+    );
     engine.promote_transfer("t1").unwrap();
-    assert_eq!(engine.get_transfer("t1").unwrap().status, TransferStatus::Active);
+    assert_eq!(
+        engine.get_transfer("t1").unwrap().status,
+        TransferStatus::Active
+    );
 }
 
 #[test]
@@ -726,8 +873,12 @@ fn promote_active_fails() {
     let mut policy = TransferPolicy::default();
     policy.require_drift_monitoring = false;
     let mut engine = TransferEngine::new(policy, epoch(5));
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     assert!(engine.promote_transfer("t1").is_err()); // already Active
 }
@@ -739,8 +890,12 @@ fn promote_active_fails() {
 #[test]
 fn manual_revoke_produces_receipt() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     let receipt = engine.revoke_transfer("t1").unwrap();
     assert_eq!(receipt.reason, TransferStatus::RevokedManual);
@@ -750,8 +905,12 @@ fn manual_revoke_produces_receipt() {
 #[test]
 fn revoke_already_revoked_fails() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
     engine.revoke_transfer("t1").unwrap();
 
     assert!(engine.revoke_transfer("t1").is_err());
@@ -764,19 +923,30 @@ fn revoke_already_revoked_fails() {
 #[test]
 fn complete_transfer_success() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     engine.complete_transfer("t1").unwrap();
-    assert_eq!(engine.get_transfer("t1").unwrap().status, TransferStatus::Completed);
+    assert_eq!(
+        engine.get_transfer("t1").unwrap().status,
+        TransferStatus::Completed
+    );
     assert_eq!(engine.active_transfer_count(), 0);
 }
 
 #[test]
 fn complete_revoked_transfer_fails() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
     engine.revoke_transfer("t1").unwrap();
 
     assert!(engine.complete_transfer("t1").is_err());
@@ -789,20 +959,31 @@ fn complete_revoked_transfer_fails() {
 #[test]
 fn expire_stale_priors_revokes() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     engine.advance_epoch(epoch(100));
     let expired = engine.expire_stale_priors();
     assert_eq!(expired, vec!["t1"]);
-    assert_eq!(engine.get_transfer("t1").unwrap().status, TransferStatus::RevokedStale);
+    assert_eq!(
+        engine.get_transfer("t1").unwrap().status,
+        TransferStatus::RevokedStale
+    );
 }
 
 #[test]
 fn expire_stale_skips_fresh() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     engine.advance_epoch(epoch(6));
     let expired = engine.expire_stale_priors();
@@ -816,10 +997,18 @@ fn expire_stale_skips_fresh() {
 #[test]
 fn summary_counts_by_status() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.register_prior(prior("p2", TransferKind::CacheHint, 3, 800_000, 5)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
-    engine.execute_transfer("t2", "p2", "tgt1", "c2", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .register_prior(prior("p2", TransferKind::CacheHint, 3, 800_000, 5))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t2", "p2", "tgt1", "c2"))
+        .unwrap();
     engine.revoke_transfer("t1").unwrap();
 
     let s = engine.summarize_target("tgt1");
@@ -839,10 +1028,18 @@ fn summary_empty_target() {
 #[test]
 fn summary_kind_breakdown() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.register_prior(prior("p2", TransferKind::TieringPrior, 3, 800_000, 5)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
-    engine.execute_transfer("t2", "p2", "tgt1", "c2", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .register_prior(prior("p2", TransferKind::TieringPrior, 3, 800_000, 5))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t2", "p2", "tgt1", "c2"))
+        .unwrap();
 
     let s = engine.summarize_target("tgt1");
     assert_eq!(s.kind_breakdown.len(), 2);
@@ -857,11 +1054,21 @@ fn summary_kind_breakdown() {
 #[test]
 fn active_transfers_for_target() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.register_prior(prior("p2", TransferKind::CacheHint, 3, 800_000, 5)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
-    engine.execute_transfer("t2", "p2", "tgt1", "c2", true, false, false).unwrap();
-    engine.execute_transfer("t3", "p1", "tgt2", "c3", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .register_prior(prior("p2", TransferKind::CacheHint, 3, 800_000, 5))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t2", "p2", "tgt1", "c2"))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t3", "p1", "tgt2", "c3"))
+        .unwrap();
 
     assert_eq!(engine.active_transfers_for("tgt1").len(), 2);
     assert_eq!(engine.active_transfers_for("tgt2").len(), 1);
@@ -875,8 +1082,12 @@ fn active_transfers_for_target() {
 #[test]
 fn evidence_inventory_counts() {
     let mut engine = engine_default(5);
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10)).unwrap();
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 10))
+        .unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
     engine.revoke_transfer("t1").unwrap();
 
     let inv = engine.evidence_inventory();
@@ -914,7 +1125,9 @@ fn full_lifecycle_register_transfer_monitor_promote_complete() {
     engine.register_prior(p).unwrap();
 
     // Transfer
-    let r = engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    let r = engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
     assert_eq!(r.status, TransferStatus::Probationary);
 
     // Monitor drift
@@ -926,11 +1139,17 @@ fn full_lifecycle_register_transfer_monitor_promote_complete() {
 
     // Promote
     engine.promote_transfer("t1").unwrap();
-    assert_eq!(engine.get_transfer("t1").unwrap().status, TransferStatus::Active);
+    assert_eq!(
+        engine.get_transfer("t1").unwrap().status,
+        TransferStatus::Active
+    );
 
     // Complete
     engine.complete_transfer("t1").unwrap();
-    assert_eq!(engine.get_transfer("t1").unwrap().status, TransferStatus::Completed);
+    assert_eq!(
+        engine.get_transfer("t1").unwrap().status,
+        TransferStatus::Completed
+    );
     assert_eq!(engine.active_transfer_count(), 0);
 }
 
@@ -947,13 +1166,17 @@ fn full_lifecycle_drift_revocation_then_new_transfer() {
     engine.register_prior(p2).unwrap();
 
     // First transfer, drift exceeds budget
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
     let obs = DriftObservation::new("t1", "exec_time", 500_000, 600_000, epoch(5), 1);
     let v = engine.record_drift(obs).unwrap();
     assert!(matches!(v, DriftVerdict::BudgetExceeded { .. }));
 
     // Second transfer with different prior still works (rule budget reclaimed)
-    let r2 = engine.execute_transfer("t2", "p2", "tgt1", "c2", true, false, false).unwrap();
+    let r2 = engine
+        .execute_transfer(&tinput("t2", "p2", "tgt1", "c2"))
+        .unwrap();
     assert_eq!(r2.status, TransferStatus::Active);
 }
 
@@ -963,19 +1186,31 @@ fn rule_budget_accounting_across_transfers() {
     policy.max_transferred_rules = 20;
     let mut engine = TransferEngine::new(policy, epoch(5));
 
-    engine.register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 15)).unwrap();
-    engine.register_prior(prior("p2", TransferKind::CacheHint, 3, 900_000, 10)).unwrap();
+    engine
+        .register_prior(prior("p1", TransferKind::RewritePack, 3, 900_000, 15))
+        .unwrap();
+    engine
+        .register_prior(prior("p2", TransferKind::CacheHint, 3, 900_000, 10))
+        .unwrap();
 
-    engine.execute_transfer("t1", "p1", "tgt1", "c1", true, false, false).unwrap();
+    engine
+        .execute_transfer(&tinput("t1", "p1", "tgt1", "c1"))
+        .unwrap();
 
     // 15 + 10 = 25 > 20
-    assert!(engine.execute_transfer("t2", "p2", "tgt1", "c2", true, false, false).is_err());
+    assert!(
+        engine
+            .execute_transfer(&tinput("t2", "p2", "tgt1", "c2"))
+            .is_err()
+    );
 
     // Revoke t1, freeing 15
     engine.revoke_transfer("t1").unwrap();
 
     // Now 0 + 10 = 10 ≤ 20
-    engine.execute_transfer("t2", "p2", "tgt1", "c2", true, false, false).unwrap();
+    engine
+        .execute_transfer(&tinput("t2", "p2", "tgt1", "c2"))
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------

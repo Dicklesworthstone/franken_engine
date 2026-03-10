@@ -1,10 +1,22 @@
 //! Integration tests for the self-adjusting resolution graph (RGC-406B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::self_adjusting_resolution_graph::{
-    self, DependencyEdge, EdgeKind, InvalidationScope, ModuleNode,
-    ResolutionGraphError, SCHEMA_VERSION, BEAD_ID, COMPONENT, POLICY_ID,
-    MILLIONTHS,
+    self, BEAD_ID, COMPONENT, DependencyEdge, EdgeKind, InvalidationScope, MILLIONTHS, ModuleNode,
+    POLICY_ID, ResolutionGraphError, SCHEMA_VERSION,
 };
 
 // ---------------------------------------------------------------------------
@@ -124,7 +136,10 @@ fn test_dependency_edge_hash_deterministic() {
 
 #[test]
 fn test_invalidation_scope_display() {
-    assert_eq!(format!("{}", InvalidationScope::SingleModule), "single-module");
+    assert_eq!(
+        format!("{}", InvalidationScope::SingleModule),
+        "single-module"
+    );
     assert_eq!(format!("{}", InvalidationScope::FullGraph), "full-graph");
 }
 
@@ -134,9 +149,7 @@ fn test_invalidation_scope_display() {
 
 #[test]
 fn test_build_graph_empty() {
-    let graph = self_adjusting_resolution_graph::build_graph(
-        vec![], vec![], vec![],
-    ).unwrap();
+    let graph = self_adjusting_resolution_graph::build_graph(vec![], vec![], vec![]).unwrap();
     assert_eq!(graph.node_count(), 0);
     assert_eq!(graph.edge_count(), 0);
 }
@@ -144,9 +157,9 @@ fn test_build_graph_empty() {
 #[test]
 fn test_build_graph_single_node() {
     let node = make_node("app");
-    let graph = self_adjusting_resolution_graph::build_graph(
-        vec![node], vec![], vec!["app".to_string()],
-    ).unwrap();
+    let graph =
+        self_adjusting_resolution_graph::build_graph(vec![node], vec![], vec!["app".to_string()])
+            .unwrap();
     assert_eq!(graph.node_count(), 1);
     assert!(graph.root_modules.contains(&"app".to_string()));
 }
@@ -155,9 +168,8 @@ fn test_build_graph_single_node() {
 fn test_build_graph_with_edges() {
     let nodes = vec![make_node("app"), make_node("utils")];
     let edges = vec![make_edge("app", "utils", EdgeKind::StaticImport)];
-    let graph = self_adjusting_resolution_graph::build_graph(
-        nodes, edges, vec!["app".to_string()],
-    ).unwrap();
+    let graph = self_adjusting_resolution_graph::build_graph(nodes, edges, vec!["app".to_string()])
+        .unwrap();
     assert_eq!(graph.node_count(), 2);
     assert_eq!(graph.edge_count(), 1);
 }
@@ -166,10 +178,11 @@ fn test_build_graph_with_edges() {
 fn test_build_graph_invalid_specifier() {
     let mut node = make_node("app");
     node.specifier = String::new();
-    let result = self_adjusting_resolution_graph::build_graph(
-        vec![node], vec![], vec![],
-    );
-    assert!(matches!(result, Err(ResolutionGraphError::InvalidSpecifier)));
+    let result = self_adjusting_resolution_graph::build_graph(vec![node], vec![], vec![]);
+    assert!(matches!(
+        result,
+        Err(ResolutionGraphError::InvalidSpecifier)
+    ));
 }
 
 #[test]
@@ -179,9 +192,7 @@ fn test_build_graph_duplicate_edge() {
         make_edge("a", "b", EdgeKind::StaticImport),
         make_edge("a", "b", EdgeKind::StaticImport),
     ];
-    let result = self_adjusting_resolution_graph::build_graph(
-        nodes, edges, vec![],
-    );
+    let result = self_adjusting_resolution_graph::build_graph(nodes, edges, vec![]);
     assert!(matches!(result, Err(ResolutionGraphError::DuplicateEdge)));
 }
 
@@ -189,10 +200,11 @@ fn test_build_graph_duplicate_edge() {
 fn test_build_graph_missing_edge_endpoint() {
     let nodes = vec![make_node("a")];
     let edges = vec![make_edge("a", "missing", EdgeKind::StaticImport)];
-    let result = self_adjusting_resolution_graph::build_graph(
-        nodes, edges, vec![],
-    );
-    assert!(matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))));
+    let result = self_adjusting_resolution_graph::build_graph(nodes, edges, vec![]);
+    assert!(matches!(
+        result,
+        Err(ResolutionGraphError::ModuleNotFound(_))
+    ));
 }
 
 #[test]
@@ -200,11 +212,13 @@ fn test_build_graph_content_hash_deterministic() {
     let nodes = vec![make_node("a"), make_node("b")];
     let edges = vec![make_edge("a", "b", EdgeKind::StaticImport)];
     let g1 = self_adjusting_resolution_graph::build_graph(
-        nodes.clone(), edges.clone(), vec!["a".to_string()],
-    ).unwrap();
-    let g2 = self_adjusting_resolution_graph::build_graph(
-        nodes, edges, vec!["a".to_string()],
-    ).unwrap();
+        nodes.clone(),
+        edges.clone(),
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let g2 =
+        self_adjusting_resolution_graph::build_graph(nodes, edges, vec!["a".to_string()]).unwrap();
     assert_eq!(g1.content_hash, g2.content_hash);
 }
 
@@ -215,11 +229,12 @@ fn test_build_graph_content_hash_deterministic() {
 #[test]
 fn test_add_module() {
     let mut graph = self_adjusting_resolution_graph::build_graph(
-        vec![make_node("a")], vec![], vec!["a".to_string()],
-    ).unwrap();
-    self_adjusting_resolution_graph::add_module(
-        &mut graph, make_node("b"),
-    ).unwrap();
+        vec![make_node("a")],
+        vec![],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    self_adjusting_resolution_graph::add_module(&mut graph, make_node("b")).unwrap();
     assert_eq!(graph.node_count(), 2);
 }
 
@@ -229,10 +244,9 @@ fn test_remove_module() {
         vec![make_node("a"), make_node("b")],
         vec![make_edge("a", "b", EdgeKind::StaticImport)],
         vec!["a".to_string()],
-    ).unwrap();
-    let receipt = self_adjusting_resolution_graph::remove_module(
-        &mut graph, "b",
-    ).unwrap();
+    )
+    .unwrap();
+    let receipt = self_adjusting_resolution_graph::remove_module(&mut graph, "b").unwrap();
     assert_eq!(graph.node_count(), 1);
     assert_eq!(graph.edge_count(), 0);
     assert!(!receipt.receipt_id.is_empty());
@@ -240,11 +254,13 @@ fn test_remove_module() {
 
 #[test]
 fn test_remove_module_not_found() {
-    let mut graph = self_adjusting_resolution_graph::build_graph(
-        vec![make_node("a")], vec![], vec![],
-    ).unwrap();
+    let mut graph =
+        self_adjusting_resolution_graph::build_graph(vec![make_node("a")], vec![], vec![]).unwrap();
     let result = self_adjusting_resolution_graph::remove_module(&mut graph, "missing");
-    assert!(matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))));
+    assert!(matches!(
+        result,
+        Err(ResolutionGraphError::ModuleNotFound(_))
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -257,10 +273,9 @@ fn test_invalidate_module() {
         vec![make_node("a"), make_node("b")],
         vec![make_edge("a", "b", EdgeKind::StaticImport)],
         vec!["a".to_string()],
-    ).unwrap();
-    let receipt = self_adjusting_resolution_graph::invalidate_module(
-        &graph, "a",
-    ).unwrap();
+    )
+    .unwrap();
+    let receipt = self_adjusting_resolution_graph::invalidate_module(&graph, "a").unwrap();
     assert_eq!(receipt.trigger_module, "a");
     assert!(!receipt.affected_modules.is_empty());
 }
@@ -278,7 +293,8 @@ fn test_compute_affected_set() {
             make_edge("c", "b", EdgeKind::StaticImport),
         ],
         vec!["c".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
     let affected = self_adjusting_resolution_graph::compute_affected_set(&graph, "a");
     // a -> b depends on a, c depends on b
     assert!(affected.contains("b"));
@@ -291,8 +307,11 @@ fn test_compute_affected_set() {
 #[test]
 fn test_create_and_verify_checkpoint() {
     let graph = self_adjusting_resolution_graph::build_graph(
-        vec![make_node("a")], vec![], vec!["a".to_string()],
-    ).unwrap();
+        vec![make_node("a")],
+        vec![],
+        vec!["a".to_string()],
+    )
+    .unwrap();
     let checkpoint = self_adjusting_resolution_graph::create_checkpoint(&graph);
     assert!(!checkpoint.checkpoint_id.is_empty());
     let valid = self_adjusting_resolution_graph::verify_checkpoint(&graph, &checkpoint);
@@ -309,7 +328,8 @@ fn test_detect_cycles_none() {
         vec![make_node("a"), make_node("b")],
         vec![make_edge("a", "b", EdgeKind::StaticImport)],
         vec![],
-    ).unwrap();
+    )
+    .unwrap();
     let cycles = self_adjusting_resolution_graph::detect_cycles(&graph);
     assert!(cycles.is_empty());
 }
@@ -327,7 +347,8 @@ fn test_topological_order() {
             make_edge("b", "c", EdgeKind::StaticImport),
         ],
         vec!["a".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
     let order = self_adjusting_resolution_graph::topological_order(&graph).unwrap();
     assert_eq!(order.len(), 3);
 }
@@ -342,11 +363,13 @@ fn test_add_edge() {
         vec![make_node("a"), make_node("b")],
         vec![],
         vec!["a".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
     self_adjusting_resolution_graph::add_edge(
         &mut graph,
         make_edge("a", "b", EdgeKind::DynamicImport),
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(graph.edge_count(), 1);
 }
 
@@ -360,7 +383,8 @@ fn test_connected_component() {
         vec![make_node("a"), make_node("b"), make_node("c")],
         vec![make_edge("a", "b", EdgeKind::StaticImport)],
         vec![],
-    ).unwrap();
+    )
+    .unwrap();
     let component = self_adjusting_resolution_graph::connected_component(&graph, "a").unwrap();
     assert!(component.contains("a"));
     assert!(component.contains("b"));
@@ -380,7 +404,8 @@ fn test_graph_depth_linear() {
             make_edge("b", "c", EdgeKind::StaticImport),
         ],
         vec!["a".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
     let depth = self_adjusting_resolution_graph::graph_depth(&graph).unwrap();
     assert!(depth >= 2);
 }

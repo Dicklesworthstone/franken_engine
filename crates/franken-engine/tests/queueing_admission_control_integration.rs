@@ -2,6 +2,19 @@
 //!
 //! Bead: bd-1lsy.7.11.2 [RGC-611B]
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::queueing_admission_control::*;
 use frankenengine_engine::stage_envelope_certificate::{ExecutionStage, LatencyPercentile};
 
@@ -23,11 +36,13 @@ fn controller_with_partitions() -> AdmissionController {
 }
 
 fn small_controller() -> AdmissionController {
-    let mut policy = AdmissionControlPolicy::default();
-    policy.max_queue_depth = 5;
-    policy.token_capacity = 10;
-    policy.token_refill_rate = 2;
-    policy.max_receipts = 10;
+    let policy = AdmissionControlPolicy {
+        max_queue_depth: 5,
+        token_capacity: 10,
+        token_refill_rate: 2,
+        max_receipts: 10,
+        ..Default::default()
+    };
     AdmissionController::new(policy)
 }
 
@@ -66,11 +81,13 @@ fn test_e2e_queue_fill_then_shed() {
 
 #[test]
 fn test_e2e_token_exhaustion_and_refill() {
-    let mut policy = AdmissionControlPolicy::default();
-    policy.max_queue_depth = 1000;
-    policy.token_capacity = 3;
-    policy.token_refill_rate = 1;
-    policy.tokens_per_admission = 1;
+    let policy = AdmissionControlPolicy {
+        max_queue_depth: 1000,
+        token_capacity: 3,
+        token_refill_rate: 1,
+        tokens_per_admission: 1,
+        ..Default::default()
+    };
     let mut ctrl = AdmissionController::new(policy);
 
     // Consume all tokens
@@ -140,10 +157,7 @@ fn test_e2e_emergency_sheds_all_except_critical() {
 
     // Critical should still get through
     let r_crit = ctrl.check_admission(ExecutionStage::Parse, AdmissionPriority::Critical);
-    assert!(!matches!(
-        r_crit.decision,
-        AdmissionDecision::Shed { .. }
-    ));
+    assert!(!matches!(r_crit.decision, AdmissionDecision::Shed { .. }));
 }
 
 #[test]
@@ -269,8 +283,10 @@ fn test_receipt_unique_hashes() {
 
 #[test]
 fn test_receipts_bounded_eviction() {
-    let mut policy = AdmissionControlPolicy::default();
-    policy.max_receipts = 5;
+    let policy = AdmissionControlPolicy {
+        max_receipts: 5,
+        ..Default::default()
+    };
     let mut ctrl = AdmissionController::new(policy);
     for _ in 0..20 {
         ctrl.check_admission(ExecutionStage::Parse, AdmissionPriority::Normal);
@@ -391,7 +407,10 @@ fn test_summary_mixed_decisions() {
     ctrl.check_admission(ExecutionStage::Parse, AdmissionPriority::Normal);
     let summary = ctrl.summary();
     assert!(summary.total_shed > 0);
-    assert_eq!(summary.total_checks, summary.total_admitted + summary.total_queued + summary.total_shed);
+    assert_eq!(
+        summary.total_checks,
+        summary.total_admitted + summary.total_queued + summary.total_shed
+    );
 }
 
 #[test]
@@ -448,8 +467,11 @@ fn test_partition_complete_never_underflows() {
 
 #[test]
 fn test_custom_stage_limits() {
-    let mut policy = AdmissionControlPolicy::default();
-    policy.stage_max_depths.insert(ExecutionStage::GcPause, 4);
+    let policy = {
+        let mut p = AdmissionControlPolicy::default();
+        p.stage_max_depths.insert(ExecutionStage::GcPause, 4);
+        p
+    };
     let mut ctrl = AdmissionController::new(policy);
     ctrl.init_partition(ExecutionStage::GcPause, 4);
     for _ in 0..4 {
@@ -466,9 +488,11 @@ fn test_custom_stage_limits() {
 
 #[test]
 fn test_policy_slo_percentile() {
-    let mut policy = AdmissionControlPolicy::default();
-    policy.slo_percentile = LatencyPercentile::P999;
-    policy.slo_target_ns = 100_000_000; // 100ms
+    let policy = AdmissionControlPolicy {
+        slo_percentile: LatencyPercentile::P999,
+        slo_target_ns: 100_000_000, // 100ms
+        ..Default::default()
+    };
     let ctrl = AdmissionController::new(policy);
     assert_eq!(ctrl.policy.slo_target_ns, 100_000_000);
 }

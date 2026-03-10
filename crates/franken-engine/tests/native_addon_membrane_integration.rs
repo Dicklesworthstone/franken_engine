@@ -1,4 +1,16 @@
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -106,6 +118,13 @@ fn representative_inventory_profile() -> CapabilityProfile {
         RuntimeCapability::ExtensionLifecycle,
         RuntimeCapability::HeapAllocate,
     ])
+}
+
+fn representative_required_addon_ids() -> Vec<String> {
+    representative_inventory_requests()
+        .into_iter()
+        .map(|request| request.addon_id)
+        .collect()
 }
 
 fn bridge_commands() -> Vec<String> {
@@ -359,6 +378,40 @@ fn abi_fingerprint_and_inventory_hash_are_deterministic() {
 }
 
 #[test]
+fn inventory_report_marks_missing_required_native_cohorts_explicitly() {
+    let membrane = NativeAddonMembrane::standard();
+    let requests = vec![
+        representative_inventory_requests()
+            .into_iter()
+            .next()
+            .unwrap(),
+    ];
+    let profile = representative_inventory_profile();
+    let report = membrane.inventory_report_with_requirements(
+        &requests,
+        &profile,
+        &[
+            " missing-addon ".to_string(),
+            "direct-addon".to_string(),
+            "missing-addon".to_string(),
+        ],
+    );
+
+    assert_eq!(
+        report.required_addon_ids,
+        vec!["direct-addon".to_string(), "missing-addon".to_string()]
+    );
+    assert!(!report.coverage_complete);
+    assert_eq!(report.coverage_gaps.len(), 1);
+    assert_eq!(report.coverage_gaps[0].addon_id, "missing-addon");
+    assert_eq!(
+        report.coverage_gaps[0].reason_code,
+        "missing_from_inventory_input"
+    );
+    assert!(report.coverage_gaps[0].message.contains("missing-addon"));
+}
+
+#[test]
 fn artifact_bundle_writer_emits_expected_files() {
     let membrane = NativeAddonMembrane::standard();
     let requests = representative_inventory_requests();
@@ -370,6 +423,7 @@ fn artifact_bundle_writer_emits_expected_files() {
             "cargo test -p frankenengine-engine --test native_addon_membrane_integration artifact_bundle_writer_emits_expected_files".to_string(),
         ],
         generated_at_unix_ms: 1_730_000_000_000,
+        required_addon_ids: representative_required_addon_ids(),
     };
     let bundle = membrane
         .write_artifact_bundle(
@@ -553,6 +607,20 @@ fn artifact_bundle_writer_emits_expected_files() {
         fallback_routes,
         BTreeSet::from(["delegate_cell", "wasm_port"])
     );
+
+    let inventory: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&bundle.inventory_path).unwrap()).unwrap();
+    assert_eq!(inventory["coverage_complete"], true);
+    assert_eq!(inventory["coverage_gaps"], serde_json::json!([]));
+    assert_eq!(
+        inventory["required_addon_ids"],
+        serde_json::json!([
+            "delegate-addon",
+            "direct-addon",
+            "unsupported-addon",
+            "wasm-addon"
+        ])
+    );
 }
 
 #[test]
@@ -621,6 +689,7 @@ fn native_addon_membrane_artifact_bridge_emits_bundle_when_env_is_set() {
                 run_id,
                 command_transcript: bridge_commands(),
                 generated_at_unix_ms: 1_730_000_000_000,
+                required_addon_ids: representative_required_addon_ids(),
             },
         )
         .expect("artifact bridge should write bundle");

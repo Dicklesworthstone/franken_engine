@@ -4,9 +4,22 @@
 //! health checks, transition events, and the full lifecycle from inventory
 //! to instantiation.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::metadata_substrate_inventory::{
     FallbackMode, LocalityGoal, MetadataStructureKind, RollbackRule, SubstrateAssignment,
-    SubstrateContract, SubstrateInventory, SubstrateKind,
+    SubstrateContract, SubstrateKind,
 };
 use frankenengine_engine::optimized_metadata_substrate::{
     COMPONENT, OPTIMIZED_SUBSTRATE_BEAD_ID, OPTIMIZED_SUBSTRATE_SCHEMA_VERSION, OverridePolicy,

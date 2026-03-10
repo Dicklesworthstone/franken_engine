@@ -3,6 +3,19 @@
 //! Covers end-to-end workflows: element-kind transitions, deopt chains,
 //! typed-array lifecycle, policy enforcement, diagnostics, and serialization.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::array_fast_lane::{
     ARRAY_FAST_LANE_SCHEMA_VERSION, ArrayFastLaneDiagnostics, ArrayFastLaneEngine,
     ArrayLaneDescriptor, DeoptReason, ElementKind, ElementKindTransition, FastLanePolicy,
@@ -647,7 +660,7 @@ fn test_arrays_by_kind_grouping() {
     assert_eq!(by_kind.get(&ElementKind::PackedSmi).unwrap().len(), 2);
     assert_eq!(by_kind.get(&ElementKind::PackedDouble).unwrap().len(), 1);
     assert_eq!(by_kind.get(&ElementKind::PackedElements).unwrap().len(), 1);
-    assert!(by_kind.get(&ElementKind::HoleySmi).is_none());
+    assert!(!by_kind.contains_key(&ElementKind::HoleySmi));
 }
 
 #[test]

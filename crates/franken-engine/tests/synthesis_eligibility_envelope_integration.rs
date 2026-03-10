@@ -3,6 +3,19 @@
 //! Validates public API, serde contracts, determinism, eligibility evaluation,
 //! corpus management, and envelope generation.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -20,7 +33,16 @@ fn pure_schema(id: &str) -> KernelSchema {
     let mut ops = BTreeMap::new();
     ops.insert(OperationKind::Arithmetic, 10);
     ops.insert(OperationKind::Load, 5);
-    KernelSchema::new(id, ops, 2, BTreeSet::new(), 950_000, 970_000, 1, 1)
+    KernelSchema::new(KernelSchemaInput {
+        schema_id: id.into(),
+        operation_counts: ops,
+        branch_depth: 2,
+        side_effects: BTreeSet::new(),
+        input_shape_stability: 950_000,
+        output_shape_stability: 970_000,
+        input_shape_count: 1,
+        output_shape_count: 1,
+    })
 }
 
 fn effectful_schema(id: &str) -> KernelSchema {
@@ -28,20 +50,47 @@ fn effectful_schema(id: &str) -> KernelSchema {
     ops.insert(OperationKind::Arithmetic, 5);
     ops.insert(OperationKind::Store, 3);
     let effects = BTreeSet::from([SideEffectKind::PropertyWrite]);
-    KernelSchema::new(id, ops, 1, effects, 920_000, 940_000, 2, 1)
+    KernelSchema::new(KernelSchemaInput {
+        schema_id: id.into(),
+        operation_counts: ops,
+        branch_depth: 1,
+        side_effects: effects,
+        input_shape_stability: 920_000,
+        output_shape_stability: 940_000,
+        input_shape_count: 2,
+        output_shape_count: 1,
+    })
 }
 
 fn oversized_schema(id: &str) -> KernelSchema {
     let mut ops = BTreeMap::new();
     ops.insert(OperationKind::Arithmetic, 300);
-    KernelSchema::new(id, ops, 10, BTreeSet::new(), 500_000, 500_000, 5, 5)
+    KernelSchema::new(KernelSchemaInput {
+        schema_id: id.into(),
+        operation_counts: ops,
+        branch_depth: 10,
+        side_effects: BTreeSet::new(),
+        input_shape_stability: 500_000,
+        output_shape_stability: 500_000,
+        input_shape_count: 5,
+        output_shape_count: 5,
+    })
 }
 
 fn global_mutation_schema(id: &str) -> KernelSchema {
     let mut ops = BTreeMap::new();
     ops.insert(OperationKind::Store, 1);
     let effects = BTreeSet::from([SideEffectKind::GlobalMutation]);
-    KernelSchema::new(id, ops, 0, effects, 950_000, 950_000, 1, 1)
+    KernelSchema::new(KernelSchemaInput {
+        schema_id: id.into(),
+        operation_counts: ops,
+        branch_depth: 0,
+        side_effects: effects,
+        input_shape_stability: 950_000,
+        output_shape_stability: 950_000,
+        input_shape_count: 1,
+        output_shape_count: 1,
+    })
 }
 
 // ---------------------------------------------------------------------------

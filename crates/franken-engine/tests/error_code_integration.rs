@@ -5,6 +5,19 @@
 //! registry construction, numeric lookups, stable codes, operator actions,
 //! and serde round-trips from outside the crate boundary.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::error_code::{
     ALL_ERROR_CODES, ERROR_CODE_COMPATIBILITY_POLICY, ERROR_CODE_REGISTRY_VERSION, ErrorCodeEntry,
     ErrorCodeRegistry, ErrorSeverity, ErrorSubsystem, FrankenErrorCode, error_code_registry,

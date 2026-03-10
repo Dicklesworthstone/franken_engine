@@ -23,6 +23,19 @@
 //! concurrency_level, total_hostcalls, total_lifecycle_events,
 //! invariant_violations, budget_exhaustion_events, quarantine_events.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::extension_lifecycle_manager::{
     CancellationConfig, ExtensionLifecycleManager, ExtensionState, LifecycleError,
     LifecycleTransition, ResourceBudget,

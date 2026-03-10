@@ -4,6 +4,18 @@
 //! obligations, Ir2FlowLattice engine, data source/sink assignment, and serde.
 
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
 
 use frankenengine_engine::flow_lattice::{
     Clearance, DataSource, DeclassificationObligation, FlowCheckResult, FlowLatticeError,

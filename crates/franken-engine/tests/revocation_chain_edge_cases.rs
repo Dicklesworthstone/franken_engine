@@ -6,6 +6,19 @@
 //! is_revoked, lookup, audited lookup, audit events, drain, event_counts),
 //! schema helpers, and cross-cutting integration scenarios.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::capability_token::PrincipalId;
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain};
 use frankenengine_engine::hash_tiers::ContentHash;

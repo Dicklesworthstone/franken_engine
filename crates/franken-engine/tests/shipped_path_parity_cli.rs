@@ -1,4 +1,16 @@
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
 
 use std::fs;
 use std::path::PathBuf;
@@ -71,10 +83,20 @@ fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
         report_json["component"].as_str(),
         Some("shipped_path_parity")
     );
-    assert_eq!(report_json["specimen_count"].as_u64(), Some(6));
-    assert_eq!(report_json["js_specimen_count"].as_u64(), Some(4));
-    assert_eq!(report_json["ts_specimen_count"].as_u64(), Some(2));
+    assert_eq!(report_json["specimen_count"].as_u64(), Some(9));
+    assert_eq!(report_json["js_specimen_count"].as_u64(), Some(6));
+    assert_eq!(report_json["ts_specimen_count"].as_u64(), Some(3));
     assert_eq!(report_json["mismatch_count"].as_u64(), Some(0));
+    assert!(
+        report_json["specimens"]
+            .as_array()
+            .expect("specimens should be an array")
+            .iter()
+            .any(|specimen| {
+                specimen["command_family"].as_str() == Some("verify_compile_artifact")
+            }),
+        "parity report should include verify compile-artifact specimens"
+    );
 
     let events = fs::read_to_string(&events_path).expect("events should be readable");
     assert!(events.contains("shipped_path_parity_started"));
@@ -84,4 +106,5 @@ fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
     assert!(commands.contains("frankenctl"));
     assert!(commands.contains("compile"));
     assert!(commands.contains("run"));
+    assert!(commands.contains("verify compile-artifact"));
 }

@@ -1,22 +1,36 @@
 //! Integration tests for the React package cohort validation and resolver
 //! behaviour module (RGC-405A).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use frankenengine_engine::react_package_cohort::{
-    build_cohort_matrix, build_cohort_matrix_with_edges, build_manifest,
-    build_manifest_with_aliases, cohort_coverage_millionths, detect_alias_loops, format_compatible,
+    CohortError, CohortMatrix, CohortValidationReport, EdgeCase, ExportCondition, ModuleFormat,
+    PackageManifest, REACT_COHORT_BEAD_ID, REACT_COHORT_COMPONENT,
+    REACT_COHORT_EVENT_SCHEMA_VERSION, REACT_COHORT_POLICY_ID,
+    REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION, REACT_COHORT_SCHEMA_VERSION,
+    REACT_COHORT_TRACE_IDS_SCHEMA_VERSION, ReactCohortEvent, ReactCohortRunManifest,
+    ReactCohortTraceIds, ReactCohortWriteError, ReactPackage, SubpathEntry, build_cohort_matrix,
+    build_cohort_matrix_with_edges, build_manifest, build_manifest_with_aliases,
+    cohort_coverage_millionths, detect_alias_loops, format_compatible,
     franken_engine_react_cohort_manifest, resolve_alias_chain, resolve_subpath,
     resolve_subpath_with_fallbacks, validate_cohort, validate_edge_case, verify_format_consistency,
-    write_react_package_cohort_bundle, CohortError, CohortMatrix, CohortValidationReport, EdgeCase,
-    ExportCondition, ModuleFormat, PackageManifest, ReactCohortEvent, ReactCohortRunManifest,
-    ReactCohortTraceIds, ReactCohortWriteError, ReactPackage, SubpathEntry,
-    REACT_COHORT_BEAD_ID, REACT_COHORT_COMPONENT, REACT_COHORT_EVENT_SCHEMA_VERSION,
-    REACT_COHORT_POLICY_ID, REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION, REACT_COHORT_SCHEMA_VERSION,
-    REACT_COHORT_TRACE_IDS_SCHEMA_VERSION,
+    write_react_package_cohort_bundle,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -41,20 +55,30 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
     dir
 }
 
-fn sample_subpath(
-    sub: &str,
-    cond: ExportCondition,
-    path: &str,
-    fmt: ModuleFormat,
-) -> SubpathEntry {
+fn sample_subpath(sub: &str, cond: ExportCondition, path: &str, fmt: ModuleFormat) -> SubpathEntry {
     SubpathEntry::new(sub, vec![cond], path, fmt)
 }
 
 fn sample_react_manifest() -> PackageManifest {
     let subpaths = vec![
-        sample_subpath(".", ExportCondition::Import, "./esm/react.js", ModuleFormat::Esm),
-        sample_subpath(".", ExportCondition::Require, "./cjs/react.js", ModuleFormat::Cjs),
-        sample_subpath(".", ExportCondition::Default, "./cjs/react.js", ModuleFormat::Cjs),
+        sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./esm/react.js",
+            ModuleFormat::Esm,
+        ),
+        sample_subpath(
+            ".",
+            ExportCondition::Require,
+            "./cjs/react.js",
+            ModuleFormat::Cjs,
+        ),
+        sample_subpath(
+            ".",
+            ExportCondition::Default,
+            "./cjs/react.js",
+            ModuleFormat::Cjs,
+        ),
         sample_subpath(
             "./jsx-runtime",
             ExportCondition::Import,
@@ -136,7 +160,13 @@ fn test_react_package_serde_roundtrip() {
 #[test]
 fn test_export_condition_keys_display_and_serde() {
     let expected_keys = [
-        "import", "require", "default", "browser", "node", "react-server", "react-native",
+        "import",
+        "require",
+        "default",
+        "browser",
+        "node",
+        "react-server",
+        "react-native",
     ];
     for (cond, key) in ExportCondition::ALL.iter().zip(expected_keys.iter()) {
         assert_eq!(cond.condition_key(), *key);
@@ -319,12 +349,14 @@ fn test_resolve_subpath_with_fallbacks_priority_order() {
 #[test]
 fn test_resolve_subpath_with_fallbacks_all_miss() {
     let manifest = sample_react_manifest();
-    assert!(resolve_subpath_with_fallbacks(
-        &manifest,
-        "./nonexistent",
-        &[ExportCondition::Browser, ExportCondition::ReactNative],
-    )
-    .is_err());
+    assert!(
+        resolve_subpath_with_fallbacks(
+            &manifest,
+            "./nonexistent",
+            &[ExportCondition::Browser, ExportCondition::ReactNative],
+        )
+        .is_err()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -390,8 +422,16 @@ fn test_edge_case_display_and_serde() {
 
 #[test]
 fn test_cohort_error_display_all_variants() {
-    assert!(CohortError::PackageNotFound("react-missing".into()).to_string().contains("react-missing"));
-    assert!(CohortError::SubpathMissing("./foo".into()).to_string().contains("./foo"));
+    assert!(
+        CohortError::PackageNotFound("react-missing".into())
+            .to_string()
+            .contains("react-missing")
+    );
+    assert!(
+        CohortError::SubpathMissing("./foo".into())
+            .to_string()
+            .contains("./foo")
+    );
     let fmt_err = CohortError::FormatMismatch {
         expected: ModuleFormat::Esm,
         actual: ModuleFormat::Cjs,
@@ -400,7 +440,11 @@ fn test_cohort_error_display_all_variants() {
     assert!(fmt_err.to_string().contains("cjs"));
     let loop_err = CohortError::AliasLoop(vec!["a".into(), "b".into(), "a".into()]);
     assert!(loop_err.to_string().contains("a -> b -> a"));
-    assert!(CohortError::InternalError("boom".into()).to_string().contains("boom"));
+    assert!(
+        CohortError::InternalError("boom".into())
+            .to_string()
+            .contains("boom")
+    );
 }
 
 #[test]
@@ -448,9 +492,16 @@ fn test_build_cohort_matrix_deterministic_and_epoch_sensitive() {
 
 #[test]
 fn test_cohort_matrix_pass_rate_all_pass() {
-    let mut ec = EdgeCase::pending("ec-1", "test", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+    let mut ec = EdgeCase::pending(
+        "ec-1",
+        "test",
+        ReactPackage::React,
+        ExportCondition::Import,
+        "./esm/react.js",
+    );
     ec.resolve("./esm/react.js");
-    let matrix = build_cohort_matrix_with_edges(test_epoch(), vec![sample_react_manifest()], vec![ec]);
+    let matrix =
+        build_cohort_matrix_with_edges(test_epoch(), vec![sample_react_manifest()], vec![ec]);
     assert_eq!(matrix.pass_rate_millionths(), 1_000_000);
     assert_eq!(matrix.passed_edge_cases(), 1);
     assert_eq!(matrix.failed_edge_cases(), 0);
@@ -458,11 +509,24 @@ fn test_cohort_matrix_pass_rate_all_pass() {
 
 #[test]
 fn test_cohort_matrix_pass_rate_partial() {
-    let mut ec1 = EdgeCase::pending("ec-p", "pass", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+    let mut ec1 = EdgeCase::pending(
+        "ec-p",
+        "pass",
+        ReactPackage::React,
+        ExportCondition::Import,
+        "./esm/react.js",
+    );
     ec1.resolve("./esm/react.js");
-    let mut ec2 = EdgeCase::pending("ec-f", "fail", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+    let mut ec2 = EdgeCase::pending(
+        "ec-f",
+        "fail",
+        ReactPackage::React,
+        ExportCondition::Import,
+        "./esm/react.js",
+    );
     ec2.resolve("./wrong.js");
-    let matrix = build_cohort_matrix_with_edges(test_epoch(), vec![sample_react_manifest()], vec![ec1, ec2]);
+    let matrix =
+        build_cohort_matrix_with_edges(test_epoch(), vec![sample_react_manifest()], vec![ec1, ec2]);
     assert_eq!(matrix.pass_rate_millionths(), 500_000);
 }
 
@@ -532,7 +596,10 @@ fn test_resolve_alias_chain_follows_and_terminates() {
     aliases.insert("b".into(), "c".into());
     assert_eq!(resolve_alias_chain(&aliases, "a").unwrap(), "c");
     // No alias => returns start key
-    assert_eq!(resolve_alias_chain(&BTreeMap::new(), "direct").unwrap(), "direct");
+    assert_eq!(
+        resolve_alias_chain(&BTreeMap::new(), "direct").unwrap(),
+        "direct"
+    );
 }
 
 #[test]
@@ -579,8 +646,18 @@ fn test_verify_format_consistency_clean() {
 #[test]
 fn test_verify_format_consistency_conflict() {
     let subpaths = vec![
-        sample_subpath(".", ExportCondition::Import, "./shared/index.js", ModuleFormat::Esm),
-        sample_subpath(".", ExportCondition::Require, "./shared/index.js", ModuleFormat::Cjs),
+        sample_subpath(
+            ".",
+            ExportCondition::Import,
+            "./shared/index.js",
+            ModuleFormat::Esm,
+        ),
+        sample_subpath(
+            ".",
+            ExportCondition::Require,
+            "./shared/index.js",
+            ModuleFormat::Cjs,
+        ),
     ];
     let manifest = build_manifest(ReactPackage::React, "18.3.1", subpaths);
     let errors = verify_format_consistency(&manifest);
@@ -629,9 +706,16 @@ fn test_validate_edge_case_match_and_miss() {
 
 #[test]
 fn test_validate_cohort_clean() {
-    let mut ec = EdgeCase::pending("ec-ok", "clean", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+    let mut ec = EdgeCase::pending(
+        "ec-ok",
+        "clean",
+        ReactPackage::React,
+        ExportCondition::Import,
+        "./esm/react.js",
+    );
     ec.resolve("./esm/react.js");
-    let matrix = build_cohort_matrix_with_edges(test_epoch(), vec![sample_react_manifest()], vec![ec]);
+    let matrix =
+        build_cohort_matrix_with_edges(test_epoch(), vec![sample_react_manifest()], vec![ec]);
     let report = validate_cohort(&matrix);
     assert!(report.passed);
     assert_eq!(report.pass_rate_millionths, 1_000_000);
@@ -641,9 +725,16 @@ fn test_validate_cohort_clean() {
 #[test]
 fn test_validate_cohort_failure_modes() {
     // Failed edge case
-    let mut ec = EdgeCase::pending("ec-bad", "bad", ReactPackage::React, ExportCondition::Import, "./esm/react.js");
+    let mut ec = EdgeCase::pending(
+        "ec-bad",
+        "bad",
+        ReactPackage::React,
+        ExportCondition::Import,
+        "./esm/react.js",
+    );
     ec.resolve("./wrong.js");
-    let matrix = build_cohort_matrix_with_edges(test_epoch(), vec![sample_react_manifest()], vec![ec]);
+    let matrix =
+        build_cohort_matrix_with_edges(test_epoch(), vec![sample_react_manifest()], vec![ec]);
     assert!(!validate_cohort(&matrix).passed);
     // Alias loop
     let mut aliases = BTreeMap::new();
@@ -676,7 +767,10 @@ fn test_cohort_coverage_various() {
     // Empty => 0
     assert_eq!(cohort_coverage_millionths(&[]), 0);
     // Single package => 1/7
-    assert_eq!(cohort_coverage_millionths(&[sample_react_manifest()]), 1_000_000 / 7);
+    assert_eq!(
+        cohort_coverage_millionths(&[sample_react_manifest()]),
+        1_000_000 / 7
+    );
     // All packages => 100%
     let all: Vec<PackageManifest> = ReactPackage::ALL
         .iter()
@@ -700,7 +794,11 @@ fn test_golden_manifest_structure() {
     let matrix = franken_engine_react_cohort_manifest();
     assert_eq!(matrix.package_count(), 7);
     for pkg in ReactPackage::ALL {
-        assert!(matrix.find_manifest(*pkg).is_some(), "missing manifest for {:?}", pkg);
+        assert!(
+            matrix.find_manifest(*pkg).is_some(),
+            "missing manifest for {:?}",
+            pkg
+        );
     }
     // react: 7, react-dom: 8, react-dom/server: 4, jsx-runtime: 3,
     // jsx-dev-runtime: 3, scheduler: 3, reconciler: 3 = 31
@@ -733,11 +831,15 @@ fn test_golden_manifest_subpath_resolutions() {
     // dom/server multi-condition
     let server = matrix.find_manifest(ReactPackage::ReactDomServer).unwrap();
     assert_eq!(
-        resolve_subpath(server, ".", &ExportCondition::Browser).unwrap().resolved_path,
+        resolve_subpath(server, ".", &ExportCondition::Browser)
+            .unwrap()
+            .resolved_path,
         "./esm/react-dom-server.browser.js",
     );
     assert_eq!(
-        resolve_subpath(server, ".", &ExportCondition::ReactServer).unwrap().resolved_path,
+        resolve_subpath(server, ".", &ExportCondition::ReactServer)
+            .unwrap()
+            .resolved_path,
         "./esm/react-dom-server.edge.js",
     );
     let cjs = resolve_subpath(server, ".", &ExportCondition::Require).unwrap();
@@ -812,7 +914,10 @@ fn write_bundle_events_trace_ids_and_commands_are_structured() {
         .lines()
         .map(|line| serde_json::from_str(line).expect("parse event"))
         .collect();
-    assert_eq!(events.len(), artifacts.package_count + artifacts.edge_case_count + 2);
+    assert_eq!(
+        events.len(),
+        artifacts.package_count + artifacts.edge_case_count + 2
+    );
     assert_eq!(events.first().unwrap().event, "cohort_generation_started");
     assert_eq!(events.last().unwrap().event, "cohort_generation_completed");
     assert!(
@@ -825,14 +930,20 @@ fn write_bundle_events_trace_ids_and_commands_are_structured() {
         serde_json::from_slice(&fs::read(&artifacts.trace_ids_path).expect("read trace ids"))
             .expect("parse trace ids");
     let short_hash = &artifacts.matrix_hash[..16];
-    assert_eq!(trace_ids.schema_version, REACT_COHORT_TRACE_IDS_SCHEMA_VERSION);
+    assert_eq!(
+        trace_ids.schema_version,
+        REACT_COHORT_TRACE_IDS_SCHEMA_VERSION
+    );
     assert!(trace_ids.trace_id.contains(short_hash));
     assert!(trace_ids.decision_id.contains(short_hash));
     assert_eq!(trace_ids.policy_id, REACT_COHORT_POLICY_ID);
 
     let commands_txt = fs::read_to_string(&artifacts.commands_path).expect("read commands");
     for command in &commands {
-        assert!(commands_txt.contains(command), "commands should contain {command}");
+        assert!(
+            commands_txt.contains(command),
+            "commands should contain {command}"
+        );
     }
 }
 
@@ -896,14 +1007,16 @@ fn write_bundle_releases_lock_after_success() {
 }
 
 #[test]
-#[ignore = "requires franken_react_package_cohort binary (not yet shipped)"]
 fn franken_react_package_cohort_cli_writes_bundle() {
     let out_dir = unique_temp_dir("cli");
-    let output = Command::new(std::env::var("CARGO_BIN_EXE_franken_react_package_cohort").unwrap_or_else(|_| "franken_react_package_cohort".into()))
-        .arg("--out-dir")
-        .arg(&out_dir)
-        .output()
-        .expect("run franken_react_package_cohort");
+    let output = Command::new(
+        std::env::var("CARGO_BIN_EXE_franken_react_package_cohort")
+            .unwrap_or_else(|_| "franken_react_package_cohort".into()),
+    )
+    .arg("--out-dir")
+    .arg(&out_dir)
+    .output()
+    .expect("run franken_react_package_cohort");
     assert!(
         output.status.success(),
         "stdout:\n{}\n\nstderr:\n{}",
@@ -935,9 +1048,10 @@ fn franken_react_package_cohort_cli_writes_bundle() {
         Some(out_dir.join("commands.txt").to_str().unwrap())
     );
 
-    let manifest: ReactCohortRunManifest =
-        serde_json::from_slice(&fs::read(out_dir.join("run_manifest.json")).expect("read manifest"))
-            .expect("parse manifest");
+    let manifest: ReactCohortRunManifest = serde_json::from_slice(
+        &fs::read(out_dir.join("run_manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
     assert_eq!(
         manifest.schema_version,
         REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION

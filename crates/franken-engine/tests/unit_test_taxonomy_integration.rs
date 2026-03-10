@@ -5,6 +5,19 @@
 //! LaneCoverageContract, UnitTestTaxonomyBundle, TaxonomyValidationError,
 //! default_frx20_bundle, and validate_for_gate.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::unit_test_taxonomy::{
     DETERMINISM_CONTRACT_SCHEMA_VERSION, DeterminismContract, FIXTURE_REGISTRY_SCHEMA_VERSION,
     FixtureRegistryEntry, LaneCoverageContract, LaneId, REQUIRED_STRUCTURED_LOG_FIELDS,

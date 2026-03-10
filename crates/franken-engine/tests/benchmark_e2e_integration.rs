@@ -7,6 +7,19 @@
 //! run_reload_revoke_churn, run_adversarial_noise_under_load, run_benchmark,
 //! BenchmarkSuiteConfig, run_benchmark_suite, measurements_to_cases.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::benchmark_e2e::{
     BENCHMARK_E2E_COMPONENT, BENCHMARK_E2E_SCHEMA_VERSION, BenchmarkFamily, BenchmarkMeasurement,
     BenchmarkSuiteConfig, LatencyDistribution, MIN_START_BUDGET_MILLIONTHS, RegressionThresholds,

@@ -1,11 +1,24 @@
 //! Integration tests for the kernel synthesis contract module (RGC-613A).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::kernel_synthesis_contract::{
-    EligibilityDecision, EligibilityStatus, ForbiddenReason, KernelCorpus, KernelFamily,
-    KernelSchema, KernelSynthCertificate, KernelSynthError, KernelSynthEvidenceManifest,
-    ProofRequirement, SynthesisBudget, SynthesisEnvelope, KERNEL_SYNTH_COMPONENT,
-    KERNEL_SYNTH_POLICY_ID, KERNEL_SYNTH_SCHEMA_VERSION, MILLIONTHS, build_synthesis_envelope,
+    EligibilityDecision, EligibilityStatus, ForbiddenReason, KERNEL_SYNTH_COMPONENT,
+    KERNEL_SYNTH_POLICY_ID, KERNEL_SYNTH_SCHEMA_VERSION, KernelCorpus, KernelFamily, KernelSchema,
+    KernelSynthCertificate, KernelSynthError, KernelSynthEvidenceManifest, MILLIONTHS,
+    ProofRequirement, SynthesisBudget, SynthesisEnvelope, build_synthesis_envelope,
     evaluate_eligibility, mine_canonical_kernels, run_kernel_synth_evidence,
 };
 
@@ -208,25 +221,33 @@ fn integration_evaluate_eligible_kernel() {
 fn integration_evaluate_side_effect_forbidden() {
     let decision = evaluate_eligibility(&side_effectful_schema("k2"));
     assert_eq!(decision.status, EligibilityStatus::Forbidden);
-    assert!(decision.forbidden_reasons.contains(&ForbiddenReason::SideEffect));
+    assert!(
+        decision
+            .forbidden_reasons
+            .contains(&ForbiddenReason::SideEffect)
+    );
 }
 
 #[test]
 fn integration_evaluate_nondeterministic_forbidden() {
     let decision = evaluate_eligibility(&nondeterministic_schema("k3"));
     assert_eq!(decision.status, EligibilityStatus::Forbidden);
-    assert!(decision
-        .forbidden_reasons
-        .contains(&ForbiddenReason::NonDeterministic));
+    assert!(
+        decision
+            .forbidden_reasons
+            .contains(&ForbiddenReason::NonDeterministic)
+    );
 }
 
 #[test]
 fn integration_evaluate_unbounded_forbidden() {
     let decision = evaluate_eligibility(&unbounded_schema("k4"));
     assert_eq!(decision.status, EligibilityStatus::Forbidden);
-    assert!(decision
-        .forbidden_reasons
-        .contains(&ForbiddenReason::UnboundedComplexity));
+    assert!(
+        decision
+            .forbidden_reasons
+            .contains(&ForbiddenReason::UnboundedComplexity)
+    );
 }
 
 #[test]
@@ -241,7 +262,10 @@ fn integration_evaluate_low_purity_conditional() {
 #[test]
 fn integration_evaluate_zero_hotness_deferred() {
     let decision = evaluate_eligibility(&zero_hotness_schema("k6"));
-    assert!(matches!(decision.status, EligibilityStatus::Deferred { .. }));
+    assert!(matches!(
+        decision.status,
+        EligibilityStatus::Deferred { .. }
+    ));
     assert_eq!(decision.confidence_millionths, 0);
     assert_eq!(decision.evidence_count, 0);
 }
@@ -333,8 +357,14 @@ fn integration_canonical_corpus_has_mixed_verdicts() {
         .iter()
         .filter(|d| d.status == EligibilityStatus::Forbidden)
         .count();
-    assert!(eligible_count > 0, "should have at least one eligible kernel");
-    assert!(forbidden_count > 0, "should have at least one forbidden kernel");
+    assert!(
+        eligible_count > 0,
+        "should have at least one eligible kernel"
+    );
+    assert!(
+        forbidden_count > 0,
+        "should have at least one forbidden kernel"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -345,9 +375,7 @@ fn integration_canonical_corpus_has_mixed_verdicts() {
 fn integration_error_serde_roundtrip() {
     let errors = vec![
         KernelSynthError::EmptyCorpus,
-        KernelSynthError::DuplicateKernel {
-            id: "dup".into(),
-        },
+        KernelSynthError::DuplicateKernel { id: "dup".into() },
         KernelSynthError::InvalidBudget {
             reason: "negative".into(),
         },
@@ -364,7 +392,11 @@ fn integration_error_serde_roundtrip() {
 
 #[test]
 fn integration_error_display() {
-    assert!(KernelSynthError::EmptyCorpus.to_string().contains("empty corpus"));
+    assert!(
+        KernelSynthError::EmptyCorpus
+            .to_string()
+            .contains("empty corpus")
+    );
     let dk = KernelSynthError::DuplicateKernel { id: "dup".into() };
     assert!(dk.to_string().contains("dup"));
 }

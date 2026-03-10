@@ -1,10 +1,22 @@
 //! Integration tests for the transport certificate ledger (RGC-616B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::transport_certificate_ledger::{
-    self, ArtifactKind, DegradationReason, HardwareCell, ResidualComponent,
-    TransportError, TransportOutcome,
-    SCHEMA_VERSION, BEAD_ID, COMPONENT, POLICY_ID,
+    self, ArtifactKind, BEAD_ID, COMPONENT, DegradationReason, HardwareCell, POLICY_ID,
+    ResidualComponent, SCHEMA_VERSION, TransportError, TransportOutcome,
 };
 
 // ---------------------------------------------------------------------------
@@ -122,7 +134,10 @@ fn test_outcome_serde_roundtrip() {
 
 #[test]
 fn test_degradation_reason_as_str() {
-    assert_eq!(DegradationReason::MicroarchMismatch.as_str(), "microarch_mismatch");
+    assert_eq!(
+        DegradationReason::MicroarchMismatch.as_str(),
+        "microarch_mismatch"
+    );
     assert_eq!(DegradationReason::IsaMissing.as_str(), "isa_missing");
 }
 
@@ -189,34 +204,30 @@ fn test_hardware_cell_display() {
 
 #[test]
 fn test_detect_degradation_same_cell() {
-    let reasons = transport_certificate_ledger::detect_degradation(
-        &cell_x86_zen4(), &cell_x86_zen4(),
-    );
+    let reasons =
+        transport_certificate_ledger::detect_degradation(&cell_x86_zen4(), &cell_x86_zen4());
     assert!(reasons.is_empty());
 }
 
 #[test]
 fn test_detect_degradation_different_microarch() {
-    let reasons = transport_certificate_ledger::detect_degradation(
-        &cell_x86_zen4(), &cell_x86_alder(),
-    );
+    let reasons =
+        transport_certificate_ledger::detect_degradation(&cell_x86_zen4(), &cell_x86_alder());
     assert!(!reasons.is_empty());
     assert!(reasons.contains(&DegradationReason::MicroarchMismatch));
 }
 
 #[test]
 fn test_detect_degradation_cross_arch() {
-    let reasons = transport_certificate_ledger::detect_degradation(
-        &cell_x86_zen4(), &cell_arm_nv2(),
-    );
+    let reasons =
+        transport_certificate_ledger::detect_degradation(&cell_x86_zen4(), &cell_arm_nv2());
     assert!(reasons.contains(&DegradationReason::IsaMissing));
 }
 
 #[test]
 fn test_detect_degradation_vector_width_reduction() {
-    let reasons = transport_certificate_ledger::detect_degradation(
-        &cell_x86_avx512(), &cell_x86_zen4(),
-    );
+    let reasons =
+        transport_certificate_ledger::detect_degradation(&cell_x86_avx512(), &cell_x86_zen4());
     assert!(reasons.contains(&DegradationReason::VectorizationUnavailable));
 }
 
@@ -254,26 +265,50 @@ fn test_residual_fraction_capped() {
 
 #[test]
 fn test_classify_outcome_full() {
-    assert_eq!(transport_certificate_ledger::classify_outcome(950_000), TransportOutcome::FullTransport);
-    assert_eq!(transport_certificate_ledger::classify_outcome(1_000_000), TransportOutcome::FullTransport);
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(950_000),
+        TransportOutcome::FullTransport
+    );
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(1_000_000),
+        TransportOutcome::FullTransport
+    );
 }
 
 #[test]
 fn test_classify_outcome_partial() {
-    assert_eq!(transport_certificate_ledger::classify_outcome(700_000), TransportOutcome::PartialTransport);
-    assert_eq!(transport_certificate_ledger::classify_outcome(949_999), TransportOutcome::PartialTransport);
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(700_000),
+        TransportOutcome::PartialTransport
+    );
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(949_999),
+        TransportOutcome::PartialTransport
+    );
 }
 
 #[test]
 fn test_classify_outcome_degraded() {
-    assert_eq!(transport_certificate_ledger::classify_outcome(300_000), TransportOutcome::Degraded);
-    assert_eq!(transport_certificate_ledger::classify_outcome(699_999), TransportOutcome::Degraded);
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(300_000),
+        TransportOutcome::Degraded
+    );
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(699_999),
+        TransportOutcome::Degraded
+    );
 }
 
 #[test]
 fn test_classify_outcome_failed() {
-    assert_eq!(transport_certificate_ledger::classify_outcome(299_999), TransportOutcome::Failed);
-    assert_eq!(transport_certificate_ledger::classify_outcome(0), TransportOutcome::Failed);
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(299_999),
+        TransportOutcome::Failed
+    );
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(0),
+        TransportOutcome::Failed
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -283,10 +318,14 @@ fn test_classify_outcome_failed() {
 #[test]
 fn test_evaluate_transport_same_cell() {
     let cert = transport_certificate_ledger::evaluate_transport(
-        ArtifactKind::RewriteRule, test_hash(),
-        &cell_x86_zen4(), &cell_x86_zen4(),
-        1_000_000, 1_000_000,
-    ).unwrap();
+        ArtifactKind::RewriteRule,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_x86_zen4(),
+        1_000_000,
+        1_000_000,
+    )
+    .unwrap();
     assert_eq!(cert.outcome, TransportOutcome::FullTransport);
     assert!(cert.is_usable());
     assert!(cert.is_full_transport());
@@ -296,10 +335,14 @@ fn test_evaluate_transport_same_cell() {
 #[test]
 fn test_evaluate_transport_cross_arch_sensitive() {
     let cert = transport_certificate_ledger::evaluate_transport(
-        ArtifactKind::AotModule, test_hash(),
-        &cell_x86_zen4(), &cell_arm_nv2(),
-        1_000_000, 200_000,
-    ).unwrap();
+        ArtifactKind::AotModule,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_arm_nv2(),
+        1_000_000,
+        200_000,
+    )
+    .unwrap();
     assert_eq!(cert.outcome, TransportOutcome::Incompatible);
     assert!(!cert.is_usable());
     assert!(!cert.same_arch_family());
@@ -308,10 +351,14 @@ fn test_evaluate_transport_cross_arch_sensitive() {
 #[test]
 fn test_evaluate_transport_cross_arch_nonsensitive() {
     let cert = transport_certificate_ledger::evaluate_transport(
-        ArtifactKind::ProfileData, test_hash(),
-        &cell_x86_zen4(), &cell_arm_nv2(),
-        1_000_000, 400_000,
-    ).unwrap();
+        ArtifactKind::ProfileData,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_arm_nv2(),
+        1_000_000,
+        400_000,
+    )
+    .unwrap();
     // ProfileData is not arch-sensitive, so it should classify by residual
     assert_ne!(cert.outcome, TransportOutcome::Incompatible);
 }
@@ -319,15 +366,23 @@ fn test_evaluate_transport_cross_arch_nonsensitive() {
 #[test]
 fn test_evaluate_transport_certificate_content_hash_deterministic() {
     let a = transport_certificate_ledger::evaluate_transport(
-        ArtifactKind::RewriteRule, test_hash(),
-        &cell_x86_zen4(), &cell_x86_alder(),
-        1_000_000, 900_000,
-    ).unwrap();
+        ArtifactKind::RewriteRule,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        900_000,
+    )
+    .unwrap();
     let b = transport_certificate_ledger::evaluate_transport(
-        ArtifactKind::RewriteRule, test_hash(),
-        &cell_x86_zen4(), &cell_x86_alder(),
-        1_000_000, 900_000,
-    ).unwrap();
+        ArtifactKind::RewriteRule,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        900_000,
+    )
+    .unwrap();
     assert_eq!(a.content_hash, b.content_hash);
 }
 
@@ -355,25 +410,34 @@ fn test_residual_component_zero_source() {
 #[test]
 fn test_build_residual_ledger_ok() {
     let cert = transport_certificate_ledger::evaluate_transport(
-        ArtifactKind::RewriteRule, test_hash(),
-        &cell_x86_zen4(), &cell_x86_alder(),
-        1_000_000, 900_000,
-    ).unwrap();
+        ArtifactKind::RewriteRule,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        900_000,
+    )
+    .unwrap();
     let comp = ResidualComponent::new("branch", 500_000, 400_000, "drift");
-    let ledger = transport_certificate_ledger::build_residual_ledger(
-        &cert, vec![comp],
-    ).unwrap();
+    let ledger = transport_certificate_ledger::build_residual_ledger(&cert, vec![comp]).unwrap();
     assert_eq!(ledger.component_count(), 1);
-    assert!(ledger.total_loss_millionths() > 0 || ledger.total_source_millionths == ledger.total_transported_millionths);
+    assert!(
+        ledger.total_loss_millionths() > 0
+            || ledger.total_source_millionths == ledger.total_transported_millionths
+    );
 }
 
 #[test]
 fn test_build_residual_ledger_inconsistent() {
     let cert = transport_certificate_ledger::evaluate_transport(
-        ArtifactKind::RewriteRule, test_hash(),
-        &cell_x86_zen4(), &cell_x86_alder(),
-        100_000, 90_000,
-    ).unwrap();
+        ArtifactKind::RewriteRule,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        100_000,
+        90_000,
+    )
+    .unwrap();
     // Source contribution exceeds cert source perf
     let comp = ResidualComponent::new("branch", 500_000, 400_000, "too much");
     let result = transport_certificate_ledger::build_residual_ledger(&cert, vec![comp]);
@@ -387,14 +451,16 @@ fn test_build_residual_ledger_inconsistent() {
 #[test]
 fn test_validate_ledger_consistency_ok() {
     let cert = transport_certificate_ledger::evaluate_transport(
-        ArtifactKind::RewriteRule, test_hash(),
-        &cell_x86_zen4(), &cell_x86_alder(),
-        1_000_000, 900_000,
-    ).unwrap();
+        ArtifactKind::RewriteRule,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        900_000,
+    )
+    .unwrap();
     let comp = ResidualComponent::new("branch", 500_000, 400_000, "drift");
-    let ledger = transport_certificate_ledger::build_residual_ledger(
-        &cert, vec![comp],
-    ).unwrap();
+    let ledger = transport_certificate_ledger::build_residual_ledger(&cert, vec![comp]).unwrap();
     assert!(transport_certificate_ledger::validate_ledger_consistency(&ledger).is_ok());
 }
 

@@ -1,12 +1,25 @@
 //! Integration tests for the metadata substrate optimized module (RGC-626B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::metadata_substrate_optimized::{
     FallbackPath, OptimizationDecision, OptimizationLevel, OverrideConfig, RollbackStrategy,
-    SubstrateCertificate, SubstrateError, SubstrateEvidenceManifest, SubstrateInventoryReport,
-    SubstrateKind, SubstrateProfile, SubstrateTransition, TransitionTrigger,
     SUBSTRATE_OPT_COMPONENT, SUBSTRATE_OPT_POLICY_ID, SUBSTRATE_OPT_SCHEMA_VERSION,
-    apply_override, build_canonical_inventory, certify_substrate, compute_transition_cost,
-    evaluate_substrate, recommend_substrate_kind, run_substrate_evidence,
+    SubstrateCertificate, SubstrateError, SubstrateEvidenceManifest, SubstrateInventoryReport,
+    SubstrateKind, SubstrateProfile, SubstrateTransition, TransitionTrigger, apply_override,
+    build_canonical_inventory, certify_substrate, compute_transition_cost, evaluate_substrate,
+    recommend_substrate_kind, run_substrate_evidence,
 };
 
 // ---------------------------------------------------------------------------
@@ -82,7 +95,10 @@ fn integration_substrate_kind_serde_all_variants() {
 #[test]
 fn integration_substrate_kind_display() {
     assert_eq!(SubstrateKind::SwissTable.to_string(), "swiss_table");
-    assert_eq!(SubstrateKind::GenericFallback.to_string(), "generic_fallback");
+    assert_eq!(
+        SubstrateKind::GenericFallback.to_string(),
+        "generic_fallback"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +124,10 @@ fn integration_optimization_level_serde_all_variants() {
 #[test]
 fn integration_optimization_level_display() {
     assert_eq!(OptimizationLevel::Unoptimized.to_string(), "unoptimized");
-    assert_eq!(OptimizationLevel::FullySwizzled.to_string(), "fully_swizzled");
+    assert_eq!(
+        OptimizationLevel::FullySwizzled.to_string(),
+        "fully_swizzled"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +178,10 @@ fn integration_rollback_strategy_serde_all_variants() {
 
 #[test]
 fn integration_rollback_strategy_display() {
-    assert_eq!(RollbackStrategy::SnapshotRestore.to_string(), "snapshot_restore");
+    assert_eq!(
+        RollbackStrategy::SnapshotRestore.to_string(),
+        "snapshot_restore"
+    );
     assert_eq!(RollbackStrategy::NoRollback.to_string(), "no_rollback");
 }
 
@@ -212,7 +234,10 @@ fn integration_error_serde_roundtrip() {
 
 #[test]
 fn integration_error_display() {
-    assert_eq!(SubstrateError::EmptyInventory.to_string(), "empty inventory");
+    assert_eq!(
+        SubstrateError::EmptyInventory.to_string(),
+        "empty inventory"
+    );
     let tf = SubstrateError::TransitionForbidden {
         from: SubstrateKind::SwissTable,
         to: SubstrateKind::GenericFallback,
@@ -296,7 +321,10 @@ fn integration_recommend_low_access_hot_flat_array() {
 
 #[test]
 fn integration_transition_cost_same_kind_zero() {
-    assert_eq!(compute_transition_cost(SubstrateKind::SwissTable, SubstrateKind::SwissTable), 0);
+    assert_eq!(
+        compute_transition_cost(SubstrateKind::SwissTable, SubstrateKind::SwissTable),
+        0
+    );
 }
 
 #[test]
@@ -517,10 +545,7 @@ fn integration_evidence_certificates_have_schema_version() {
 #[test]
 fn integration_evidence_counts() {
     let m = run_substrate_evidence();
-    assert_eq!(
-        m.optimized_count + m.fallback_count,
-        m.substrates_evaluated
-    );
+    assert_eq!(m.optimized_count + m.fallback_count, m.substrates_evaluated);
 }
 
 // ---------------------------------------------------------------------------

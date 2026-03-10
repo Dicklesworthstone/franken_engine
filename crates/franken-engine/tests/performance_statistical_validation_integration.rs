@@ -3,6 +3,19 @@
 //! Validates the full pipeline: input construction → warmup trim → outlier filtering →
 //! statistical analysis → verdict/promotion decisions → report serialization.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::performance_statistical_validation::{
     ConfidenceIntervalNs, FindingCode, OutlierPolicy, OutlierSummary,
     PERFORMANCE_STATISTICAL_VALIDATION_COMPONENT, SampleStatsNs, StatisticalThresholds,

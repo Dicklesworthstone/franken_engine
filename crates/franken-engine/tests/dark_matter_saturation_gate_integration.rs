@@ -3,9 +3,23 @@
 //! Validates public API, serde contracts, determinism, gate evaluation logic,
 //! freshness gating, ratchet widening, evidence emission, and edge cases.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeMap;
 
 use frankenengine_engine::dark_matter_saturation_gate::*;
+#[allow(unused_imports)]
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -19,12 +33,7 @@ fn epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(500)
 }
 
-fn make_region(
-    id: &str,
-    kind: DarkMatterRegionKind,
-    mass: u64,
-    retired: bool,
-) -> DarkMatterRegion {
+fn make_region(id: &str, kind: DarkMatterRegionKind, mass: u64, retired: bool) -> DarkMatterRegion {
     DarkMatterRegion {
         region_id: id.to_string(),
         kind,
@@ -225,7 +234,12 @@ fn region_effective_mass_double_weight() {
 
 #[test]
 fn region_effective_mass_saturating_overflow() {
-    let mut r = make_region("r1", DarkMatterRegionKind::UntestedCodePath, u64::MAX, false);
+    let mut r = make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        u64::MAX,
+        false,
+    );
     r.priority_weight_millionths = u64::MAX;
     // must not panic; result clamped via saturating ops
     let _ = r.effective_mass();
@@ -233,8 +247,18 @@ fn region_effective_mass_saturating_overflow() {
 
 #[test]
 fn region_content_hash_deterministic() {
-    let r1 = make_region("gc_reentry", DarkMatterRegionKind::UnobservedInteraction, 50_000, false);
-    let r2 = make_region("gc_reentry", DarkMatterRegionKind::UnobservedInteraction, 50_000, false);
+    let r1 = make_region(
+        "gc_reentry",
+        DarkMatterRegionKind::UnobservedInteraction,
+        50_000,
+        false,
+    );
+    let r2 = make_region(
+        "gc_reentry",
+        DarkMatterRegionKind::UnobservedInteraction,
+        50_000,
+        false,
+    );
     assert_eq!(r1.content_hash(), r2.content_hash());
 }
 
@@ -248,7 +272,12 @@ fn region_content_hash_differs_on_id() {
 #[test]
 fn region_content_hash_differs_on_kind() {
     let r1 = make_region("r", DarkMatterRegionKind::UntestedCodePath, 100_000, false);
-    let r2 = make_region("r", DarkMatterRegionKind::UnverifiedInterleaving, 100_000, false);
+    let r2 = make_region(
+        "r",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        100_000,
+        false,
+    );
     assert_ne!(r1.content_hash(), r2.content_hash());
 }
 
@@ -268,7 +297,12 @@ fn region_content_hash_differs_on_retired() {
 
 #[test]
 fn region_display_contains_fields() {
-    let r = make_region("gc_reentry", DarkMatterRegionKind::UnobservedInteraction, 50_000, false);
+    let r = make_region(
+        "gc_reentry",
+        DarkMatterRegionKind::UnobservedInteraction,
+        50_000,
+        false,
+    );
     let s = r.to_string();
     assert!(s.contains("gc_reentry"));
     assert!(s.contains("active"));
@@ -277,14 +311,24 @@ fn region_display_contains_fields() {
 
 #[test]
 fn region_display_retired() {
-    let r = make_region("gc_reentry", DarkMatterRegionKind::UnobservedInteraction, 50_000, true);
+    let r = make_region(
+        "gc_reentry",
+        DarkMatterRegionKind::UnobservedInteraction,
+        50_000,
+        true,
+    );
     let s = r.to_string();
     assert!(s.contains("retired"));
 }
 
 #[test]
 fn region_serde_roundtrip() {
-    let r = make_region("gc_reentry", DarkMatterRegionKind::UnobservedInteraction, 50_000, false);
+    let r = make_region(
+        "gc_reentry",
+        DarkMatterRegionKind::UnobservedInteraction,
+        50_000,
+        false,
+    );
     let json = serde_json::to_string(&r).unwrap();
     let back: DarkMatterRegion = serde_json::from_str(&json).unwrap();
     assert_eq!(back, r);
@@ -317,16 +361,36 @@ fn estimate_empty_has_zero_mass() {
 #[test]
 fn estimate_active_mass_sum() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 80_000, false));
-    e.add_region(make_region("r2", DarkMatterRegionKind::UnverifiedInterleaving, 20_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        80_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        20_000,
+        false,
+    ));
     assert_eq!(e.active_mass(), 100_000);
 }
 
 #[test]
 fn estimate_retired_mass_excluded_from_active() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 80_000, false));
-    e.add_region(make_region("r2", DarkMatterRegionKind::UntestedCodePath, 40_000, true));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        80_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UntestedCodePath,
+        40_000,
+        true,
+    ));
     assert_eq!(e.active_mass(), 80_000);
     assert_eq!(e.retired_mass(), 40_000);
 }
@@ -334,7 +398,12 @@ fn estimate_retired_mass_excluded_from_active() {
 #[test]
 fn estimate_dark_matter_fraction_simple() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 200_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        200_000,
+        false,
+    ));
     // 200_000 / 1_000_000 = 200_000 millionths (20%)
     assert_eq!(e.dark_matter_fraction(), 200_000);
 }
@@ -348,9 +417,24 @@ fn estimate_dark_matter_fraction_zero_surface_is_million() {
 #[test]
 fn estimate_region_counts() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 80_000, false));
-    e.add_region(make_region("r2", DarkMatterRegionKind::UntestedCodePath, 40_000, true));
-    e.add_region(make_region("r3", DarkMatterRegionKind::UnverifiedInterleaving, 20_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        80_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UntestedCodePath,
+        40_000,
+        true,
+    ));
+    e.add_region(make_region(
+        "r3",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        20_000,
+        false,
+    ));
     assert_eq!(e.active_region_count(), 2);
     assert_eq!(e.retired_region_count(), 1);
     assert_eq!(e.total_region_count(), 3);
@@ -359,19 +443,50 @@ fn estimate_region_counts() {
 #[test]
 fn estimate_mass_by_kind() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 80_000, false));
-    e.add_region(make_region("r2", DarkMatterRegionKind::UntestedCodePath, 40_000, true));
-    e.add_region(make_region("r3", DarkMatterRegionKind::UnverifiedInterleaving, 20_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        80_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UntestedCodePath,
+        40_000,
+        true,
+    ));
+    e.add_region(make_region(
+        "r3",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        20_000,
+        false,
+    ));
     let by_kind = e.mass_by_kind();
-    assert_eq!(by_kind[&DarkMatterRegionKind::UntestedCodePath], (80_000, 40_000));
-    assert_eq!(by_kind[&DarkMatterRegionKind::UnverifiedInterleaving], (20_000, 0));
+    assert_eq!(
+        by_kind[&DarkMatterRegionKind::UntestedCodePath],
+        (80_000, 40_000)
+    );
+    assert_eq!(
+        by_kind[&DarkMatterRegionKind::UnverifiedInterleaving],
+        (20_000, 0)
+    );
 }
 
 #[test]
 fn estimate_add_region_overwrites_same_id() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 200_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        200_000,
+        false,
+    ));
     assert_eq!(e.total_region_count(), 1);
     assert_eq!(e.active_mass(), 200_000);
 }
@@ -379,25 +494,50 @@ fn estimate_add_region_overwrites_same_id() {
 #[test]
 fn estimate_content_hash_deterministic() {
     let mut e1 = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e1.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
+    e1.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
     let mut e2 = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e2.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
+    e2.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
     assert_eq!(e1.content_hash(), e2.content_hash());
 }
 
 #[test]
 fn estimate_content_hash_differs_on_regions() {
     let mut e1 = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e1.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
+    e1.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
     let mut e2 = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e2.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 200_000, false));
+    e2.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        200_000,
+        false,
+    ));
     assert_ne!(e1.content_hash(), e2.content_hash());
 }
 
 #[test]
 fn estimate_display_contains_key_fields() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 200_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        200_000,
+        false,
+    ));
     let s = e.to_string();
     assert!(s.contains("dark_matter_estimate"));
     assert!(s.contains("200000"));
@@ -406,7 +546,12 @@ fn estimate_display_contains_key_fields() {
 #[test]
 fn estimate_serde_roundtrip() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
     let json = serde_json::to_string(&e).unwrap();
     let back: DarkMatterEstimate = serde_json::from_str(&json).unwrap();
     assert_eq!(back, e);
@@ -669,10 +814,19 @@ fn config_default_is_valid() {
 #[test]
 fn config_default_uses_constants() {
     let c = SaturationConfig::default();
-    assert_eq!(c.saturation_threshold_millionths, DEFAULT_SATURATION_THRESHOLD);
+    assert_eq!(
+        c.saturation_threshold_millionths,
+        DEFAULT_SATURATION_THRESHOLD
+    );
     assert_eq!(c.max_staleness_hours, DEFAULT_MAX_STALENESS_HOURS);
-    assert_eq!(c.min_burndown_velocity_millionths, DEFAULT_MIN_BURNDOWN_VELOCITY);
-    assert_eq!(c.ratchet_widening_ceiling_millionths, DEFAULT_RATCHET_WIDENING_CEILING);
+    assert_eq!(
+        c.min_burndown_velocity_millionths,
+        DEFAULT_MIN_BURNDOWN_VELOCITY
+    );
+    assert_eq!(
+        c.ratchet_widening_ceiling_millionths,
+        DEFAULT_RATCHET_WIDENING_CEILING
+    );
     assert_eq!(c.min_observations, DEFAULT_MIN_OBSERVATIONS);
 }
 
@@ -821,13 +975,27 @@ fn saturation_reason_display_invalid_config() {
 fn saturation_reason_serde_all_variants() {
     let variants: Vec<SaturationReason> = vec![
         SaturationReason::LowDarkMatterWithPositiveBurndown,
-        SaturationReason::HighDarkMatterFraction { fraction_millionths: 300_000 },
-        SaturationReason::NegativeBurndown { velocity_millionths: 50_000 },
-        SaturationReason::InsufficientBurndownVelocity { velocity_millionths: 1_000 },
-        SaturationReason::InsufficientObservations { count: 3, required: 10 },
-        SaturationReason::StaleBoard { hours_since_refresh: 200 },
+        SaturationReason::HighDarkMatterFraction {
+            fraction_millionths: 300_000,
+        },
+        SaturationReason::NegativeBurndown {
+            velocity_millionths: 50_000,
+        },
+        SaturationReason::InsufficientBurndownVelocity {
+            velocity_millionths: 1_000,
+        },
+        SaturationReason::InsufficientObservations {
+            count: 3,
+            required: 10,
+        },
+        SaturationReason::StaleBoard {
+            hours_since_refresh: 200,
+        },
         SaturationReason::InvalidConfiguration {
-            violations: vec![ConfigViolation { field: "x".into(), message: "bad".into() }],
+            violations: vec![ConfigViolation {
+                field: "x".into(),
+                message: "bad".into(),
+            }],
         },
     ];
     for r in &variants {
@@ -844,7 +1012,10 @@ fn saturation_reason_serde_all_variants() {
 #[test]
 fn freshness_reason_display_all() {
     assert_eq!(FreshnessReason::WithinWindow.to_string(), "within_window");
-    assert_eq!(FreshnessReason::NoObservations.to_string(), "no_observations");
+    assert_eq!(
+        FreshnessReason::NoObservations.to_string(),
+        "no_observations"
+    );
     let r = FreshnessReason::ExceedsWindow { hours_over: 24 };
     assert!(r.to_string().contains("24"));
 }
@@ -869,10 +1040,18 @@ fn freshness_reason_serde_all_variants() {
 
 #[test]
 fn ratchet_widening_reason_display_all() {
-    assert_eq!(RatchetWideningReason::BelowCeiling.to_string(), "below_ceiling");
+    assert_eq!(
+        RatchetWideningReason::BelowCeiling.to_string(),
+        "below_ceiling"
+    );
     assert_eq!(RatchetWideningReason::BoardStale.to_string(), "board_stale");
-    assert_eq!(RatchetWideningReason::InsufficientData.to_string(), "insufficient_data");
-    let r = RatchetWideningReason::AboveCeiling { excess_millionths: 50_000 };
+    assert_eq!(
+        RatchetWideningReason::InsufficientData.to_string(),
+        "insufficient_data"
+    );
+    let r = RatchetWideningReason::AboveCeiling {
+        excess_millionths: 50_000,
+    };
     assert!(r.to_string().contains("50000"));
 }
 
@@ -880,7 +1059,9 @@ fn ratchet_widening_reason_display_all() {
 fn ratchet_widening_reason_serde_all_variants() {
     let variants: Vec<RatchetWideningReason> = vec![
         RatchetWideningReason::BelowCeiling,
-        RatchetWideningReason::AboveCeiling { excess_millionths: 50_000 },
+        RatchetWideningReason::AboveCeiling {
+            excess_millionths: 50_000,
+        },
         RatchetWideningReason::BoardStale,
         RatchetWideningReason::InsufficientData,
     ];
@@ -1035,10 +1216,12 @@ fn evaluator_saturated_low_dm_positive_burndown() {
     let eval = build_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::Saturated);
-    assert!(verdict.reasons.iter().any(|r| matches!(
-        r,
-        SaturationReason::LowDarkMatterWithPositiveBurndown
-    )));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::LowDarkMatterWithPositiveBurndown))
+    );
 }
 
 #[test]
@@ -1049,10 +1232,12 @@ fn evaluator_scope_limited_high_dm() {
     let eval = build_evaluator(500_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(
-        r,
-        SaturationReason::HighDarkMatterFraction { .. }
-    )));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::HighDarkMatterFraction { .. }))
+    );
 }
 
 #[test]
@@ -1063,10 +1248,12 @@ fn evaluator_scope_limited_negative_burndown() {
     let eval = build_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(
-        r,
-        SaturationReason::NegativeBurndown { .. }
-    )));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::NegativeBurndown { .. }))
+    );
 }
 
 #[test]
@@ -1077,10 +1264,12 @@ fn evaluator_scope_limited_insufficient_observations() {
     let eval = build_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(
-        r,
-        SaturationReason::InsufficientObservations { .. }
-    )));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::InsufficientObservations { .. }))
+    );
 }
 
 #[test]
@@ -1091,10 +1280,12 @@ fn evaluator_scope_limited_invalid_config() {
     let eval = build_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(
-        r,
-        SaturationReason::InvalidConfiguration { .. }
-    )));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::InvalidConfiguration { .. }))
+    );
 }
 
 #[test]
@@ -1106,10 +1297,12 @@ fn evaluator_scope_limited_insufficient_velocity() {
     let eval = build_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(
-        r,
-        SaturationReason::InsufficientBurndownVelocity { .. }
-    )));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::InsufficientBurndownVelocity { .. }))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,7 +1328,10 @@ fn evaluator_stale_board() {
     // Last obs at 1400. now = 1400 + 7200 = 8600
     let verdict = eval.evaluate_freshness(8600);
     assert!(!verdict.is_fresh);
-    assert!(matches!(verdict.reason, FreshnessReason::ExceedsWindow { .. }));
+    assert!(matches!(
+        verdict.reason,
+        FreshnessReason::ExceedsWindow { .. }
+    ));
 }
 
 #[test]
@@ -1161,7 +1357,10 @@ fn ratchet_widening_permitted_low_dm() {
     let eval = build_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_ratchet_widening(1500);
     assert!(verdict.permitted);
-    assert!(matches!(verdict.reason, RatchetWideningReason::BelowCeiling));
+    assert!(matches!(
+        verdict.reason,
+        RatchetWideningReason::BelowCeiling
+    ));
 }
 
 #[test]
@@ -1173,7 +1372,10 @@ fn ratchet_widening_blocked_high_dm() {
     let eval = build_evaluator(300_000, MILLION, obs, config);
     let verdict = eval.evaluate_ratchet_widening(1500);
     assert!(!verdict.permitted);
-    assert!(matches!(verdict.reason, RatchetWideningReason::AboveCeiling { .. }));
+    assert!(matches!(
+        verdict.reason,
+        RatchetWideningReason::AboveCeiling { .. }
+    ));
 }
 
 #[test]
@@ -1196,7 +1398,10 @@ fn ratchet_widening_blocked_insufficient_data() {
     let eval = build_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_ratchet_widening(1500);
     assert!(!verdict.permitted);
-    assert!(matches!(verdict.reason, RatchetWideningReason::InsufficientData));
+    assert!(matches!(
+        verdict.reason,
+        RatchetWideningReason::InsufficientData
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,8 +1503,10 @@ fn decision_receipt_compute_hash_differs_on_epoch() {
     let sat = eval.evaluate_saturation(1500);
     let fresh = eval.evaluate_freshness(1500);
     let ratchet = eval.evaluate_ratchet_widening(1500);
-    let h1 = DecisionReceipt::compute_hash(&sat, &fresh, &ratchet, SecurityEpoch::from_raw(1), 1500);
-    let h2 = DecisionReceipt::compute_hash(&sat, &fresh, &ratchet, SecurityEpoch::from_raw(2), 1500);
+    let h1 =
+        DecisionReceipt::compute_hash(&sat, &fresh, &ratchet, SecurityEpoch::from_raw(1), 1500);
+    let h2 =
+        DecisionReceipt::compute_hash(&sat, &fresh, &ratchet, SecurityEpoch::from_raw(2), 1500);
     assert_ne!(h1, h2);
 }
 
@@ -1401,8 +1608,18 @@ fn evidence_serde_roundtrip() {
 fn evidence_mass_by_kind_populated() {
     let ep = epoch();
     let mut estimate = DarkMatterEstimate::new(MILLION, ep, 1000);
-    estimate.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 60_000, false));
-    estimate.add_region(make_region("r2", DarkMatterRegionKind::UnverifiedInterleaving, 40_000, false));
+    estimate.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        60_000,
+        false,
+    ));
+    estimate.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        40_000,
+        false,
+    ));
     let mut config = low_dm_config();
     config.min_burndown_velocity_millionths = 0;
     let obs = build_observations(5, 1000, 100, 100_000, 5_000, 15_000);
@@ -1412,8 +1629,18 @@ fn evidence_mass_by_kind_populated() {
     }
     let eval = SaturationGateEvaluator::new(config, estimate, tracker);
     let evidence = eval.emit_evidence(1500);
-    assert!(evidence.estimate_summary.mass_by_kind.contains_key("untested_code_path"));
-    assert!(evidence.estimate_summary.mass_by_kind.contains_key("unverified_interleaving"));
+    assert!(
+        evidence
+            .estimate_summary
+            .mass_by_kind
+            .contains_key("untested_code_path")
+    );
+    assert!(
+        evidence
+            .estimate_summary
+            .mass_by_kind
+            .contains_key("unverified_interleaving")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1480,10 +1707,25 @@ fn boundary_one_above_saturation_threshold() {
 fn evaluator_with_multiple_regions_mixed_retired() {
     let ep = epoch();
     let mut estimate = DarkMatterEstimate::new(MILLION, ep, 1000);
-    estimate.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 50_000, false));
-    estimate.add_region(make_region("r2", DarkMatterRegionKind::UnverifiedInterleaving, 30_000, false));
-    estimate.add_region(make_region("r3", DarkMatterRegionKind::UntestedErrorRecovery, 20_000, true));
-    let mut config = low_dm_config();
+    estimate.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        50_000,
+        false,
+    ));
+    estimate.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        30_000,
+        false,
+    ));
+    estimate.add_region(make_region(
+        "r3",
+        DarkMatterRegionKind::UntestedErrorRecovery,
+        20_000,
+        true,
+    ));
+    let config = low_dm_config();
     let obs = build_observations(5, 1000, 100, 80_000, 5_000, 15_000);
     let mut tracker = BurndownTracker::new(MILLION, ep);
     for o in obs {
@@ -1544,13 +1786,21 @@ fn evidence_no_observations_has_max_hours_since() {
     let config = SaturationConfig::default();
     let eval = build_evaluator(0, MILLION, vec![], config);
     let evidence = eval.emit_evidence(5000);
-    assert_eq!(evidence.burndown_metrics.hours_since_last_observation, u64::MAX);
+    assert_eq!(
+        evidence.burndown_metrics.hours_since_last_observation,
+        u64::MAX
+    );
 }
 
 #[test]
 fn region_with_zero_mass_contributes_nothing() {
     let mut e = DarkMatterEstimate::new(MILLION, epoch(), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 0, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        0,
+        false,
+    ));
     assert_eq!(e.active_mass(), 0);
     assert_eq!(e.effective_mass(), 0);
     assert_eq!(e.dark_matter_fraction(), 0);

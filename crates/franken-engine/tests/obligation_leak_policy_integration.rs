@@ -12,6 +12,19 @@
 //! - FailoverAction variants
 //! - Multi-region / multi-channel / multi-component metrics accumulation
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::obligation_leak_policy::{
     FailoverAction, LeakDiagnostic, LeakEvent, LeakHandler, LeakMetrics, LeakResponse,
     LeakSeverity, ObligationLeakPolicy,

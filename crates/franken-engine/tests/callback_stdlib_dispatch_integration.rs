@@ -6,16 +6,28 @@
 //! serde round-trips, Display formatting, and edge cases.
 
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
 
 use std::collections::BTreeSet;
 
 use frankenengine_engine::callback_stdlib_dispatch::{
-    batch_cost, build_decision, build_profile, build_trace, constrained_decision,
+    BEAD_ID, COMPONENT, CallbackKind, DISPATCH_SCHEMA_VERSION, DispatchConstraints,
+    DispatchDecision, DispatchProfile, DispatchStrategy, DispatchTrace, StdlibDispatchError,
+    StdlibMethod, batch_cost, build_decision, build_profile, build_trace, constrained_decision,
     deopt_risk_tier, estimate_dispatch_cost, franken_engine_stdlib_dispatch_manifest,
     is_inlineable, optimal_pure_strategy, select_strategy, validate_stack_depth,
-    worst_case_strategy, CallbackKind, DispatchConstraints, DispatchDecision,
-    DispatchProfile, DispatchStrategy, DispatchTrace, StdlibDispatchError, StdlibMethod,
-    BEAD_ID, COMPONENT, DISPATCH_SCHEMA_VERSION,
+    worst_case_strategy,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -273,7 +285,10 @@ fn test_cost_base_and_monotonicity() {
         &DispatchStrategy::InlinedCallback,
         0,
     );
-    assert_eq!(cost0, DispatchStrategy::InlinedCallback.base_cost_millionths());
+    assert_eq!(
+        cost0,
+        DispatchStrategy::InlinedCallback.base_cost_millionths()
+    );
 
     // Monotonically increasing.
     let mut prev = 0u64;
@@ -348,8 +363,16 @@ fn test_is_inlineable_matrix() {
     // Pure/builtin inlineable on most methods, not on sort/PromiseThen.
     for m in StdlibMethod::ALL {
         let expected = !m.requires_comparator() && !m.is_async_dispatch();
-        assert_eq!(is_inlineable(m, &CallbackKind::PureFunction), expected, "pure on {m}");
-        assert_eq!(is_inlineable(m, &CallbackKind::BuiltinFunction), expected, "builtin on {m}");
+        assert_eq!(
+            is_inlineable(m, &CallbackKind::PureFunction),
+            expected,
+            "pure on {m}"
+        );
+        assert_eq!(
+            is_inlineable(m, &CallbackKind::BuiltinFunction),
+            expected,
+            "builtin on {m}"
+        );
     }
     // Non-eligible kinds never inlineable.
     for kind in &[
@@ -418,9 +441,10 @@ fn test_trace_content_hash_deterministic() {
     assert_eq!(mk().trace_content_hash(), mk().trace_content_hash());
 
     // Different decisions -> different hash.
-    let t_other = build_trace(vec![
-        build_decision(StdlibMethod::ArrayReduce, CallbackKind::MutatingFunction),
-    ]);
+    let t_other = build_trace(vec![build_decision(
+        StdlibMethod::ArrayReduce,
+        CallbackKind::MutatingFunction,
+    )]);
     assert_ne!(mk().trace_content_hash(), t_other.trace_content_hash());
 }
 
@@ -442,22 +466,59 @@ fn test_trace_display() {
 #[test]
 fn test_constrained_stack_overflow() {
     let c = default_constraints();
-    assert!(constrained_decision(StdlibMethod::ArrayMap, CallbackKind::PureFunction, &c, c.max_stack_depth).is_err());
-    assert!(constrained_decision(StdlibMethod::ArrayMap, CallbackKind::PureFunction, &c, c.max_stack_depth - 1).is_ok());
+    assert!(
+        constrained_decision(
+            StdlibMethod::ArrayMap,
+            CallbackKind::PureFunction,
+            &c,
+            c.max_stack_depth
+        )
+        .is_err()
+    );
+    assert!(
+        constrained_decision(
+            StdlibMethod::ArrayMap,
+            CallbackKind::PureFunction,
+            &c,
+            c.max_stack_depth - 1
+        )
+        .is_ok()
+    );
 }
 
 #[test]
 fn test_constrained_async_non_promise_rejection_and_override() {
     let c = default_constraints();
-    let result = constrained_decision(StdlibMethod::ArrayFilter, CallbackKind::AsyncFunction, &c, 0);
+    let result = constrained_decision(
+        StdlibMethod::ArrayFilter,
+        CallbackKind::AsyncFunction,
+        &c,
+        0,
+    );
     assert_eq!(result, Err(StdlibDispatchError::CallbackTypeUnsafe));
 
     // Async on PromiseThen is OK even with default constraints.
-    assert!(constrained_decision(StdlibMethod::PromiseThen, CallbackKind::AsyncFunction, &c, 0).is_ok());
+    assert!(
+        constrained_decision(
+            StdlibMethod::PromiseThen,
+            CallbackKind::AsyncFunction,
+            &c,
+            0
+        )
+        .is_ok()
+    );
 
     // Permissive constraints allow async on non-promise.
     let cp = permissive_constraints();
-    assert!(constrained_decision(StdlibMethod::ArrayFilter, CallbackKind::AsyncFunction, &cp, 0).is_ok());
+    assert!(
+        constrained_decision(
+            StdlibMethod::ArrayFilter,
+            CallbackKind::AsyncFunction,
+            &cp,
+            0
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -467,14 +528,16 @@ fn test_constrained_low_deopt_ceiling_forces_fallback() {
         ..default_constraints()
     };
     // PureFunction deopt risk = 50_000 > ceiling 10_000.
-    let d = constrained_decision(StdlibMethod::ArrayMap, CallbackKind::PureFunction, &c, 0).unwrap();
+    let d =
+        constrained_decision(StdlibMethod::ArrayMap, CallbackKind::PureFunction, &c, 0).unwrap();
     assert_eq!(d.strategy, DispatchStrategy::FallbackSlow);
 }
 
 #[test]
 fn test_constrained_normal_path() {
     let c = default_constraints();
-    let d = constrained_decision(StdlibMethod::ArrayMap, CallbackKind::PureFunction, &c, 0).unwrap();
+    let d =
+        constrained_decision(StdlibMethod::ArrayMap, CallbackKind::PureFunction, &c, 0).unwrap();
     assert_eq!(d.strategy, DispatchStrategy::InlinedCallback);
 }
 
@@ -534,12 +597,28 @@ fn test_batch_cost_empty_and_additive() {
     assert_eq!(batch_cost(&[]), 0);
 
     let items = vec![
-        (StdlibMethod::ArrayMap, DispatchStrategy::InlinedCallback, 50),
-        (StdlibMethod::ArrayReduce, DispatchStrategy::InterpreterCallback, 200),
+        (
+            StdlibMethod::ArrayMap,
+            DispatchStrategy::InlinedCallback,
+            50,
+        ),
+        (
+            StdlibMethod::ArrayReduce,
+            DispatchStrategy::InterpreterCallback,
+            200,
+        ),
     ];
     let total = batch_cost(&items);
-    let c1 = estimate_dispatch_cost(StdlibMethod::ArrayMap, &DispatchStrategy::InlinedCallback, 50);
-    let c2 = estimate_dispatch_cost(StdlibMethod::ArrayReduce, &DispatchStrategy::InterpreterCallback, 200);
+    let c1 = estimate_dispatch_cost(
+        StdlibMethod::ArrayMap,
+        &DispatchStrategy::InlinedCallback,
+        50,
+    );
+    let c2 = estimate_dispatch_cost(
+        StdlibMethod::ArrayReduce,
+        &DispatchStrategy::InterpreterCallback,
+        200,
+    );
     assert_eq!(total, c1.saturating_add(c2));
 }
 
@@ -550,7 +629,10 @@ fn test_batch_cost_empty_and_additive() {
 #[test]
 fn test_optimal_and_worst_case_strategies() {
     for m in StdlibMethod::ALL {
-        assert_eq!(optimal_pure_strategy(*m), select_strategy(*m, CallbackKind::PureFunction));
+        assert_eq!(
+            optimal_pure_strategy(*m),
+            select_strategy(*m, CallbackKind::PureFunction)
+        );
         assert_eq!(worst_case_strategy(*m), DispatchStrategy::FallbackSlow);
     }
 }
@@ -734,6 +816,9 @@ fn test_trace_max_deopt_and_average_cost() {
     let mut_cost = d_mut.estimated_cost_millionths;
     let trace = build_trace(vec![d_pure, d_mut]);
 
-    assert_eq!(trace.max_deopt_risk_millionths(), CallbackKind::MutatingFunction.deopt_risk_millionths());
+    assert_eq!(
+        trace.max_deopt_risk_millionths(),
+        CallbackKind::MutatingFunction.deopt_risk_millionths()
+    );
     assert_eq!(trace.average_cost_millionths(), (pure_cost + mut_cost) / 2);
 }

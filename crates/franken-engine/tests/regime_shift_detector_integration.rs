@@ -2,6 +2,19 @@
 //!
 //! Bead: bd-1lsy.7.8.2 [RGC-608B]
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::regime_shift_detector::*;
 use frankenengine_engine::stage_envelope_certificate::ExecutionStage;
 
@@ -185,24 +198,12 @@ fn test_multi_metric_independent_detectors() {
 fn test_stage_scoped_detectors_independent() {
     let mut engine = fast_engine();
     engine.register_detector(MetricKind::Latency, Some(ExecutionStage::Parse), 500_000);
-    engine.register_detector(
-        MetricKind::Latency,
-        Some(ExecutionStage::GcPause),
-        500_000,
-    );
+    engine.register_detector(MetricKind::Latency, Some(ExecutionStage::GcPause), 500_000);
 
     // Only disturb Parse stage
     for _ in 0..100 {
-        engine.observe(
-            MetricKind::Latency,
-            Some(ExecutionStage::Parse),
-            900_000,
-        );
-        engine.observe(
-            MetricKind::Latency,
-            Some(ExecutionStage::GcPause),
-            500_000,
-        );
+        engine.observe(MetricKind::Latency, Some(ExecutionStage::Parse), 900_000);
+        engine.observe(MetricKind::Latency, Some(ExecutionStage::GcPause), 500_000);
     }
 
     let parse_det = engine
@@ -213,7 +214,9 @@ fn test_stage_scoped_detectors_independent() {
         .detectors
         .get(&(MetricKind::Latency, Some(ExecutionStage::GcPause)))
         .unwrap();
-    assert!(parse_det.cusum_upper > gc_det.cusum_upper || parse_det.alarm_count > gc_det.alarm_count);
+    assert!(
+        parse_det.cusum_upper > gc_det.cusum_upper || parse_det.alarm_count > gc_det.alarm_count
+    );
 }
 
 #[test]
@@ -304,11 +307,7 @@ fn test_latency_shift_produces_fallback() {
     engine.register_detector(MetricKind::Latency, Some(ExecutionStage::Parse), 100_000);
     let mut got_fallback = false;
     for _ in 0..300 {
-        let (_, action) = engine.observe(
-            MetricKind::Latency,
-            Some(ExecutionStage::Parse),
-            900_000,
-        );
+        let (_, action) = engine.observe(MetricKind::Latency, Some(ExecutionStage::Parse), 900_000);
         if matches!(action, DowngradeAction::FallbackToDefault { .. }) {
             got_fallback = true;
             break;
@@ -470,10 +469,7 @@ fn test_auto_adapt_after_stability() {
         engine.tick();
     }
 
-    let det = engine
-        .detectors
-        .get(&(MetricKind::Latency, None))
-        .unwrap();
+    let det = engine.detectors.get(&(MetricKind::Latency, None)).unwrap();
     // After auto-adapt, reference should have moved toward EWMA
     // and accumulators should be reset
     assert_eq!(det.cusum_upper, 0);
@@ -494,16 +490,8 @@ fn test_register_duplicate_returns_false() {
 #[test]
 fn test_register_same_metric_different_stages() {
     let mut engine = default_engine();
-    assert!(engine.register_detector(
-        MetricKind::Latency,
-        Some(ExecutionStage::Parse),
-        500_000
-    ));
-    assert!(engine.register_detector(
-        MetricKind::Latency,
-        Some(ExecutionStage::GcPause),
-        500_000
-    ));
+    assert!(engine.register_detector(MetricKind::Latency, Some(ExecutionStage::Parse), 500_000));
+    assert!(engine.register_detector(MetricKind::Latency, Some(ExecutionStage::GcPause), 500_000));
     assert!(engine.register_detector(MetricKind::Latency, None, 500_000));
     assert_eq!(engine.detectors.len(), 3);
 }
@@ -751,8 +739,14 @@ fn test_metric_kind_display_all_variants() {
     assert_eq!(format!("{}", MetricKind::Throughput), "throughput");
     assert_eq!(format!("{}", MetricKind::ErrorRate), "error_rate");
     assert_eq!(format!("{}", MetricKind::QueueDepth), "queue_depth");
-    assert_eq!(format!("{}", MetricKind::TokenUtilization), "token_utilization");
-    assert_eq!(format!("{}", MetricKind::GcPauseDuration), "gc_pause_duration");
+    assert_eq!(
+        format!("{}", MetricKind::TokenUtilization),
+        "token_utilization"
+    );
+    assert_eq!(
+        format!("{}", MetricKind::GcPauseDuration),
+        "gc_pause_duration"
+    );
     assert_eq!(format!("{}", MetricKind::Custom), "custom");
 }
 

@@ -5,6 +5,19 @@
 //! reward observation, regime detection, regret certificates, and serde
 //! round-trips from outside the crate boundary.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::regret_bounded_router::{
     Exp3State, FtrlState, LaneArm, ROUTING_SCHEMA_VERSION, RegimeKind, RegimeTransition,
     RegretBoundedRouter, RegretCertificate, RewardSignal, RouterError, RouterSummary,

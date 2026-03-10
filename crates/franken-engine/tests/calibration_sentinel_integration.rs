@@ -9,6 +9,19 @@
 //! content-hash determinism, serde round-trips, Display formatting, and
 //! edge cases (zero thresholds, large values, empty cells, mixed states).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::calibration_sentinel::*;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -72,7 +85,12 @@ fn test_sentinel_state_healthy_and_degraded() {
     assert!(SentinelState::Yellow.is_degraded());
     assert!(SentinelState::Red.is_degraded());
     assert!(!SentinelState::Unknown.is_degraded());
-    for s in &[SentinelState::Green, SentinelState::Yellow, SentinelState::Red, SentinelState::Unknown] {
+    for s in &[
+        SentinelState::Green,
+        SentinelState::Yellow,
+        SentinelState::Red,
+        SentinelState::Unknown,
+    ] {
         assert_eq!(s.as_str(), format!("{s}"));
     }
 }
@@ -280,11 +298,19 @@ fn test_fail_closed_empty_cell_blocks() {
 
 #[test]
 fn test_require_calibration_green_and_yellow_allow() {
-    let dg = evaluate_promotion(&green_cell("rc-g", "lat", PromotionRule::RequireCalibration));
+    let dg = evaluate_promotion(&green_cell(
+        "rc-g",
+        "lat",
+        PromotionRule::RequireCalibration,
+    ));
     assert!(dg.allowed);
     assert!(dg.suppression_reasons.is_empty());
 
-    let dy = evaluate_promotion(&yellow_cell("rc-y", "lat", PromotionRule::RequireCalibration));
+    let dy = evaluate_promotion(&yellow_cell(
+        "rc-y",
+        "lat",
+        PromotionRule::RequireCalibration,
+    ));
     assert!(dy.allowed);
     assert!(!dy.suppression_reasons.is_empty());
 }
@@ -295,7 +321,12 @@ fn test_require_calibration_red_and_unknown_block() {
     assert!(!dr.allowed);
 
     let s = create_sentinel("unk-rc", SentinelKind::Coverage, 800_000);
-    let cell = build_cell("unk-rc-c", "test", vec![s], PromotionRule::RequireCalibration);
+    let cell = build_cell(
+        "unk-rc-c",
+        "test",
+        vec![s],
+        PromotionRule::RequireCalibration,
+    );
     let du = evaluate_promotion(&cell);
     assert!(!du.allowed);
 }
@@ -306,21 +337,38 @@ fn test_require_calibration_red_and_unknown_block() {
 
 #[test]
 fn test_require_observability_green_and_yellow_allow() {
-    let dg = evaluate_promotion(&green_cell("ro-g", "lat", PromotionRule::RequireObservability));
+    let dg = evaluate_promotion(&green_cell(
+        "ro-g",
+        "lat",
+        PromotionRule::RequireObservability,
+    ));
     assert!(dg.allowed);
 
-    let dy = evaluate_promotion(&yellow_cell("ro-y", "lat", PromotionRule::RequireObservability));
+    let dy = evaluate_promotion(&yellow_cell(
+        "ro-y",
+        "lat",
+        PromotionRule::RequireObservability,
+    ));
     assert!(dy.allowed);
     assert!(!dy.suppression_reasons.is_empty());
 }
 
 #[test]
 fn test_require_observability_red_and_unknown_block() {
-    let dr = evaluate_promotion(&red_cell("ro-r", "lat", PromotionRule::RequireObservability));
+    let dr = evaluate_promotion(&red_cell(
+        "ro-r",
+        "lat",
+        PromotionRule::RequireObservability,
+    ));
     assert!(!dr.allowed);
 
     let s = create_sentinel("unk-ro", SentinelKind::ErrorBound, 500_000);
-    let cell = build_cell("unk-ro-c", "test", vec![s], PromotionRule::RequireObservability);
+    let cell = build_cell(
+        "unk-ro-c",
+        "test",
+        vec![s],
+        PromotionRule::RequireObservability,
+    );
     let du = evaluate_promotion(&cell);
     assert!(!du.allowed);
 }
@@ -399,7 +447,10 @@ fn test_build_report_green_and_red_counts() {
 #[test]
 fn test_build_report_epoch_preserved() {
     let epoch = SecurityEpoch::from_raw(42);
-    let report = build_report(epoch, vec![green_cell("ep1", "lat", PromotionRule::FailClosed)]);
+    let report = build_report(
+        epoch,
+        vec![green_cell("ep1", "lat", PromotionRule::FailClosed)],
+    );
     assert_eq!(report.epoch, epoch);
 }
 
@@ -525,14 +576,21 @@ fn test_serde_roundtrip_enums() {
         let back: SentinelKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*kind, back);
     }
-    for state in &[SentinelState::Green, SentinelState::Yellow, SentinelState::Red, SentinelState::Unknown] {
+    for state in &[
+        SentinelState::Green,
+        SentinelState::Yellow,
+        SentinelState::Red,
+        SentinelState::Unknown,
+    ] {
         let json = serde_json::to_string(state).unwrap();
         let back: SentinelState = serde_json::from_str(&json).unwrap();
         assert_eq!(*state, back);
     }
     for rule in &[
-        PromotionRule::FailClosed, PromotionRule::RequireCalibration,
-        PromotionRule::RequireObservability, PromotionRule::SuppressClaim,
+        PromotionRule::FailClosed,
+        PromotionRule::RequireCalibration,
+        PromotionRule::RequireObservability,
+        PromotionRule::SuppressClaim,
         PromotionRule::AllowWithWarning,
     ] {
         let json = serde_json::to_string(rule).unwrap();
@@ -602,8 +660,14 @@ fn test_sentinel_hash_sensitivity() {
 
 #[test]
 fn test_report_hash_changes_with_epoch() {
-    let r1 = build_report(SecurityEpoch::from_raw(1), vec![green_cell("eh", "lat", PromotionRule::FailClosed)]);
-    let r2 = build_report(SecurityEpoch::from_raw(2), vec![green_cell("eh", "lat", PromotionRule::FailClosed)]);
+    let r1 = build_report(
+        SecurityEpoch::from_raw(1),
+        vec![green_cell("eh", "lat", PromotionRule::FailClosed)],
+    );
+    let r2 = build_report(
+        SecurityEpoch::from_raw(2),
+        vec![green_cell("eh", "lat", PromotionRule::FailClosed)],
+    );
     assert_ne!(r1.content_hash, r2.content_hash);
 }
 

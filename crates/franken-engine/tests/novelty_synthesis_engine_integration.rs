@@ -1,12 +1,24 @@
 //! Integration tests for the novelty synthesis engine (RGC-707B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeSet;
 
 use frankenengine_engine::novelty_synthesis_engine::{
-    self, SynthesisConstraint, SynthesisDenialReason, SynthesisStrategy,
-    ProgramKind, SynthesisError, SCHEMA_VERSION, BEAD_ID, COMPONENT,
-    POLICY_ID, DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, DEFAULT_MIN_NOVELTY,
-    STRATEGY_COUNT, KIND_COUNT,
+    self, BEAD_ID, COMPONENT, DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, DEFAULT_MIN_NOVELTY,
+    KIND_COUNT, POLICY_ID, ProgramKind, SCHEMA_VERSION, STRATEGY_COUNT, SynthesisConstraint,
+    SynthesisDenialReason, SynthesisError, SynthesisStrategy,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -247,13 +259,15 @@ fn test_synthesize_candidate_deterministic() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"determinism-test",
-    ).unwrap();
+    )
+    .unwrap();
     let b = novelty_synthesis_engine::synthesize_candidate(
         ProgramKind::PlainJs,
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"determinism-test",
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(a.candidate_id, b.candidate_id);
     assert_eq!(a.content_hash, b.content_hash);
     assert_eq!(a.source_text, b.source_text);
@@ -283,7 +297,8 @@ fn test_candidate_source_byte_count() {
         SynthesisStrategy::MutationBased,
         &constraint,
         b"byte-count-test",
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(c.source_byte_count(), c.source_text.len() as u64);
 }
 
@@ -295,7 +310,8 @@ fn test_candidate_exceeds_novelty() {
         SynthesisStrategy::ObstructionTargeted,
         &constraint,
         b"novelty-test",
-    ).unwrap();
+    )
+    .unwrap();
     // ObstructionTargeted has the highest base multiplier (900k)
     assert!(c.exceeds_novelty(0));
 }
@@ -320,7 +336,8 @@ fn test_build_batch_with_candidates() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"batch-test",
-    ).unwrap();
+    )
+    .unwrap();
     let batch = novelty_synthesis_engine::build_batch(test_epoch(), vec![c]).unwrap();
     assert_eq!(batch.candidate_count(), 1);
     assert!(!batch.is_empty());
@@ -335,7 +352,8 @@ fn test_build_batch_content_hash_deterministic() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"hash-test",
-    ).unwrap();
+    )
+    .unwrap();
     let c2 = c1.clone();
     let b1 = novelty_synthesis_engine::build_batch(test_epoch(), vec![c1]).unwrap();
     let b2 = novelty_synthesis_engine::build_batch(test_epoch(), vec![c2]).unwrap();
@@ -354,7 +372,8 @@ fn test_evaluate_novelty_empty_set() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"eval-test",
-    ).unwrap();
+    )
+    .unwrap();
     let novelty = novelty_synthesis_engine::evaluate_candidate_novelty(&c, &BTreeSet::new());
     assert_eq!(novelty, 1_000_000); // Full novelty
 }
@@ -367,7 +386,8 @@ fn test_evaluate_novelty_duplicate() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"dup-test",
-    ).unwrap();
+    )
+    .unwrap();
     let mut existing = BTreeSet::new();
     existing.insert(c.content_hash.clone());
     let novelty = novelty_synthesis_engine::evaluate_candidate_novelty(&c, &existing);
@@ -386,7 +406,8 @@ fn test_filter_candidates_all_accepted() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"filter-test",
-    ).unwrap();
+    )
+    .unwrap();
     let (accepted, denied) = novelty_synthesis_engine::filter_candidates(vec![c], &constraint);
     assert_eq!(accepted.len(), 1);
     assert!(denied.is_empty());
@@ -400,7 +421,8 @@ fn test_filter_candidates_duplicate_denied() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"dup-filter",
-    ).unwrap();
+    )
+    .unwrap();
     let c2 = c.clone();
     let (accepted, denied) = novelty_synthesis_engine::filter_candidates(vec![c, c2], &constraint);
     assert_eq!(accepted.len(), 1);
@@ -420,7 +442,8 @@ fn test_build_receipt_from_batch() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"receipt-test",
-    ).unwrap();
+    )
+    .unwrap();
     let batch = novelty_synthesis_engine::build_batch(test_epoch(), vec![c]).unwrap();
     let receipt = novelty_synthesis_engine::build_receipt(&batch, 1);
     assert_eq!(receipt.candidates_proposed, 1);
@@ -437,7 +460,8 @@ fn test_build_receipt_none_accepted() {
         SynthesisStrategy::GrammarGuided,
         &constraint,
         b"none-accept",
-    ).unwrap();
+    )
+    .unwrap();
     let batch = novelty_synthesis_engine::build_batch(test_epoch(), vec![c]).unwrap();
     let receipt = novelty_synthesis_engine::build_receipt(&batch, 0);
     assert!(receipt.none_accepted());

@@ -1,12 +1,25 @@
 //! Integration tests for frontier complex cartography (RGC-809A).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
+use frankenengine_engine::frontier_complex_cartography::{
+    self, BEAD_ID, COMPONENT, CartographyError, FrontierHole, HoleLedger, HoleSignificance,
+    MILLIONTHS, POLICY_ID, PersistenceDiagram, PersistencePair, SCHEMA_VERSION, Simplex,
+    SimplexDimension,
+};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::frontier_complex_cartography::{
-    self, CartographyError, FrontierHole, HoleLedger, HoleSignificance,
-    PersistencePair, PersistenceDiagram, Simplex, SimplexDimension,
-    SCHEMA_VERSION, BEAD_ID, COMPONENT, POLICY_ID, MILLIONTHS,
-};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,7 +105,10 @@ fn test_simplex_dimension_from_u32() {
     assert_eq!(SimplexDimension::from_u32(1), SimplexDimension::Edge);
     assert_eq!(SimplexDimension::from_u32(2), SimplexDimension::Triangle);
     assert_eq!(SimplexDimension::from_u32(3), SimplexDimension::Tetrahedron);
-    assert_eq!(SimplexDimension::from_u32(4), SimplexDimension::HigherDim(4));
+    assert_eq!(
+        SimplexDimension::from_u32(4),
+        SimplexDimension::HigherDim(4)
+    );
 }
 
 #[test]
@@ -135,7 +151,10 @@ fn test_simplex_validate_wrong_vertex_count() {
         vertices: vec!["a".to_string()], // needs 2
         filtration_value_millionths: 100_000,
     };
-    assert!(matches!(s.validate(), Err(CartographyError::InvalidSimplex)));
+    assert!(matches!(
+        s.validate(),
+        Err(CartographyError::InvalidSimplex)
+    ));
 }
 
 #[test]
@@ -146,7 +165,10 @@ fn test_simplex_validate_empty_id() {
         vertices: vec!["a".to_string()],
         filtration_value_millionths: 100_000,
     };
-    assert!(matches!(s.validate(), Err(CartographyError::InvalidSimplex)));
+    assert!(matches!(
+        s.validate(),
+        Err(CartographyError::InvalidSimplex)
+    ));
 }
 
 #[test]
@@ -157,7 +179,10 @@ fn test_simplex_validate_duplicate_vertices() {
         vertices: vec!["a".to_string(), "a".to_string()],
         filtration_value_millionths: 100_000,
     };
-    assert!(matches!(s.validate(), Err(CartographyError::InvalidSimplex)));
+    assert!(matches!(
+        s.validate(),
+        Err(CartographyError::InvalidSimplex)
+    ));
 }
 
 #[test]
@@ -187,10 +212,7 @@ fn test_build_complex_empty() {
 
 #[test]
 fn test_build_complex_vertices_only() {
-    let simplices = vec![
-        vertex("v1", "a", 100_000),
-        vertex("v2", "b", 200_000),
-    ];
+    let simplices = vec![vertex("v1", "a", 100_000), vertex("v2", "b", 200_000)];
     let complex = frontier_complex_cartography::build_complex(simplices).unwrap();
     assert_eq!(complex.vertex_count, 2);
     assert_eq!(complex.max_dimension, 0);
@@ -211,10 +233,7 @@ fn test_build_complex_with_edges() {
 
 #[test]
 fn test_build_complex_filtration_range() {
-    let simplices = vec![
-        vertex("v1", "a", 100_000),
-        vertex("v2", "b", 300_000),
-    ];
+    let simplices = vec![vertex("v1", "a", 100_000), vertex("v2", "b", 300_000)];
     let complex = frontier_complex_cartography::build_complex(simplices).unwrap();
     let (min, max) = complex.filtration_range().unwrap();
     assert_eq!(min, 100_000);
@@ -307,7 +326,10 @@ fn test_hole_significance_actionable() {
 #[test]
 fn test_hole_significance_display() {
     assert_eq!(format!("{}", HoleSignificance::Persistent), "persistent");
-    assert_eq!(format!("{}", HoleSignificance::SamplingNoise), "sampling_noise");
+    assert_eq!(
+        format!("{}", HoleSignificance::SamplingNoise),
+        "sampling_noise"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -350,10 +372,7 @@ fn test_total_persistence() {
 
 #[test]
 fn test_euler_characteristic_vertices_only() {
-    let simplices = vec![
-        vertex("v1", "a", 100_000),
-        vertex("v2", "b", 200_000),
-    ];
+    let simplices = vec![vertex("v1", "a", 100_000), vertex("v2", "b", 200_000)];
     let complex = frontier_complex_cartography::build_complex(simplices).unwrap();
     let chi = frontier_complex_cartography::euler_characteristic(&complex);
     assert_eq!(chi, 2); // 2 vertices, 0 edges, 0 triangles => chi = 2

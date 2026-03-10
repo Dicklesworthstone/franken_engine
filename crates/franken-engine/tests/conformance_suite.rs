@@ -8,6 +8,19 @@
 //!
 //! Plan references: Section 10.10 item 25, 9E.10.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::canonical_encoding::CanonicalGuard;

@@ -4,7 +4,20 @@
 //! batch processing, rollback governance, savings reports, evidence bundles,
 //! and diagnostic emission.
 
-use std::collections::{BTreeMap, BTreeSet};
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
+use std::collections::BTreeSet;
 
 use frankenengine_engine::allocation_elision_gate::*;
 use frankenengine_engine::hash_tiers::ContentHash;
@@ -975,9 +988,11 @@ fn evaluator_deny_gc_regression() {
     input.gc_assessment = bad_gc_assessment();
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::GcPauseRegression));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::GcPauseRegression)
+    );
 }
 
 #[test]
@@ -987,9 +1002,11 @@ fn evaluator_deny_latency_regression() {
     input.latency_evidence = bad_latency_evidence();
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::TailLatencyRegression));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::TailLatencyRegression)
+    );
 }
 
 #[test]
@@ -999,9 +1016,11 @@ fn evaluator_deny_missing_escape_cert() {
     input.has_escape_certificate = false;
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::MissingEscapeCertificate));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::MissingEscapeCertificate)
+    );
 }
 
 #[test]
@@ -1011,9 +1030,11 @@ fn evaluator_deny_insufficient_gc_samples() {
     input.gc_assessment.sample_count = 5;
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::InsufficientSamples));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::InsufficientSamples)
+    );
 }
 
 #[test]
@@ -1023,9 +1044,11 @@ fn evaluator_deny_insufficient_latency_samples() {
     input.latency_evidence.sample_count = 5;
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::InsufficientSamples));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::InsufficientSamples)
+    );
 }
 
 #[test]
@@ -1035,9 +1058,11 @@ fn evaluator_deny_bad_support_contract() {
     input.support_contract = Some(bad_support_contract());
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::InsufficientSupportCoverage));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::InsufficientSupportCoverage)
+    );
 }
 
 #[test]
@@ -1047,9 +1072,11 @@ fn evaluator_deny_missing_support_contract() {
     input.support_contract = None;
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::InsufficientSupportCoverage));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::InsufficientSupportCoverage)
+    );
 }
 
 #[test]
@@ -1059,9 +1086,11 @@ fn evaluator_deny_unhealthy_observability() {
     input.observability = Some(unhealthy_observability());
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::ObservabilityUnhealthy));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::ObservabilityUnhealthy)
+    );
 }
 
 #[test]
@@ -1071,9 +1100,11 @@ fn evaluator_deny_missing_observability() {
     input.observability = None;
     let result = ev.evaluate(&input);
     assert_eq!(result.verdict, ElisionVerdict::Denied);
-    assert!(result
-        .denial_reasons
-        .contains(&DenialReason::ObservabilityUnhealthy));
+    assert!(
+        result
+            .denial_reasons
+            .contains(&DenialReason::ObservabilityUnhealthy)
+    );
 }
 
 #[test]
@@ -1167,14 +1198,8 @@ fn receipt_approved_has_assumptions() {
     let input = make_good_input("site-assumptions");
     let result = ev.evaluate(&input);
     assert!(!result.receipt.required_assumptions.is_empty());
-    assert!(result
-        .receipt
-        .required_assumptions
-        .contains("no_escape"));
-    assert!(result
-        .receipt
-        .required_assumptions
-        .contains("stable_shape"));
+    assert!(result.receipt.required_assumptions.contains("no_escape"));
+    assert!(result.receipt.required_assumptions.contains("stable_shape"));
 }
 
 #[test]
@@ -1242,10 +1267,7 @@ fn evaluator_independent_sites_independent_verdicts() {
         ev.site_verdict("good-site"),
         Some(&ElisionVerdict::Approved)
     );
-    assert_eq!(
-        ev.site_verdict("bad-site"),
-        Some(&ElisionVerdict::Denied)
-    );
+    assert_eq!(ev.site_verdict("bad-site"), Some(&ElisionVerdict::Denied));
 }
 
 // ---------------------------------------------------------------------------
@@ -1258,10 +1280,12 @@ fn evaluator_diagnostics_on_approval() {
     let input = make_good_input("site-diag-approve");
     let result = ev.evaluate(&input);
     assert!(!result.diagnostics.is_empty());
-    assert!(result
-        .diagnostics
-        .iter()
-        .any(|d| d.kind == DiagnosticKind::ElisionApproved));
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagnosticKind::ElisionApproved)
+    );
 }
 
 #[test]
@@ -1270,10 +1294,12 @@ fn evaluator_diagnostics_on_denial() {
     let mut input = make_good_input("site-diag-deny");
     input.gc_assessment = bad_gc_assessment();
     let result = ev.evaluate(&input);
-    assert!(result
-        .diagnostics
-        .iter()
-        .any(|d| d.kind == DiagnosticKind::ElisionDenied));
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.kind == DiagnosticKind::ElisionDenied)
+    );
 }
 
 #[test]
@@ -1500,7 +1526,11 @@ fn batch_all_approved() {
     let inputs = vec![make_good_input("batch-a"), make_good_input("batch-b")];
     let results = ev.evaluate_batch(&inputs);
     assert_eq!(results.len(), 2);
-    assert!(results.iter().all(|r| r.verdict == ElisionVerdict::Approved));
+    assert!(
+        results
+            .iter()
+            .all(|r| r.verdict == ElisionVerdict::Approved)
+    );
     assert_eq!(ev.tracked_site_count(), 2);
 }
 

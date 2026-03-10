@@ -3,6 +3,19 @@
 //! Validates public API, serde contracts, determinism, gate evaluation logic,
 //! batch processing, report aggregation, and rejection coverage.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::descent_certificate_gate::*;
@@ -143,12 +156,14 @@ fn policy_id_format() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn coverage_threshold_valid() {
     assert!(MIN_DESCENT_COVERAGE > 0);
     assert!(MIN_DESCENT_COVERAGE <= 1_000_000);
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn confidence_threshold_valid() {
     assert!(MIN_DESCENT_CONFIDENCE > 0);
     assert!(MIN_DESCENT_CONFIDENCE <= 1_000_000);
@@ -326,7 +341,7 @@ fn cert_obstructed_serde_roundtrip() {
 
 #[test]
 fn rejection_tags_unique() {
-    let rejections = vec![
+    let rejections = [
         GateRejection::NoCertificate,
         GateRejection::SurfaceMismatch {
             claim_surface: SupportSurface::Latency,
@@ -480,7 +495,10 @@ fn config_default_values() {
 
 #[test]
 fn config_default_trait() {
-    assert_eq!(DescentGateConfig::default(), DescentGateConfig::default_config());
+    assert_eq!(
+        DescentGateConfig::default(),
+        DescentGateConfig::default_config()
+    );
 }
 
 #[test]
@@ -507,7 +525,11 @@ fn config_serde_roundtrip() {
 #[test]
 fn gate_supports_clean_cert() {
     let gate = DescentGate::with_defaults();
-    let v = gate.evaluate(&latency_claim(), Some(&clean_cert(SupportSurface::Latency)), false);
+    let v = gate.evaluate(
+        &latency_claim(),
+        Some(&clean_cert(SupportSurface::Latency)),
+        false,
+    );
     assert!(v.is_supported());
 }
 
@@ -566,7 +588,7 @@ fn gate_rejects_obstructed() {
 fn gate_rejects_excluded_region() {
     let gate = DescentGate::with_defaults();
     let v = gate.evaluate(
-        &latency_claim(), // claims region-a
+        &latency_claim(),                              // claims region-a
         Some(&excluded_cert(SupportSurface::Latency)), // excludes region-a
         false,
     );
@@ -673,7 +695,10 @@ fn batch_mixed_results() {
     let mut certs = BTreeMap::new();
     certs.insert("lat-1".to_string(), clean_cert(SupportSurface::Latency));
     // thr-1 has no cert
-    certs.insert("ship-1".to_string(), clean_cert(SupportSurface::ShippedPath));
+    certs.insert(
+        "ship-1".to_string(),
+        clean_cert(SupportSurface::ShippedPath),
+    );
     let parity = BTreeSet::from(["ship-1".to_string()]);
     let results = gate.evaluate_batch(&claims, &certs, &parity);
     assert_eq!(results.len(), 3);
@@ -820,7 +845,10 @@ fn full_gate_workflow() {
         "thr-1".to_string(),
         obstructed_cert(SupportSurface::Throughput),
     );
-    certs.insert("ship-1".to_string(), clean_cert(SupportSurface::ShippedPath));
+    certs.insert(
+        "ship-1".to_string(),
+        clean_cert(SupportSurface::ShippedPath),
+    );
     certs.insert(
         "docs-1".to_string(),
         clean_cert(SupportSurface::Documentation),

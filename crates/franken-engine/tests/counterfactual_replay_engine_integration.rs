@@ -6,6 +6,19 @@
 //! Recommendation, ReplayEngineError, ReplayEngineConfig,
 //! CounterfactualReplayEngine (compare, replay_count), and serde round-trips.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeMap;
 
 use frankenengine_engine::causal_replay::{

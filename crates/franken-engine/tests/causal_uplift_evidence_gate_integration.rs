@@ -3,6 +3,19 @@
 //! Validates public API, serde contracts, determinism, gate evaluation logic,
 //! batch processing, report aggregation, and rejection reason coverage.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::causal_uplift_evidence_gate::*;
@@ -190,7 +203,10 @@ fn method_all_count() {
 
 #[test]
 fn method_names_unique() {
-    let names: BTreeSet<&str> = IdentificationMethod::ALL.iter().map(|m| m.as_str()).collect();
+    let names: BTreeSet<&str> = IdentificationMethod::ALL
+        .iter()
+        .map(|m| m.as_str())
+        .collect();
     assert_eq!(names.len(), IdentificationMethod::ALL.len());
 }
 
@@ -505,14 +521,20 @@ fn config_permissive_serde_roundtrip() {
 #[test]
 fn gate_admits_good_regression_evidence() {
     let gate = EvidenceGate::with_defaults();
-    let v = gate.evaluate(&regression_claim(), Some(&good_backing(ClaimCategory::Regression)));
+    let v = gate.evaluate(
+        &regression_claim(),
+        Some(&good_backing(ClaimCategory::Regression)),
+    );
     assert!(v.is_admitted());
 }
 
 #[test]
 fn gate_admits_good_supremacy_evidence() {
     let gate = EvidenceGate::with_defaults();
-    let v = gate.evaluate(&supremacy_claim(), Some(&strong_backing(ClaimCategory::Supremacy)));
+    let v = gate.evaluate(
+        &supremacy_claim(),
+        Some(&strong_backing(ClaimCategory::Supremacy)),
+    );
     assert!(v.is_admitted());
 }
 
@@ -537,7 +559,10 @@ fn gate_admits_good_transfer_evidence() {
 #[test]
 fn gate_admits_good_rollout_evidence() {
     let gate = EvidenceGate::with_defaults();
-    let v = gate.evaluate(&rollout_claim(), Some(&good_backing(ClaimCategory::Rollout)));
+    let v = gate.evaluate(
+        &rollout_claim(),
+        Some(&good_backing(ClaimCategory::Rollout)),
+    );
     assert!(v.is_admitted());
 }
 
@@ -729,11 +754,7 @@ fn batch_mixed_results() {
 #[test]
 fn batch_preserves_order() {
     let gate = EvidenceGate::with_defaults();
-    let claims = vec![
-        regression_claim(),
-        supremacy_claim(),
-        optimization_claim(),
-    ];
+    let claims = vec![regression_claim(), supremacy_claim(), optimization_claim()];
     let results = gate.evaluate_batch(&claims, &BTreeMap::new());
     assert_eq!(results[0].claim_id(), "reg-1");
     assert_eq!(results[1].claim_id(), "sup-1");

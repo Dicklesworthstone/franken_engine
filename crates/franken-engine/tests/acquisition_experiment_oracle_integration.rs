@@ -1,11 +1,23 @@
 //! Integration tests for the acquisition experiment oracle (RGC-706B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeMap;
 
 use frankenengine_engine::acquisition_experiment_oracle::{
-    self, AcquisitionError, AcquisitionSignal, ExperimentKind,
-    ExperimentProposal, SCHEMA_VERSION, BEAD_ID, COMPONENT, POLICY_ID,
-    MILLIONTHS,
+    self, AcquisitionError, AcquisitionSignal, BEAD_ID, COMPONENT, ExperimentKind,
+    ExperimentProposal, MILLIONTHS, POLICY_ID, SCHEMA_VERSION,
 };
 
 // ---------------------------------------------------------------------------
@@ -78,7 +90,10 @@ fn test_experiment_kind_all() {
 #[test]
 fn test_experiment_kind_as_str() {
     assert_eq!(ExperimentKind::BoardCellProbe.as_str(), "board_cell_probe");
-    assert_eq!(ExperimentKind::DarkMatterExploration.as_str(), "dark_matter_exploration");
+    assert_eq!(
+        ExperimentKind::DarkMatterExploration.as_str(),
+        "dark_matter_exploration"
+    );
 }
 
 #[test]
@@ -107,8 +122,14 @@ fn test_acquisition_signal_all() {
 
 #[test]
 fn test_acquisition_signal_as_str() {
-    assert_eq!(AcquisitionSignal::LiveShiftPressure.as_str(), "live_shift_pressure");
-    assert_eq!(AcquisitionSignal::SemanticDarkMatter.as_str(), "semantic_dark_matter");
+    assert_eq!(
+        AcquisitionSignal::LiveShiftPressure.as_str(),
+        "live_shift_pressure"
+    );
+    assert_eq!(
+        AcquisitionSignal::SemanticDarkMatter.as_str(),
+        "semantic_dark_matter"
+    );
 }
 
 #[test]
@@ -126,25 +147,46 @@ fn test_acquisition_signal_serde_roundtrip() {
 
 #[test]
 fn test_proposal_new_seals() {
-    let p = make_proposal("p1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "p1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     assert!(!p.proposal_id.is_empty());
     // content_hash should be non-trivially set
-    assert_ne!(p.content_hash, frankenengine_engine::hash_tiers::ContentHash::compute(b""));
+    assert_ne!(
+        p.content_hash,
+        frankenengine_engine::hash_tiers::ContentHash::compute(b"")
+    );
 }
 
 #[test]
 fn test_proposal_display() {
-    let p = make_proposal("p1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 500_000, 100_000);
+    let p = make_proposal(
+        "p1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
     let s = format!("{p}");
     assert!(s.contains("p1"));
 }
 
 #[test]
 fn test_proposal_serde_roundtrip() {
-    let p = make_proposal("p1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 500_000, 100_000);
+    let p = make_proposal(
+        "p1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
     let json = serde_json::to_string(&p).unwrap();
     let back: ExperimentProposal = serde_json::from_str(&json).unwrap();
     assert_eq!(p, back);
@@ -156,8 +198,14 @@ fn test_proposal_serde_roundtrip() {
 
 #[test]
 fn test_score_proposal_basic() {
-    let p = make_proposal("s1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "s1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     let score = acquisition_experiment_oracle::score_proposal(&p, &default_weights());
     assert!(score.raw_gain_millionths > 0);
     assert!(score.cost_adjusted_millionths > 0);
@@ -166,8 +214,14 @@ fn test_score_proposal_basic() {
 
 #[test]
 fn test_score_proposal_custom_weights() {
-    let p = make_proposal("s2", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "s2",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     let mut weights = BTreeMap::new();
     weights.insert("live_shift_pressure".to_string(), 2_000_000);
     let score = acquisition_experiment_oracle::score_proposal(&p, &weights);
@@ -180,13 +234,23 @@ fn test_score_proposal_custom_weights() {
 
 #[test]
 fn test_rank_proposals_ordering() {
-    let p1 = make_proposal("r1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
-    let p2 = make_proposal("r2", ExperimentKind::CorpusAddition,
-        AcquisitionSignal::CoverageDebt, 200_000, 100_000, 100_000);
-    let ranked = acquisition_experiment_oracle::rank_proposals(
-        vec![p1, p2], &default_weights(),
+    let p1 = make_proposal(
+        "r1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
     );
+    let p2 = make_proposal(
+        "r2",
+        ExperimentKind::CorpusAddition,
+        AcquisitionSignal::CoverageDebt,
+        200_000,
+        100_000,
+        100_000,
+    );
+    let ranked = acquisition_experiment_oracle::rank_proposals(vec![p1, p2], &default_weights());
     assert_eq!(ranked.len(), 2);
     // The higher-gain proposal should be first
     assert!(ranked[0].1.cost_adjusted_millionths >= ranked[1].1.cost_adjusted_millionths);
@@ -198,30 +262,40 @@ fn test_rank_proposals_ordering() {
 
 #[test]
 fn test_select_experiments_ok() {
-    let p1 = make_proposal("e1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
-    let plan = acquisition_experiment_oracle::select_experiments(
-        vec![p1], 1_000_000, &default_weights(),
-    ).unwrap();
+    let p1 = make_proposal(
+        "e1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p1], 1_000_000, &default_weights())
+            .unwrap();
     assert!(!plan.proposals.is_empty());
     assert_eq!(plan.proposals.len(), plan.scores.len());
 }
 
 #[test]
 fn test_select_experiments_budget_exhausted() {
-    let p1 = make_proposal("e2", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 2_000_000);
-    let result = acquisition_experiment_oracle::select_experiments(
-        vec![p1], 100_000, &default_weights(),
+    let p1 = make_proposal(
+        "e2",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        2_000_000,
     );
+    let result =
+        acquisition_experiment_oracle::select_experiments(vec![p1], 100_000, &default_weights());
     assert!(matches!(result, Err(AcquisitionError::BudgetExhausted)));
 }
 
 #[test]
 fn test_select_experiments_no_candidates() {
-    let result = acquisition_experiment_oracle::select_experiments(
-        vec![], 1_000_000, &default_weights(),
-    );
+    let result =
+        acquisition_experiment_oracle::select_experiments(vec![], 1_000_000, &default_weights());
     assert!(matches!(result, Err(AcquisitionError::NoCandidates)));
 }
 
@@ -231,8 +305,14 @@ fn test_select_experiments_no_candidates() {
 
 #[test]
 fn test_record_outcome() {
-    let p = make_proposal("o1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "o1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     let outcome = acquisition_experiment_oracle::record_outcome(&p, 600_000);
     assert_eq!(outcome.proposal_id, "o1");
     assert_eq!(outcome.actual_information_gain_millionths, 600_000);
@@ -244,12 +324,18 @@ fn test_record_outcome() {
 
 #[test]
 fn test_compute_regret_positive() {
-    assert_eq!(acquisition_experiment_oracle::compute_regret(500_000, 300_000), 200_000);
+    assert_eq!(
+        acquisition_experiment_oracle::compute_regret(500_000, 300_000),
+        200_000
+    );
 }
 
 #[test]
 fn test_compute_regret_zero() {
-    assert_eq!(acquisition_experiment_oracle::compute_regret(300_000, 500_000), 0);
+    assert_eq!(
+        acquisition_experiment_oracle::compute_regret(300_000, 500_000),
+        0
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -258,8 +344,14 @@ fn test_compute_regret_zero() {
 
 #[test]
 fn test_calibrate_oracle_perfect() {
-    let p = make_proposal("c1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 500_000, 100_000);
+    let p = make_proposal(
+        "c1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
     let outcome = acquisition_experiment_oracle::record_outcome(&p, 500_000);
     let cal = acquisition_experiment_oracle::calibrate_oracle(&[outcome], &[p]);
     assert_eq!(cal.predictions_count, 1);
@@ -273,12 +365,18 @@ fn test_calibrate_oracle_perfect() {
 
 #[test]
 fn test_combine_signal_strengths_empty() {
-    assert_eq!(acquisition_experiment_oracle::combine_signal_strengths(&[]), 0);
+    assert_eq!(
+        acquisition_experiment_oracle::combine_signal_strengths(&[]),
+        0
+    );
 }
 
 #[test]
 fn test_combine_signal_strengths_single() {
-    assert_eq!(acquisition_experiment_oracle::combine_signal_strengths(&[500_000]), 500_000);
+    assert_eq!(
+        acquisition_experiment_oracle::combine_signal_strengths(&[500_000]),
+        500_000
+    );
 }
 
 #[test]
@@ -294,8 +392,14 @@ fn test_combine_signal_strengths_diminishing() {
 
 #[test]
 fn test_information_density() {
-    let p = make_proposal("d1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 1_000_000, 500_000);
+    let p = make_proposal(
+        "d1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        1_000_000,
+        500_000,
+    );
     let density = acquisition_experiment_oracle::information_density(&p);
     assert_eq!(density, 2_000_000); // 1M gain / 0.5M cost = 2.0
 }
@@ -306,16 +410,28 @@ fn test_information_density() {
 
 #[test]
 fn test_is_justified_true() {
-    let p = make_proposal("j1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 500_000, 100_000);
+    let p = make_proposal(
+        "j1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
     // threshold of 1.0 => min_gain = cost * 1.0 = 100_000; gain=500_000 >= 100_000
     assert!(acquisition_experiment_oracle::is_justified(&p, 1_000_000));
 }
 
 #[test]
 fn test_is_justified_false() {
-    let p = make_proposal("j2", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 50_000, 1_000_000);
+    let p = make_proposal(
+        "j2",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        50_000,
+        1_000_000,
+    );
     // threshold=1.0 => min_gain = 1_000_000; gain=50_000 < 1_000_000
     assert!(!acquisition_experiment_oracle::is_justified(&p, 1_000_000));
 }
@@ -326,8 +442,14 @@ fn test_is_justified_false() {
 
 #[test]
 fn test_diversity_bonus_single_kind() {
-    let p = make_proposal("db1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 500_000, 100_000);
+    let p = make_proposal(
+        "db1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
     let bonus = acquisition_experiment_oracle::diversity_bonus(&[p]);
     // 1 kind out of 7 = 1/7 * 1M
     assert!(bonus > 0);
@@ -355,16 +477,28 @@ fn test_staleness_penalty_stale() {
 
 #[test]
 fn test_exploration_ratio_all_exploit() {
-    let p = make_proposal("ex1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 500_000, 100_000);
+    let p = make_proposal(
+        "ex1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
     let ratio = acquisition_experiment_oracle::exploration_ratio(&[p]);
     assert_eq!(ratio, 0); // BoardCellProbe is exploitation
 }
 
 #[test]
 fn test_exploration_ratio_all_explore() {
-    let p = make_proposal("ex2", ExperimentKind::DarkMatterExploration,
-        AcquisitionSignal::SemanticDarkMatter, 500_000, 500_000, 100_000);
+    let p = make_proposal(
+        "ex2",
+        ExperimentKind::DarkMatterExploration,
+        AcquisitionSignal::SemanticDarkMatter,
+        500_000,
+        500_000,
+        100_000,
+    );
     let ratio = acquisition_experiment_oracle::exploration_ratio(&[p]);
     assert_eq!(ratio, MILLIONTHS); // 100% exploration
 }
@@ -375,11 +509,17 @@ fn test_exploration_ratio_all_explore() {
 
 #[test]
 fn test_validate_plan_valid() {
-    let p = make_proposal("v1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 500_000, 100_000);
-    let plan = acquisition_experiment_oracle::select_experiments(
-        vec![p], 1_000_000, &default_weights(),
-    ).unwrap();
+    let p = make_proposal(
+        "v1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p], 1_000_000, &default_weights())
+            .unwrap();
     let errors = acquisition_experiment_oracle::validate_plan(&plan);
     assert!(errors.is_empty());
 }
@@ -390,11 +530,17 @@ fn test_validate_plan_valid() {
 
 #[test]
 fn test_summarise_plan() {
-    let p = make_proposal("sum1", ExperimentKind::BoardCellProbe,
-        AcquisitionSignal::CoverageDebt, 500_000, 500_000, 100_000);
-    let plan = acquisition_experiment_oracle::select_experiments(
-        vec![p], 1_000_000, &default_weights(),
-    ).unwrap();
+    let p = make_proposal(
+        "sum1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p], 1_000_000, &default_weights())
+            .unwrap();
     let summary = acquisition_experiment_oracle::summarise_plan(&plan);
     assert!(summary.contains("Experiment Plan"));
 }

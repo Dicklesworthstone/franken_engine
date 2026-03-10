@@ -5,6 +5,19 @@
 //! exactness, Debug distinctness, and edge cases beyond
 //! the existing 49 integration tests.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::cut_line_automation::{

@@ -1,12 +1,25 @@
 //! Integration tests for the typed-array fast-lane module (RGC-606C).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::typed_array_fast_lane::{
-    ArrayProfile, ArrayStorageMode, DeoptReason, ElementKind, ElementTransition, FastLaneConfig,
-    FastLaneCertificate, FastLaneError, FastLaneEvidenceManifest,
-    TransitionTrigger, TypedArrayKind, TypedArrayValidation, TYPED_ARRAY_COMPONENT,
-    TYPED_ARRAY_POLICY_ID, TYPED_ARRAY_SCHEMA_VERSION, allowed_transitions,
-    build_transition_graph, certify_fast_lane, compute_element_size, evaluate_fast_lane,
-    is_transition_reversible, run_fast_lane_evidence, validate_typed_array,
+    ArrayProfile, ArrayStorageMode, DeoptReason, ElementKind, ElementTransition,
+    FastLaneCertificate, FastLaneConfig, FastLaneError, FastLaneEvidenceManifest,
+    TYPED_ARRAY_COMPONENT, TYPED_ARRAY_POLICY_ID, TYPED_ARRAY_SCHEMA_VERSION, TransitionTrigger,
+    TypedArrayKind, TypedArrayValidation, allowed_transitions, build_transition_graph,
+    certify_fast_lane, compute_element_size, evaluate_fast_lane, is_transition_reversible,
+    run_fast_lane_evidence, validate_typed_array,
 };
 
 // ---------------------------------------------------------------------------
@@ -224,7 +237,10 @@ fn integration_validate_typed_array_detached() {
         is_shared: false,
         byte_offset: 0,
     };
-    assert_eq!(validate_typed_array(&v).unwrap_err(), FastLaneError::DetachedBuffer);
+    assert_eq!(
+        validate_typed_array(&v).unwrap_err(),
+        FastLaneError::DetachedBuffer
+    );
 }
 
 #[test]
@@ -474,8 +490,16 @@ fn integration_fast_lane_error_serde_roundtrip() {
 
 #[test]
 fn integration_fast_lane_error_display() {
-    assert!(FastLaneError::DetachedBuffer.to_string().contains("detached"));
-    assert!(FastLaneError::OverflowProtection.to_string().contains("overflow"));
+    assert!(
+        FastLaneError::DetachedBuffer
+            .to_string()
+            .contains("detached")
+    );
+    assert!(
+        FastLaneError::OverflowProtection
+            .to_string()
+            .contains("overflow")
+    );
     assert!(FastLaneError::EmptyProfile.to_string().contains("empty"));
 }
 

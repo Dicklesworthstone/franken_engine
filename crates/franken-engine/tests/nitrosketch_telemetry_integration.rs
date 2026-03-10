@@ -1,6 +1,19 @@
 //! Integration tests for nitrosketch_telemetry module: weighted sketch updates,
 //! site inventories, exact-shadow calibration, and sampling strategies.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::nitrosketch_telemetry::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -15,7 +28,13 @@ fn make_site(id: &str, kind: SketchKind) -> TelemetrySite {
 }
 
 fn make_site_with_budget(id: &str, budget: u64) -> TelemetrySite {
-    create_site(id, &format!("test/{}", id), SketchKind::CountMin, MILLION, budget)
+    create_site(
+        id,
+        &format!("test/{}", id),
+        SketchKind::CountMin,
+        MILLION,
+        budget,
+    )
 }
 
 fn test_epoch() -> SecurityEpoch {
@@ -82,7 +101,13 @@ fn test_sampling_strategy_display_and_serde() {
 
 #[test]
 fn test_create_site_populates_all_fields() {
-    let site = create_site("perf_counter", "/runtime/perf", SketchKind::Histogram, 750_000, 5000);
+    let site = create_site(
+        "perf_counter",
+        "/runtime/perf",
+        SketchKind::Histogram,
+        750_000,
+        5000,
+    );
     assert_eq!(site.site_id, "perf_counter");
     assert_eq!(site.path, "/runtime/perf");
     assert_eq!(site.sketch_kind, SketchKind::Histogram);
@@ -274,7 +299,10 @@ fn test_record_update_decrements_budget_and_returns_correct_fields() {
 #[test]
 fn test_record_update_exhausted_budget_returns_error() {
     let mut site = make_site_with_budget("ru2", 0);
-    assert_eq!(record_update(&mut site, "key", MILLION), Err(TelemetryError::BudgetExhausted));
+    assert_eq!(
+        record_update(&mut site, "key", MILLION),
+        Err(TelemetryError::BudgetExhausted)
+    );
 }
 
 #[test]
@@ -338,19 +366,43 @@ fn test_accumulator_drain_returns_updates_and_resets() {
 #[test]
 fn test_deterministic_sampling_period_acceptance() {
     // 50% rate => period = 2
-    let accepted = evaluate_sampling(SamplingStrategy::Deterministic, 500_000, "key", MILLION, 0, 100, 100);
+    let accepted = evaluate_sampling(
+        SamplingStrategy::Deterministic,
+        500_000,
+        "key",
+        MILLION,
+        0,
+        100,
+        100,
+    );
     assert!(accepted.accepted);
     assert_eq!(accepted.adjusted_weight_millionths, MILLION * 2);
     assert_eq!(accepted.strategy, SamplingStrategy::Deterministic);
 
-    let rejected = evaluate_sampling(SamplingStrategy::Deterministic, 500_000, "key", MILLION, 1, 100, 100);
+    let rejected = evaluate_sampling(
+        SamplingStrategy::Deterministic,
+        500_000,
+        "key",
+        MILLION,
+        1,
+        100,
+        100,
+    );
     assert!(!rejected.accepted);
 }
 
 #[test]
 fn test_deterministic_sampling_full_rate_accepts_all() {
     for seq in 0..10 {
-        let d = evaluate_sampling(SamplingStrategy::Deterministic, MILLION, "key", MILLION, seq, 100, 100);
+        let d = evaluate_sampling(
+            SamplingStrategy::Deterministic,
+            MILLION,
+            "key",
+            MILLION,
+            seq,
+            100,
+            100,
+        );
         assert!(d.accepted);
     }
 }
@@ -358,32 +410,88 @@ fn test_deterministic_sampling_full_rate_accepts_all() {
 #[test]
 fn test_replay_stable_consistency_and_full_rate() {
     // Same key produces same decision regardless of other params
-    let d1 = evaluate_sampling(SamplingStrategy::ReplayStable, MILLION, "stable_key", MILLION, 0, 100, 100);
-    let d2 = evaluate_sampling(SamplingStrategy::ReplayStable, MILLION, "stable_key", MILLION, 999, 50, 100);
+    let d1 = evaluate_sampling(
+        SamplingStrategy::ReplayStable,
+        MILLION,
+        "stable_key",
+        MILLION,
+        0,
+        100,
+        100,
+    );
+    let d2 = evaluate_sampling(
+        SamplingStrategy::ReplayStable,
+        MILLION,
+        "stable_key",
+        MILLION,
+        999,
+        50,
+        100,
+    );
     assert_eq!(d1.accepted, d2.accepted);
 
     // Full rate always accepts
-    let d3 = evaluate_sampling(SamplingStrategy::ReplayStable, MILLION, "any_key", MILLION, 0, 100, 100);
+    let d3 = evaluate_sampling(
+        SamplingStrategy::ReplayStable,
+        MILLION,
+        "any_key",
+        MILLION,
+        0,
+        100,
+        100,
+    );
     assert!(d3.accepted);
 }
 
 #[test]
 fn test_priority_based_weight_threshold() {
     // threshold = MILLION - 500_000 = 500_000
-    let high = evaluate_sampling(SamplingStrategy::PriorityBased, 500_000, "key", MILLION, 0, 100, 100);
+    let high = evaluate_sampling(
+        SamplingStrategy::PriorityBased,
+        500_000,
+        "key",
+        MILLION,
+        0,
+        100,
+        100,
+    );
     assert!(high.accepted);
     assert_eq!(high.adjusted_weight_millionths, MILLION);
 
-    let low = evaluate_sampling(SamplingStrategy::PriorityBased, 500_000, "key", 100, 0, 100, 100);
+    let low = evaluate_sampling(
+        SamplingStrategy::PriorityBased,
+        500_000,
+        "key",
+        100,
+        0,
+        100,
+        100,
+    );
     assert!(!low.accepted);
 }
 
 #[test]
 fn test_budget_adaptive_zero_budget_rejects() {
-    let d1 = evaluate_sampling(SamplingStrategy::BudgetAdaptive, MILLION, "key", MILLION, 0, 0, 100);
+    let d1 = evaluate_sampling(
+        SamplingStrategy::BudgetAdaptive,
+        MILLION,
+        "key",
+        MILLION,
+        0,
+        0,
+        100,
+    );
     assert!(!d1.accepted);
 
-    let d2 = evaluate_sampling(SamplingStrategy::BudgetAdaptive, MILLION, "key", MILLION, 0, 0, 0);
+    let d2 = evaluate_sampling(
+        SamplingStrategy::BudgetAdaptive,
+        MILLION,
+        "key",
+        MILLION,
+        0,
+        0,
+        0,
+    );
     assert!(!d2.accepted);
 }
 
@@ -396,21 +504,42 @@ fn test_record_with_sampling_accept_reject_and_exhausted() {
     // Accepted: consumes budget
     let mut site1 = make_site_with_budget("rws1", 100);
     site1.sampling_rate_millionths = MILLION;
-    let result1 = record_update_with_sampling(&mut site1, SamplingStrategy::Deterministic, "key", MILLION, 0, 100);
+    let result1 = record_update_with_sampling(
+        &mut site1,
+        SamplingStrategy::Deterministic,
+        "key",
+        MILLION,
+        0,
+        100,
+    );
     assert!(result1.unwrap().is_some());
     assert_eq!(site1.budget_remaining, 99);
 
     // Rejected: preserves budget
     let mut site2 = make_site_with_budget("rws2", 100);
     site2.sampling_rate_millionths = 500_000;
-    let result2 = record_update_with_sampling(&mut site2, SamplingStrategy::Deterministic, "key", MILLION, 1, 100);
+    let result2 = record_update_with_sampling(
+        &mut site2,
+        SamplingStrategy::Deterministic,
+        "key",
+        MILLION,
+        1,
+        100,
+    );
     assert!(result2.unwrap().is_none());
     assert_eq!(site2.budget_remaining, 100);
 
     // Exhausted: returns error
     let mut site3 = make_site_with_budget("rws3", 0);
     site3.sampling_rate_millionths = MILLION;
-    let result3 = record_update_with_sampling(&mut site3, SamplingStrategy::Deterministic, "key", MILLION, 0, 100);
+    let result3 = record_update_with_sampling(
+        &mut site3,
+        SamplingStrategy::Deterministic,
+        "key",
+        MILLION,
+        0,
+        100,
+    );
     assert_eq!(result3, Err(TelemetryError::BudgetExhausted));
 }
 
@@ -441,7 +570,10 @@ fn test_remove_site_from_inventory() {
     assert!(inv.find_site("rem_a").is_none());
 
     // Missing site returns error
-    assert_eq!(remove_site_from_inventory(&mut inv, "ghost"), Err(TelemetryError::SiteNotFound));
+    assert_eq!(
+        remove_site_from_inventory(&mut inv, "ghost"),
+        Err(TelemetryError::SiteNotFound)
+    );
 }
 
 #[test]
@@ -469,7 +601,8 @@ fn test_validate_inventory_valid_and_tampered() {
     assert!(validate_inventory(&inv).is_ok());
 
     let mut tampered = build_inventory(vec![make_site("tamper", SketchKind::CountMin)]);
-    tampered.content_hash = frankenengine_engine::hash_tiers::ContentHash::compute(b"tampered_data");
+    tampered.content_hash =
+        frankenengine_engine::hash_tiers::ContentHash::compute(b"tampered_data");
     assert!(validate_inventory(&tampered).is_err());
 }
 
@@ -567,7 +700,11 @@ fn test_calibration_report_failure_and_empty() {
 
 #[test]
 fn test_calibration_report_display_and_serde() {
-    let results = vec![calibrate_site(&make_site("d", SketchKind::CountMin), 100, 100)];
+    let results = vec![calibrate_site(
+        &make_site("d", SketchKind::CountMin),
+        100,
+        100,
+    )];
     let report = build_calibration_report(SecurityEpoch::from_raw(7), results);
     let s = report.to_string();
     assert!(s.contains("report:"));
@@ -588,7 +725,12 @@ fn test_calibrate_inventory_success_and_missing_site() {
         make_site("ci_a", SketchKind::CountMin),
         make_site("ci_b", SketchKind::Quantile),
     ]);
-    let report = calibrate_inventory(&inv, &[("ci_a", 100, 100), ("ci_b", 200, 198)], test_epoch()).unwrap();
+    let report = calibrate_inventory(
+        &inv,
+        &[("ci_a", 100, 100), ("ci_b", 200, 198)],
+        test_epoch(),
+    )
+    .unwrap();
     assert_eq!(report.results.len(), 2);
     assert!(report.all_passed());
 
@@ -616,20 +758,35 @@ fn test_compute_sampling_rate_edge_cases() {
 
 #[test]
 fn test_meets_quality_bar() {
-    let pass_report = build_calibration_report(test_epoch(), vec![
-        calibrate_site(&make_site("qb1", SketchKind::CountMin), 100, 100),
-    ]);
+    let pass_report = build_calibration_report(
+        test_epoch(),
+        vec![calibrate_site(
+            &make_site("qb1", SketchKind::CountMin),
+            100,
+            100,
+        )],
+    );
     assert!(meets_quality_bar(&pass_report, 50_000));
 
-    let fail_report = build_calibration_report(test_epoch(), vec![
-        calibrate_site(&make_site("qb2", SketchKind::CountMin), 100, 200),
-    ]);
+    let fail_report = build_calibration_report(
+        test_epoch(),
+        vec![calibrate_site(
+            &make_site("qb2", SketchKind::CountMin),
+            100,
+            200,
+        )],
+    );
     assert!(!meets_quality_bar(&fail_report, 50_000));
 
     // Passes per-site but mean error above custom threshold
-    let marginal = build_calibration_report(test_epoch(), vec![
-        calibrate_site(&make_site("qb3", SketchKind::CountMin), 1000, 1049),
-    ]);
+    let marginal = build_calibration_report(
+        test_epoch(),
+        vec![calibrate_site(
+            &make_site("qb3", SketchKind::CountMin),
+            1000,
+            1049,
+        )],
+    );
     assert!(!meets_quality_bar(&marginal, 10_000));
 }
 
@@ -693,7 +850,10 @@ fn test_compute_manifest_entries_matches_inventory() {
     for (entry, site) in entries.iter().zip(inv.sites.iter()) {
         assert_eq!(entry.site_id, site.site_id);
         assert_eq!(entry.sketch_kind, site.sketch_kind);
-        assert_eq!(entry.sampling_rate_millionths, site.sampling_rate_millionths);
+        assert_eq!(
+            entry.sampling_rate_millionths,
+            site.sampling_rate_millionths
+        );
     }
 }
 

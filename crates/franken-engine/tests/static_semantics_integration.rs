@@ -3,6 +3,19 @@
 //! Tests the full pipeline: source text → parser → AST → static_semantics analysis.
 //! Validates that the static-semantic checks integrate correctly with the parser output.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::ast::{
     AssignmentOperator, BindingPattern, BlockStatement, BreakStatement, ContinueStatement,
     ExportDeclaration, ExportKind, Expression, ExpressionStatement, ForInStatement,

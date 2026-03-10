@@ -1,8 +1,21 @@
 //! Integration tests for the catastrophe witness generator (RGC-619B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::catastrophe_witness_generator::{
-    self, BoundaryKind, ManifoldCoordinate, PhaseRegion, WitnessError,
-    SCHEMA_VERSION, BEAD_ID, COMPONENT, POLICY_ID, MILLIONTHS,
+    self, BEAD_ID, BoundaryKind, COMPONENT, MILLIONTHS, ManifoldCoordinate, POLICY_ID, PhaseRegion,
+    SCHEMA_VERSION, WitnessError,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -187,41 +200,31 @@ fn test_manifold_coordinate_display() {
 
 #[test]
 fn test_classify_region_robust_win() {
-    let region = catastrophe_witness_generator::classify_region(
-        2_000_000, 0, 1_000_000,
-    );
+    let region = catastrophe_witness_generator::classify_region(2_000_000, 0, 1_000_000);
     assert_eq!(region, PhaseRegion::RobustWin);
 }
 
 #[test]
 fn test_classify_region_brittle_win() {
-    let region = catastrophe_witness_generator::classify_region(
-        500_000, 0, 1_000_000,
-    );
+    let region = catastrophe_witness_generator::classify_region(500_000, 0, 1_000_000);
     assert_eq!(region, PhaseRegion::BrittleWin);
 }
 
 #[test]
 fn test_classify_region_neutral() {
-    let region = catastrophe_witness_generator::classify_region(
-        100_000, 0, 1_000_000,
-    );
+    let region = catastrophe_witness_generator::classify_region(100_000, 0, 1_000_000);
     assert_eq!(region, PhaseRegion::Neutral);
 }
 
 #[test]
 fn test_classify_region_brittle_loss() {
-    let region = catastrophe_witness_generator::classify_region(
-        -500_000, 0, 1_000_000,
-    );
+    let region = catastrophe_witness_generator::classify_region(-500_000, 0, 1_000_000);
     assert_eq!(region, PhaseRegion::BrittleLoss);
 }
 
 #[test]
 fn test_classify_region_robust_loss() {
-    let region = catastrophe_witness_generator::classify_region(
-        -2_000_000, 0, 1_000_000,
-    );
+    let region = catastrophe_witness_generator::classify_region(-2_000_000, 0, 1_000_000);
     assert_eq!(region, PhaseRegion::RobustLoss);
 }
 
@@ -233,9 +236,7 @@ fn test_classify_region_robust_loss() {
 fn test_detect_boundary_ok() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let result = catastrophe_witness_generator::detect_boundary(
-        &src, &tgt, 2_000_000, -2_000_000,
-    );
+    let result = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000);
     assert!(result.is_ok());
     let boundary = result.unwrap();
     assert!(!boundary.boundary_id.is_empty());
@@ -246,9 +247,7 @@ fn test_detect_boundary_ok() {
 fn test_detect_boundary_same_region_error() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 1)];
-    let result = catastrophe_witness_generator::detect_boundary(
-        &src, &tgt, 2_000_000, 2_000_001,
-    );
+    let result = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, 2_000_001);
     assert!(matches!(result, Err(WitnessError::NoBoundaryDetected)));
 }
 
@@ -260,12 +259,16 @@ fn test_detect_boundary_same_region_error() {
 fn test_generate_witness_ok() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(
-        &src, &tgt, 2_000_000, -2_000_000,
-    ).unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     let witness = catastrophe_witness_generator::generate_witness(
-        &boundary, "input-data", 1_000_000, -500_000, "throughput",
-    ).unwrap();
+        &boundary,
+        "input-data",
+        1_000_000,
+        -500_000,
+        "throughput",
+    )
+    .unwrap();
     assert!(!witness.witness_id.is_empty());
     assert!(witness.is_regression());
     assert_eq!(witness.delta_millionths, -1_500_000);
@@ -277,12 +280,15 @@ fn test_generate_witness_ok() {
 fn test_generate_witness_input_too_large() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(
-        &src, &tgt, 2_000_000, -2_000_000,
-    ).unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     let large_input = "x".repeat(65_537);
     let result = catastrophe_witness_generator::generate_witness(
-        &boundary, &large_input, 1_000_000, -500_000, "throughput",
+        &boundary,
+        &large_input,
+        1_000_000,
+        -500_000,
+        "throughput",
     );
     assert!(matches!(result, Err(WitnessError::InputTooLarge)));
 }
@@ -295,12 +301,16 @@ fn test_generate_witness_input_too_large() {
 fn test_minimize_witness_ok() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(
-        &src, &tgt, 2_000_000, -2_000_000,
-    ).unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     let witness = catastrophe_witness_generator::generate_witness(
-        &boundary, "test-input", 1_000_000, -500_000, "throughput",
-    ).unwrap();
+        &boundary,
+        "test-input",
+        1_000_000,
+        -500_000,
+        "throughput",
+    )
+    .unwrap();
     if witness.replay_steps > 1 {
         let result = catastrophe_witness_generator::minimize_witness(&witness);
         assert!(result.is_ok());
@@ -316,17 +326,15 @@ fn test_minimize_witness_ok() {
 
 #[test]
 fn test_boundary_sharpness_zero_distance() {
-    let sharpness = catastrophe_witness_generator::compute_boundary_sharpness(
-        1_000_000, -1_000_000, 0,
-    );
+    let sharpness =
+        catastrophe_witness_generator::compute_boundary_sharpness(1_000_000, -1_000_000, 0);
     assert!(sharpness > 0);
 }
 
 #[test]
 fn test_boundary_sharpness_large_distance() {
-    let sharpness = catastrophe_witness_generator::compute_boundary_sharpness(
-        1_000_000, 900_000, 1_000_000,
-    );
+    let sharpness =
+        catastrophe_witness_generator::compute_boundary_sharpness(1_000_000, 900_000, 1_000_000);
     assert!(sharpness > 0);
 }
 
@@ -336,9 +344,9 @@ fn test_boundary_sharpness_large_distance() {
 
 #[test]
 fn test_build_brittleness_report_empty() {
-    let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![], vec![],
-    ).unwrap();
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![])
+            .unwrap();
     assert_eq!(report.brittle_region_count, 0);
     assert!(!report.has_critical_boundaries());
     assert_eq!(report.regression_count(), 0);
@@ -348,15 +356,18 @@ fn test_build_brittleness_report_empty() {
 fn test_build_brittleness_report_with_data() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(
-        &src, &tgt, 2_000_000, -2_000_000,
-    ).unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     let witness = catastrophe_witness_generator::generate_witness(
         &boundary, "input", 1_000_000, -500_000, "metric",
-    ).unwrap();
+    )
+    .unwrap();
     let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![boundary], vec![witness],
-    ).unwrap();
+        test_epoch(),
+        vec![boundary],
+        vec![witness],
+    )
+    .unwrap();
     assert!(report.has_critical_boundaries());
     assert_eq!(report.regression_count(), 1);
 }

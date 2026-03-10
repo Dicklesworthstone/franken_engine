@@ -7,6 +7,19 @@
 //! BenchmarkDenominatorError, weighted_geometric_mean, evaluate_publication_gate,
 //! serde round-trips, Display/Debug, error stable codes, and boundary conditions.
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use std::collections::BTreeSet;
 
 use frankenengine_engine::benchmark_denominator::{

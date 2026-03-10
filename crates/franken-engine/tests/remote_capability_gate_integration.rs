@@ -14,6 +14,19 @@
 //! - Deterministic replay: same inputs produce identical audit trails
 //! - End-to-end workflows combining gate + mock transport
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
 use frankenengine_engine::remote_capability_gate::{
     MockRemoteTransport, RemoteCapabilityDenied, RemoteGateEvent, RemoteOperationGate,

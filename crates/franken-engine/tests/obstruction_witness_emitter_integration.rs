@@ -1,8 +1,21 @@
 //! Integration tests for the obstruction witness emitter (RGC-808B).
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
 use frankenengine_engine::obstruction_witness_emitter::{
-    self, ObstructionError, ObstructionKind, SupportSurface,
-    SCHEMA_VERSION, BEAD_ID, COMPONENT, POLICY_ID, MILLIONTHS,
+    self, BEAD_ID, COMPONENT, MILLIONTHS, ObstructionError, ObstructionKind, POLICY_ID,
+    SCHEMA_VERSION, SupportSurface,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -92,7 +105,10 @@ fn test_support_surface_serde_roundtrip() {
 
 #[test]
 fn test_obstruction_kind_display_type_mismatch() {
-    assert_eq!(format!("{}", ObstructionKind::TypeMismatch), "type-mismatch");
+    assert_eq!(
+        format!("{}", ObstructionKind::TypeMismatch),
+        "type-mismatch"
+    );
 }
 
 #[test]
@@ -102,7 +118,10 @@ fn test_obstruction_kind_display_semantic_gap() {
 
 #[test]
 fn test_obstruction_kind_display_unsupported() {
-    assert_eq!(format!("{}", ObstructionKind::UnsupportedFeature), "unsupported-feature");
+    assert_eq!(
+        format!("{}", ObstructionKind::UnsupportedFeature),
+        "unsupported-feature"
+    );
 }
 
 #[test]
@@ -125,7 +144,8 @@ fn test_emit_witness_ok() {
         "const x = 42;",
         "type error at line 1",
         "parser-lowering",
-    ).unwrap();
+    )
+    .unwrap();
     assert!(!witness.witness_id.is_empty());
     assert_eq!(witness.surface, SupportSurface::Parser);
     assert_eq!(witness.kind, ObstructionKind::TypeMismatch);
@@ -177,14 +197,16 @@ fn test_emit_witness_deterministic() {
         "const x = 42;",
         "type error",
         "seam-1",
-    ).unwrap();
+    )
+    .unwrap();
     let b = obstruction_witness_emitter::emit_witness(
         SupportSurface::Parser,
         ObstructionKind::TypeMismatch,
         "const x = 42;",
         "type error",
         "seam-1",
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(a.content_hash, b.content_hash);
 }
 
@@ -200,7 +222,8 @@ fn test_minimize_witness_ok() {
         "some code that contains seam-rt marker for testing purposes seam-rt end",
         "semantic gap at runtime boundary",
         "seam-rt",
-    ).unwrap();
+    )
+    .unwrap();
     let minimized = obstruction_witness_emitter::minimize_witness(&witness).unwrap();
     assert!(minimized.minimal);
     assert!(minimized.program_source.len() <= witness.program_source.len());
@@ -214,7 +237,8 @@ fn test_minimize_witness_empty_program() {
         "x",
         "failure",
         "x",
-    ).unwrap();
+    )
+    .unwrap();
     // Source is only 1 char, minimization may fail or succeed depending on logic
     let _result = obstruction_witness_emitter::minimize_witness(&witness);
     // Just checking it does not panic
@@ -282,7 +306,8 @@ fn test_diagnose_seam_with_witnesses() {
         "source",
         "failure",
         "parser-lowering",
-    ).unwrap();
+    )
+    .unwrap();
     let diagnosis = obstruction_witness_emitter::diagnose_seam(
         &[w],
         SupportSurface::Parser,
@@ -298,9 +323,8 @@ fn test_diagnose_seam_with_witnesses() {
 
 #[test]
 fn test_build_report_empty() {
-    let report = obstruction_witness_emitter::build_report(
-        test_epoch(), vec![], vec![], vec![],
-    ).unwrap();
+    let report =
+        obstruction_witness_emitter::build_report(test_epoch(), vec![], vec![], vec![]).unwrap();
     assert_eq!(report.total_obstructions, 0);
     assert!(report.witnesses.is_empty());
 }
@@ -313,7 +337,8 @@ fn test_build_report_with_data() {
         "code",
         "gap",
         "seam-1",
-    ).unwrap();
+    )
+    .unwrap();
     let ng = obstruction_witness_emitter::detect_nongluable(
         "let x;",
         SupportSurface::Parser,
@@ -326,9 +351,9 @@ fn test_build_report_with_data() {
         SupportSurface::Parser,
         SupportSurface::Lowering,
     );
-    let report = obstruction_witness_emitter::build_report(
-        test_epoch(), vec![w], vec![ng], vec![diag],
-    ).unwrap();
+    let report =
+        obstruction_witness_emitter::build_report(test_epoch(), vec![w], vec![ng], vec![diag])
+            .unwrap();
     assert_eq!(report.witnesses.len(), 1);
     assert_eq!(report.nongluable_programs.len(), 1);
     assert_eq!(report.seam_diagnoses.len(), 1);

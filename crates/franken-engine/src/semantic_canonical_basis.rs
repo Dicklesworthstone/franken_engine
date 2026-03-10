@@ -204,9 +204,7 @@ impl EquivalenceTransformation {
     pub fn is_universally_safe(&self) -> bool {
         matches!(
             self,
-            Self::AlphaRenaming
-                | Self::LabelNormalization
-                | Self::MetadataNormalization
+            Self::AlphaRenaming | Self::LabelNormalization | Self::MetadataNormalization
         )
     }
 }
@@ -232,19 +230,12 @@ pub enum RefusalReason {
         right: ArtifactFamily,
     },
     /// The artifacts originate from different security epochs.
-    EpochMismatch {
-        left_epoch: u64,
-        right_epoch: u64,
-    },
+    EpochMismatch { left_epoch: u64, right_epoch: u64 },
     /// The artifacts have differing observable side effects that would be
     /// lost under the proposed transformation.
-    ObservableEffectDifference {
-        description: String,
-    },
+    ObservableEffectDifference { description: String },
     /// The orbit reduction path exceeded `MAX_ORBIT_DEPTH`.
-    OrbitDepthExceeded {
-        depth_reached: usize,
-    },
+    OrbitDepthExceeded { depth_reached: usize },
     /// A required transformation class is not in the allowed set.
     TransformationNotAllowed {
         transformation: EquivalenceTransformation,
@@ -257,9 +248,7 @@ pub enum RefusalReason {
     },
     /// The artifacts contain opaque regions that the system cannot
     /// structurally inspect (e.g., foreign bytecode, native stubs).
-    OpaqueRegionPresent {
-        region_label: String,
-    },
+    OpaqueRegionPresent { region_label: String },
 }
 
 impl RefusalReason {
@@ -291,7 +280,11 @@ impl fmt::Display for RefusalReason {
                 write!(f, "observable effect difference: {}", description)
             }
             Self::OrbitDepthExceeded { depth_reached } => {
-                write!(f, "orbit depth exceeded: {} (max {})", depth_reached, MAX_ORBIT_DEPTH)
+                write!(
+                    f,
+                    "orbit depth exceeded: {} (max {})",
+                    depth_reached, MAX_ORBIT_DEPTH
+                )
             }
             Self::TransformationNotAllowed { transformation } => {
                 write!(f, "transformation not allowed: {}", transformation)
@@ -592,7 +585,11 @@ impl EquivalenceClass {
 
     /// Maximum orbit depth across all members.
     pub fn max_orbit_depth(&self) -> usize {
-        self.member_orbits.iter().map(|o| o.depth()).max().unwrap_or(0)
+        self.member_orbits
+            .iter()
+            .map(|o| o.depth())
+            .max()
+            .unwrap_or(0)
     }
 
     /// The set of all transformations used across all member orbits.
@@ -734,11 +731,10 @@ impl SemanticCanonicalBasis {
             .filter(|f| !covered_families.contains(f))
             .collect();
         let total_families = ArtifactFamily::ALL.len() as u64;
-        let coverage_millionths = if total_families == 0 {
-            0
-        } else {
-            (covered_families.len() as u64).saturating_mul(MILLION) / total_families
-        };
+        let coverage_millionths = (covered_families.len() as u64)
+            .saturating_mul(MILLION)
+            .checked_div(total_families)
+            .unwrap_or(0);
         BasisCoverageReport {
             covered_families,
             uncovered_families,
@@ -887,8 +883,19 @@ mod tests {
         }
     }
 
-    fn make_orbit(family: ArtifactFamily, input: &str, canonical: &str, steps: Vec<OrbitStep>) -> OrbitReduction {
-        OrbitReduction::new(family, input.to_string(), canonical.to_string(), steps, true)
+    fn make_orbit(
+        family: ArtifactFamily,
+        input: &str,
+        canonical: &str,
+        steps: Vec<OrbitStep>,
+    ) -> OrbitReduction {
+        OrbitReduction::new(
+            family,
+            input.to_string(),
+            canonical.to_string(),
+            steps,
+            true,
+        )
     }
 
     fn make_representative(family: ArtifactFamily, fingerprint: &str) -> CanonicalRepresentative {
@@ -901,12 +908,12 @@ mod tests {
         )
     }
 
-    fn make_class(family: ArtifactFamily, fingerprint: &str, orbits: Vec<OrbitReduction>) -> EquivalenceClass {
-        EquivalenceClass::new(
-            make_representative(family, fingerprint),
-            orbits,
-            Vec::new(),
-        )
+    fn make_class(
+        family: ArtifactFamily,
+        fingerprint: &str,
+        orbits: Vec<OrbitReduction>,
+    ) -> EquivalenceClass {
+        EquivalenceClass::new(make_representative(family, fingerprint), orbits, Vec::new())
     }
 
     fn make_basis(classes: Vec<EquivalenceClass>) -> SemanticCanonicalBasis {
@@ -1159,7 +1166,10 @@ mod tests {
 
     #[test]
     fn orbit_reduction_content_hash_deterministic() {
-        let steps = vec![make_orbit_step(0, EquivalenceTransformation::ConstantFolding)];
+        let steps = vec![make_orbit_step(
+            0,
+            EquivalenceTransformation::ConstantFolding,
+        )];
         let o1 = make_orbit(ArtifactFamily::CacheEntry, "in", "out", steps.clone());
         let o2 = make_orbit(ArtifactFamily::CacheEntry, "in", "out", steps);
         assert_eq!(o1.content_hash, o2.content_hash);
@@ -1180,7 +1190,10 @@ mod tests {
             ArtifactFamily::RewritePack,
             "orig",
             "canonical",
-            vec![make_orbit_step(0, EquivalenceTransformation::ScopeFlattening)],
+            vec![make_orbit_step(
+                0,
+                EquivalenceTransformation::ScopeFlattening,
+            )],
         );
         let json = serde_json::to_string(&orbit).unwrap();
         let back: OrbitReduction = serde_json::from_str(&json).unwrap();
@@ -1247,13 +1260,21 @@ mod tests {
     #[test]
     fn equivalence_class_with_members() {
         let orbits = vec![
-            make_orbit(ArtifactFamily::Ir1Fragment, "a", "c", vec![
-                make_orbit_step(0, EquivalenceTransformation::AlphaRenaming),
-            ]),
-            make_orbit(ArtifactFamily::Ir1Fragment, "b", "c", vec![
-                make_orbit_step(0, EquivalenceTransformation::AlphaRenaming),
-                make_orbit_step(1, EquivalenceTransformation::DeadCodeElimination),
-            ]),
+            make_orbit(
+                ArtifactFamily::Ir1Fragment,
+                "a",
+                "c",
+                vec![make_orbit_step(0, EquivalenceTransformation::AlphaRenaming)],
+            ),
+            make_orbit(
+                ArtifactFamily::Ir1Fragment,
+                "b",
+                "c",
+                vec![
+                    make_orbit_step(0, EquivalenceTransformation::AlphaRenaming),
+                    make_orbit_step(1, EquivalenceTransformation::DeadCodeElimination),
+                ],
+            ),
         ];
         let cls = make_class(ArtifactFamily::Ir1Fragment, "c", orbits);
         assert_eq!(cls.member_count(), 2);
@@ -1266,12 +1287,24 @@ mod tests {
     #[test]
     fn equivalence_class_transformations_used() {
         let orbits = vec![
-            make_orbit(ArtifactFamily::CacheEntry, "x", "z", vec![
-                make_orbit_step(0, EquivalenceTransformation::ConstantFolding),
-            ]),
-            make_orbit(ArtifactFamily::CacheEntry, "y", "z", vec![
-                make_orbit_step(0, EquivalenceTransformation::CommutativeReorder),
-            ]),
+            make_orbit(
+                ArtifactFamily::CacheEntry,
+                "x",
+                "z",
+                vec![make_orbit_step(
+                    0,
+                    EquivalenceTransformation::ConstantFolding,
+                )],
+            ),
+            make_orbit(
+                ArtifactFamily::CacheEntry,
+                "y",
+                "z",
+                vec![make_orbit_step(
+                    0,
+                    EquivalenceTransformation::CommutativeReorder,
+                )],
+            ),
         ];
         let cls = make_class(ArtifactFamily::CacheEntry, "z", orbits);
         let used = cls.all_transformations_used();
@@ -1327,7 +1360,10 @@ mod tests {
         let basis = make_basis(classes);
         let report = basis.coverage_report();
         assert_eq!(report.covered_families.len(), 2);
-        assert_eq!(report.uncovered_families.len(), ArtifactFamily::ALL.len() - 2);
+        assert_eq!(
+            report.uncovered_families.len(),
+            ArtifactFamily::ALL.len() - 2
+        );
         assert!(!report.is_complete());
         assert_eq!(report.total_classes, 2);
         assert!(report.coverage_millionths > 0);
@@ -1354,7 +1390,10 @@ mod tests {
                 ArtifactFamily::BytecodeArtifact,
                 "x",
                 "bc",
-                vec![make_orbit_step(0, EquivalenceTransformation::MetadataNormalization)],
+                vec![make_orbit_step(
+                    0,
+                    EquivalenceTransformation::MetadataNormalization,
+                )],
             )],
         )];
         let basis = make_basis(classes);
@@ -1388,7 +1427,12 @@ mod tests {
         let cls = make_class(
             ArtifactFamily::Ir1Fragment,
             "canon",
-            vec![make_orbit(ArtifactFamily::Ir1Fragment, "a", "canon", Vec::new())],
+            vec![make_orbit(
+                ArtifactFamily::Ir1Fragment,
+                "a",
+                "canon",
+                Vec::new(),
+            )],
         );
         let basis = make_basis(vec![cls]);
         let result = query_identification(&basis, ArtifactFamily::Ir1Fragment, "a", "unknown");
@@ -1432,7 +1476,10 @@ mod tests {
             ArtifactFamily::Ir1Fragment,
             "in",
             "out",
-            vec![make_orbit_step(0, EquivalenceTransformation::DeadCodeElimination)],
+            vec![make_orbit_step(
+                0,
+                EquivalenceTransformation::DeadCodeElimination,
+            )],
         );
         let issues = validate_orbit(&orbit, &safe_transformations());
         assert_eq!(issues.len(), 1);
@@ -1449,7 +1496,11 @@ mod tests {
             .collect();
         let orbit = make_orbit(ArtifactFamily::Ir1Fragment, "a", "b", steps);
         let issues = validate_orbit(&orbit, &all_transformations());
-        assert!(issues.iter().any(|i| matches!(i, RefusalReason::OrbitDepthExceeded { .. })));
+        assert!(
+            issues
+                .iter()
+                .any(|i| matches!(i, RefusalReason::OrbitDepthExceeded { .. }))
+        );
     }
 
     // --- Constants tests ---

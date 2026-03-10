@@ -508,10 +508,7 @@ pub struct SubstrateInstance {
 
 impl SubstrateInstance {
     /// Instantiate from a contract and selection receipt.
-    pub fn from_contract(
-        contract: &SubstrateContract,
-        receipt: SubstrateSelectionReceipt,
-    ) -> Self {
+    pub fn from_contract(contract: &SubstrateContract, receipt: SubstrateSelectionReceipt) -> Self {
         let mut inst = Self {
             structure_kind: contract.structure_kind,
             substrate_kind: receipt.selected_substrate,
@@ -539,11 +536,10 @@ impl SubstrateInstance {
     /// Record entries and update load factor.
     pub fn record_entries(&mut self, count: u64) {
         self.entry_count = count;
-        self.load_factor_millionths = if self.max_entry_count == 0 {
-            0
-        } else {
-            count.saturating_mul(MILLION) / self.max_entry_count
-        };
+        self.load_factor_millionths = count
+            .saturating_mul(MILLION)
+            .checked_div(self.max_entry_count)
+            .unwrap_or(0);
         self.recompute_hash();
     }
 
@@ -567,14 +563,11 @@ impl SubstrateInstance {
         self.substrate_kind = snapshot.substrate_kind;
         self.status = SubstrateInstanceStatus::RolledBack;
         self.entry_count = snapshot.entry_count;
-        self.load_factor_millionths = if self.max_entry_count == 0 {
-            0
-        } else {
-            snapshot
-                .entry_count
-                .saturating_mul(MILLION)
-                / self.max_entry_count
-        };
+        self.load_factor_millionths = snapshot
+            .entry_count
+            .saturating_mul(MILLION)
+            .checked_div(self.max_entry_count)
+            .unwrap_or(0);
         self.recompute_hash();
     }
 
@@ -677,17 +670,13 @@ impl SubstrateSelector {
     }
 
     /// Select and instantiate a substrate from a contract assignment.
-    pub fn select_from_contract(
-        &mut self,
-        assignment: &SubstrateAssignment,
-    ) -> SubstrateInstance {
+    pub fn select_from_contract(&mut self, assignment: &SubstrateAssignment) -> SubstrateInstance {
         let receipt = SubstrateSelectionReceipt::from_contract(
             &assignment.contract,
             self.selection_epoch,
             &assignment.rationale,
         );
-        let instance =
-            SubstrateInstance::from_contract(&assignment.contract, receipt.clone());
+        let instance = SubstrateInstance::from_contract(&assignment.contract, receipt.clone());
         self.receipts.push(receipt);
         self.instances.push(instance.clone());
         self.recompute_hash();
@@ -717,8 +706,7 @@ impl SubstrateSelector {
             self.selection_epoch,
             rationale,
         );
-        let mut instance =
-            SubstrateInstance::from_contract(&assignment.contract, receipt.clone());
+        let mut instance = SubstrateInstance::from_contract(&assignment.contract, receipt.clone());
         instance.substrate_kind = override_substrate;
         instance.locality_goal = override_locality;
         instance.recompute_hash();
@@ -729,10 +717,7 @@ impl SubstrateSelector {
     }
 
     /// Instantiate all substrates from an inventory using contract defaults.
-    pub fn instantiate_all(
-        &mut self,
-        inventory: &SubstrateInventory,
-    ) -> Vec<SubstrateInstance> {
+    pub fn instantiate_all(&mut self, inventory: &SubstrateInventory) -> Vec<SubstrateInstance> {
         let mut result = Vec::new();
         for assignment in &inventory.assignments {
             result.push(self.select_from_contract(assignment));
@@ -741,13 +726,8 @@ impl SubstrateSelector {
     }
 
     /// Get instance for a specific structure kind.
-    pub fn instance_for(
-        &self,
-        kind: MetadataStructureKind,
-    ) -> Option<&SubstrateInstance> {
-        self.instances
-            .iter()
-            .find(|i| i.structure_kind == kind)
+    pub fn instance_for(&self, kind: MetadataStructureKind) -> Option<&SubstrateInstance> {
+        self.instances.iter().find(|i| i.structure_kind == kind)
     }
 
     /// Get mutable instance for a specific structure kind.
@@ -755,9 +735,7 @@ impl SubstrateSelector {
         &mut self,
         kind: MetadataStructureKind,
     ) -> Option<&mut SubstrateInstance> {
-        self.instances
-            .iter_mut()
-            .find(|i| i.structure_kind == kind)
+        self.instances.iter_mut().find(|i| i.structure_kind == kind)
     }
 
     /// Count active instances.
@@ -767,10 +745,7 @@ impl SubstrateSelector {
 
     /// Count overridden instances.
     pub fn overridden_count(&self) -> usize {
-        self.receipts
-            .iter()
-            .filter(|r| r.override_applied)
-            .count()
+        self.receipts.iter().filter(|r| r.override_applied).count()
     }
 
     /// Compute a summary report.
@@ -788,16 +763,12 @@ impl SubstrateSelector {
             .iter()
             .filter(|i| i.status == SubstrateInstanceStatus::RolledBack)
             .count();
-        let structure_kinds_covered: BTreeSet<MetadataStructureKind> = self
-            .instances
-            .iter()
-            .map(|i| i.structure_kind)
-            .collect();
+        let structure_kinds_covered: BTreeSet<MetadataStructureKind> =
+            self.instances.iter().map(|i| i.structure_kind).collect();
         let coverage = if MetadataStructureKind::ALL.is_empty() {
             0
         } else {
-            (structure_kinds_covered.len() as u64)
-                .saturating_mul(MILLION)
+            (structure_kinds_covered.len() as u64).saturating_mul(MILLION)
                 / (MetadataStructureKind::ALL.len() as u64)
         };
         SelectorSummaryReport {
@@ -1122,24 +1093,130 @@ impl fmt::Display for SubstrateTransitionEvent {
 pub fn default_optimized_assignments(epoch: SecurityEpoch) -> SubstrateInventory {
     let mut inventory = SubstrateInventory::new();
 
-    let assignments: Vec<(MetadataStructureKind, SubstrateKind, LocalityGoal, FallbackMode, RollbackRule, u64, u64, &str)> = vec![
-        (MetadataStructureKind::ShapeTable, SubstrateKind::SwissTable, LocalityGoal::L1Hot, FallbackMode::LinearScan, RollbackRule::SnapshottedCow, 65536, 850_000, "Shape tables are the hottest metadata; Swiss table with L1 locality"),
-        (MetadataStructureKind::InlineCacheTable, SubstrateKind::FlatArray, LocalityGoal::L1Hot, FallbackMode::Deoptimize, RollbackRule::EpochFenced, 16384, 900_000, "IC stubs need flat sequential access for speculative dispatch"),
-        (MetadataStructureKind::StringTable, SubstrateKind::ArtTree, LocalityGoal::L2Warm, FallbackMode::Rehash, RollbackRule::Immutable, 262144, 300_000, "String interning uses ART for prefix-friendly lookup"),
-        (MetadataStructureKind::ScopeChainTable, SubstrateKind::FlatArray, LocalityGoal::L1Hot, FallbackMode::LinearScan, RollbackRule::Rebuilds, 4096, 700_000, "Scope chains are shallow and sequential"),
-        (MetadataStructureKind::ModuleGraph, SubstrateKind::BTreeIndex, LocalityGoal::L3Cold, FallbackMode::Rehash, RollbackRule::Rebuilds, 8192, 200_000, "Module graphs are cold but need sorted iteration"),
-        (MetadataStructureKind::PrototypeChainTable, SubstrateKind::LinearProbe, LocalityGoal::L2Warm, FallbackMode::LinearScan, RollbackRule::SnapshottedCow, 8192, 600_000, "Prototype chains use linear probing for cache-friendly lookup"),
-        (MetadataStructureKind::TypeFeedbackVector, SubstrateKind::FlatArray, LocalityGoal::L1Hot, FallbackMode::Deoptimize, RollbackRule::EpochFenced, 32768, 800_000, "Type feedback needs sequential access for profiling"),
-        (MetadataStructureKind::CompilationCache, SubstrateKind::HashArray, LocalityGoal::L3Cold, FallbackMode::Recompile, RollbackRule::Rebuilds, 131072, 150_000, "Compilation artifacts use HAMT for large sparse lookup"),
-        (MetadataStructureKind::GcMetadata, SubstrateKind::CacheOblivious, LocalityGoal::L2Warm, FallbackMode::Abstain, RollbackRule::NoRollback, 524288, 500_000, "GC bitmaps use cache-oblivious layout for scan locality"),
-        (MetadataStructureKind::AllocationSiteTable, SubstrateKind::SwissTable, LocalityGoal::L2Warm, FallbackMode::LinearScan, RollbackRule::EpochFenced, 16384, 400_000, "Allocation site tracking uses Swiss table for fast insert"),
+    #[allow(clippy::type_complexity)]
+    let assignments: Vec<(
+        MetadataStructureKind,
+        SubstrateKind,
+        LocalityGoal,
+        FallbackMode,
+        RollbackRule,
+        u64,
+        u64,
+        &str,
+    )> = vec![
+        (
+            MetadataStructureKind::ShapeTable,
+            SubstrateKind::SwissTable,
+            LocalityGoal::L1Hot,
+            FallbackMode::LinearScan,
+            RollbackRule::SnapshottedCow,
+            65536,
+            850_000,
+            "Shape tables are the hottest metadata; Swiss table with L1 locality",
+        ),
+        (
+            MetadataStructureKind::InlineCacheTable,
+            SubstrateKind::FlatArray,
+            LocalityGoal::L1Hot,
+            FallbackMode::Deoptimize,
+            RollbackRule::EpochFenced,
+            16384,
+            900_000,
+            "IC stubs need flat sequential access for speculative dispatch",
+        ),
+        (
+            MetadataStructureKind::StringTable,
+            SubstrateKind::ArtTree,
+            LocalityGoal::L2Warm,
+            FallbackMode::Rehash,
+            RollbackRule::Immutable,
+            262144,
+            300_000,
+            "String interning uses ART for prefix-friendly lookup",
+        ),
+        (
+            MetadataStructureKind::ScopeChainTable,
+            SubstrateKind::FlatArray,
+            LocalityGoal::L1Hot,
+            FallbackMode::LinearScan,
+            RollbackRule::Rebuilds,
+            4096,
+            700_000,
+            "Scope chains are shallow and sequential",
+        ),
+        (
+            MetadataStructureKind::ModuleGraph,
+            SubstrateKind::BTreeIndex,
+            LocalityGoal::L3Cold,
+            FallbackMode::Rehash,
+            RollbackRule::Rebuilds,
+            8192,
+            200_000,
+            "Module graphs are cold but need sorted iteration",
+        ),
+        (
+            MetadataStructureKind::PrototypeChainTable,
+            SubstrateKind::LinearProbe,
+            LocalityGoal::L2Warm,
+            FallbackMode::LinearScan,
+            RollbackRule::SnapshottedCow,
+            8192,
+            600_000,
+            "Prototype chains use linear probing for cache-friendly lookup",
+        ),
+        (
+            MetadataStructureKind::TypeFeedbackVector,
+            SubstrateKind::FlatArray,
+            LocalityGoal::L1Hot,
+            FallbackMode::Deoptimize,
+            RollbackRule::EpochFenced,
+            32768,
+            800_000,
+            "Type feedback needs sequential access for profiling",
+        ),
+        (
+            MetadataStructureKind::CompilationCache,
+            SubstrateKind::HashArray,
+            LocalityGoal::L3Cold,
+            FallbackMode::Recompile,
+            RollbackRule::Rebuilds,
+            131072,
+            150_000,
+            "Compilation artifacts use HAMT for large sparse lookup",
+        ),
+        (
+            MetadataStructureKind::GcMetadata,
+            SubstrateKind::CacheOblivious,
+            LocalityGoal::L2Warm,
+            FallbackMode::Abstain,
+            RollbackRule::NoRollback,
+            524288,
+            500_000,
+            "GC bitmaps use cache-oblivious layout for scan locality",
+        ),
+        (
+            MetadataStructureKind::AllocationSiteTable,
+            SubstrateKind::SwissTable,
+            LocalityGoal::L2Warm,
+            FallbackMode::LinearScan,
+            RollbackRule::EpochFenced,
+            16384,
+            400_000,
+            "Allocation site tracking uses Swiss table for fast insert",
+        ),
     ];
 
     for (kind, substrate, locality, fallback, rollback, max_entries, hot_frac, rationale) in
         assignments
     {
         let contract = SubstrateContract::new(
-            kind, substrate, locality, fallback, rollback, max_entries, hot_frac,
+            kind,
+            substrate,
+            locality,
+            fallback,
+            rollback,
+            max_entries,
+            hot_frac,
         );
         let assignment = SubstrateAssignment {
             contract,
@@ -1193,8 +1270,14 @@ mod tests {
         assert_eq!(SubstrateInstanceStatus::Active.to_string(), "active");
         assert_eq!(SubstrateInstanceStatus::Warming.to_string(), "warming");
         assert_eq!(SubstrateInstanceStatus::Paused.to_string(), "paused");
-        assert_eq!(SubstrateInstanceStatus::FallenBack.to_string(), "fallen_back");
-        assert_eq!(SubstrateInstanceStatus::RolledBack.to_string(), "rolled_back");
+        assert_eq!(
+            SubstrateInstanceStatus::FallenBack.to_string(),
+            "fallen_back"
+        );
+        assert_eq!(
+            SubstrateInstanceStatus::RolledBack.to_string(),
+            "rolled_back"
+        );
         assert_eq!(
             SubstrateInstanceStatus::Decommissioned.to_string(),
             "decommissioned"
@@ -1220,7 +1303,10 @@ mod tests {
     #[test]
     fn test_override_reason_display() {
         assert_eq!(OverrideReason::OperatorDebug.to_string(), "operator_debug");
-        assert_eq!(OverrideReason::CorruptionDetected.to_string(), "corruption_detected");
+        assert_eq!(
+            OverrideReason::CorruptionDetected.to_string(),
+            "corruption_detected"
+        );
         assert_eq!(OverrideReason::None.to_string(), "none");
     }
 
@@ -1320,11 +1406,8 @@ mod tests {
     #[test]
     fn test_receipt_from_contract() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "default selection",
-        );
+        let receipt =
+            SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "default selection");
         assert_eq!(receipt.structure_kind, MetadataStructureKind::ShapeTable);
         assert_eq!(receipt.selected_substrate, SubstrateKind::SwissTable);
         assert!(!receipt.override_applied);
@@ -1351,11 +1434,7 @@ mod tests {
     #[test]
     fn test_receipt_display_no_override() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "default",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "default");
         let display = receipt.to_string();
         assert!(display.contains("SelectionReceipt"));
         assert!(display.contains("shape_table"));
@@ -1388,11 +1467,7 @@ mod tests {
     #[test]
     fn test_receipt_serde_roundtrip() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let json = serde_json::to_string(&receipt).unwrap();
         let back: SubstrateSelectionReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, back);
@@ -1471,11 +1546,7 @@ mod tests {
     #[test]
     fn test_instance_from_contract() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let instance = SubstrateInstance::from_contract(&contract, receipt);
         assert_eq!(instance.structure_kind, MetadataStructureKind::ShapeTable);
         assert_eq!(instance.status, SubstrateInstanceStatus::Warming);
@@ -1485,11 +1556,7 @@ mod tests {
     #[test]
     fn test_instance_activate() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         assert_eq!(instance.status, SubstrateInstanceStatus::Warming);
         instance.activate();
@@ -1499,11 +1566,7 @@ mod tests {
     #[test]
     fn test_instance_record_entries() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.record_entries(32768);
         assert_eq!(instance.entry_count, 32768);
@@ -1521,11 +1584,7 @@ mod tests {
             0,
             850_000,
         );
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.record_entries(100);
         assert_eq!(instance.load_factor_millionths, 0);
@@ -1534,11 +1593,7 @@ mod tests {
     #[test]
     fn test_instance_snapshot_and_rollback() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.activate();
         instance.record_entries(1000);
@@ -1554,11 +1609,7 @@ mod tests {
     #[test]
     fn test_instance_fallback() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.activate();
         instance.fallback(OverrideReason::CorruptionDetected);
@@ -1570,11 +1621,7 @@ mod tests {
     #[test]
     fn test_instance_decommission() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.decommission();
         assert_eq!(instance.status, SubstrateInstanceStatus::Decommissioned);
@@ -1584,11 +1631,7 @@ mod tests {
     #[test]
     fn test_instance_is_serving() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         assert!(instance.is_serving()); // Warming is serving
         instance.activate();
@@ -1600,11 +1643,7 @@ mod tests {
     #[test]
     fn test_instance_overloaded() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.record_entries(60000); // ~91% of 65536
         assert!(instance.is_overloaded(800_000));
@@ -1615,11 +1654,7 @@ mod tests {
     #[test]
     fn test_instance_display() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let instance = SubstrateInstance::from_contract(&contract, receipt);
         let display = instance.to_string();
         assert!(display.contains("SubstrateInstance"));
@@ -1629,11 +1664,7 @@ mod tests {
     #[test]
     fn test_instance_serde_roundtrip() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let instance = SubstrateInstance::from_contract(&contract, receipt);
         let json = serde_json::to_string(&instance).unwrap();
         let back: SubstrateInstance = serde_json::from_str(&json).unwrap();
@@ -1787,11 +1818,7 @@ mod tests {
     #[test]
     fn test_health_check_healthy() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.activate();
         instance.record_entries(1000);
@@ -1804,11 +1831,7 @@ mod tests {
     #[test]
     fn test_health_check_overloaded() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.activate();
         instance.record_entries(60000); // >80% of 65536
@@ -1820,11 +1843,7 @@ mod tests {
     #[test]
     fn test_health_check_not_serving() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.decommission();
         let check = SubstrateHealthCheck::check(&instance, test_epoch());
@@ -1835,11 +1854,7 @@ mod tests {
     #[test]
     fn test_health_check_display() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.activate();
         instance.record_entries(1000);
@@ -1852,11 +1867,7 @@ mod tests {
     #[test]
     fn test_health_check_serde_roundtrip() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.activate();
         let check = SubstrateHealthCheck::check(&instance, test_epoch());
@@ -1937,8 +1948,14 @@ mod tests {
         assert_eq!(SubstrateTransitionKind::Created.to_string(), "created");
         assert_eq!(SubstrateTransitionKind::Activated.to_string(), "activated");
         assert_eq!(SubstrateTransitionKind::FellBack.to_string(), "fell_back");
-        assert_eq!(SubstrateTransitionKind::RolledBack.to_string(), "rolled_back");
-        assert_eq!(SubstrateTransitionKind::SnapshotTaken.to_string(), "snapshot_taken");
+        assert_eq!(
+            SubstrateTransitionKind::RolledBack.to_string(),
+            "rolled_back"
+        );
+        assert_eq!(
+            SubstrateTransitionKind::SnapshotTaken.to_string(),
+            "snapshot_taken"
+        );
     }
 
     // --- SubstrateSelectionError ---
@@ -2083,11 +2100,7 @@ mod tests {
     #[test]
     fn test_multiple_snapshots() {
         let contract = test_contract();
-        let receipt = SubstrateSelectionReceipt::from_contract(
-            &contract,
-            test_epoch(),
-            "test",
-        );
+        let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.activate();
 

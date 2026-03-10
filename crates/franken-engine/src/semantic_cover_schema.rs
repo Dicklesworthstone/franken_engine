@@ -143,9 +143,12 @@ impl CoverFeature {
 
     /// True if the feature has at least one unsupported surface.
     pub fn has_gap(&self) -> bool {
-        self.relevant_surfaces
-            .iter()
-            .any(|s| matches!(self.support_map.get(s), Some(SupportStatus::Unsupported) | Some(SupportStatus::Unknown)))
+        self.relevant_surfaces.iter().any(|s| {
+            matches!(
+                self.support_map.get(s),
+                Some(SupportStatus::Unsupported) | Some(SupportStatus::Unknown)
+            )
+        })
     }
 
     /// Count of surfaces where this feature is supported.
@@ -273,10 +276,9 @@ impl OverlapRestrictionMap {
             .filter(|e| {
                 e.surface_a == lo
                     && e.surface_b == hi
-                    && e
-                        .scope_prefix
+                    && e.scope_prefix
                         .as_ref()
-                        .map_or(true, |p| feature_key.starts_with(p.as_str()))
+                        .is_none_or(|p| feature_key.starts_with(p.as_str()))
             })
             .collect()
     }
@@ -381,7 +383,10 @@ impl SemanticCover {
 
     /// Number of fully covered features.
     pub fn fully_covered_count(&self) -> usize {
-        self.features.iter().filter(|f| f.is_fully_covered()).count()
+        self.features
+            .iter()
+            .filter(|f| f.is_fully_covered())
+            .count()
     }
 
     /// Number of features with gaps.
@@ -438,7 +443,11 @@ impl SemanticCover {
                 }
             })
             .collect();
-        gaps.sort_by(|a, b| a.severity.cmp(&b.severity).then(a.feature_key.cmp(&b.feature_key)));
+        gaps.sort_by(|a, b| {
+            a.severity
+                .cmp(&b.severity)
+                .then(a.feature_key.cmp(&b.feature_key))
+        });
         gaps
     }
 
@@ -546,9 +555,7 @@ pub fn detect_overlap_violations(cover: &SemanticCover) -> Vec<OverlapViolation>
             for j in (i + 1)..supported_surfaces.len() {
                 let a = supported_surfaces[i];
                 let b = supported_surfaces[j];
-                let restrictions = cover
-                    .overlap_map
-                    .restrictions_for_scope(a, b, &feature.key);
+                let restrictions = cover.overlap_map.restrictions_for_scope(a, b, &feature.key);
                 for entry in restrictions {
                     if entry.restriction == OverlapRestriction::Exclusive {
                         violations.push(OverlapViolation {
@@ -810,10 +817,7 @@ mod tests {
         SecurityEpoch::from_raw(42)
     }
 
-    fn make_feature(
-        key: &str,
-        surfaces: &[(EngineSurface, SupportStatus)],
-    ) -> CoverFeature {
+    fn make_feature(key: &str, surfaces: &[(EngineSurface, SupportStatus)]) -> CoverFeature {
         let relevant: BTreeSet<EngineSurface> = surfaces.iter().map(|(s, _)| *s).collect();
         let support_map: BTreeMap<EngineSurface, SupportStatus> =
             surfaces.iter().cloned().collect();
@@ -893,10 +897,13 @@ mod tests {
 
     #[test]
     fn feature_fully_covered() {
-        let f = make_feature("test", &[
-            (EngineSurface::Parser, SupportStatus::Supported),
-            (EngineSurface::Runtime, SupportStatus::Supported),
-        ]);
+        let f = make_feature(
+            "test",
+            &[
+                (EngineSurface::Parser, SupportStatus::Supported),
+                (EngineSurface::Runtime, SupportStatus::Supported),
+            ],
+        );
         assert!(f.is_fully_covered());
         assert!(!f.has_gap());
         assert_eq!(f.supported_surface_count(), 2);
@@ -905,10 +912,13 @@ mod tests {
 
     #[test]
     fn feature_with_gap() {
-        let f = make_feature("gap", &[
-            (EngineSurface::Parser, SupportStatus::Supported),
-            (EngineSurface::Runtime, SupportStatus::Unsupported),
-        ]);
+        let f = make_feature(
+            "gap",
+            &[
+                (EngineSurface::Parser, SupportStatus::Supported),
+                (EngineSurface::Runtime, SupportStatus::Unsupported),
+            ],
+        );
         assert!(!f.is_fully_covered());
         assert!(f.has_gap());
         assert_eq!(f.supported_surface_count(), 1);
@@ -917,10 +927,13 @@ mod tests {
 
     #[test]
     fn feature_unknown_is_gap() {
-        let f = make_feature("unk", &[
-            (EngineSurface::Parser, SupportStatus::Supported),
-            (EngineSurface::Lowering, SupportStatus::Unknown),
-        ]);
+        let f = make_feature(
+            "unk",
+            &[
+                (EngineSurface::Parser, SupportStatus::Supported),
+                (EngineSurface::Lowering, SupportStatus::Unknown),
+            ],
+        );
         assert!(f.has_gap());
     }
 
@@ -940,10 +953,13 @@ mod tests {
 
     #[test]
     fn feature_serde_roundtrip() {
-        let f = make_feature("serde_test", &[
-            (EngineSurface::Parser, SupportStatus::Supported),
-            (EngineSurface::Module, SupportStatus::Partial),
-        ]);
+        let f = make_feature(
+            "serde_test",
+            &[
+                (EngineSurface::Parser, SupportStatus::Supported),
+                (EngineSurface::Module, SupportStatus::Partial),
+            ],
+        );
         let json = serde_json::to_string(&f).unwrap();
         let back: CoverFeature = serde_json::from_str(&json).unwrap();
         assert_eq!(f, back);
@@ -954,9 +970,15 @@ mod tests {
     #[test]
     fn overlap_restriction_display() {
         assert_eq!(OverlapRestriction::Allowed.to_string(), "allowed");
-        assert_eq!(OverlapRestriction::DelegationRequired.to_string(), "delegation_required");
+        assert_eq!(
+            OverlapRestriction::DelegationRequired.to_string(),
+            "delegation_required"
+        );
         assert_eq!(OverlapRestriction::Exclusive.to_string(), "exclusive");
-        assert_eq!(OverlapRestriction::ReconciliationRequired.to_string(), "reconciliation_required");
+        assert_eq!(
+            OverlapRestriction::ReconciliationRequired.to_string(),
+            "reconciliation_required"
+        );
     }
 
     #[test]
@@ -993,13 +1015,13 @@ mod tests {
     #[test]
     fn overlap_map_scope_filter() {
         let map = default_overlap_map();
-        let entries = map.restrictions_for_scope(
-            EngineSurface::Parser,
-            EngineSurface::TypeScript,
-            "ts.enum",
-        );
+        let entries =
+            map.restrictions_for_scope(EngineSurface::Parser, EngineSurface::TypeScript, "ts.enum");
         assert!(!entries.is_empty());
-        assert_eq!(entries[0].restriction, OverlapRestriction::ReconciliationRequired);
+        assert_eq!(
+            entries[0].restriction,
+            OverlapRestriction::ReconciliationRequired
+        );
     }
 
     #[test]
@@ -1030,14 +1052,20 @@ mod tests {
     #[test]
     fn cover_basic() {
         let features = vec![
-            make_feature("f1", &[
-                (EngineSurface::Parser, SupportStatus::Supported),
-                (EngineSurface::Runtime, SupportStatus::Supported),
-            ]),
-            make_feature("f2", &[
-                (EngineSurface::Parser, SupportStatus::Supported),
-                (EngineSurface::Runtime, SupportStatus::Unsupported),
-            ]),
+            make_feature(
+                "f1",
+                &[
+                    (EngineSurface::Parser, SupportStatus::Supported),
+                    (EngineSurface::Runtime, SupportStatus::Supported),
+                ],
+            ),
+            make_feature(
+                "f2",
+                &[
+                    (EngineSurface::Parser, SupportStatus::Supported),
+                    (EngineSurface::Runtime, SupportStatus::Unsupported),
+                ],
+            ),
         ];
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
@@ -1049,14 +1077,15 @@ mod tests {
     #[test]
     fn cover_find_gaps() {
         let features = vec![
-            make_feature("ok", &[
-                (EngineSurface::Parser, SupportStatus::Supported),
-            ]),
-            make_feature("bad", &[
-                (EngineSurface::Parser, SupportStatus::Supported),
-                (EngineSurface::Runtime, SupportStatus::Unsupported),
-                (EngineSurface::Lowering, SupportStatus::Unsupported),
-            ]),
+            make_feature("ok", &[(EngineSurface::Parser, SupportStatus::Supported)]),
+            make_feature(
+                "bad",
+                &[
+                    (EngineSurface::Parser, SupportStatus::Supported),
+                    (EngineSurface::Runtime, SupportStatus::Unsupported),
+                    (EngineSurface::Lowering, SupportStatus::Unsupported),
+                ],
+            ),
         ];
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
@@ -1068,12 +1097,13 @@ mod tests {
 
     #[test]
     fn cover_surface_summary() {
-        let features = vec![
-            make_feature("f1", &[
+        let features = vec![make_feature(
+            "f1",
+            &[
                 (EngineSurface::Parser, SupportStatus::Supported),
                 (EngineSurface::Runtime, SupportStatus::Supported),
-            ]),
-        ];
+            ],
+        )];
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
         let summary = cover.surface_summary();
@@ -1084,9 +1114,10 @@ mod tests {
 
     #[test]
     fn cover_get_feature() {
-        let features = vec![
-            make_feature("findme", &[(EngineSurface::Parser, SupportStatus::Supported)]),
-        ];
+        let features = vec![make_feature(
+            "findme",
+            &[(EngineSurface::Parser, SupportStatus::Supported)],
+        )];
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
         assert!(cover.get_feature("findme").is_some());
@@ -1095,9 +1126,10 @@ mod tests {
 
     #[test]
     fn cover_content_hash_deterministic() {
-        let features = vec![
-            make_feature("f1", &[(EngineSurface::Parser, SupportStatus::Supported)]),
-        ];
+        let features = vec![make_feature(
+            "f1",
+            &[(EngineSurface::Parser, SupportStatus::Supported)],
+        )];
         let map = default_overlap_map();
         let c1 = SemanticCover::new(features.clone(), map.clone(), test_epoch());
         let c2 = SemanticCover::new(features, map, test_epoch());
@@ -1107,14 +1139,20 @@ mod tests {
     #[test]
     fn cover_coverage_ratio() {
         let features = vec![
-            make_feature("full", &[
-                (EngineSurface::Parser, SupportStatus::Supported),
-                (EngineSurface::Runtime, SupportStatus::Supported),
-            ]),
-            make_feature("half", &[
-                (EngineSurface::Parser, SupportStatus::Supported),
-                (EngineSurface::Runtime, SupportStatus::Unsupported),
-            ]),
+            make_feature(
+                "full",
+                &[
+                    (EngineSurface::Parser, SupportStatus::Supported),
+                    (EngineSurface::Runtime, SupportStatus::Supported),
+                ],
+            ),
+            make_feature(
+                "half",
+                &[
+                    (EngineSurface::Parser, SupportStatus::Supported),
+                    (EngineSurface::Runtime, SupportStatus::Unsupported),
+                ],
+            ),
         ];
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
@@ -1126,12 +1164,13 @@ mod tests {
 
     #[test]
     fn detect_no_violations() {
-        let features = vec![
-            make_feature("f1", &[
+        let features = vec![make_feature(
+            "f1",
+            &[
                 (EngineSurface::Parser, SupportStatus::Supported),
                 (EngineSurface::Runtime, SupportStatus::Supported),
-            ]),
-        ];
+            ],
+        )];
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
         let violations = detect_overlap_violations(&cover);
@@ -1143,12 +1182,13 @@ mod tests {
     #[test]
     fn detect_exclusive_violation() {
         // CLI and Runtime both claim support → exclusive violation
-        let features = vec![
-            make_feature("shared", &[
+        let features = vec![make_feature(
+            "shared",
+            &[
                 (EngineSurface::Cli, SupportStatus::Supported),
                 (EngineSurface::Runtime, SupportStatus::Supported),
-            ]),
-        ];
+            ],
+        )];
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
         let violations = detect_overlap_violations(&cover);
@@ -1191,8 +1231,17 @@ mod tests {
 
     #[test]
     fn specimen_family_display() {
-        assert_eq!(CoverSpecimenFamily::FullCoverage.to_string(), "full_coverage");
-        assert_eq!(CoverSpecimenFamily::PartialCoverage.to_string(), "partial_coverage");
-        assert_eq!(CoverSpecimenFamily::OverlapViolation.to_string(), "overlap_violation");
+        assert_eq!(
+            CoverSpecimenFamily::FullCoverage.to_string(),
+            "full_coverage"
+        );
+        assert_eq!(
+            CoverSpecimenFamily::PartialCoverage.to_string(),
+            "partial_coverage"
+        );
+        assert_eq!(
+            CoverSpecimenFamily::OverlapViolation.to_string(),
+            "overlap_violation"
+        );
     }
 }

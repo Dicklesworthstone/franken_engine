@@ -216,6 +216,7 @@ pub struct AcceptedLaw {
 
 impl AcceptedLaw {
     /// Create a new accepted law.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         law_id: &str,
         candidate_id: &str,
@@ -245,7 +246,8 @@ impl AcceptedLaw {
     pub fn promotion_priority_millionths(&self) -> u64 {
         let strength_weight = self.strength.weight_millionths();
         // Weighted average: 60% strength, 40% mining rank
-        let priority = (strength_weight * 600_000 + self.mining_rank_millionths * 400_000) / MILLION;
+        let priority =
+            (strength_weight * 600_000 + self.mining_rank_millionths * 400_000) / MILLION;
         priority.min(MILLION)
     }
 
@@ -635,10 +637,7 @@ impl fmt::Display for SupportAtlasEntry {
         write!(
             f,
             "SupportAtlasEntry({} domain={} coverage={} validated={})",
-            self.entry_id,
-            self.domain,
-            self.coverage_depth_millionths,
-            self.workload_validated,
+            self.entry_id, self.domain, self.coverage_depth_millionths, self.workload_validated,
         )
     }
 }
@@ -787,10 +786,7 @@ impl fmt::Display for FrontierEntry {
         write!(
             f,
             "FrontierEntry({} region={} priority={} explored={})",
-            self.entry_id,
-            self.frontier_region,
-            self.priority_millionths,
-            self.explored,
+            self.entry_id, self.frontier_region, self.priority_millionths, self.explored,
         )
     }
 }
@@ -987,22 +983,10 @@ impl PromotionPipeline {
     /// Create a new promotion pipeline.
     pub fn new(pipeline_id: &str, epoch: SecurityEpoch) -> Self {
         let mut pipeline = Self {
-            rewrite_pack: RewritePack::new(
-                &format!("{pipeline_id}-rewrite"),
-                epoch,
-            ),
-            synthesis_lane: SynthesisLane::new(
-                &format!("{pipeline_id}-synthesis"),
-                epoch,
-            ),
-            support_atlas: SupportAtlas::new(
-                &format!("{pipeline_id}-atlas"),
-                epoch,
-            ),
-            frontier_ledger: FrontierLedger::new(
-                &format!("{pipeline_id}-frontier"),
-                epoch,
-            ),
+            rewrite_pack: RewritePack::new(&format!("{pipeline_id}-rewrite"), epoch),
+            synthesis_lane: SynthesisLane::new(&format!("{pipeline_id}-synthesis"), epoch),
+            support_atlas: SupportAtlas::new(&format!("{pipeline_id}-atlas"), epoch),
+            frontier_ledger: FrontierLedger::new(&format!("{pipeline_id}-frontier"), epoch),
             receipts: Vec::new(),
             pipeline_epoch: epoch,
             schema_version: LAW_PROMOTION_SCHEMA_VERSION.to_string(),
@@ -1055,13 +1039,7 @@ impl PromotionPipeline {
         expected_pattern: &str,
     ) -> PromotionReceipt {
         let seed_id = format!("syn-{}", law.law_id);
-        let seed = SynthesisSeed::from_law(
-            &seed_id,
-            law,
-            template,
-            parameters,
-            expected_pattern,
-        );
+        let seed = SynthesisSeed::from_law(&seed_id, law, template, parameters, expected_pattern);
         self.synthesis_lane.add_seed(seed);
 
         let receipt_id = format!("pr-syn-{}", law.law_id);
@@ -1086,12 +1064,7 @@ impl PromotionPipeline {
         coverage_depth_millionths: u64,
     ) -> PromotionReceipt {
         let entry_id = format!("atlas-{}", law.law_id);
-        let entry = SupportAtlasEntry::from_law(
-            &entry_id,
-            law,
-            domain,
-            coverage_depth_millionths,
-        );
+        let entry = SupportAtlasEntry::from_law(&entry_id, law, domain, coverage_depth_millionths);
         self.support_atlas.add_entry(entry);
 
         let receipt_id = format!("pr-atlas-{}", law.law_id);
@@ -1116,12 +1089,8 @@ impl PromotionPipeline {
         expected_gain_millionths: u64,
     ) -> PromotionReceipt {
         let entry_id = format!("front-{}", law.law_id);
-        let entry = FrontierEntry::from_law(
-            &entry_id,
-            law,
-            frontier_region,
-            expected_gain_millionths,
-        );
+        let entry =
+            FrontierEntry::from_law(&entry_id, law, frontier_region, expected_gain_millionths);
         self.frontier_ledger.add_entry(entry);
 
         let receipt_id = format!("pr-front-{}", law.law_id);
@@ -1285,7 +1254,10 @@ mod tests {
         assert_eq!(PromotionTarget::RewritePack.to_string(), "rewrite_pack");
         assert_eq!(PromotionTarget::SynthesisLane.to_string(), "synthesis_lane");
         assert_eq!(PromotionTarget::SupportAtlas.to_string(), "support_atlas");
-        assert_eq!(PromotionTarget::FrontierLedger.to_string(), "frontier_ledger");
+        assert_eq!(
+            PromotionTarget::FrontierLedger.to_string(),
+            "frontier_ledger"
+        );
     }
 
     #[test]
@@ -1492,7 +1464,10 @@ mod tests {
             "result >= 0",
         );
         assert_eq!(seed.seed_id, "syn-001");
-        assert_eq!(seed.priority_millionths, law.promotion_priority_millionths());
+        assert_eq!(
+            seed.priority_millionths,
+            law.promotion_priority_millionths()
+        );
     }
 
     #[test]
@@ -1572,9 +1547,24 @@ mod tests {
     fn test_support_atlas_covered_domains() {
         let mut atlas = SupportAtlas::new("atlas-001", test_epoch());
         let law = test_law();
-        atlas.add_entry(SupportAtlasEntry::from_law("e1", &law, "string.length", 500_000));
-        atlas.add_entry(SupportAtlasEntry::from_law("e2", &law, "array.push", 600_000));
-        atlas.add_entry(SupportAtlasEntry::from_law("e3", &law, "string.length", 700_000));
+        atlas.add_entry(SupportAtlasEntry::from_law(
+            "e1",
+            &law,
+            "string.length",
+            500_000,
+        ));
+        atlas.add_entry(SupportAtlasEntry::from_law(
+            "e2",
+            &law,
+            "array.push",
+            600_000,
+        ));
+        atlas.add_entry(SupportAtlasEntry::from_law(
+            "e3",
+            &law,
+            "string.length",
+            700_000,
+        ));
         assert_eq!(atlas.covered_domains().len(), 2);
     }
 
@@ -1704,8 +1694,22 @@ mod tests {
 
     #[test]
     fn test_receipt_hash_determinism() {
-        let r1 = PromotionReceipt::new("p", "l", PromotionTarget::RewritePack, "a", test_epoch(), "r");
-        let r2 = PromotionReceipt::new("p", "l", PromotionTarget::RewritePack, "a", test_epoch(), "r");
+        let r1 = PromotionReceipt::new(
+            "p",
+            "l",
+            PromotionTarget::RewritePack,
+            "a",
+            test_epoch(),
+            "r",
+        );
+        let r2 = PromotionReceipt::new(
+            "p",
+            "l",
+            PromotionTarget::RewritePack,
+            "a",
+            test_epoch(),
+            "r",
+        );
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -1731,12 +1735,7 @@ mod tests {
     fn test_pipeline_promote_to_synthesis() {
         let mut pipeline = PromotionPipeline::new("pipe-001", test_epoch());
         let law = test_law();
-        let receipt = pipeline.promote_to_synthesis(
-            &law,
-            "test_$p() {}",
-            vec!["p".into()],
-            "true",
-        );
+        let receipt = pipeline.promote_to_synthesis(&law, "test_$p() {}", vec!["p".into()], "true");
         assert_eq!(receipt.target, PromotionTarget::SynthesisLane);
         assert_eq!(pipeline.synthesis_lane.seed_count(), 1);
     }
@@ -1886,11 +1885,7 @@ mod tests {
             epoch,
             vec!["campaign-001".into()],
         );
-        pipeline.promote_to_frontier(
-            &heuristic_law,
-            "sparse-array-optimization",
-            250_000,
-        );
+        pipeline.promote_to_frontier(&heuristic_law, "sparse-array-optimization", 250_000);
 
         let report = pipeline.summary_report();
         assert_eq!(report.total_promotions, 3);
@@ -1899,7 +1894,10 @@ mod tests {
         assert_eq!(report.frontier_entries, 1);
 
         // Proved law has higher priority than heuristic
-        assert!(proved_law.promotion_priority_millionths() > heuristic_law.promotion_priority_millionths());
+        assert!(
+            proved_law.promotion_priority_millionths()
+                > heuristic_law.promotion_priority_millionths()
+        );
     }
 
     #[test]

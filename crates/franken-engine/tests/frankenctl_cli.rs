@@ -110,6 +110,187 @@ fn frankenctl_help_lists_supported_commands() {
 }
 
 #[test]
+fn frankenctl_react_help_is_available_without_changing_top_level_help() {
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args(["react", "--help"])
+        .output()
+        .expect("react help should execute");
+
+    assert!(
+        output.status.success(),
+        "react help failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("react usage:"));
+    assert!(stdout.contains("frankenctl react compile"));
+    assert!(stdout.contains("frankenctl react build"));
+    assert!(stdout.contains("frankenctl react contract"));
+}
+
+#[test]
+fn frankenctl_react_contract_emits_machine_readable_contract() {
+    let output_path = temp_path("frankenctl_react_contract", "json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "react",
+            "contract",
+            "--trace-id",
+            "trace-react-contract",
+            "--decision-id",
+            "decision-react-contract",
+            "--policy-id",
+            "policy-react-contract",
+            "--out",
+            output_path.to_str().expect("path should be utf8"),
+        ])
+        .output()
+        .expect("react contract should execute");
+
+    assert!(
+        output.status.success(),
+        "react contract failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["schema_version"].as_str(),
+        Some("franken-engine.frankenctl.react-cli-contract.v1")
+    );
+    assert_eq!(
+        stdout_json["trace_id"].as_str(),
+        Some("trace-react-contract")
+    );
+    assert_eq!(
+        stdout_json["capability_contract_schema_version"].as_str(),
+        Some("rgc.react-capability-contract.v1")
+    );
+    assert!(
+        stdout_json["commands"]
+            .as_array()
+            .is_some_and(|commands| commands.len() >= 3)
+    );
+    assert!(
+        stdout_json["compile_capabilities"]
+            .as_array()
+            .is_some_and(|caps| !caps.is_empty())
+    );
+    let output_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&output_path).expect("contract output should exist"))
+            .expect("contract output should parse");
+    assert_eq!(stdout_json, output_json);
+
+    let _ = fs::remove_file(output_path);
+}
+
+#[test]
+fn frankenctl_react_compile_fails_closed_with_contract_guidance() {
+    let source_path = temp_path("frankenctl_react_compile_source", "tsx");
+    let report_path = temp_path("frankenctl_react_compile_report", "json");
+    write_source(&source_path, "export const App = () => <div>Hello</div>;\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "react",
+            "compile",
+            "--input",
+            source_path.to_str().expect("path should be utf8"),
+            "--source-form",
+            "tsx",
+            "--runtime",
+            "automatic",
+            "--trace-id",
+            "trace-react-compile",
+            "--decision-id",
+            "decision-react-compile",
+            "--policy-id",
+            "policy-react-compile",
+            "--out",
+            report_path.to_str().expect("path should be utf8"),
+        ])
+        .output()
+        .expect("react compile should execute");
+
+    assert_eq!(output.status.code(), Some(25));
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["schema_version"].as_str(),
+        Some("franken-engine.frankenctl.react-cli-report.v1")
+    );
+    assert_eq!(
+        stdout_json["capability_id"].as_str(),
+        Some("tsx-automatic-runtime-compile")
+    );
+    assert_eq!(stdout_json["support_status"].as_str(), Some("deferred"));
+    assert_eq!(
+        stdout_json["diagnostic"]["error_code"].as_str(),
+        Some("FE-RGC-016A-CAP-0005")
+    );
+    assert_eq!(
+        stdout_json["request"]["runtime_mode"].as_str(),
+        Some("automatic")
+    );
+    let output_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path).expect("react report should exist"))
+            .expect("react report should parse");
+    assert_eq!(stdout_json, output_json);
+
+    let _ = fs::remove_file(source_path);
+    let _ = fs::remove_file(report_path);
+}
+
+#[test]
+fn frankenctl_react_build_fails_closed_with_contract_guidance() {
+    let entry_path = temp_path("frankenctl_react_build_entry", "jsx");
+    let report_path = temp_path("frankenctl_react_build_report", "json");
+    write_source(
+        &entry_path,
+        "export default function App() { return <main />; }\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "react",
+            "build",
+            "--entry",
+            entry_path.to_str().expect("path should be utf8"),
+            "--target",
+            "ssr",
+            "--trace-id",
+            "trace-react-build",
+            "--decision-id",
+            "decision-react-build",
+            "--policy-id",
+            "policy-react-build",
+            "--out",
+            report_path.to_str().expect("path should be utf8"),
+        ])
+        .output()
+        .expect("react build should execute");
+
+    assert_eq!(output.status.code(), Some(25));
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["capability_id"].as_str(),
+        Some("react-ssr-entrypoint")
+    );
+    assert_eq!(stdout_json["support_status"].as_str(), Some("unsupported"));
+    assert_eq!(
+        stdout_json["diagnostic"]["error_code"].as_str(),
+        Some("FE-RGC-016A-CAP-0007")
+    );
+    assert_eq!(stdout_json["request"]["build_target"].as_str(), Some("ssr"));
+    let output_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path).expect("react build report should exist"))
+            .expect("react build report should parse");
+    assert_eq!(stdout_json, output_json);
+
+    let _ = fs::remove_file(entry_path);
+    let _ = fs::remove_file(report_path);
+}
+
+#[test]
 fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
     let source_path = temp_path("frankenctl_compile_source", "js");
     let artifact_path = temp_path("frankenctl_compile_artifact", "json");

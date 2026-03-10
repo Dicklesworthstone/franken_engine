@@ -167,6 +167,32 @@ impl fmt::Display for NativeAddonSupportStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum NativeAddonRiskClassification {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl NativeAddonRiskClassification {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Critical => "critical",
+        }
+    }
+}
+
+impl fmt::Display for NativeAddonRiskClassification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum NativeAddonHandleDiscipline {
     NodeApiOnly,
     ThreadSafeFunctionOnly,
@@ -523,6 +549,15 @@ impl NativeAddonLoadRequest {
         caps
     }
 
+    pub fn symbol_families(&self) -> Vec<String> {
+        self.symbol_exports
+            .iter()
+            .map(|symbol| symbol.class.as_str().to_string())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     pub fn abi_fingerprint(&self) -> ContentHash {
         ContentHash::compute(&encode_value(&self.canonical_value()))
     }
@@ -650,6 +685,10 @@ pub struct NativeAddonSupportSurface {
     pub supported_fallbacks: Vec<NativeAddonFallbackMode>,
     pub required_capabilities: BTreeSet<RuntimeCapability>,
     pub required_slot_capabilities: Vec<SlotCapability>,
+    pub symbol_families: Vec<String>,
+    pub risk_classification: NativeAddonRiskClassification,
+    pub owner_route: String,
+    pub remediation_hint: String,
     pub abi_fingerprint: ContentHash,
 }
 
@@ -707,6 +746,10 @@ impl NativeAddonSupportSurface {
             CanonicalValue::String(self.package_version.clone()),
         );
         map.insert(
+            "owner_route".to_string(),
+            CanonicalValue::String(self.owner_route.clone()),
+        );
+        map.insert(
             "required_capabilities".to_string(),
             CanonicalValue::Array(
                 self.required_capabilities
@@ -729,6 +772,23 @@ impl NativeAddonSupportSurface {
             self.selected_route
                 .map(|route| CanonicalValue::String(route.as_str().to_string()))
                 .unwrap_or(CanonicalValue::Null),
+        );
+        map.insert(
+            "remediation_hint".to_string(),
+            CanonicalValue::String(self.remediation_hint.clone()),
+        );
+        map.insert(
+            "risk_classification".to_string(),
+            CanonicalValue::String(self.risk_classification.as_str().to_string()),
+        );
+        map.insert(
+            "symbol_families".to_string(),
+            CanonicalValue::Array(
+                self.symbol_families
+                    .iter()
+                    .map(|family| CanonicalValue::String(family.clone()))
+                    .collect(),
+            ),
         );
         map.insert(
             "support_status".to_string(),
@@ -847,6 +907,7 @@ pub struct NativeAddonAbiFingerprintEntry {
     pub cohort: NativeAddonCohort,
     pub abi_surface: NativeAddonAbiSurface,
     pub supported_fallbacks: Vec<NativeAddonFallbackMode>,
+    pub symbol_families: Vec<String>,
     pub fingerprint: ContentHash,
 }
 
@@ -872,6 +933,15 @@ impl NativeAddonAbiFingerprintEntry {
         map.insert(
             "package_name".to_string(),
             CanonicalValue::String(self.package_name.clone()),
+        );
+        map.insert(
+            "symbol_families".to_string(),
+            CanonicalValue::Array(
+                self.symbol_families
+                    .iter()
+                    .map(|family| CanonicalValue::String(family.clone()))
+                    .collect(),
+            ),
         );
         map.insert(
             "supported_fallbacks".to_string(),
@@ -1131,6 +1201,7 @@ impl NativeAddonMembrane {
         let mut direct_blockers = self.direct_blockers(request);
         direct_blockers.sort();
         direct_blockers.dedup();
+        let symbol_families = request.symbol_families();
 
         let selected_route = if !missing_capabilities.is_empty() {
             None
@@ -1158,6 +1229,24 @@ impl NativeAddonMembrane {
             }
             None => NativeAddonSupportStatus::Unsupported,
         };
+        let risk_classification = classify_risk(
+            request,
+            support_status,
+            selected_route,
+            &missing_capabilities,
+        );
+        let owner_route = owner_route(
+            request,
+            support_status,
+            selected_route,
+            &missing_capabilities,
+        );
+        let remediation_hint = remediation_hint(
+            request,
+            selected_route,
+            &missing_capabilities,
+            &direct_blockers,
+        );
 
         NativeAddonSupportSurface {
             addon_id: request.addon_id.trim().to_string(),
@@ -1174,6 +1263,10 @@ impl NativeAddonMembrane {
             supported_fallbacks: request.supported_fallbacks.iter().copied().collect(),
             required_capabilities,
             required_slot_capabilities: request.required_slot_capabilities(),
+            symbol_families,
+            risk_classification,
+            owner_route,
+            remediation_hint,
             abi_fingerprint: request.abi_fingerprint(),
         }
     }
@@ -1273,6 +1366,7 @@ impl NativeAddonMembrane {
                 cohort: surface.cohort,
                 abi_surface: surface.abi_surface,
                 supported_fallbacks: surface.supported_fallbacks.clone(),
+                symbol_families: surface.symbol_families.clone(),
                 fingerprint: surface.abi_fingerprint.clone(),
             });
             support_surface.push(surface);
@@ -1719,9 +1813,15 @@ impl NativeAddonMembrane {
 }
 
 fn compatibility_notes(surface: &NativeAddonSupportSurface) -> String {
+    let metadata_prefix = format!(
+        "risk={} owner_route={} remediation={}",
+        surface.risk_classification.as_str(),
+        surface.owner_route,
+        surface.remediation_hint
+    );
     if !surface.missing_capabilities.is_empty() {
         return format!(
-            "missing capabilities: {}",
+            "{metadata_prefix}; missing capabilities: {}",
             surface
                 .missing_capabilities
                 .iter()
@@ -1736,12 +1836,129 @@ fn compatibility_notes(surface: &NativeAddonSupportSurface) -> String {
             .map(|route| route.as_str().to_string())
             .unwrap_or_else(|| "none".to_string());
         return format!(
-            "direct blockers: {}; selected fallback: {}",
+            "{metadata_prefix}; direct blockers: {}; selected fallback: {}",
             surface.direct_blockers.join("; "),
             fallback
         );
     }
-    "direct membrane eligible".to_string()
+    format!("{metadata_prefix}; direct membrane eligible")
+}
+
+fn classify_risk(
+    request: &NativeAddonLoadRequest,
+    support_status: NativeAddonSupportStatus,
+    selected_route: Option<NativeAddonRoute>,
+    missing_capabilities: &BTreeSet<RuntimeCapability>,
+) -> NativeAddonRiskClassification {
+    if !missing_capabilities.is_empty() {
+        return NativeAddonRiskClassification::Critical;
+    }
+
+    if matches!(
+        request.abi_surface,
+        NativeAddonAbiSurface::V8Direct
+            | NativeAddonAbiSurface::ForeignFfi
+            | NativeAddonAbiSurface::Unknown
+    ) {
+        return NativeAddonRiskClassification::Critical;
+    }
+
+    if matches!(selected_route, Some(NativeAddonRoute::DelegateCell))
+        || request.uses_foreign_heap
+        || request.uses_process_global_state
+        || matches!(
+            request.handle_discipline,
+            NativeAddonHandleDiscipline::ExternalBuffer
+                | NativeAddonHandleDiscipline::RawPointerEscape
+        )
+    {
+        return NativeAddonRiskClassification::High;
+    }
+
+    if matches!(selected_route, Some(NativeAddonRoute::WasmPort))
+        || matches!(
+            request.cohort(),
+            NativeAddonCohort::NodeApiIsolateBound | NativeAddonCohort::LegacyNan
+        )
+        || support_status == NativeAddonSupportStatus::FallbackOnly
+    {
+        return NativeAddonRiskClassification::Medium;
+    }
+
+    NativeAddonRiskClassification::Low
+}
+
+fn owner_route(
+    request: &NativeAddonLoadRequest,
+    support_status: NativeAddonSupportStatus,
+    selected_route: Option<NativeAddonRoute>,
+    missing_capabilities: &BTreeSet<RuntimeCapability>,
+) -> String {
+    if !missing_capabilities.is_empty()
+        || matches!(request.cohort(), NativeAddonCohort::NodeApiPrivileged)
+    {
+        return "security-capability-review".to_string();
+    }
+
+    match selected_route {
+        Some(NativeAddonRoute::DirectMembrane) => match request.cohort() {
+            NativeAddonCohort::NodeApiPortable => "interop-native-addon".to_string(),
+            NativeAddonCohort::NodeApiIsolateBound => "runtime-async-isolation".to_string(),
+            NativeAddonCohort::NodeApiPrivileged => "security-capability-review".to_string(),
+            NativeAddonCohort::LegacyNan => "interop-wasm-porting".to_string(),
+            NativeAddonCohort::V8Binding => "compatibility-v8-binding".to_string(),
+            NativeAddonCohort::ForeignFfi => "compatibility-ffi-review".to_string(),
+            NativeAddonCohort::Unknown => "interop-native-addon".to_string(),
+        },
+        Some(NativeAddonRoute::WasmPort) => "interop-wasm-porting".to_string(),
+        Some(NativeAddonRoute::DelegateCell) => "runtime-delegate-cell".to_string(),
+        None => match (support_status, request.abi_surface) {
+            (_, NativeAddonAbiSurface::V8Direct) => "compatibility-v8-binding".to_string(),
+            (_, NativeAddonAbiSurface::ForeignFfi) => "compatibility-ffi-review".to_string(),
+            (_, NativeAddonAbiSurface::Unknown) => "interop-native-addon".to_string(),
+            (NativeAddonSupportStatus::Unsupported, _) => "interop-native-addon".to_string(),
+            _ => "interop-native-addon".to_string(),
+        },
+    }
+}
+
+fn remediation_hint(
+    request: &NativeAddonLoadRequest,
+    selected_route: Option<NativeAddonRoute>,
+    missing_capabilities: &BTreeSet<RuntimeCapability>,
+    direct_blockers: &[String],
+) -> String {
+    if !missing_capabilities.is_empty() {
+        return format!(
+            "grant missing capabilities ({}) or keep the addon unsupported until the package matrix and policy contract are updated",
+            missing_capabilities
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    match selected_route {
+        Some(NativeAddonRoute::DirectMembrane) => match request.cohort() {
+            NativeAddonCohort::NodeApiIsolateBound => {
+                "keep the direct membrane path, but preserve async-worker isolation and threadsafe-function coverage in verification".to_string()
+            }
+            _ => "retain the stable Node-API surface and current handle discipline".to_string(),
+        },
+        Some(NativeAddonRoute::WasmPort) => {
+            "prefer a maintained WASM port for this cohort and keep delegate-cell fallback for unsupported host features".to_string()
+        }
+        Some(NativeAddonRoute::DelegateCell) => {
+            "route through the delegate cell and isolate unsafe pointer or heap behavior behind the hostcall session boundary".to_string()
+        }
+        None if direct_blockers.iter().any(|blocker| blocker.contains("node_api surface")) => {
+            "port the addon to the stable Node-API surface or publish it as fallback-only/unsupported with explicit operator guidance".to_string()
+        }
+        None => {
+            "publish the unsupported disposition with owner-routed remediation instead of silently omitting the addon cohort".to_string()
+        }
+    }
 }
 
 fn native_addon_decision_stable_id(
@@ -2913,12 +3130,47 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
+    fn load_request_symbol_families_are_sorted_and_deduped() {
+        let req = simple_request()
+            .with_symbol(NativeAddonSymbol::new(
+                "beta",
+                NativeAddonSymbolClass::FunctionExport,
+            ))
+            .with_symbol(NativeAddonSymbol::new(
+                "alpha",
+                NativeAddonSymbolClass::ValueExport,
+            ))
+            .with_symbol(NativeAddonSymbol::new(
+                "gamma",
+                NativeAddonSymbolClass::FunctionExport,
+            ));
+
+        assert_eq!(
+            req.symbol_families(),
+            vec!["function_export".to_string(), "value_export".to_string()]
+        );
+    }
+
+    #[test]
     fn compatibility_notes_direct_eligible() {
         let m = NativeAddonMembrane::standard();
         let req = simple_request();
         let surface = m.assess_support_surface(&req, &full_profile());
+        assert_eq!(
+            surface.risk_classification,
+            NativeAddonRiskClassification::Low
+        );
+        assert_eq!(surface.owner_route, "interop-native-addon");
+        assert_eq!(
+            surface.remediation_hint,
+            "retain the stable Node-API surface and current handle discipline"
+        );
+        assert!(surface.symbol_families.is_empty());
         let notes = compatibility_notes(&surface);
-        assert_eq!(notes, "direct membrane eligible");
+        assert_eq!(
+            notes,
+            "risk=low owner_route=interop-native-addon remediation=retain the stable Node-API surface and current handle discipline; direct membrane eligible"
+        );
     }
 
     #[test]
@@ -2927,8 +3179,20 @@ mod tests {
         let mut req = simple_request();
         req.requires_network_egress = true;
         let surface = m.assess_support_surface(&req, &CapabilityProfile::compute_only());
+        assert_eq!(
+            surface.risk_classification,
+            NativeAddonRiskClassification::Critical
+        );
+        assert_eq!(surface.owner_route, "security-capability-review");
+        assert_eq!(
+            surface.remediation_hint,
+            "grant missing capabilities (network_egress) or keep the addon unsupported until the package matrix and policy contract are updated"
+        );
         let notes = compatibility_notes(&surface);
-        assert!(notes.starts_with("missing capabilities:"));
+        assert!(notes.starts_with(
+            "risk=critical owner_route=security-capability-review remediation=grant missing capabilities (network_egress)"
+        ));
+        assert!(notes.contains("missing capabilities: network_egress"));
     }
 
     #[test]
@@ -2938,8 +3202,22 @@ mod tests {
             .with_handle_discipline(NativeAddonHandleDiscipline::ExternalBuffer)
             .allow_fallback(NativeAddonFallbackMode::DelegateCell);
         let surface = m.assess_support_surface(&req, &full_profile());
+        assert_eq!(surface.symbol_families, vec!["external_buffer".to_string()]);
+        assert_eq!(
+            surface.risk_classification,
+            NativeAddonRiskClassification::High
+        );
+        assert_eq!(surface.owner_route, "runtime-delegate-cell");
+        assert_eq!(
+            surface.remediation_hint,
+            "route through the delegate cell and isolate unsafe pointer or heap behavior behind the hostcall session boundary"
+        );
         let notes = compatibility_notes(&surface);
-        assert!(notes.starts_with("direct blockers:"));
+        assert!(notes.starts_with(
+            "risk=high owner_route=runtime-delegate-cell remediation=route through the delegate cell"
+        ));
+        assert!(notes.contains("direct blockers:"));
+        assert!(notes.contains("selected fallback: delegate_cell"));
     }
 
     // -----------------------------------------------------------------------

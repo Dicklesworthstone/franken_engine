@@ -446,6 +446,100 @@ fn artifact_bundle_writer_emits_expected_files() {
         .expect("unsupported cohort should still have an explicit disposition");
     assert_eq!(unsupported_entry["support_status"], "unsupported");
     assert!(unsupported_entry["selected_route"].is_null());
+    assert!(
+        unsupported_entry["notes"]
+            .as_str()
+            .unwrap()
+            .starts_with("risk=critical owner_route=security-capability-review")
+    );
+
+    let support_surface: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&bundle.support_surface_path).unwrap()).unwrap();
+    let support_surface = support_surface.as_array().unwrap();
+    let direct_surface = support_surface
+        .iter()
+        .find(|entry| entry["addon_id"].as_str() == Some("direct-addon"))
+        .expect("direct addon support surface should be present");
+    assert_eq!(direct_surface["risk_classification"], "low");
+    assert_eq!(direct_surface["owner_route"], "interop-native-addon");
+    assert_eq!(
+        direct_surface["remediation_hint"],
+        "retain the stable Node-API surface and current handle discipline"
+    );
+    assert_eq!(
+        direct_surface["symbol_families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["function_export"]
+    );
+
+    let delegate_surface = support_surface
+        .iter()
+        .find(|entry| entry["addon_id"].as_str() == Some("delegate-addon"))
+        .expect("delegate addon support surface should be present");
+    assert_eq!(delegate_surface["risk_classification"], "high");
+    assert_eq!(delegate_surface["owner_route"], "runtime-delegate-cell");
+    assert!(
+        delegate_surface["remediation_hint"]
+            .as_str()
+            .unwrap()
+            .contains("delegate cell")
+    );
+    assert_eq!(
+        delegate_surface["symbol_families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["external_buffer"]
+    );
+
+    let unsupported_surface = support_surface
+        .iter()
+        .find(|entry| entry["addon_id"].as_str() == Some("unsupported-addon"))
+        .expect("unsupported addon support surface should be present");
+    assert_eq!(unsupported_surface["risk_classification"], "critical");
+    assert_eq!(
+        unsupported_surface["owner_route"],
+        "security-capability-review"
+    );
+    assert!(
+        unsupported_surface["remediation_hint"]
+            .as_str()
+            .unwrap()
+            .contains("grant missing capabilities")
+    );
+    assert_eq!(
+        unsupported_surface["symbol_families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["function_export"]
+    );
+
+    let abi_fingerprint_index: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&bundle.abi_fingerprint_index_path).unwrap())
+            .unwrap();
+    let abi_fingerprint_index = abi_fingerprint_index.as_array().unwrap();
+    let delegate_abi = abi_fingerprint_index
+        .iter()
+        .find(|entry| entry["addon_id"].as_str() == Some("delegate-addon"))
+        .expect("delegate addon abi fingerprint entry should be present");
+    assert_eq!(
+        delegate_abi["symbol_families"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["external_buffer"]
+    );
 
     let fallback_receipts: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&bundle.fallback_receipts_path).unwrap()).unwrap();

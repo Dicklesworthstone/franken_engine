@@ -50,6 +50,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
+const REACT_CLI_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-contract.v1";
+const REACT_CLI_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-report.v1";
+const REACT_CAPABILITY_CONTRACT_JSON: &str =
+    include_str!("../../../../docs/rgc_react_capability_contract_v1.json");
 const CODE_BUNDLE_MISSING_FILE: &str = "FE-TPV-BUNDLE-0001";
 const CODE_BUNDLE_PARSE_ERROR: &str = "FE-TPV-BUNDLE-0002";
 const CODE_BUNDLE_CONTEXT_MISMATCH: &str = "FE-TPV-BUNDLE-0003";
@@ -66,6 +70,7 @@ enum CommandSpec {
     Verify(VerifyArgs),
     Benchmark(BenchmarkArgs),
     Replay(ReplayArgs),
+    React(ReactArgs),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +87,10 @@ enum HelpTopic {
     BenchmarkVerify,
     Replay,
     ReplayRun,
+    React,
+    ReactCompile,
+    ReactBuild,
+    ReactContract,
 }
 
 impl HelpTopic {
@@ -99,6 +108,10 @@ impl HelpTopic {
             Self::BenchmarkVerify => benchmark_verify_usage(),
             Self::Replay => replay_usage(),
             Self::ReplayRun => replay_run_usage(),
+            Self::React => react_usage(),
+            Self::ReactCompile => react_compile_usage(),
+            Self::ReactBuild => react_build_usage(),
+            Self::ReactContract => react_contract_usage(),
         }
     }
 }
@@ -192,6 +205,91 @@ struct ReplayArgs {
     trace: PathBuf,
     mode: ReplayMode,
     out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReactArgs {
+    Compile(ReactCompileArgs),
+    Build(ReactBuildArgs),
+    Contract(ReactContractArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReactCompileArgs {
+    input: PathBuf,
+    source_form: ReactSourceForm,
+    runtime_mode: Option<ReactRuntimeMode>,
+    out: Option<PathBuf>,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReactBuildArgs {
+    entry: PathBuf,
+    target: ReactBuildTarget,
+    out: Option<PathBuf>,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReactContractArgs {
+    out: Option<PathBuf>,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReactSourceForm {
+    Jsx,
+    Tsx,
+    JsxFragment,
+}
+
+impl ReactSourceForm {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Jsx => "jsx",
+            Self::Tsx => "tsx",
+            Self::JsxFragment => "jsx-fragment",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReactRuntimeMode {
+    Classic,
+    Automatic,
+}
+
+impl ReactRuntimeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Automatic => "automatic",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReactBuildTarget {
+    Ssr,
+    Client,
+    Hydration,
+}
+
+impl ReactBuildTarget {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ssr => "ssr",
+            Self::Client => "client",
+            Self::Hydration => "hydration",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,6 +434,142 @@ struct DoctorCommandOutput {
     rollout_decision: RolloutDecisionArtifactOutput,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ReactCapabilityContract {
+    schema_version: String,
+    bead_id: String,
+    product_surfaces: Vec<ReactProductSurface>,
+    capability_rows: Vec<ReactCapabilityRow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReactProductSurface {
+    surface_bead: String,
+    name: String,
+    ship_status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReactCapabilityRow {
+    capability_id: String,
+    source_form: String,
+    runtime_mode: String,
+    entry_surface: String,
+    support_status: String,
+    owning_implementation_bead: String,
+    parity_gate_bead: String,
+    product_surface_bead: String,
+    verification_lane: String,
+    required_artifacts: Vec<String>,
+    user_visible_diagnostic: ReactUserVisibleDiagnostic,
+    unsupported_surface_policy: ReactUnsupportedSurfacePolicy,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReactUserVisibleDiagnostic {
+    error_code: String,
+    diagnostic_surface: String,
+    message_template: String,
+    remediation_bead: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReactUnsupportedSurfacePolicy {
+    fallback_mode: String,
+    waiver_required: bool,
+    max_waiver_age_hours: u64,
+    user_visible_diagnostics_required: bool,
+    target_milestone: String,
+    claim_language_state: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliContractOutput {
+    schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    capability_contract_schema_version: String,
+    capability_contract_bead: String,
+    commands: Vec<ReactCliCommandContract>,
+    compile_capabilities: Vec<ReactCliCapabilitySummary>,
+    build_capabilities: Vec<ReactCliCapabilitySummary>,
+    product_surfaces: Vec<ReactCliProductSurface>,
+    output: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliCommandContract {
+    name: String,
+    output_schema_version: String,
+    behavior: String,
+    usage: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliCapabilitySummary {
+    capability_id: String,
+    support_status: String,
+    source_form: Option<String>,
+    runtime_mode: Option<String>,
+    build_target: Option<String>,
+    error_code: String,
+    diagnostic_surface: String,
+    message_template: String,
+    fallback_mode: String,
+    claim_language_state: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliProductSurface {
+    surface_bead: String,
+    name: String,
+    ship_status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliReportOutput {
+    schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    command: String,
+    support_status: String,
+    shipped: bool,
+    blocked: bool,
+    capability_id: String,
+    request: ReactCliRequest,
+    diagnostic: ReactCliDiagnostic,
+    required_artifacts: Vec<String>,
+    output: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliRequest {
+    input_path: String,
+    source_form: Option<String>,
+    runtime_mode: Option<String>,
+    build_target: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactCliDiagnostic {
+    error_code: String,
+    diagnostic_surface: String,
+    message: String,
+    remediation_bead: String,
+    fallback_mode: String,
+    waiver_required: bool,
+    max_waiver_age_hours: u64,
+    user_visible_diagnostics_required: bool,
+    target_milestone: String,
+    claim_language_state: String,
+    owning_implementation_bead: String,
+    parity_gate_bead: String,
+    product_surface_bead: String,
+    verification_lane: String,
+}
+
 fn main() {
     let code = match run(env::args().skip(1).collect()) {
         Ok(code) => code,
@@ -379,6 +613,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::Verify(args) => execute_verify(args),
         CommandSpec::Benchmark(args) => execute_benchmark(args),
         CommandSpec::Replay(args) => execute_replay(args),
+        CommandSpec::React(args) => execute_react(args),
     };
 
     outcome.map_err(|error| {
@@ -404,6 +639,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "verify" => parse_verify_command(&args[1..]),
         "benchmark" => parse_benchmark_command(&args[1..]),
         "replay" => parse_replay_command(&args[1..]),
+        "react" => parse_react_command(&args[1..]),
         other => Err(format!("unknown command `{other}`\n\n{}", usage())),
     }
 }
@@ -808,6 +1044,163 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
         mode,
         out,
     }))
+}
+
+fn parse_react_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::React));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => match args.get(1).map(String::as_str) {
+            Some("compile") => Ok(CommandSpec::HelpTopic(HelpTopic::ReactCompile)),
+            Some("build") => Ok(CommandSpec::HelpTopic(HelpTopic::ReactBuild)),
+            Some("contract") => Ok(CommandSpec::HelpTopic(HelpTopic::ReactContract)),
+            Some(other) => Err(format!(
+                "unknown react help topic `{other}` (expected compile|build|contract)"
+            )),
+            None => Ok(CommandSpec::HelpTopic(HelpTopic::React)),
+        },
+        "compile" => parse_react_compile_command(&args[1..]),
+        "build" => parse_react_build_command(&args[1..]),
+        "contract" => parse_react_contract_command(&args[1..]),
+        other => Err(format!(
+            "unknown react subcommand `{other}` (expected compile|build|contract)"
+        )),
+    }
+}
+
+fn parse_react_compile_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ReactCompile));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut source_form: Option<ReactSourceForm> = None;
+    let mut runtime_mode: Option<ReactRuntimeMode> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut trace_id = "trace-frankenctl-react-compile".to_string();
+    let mut decision_id = "decision-frankenctl-react-compile".to_string();
+    let mut policy_id = "frankenctl.react.compile.v1".to_string();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--source-form" => {
+                source_form = Some(parse_react_source_form(&next_arg(
+                    args,
+                    &mut index,
+                    "--source-form",
+                )?)?)
+            }
+            "--runtime" => {
+                runtime_mode = Some(parse_react_runtime_mode(&next_arg(
+                    args,
+                    &mut index,
+                    "--runtime",
+                )?)?)
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--trace-id" => trace_id = next_arg(args, &mut index, "--trace-id")?,
+            "--decision-id" => decision_id = next_arg(args, &mut index, "--decision-id")?,
+            "--policy-id" => policy_id = next_arg(args, &mut index, "--policy-id")?,
+            flag => return Err(format!("unknown react compile flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    let source_form = source_form
+        .ok_or_else(|| "react compile requires --source-form <jsx|tsx|jsx-fragment>".to_string())?;
+    if source_form != ReactSourceForm::JsxFragment && runtime_mode.is_none() {
+        return Err("react compile requires --runtime <classic|automatic> unless --source-form jsx-fragment".to_string());
+    }
+    if source_form == ReactSourceForm::JsxFragment && runtime_mode.is_some() {
+        return Err(
+            "react compile does not accept --runtime when --source-form jsx-fragment".to_string(),
+        );
+    }
+
+    Ok(CommandSpec::React(ReactArgs::Compile(ReactCompileArgs {
+        input: input.ok_or_else(|| "react compile requires --input <path>".to_string())?,
+        source_form,
+        runtime_mode,
+        out,
+        trace_id,
+        decision_id,
+        policy_id,
+    })))
+}
+
+fn parse_react_build_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ReactBuild));
+    }
+
+    let mut entry: Option<PathBuf> = None;
+    let mut target: Option<ReactBuildTarget> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut trace_id = "trace-frankenctl-react-build".to_string();
+    let mut decision_id = "decision-frankenctl-react-build".to_string();
+    let mut policy_id = "frankenctl.react.build.v1".to_string();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--entry" => entry = Some(PathBuf::from(next_arg(args, &mut index, "--entry")?)),
+            "--target" => {
+                target = Some(parse_react_build_target(&next_arg(
+                    args, &mut index, "--target",
+                )?)?)
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--trace-id" => trace_id = next_arg(args, &mut index, "--trace-id")?,
+            "--decision-id" => decision_id = next_arg(args, &mut index, "--decision-id")?,
+            "--policy-id" => policy_id = next_arg(args, &mut index, "--policy-id")?,
+            flag => return Err(format!("unknown react build flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::React(ReactArgs::Build(ReactBuildArgs {
+        entry: entry.ok_or_else(|| "react build requires --entry <path>".to_string())?,
+        target: target
+            .ok_or_else(|| "react build requires --target <ssr|client|hydration>".to_string())?,
+        out,
+        trace_id,
+        decision_id,
+        policy_id,
+    })))
+}
+
+fn parse_react_contract_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ReactContract));
+    }
+
+    let mut out: Option<PathBuf> = None;
+    let mut trace_id = "trace-frankenctl-react-contract".to_string();
+    let mut decision_id = "decision-frankenctl-react-contract".to_string();
+    let mut policy_id = "frankenctl.react.contract.v1".to_string();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--trace-id" => trace_id = next_arg(args, &mut index, "--trace-id")?,
+            "--decision-id" => decision_id = next_arg(args, &mut index, "--decision-id")?,
+            "--policy-id" => policy_id = next_arg(args, &mut index, "--policy-id")?,
+            flag => return Err(format!("unknown react contract flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::React(ReactArgs::Contract(ReactContractArgs {
+        out,
+        trace_id,
+        decision_id,
+        policy_id,
+    })))
 }
 
 fn has_help_flag(args: &[String]) -> bool {
@@ -1559,6 +1952,260 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+fn execute_react(args: ReactArgs) -> Result<i32, String> {
+    match args {
+        ReactArgs::Compile(args) => execute_react_compile(args),
+        ReactArgs::Build(args) => execute_react_build(args),
+        ReactArgs::Contract(args) => execute_react_contract(args),
+    }
+}
+
+fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
+    if !args.input.is_file() {
+        return Err(format!(
+            "react compile requires an existing --input <path> (missing `{}`)",
+            args.input.display()
+        ));
+    }
+    let contract = parse_react_capability_contract()?;
+    let row = select_react_compile_row(&contract, args.source_form, args.runtime_mode)?;
+    let output = build_react_cli_report(
+        &args.trace_id,
+        &args.decision_id,
+        &args.policy_id,
+        "react-compile",
+        ReactCliRequest {
+            input_path: args.input.display().to_string(),
+            source_form: Some(args.source_form.as_str().to_string()),
+            runtime_mode: args.runtime_mode.map(|mode| mode.as_str().to_string()),
+            build_target: None,
+        },
+        row,
+        args.out.as_ref(),
+    );
+
+    if let Some(path) = &args.out {
+        write_json_file(path, &output)?;
+    }
+    print_json(&output)?;
+    Ok(25)
+}
+
+fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
+    if !args.entry.exists() {
+        return Err(format!(
+            "react build requires an existing --entry <path> (missing `{}`)",
+            args.entry.display()
+        ));
+    }
+    let contract = parse_react_capability_contract()?;
+    let row = select_react_build_row(&contract, args.target)?;
+    let output = build_react_cli_report(
+        &args.trace_id,
+        &args.decision_id,
+        &args.policy_id,
+        "react-build",
+        ReactCliRequest {
+            input_path: args.entry.display().to_string(),
+            source_form: None,
+            runtime_mode: None,
+            build_target: Some(args.target.as_str().to_string()),
+        },
+        row,
+        args.out.as_ref(),
+    );
+
+    if let Some(path) = &args.out {
+        write_json_file(path, &output)?;
+    }
+    print_json(&output)?;
+    Ok(25)
+}
+
+fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
+    let contract = parse_react_capability_contract()?;
+    let compile_capabilities = contract
+        .capability_rows
+        .iter()
+        .filter(|row| row.entry_surface == "compile_contract")
+        .map(|row| ReactCliCapabilitySummary {
+            capability_id: row.capability_id.clone(),
+            support_status: row.support_status.clone(),
+            source_form: Some(row.source_form.clone()),
+            runtime_mode: Some(row.runtime_mode.clone()),
+            build_target: None,
+            error_code: row.user_visible_diagnostic.error_code.clone(),
+            diagnostic_surface: row.user_visible_diagnostic.diagnostic_surface.clone(),
+            message_template: row.user_visible_diagnostic.message_template.clone(),
+            fallback_mode: row.unsupported_surface_policy.fallback_mode.clone(),
+            claim_language_state: row.unsupported_surface_policy.claim_language_state.clone(),
+        })
+        .collect();
+    let build_capabilities = contract
+        .capability_rows
+        .iter()
+        .filter_map(|row| {
+            let build_target = match row.entry_surface.as_str() {
+                "ssr_entry" => Some("ssr".to_string()),
+                "client_entry_preparation" => Some("client".to_string()),
+                "hydration_artifacts" => Some("hydration".to_string()),
+                _ => None,
+            }?;
+            Some(ReactCliCapabilitySummary {
+                capability_id: row.capability_id.clone(),
+                support_status: row.support_status.clone(),
+                source_form: None,
+                runtime_mode: None,
+                build_target: Some(build_target),
+                error_code: row.user_visible_diagnostic.error_code.clone(),
+                diagnostic_surface: row.user_visible_diagnostic.diagnostic_surface.clone(),
+                message_template: row.user_visible_diagnostic.message_template.clone(),
+                fallback_mode: row.unsupported_surface_policy.fallback_mode.clone(),
+                claim_language_state: row.unsupported_surface_policy.claim_language_state.clone(),
+            })
+        })
+        .collect();
+    let output = ReactCliContractOutput {
+        schema_version: REACT_CLI_CONTRACT_SCHEMA_VERSION.to_string(),
+        trace_id: args.trace_id,
+        decision_id: args.decision_id,
+        policy_id: args.policy_id,
+        capability_contract_schema_version: contract.schema_version,
+        capability_contract_bead: contract.bead_id,
+        commands: vec![
+            ReactCliCommandContract {
+                name: "react compile".to_string(),
+                output_schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
+                behavior: "fail_closed_until_capability_row_is_shipped".to_string(),
+                usage: "frankenctl react compile --input <path> --source-form <jsx|tsx|jsx-fragment> [--runtime <classic|automatic>] [--out <report.json>]".to_string(),
+            },
+            ReactCliCommandContract {
+                name: "react build".to_string(),
+                output_schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
+                behavior: "fail_closed_until_build_target_is_shipped".to_string(),
+                usage: "frankenctl react build --entry <path> --target <ssr|client|hydration> [--out <report.json>]".to_string(),
+            },
+            ReactCliCommandContract {
+                name: "react contract".to_string(),
+                output_schema_version: REACT_CLI_CONTRACT_SCHEMA_VERSION.to_string(),
+                behavior: "emit_machine_readable_contract".to_string(),
+                usage: "frankenctl react contract [--out <react_cli_contract.json>]".to_string(),
+            },
+        ],
+        compile_capabilities,
+        build_capabilities,
+        product_surfaces: contract
+            .product_surfaces
+            .into_iter()
+            .map(|surface| ReactCliProductSurface {
+                surface_bead: surface.surface_bead,
+                name: surface.name,
+                ship_status: surface.ship_status,
+            })
+            .collect(),
+        output: args.out.as_ref().map(|path| path.display().to_string()),
+    };
+
+    if let Some(path) = &args.out {
+        write_json_file(path, &output)?;
+    }
+    print_json(&output)?;
+    Ok(0)
+}
+
+fn parse_react_capability_contract() -> Result<ReactCapabilityContract, String> {
+    serde_json::from_str(REACT_CAPABILITY_CONTRACT_JSON)
+        .map_err(|error| format!("failed to parse embedded React capability contract: {error}"))
+}
+
+fn select_react_compile_row(
+    contract: &ReactCapabilityContract,
+    source_form: ReactSourceForm,
+    runtime_mode: Option<ReactRuntimeMode>,
+) -> Result<&ReactCapabilityRow, String> {
+    let capability_id = match (source_form, runtime_mode) {
+        (ReactSourceForm::Jsx, Some(ReactRuntimeMode::Classic)) => "jsx-classic-runtime-compile",
+        (ReactSourceForm::Tsx, Some(ReactRuntimeMode::Classic)) => "tsx-classic-runtime-compile",
+        (ReactSourceForm::JsxFragment, None) => "fragment-lowering-contract",
+        (ReactSourceForm::Jsx, Some(ReactRuntimeMode::Automatic)) => {
+            "jsx-automatic-runtime-compile"
+        }
+        (ReactSourceForm::Tsx, Some(ReactRuntimeMode::Automatic)) => {
+            "tsx-automatic-runtime-compile"
+        }
+        _ => {
+            return Err(
+                "react compile request did not map to a declared capability contract row"
+                    .to_string(),
+            );
+        }
+    };
+    contract
+        .capability_rows
+        .iter()
+        .find(|row| row.capability_id == capability_id)
+        .ok_or_else(|| format!("missing React capability contract row `{capability_id}`"))
+}
+
+fn select_react_build_row(
+    contract: &ReactCapabilityContract,
+    target: ReactBuildTarget,
+) -> Result<&ReactCapabilityRow, String> {
+    let capability_id = match target {
+        ReactBuildTarget::Ssr => "react-ssr-entrypoint",
+        ReactBuildTarget::Client => "react-client-entry-preparation",
+        ReactBuildTarget::Hydration => "react-hydration-handoff-artifacts",
+    };
+    contract
+        .capability_rows
+        .iter()
+        .find(|row| row.capability_id == capability_id)
+        .ok_or_else(|| format!("missing React capability contract row `{capability_id}`"))
+}
+
+fn build_react_cli_report(
+    trace_id: &str,
+    decision_id: &str,
+    policy_id: &str,
+    command: &str,
+    request: ReactCliRequest,
+    row: &ReactCapabilityRow,
+    out: Option<&PathBuf>,
+) -> ReactCliReportOutput {
+    ReactCliReportOutput {
+        schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: policy_id.to_string(),
+        command: command.to_string(),
+        support_status: row.support_status.clone(),
+        shipped: row.support_status == "shipped",
+        blocked: row.support_status != "shipped",
+        capability_id: row.capability_id.clone(),
+        request,
+        diagnostic: ReactCliDiagnostic {
+            error_code: row.user_visible_diagnostic.error_code.clone(),
+            diagnostic_surface: row.user_visible_diagnostic.diagnostic_surface.clone(),
+            message: row.user_visible_diagnostic.message_template.clone(),
+            remediation_bead: row.user_visible_diagnostic.remediation_bead.clone(),
+            fallback_mode: row.unsupported_surface_policy.fallback_mode.clone(),
+            waiver_required: row.unsupported_surface_policy.waiver_required,
+            max_waiver_age_hours: row.unsupported_surface_policy.max_waiver_age_hours,
+            user_visible_diagnostics_required: row
+                .unsupported_surface_policy
+                .user_visible_diagnostics_required,
+            target_milestone: row.unsupported_surface_policy.target_milestone.clone(),
+            claim_language_state: row.unsupported_surface_policy.claim_language_state.clone(),
+            owning_implementation_bead: row.owning_implementation_bead.clone(),
+            parity_gate_bead: row.parity_gate_bead.clone(),
+            product_surface_bead: row.product_surface_bead.clone(),
+            verification_lane: row.verification_lane.clone(),
+        },
+        required_artifacts: row.required_artifacts.clone(),
+        output: out.map(|path| path.display().to_string()),
+    }
+}
+
 fn validate_compile_artifact(artifact: &CompileArtifact) -> Vec<String> {
     let mut errors = Vec::new();
 
@@ -1636,6 +2283,38 @@ fn parse_goal(value: &str) -> Result<ParseGoal, String> {
         "module" => Ok(ParseGoal::Module),
         other => Err(format!(
             "invalid parse goal `{other}` (expected script|module)"
+        )),
+    }
+}
+
+fn parse_react_source_form(value: &str) -> Result<ReactSourceForm, String> {
+    match value {
+        "jsx" => Ok(ReactSourceForm::Jsx),
+        "tsx" => Ok(ReactSourceForm::Tsx),
+        "jsx-fragment" => Ok(ReactSourceForm::JsxFragment),
+        other => Err(format!(
+            "invalid react source form `{other}` (expected jsx|tsx|jsx-fragment)"
+        )),
+    }
+}
+
+fn parse_react_runtime_mode(value: &str) -> Result<ReactRuntimeMode, String> {
+    match value {
+        "classic" => Ok(ReactRuntimeMode::Classic),
+        "automatic" => Ok(ReactRuntimeMode::Automatic),
+        other => Err(format!(
+            "invalid react runtime `{other}` (expected classic|automatic)"
+        )),
+    }
+}
+
+fn parse_react_build_target(value: &str) -> Result<ReactBuildTarget, String> {
+    match value {
+        "ssr" => Ok(ReactBuildTarget::Ssr),
+        "client" => Ok(ReactBuildTarget::Client),
+        "hydration" => Ok(ReactBuildTarget::Hydration),
+        other => Err(format!(
+            "invalid react build target `{other}` (expected ssr|client|hydration)"
         )),
     }
 }
@@ -1905,6 +2584,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Verify(_) => "verify",
         CommandSpec::Benchmark(_) => "benchmark",
         CommandSpec::Replay(_) => "replay",
+        CommandSpec::React(_) => "react",
     }
 }
 
@@ -1920,6 +2600,9 @@ fn command_remediation(command: &str) -> &'static str {
             "Validate benchmark subcommand args (run|score|verify), then rerun `frankenctl benchmark ...`."
         }
         "replay" => "Validate trace JSON and mode, then rerun `frankenctl replay run`.",
+        "react" => {
+            "Inspect `frankenctl react contract` and rerun with a declared source-form/runtime/target combination."
+        }
         _ => "Run `frankenctl --help` for command usage details.",
     }
 }
@@ -2040,6 +2723,64 @@ fn replay_run_usage() -> String {
     .join("\n")
 }
 
+fn react_usage() -> String {
+    [
+        "react usage:",
+        "  frankenctl react compile --input <path> --source-form <jsx|tsx|jsx-fragment>",
+        "      [--runtime <classic|automatic>] [--out <report.json>]",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "  frankenctl react build --entry <path> --target <ssr|client|hydration>",
+        "      [--out <report.json>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "  frankenctl react contract [--out <react_cli_contract.json>]",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "",
+        "notes:",
+        "  react compile/build currently fail closed with deterministic unsupported-surface guidance",
+        "  until the owning implementation and parity-gate beads are actually shipped.",
+    ]
+    .join("\n")
+}
+
+fn react_compile_usage() -> String {
+    [
+        "react compile usage:",
+        "  frankenctl react compile --input <path> --source-form <jsx|tsx|jsx-fragment>",
+        "      [--runtime <classic|automatic>] [--out <report.json>]",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "",
+        "behavior:",
+        "  emits a deterministic react-cli report tied to the embedded React capability contract",
+        "  and exits non-zero until the requested capability row is shipped.",
+    ]
+    .join("\n")
+}
+
+fn react_build_usage() -> String {
+    [
+        "react build usage:",
+        "  frankenctl react build --entry <path> --target <ssr|client|hydration>",
+        "      [--out <report.json>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "",
+        "behavior:",
+        "  emits a deterministic react-cli report tied to the embedded React capability contract",
+        "  and exits non-zero until the requested build target is shipped.",
+    ]
+    .join("\n")
+}
+
+fn react_contract_usage() -> String {
+    [
+        "react contract usage:",
+        "  frankenctl react contract [--out <react_cli_contract.json>]",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "",
+        "behavior:",
+        "  prints the machine-readable React compile/build CLI contract synthesized from",
+        "  docs/rgc_react_capability_contract_v1.json.",
+    ]
+    .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2112,6 +2853,87 @@ mod tests {
         ];
         let parsed = parse_command(&replay).expect("replay run --help should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReplayRun));
+    }
+
+    #[test]
+    fn parse_react_help_commands() {
+        let top_level = vec!["react".to_string(), "--help".to_string()];
+        let parsed = parse_command(&top_level).expect("react --help should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::React));
+
+        let compile = vec![
+            "react".to_string(),
+            "help".to_string(),
+            "compile".to_string(),
+        ];
+        let parsed = parse_command(&compile).expect("react help compile should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReactCompile));
+    }
+
+    #[test]
+    fn parse_react_compile_command() {
+        let args = vec![
+            "react".to_string(),
+            "compile".to_string(),
+            "--input".to_string(),
+            "demo.tsx".to_string(),
+            "--source-form".to_string(),
+            "tsx".to_string(),
+            "--runtime".to_string(),
+            "automatic".to_string(),
+            "--out".to_string(),
+            "react-report.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("react compile should parse");
+        match parsed {
+            CommandSpec::React(ReactArgs::Compile(spec)) => {
+                assert_eq!(spec.input, PathBuf::from("demo.tsx"));
+                assert_eq!(spec.source_form, ReactSourceForm::Tsx);
+                assert_eq!(spec.runtime_mode, Some(ReactRuntimeMode::Automatic));
+                assert_eq!(spec.out, Some(PathBuf::from("react-report.json")));
+            }
+            other => panic!("expected react compile command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_react_build_command() {
+        let args = vec![
+            "react".to_string(),
+            "build".to_string(),
+            "--entry".to_string(),
+            "app.jsx".to_string(),
+            "--target".to_string(),
+            "ssr".to_string(),
+            "--out".to_string(),
+            "build-report.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("react build should parse");
+        match parsed {
+            CommandSpec::React(ReactArgs::Build(spec)) => {
+                assert_eq!(spec.entry, PathBuf::from("app.jsx"));
+                assert_eq!(spec.target, ReactBuildTarget::Ssr);
+                assert_eq!(spec.out, Some(PathBuf::from("build-report.json")));
+            }
+            other => panic!("expected react build command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_react_contract_command() {
+        let args = vec![
+            "react".to_string(),
+            "contract".to_string(),
+            "--out".to_string(),
+            "react-cli-contract.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("react contract should parse");
+        match parsed {
+            CommandSpec::React(ReactArgs::Contract(spec)) => {
+                assert_eq!(spec.out, Some(PathBuf::from("react-cli-contract.json")));
+            }
+            other => panic!("expected react contract command, got {other:?}"),
+        }
     }
 
     #[test]

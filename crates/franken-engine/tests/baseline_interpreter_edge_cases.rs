@@ -1357,13 +1357,13 @@ fn delete_property_returns_true_and_removes_key() {
             key: 1,
             dst: 3,
         },
-        Ir3Instruction::InOp {
+        Ir3Instruction::GetProperty {
+            obj: 0,
+            key: 1,
             dst: 4,
-            lhs: 1,
-            rhs: 0,
         },
         Ir3Instruction::Return { value: 4 },
     ]);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.value, Value::Bool(false));
+    assert_eq!(result.value, Value::Undefined);
 }

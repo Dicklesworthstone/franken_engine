@@ -1,0 +1,397 @@
+{
+  "schema_version": "franken-engine.rgc-support-surface-contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.10.11.2",
+  "policy_id": "policy-rgc-support-surface-contract-v1",
+  "generated_by": "bd-1lsy.10.11.2",
+  "generated_at_utc": "2026-03-10T00:00:00Z",
+  "source_inputs": [
+    "docs/RGC_SUPPORT_SURFACE_CONTRACT_V1.md",
+    "docs/rgc_docs_help_surface_audit_v1.json",
+    "docs/rgc_react_capability_contract_v1.json",
+    "docs/TS_NORMALIZATION_CONTRACT.md",
+    "docs/rgc_module_resolution_index_v1.json",
+    "docs/rgc_cross_platform_matrix_v1.json",
+    "docs/rgc_observability_channel_policy_v1.json",
+    "crates/franken-engine/src/bin/frankenctl.rs"
+  ],
+  "allowed_support_statuses": [
+    "shipped",
+    "deferred",
+    "unsupported",
+    "candidate"
+  ],
+  "claim_language_states": [
+    "shipped_fact",
+    "target_only"
+  ],
+  "surface_rows": [
+    {
+      "surface_id": "parser.unsupported_syntax_scaffold",
+      "area": "parser",
+      "entry_surface": "frankenctl compile/run parse phase",
+      "support_status": "unsupported",
+      "claim_language_state": "target_only",
+      "current_behavior": "Unsupported scaffold constructs fail closed with the parser's UnsupportedSyntax diagnostic instead of silently parsing.",
+      "evidence_sources": [
+        "crates/franken-engine/src/parser.rs",
+        "docs/PARSER_DIAGNOSTICS_TAXONOMY.md"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": "FE-PARSER-DIAG-UNSUPPORTED-SYNTAX-0001",
+        "diagnostic_surface": "parser/compile/run",
+        "message_template": "statement or expression is unsupported by parser scaffold",
+        "remediation": "Reduce the input to the currently supported parser surface or capture a minimal reproducer for the parser gap inventory before claiming support.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "reject_with_diagnostic",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "typescript.normalization_subset",
+      "area": "typescript",
+      "entry_surface": "frankenctl compile/run with TS normalization",
+      "support_status": "shipped",
+      "claim_language_state": "shipped_fact",
+      "current_behavior": "The documented TS normalization subset is shipped with deterministic witness artifacts.",
+      "evidence_sources": [
+        "docs/TS_NORMALIZATION_CONTRACT.md",
+        "crates/franken-engine/src/ts_normalization.rs"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": null,
+      "fallback_policy": {
+        "fallback_mode": "none",
+        "waiver_required": false,
+        "max_waiver_age_hours": null,
+        "user_visible_diagnostics_required": false,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "typescript.namespace_export_extended_forms",
+      "area": "typescript",
+      "entry_surface": "TS normalization namespace lowering",
+      "support_status": "unsupported",
+      "claim_language_state": "target_only",
+      "current_behavior": "Namespace export forms beyond `export const|let|var <name> = <expr>` are rejected.",
+      "evidence_sources": [
+        "docs/TS_NORMALIZATION_CONTRACT.md",
+        "crates/franken-engine/src/ts_normalization.rs"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": null,
+        "diagnostic_surface": "TS normalization",
+        "message_template": "Namespace export forms beyond `export const|let|var <name> = <expr>` are not yet supported by TS normalization; reject the input and route the operator to normalization guidance.",
+        "remediation": "Rewrite the namespace export to the documented subset or stage the feature behind a future TS normalization bead before claiming support.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "typescript.non_class_decorators",
+      "area": "typescript",
+      "entry_surface": "TS normalization decorator lowering",
+      "support_status": "unsupported",
+      "claim_language_state": "target_only",
+      "current_behavior": "Decorator targets that are not class declarations are rejected.",
+      "evidence_sources": [
+        "docs/TS_NORMALIZATION_CONTRACT.md",
+        "crates/franken-engine/src/ts_normalization.rs"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": null,
+        "diagnostic_surface": "TS normalization",
+        "message_template": "Decorator targets that are not class declarations are not yet supported by TS normalization; reject the input and route the operator to normalization guidance.",
+        "remediation": "Restrict decorators to the documented class-declaration subset or keep the surface target-only until the normalization lane widens.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "runtime.frankenctl_core_workflows",
+      "area": "runtime",
+      "entry_surface": "frankenctl version/compile/run/doctor/verify/benchmark/replay",
+      "support_status": "shipped",
+      "claim_language_state": "shipped_fact",
+      "current_behavior": "The top-level frankenctl surface is intentionally narrow and limited to the commands audited by the docs/help contract.",
+      "evidence_sources": [
+        "docs/rgc_docs_help_surface_audit_v1.json",
+        "docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md",
+        "crates/franken-engine/src/bin/frankenctl.rs"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": null,
+      "fallback_policy": {
+        "fallback_mode": "none",
+        "waiver_required": false,
+        "max_waiver_age_hours": null,
+        "user_visible_diagnostics_required": false,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "runtime.doctor_support_bundle_export",
+      "area": "runtime",
+      "entry_surface": "frankenctl doctor --out-dir <path>",
+      "support_status": "shipped",
+      "claim_language_state": "shipped_fact",
+      "current_behavior": "Doctor summary output and support-bundle emission are shipped, but lossless export guidance must stay aligned with the observability mode contract.",
+      "evidence_sources": [
+        "crates/franken-engine/src/bin/frankenctl.rs",
+        "crates/franken-engine/tests/frankenctl_cli.rs",
+        "docs/RGC_OBSERVABILITY_CHANNEL_POLICY_V1.md"
+      ],
+      "mode_matrix_row_id": "runtime.doctor_support_bundle_export",
+      "user_visible_diagnostic": null,
+      "fallback_policy": {
+        "fallback_mode": "require_lossless_capture_for_export",
+        "waiver_required": false,
+        "max_waiver_age_hours": null,
+        "user_visible_diagnostics_required": false,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "runtime.react_compile_contract",
+      "area": "runtime",
+      "entry_surface": "frankenctl react compile/build",
+      "support_status": "deferred",
+      "claim_language_state": "target_only",
+      "current_behavior": "React compile/build commands currently emit deterministic machine-readable rejection guidance instead of claiming shipped compile/build support.",
+      "evidence_sources": [
+        "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
+        "docs/rgc_react_capability_contract_v1.json",
+        "crates/franken-engine/src/bin/frankenctl.rs"
+      ],
+      "linked_capability_ids": [
+        "jsx-classic-runtime-compile",
+        "tsx-classic-runtime-compile",
+        "fragment-lowering-contract",
+        "jsx-automatic-runtime-compile",
+        "tsx-automatic-runtime-compile",
+        "react-diagnostics-source-maps"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0001",
+        "diagnostic_surface": "frankenctl react compile/build",
+        "message_template": "React compile/build support is not yet shipped; keep the public wording target-only and fail closed with deterministic guidance.",
+        "remediation": "Use `frankenctl react contract` to inspect the capability matrix, then narrow the request to a documented shipped surface or wait for the owning implementation and parity beads.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5"
+      }
+    },
+    {
+      "surface_id": "runtime.react_execution_entrypoints",
+      "area": "runtime",
+      "entry_surface": "React SSR/client-entry/hydration operator surfaces",
+      "support_status": "unsupported",
+      "claim_language_state": "target_only",
+      "current_behavior": "SSR entrypoints, client-entry preparation, and hydration handoff artifacts are not shipped surfaces.",
+      "evidence_sources": [
+        "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
+        "docs/rgc_react_capability_contract_v1.json"
+      ],
+      "linked_capability_ids": [
+        "react-ssr-entrypoint",
+        "react-client-entry-preparation",
+        "react-hydration-handoff-artifacts"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": null,
+        "diagnostic_surface": "frankenctl react build / operator docs",
+        "message_template": "React SSR, client-entry, and hydration surfaces are not yet shipped; reject the request and route the operator to explicit unsupported-surface guidance.",
+        "remediation": "Treat these flows as unsupported until both the implementation beads and parity gates are green; do not use shipped-language workarounds.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5"
+      }
+    },
+    {
+      "surface_id": "module.resolution_index_exact_keys",
+      "area": "module",
+      "entry_surface": "native package/module resolution index",
+      "support_status": "shipped",
+      "claim_language_state": "shipped_fact",
+      "current_behavior": "Package-name, exact export-key, and exact hot-subpath lookups are indexed, while wildcard exports fall back to the incumbent resolver path with no semantic drift.",
+      "evidence_sources": [
+        "docs/RGC_MODULE_RESOLUTION_INDEX_V1.md",
+        "docs/rgc_module_resolution_index_v1.json"
+      ],
+      "linked_fallback_reasons": [
+        "unsupported_wildcard_export"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": "unsupported_wildcard_export",
+        "diagnostic_surface": "module resolver",
+        "message_template": "Wildcard export patterns are not accelerated by the exact-key index; fall back to the incumbent resolver instead of guessing.",
+        "remediation": "Treat wildcard exports as supported-through-fallback rather than indexed-fast-path behavior when writing docs or operator guidance.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "incumbent_resolver_fallback",
+        "waiver_required": false,
+        "max_waiver_age_hours": null,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "platform.windows_arm64_candidate",
+      "area": "platform_support",
+      "entry_surface": "cross-platform CLI/runtime support",
+      "support_status": "candidate",
+      "claim_language_state": "target_only",
+      "current_behavior": "Windows arm64 remains candidate tier and is not a required GA target in the current platform matrix.",
+      "evidence_sources": [
+        "docs/RGC_CROSS_PLATFORM_MATRIX_V1.md",
+        "docs/rgc_cross_platform_matrix_v1.json"
+      ],
+      "linked_platform_targets": [
+        "windows-arm64"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": null,
+        "diagnostic_surface": "platform support docs / rollout guidance",
+        "message_template": "Windows arm64 is candidate-tier verification only; do not use GA shipped language for rollout or support commitments.",
+        "remediation": "Limit public language to candidate-tier support until the platform matrix marks the target required and green.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "target_only_language",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "observability.support_bundle_export_lossless",
+      "area": "observability_mode",
+      "entry_surface": "support bundle export and incident-grade capture",
+      "support_status": "shipped",
+      "claim_language_state": "shipped_fact",
+      "current_behavior": "Support-bundle export and incident full capture are shipped lossless modes and must not silently route through lossy sketches.",
+      "evidence_sources": [
+        "docs/RGC_OBSERVABILITY_CHANNEL_POLICY_V1.md",
+        "docs/rgc_observability_channel_policy_v1.json"
+      ],
+      "mode_matrix_row_id": "observability.support_bundle_export_lossless",
+      "user_visible_diagnostic": null,
+      "fallback_policy": {
+        "fallback_mode": "lossless_required",
+        "waiver_required": false,
+        "max_waiver_age_hours": null,
+        "user_visible_diagnostics_required": false,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "observability.degraded_lossless_evidence_paths",
+      "area": "observability_mode",
+      "entry_surface": "degraded capture for replay/security/legal/support-bundle evidence",
+      "support_status": "unsupported",
+      "claim_language_state": "target_only",
+      "current_behavior": "Degraded mode is not a valid claim or export path for replay, security, legal-provenance, or support-bundle surfaces.",
+      "evidence_sources": [
+        "docs/RGC_OBSERVABILITY_CHANNEL_POLICY_V1.md",
+        "docs/rgc_observability_channel_policy_v1.json"
+      ],
+      "mode_matrix_row_id": "observability.lossless_evidence_paths",
+      "user_visible_diagnostic": {
+        "error_code": null,
+        "diagnostic_surface": "observability-mode guidance",
+        "message_template": "Degraded capture cannot back replay, security, legal-provenance, or support-bundle claims; rerun in exact_shadow, support_bundle_export, or incident_full_capture.",
+        "remediation": "Switch to a lossless mode before collecting publishable evidence or exporting support bundles.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "reject_lossless_claim_under_degraded",
+        "waiver_required": false,
+        "max_waiver_age_hours": null,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    }
+  ],
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "surface_id",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "support_surface_contract_report.json",
+    "support_surface_contract.json",
+    "support_surface_mode_matrix.json",
+    "step_logs/step_*.log"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_support_surface_contract.sh",
+    "replay_wrapper": "scripts/e2e/rgc_support_surface_contract_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "franken-engine.rgc-support-surface-contract.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/support_surface_contract.json",
+    "jq empty docs/support_surface_mode_matrix.json",
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_support_surface_contract cargo test -p frankenengine-engine --test support_surface_contract",
+    "./scripts/run_rgc_support_surface_contract.sh ci",
+    "./scripts/e2e/rgc_support_surface_contract_replay.sh ci"
+  ]
+}

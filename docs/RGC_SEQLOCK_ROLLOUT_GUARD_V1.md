@@ -49,3 +49,13 @@ All three remain disabled by default until positive model-check evidence exists.
 
 The suite is `rch`-backed and emits the required 621C bundle under
 `artifacts/seqlock_rollout_guard/<timestamp>/`.
+
+The wrapper fails closed if:
+
+- `rch` falls back to local execution for any heavy cargo step
+- `rch` reports a wrapped `timeout_secs` lower than the requested
+  `RCH_BUILD_TIMEOUT_SEC` / `RCH_BUILD_TIMEOUT_SECONDS` value
+- artifact retrieval fails or the remote exit marker is missing
+
+Per-step remote logs are written under
+`artifacts/seqlock_rollout_guard/<timestamp>/step_logs/`.

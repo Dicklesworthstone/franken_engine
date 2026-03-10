@@ -1,0 +1,99 @@
+{
+  "schema_version": "franken-engine.rgc-support-surface-mode-matrix.v1",
+  "contract_version": "1.0.0",
+  "generated_by": "bd-1lsy.10.11.2",
+  "generated_at_utc": "2026-03-10T00:00:00Z",
+  "modes": [
+    {
+      "mode_id": "default_capture",
+      "precedence": 0,
+      "capture_semantics": "default_mixed_capture",
+      "lossless": false,
+      "description": "Default operator mode. Exact for lossless families, but not sufficient by itself for publishable lossless claim surfaces."
+    },
+    {
+      "mode_id": "degraded",
+      "precedence": 1,
+      "capture_semantics": "approximate_capture_only",
+      "lossless": false,
+      "description": "Approximate mode for decision and optimization telemetry only. Never valid for replay, security, legal-provenance, or support-bundle claims."
+    },
+    {
+      "mode_id": "exact_shadow",
+      "precedence": 2,
+      "capture_semantics": "lossless_shadow_capture",
+      "lossless": true,
+      "description": "Lossless shadow mode suitable for exact evidence and publication-safe shadow verification."
+    },
+    {
+      "mode_id": "support_bundle_export",
+      "precedence": 3,
+      "capture_semantics": "lossless_support_bundle_export",
+      "lossless": true,
+      "description": "Lossless export mode for operator support bundles and replay-grade triage artifacts."
+    },
+    {
+      "mode_id": "incident_full_capture",
+      "precedence": 4,
+      "capture_semantics": "lossless_incident_capture",
+      "lossless": true,
+      "description": "Highest-precedence lossless capture mode for incident-grade investigation."
+    }
+  ],
+  "surface_mode_rows": [
+    {
+      "row_id": "runtime.doctor_support_bundle_export",
+      "surface_id": "runtime.doctor_support_bundle_export",
+      "allowed_modes": [
+        "default_capture",
+        "support_bundle_export",
+        "incident_full_capture"
+      ],
+      "publishable_modes": [
+        "support_bundle_export",
+        "incident_full_capture"
+      ],
+      "blocked_modes": [
+        "degraded"
+      ],
+      "rationale": "Doctor summaries may render in default capture, but exported support bundles must be lossless."
+    },
+    {
+      "row_id": "observability.support_bundle_export_lossless",
+      "surface_id": "observability.support_bundle_export_lossless",
+      "allowed_modes": [
+        "support_bundle_export",
+        "incident_full_capture"
+      ],
+      "publishable_modes": [
+        "support_bundle_export",
+        "incident_full_capture"
+      ],
+      "blocked_modes": [
+        "default_capture",
+        "degraded",
+        "exact_shadow"
+      ],
+      "rationale": "Support-bundle export is a distinct lossless operator surface and must not degrade into mixed or shadow-only capture."
+    },
+    {
+      "row_id": "observability.lossless_evidence_paths",
+      "surface_id": "observability.degraded_lossless_evidence_paths",
+      "allowed_modes": [
+        "default_capture",
+        "exact_shadow",
+        "support_bundle_export",
+        "incident_full_capture"
+      ],
+      "publishable_modes": [
+        "exact_shadow",
+        "support_bundle_export",
+        "incident_full_capture"
+      ],
+      "blocked_modes": [
+        "degraded"
+      ],
+      "rationale": "Lossless evidence families may operate under default capture, but degraded mode is never valid and exact-shadow or stronger modes are required for publishable claim paths."
+    }
+  ]
+}

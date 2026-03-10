@@ -947,6 +947,42 @@ fn lockstep_runner_preflight_only_rejects_missing_script_path() {
 }
 
 #[test]
+fn lockstep_suite_script_contract_tracks_timeout_logs_and_replay_metadata() {
+    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
+        .expect("lockstep suite script should be readable");
+
+    for expected in [
+        "RCH_EXEC_TIMEOUT_SECONDS",
+        "step_logs_dir=\"${run_dir}/step_logs\"",
+        "\"rch_timeout_seconds\": ${rch_exec_timeout_seconds}",
+        "\"step_logs_dir\": \"${step_logs_dir}\"",
+        "remote-exit=missing/process-exit=",
+        "timeout=${rch_exec_timeout_seconds}s/process-exit=",
+        "./scripts/e2e/lockstep_runner_replay.sh report",
+    ] {
+        assert!(
+            script.contains(expected),
+            "suite script should contain contract fragment `{expected}`"
+        );
+    }
+}
+
+#[test]
+fn lockstep_replay_wrapper_defaults_to_report_mode() {
+    let script = fs::read_to_string("scripts/e2e/lockstep_runner_replay.sh")
+        .expect("lockstep replay wrapper should be readable");
+
+    assert!(
+        script.contains("mode=\"${1:-report}\""),
+        "replay wrapper should default to report mode"
+    );
+    assert!(
+        script.contains("\"${root_dir}/scripts/run_lockstep_runner_suite.sh\" \"${mode}\""),
+        "replay wrapper should delegate to the suite script with the selected mode"
+    );
+}
+
+#[test]
 fn lockstep_runner_fails_closed_on_critical_drift_by_default() {
     let catalog_path = temp_path("franken_lockstep_runner_critical_gate_catalog", "json");
     let runtime_specs_path = temp_path("franken_lockstep_runner_critical_gate_specs", "toml");

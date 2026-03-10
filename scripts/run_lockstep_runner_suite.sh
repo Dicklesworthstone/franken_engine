@@ -8,6 +8,7 @@ mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_lockstep_runner_suite}"
 artifact_root="${LOCKSTEP_RUNNER_ARTIFACT_ROOT:-artifacts/lockstep_runner}"
+rch_exec_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-0}"
 fixture_catalog="${LOCKSTEP_RUNNER_FIXTURE_CATALOG:-crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json}"
 fixture_limit="${LOCKSTEP_RUNNER_FIXTURE_LIMIT:-8}"
 fixture_id="${LOCKSTEP_RUNNER_FIXTURE_ID:-}"
@@ -27,13 +28,14 @@ report_path="${run_dir}/report.json"
 evidence_path="${run_dir}/lockstep_evidence.jsonl"
 governance_actions_path="${run_dir}/governance_actions.json"
 repro_packs_dir="${run_dir}/repro_packs"
+step_logs_dir="${run_dir}/step_logs"
 
 trace_id="trace-lockstep-runner-${timestamp}"
 decision_id="decision-lockstep-runner-${timestamp}"
 policy_id="policy-lockstep-runner-v1"
 component="lockstep_runner_suite"
 
-mkdir -p "$run_dir"
+mkdir -p "$run_dir" "$step_logs_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "error: rch is required for lockstep runner suite commands" >&2
@@ -41,7 +43,12 @@ if ! command -v rch >/dev/null 2>&1; then
 fi
 
 run_rch() {
-  rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  if [[ "${rch_exec_timeout_seconds}" -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+    timeout "${rch_exec_timeout_seconds}" \
+      rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  else
+    rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+  fi
 }
 
 run_rch_strict_logged() {
@@ -104,6 +111,35 @@ rch_reject_local_fallback() {
   fi
 }
 
+strip_ansi() {
+  sed -E $'s/\x1B\\[[0-9;]*[[:alpha:]]//g' "$1"
+}
+
+extract_remote_exit_marker() {
+  local log_path="$1"
+  strip_ansi "$log_path" | sed -nE 's/.*Remote command finished: exit=([0-9]+).*/\1/p' | tail -n 1
+}
+
+annotate_failed_command() {
+  local command_text="$1"
+  local process_exit="$2"
+  local log_path="$3"
+  local remote_exit
+
+  remote_exit="$(extract_remote_exit_marker "$log_path")"
+  if [[ "$process_exit" -eq 124 ]]; then
+    if [[ "${rch_exec_timeout_seconds}" -gt 0 ]]; then
+      failed_command="${command_text} (timeout=${rch_exec_timeout_seconds}s/process-exit=${process_exit})"
+    else
+      failed_command="${command_text} (timeout/process-exit=${process_exit})"
+    fi
+  elif [[ -n "$remote_exit" ]]; then
+    failed_command="${command_text} (remote-exit=${remote_exit}/process-exit=${process_exit})"
+  else
+    failed_command="${command_text} (remote-exit=missing/process-exit=${process_exit})"
+  fi
+}
+
 extract_json_object_from_stream() {
   local input_path="$1"
   local output_path="$2"
@@ -142,7 +178,7 @@ run_step() {
   local command_text="$1"
   shift
   local step_log_path
-  step_log_path="${run_dir}/step_$(printf '%03d' "$step_log_index").log"
+  step_log_path="${step_logs_dir}/step_$(printf '%03d' "$step_log_index").log"
   step_log_index=$((step_log_index + 1))
   commands_run+=("$command_text")
   echo "==> $command_text"
@@ -155,12 +191,16 @@ run_step() {
     return 86
   fi
   if [[ "$rc" -ne 0 ]]; then
-    failed_command="$command_text"
+    annotate_failed_command "$command_text" "$rc" "$step_log_path"
     return "$rc"
   fi
   if ! rch_reject_local_fallback "$step_log_path"; then
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 86
+  fi
+  if [[ -z "$(extract_remote_exit_marker "$step_log_path")" ]]; then
+    annotate_failed_command "$command_text" 0 "$step_log_path"
+    return 87
   fi
 }
 
@@ -207,6 +247,12 @@ run_report_step() {
     failed_command="${preflight_command_text} (rch-local-fallback-detected)"
     return 86
   fi
+  if [[ "$preflight_rc" -eq 0 && -z "$(extract_remote_exit_marker "$preflight_stdout_path")" ]]; then
+    preflight_state="failed"
+    preflight_error_code="FE-LOCKSTEP-PREFLIGHT-REMOTE-EXIT-MISSING"
+    annotate_failed_command "$preflight_command_text" 0 "$preflight_stdout_path"
+    return 87
+  fi
 
   if extract_json_object_from_stream "$preflight_stdout_path" "$preflight_report_path"; then
     if [[ "$(jq -r '.preflight_passed // false' "$preflight_report_path")" == "true" ]]; then
@@ -226,7 +272,7 @@ run_report_step() {
     if [[ -z "$preflight_error_code" ]]; then
       preflight_error_code="FE-LOCKSTEP-PREFLIGHT-COMMAND-FAILED"
     fi
-    failed_command="$preflight_command_text"
+    annotate_failed_command "$preflight_command_text" "$preflight_rc" "$preflight_stdout_path"
     return "$preflight_rc"
   fi
 
@@ -282,6 +328,10 @@ run_report_step() {
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 86
   fi
+  if [[ "$rc" -eq 0 && -z "$(extract_remote_exit_marker "$report_stdout_path")" ]]; then
+    annotate_failed_command "$command_text" 0 "$report_stdout_path"
+    return 87
+  fi
 
   if [[ ! -f "$report_path" && -s "$report_stdout_path" ]]; then
     if jq -e '.' "$report_stdout_path" >/dev/null 2>&1; then
@@ -312,7 +362,7 @@ run_report_step() {
   fi
 
   if [[ "$rc" -ne 0 ]]; then
-    failed_command="$command_text"
+    annotate_failed_command "$command_text" "$rc" "$report_stdout_path"
     return "$rc"
   fi
 }
@@ -392,6 +442,7 @@ write_manifest() {
     echo "  \"component\": \"${component}\","
     echo "  \"mode\": \"${mode}\","
     echo "  \"toolchain\": \"${toolchain}\","
+    echo "  \"rch_timeout_seconds\": ${rch_exec_timeout_seconds},"
     echo "  \"cargo_target_dir\": \"${target_dir}\","
     echo "  \"trace_id\": \"${trace_id}\","
     echo "  \"decision_id\": \"${decision_id}\","
@@ -436,7 +487,8 @@ write_manifest() {
     echo "    \"report\": \"${report_path}\","
     echo "    \"evidence\": \"${evidence_path}\","
     echo "    \"governance_actions\": \"${governance_actions_path}\","
-    echo "    \"repro_packs_dir\": \"${repro_packs_dir}\""
+    echo "    \"repro_packs_dir\": \"${repro_packs_dir}\","
+    echo "    \"step_logs_dir\": \"${step_logs_dir}\""
     echo "  },"
     echo '  "operator_verification": ['
     echo "    \"cat ${manifest_path}\","
@@ -445,8 +497,9 @@ write_manifest() {
     echo "    \"cat ${report_path}\","
     echo "    \"cat ${evidence_path}\","
     echo "    \"cat ${governance_actions_path}\","
+    echo "    \"ls ${step_logs_dir}\","
     echo "    \"ls ${repro_packs_dir}\","
-    echo "    \"${0} report\""
+    echo "    \"./scripts/e2e/lockstep_runner_replay.sh report\""
     echo "  ]"
     echo "}"
   } >"$manifest_path"

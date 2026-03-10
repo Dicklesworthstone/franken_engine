@@ -867,10 +867,10 @@ impl AsyncModuleEvaluator {
             .cloned()
             .collect();
         for id in binding_ids {
-            if let Some(cell) = live_bindings.cells.get_mut(&id)
-                && cell.state != BindingCellState::Dead
-            {
-                cell.mark_dead();
+            let should_mark_dead = live_bindings
+                .get_cell(&id)
+                .is_some_and(|cell| cell.state != BindingCellState::Dead);
+            if should_mark_dead && live_bindings.mark_dead(&id).is_ok() {
                 dead.push(id);
             }
         }
@@ -993,6 +993,8 @@ pub fn compute_async_evaluation_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::esm_loader::BindingType;
+    use crate::module_live_binding::{BindingCell, BindingEvent};
 
     fn js_error(msg: &str) -> JsValue {
         JsValue::Str(msg.to_string())
@@ -1216,6 +1218,34 @@ mod tests {
 
         assert!(linkage.transitive_closure.contains("child.js"));
         assert_eq!(eval.states()["child.js"].phase, AsyncModulePhase::Rejected);
+    }
+
+    #[test]
+    fn evaluator_reject_records_live_binding_cell_died_event() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
+
+        let mut bindings = empty_live_bindings();
+        let binding_id = bindings.register_cell(BindingCell::new(
+            "bad.js",
+            "value",
+            "value",
+            BindingType::Direct,
+        ));
+
+        let linkage = eval
+            .reject_module("bad.js", &js_error("fail"), &mut bindings)
+            .unwrap();
+
+        assert_eq!(linkage.dead_bindings, vec![binding_id.clone()]);
+        assert_eq!(
+            bindings.get_cell(&binding_id).map(|cell| cell.state),
+            Some(BindingCellState::Dead)
+        );
+        assert!(bindings.events.iter().any(|event| matches!(
+            event,
+            BindingEvent::CellDied { binding_id: event_id } if event_id == &binding_id
+        )));
     }
 
     #[test]

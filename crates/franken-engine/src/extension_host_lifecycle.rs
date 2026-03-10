@@ -316,6 +316,7 @@ impl ExtensionHostLifecycleManager {
         // Mark as unloaded.
         if let Some(record) = self.extensions.get_mut(extension_id) {
             record.unloaded = true;
+            record.sessions.clear();
         }
 
         self.push_event(
@@ -1520,6 +1521,23 @@ mod tests {
         assert_eq!(mgr.session_count("ext-a"), 2);
         mgr.close_session("ext-a", "s1", &mut cx).unwrap();
         assert_eq!(mgr.session_count("ext-a"), 1);
+    }
+
+    #[test]
+    fn unload_extension_clears_session_record() {
+        let mut mgr = ExtensionHostLifecycleManager::new();
+        let mut cx = mock_cx(5000);
+        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+        mgr.create_session("ext-a", "s2", &mut cx).unwrap();
+        assert_eq!(mgr.session_count("ext-a"), 2);
+
+        mgr.unload_extension("ext-a", &mut cx).unwrap();
+
+        let record = mgr.extension_record("ext-a").unwrap();
+        assert!(record.unloaded);
+        assert!(record.sessions.is_empty());
+        assert_eq!(mgr.session_count("ext-a"), 0);
     }
 
     #[test]

@@ -494,6 +494,10 @@ pub enum DomPatchError {
     ElementNotFound(DomElementId),
     ElementAlreadyExists(DomElementId),
     ParentNotFound(DomElementId),
+    InvalidReparent {
+        id: DomElementId,
+        new_parent: DomElementId,
+    },
 }
 
 impl DomTree {
@@ -508,6 +512,38 @@ impl DomTree {
         let id = DomElementId(self.next_id);
         self.next_id += 1;
         id
+    }
+
+    fn collect_subtree_ids(&self, root: DomElementId) -> Result<Vec<DomElementId>, DomPatchError> {
+        if !self.elements.contains_key(&root) {
+            return Err(DomPatchError::ElementNotFound(root));
+        }
+
+        let mut to_remove = vec![root];
+        let mut i = 0;
+        while i < to_remove.len() {
+            let current = to_remove[i];
+            if let Some(rec) = self.elements.get(&current) {
+                to_remove.extend(rec.children.iter().copied());
+            }
+            i += 1;
+        }
+        Ok(to_remove)
+    }
+
+    fn reparent_would_cycle(&self, id: DomElementId, new_parent: DomElementId) -> bool {
+        let mut current = Some(new_parent);
+        let mut visited = BTreeSet::new();
+        while let Some(node_id) = current {
+            if node_id == id {
+                return true;
+            }
+            if !visited.insert(node_id) {
+                return true;
+            }
+            current = self.elements.get(&node_id).and_then(|record| record.parent);
+        }
+        false
     }
 
     /// Apply a single patch to the tree.
@@ -554,16 +590,7 @@ impl DomTree {
                     parent_rec.children.retain(|c| c != id);
                 }
 
-                // Recursively collect children to remove
-                let mut to_remove = vec![*id];
-                let mut i = 0;
-                while i < to_remove.len() {
-                    let current = to_remove[i];
-                    if let Some(rec) = self.elements.get(&current) {
-                        to_remove.extend(rec.children.iter().copied());
-                    }
-                    i += 1;
-                }
+                let to_remove = self.collect_subtree_ids(*id)?;
                 for r in &to_remove {
                     self.elements.remove(r);
                 }
@@ -604,6 +631,12 @@ impl DomTree {
                 if !self.elements.contains_key(new_parent) {
                     return Err(DomPatchError::ParentNotFound(*new_parent));
                 }
+                if self.reparent_would_cycle(*id, *new_parent) {
+                    return Err(DomPatchError::InvalidReparent {
+                        id: *id,
+                        new_parent: *new_parent,
+                    });
+                }
 
                 // Remove from old parent
                 let old_parent = self.elements[id].parent;
@@ -637,6 +670,9 @@ impl DomTree {
                     .get(old)
                     .ok_or(DomPatchError::ElementNotFound(*old))?
                     .clone();
+                if old != new_id && self.elements.contains_key(new_id) {
+                    return Err(DomPatchError::ElementAlreadyExists(*new_id));
+                }
 
                 // Create new element in place
                 let new_rec = DomElementRecord {
@@ -659,6 +695,11 @@ impl DomTree {
                     }
                 }
 
+                for child_id in old_rec.children.iter().copied() {
+                    for descendant_id in self.collect_subtree_ids(child_id)? {
+                        self.elements.remove(&descendant_id);
+                    }
+                }
                 self.elements.remove(old);
                 self.elements.insert(*new_id, new_rec);
                 Ok(())
@@ -1917,6 +1958,10 @@ mod tests {
             DomPatchError::ElementNotFound(DomElementId(1)),
             DomPatchError::ElementAlreadyExists(DomElementId(2)),
             DomPatchError::ParentNotFound(DomElementId(3)),
+            DomPatchError::InvalidReparent {
+                id: DomElementId(4),
+                new_parent: DomElementId(5),
+            },
         ];
         for v in &variants {
             let json = serde_json::to_string(v).unwrap();

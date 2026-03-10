@@ -949,6 +949,21 @@ impl CompressionResidualGate {
                 reason: "cold_start_decompression_budget_millionths must be non-negative".into(),
             });
         }
+        if config.memory_hidden_expansion_threshold_millionths < 0 {
+            return Err(CompressionResidualError::InvalidConfig {
+                reason: "memory_hidden_expansion_threshold_millionths must be non-negative".into(),
+            });
+        }
+        if config.proof_overhead_threshold_millionths < 0 {
+            return Err(CompressionResidualError::InvalidConfig {
+                reason: "proof_overhead_threshold_millionths must be non-negative".into(),
+            });
+        }
+        if config.support_cost_ceiling_millionths < 0 {
+            return Err(CompressionResidualError::InvalidConfig {
+                reason: "support_cost_ceiling_millionths must be non-negative".into(),
+            });
+        }
         if config.reversibility_threshold_millionths < 0
             || config.reversibility_threshold_millionths > MILLION
         {
@@ -1024,9 +1039,10 @@ impl CompressionResidualGate {
 
         let mut blocking_reasons = Vec::new();
         let mut caveats = Vec::new();
+        let no_compression_data = input.pass_results.is_empty();
 
         // Check if we have any compression data.
-        if input.pass_results.is_empty() {
+        if no_compression_data {
             blocking_reasons.push(ClaimBlockingReason::NoCompressionData);
         }
 
@@ -1120,10 +1136,10 @@ impl CompressionResidualGate {
         let rev_fail = input.reversibility_checks.len() - rev_pass;
 
         // Determine verdict.
-        let verdict = if !blocking_reasons.is_empty() {
-            CompressionClaimVerdict::Blocked
-        } else if input.pass_results.is_empty() {
+        let verdict = if no_compression_data {
             CompressionClaimVerdict::Insufficient
+        } else if !blocking_reasons.is_empty() {
+            CompressionClaimVerdict::Blocked
         } else if !caveats.is_empty() {
             CompressionClaimVerdict::ApprovedWithCaveats
         } else {
@@ -1738,6 +1754,36 @@ mod tests {
     fn test_gate_invalid_config_negative_budget() {
         let config = GateConfig {
             cold_start_decompression_budget_millionths: -1,
+            ..GateConfig::default()
+        };
+        let result = CompressionResidualGate::with_config(config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gate_invalid_config_negative_memory_hidden_expansion_threshold() {
+        let config = GateConfig {
+            memory_hidden_expansion_threshold_millionths: -1,
+            ..GateConfig::default()
+        };
+        let result = CompressionResidualGate::with_config(config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gate_invalid_config_negative_proof_overhead_threshold() {
+        let config = GateConfig {
+            proof_overhead_threshold_millionths: -1,
+            ..GateConfig::default()
+        };
+        let result = CompressionResidualGate::with_config(config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gate_invalid_config_negative_support_cost_ceiling() {
+        let config = GateConfig {
+            support_cost_ceiling_millionths: -1,
             ..GateConfig::default()
         };
         let result = CompressionResidualGate::with_config(config);
@@ -2548,7 +2594,7 @@ mod tests {
     // ── Empty input tests ─────────────────────────────────────────────
 
     #[test]
-    fn test_no_pass_results_blocked() {
+    fn test_no_pass_results_are_insufficient_and_counted() {
         let mut gate = CompressionResidualGate::new();
         let input = GateInput {
             surface: ClaimSurface::ColdStart,
@@ -2562,8 +2608,14 @@ mod tests {
             proof_total_size_bytes: 0,
         };
         let receipt = gate.evaluate(&input).unwrap();
-        // No pass results means NoCompressionData -> Blocked
-        assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
+        assert_eq!(receipt.verdict, CompressionClaimVerdict::Insufficient);
+        assert_eq!(gate.claims_insufficient, 1);
+        assert_eq!(gate.claims_blocked, 0);
+        assert!(gate.ledger().is_empty());
+        assert!(receipt
+            .blocking_reasons
+            .iter()
+            .any(|reason| matches!(reason, ClaimBlockingReason::NoCompressionData)));
     }
 
     // ── Irreversible artifact gate tests ──────────────────────────────

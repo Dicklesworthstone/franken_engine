@@ -785,6 +785,78 @@ fn dom_tree_move_parent_not_found() {
 }
 
 #[test]
+fn dom_tree_move_rejects_cycle_reparenting() {
+    let mut t = DomTree::new();
+    let root = DomElementId(0);
+    let child = DomElementId(1);
+    let grandchild = DomElementId(2);
+    t.apply_patch(&DomPatch::CreateElement {
+        id: root,
+        tag: "div".into(),
+        parent: None,
+    })
+    .unwrap();
+    t.apply_patch(&DomPatch::CreateElement {
+        id: child,
+        tag: "section".into(),
+        parent: Some(root),
+    })
+    .unwrap();
+    t.apply_patch(&DomPatch::CreateElement {
+        id: grandchild,
+        tag: "span".into(),
+        parent: Some(child),
+    })
+    .unwrap();
+
+    let err = t
+        .apply_patch(&DomPatch::MoveElement {
+            id: root,
+            new_parent: grandchild,
+            before_sibling: None,
+        })
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        DomPatchError::InvalidReparent { id, new_parent }
+            if id == root && new_parent == grandchild
+    ));
+    assert_eq!(t.get(root).unwrap().parent, None);
+    assert_eq!(t.get(root).unwrap().children, vec![child]);
+    assert_eq!(t.get(child).unwrap().parent, Some(root));
+    assert_eq!(t.get(child).unwrap().children, vec![grandchild]);
+    assert_eq!(t.get(grandchild).unwrap().parent, Some(child));
+}
+
+#[test]
+fn dom_tree_move_rejects_self_parenting() {
+    let mut t = DomTree::new();
+    let root = DomElementId(0);
+    t.apply_patch(&DomPatch::CreateElement {
+        id: root,
+        tag: "div".into(),
+        parent: None,
+    })
+    .unwrap();
+
+    let err = t
+        .apply_patch(&DomPatch::MoveElement {
+            id: root,
+            new_parent: root,
+            before_sibling: None,
+        })
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        DomPatchError::InvalidReparent { id, new_parent }
+            if id == root && new_parent == root
+    ));
+    assert_eq!(t.get(root).unwrap().parent, None);
+}
+
+#[test]
 fn dom_tree_replace_element() {
     let mut t = DomTree::new();
     let root = DomElementId(0);
@@ -813,6 +885,92 @@ fn dom_tree_replace_element() {
     assert_eq!(t.get(new_id).unwrap().tag, "strong");
     assert_eq!(t.get(new_id).unwrap().parent, Some(root));
     assert_eq!(t.get(root).unwrap().children, vec![new_id]);
+}
+
+#[test]
+fn dom_tree_replace_element_removes_old_subtree() {
+    let mut t = DomTree::new();
+    let root = DomElementId(0);
+    let old = DomElementId(1);
+    let child = DomElementId(2);
+    let grandchild = DomElementId(3);
+    let new_id = DomElementId(4);
+    t.apply_patch(&DomPatch::CreateElement {
+        id: root,
+        tag: "div".into(),
+        parent: None,
+    })
+    .unwrap();
+    t.apply_patch(&DomPatch::CreateElement {
+        id: old,
+        tag: "section".into(),
+        parent: Some(root),
+    })
+    .unwrap();
+    t.apply_patch(&DomPatch::CreateElement {
+        id: child,
+        tag: "span".into(),
+        parent: Some(old),
+    })
+    .unwrap();
+    t.apply_patch(&DomPatch::CreateElement {
+        id: grandchild,
+        tag: "em".into(),
+        parent: Some(child),
+    })
+    .unwrap();
+
+    t.apply_patch(&DomPatch::ReplaceElement {
+        old,
+        new_id,
+        tag: "strong".into(),
+    })
+    .unwrap();
+
+    assert_eq!(t.element_count(), 2);
+    assert!(!t.contains(old));
+    assert!(!t.contains(child));
+    assert!(!t.contains(grandchild));
+    assert_eq!(t.get(root).unwrap().children, vec![new_id]);
+    assert_eq!(t.get(new_id).unwrap().parent, Some(root));
+}
+
+#[test]
+fn dom_tree_replace_element_rejects_existing_new_id() {
+    let mut t = DomTree::new();
+    let root = DomElementId(0);
+    let old = DomElementId(1);
+    let existing = DomElementId(2);
+    t.apply_patch(&DomPatch::CreateElement {
+        id: root,
+        tag: "div".into(),
+        parent: None,
+    })
+    .unwrap();
+    t.apply_patch(&DomPatch::CreateElement {
+        id: old,
+        tag: "span".into(),
+        parent: Some(root),
+    })
+    .unwrap();
+    t.apply_patch(&DomPatch::CreateElement {
+        id: existing,
+        tag: "p".into(),
+        parent: Some(root),
+    })
+    .unwrap();
+
+    let err = t
+        .apply_patch(&DomPatch::ReplaceElement {
+            old,
+            new_id: existing,
+            tag: "strong".into(),
+        })
+        .unwrap_err();
+
+    assert!(matches!(err, DomPatchError::ElementAlreadyExists(id) if id == existing));
+    assert_eq!(t.get(root).unwrap().children, vec![old, existing]);
+    assert_eq!(t.element_count(), 3);
 }
 
 #[test]

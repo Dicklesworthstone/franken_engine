@@ -6908,6 +6908,8 @@ mod declassification_tests {
 mod delegate_cell_tests {
     use super::*;
 
+    const GUARDPLANE_REPLAY_COMMAND_SPACE_SENTINEL: &str = "__FRANKEN_ENGINE_SPACE__";
+
     fn delegate_base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
         let mut manifest = ExtensionManifest {
             name: "delegate-ext".to_string(),
@@ -6945,6 +6947,14 @@ mod delegate_cell_tests {
             "decision-flow-delegate",
             "policy-flow-delegate",
         )
+    }
+
+    fn guardplane_replay_command_from_env() -> String {
+        if let Ok(encoded) = std::env::var("FE_GUARDPLANE_REPLAY_COMMAND_ENCODED") {
+            return encoded.replace(GUARDPLANE_REPLAY_COMMAND_SPACE_SENTINEL, " ");
+        }
+        std::env::var("FE_GUARDPLANE_REPLAY_COMMAND")
+            .unwrap_or_else(|_| "./scripts/run_guardplane_policy_actions_suite.sh ci".to_string())
     }
 
     #[test]
@@ -7705,8 +7715,7 @@ mod delegate_cell_tests {
         assert!(!delegate.guardplane_decision_log().is_empty());
         assert!(!delegate.containment_workflow_log().is_empty());
 
-        let replay_command = std::env::var("FE_GUARDPLANE_REPLAY_COMMAND")
-            .unwrap_or_else(|_| "./scripts/run_guardplane_policy_actions_suite.sh ci".to_string());
+        let replay_command = guardplane_replay_command_from_env();
 
         let mut guardplane_lines = Vec::new();
         for entry in delegate.guardplane_decision_log() {

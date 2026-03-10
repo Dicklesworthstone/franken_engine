@@ -4,12 +4,13 @@
 
 use frankenengine_extension_host::{
     BudgetExhaustionPolicy, CancellationConfig, Capability, DataRef, DeclassificationPurpose,
-    DeclassificationRequest, DelegateCellError, DelegateCellEvidence, DelegateCellFactory,
-    DelegateCellManifest, DelegateCellPolicy, DelegationScope, ExtensionManifest, ExtensionState,
-    FlowEnforcementContext, FlowLabel, HostcallResult, HostcallSinkPolicy, HostcallType,
-    IntegrityLevel, Labeled, LifecycleContext, LifecycleTransition, ResourceBudget, SecrecyLevel,
-    MAX_DELEGATE_CPU_BUDGET_NS, MAX_DELEGATE_HOSTCALL_BUDGET, MAX_DELEGATE_LIFETIME_NS,
-    MAX_DELEGATE_MEMORY_BUDGET_BYTES,
+    DeclassificationDenialReason, DeclassificationOutcome, DeclassificationRequest,
+    DelegateCellError, DelegateCellEvidence, DelegateCellFactory, DelegateCellManifest,
+    DelegateCellPolicy, DelegationScope, ExtensionManifest, ExtensionState,
+    FlowEnforcementContext, FlowLabel, GuardplaneDecisionLogEntry, GuardplanePolicyAction,
+    HostcallResult, HostcallSinkPolicy, HostcallType, IntegrityLevel, Labeled, LifecycleContext,
+    LifecycleTransition, ResourceBudget, SecrecyLevel, MAX_DELEGATE_CPU_BUDGET_NS,
+    MAX_DELEGATE_HOSTCALL_BUDGET, MAX_DELEGATE_LIFETIME_NS, MAX_DELEGATE_MEMORY_BUDGET_BYTES,
 };
 
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -51,6 +52,87 @@ fn valid_budget() -> ResourceBudget {
 
 fn factory() -> DelegateCellFactory {
     DelegateCellFactory::default()
+}
+
+fn run_mixed_guardplane_sequence(
+    delegate: &mut frankenengine_extension_host::DelegateCell,
+) -> Vec<GuardplaneDecisionLogEntry> {
+    let denied = delegate
+        .request_declassification(
+            DeclassificationRequest {
+                request_id: "req-mixed-0".to_string(),
+                requester: delegate.delegate_id().to_string(),
+                data_ref: DataRef::new("memory", "token"),
+                current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+                target_label: FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated),
+                purpose: DeclassificationPurpose::DiagnosticExport,
+                justification: "expected denial".to_string(),
+                timestamp_ns: 600,
+            },
+            &fctx(),
+            &lctx(),
+        )
+        .expect("declassification outcome");
+    assert!(matches!(
+        denied,
+        DeclassificationOutcome::Denied {
+            reason: DeclassificationDenialReason::MissingCapability { .. },
+            ..
+        }
+    ));
+
+    let blocked_hostcall = delegate
+        .dispatch_hostcall(
+            HostcallType::ProcessSpawn,
+            Capability::ProcessSpawn,
+            Labeled::system_generated("spawn-attempt".to_string()),
+            610,
+            &fctx(),
+            &lctx(),
+        )
+        .expect("hostcall outcome");
+    assert!(matches!(
+        blocked_hostcall.result,
+        HostcallResult::Denied { .. }
+    ));
+
+    let allowed_hostcall = delegate
+        .dispatch_hostcall(
+            HostcallType::FsRead,
+            Capability::FsRead,
+            Labeled::system_generated("safe-read".to_string()),
+            620,
+            &fctx(),
+            &lctx(),
+        )
+        .expect("allowed hostcall");
+    assert!(matches!(allowed_hostcall.result, HostcallResult::Success));
+
+    let second_denial = delegate
+        .request_declassification(
+            DeclassificationRequest {
+                request_id: "req-mixed-1".to_string(),
+                requester: delegate.delegate_id().to_string(),
+                data_ref: DataRef::new("memory", "secret"),
+                current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+                target_label: FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated),
+                purpose: DeclassificationPurpose::DiagnosticExport,
+                justification: "expected denial again".to_string(),
+                timestamp_ns: 630,
+            },
+            &fctx(),
+            &lctx(),
+        )
+        .expect("second declassification outcome");
+    assert!(matches!(
+        second_denial,
+        DeclassificationOutcome::Denied {
+            reason: DeclassificationDenialReason::MissingCapability { .. },
+            ..
+        }
+    ));
+
+    delegate.guardplane_decision_log().to_vec()
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +549,111 @@ fn posterior_is_capped_at_one_million_micros() {
     }
 
     assert!(delegate.guardplane_state().posterior_micros <= 1_000_000);
+}
+
+#[test]
+fn guardplane_safe_mode_fallback_escalates_nominal_challenge_to_sandbox_on_denial() {
+    let mut delegate = factory()
+        .create_delegate_cell(
+            "d-safe-mode-denial",
+            delegate_manifest(&[Capability::FsRead], 1_000_000),
+            valid_budget(),
+            BudgetExhaustionPolicy::Suspend,
+            100,
+            &lctx(),
+        )
+        .expect("delegate created");
+    delegate.set_adaptive_components_available(false);
+
+    let denied = delegate
+        .request_declassification(
+            DeclassificationRequest {
+                request_id: "req-safe-mode-denial".to_string(),
+                requester: "d-safe-mode-denial".to_string(),
+                data_ref: DataRef::new("memory", "token"),
+                current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+                target_label: FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated),
+                purpose: DeclassificationPurpose::DiagnosticExport,
+                justification: "expected denial".to_string(),
+                timestamp_ns: 500,
+            },
+            &fctx(),
+            &lctx(),
+        )
+        .expect("declassification outcome");
+
+    assert!(matches!(
+        denied,
+        DeclassificationOutcome::Denied {
+            reason: DeclassificationDenialReason::MissingCapability { .. },
+            ..
+        }
+    ));
+
+    let decision = delegate
+        .guardplane_decision_log()
+        .last()
+        .expect("guardplane decision");
+    assert_eq!(decision.posterior_micros, 310_000);
+    assert_eq!(decision.action, GuardplanePolicyAction::Sandbox);
+    assert!(decision.safe_mode_fallback);
+    assert_eq!(decision.source_event, "delegate_declassification");
+    assert_eq!(decision.resulting_state, ExtensionState::Running);
+
+    let containment = delegate
+        .containment_workflow_log()
+        .last()
+        .expect("containment workflow");
+    assert_eq!(containment.action, GuardplanePolicyAction::Sandbox);
+    assert_eq!(containment.event, "delegate_containment_action");
+    assert_eq!(containment.source_event, "delegate_declassification");
+    assert_eq!(containment.outcome, "ok");
+    assert!(containment.error_code.is_none());
+    assert!(containment.mesh_attempted_targets.is_empty());
+}
+
+#[test]
+fn guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence() {
+    let mut first = factory()
+        .create_delegate_cell(
+            "d-mixed",
+            delegate_manifest(&[Capability::FsRead], 1_000_000),
+            valid_budget(),
+            BudgetExhaustionPolicy::Suspend,
+            100,
+            &lctx(),
+        )
+        .expect("first delegate");
+    let mut second = factory()
+        .create_delegate_cell(
+            "d-mixed",
+            delegate_manifest(&[Capability::FsRead], 1_000_000),
+            valid_budget(),
+            BudgetExhaustionPolicy::Suspend,
+            100,
+            &lctx(),
+        )
+        .expect("second delegate");
+
+    let first_decisions = run_mixed_guardplane_sequence(&mut first);
+    let second_decisions = run_mixed_guardplane_sequence(&mut second);
+
+    assert_eq!(first_decisions, second_decisions);
+    assert_eq!(first.containment_workflow_log(), second.containment_workflow_log());
+    assert_eq!(first.events(), second.events());
+    assert_eq!(
+        first
+            .guardplane_decision_log()
+            .iter()
+            .map(|entry| entry.action)
+            .collect::<Vec<_>>(),
+        vec![
+            GuardplanePolicyAction::Challenge,
+            GuardplanePolicyAction::Sandbox,
+            GuardplanePolicyAction::Sandbox,
+            GuardplanePolicyAction::Suspend,
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------

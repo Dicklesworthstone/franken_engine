@@ -22,7 +22,9 @@ guardplane_log_path="$run_dir/guardplane_decision_log.jsonl"
 containment_log_path="$run_dir/containment_workflow_log.jsonl"
 containment_timeline_path="$run_dir/containment_timeline.json"
 logs_dir="$run_dir/logs"
-bead_id="${GUARDPLANE_POLICY_ACTIONS_BEAD_ID:-bd-1lsy.6.4}"
+bead_id="${GUARDPLANE_POLICY_ACTIONS_BEAD_ID:-bd-1lsy.6.3}"
+replay_command="${GUARDPLANE_POLICY_ACTIONS_REPLAY_COMMAND:-./scripts/run_guardplane_policy_actions_suite.sh ci}"
+replay_command_encoded="${replay_command// /__FRANKEN_ENGINE_SPACE__}"
 guardplane_log_env_path="$guardplane_log_path"
 containment_log_env_path="$containment_log_path"
 containment_detection_source_event="${GUARDPLANE_CONTAINMENT_DETECTION_SOURCE_EVENT:-delegate_declassification}"
@@ -232,7 +234,7 @@ run_guardplane_artifact_capture_step() {
     env \
       "FE_GUARDPLANE_DECISION_LOG_PATH=$guardplane_log_env_path" \
       "FE_CONTAINMENT_WORKFLOW_LOG_PATH=$containment_log_env_path" \
-      "FE_GUARDPLANE_REPLAY_COMMAND=${0}::ci" \
+      "FE_GUARDPLANE_REPLAY_COMMAND_ENCODED=$replay_command_encoded" \
       "FE_GUARDPLANE_EMIT_STDOUT_MARKERS=1" \
       cargo test -p frankenengine-extension-host --lib guardplane_policy_action_logs_can_emit_jsonl_artifacts -- --nocapture
   artifact_capture_log_path="${command_logs[$(( ${#command_logs[@]} - 1 ))]}"
@@ -257,6 +259,10 @@ run_mode() {
         cargo test -p frankenengine-extension-host --lib quarantine_mesh_partial_failures_are_recorded
       run_step "cargo test -p frankenengine-extension-host --lib quarantine_mesh_total_failure_is_recorded" \
         cargo test -p frankenengine-extension-host --lib quarantine_mesh_total_failure_is_recorded
+      run_step "cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_safe_mode_fallback_escalates_nominal_challenge_to_sandbox_on_denial -- --exact" \
+        cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_safe_mode_fallback_escalates_nominal_challenge_to_sandbox_on_denial -- --exact
+      run_step "cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence -- --exact" \
+        cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence -- --exact
       run_guardplane_artifact_capture_step
       ;;
     clippy)
@@ -278,6 +284,10 @@ run_mode() {
         cargo test -p frankenengine-extension-host --lib quarantine_mesh_partial_failures_are_recorded
       run_step "cargo test -p frankenengine-extension-host --lib quarantine_mesh_total_failure_is_recorded" \
         cargo test -p frankenengine-extension-host --lib quarantine_mesh_total_failure_is_recorded
+      run_step "cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_safe_mode_fallback_escalates_nominal_challenge_to_sandbox_on_denial -- --exact" \
+        cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_safe_mode_fallback_escalates_nominal_challenge_to_sandbox_on_denial -- --exact
+      run_step "cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence -- --exact" \
+        cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence -- --exact
       run_guardplane_artifact_capture_step
       run_step "cargo clippy -p frankenengine-extension-host --lib -- -D warnings" \
         cargo clippy -p frankenengine-extension-host --lib -- -D warnings
@@ -325,6 +335,22 @@ run_mode() {
     fi
     if [[ ! -s "$containment_log_path" ]]; then
       echo "error: missing containment workflow log artifact: $containment_log_path" >&2
+      failed_command="guardplane_policy_action_logs_can_emit_jsonl_artifacts"
+      failed_log_path="$containment_log_path"
+      return 1
+    fi
+    if ! jq -s -e --arg replay_command "$replay_command" \
+      'all(.[]; .replay_command == $replay_command)' \
+      "$guardplane_log_path" >/dev/null; then
+      echo "error: guardplane decision log replay_command drift: $guardplane_log_path" >&2
+      failed_command="guardplane_policy_action_logs_can_emit_jsonl_artifacts"
+      failed_log_path="$guardplane_log_path"
+      return 1
+    fi
+    if ! jq -s -e --arg replay_command "$replay_command" \
+      'all(.[]; .replay_command == $replay_command)' \
+      "$containment_log_path" >/dev/null; then
+      echo "error: containment workflow log replay_command drift: $containment_log_path" >&2
       failed_command="guardplane_policy_action_logs_can_emit_jsonl_artifacts"
       failed_log_path="$containment_log_path"
       return 1
@@ -456,7 +482,7 @@ write_manifest() {
     echo "    \"cat ${guardplane_log_path}\","
     echo "    \"cat ${containment_log_path}\","
     echo "    \"cat ${containment_timeline_path}\","
-    echo "    \"${0} ci\""
+    echo "    \"${replay_command}\""
     echo '  ]'
     echo "}"
   } >"$manifest_path"

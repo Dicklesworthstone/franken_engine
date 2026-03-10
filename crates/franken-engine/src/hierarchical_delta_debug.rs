@@ -593,10 +593,7 @@ impl DeltaDebugger {
 
     /// Get fragments at a specific level.
     pub fn fragments_at_level(&self, level: ReductionLevel) -> Vec<&ProgramFragment> {
-        self.fragments
-            .iter()
-            .filter(|f| f.level == level)
-            .collect()
+        self.fragments.iter().filter(|f| f.level == level).collect()
     }
 
     /// Attempt to remove a set of fragments and test if the defect persists.
@@ -637,7 +634,11 @@ impl DeltaDebugger {
         let progress = outcome == StepOutcome::DefectPreserved;
 
         // Record step
-        let strategy = self.config.strategies.first().cloned()
+        let strategy = self
+            .config
+            .strategies
+            .first()
+            .cloned()
             .unwrap_or(ReductionStrategy::DeltaDebugging);
         let level = self
             .fragments
@@ -703,11 +704,8 @@ impl DeltaDebugger {
 
     /// Build the final minimal reproduction from current state.
     pub fn build_repro(&self) -> MinimalRepro {
-        let mut included_fragments: Vec<&ProgramFragment> = self
-            .fragments
-            .iter()
-            .filter(|f| f.included)
-            .collect();
+        let mut included_fragments: Vec<&ProgramFragment> =
+            self.fragments.iter().filter(|f| f.included).collect();
         included_fragments.sort_by_key(|f| f.start_offset);
 
         let source: String = included_fragments
@@ -864,11 +862,26 @@ impl fmt::Display for DeltaDebugSpecimenFamily {
 /// Build a test corpus.
 pub fn delta_debug_corpus() -> Vec<(DeltaDebugSpecimenFamily, String)> {
     vec![
-        (DeltaDebugSpecimenFamily::SingleFile, "Single file with removable lines".into()),
-        (DeltaDebugSpecimenFamily::MultiStatement, "Function with many statements".into()),
-        (DeltaDebugSpecimenFamily::ImportDependent, "Module with import dependencies".into()),
-        (DeltaDebugSpecimenFamily::ReactComponent, "React component with JSX".into()),
-        (DeltaDebugSpecimenFamily::PerformanceLoop, "Loop body causing regression".into()),
+        (
+            DeltaDebugSpecimenFamily::SingleFile,
+            "Single file with removable lines".into(),
+        ),
+        (
+            DeltaDebugSpecimenFamily::MultiStatement,
+            "Function with many statements".into(),
+        ),
+        (
+            DeltaDebugSpecimenFamily::ImportDependent,
+            "Module with import dependencies".into(),
+        ),
+        (
+            DeltaDebugSpecimenFamily::ReactComponent,
+            "React component with JSX".into(),
+        ),
+        (
+            DeltaDebugSpecimenFamily::PerformanceLoop,
+            "Loop body causing regression".into(),
+        ),
     ]
 }
 
@@ -929,7 +942,9 @@ mod tests {
 
     #[test]
     fn defect_class_custom_serde() {
-        let dc = DefectClass::Custom { tag: "custom-test".into() };
+        let dc = DefectClass::Custom {
+            tag: "custom-test".into(),
+        };
         let json = serde_json::to_string(&dc).unwrap();
         let back: DefectClass = serde_json::from_str(&json).unwrap();
         assert_eq!(dc, back);
@@ -1301,12 +1316,8 @@ mod tests {
             max_steps: 3,
             ..ReductionConfig::default()
         };
-        let mut debugger = DeltaDebugger::new(
-            sample_program(),
-            DefectClass::Crash,
-            config,
-            test_epoch(),
-        );
+        let mut debugger =
+            DeltaDebugger::new(sample_program(), DefectClass::Crash, config, test_epoch());
 
         let _repro = debugger.reduce(|_| StepOutcome::DefectLost);
         assert!(debugger.steps().len() <= 3);

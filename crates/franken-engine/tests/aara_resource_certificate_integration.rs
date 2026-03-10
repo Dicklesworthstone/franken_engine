@@ -4,11 +4,12 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::aara_resource_certificate::{
-    AbstentionPoint, AbstentionReason, AssumptionKind, CertificateAssumption, CertificateBundle,
-    CertificateVerdict, EffectEntry, EffectKind, EffectSummary, ResourceBound, ResourceCertificate,
-    ResourceDimension, SymbolicPotential, BUNDLE_SCHEMA_VERSION, CERTIFICATE_SCHEMA_VERSION,
-    COMPONENT, EFFECT_SUMMARY_SCHEMA_VERSION, MAX_ABSTENTION_POINTS_PER_REGION,
-    MAX_ASSUMPTIONS_PER_CERTIFICATE, MIN_CERTIFICATE_CONFIDENCE, POTENTIAL_SCHEMA_VERSION,
+    AbstentionPoint, AbstentionReason, AssumptionKind, BUNDLE_SCHEMA_VERSION,
+    CERTIFICATE_SCHEMA_VERSION, COMPONENT, CertificateAssumption, CertificateBundle,
+    CertificateInput, CertificateVerdict, EFFECT_SUMMARY_SCHEMA_VERSION, EffectEntry, EffectKind,
+    EffectSummary, MAX_ABSTENTION_POINTS_PER_REGION, MAX_ASSUMPTIONS_PER_CERTIFICATE,
+    MIN_CERTIFICATE_CONFIDENCE, POTENTIAL_SCHEMA_VERSION, ResourceBound, ResourceCertificate,
+    ResourceDimension, SymbolicPotential,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -70,17 +71,37 @@ fn simple_assumption(key: &str, kind: AssumptionKind) -> CertificateAssumption {
     }
 }
 
+fn make_cert_input(
+    cert_id: &str,
+    region_id: &str,
+    bounds: Vec<ResourceBound>,
+    effects: EffectSummary,
+    assumptions: Vec<CertificateAssumption>,
+    abstentions: Vec<AbstentionPoint>,
+    potentials: Vec<SymbolicPotential>,
+) -> CertificateInput {
+    CertificateInput {
+        certificate_id: cert_id.into(),
+        region_id: region_id.into(),
+        epoch: test_epoch(),
+        bounds,
+        effect_summary: effects,
+        assumptions,
+        abstention_points: abstentions,
+        potentials,
+    }
+}
+
 fn simple_certificate(region_id: &str) -> ResourceCertificate {
-    ResourceCertificate::new(
+    ResourceCertificate::new(make_cert_input(
         &format!("cert-{region_id}"),
         region_id,
-        test_epoch(),
         vec![simple_bound(ResourceDimension::Time)],
         simple_effect_summary(region_id),
         vec![simple_assumption("a1", AssumptionKind::NoEval)],
         vec![],
         vec![simple_potential(region_id, ResourceDimension::Time)],
-    )
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +327,10 @@ fn effect_summary_with_effects() {
 
 #[test]
 fn effect_summary_with_dynamic_code_gen() {
-    let entries = vec![simple_effect_entry(EffectKind::DynamicCodeGen, "fn:evil:line:1")];
+    let entries = vec![simple_effect_entry(
+        EffectKind::DynamicCodeGen,
+        "fn:evil:line:1",
+    )];
     let summary = EffectSummary::build("evil_fn", entries, vec![]);
     assert!(summary.has_dynamic_code_gen());
 }
@@ -404,8 +428,7 @@ fn potential_non_negative_fraction() {
     points.insert("a".into(), 100_000i64);
     points.insert("b".into(), 200_000i64);
     points.insert("c".into(), -100_000i64);
-    let pot =
-        SymbolicPotential::new("frac_fn", ResourceDimension::StackDepth, 1_000_000, points);
+    let pot = SymbolicPotential::new("frac_fn", ResourceDimension::StackDepth, 1_000_000, points);
     // 2 out of 3 points are non-negative
     let frac = pot.non_negative_fraction_millionths();
     assert!(frac > 0);
@@ -525,16 +548,15 @@ fn certificate_no_critical_assumptions() {
         description: "no eval".into(),
         is_critical: false,
     };
-    let cert = ResourceCertificate::new(
+    let cert = ResourceCertificate::new(make_cert_input(
         "cert-nc",
         "nc_fn",
-        test_epoch(),
         vec![simple_bound(ResourceDimension::Time)],
         simple_effect_summary("nc_fn"),
         vec![non_critical],
         vec![],
         vec![simple_potential("nc_fn", ResourceDimension::Time)],
-    );
+    ));
     assert!(!cert.has_critical_assumptions());
 }
 
@@ -545,16 +567,15 @@ fn certificate_with_abstention_gets_abstained_verdict() {
         reason: AbstentionReason::UnboundedLoop,
         detail: "while(true)".into(),
     };
-    let cert = ResourceCertificate::new(
+    let cert = ResourceCertificate::new(make_cert_input(
         "cert-abs",
         "abs_fn",
-        test_epoch(),
         vec![simple_bound(ResourceDimension::Time)],
         simple_effect_summary("abs_fn"),
         vec![],
         vec![abstention],
         vec![simple_potential("abs_fn", ResourceDimension::Time)],
-    );
+    ));
     assert_eq!(cert.verdict, CertificateVerdict::Abstained);
 }
 
@@ -566,16 +587,15 @@ fn certificate_with_invalid_potential_gets_violated_verdict() {
     let bad_pot = SymbolicPotential::new("violated_fn", ResourceDimension::Time, 100_000, points);
     assert!(!bad_pot.is_valid);
 
-    let cert = ResourceCertificate::new(
+    let cert = ResourceCertificate::new(make_cert_input(
         "cert-viol",
         "violated_fn",
-        test_epoch(),
         vec![simple_bound(ResourceDimension::Time)],
         simple_effect_summary("violated_fn"),
         vec![],
         vec![],
         vec![bad_pot],
-    );
+    ));
     assert_eq!(cert.verdict, CertificateVerdict::Violated);
 }
 
@@ -587,16 +607,15 @@ fn certificate_with_low_confidence_gets_provisional_verdict() {
         is_tight: false,
         confidence_millionths: 500_000,
     };
-    let cert = ResourceCertificate::new(
+    let cert = ResourceCertificate::new(make_cert_input(
         "cert-prov",
         "prov_fn",
-        test_epoch(),
         vec![low_conf_bound],
         simple_effect_summary("prov_fn"),
         vec![],
         vec![],
         vec![simple_potential("prov_fn", ResourceDimension::Time)],
-    );
+    ));
     assert_eq!(cert.verdict, CertificateVerdict::Provisional);
 }
 
@@ -648,16 +667,15 @@ fn bundle_with_violation_fails() {
     let mut points = BTreeMap::new();
     points.insert("exit".into(), -1_000_000i64);
     let bad_pot = SymbolicPotential::new("viol_fn", ResourceDimension::Time, 100_000, points);
-    let cert = ResourceCertificate::new(
+    let cert = ResourceCertificate::new(make_cert_input(
         "cert-viol",
         "viol_fn",
-        test_epoch(),
         vec![simple_bound(ResourceDimension::Time)],
         simple_effect_summary("viol_fn"),
         vec![],
         vec![],
         vec![bad_pot],
-    );
+    ));
     assert_eq!(cert.verdict, CertificateVerdict::Violated);
     let bundle = CertificateBundle::build("bundle-viol", test_epoch(), vec![cert]);
     assert_eq!(bundle.violated_count, 1);
@@ -673,16 +691,15 @@ fn bundle_mixed_certs() {
         reason: AbstentionReason::DynamicDispatch,
         detail: "dynamic dispatch".into(),
     };
-    let abstained = ResourceCertificate::new(
+    let abstained = ResourceCertificate::new(make_cert_input(
         "cert-abs",
         "abs_fn",
-        test_epoch(),
         vec![simple_bound(ResourceDimension::Time)],
         simple_effect_summary("abs_fn"),
         vec![],
         vec![abstention],
         vec![simple_potential("abs_fn", ResourceDimension::Time)],
-    );
+    ));
 
     let bundle = CertificateBundle::build("bundle-mix", test_epoch(), vec![good, abstained]);
     assert_eq!(bundle.total_count(), 2);
@@ -735,37 +752,40 @@ fn end_to_end_certificate_pipeline() {
     render_points.insert("alloc1".into(), 3_000_000);
     render_points.insert("alloc2".into(), 1_000_000);
     render_points.insert("exit".into(), 500_000);
-    let render_pot =
-        SymbolicPotential::new("render", ResourceDimension::HeapMemory, 5_000_000, render_points);
+    let render_pot = SymbolicPotential::new(
+        "render",
+        ResourceDimension::HeapMemory,
+        5_000_000,
+        render_points,
+    );
     assert!(render_pot.is_valid);
 
     let compute_pot = simple_potential("compute", ResourceDimension::Time);
     assert!(compute_pot.is_valid);
 
     // Build certificates
-    let render_cert = ResourceCertificate::new(
+    let render_cert = ResourceCertificate::new(make_cert_input(
         "cert-render",
         "render",
-        test_epoch(),
-        vec![
-            ResourceBound {
-                dimension: ResourceDimension::HeapMemory,
-                upper_bound_millionths: 4_500_000,
-                is_tight: false,
-                confidence_millionths: 950_000,
-            },
-        ],
+        vec![ResourceBound {
+            dimension: ResourceDimension::HeapMemory,
+            upper_bound_millionths: 4_500_000,
+            is_tight: false,
+            confidence_millionths: 950_000,
+        }],
         render_effects,
-        vec![simple_assumption("stable-proto", AssumptionKind::StablePrototypes)],
+        vec![simple_assumption(
+            "stable-proto",
+            AssumptionKind::StablePrototypes,
+        )],
         vec![],
         vec![render_pot],
-    );
+    ));
     assert_eq!(render_cert.verdict, CertificateVerdict::Certified);
 
-    let compute_cert = ResourceCertificate::new(
+    let compute_cert = ResourceCertificate::new(make_cert_input(
         "cert-compute",
         "compute",
-        test_epoch(),
         vec![simple_bound(ResourceDimension::Time)],
         compute_effects,
         vec![
@@ -774,7 +794,7 @@ fn end_to_end_certificate_pipeline() {
         ],
         vec![],
         vec![compute_pot],
-    );
+    ));
     assert_eq!(compute_cert.verdict, CertificateVerdict::Certified);
 
     // Build bundle
@@ -802,21 +822,19 @@ fn end_to_end_with_degradation() {
         detail: "eval() detected".into(),
     };
 
-    let cert = ResourceCertificate::new(
+    let cert = ResourceCertificate::new(make_cert_input(
         "cert-eval",
         "config_fn",
-        test_epoch(),
         vec![simple_bound(ResourceDimension::Time)],
         eval_effects,
         vec![],
         vec![abstention],
         vec![simple_potential("config_fn", ResourceDimension::Time)],
-    );
+    ));
     assert_eq!(cert.verdict, CertificateVerdict::Abstained);
 
     let good_cert = simple_certificate("good_fn");
-    let bundle =
-        CertificateBundle::build("bundle-degraded", test_epoch(), vec![good_cert, cert]);
+    let bundle = CertificateBundle::build("bundle-degraded", test_epoch(), vec![good_cert, cert]);
     assert_eq!(bundle.abstained_count, 1);
     assert_eq!(bundle.certified_count, 1);
     // 50% certification rate — may not pass a 90% threshold

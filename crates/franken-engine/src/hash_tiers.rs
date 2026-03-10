@@ -61,7 +61,7 @@ impl fmt::Display for IntegrityHash {
 ///
 /// Scope: persisted, deterministic across platforms, NOT used for
 /// authentication.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ContentHash(pub [u8; 32]);
 
 impl ContentHash {

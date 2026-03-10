@@ -209,8 +209,7 @@ impl EffectSummary {
     ) -> Self {
         let mut kind_totals = BTreeMap::new();
         for entry in &entries {
-            *kind_totals.entry(entry.kind).or_insert(0) +=
-                entry.worst_case_count_millionths;
+            *kind_totals.entry(entry.kind).or_insert(0) += entry.worst_case_count_millionths;
         }
         let is_complete = abstention_points.is_empty();
 
@@ -430,12 +429,8 @@ impl SymbolicPotential {
             .unwrap_or(initial_potential);
         let is_valid = min_potential >= 0;
 
-        let content_hash = Self::compute_hash(
-            region_id,
-            dimension,
-            initial_potential,
-            &point_potentials,
-        );
+        let content_hash =
+            Self::compute_hash(region_id, dimension, initial_potential, &point_potentials);
 
         Self {
             schema_version: POTENTIAL_SCHEMA_VERSION.into(),
@@ -469,11 +464,7 @@ impl SymbolicPotential {
         if self.point_potentials.is_empty() {
             return MILLION;
         }
-        let non_neg = self
-            .point_potentials
-            .values()
-            .filter(|&&v| v >= 0)
-            .count() as i64;
+        let non_neg = self.point_potentials.values().filter(|&&v| v >= 0).count() as i64;
         let total = self.point_potentials.len() as i64;
         non_neg.checked_mul(MILLION).unwrap_or(0) / total
     }
@@ -531,9 +522,7 @@ impl ResourceBound {
                 .upper_bound_millionths
                 .saturating_add(other.upper_bound_millionths),
             is_tight: self.is_tight && other.is_tight,
-            confidence_millionths: self
-                .confidence_millionths
-                .min(other.confidence_millionths),
+            confidence_millionths: self.confidence_millionths.min(other.confidence_millionths),
         })
     }
 }
@@ -601,40 +590,53 @@ pub struct ResourceCertificate {
     pub content_hash: ContentHash,
 }
 
+/// Input for constructing a [`ResourceCertificate`].
+#[derive(Debug, Clone)]
+pub struct CertificateInput {
+    /// Certificate identifier.
+    pub certificate_id: String,
+    /// Region being certified.
+    pub region_id: String,
+    /// Security epoch.
+    pub epoch: SecurityEpoch,
+    /// Per-dimension resource bounds.
+    pub bounds: Vec<ResourceBound>,
+    /// Effect summary for the region.
+    pub effect_summary: EffectSummary,
+    /// Assumptions this certificate depends on.
+    pub assumptions: Vec<CertificateAssumption>,
+    /// Abstention points where analysis could not proceed.
+    pub abstention_points: Vec<AbstentionPoint>,
+    /// Supporting symbolic potentials (one per dimension that was analyzed).
+    pub potentials: Vec<SymbolicPotential>,
+}
+
 impl ResourceCertificate {
-    /// Create a new resource certificate.
-    pub fn new(
-        certificate_id: &str,
-        region_id: &str,
-        epoch: SecurityEpoch,
-        bounds: Vec<ResourceBound>,
-        effect_summary: EffectSummary,
-        assumptions: Vec<CertificateAssumption>,
-        abstention_points: Vec<AbstentionPoint>,
-        potentials: Vec<SymbolicPotential>,
-    ) -> Self {
-        let verdict = Self::compute_verdict(&bounds, &abstention_points, &potentials);
+    /// Create a new resource certificate from input.
+    pub fn new(input: CertificateInput) -> Self {
+        let verdict =
+            Self::compute_verdict(&input.bounds, &input.abstention_points, &input.potentials);
 
         let content_hash = Self::compute_hash(
-            certificate_id,
-            region_id,
-            epoch,
+            &input.certificate_id,
+            &input.region_id,
+            input.epoch,
             verdict,
-            &bounds,
-            &effect_summary,
+            &input.bounds,
+            &input.effect_summary,
         );
 
         Self {
             schema_version: CERTIFICATE_SCHEMA_VERSION.into(),
-            certificate_id: certificate_id.into(),
-            region_id: region_id.into(),
-            epoch,
+            certificate_id: input.certificate_id,
+            region_id: input.region_id,
+            epoch: input.epoch,
             verdict,
-            bounds,
-            effect_summary,
-            assumptions,
-            abstention_points,
-            potentials,
+            bounds: input.bounds,
+            effect_summary: input.effect_summary,
+            assumptions: input.assumptions,
+            abstention_points: input.abstention_points,
+            potentials: input.potentials,
             content_hash,
         }
     }
@@ -741,7 +743,11 @@ pub struct CertificateBundle {
 
 impl CertificateBundle {
     /// Build a bundle from a set of certificates.
-    pub fn build(bundle_id: &str, epoch: SecurityEpoch, certificates: Vec<ResourceCertificate>) -> Self {
+    pub fn build(
+        bundle_id: &str,
+        epoch: SecurityEpoch,
+        certificates: Vec<ResourceCertificate>,
+    ) -> Self {
         let certified_count = certificates
             .iter()
             .filter(|c| c.verdict == CertificateVerdict::Certified)
@@ -788,8 +794,7 @@ impl CertificateBundle {
 
     /// Whether the bundle passes (no violations and certification rate above threshold).
     pub fn passes(&self, min_rate_millionths: i64) -> bool {
-        self.violated_count == 0
-            && self.certification_rate_millionths() >= min_rate_millionths
+        self.violated_count == 0 && self.certification_rate_millionths() >= min_rate_millionths
     }
 
     fn compute_hash(
@@ -867,6 +872,27 @@ mod tests {
         SymbolicPotential::new(region, dim, initial, map)
     }
 
+    fn make_cert(
+        id: &str,
+        region: &str,
+        bounds: Vec<ResourceBound>,
+        summary: EffectSummary,
+        assumptions: Vec<CertificateAssumption>,
+        abs: Vec<AbstentionPoint>,
+        potentials: Vec<SymbolicPotential>,
+    ) -> ResourceCertificate {
+        ResourceCertificate::new(CertificateInput {
+            certificate_id: id.into(),
+            region_id: region.into(),
+            epoch: test_epoch(),
+            bounds,
+            effect_summary: summary,
+            assumptions,
+            abstention_points: abs,
+            potentials,
+        })
+    }
+
     // --- ResourceDimension ---
 
     #[test]
@@ -898,7 +924,10 @@ mod tests {
     fn effect_kind_display() {
         assert_eq!(format!("{}", EffectKind::Allocation), "allocation");
         assert_eq!(format!("{}", EffectKind::Hostcall), "hostcall");
-        assert_eq!(format!("{}", EffectKind::DynamicCodeGen), "dynamic_code_gen");
+        assert_eq!(
+            format!("{}", EffectKind::DynamicCodeGen),
+            "dynamic_code_gen"
+        );
     }
 
     #[test]
@@ -928,13 +957,23 @@ mod tests {
         assert!(!summary.is_pure());
         assert!(summary.is_complete);
         assert_eq!(summary.total_effect_count(), 4 * MILLION);
-        assert_eq!(*summary.kind_totals.get(&EffectKind::Allocation).unwrap(), 3 * MILLION);
+        assert_eq!(
+            *summary.kind_totals.get(&EffectKind::Allocation).unwrap(),
+            3 * MILLION
+        );
     }
 
     #[test]
     fn effect_summary_with_abstention() {
-        let entries = vec![test_effect_entry(EffectKind::Allocation, "fn:bar:5", MILLION)];
-        let abs = vec![test_abstention("fn:bar:10", AbstentionReason::DynamicCodeGen)];
+        let entries = vec![test_effect_entry(
+            EffectKind::Allocation,
+            "fn:bar:5",
+            MILLION,
+        )];
+        let abs = vec![test_abstention(
+            "fn:bar:10",
+            AbstentionReason::DynamicCodeGen,
+        )];
         let summary = EffectSummary::build("fn:bar", entries, abs);
         assert!(!summary.is_complete);
         assert!(!summary.is_pure());
@@ -942,7 +981,11 @@ mod tests {
 
     #[test]
     fn effect_summary_has_dynamic_code_gen() {
-        let entries = vec![test_effect_entry(EffectKind::DynamicCodeGen, "eval:1", MILLION)];
+        let entries = vec![test_effect_entry(
+            EffectKind::DynamicCodeGen,
+            "eval:1",
+            MILLION,
+        )];
         let summary = EffectSummary::build("eval_region", entries, vec![]);
         assert!(summary.has_dynamic_code_gen());
     }
@@ -956,7 +999,11 @@ mod tests {
         );
         let s2 = EffectSummary::build(
             "b",
-            vec![test_effect_entry(EffectKind::Allocation, "b:1", 2 * MILLION)],
+            vec![test_effect_entry(
+                EffectKind::Allocation,
+                "b:1",
+                2 * MILLION,
+            )],
             vec![],
         );
         let composed = s1.compose(&s2);
@@ -995,9 +1042,18 @@ mod tests {
 
     #[test]
     fn abstention_reason_display() {
-        assert_eq!(format!("{}", AbstentionReason::DynamicDispatch), "dynamic_dispatch");
-        assert_eq!(format!("{}", AbstentionReason::UnboundedLoop), "unbounded_loop");
-        assert_eq!(format!("{}", AbstentionReason::BudgetExhausted), "budget_exhausted");
+        assert_eq!(
+            format!("{}", AbstentionReason::DynamicDispatch),
+            "dynamic_dispatch"
+        );
+        assert_eq!(
+            format!("{}", AbstentionReason::UnboundedLoop),
+            "unbounded_loop"
+        );
+        assert_eq!(
+            format!("{}", AbstentionReason::BudgetExhausted),
+            "budget_exhausted"
+        );
     }
 
     #[test]
@@ -1023,9 +1079,15 @@ mod tests {
 
     #[test]
     fn assumption_kind_display() {
-        assert_eq!(format!("{}", AssumptionKind::BoundedIteration), "bounded_iteration");
+        assert_eq!(
+            format!("{}", AssumptionKind::BoundedIteration),
+            "bounded_iteration"
+        );
         assert_eq!(format!("{}", AssumptionKind::NoEval), "no_eval");
-        assert_eq!(format!("{}", AssumptionKind::NoProxyTraps), "no_proxy_traps");
+        assert_eq!(
+            format!("{}", AssumptionKind::NoProxyTraps),
+            "no_proxy_traps"
+        );
     }
 
     #[test]
@@ -1051,29 +1113,44 @@ mod tests {
 
     #[test]
     fn potential_valid_when_all_non_negative() {
-        let pot = test_potential("fn:f", ResourceDimension::Time, 10 * MILLION, vec![
-            ("entry", 10 * MILLION),
-            ("loop_head", 5 * MILLION),
-            ("exit", 2 * MILLION),
-        ]);
+        let pot = test_potential(
+            "fn:f",
+            ResourceDimension::Time,
+            10 * MILLION,
+            vec![
+                ("entry", 10 * MILLION),
+                ("loop_head", 5 * MILLION),
+                ("exit", 2 * MILLION),
+            ],
+        );
         assert!(pot.is_valid);
         assert_eq!(pot.min_potential_millionths, 2 * MILLION);
     }
 
     #[test]
     fn potential_invalid_when_negative() {
-        let pot = test_potential("fn:g", ResourceDimension::HeapMemory, 5 * MILLION, vec![
-            ("entry", 5 * MILLION),
-            ("alloc_heavy", -1 * MILLION),
-            ("exit", 0),
-        ]);
+        let pot = test_potential(
+            "fn:g",
+            ResourceDimension::HeapMemory,
+            5 * MILLION,
+            vec![
+                ("entry", 5 * MILLION),
+                ("alloc_heavy", -1 * MILLION),
+                ("exit", 0),
+            ],
+        );
         assert!(!pot.is_valid);
         assert_eq!(pot.min_potential_millionths, -1 * MILLION);
     }
 
     #[test]
     fn potential_empty_points() {
-        let pot = SymbolicPotential::new("empty", ResourceDimension::StackDepth, MILLION, BTreeMap::new());
+        let pot = SymbolicPotential::new(
+            "empty",
+            ResourceDimension::StackDepth,
+            MILLION,
+            BTreeMap::new(),
+        );
         assert!(pot.is_valid);
         assert_eq!(pot.point_count(), 0);
         assert_eq!(pot.terminal_potential(), MILLION);
@@ -1081,22 +1158,29 @@ mod tests {
 
     #[test]
     fn potential_non_negative_fraction() {
-        let pot = test_potential("fn:h", ResourceDimension::Time, 10 * MILLION, vec![
-            ("a", 10 * MILLION),
-            ("b", -MILLION),
-            ("c", 5 * MILLION),
-            ("d", -2 * MILLION),
-        ]);
+        let pot = test_potential(
+            "fn:h",
+            ResourceDimension::Time,
+            10 * MILLION,
+            vec![
+                ("a", 10 * MILLION),
+                ("b", -MILLION),
+                ("c", 5 * MILLION),
+                ("d", -2 * MILLION),
+            ],
+        );
         // 2 out of 4 are non-negative
         assert_eq!(pot.non_negative_fraction_millionths(), 500_000);
     }
 
     #[test]
     fn potential_serde_roundtrip() {
-        let pot = test_potential("fn:i", ResourceDimension::GcPressure, 3 * MILLION, vec![
-            ("start", 3 * MILLION),
-            ("end", MILLION),
-        ]);
+        let pot = test_potential(
+            "fn:i",
+            ResourceDimension::GcPressure,
+            3 * MILLION,
+            vec![("start", 3 * MILLION), ("end", MILLION)],
+        );
         let json = serde_json::to_string(&pot).unwrap();
         let back: SymbolicPotential = serde_json::from_str(&json).unwrap();
         assert_eq!(pot, back);
@@ -1104,8 +1188,18 @@ mod tests {
 
     #[test]
     fn potential_deterministic_hash() {
-        let p1 = test_potential("fn:j", ResourceDimension::Time, MILLION, vec![("a", 500_000)]);
-        let p2 = test_potential("fn:j", ResourceDimension::Time, MILLION, vec![("a", 500_000)]);
+        let p1 = test_potential(
+            "fn:j",
+            ResourceDimension::Time,
+            MILLION,
+            vec![("a", 500_000)],
+        );
+        let p2 = test_potential(
+            "fn:j",
+            ResourceDimension::Time,
+            MILLION,
+            vec![("a", 500_000)],
+        );
         assert_eq!(p1.content_hash, p2.content_hash);
     }
 
@@ -1149,7 +1243,10 @@ mod tests {
     #[test]
     fn verdict_display() {
         assert_eq!(format!("{}", CertificateVerdict::Certified), "certified");
-        assert_eq!(format!("{}", CertificateVerdict::Provisional), "provisional");
+        assert_eq!(
+            format!("{}", CertificateVerdict::Provisional),
+            "provisional"
+        );
         assert_eq!(format!("{}", CertificateVerdict::Abstained), "abstained");
         assert_eq!(format!("{}", CertificateVerdict::Violated), "violated");
     }
@@ -1174,14 +1271,15 @@ mod tests {
     fn certificate_certified_verdict() {
         let summary = EffectSummary::build("fn:x", vec![], vec![]);
         let bounds = vec![test_bound(ResourceDimension::Time, 10 * MILLION, MILLION)];
-        let potentials = vec![test_potential("fn:x", ResourceDimension::Time, 10 * MILLION, vec![
-            ("entry", 10 * MILLION),
-            ("exit", 5 * MILLION),
-        ])];
-        let cert = ResourceCertificate::new(
+        let potentials = vec![test_potential(
+            "fn:x",
+            ResourceDimension::Time,
+            10 * MILLION,
+            vec![("entry", 10 * MILLION), ("exit", 5 * MILLION)],
+        )];
+        let cert = make_cert(
             "cert-1",
             "fn:x",
-            test_epoch(),
             bounds,
             summary,
             vec![test_assumption("no_eval", AssumptionKind::NoEval)],
@@ -1197,34 +1295,31 @@ mod tests {
     fn certificate_abstained_verdict() {
         let summary = EffectSummary::build("fn:y", vec![], vec![]);
         let bounds = vec![test_bound(ResourceDimension::Time, 10 * MILLION, MILLION)];
-        let abs = vec![test_abstention("fn:y:eval", AbstentionReason::DynamicCodeGen)];
-        let cert = ResourceCertificate::new(
-            "cert-2",
-            "fn:y",
-            test_epoch(),
-            bounds,
-            summary,
-            vec![],
-            abs,
-            vec![],
-        );
+        let abs = vec![test_abstention(
+            "fn:y:eval",
+            AbstentionReason::DynamicCodeGen,
+        )];
+        let cert = make_cert("cert-2", "fn:y", bounds, summary, vec![], abs, vec![]);
         assert_eq!(cert.verdict, CertificateVerdict::Abstained);
     }
 
     #[test]
     fn certificate_violated_verdict() {
         let summary = EffectSummary::build("fn:z", vec![], vec![]);
-        let bounds = vec![test_bound(ResourceDimension::HeapMemory, 100 * MILLION, MILLION)];
+        let bounds = vec![test_bound(
+            ResourceDimension::HeapMemory,
+            100 * MILLION,
+            MILLION,
+        )];
         let potentials = vec![test_potential(
             "fn:z",
             ResourceDimension::HeapMemory,
             5 * MILLION,
             vec![("alloc_bomb", -10 * MILLION)],
         )];
-        let cert = ResourceCertificate::new(
+        let cert = make_cert(
             "cert-3",
             "fn:z",
-            test_epoch(),
             bounds,
             summary,
             vec![],
@@ -1237,14 +1332,16 @@ mod tests {
     #[test]
     fn certificate_provisional_verdict() {
         let summary = EffectSummary::build("fn:w", vec![], vec![]);
-        let bounds = vec![test_bound(ResourceDimension::Time, 10 * MILLION, 500_000)]; // low confidence
-        let potentials = vec![test_potential("fn:w", ResourceDimension::Time, MILLION, vec![
-            ("a", 500_000),
-        ])];
-        let cert = ResourceCertificate::new(
+        let bounds = vec![test_bound(ResourceDimension::Time, 10 * MILLION, 500_000)];
+        let potentials = vec![test_potential(
+            "fn:w",
+            ResourceDimension::Time,
+            MILLION,
+            vec![("a", 500_000)],
+        )];
+        let cert = make_cert(
             "cert-4",
             "fn:w",
-            test_epoch(),
             bounds,
             summary,
             vec![],
@@ -1261,8 +1358,14 @@ mod tests {
             test_bound(ResourceDimension::Time, 10 * MILLION, MILLION),
             test_bound(ResourceDimension::HeapMemory, 50 * MILLION, MILLION),
         ];
-        let cert = ResourceCertificate::new(
-            "cert-5", "fn:multi", test_epoch(), bounds, summary, vec![], vec![], vec![],
+        let cert = make_cert(
+            "cert-5",
+            "fn:multi",
+            bounds,
+            summary,
+            vec![],
+            vec![],
+            vec![],
         );
         let dims = cert.covered_dimensions();
         assert!(dims.contains(&ResourceDimension::Time));
@@ -1277,9 +1380,7 @@ mod tests {
             test_bound(ResourceDimension::Time, 10 * MILLION, MILLION),
             test_bound(ResourceDimension::HostcallCount, 5 * MILLION, MILLION),
         ];
-        let cert = ResourceCertificate::new(
-            "cert-6", "fn:q", test_epoch(), bounds, summary, vec![], vec![], vec![],
-        );
+        let cert = make_cert("cert-6", "fn:q", bounds, summary, vec![], vec![], vec![]);
         assert!(cert.bound_for(ResourceDimension::Time).is_some());
         assert!(cert.bound_for(ResourceDimension::HostcallCount).is_some());
         assert!(cert.bound_for(ResourceDimension::GcPressure).is_none());
@@ -1288,26 +1389,27 @@ mod tests {
     #[test]
     fn certificate_has_critical_assumptions() {
         let summary = EffectSummary::build("fn:r", vec![], vec![]);
-        let cert_with = ResourceCertificate::new(
-            "cert-7", "fn:r", test_epoch(), vec![], summary.clone(),
+        let cert_with = make_cert(
+            "cert-7",
+            "fn:r",
+            vec![],
+            summary.clone(),
             vec![test_assumption("eval_free", AssumptionKind::NoEval)],
-            vec![], vec![],
+            vec![],
+            vec![],
         );
         assert!(cert_with.has_critical_assumptions());
 
-        let cert_without = ResourceCertificate::new(
-            "cert-8", "fn:r", test_epoch(), vec![], summary, vec![], vec![], vec![],
-        );
+        let cert_without = make_cert("cert-8", "fn:r", vec![], summary, vec![], vec![], vec![]);
         assert!(!cert_without.has_critical_assumptions());
     }
 
     #[test]
     fn certificate_serde_roundtrip() {
         let summary = EffectSummary::build("fn:serde", vec![], vec![]);
-        let cert = ResourceCertificate::new(
+        let cert = make_cert(
             "cert-serde",
             "fn:serde",
-            test_epoch(),
             vec![test_bound(ResourceDimension::Time, MILLION, MILLION)],
             summary,
             vec![],
@@ -1323,15 +1425,23 @@ mod tests {
     fn certificate_deterministic_hash() {
         let summary1 = EffectSummary::build("fn:det", vec![], vec![]);
         let summary2 = EffectSummary::build("fn:det", vec![], vec![]);
-        let c1 = ResourceCertificate::new(
-            "cert-det", "fn:det", test_epoch(),
+        let c1 = make_cert(
+            "cert-det",
+            "fn:det",
             vec![test_bound(ResourceDimension::Time, MILLION, MILLION)],
-            summary1, vec![], vec![], vec![],
+            summary1,
+            vec![],
+            vec![],
+            vec![],
         );
-        let c2 = ResourceCertificate::new(
-            "cert-det", "fn:det", test_epoch(),
+        let c2 = make_cert(
+            "cert-det",
+            "fn:det",
             vec![test_bound(ResourceDimension::Time, MILLION, MILLION)],
-            summary2, vec![], vec![], vec![],
+            summary2,
+            vec![],
+            vec![],
+            vec![],
         );
         assert_eq!(c1.content_hash, c2.content_hash);
     }
@@ -1343,7 +1453,7 @@ mod tests {
         let bundle = CertificateBundle::build("empty", test_epoch(), vec![]);
         assert_eq!(bundle.total_count(), 0);
         assert_eq!(bundle.certification_rate_millionths(), 0);
-        assert!(!bundle.passes(500_000)); // 0% < 50%
+        assert!(!bundle.passes(500_000));
     }
 
     #[test]
@@ -1351,10 +1461,9 @@ mod tests {
         let certs = (0..3)
             .map(|i| {
                 let summary = EffectSummary::build(&format!("fn:{i}"), vec![], vec![]);
-                ResourceCertificate::new(
+                make_cert(
                     &format!("cert-{i}"),
                     &format!("fn:{i}"),
-                    test_epoch(),
                     vec![test_bound(ResourceDimension::Time, MILLION, MILLION)],
                     summary,
                     vec![],
@@ -1376,19 +1485,30 @@ mod tests {
 
     #[test]
     fn bundle_mixed_verdicts() {
-        let cert = ResourceCertificate::new(
-            "c1", "fn:a", test_epoch(),
+        let cert = make_cert(
+            "c1",
+            "fn:a",
             vec![test_bound(ResourceDimension::Time, MILLION, MILLION)],
             EffectSummary::build("fn:a", vec![], vec![]),
-            vec![], vec![],
-            vec![test_potential("fn:a", ResourceDimension::Time, MILLION, vec![("x", 500_000)])],
+            vec![],
+            vec![],
+            vec![test_potential(
+                "fn:a",
+                ResourceDimension::Time,
+                MILLION,
+                vec![("x", 500_000)],
+            )],
         );
-        let abstained = ResourceCertificate::new(
-            "c2", "fn:b", test_epoch(),
+        let abstained = make_cert(
+            "c2",
+            "fn:b",
             vec![],
             EffectSummary::build("fn:b", vec![], vec![]),
             vec![],
-            vec![test_abstention("fn:b:eval", AbstentionReason::DynamicCodeGen)],
+            vec![test_abstention(
+                "fn:b:eval",
+                AbstentionReason::DynamicCodeGen,
+            )],
             vec![],
         );
         let bundle = CertificateBundle::build("mixed", test_epoch(), vec![cert, abstained]);
@@ -1415,16 +1535,23 @@ mod tests {
 
     #[test]
     fn bundle_passes_with_violations() {
-        let violated = ResourceCertificate::new(
-            "v1", "fn:v", test_epoch(),
+        let violated = make_cert(
+            "v1",
+            "fn:v",
             vec![test_bound(ResourceDimension::Time, MILLION, MILLION)],
             EffectSummary::build("fn:v", vec![], vec![]),
-            vec![], vec![],
-            vec![test_potential("fn:v", ResourceDimension::Time, MILLION, vec![("x", -1)])],
+            vec![],
+            vec![],
+            vec![test_potential(
+                "fn:v",
+                ResourceDimension::Time,
+                MILLION,
+                vec![("x", -1)],
+            )],
         );
         let bundle = CertificateBundle::build("violated", test_epoch(), vec![violated]);
         assert_eq!(bundle.violated_count, 1);
-        assert!(!bundle.passes(0)); // violations present
+        assert!(!bundle.passes(0));
     }
 
     // --- EffectEntry serde ---

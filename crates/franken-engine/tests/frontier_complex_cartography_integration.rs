@@ -324,7 +324,7 @@ fn test_classify_hole_sampling_noise() {
         killer_simplex: Some("t1".to_string()),
         persistence_millionths: 10_000,
     };
-    let sig = frontier_complex_cartography::classify_hole(&pair, 100);
+    let sig = frontier_complex_cartography::classify_hole(&pair, 50_000, 100);
     assert_eq!(sig, HoleSignificance::SamplingNoise);
 }
 

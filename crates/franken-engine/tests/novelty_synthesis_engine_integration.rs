@@ -6,7 +6,7 @@ use frankenengine_engine::novelty_synthesis_engine::{
     self, SynthesisConstraint, SynthesisDenialReason, SynthesisStrategy,
     ProgramKind, SynthesisError, SCHEMA_VERSION, BEAD_ID, COMPONENT,
     POLICY_ID, DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, DEFAULT_MIN_NOVELTY,
-    MAX_BATCH_SIZE, STRATEGY_COUNT, KIND_COUNT,
+    STRATEGY_COUNT, KIND_COUNT,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 

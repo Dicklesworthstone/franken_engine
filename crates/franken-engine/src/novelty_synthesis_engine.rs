@@ -889,14 +889,13 @@ pub fn franken_engine_synthesis_manifest() -> SynthesisBatch {
 
 /// Generate deterministic source text for a given kind and strategy.
 fn generate_source(kind: ProgramKind, strategy: SynthesisStrategy, seed: u64) -> String {
-    let body = match strategy {
+    match strategy {
         SynthesisStrategy::GrammarGuided => generate_grammar_guided(kind, seed),
         SynthesisStrategy::MutationBased => generate_mutation_based(kind, seed),
         SynthesisStrategy::RecombinationBased => generate_recombination(kind, seed),
         SynthesisStrategy::TemplateDriven => generate_template_driven(kind, seed),
         SynthesisStrategy::ObstructionTargeted => generate_obstruction_targeted(kind, seed),
-    };
-    body
+    }
 }
 
 /// Grammar-guided source generation: builds from production rules.
@@ -986,7 +985,7 @@ fn generate_grammar_guided(kind: ProgramKind, seed: u64) -> String {
 /// Mutation-based: small perturbation of a base template.
 fn generate_mutation_based(kind: ProgramKind, seed: u64) -> String {
     let idx = seed % 50;
-    let op = if seed % 3 == 0 {
+    let op = if seed.is_multiple_of(3) {
         "+"
     } else if seed % 3 == 1 {
         "-"

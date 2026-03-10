@@ -482,7 +482,7 @@ impl LifecyclePipeline {
             &candidate.candidate_id,
             &candidate.statement,
             strength,
-            candidate.supporting_source_ids.iter().cloned().collect(),
+            candidate.supporting_source_ids.to_vec(),
             candidate.rank_millionths,
             self.pipeline_epoch,
             evidence_ids,

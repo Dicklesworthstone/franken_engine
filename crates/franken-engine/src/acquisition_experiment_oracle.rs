@@ -237,6 +237,7 @@ impl ExperimentProposal {
     }
 
     /// Create a new proposal and immediately seal it.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         proposal_id: String,
         kind: ExperimentKind,
@@ -616,11 +617,11 @@ pub fn select_experiments(
         return Err(AcquisitionError::BudgetExhausted);
     }
 
+    let gain_hex = hex_encode(&total_gain.to_le_bytes());
     let plan_id = format!(
         "plan-{}-{}",
         BEAD_ID,
-        hex_encode(&total_gain.to_le_bytes())[..8]
-            .to_string()
+        &gain_hex[..8]
     );
 
     let mut plan = ExperimentPlan {
@@ -1010,13 +1011,13 @@ pub fn validate_plan(plan: &ExperimentPlan) -> Vec<String> {
     }
 
     for (i, score) in plan.scores.iter().enumerate() {
-        if let Some(proposal) = plan.proposals.get(i) {
-            if score.proposal_id != proposal.proposal_id {
-                errors.push(format!(
-                    "score[{}] proposal_id mismatch: {} vs {}",
-                    i, score.proposal_id, proposal.proposal_id
-                ));
-            }
+        if let Some(proposal) = plan.proposals.get(i)
+            && score.proposal_id != proposal.proposal_id
+        {
+            errors.push(format!(
+                "score[{}] proposal_id mismatch: {} vs {}",
+                i, score.proposal_id, proposal.proposal_id
+            ));
         }
     }
 

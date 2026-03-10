@@ -338,7 +338,7 @@ impl fmt::Display for OptimizationDecision {
 // ---------------------------------------------------------------------------
 
 /// Operator-supplied overrides that force specific substrate decisions.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverrideConfig {
     /// Force a specific substrate kind regardless of profile.
     pub force_kind: Option<SubstrateKind>,
@@ -352,17 +352,7 @@ pub struct OverrideConfig {
     pub debug_mode: bool,
 }
 
-impl Default for OverrideConfig {
-    fn default() -> Self {
-        Self {
-            force_kind: None,
-            force_fallback: None,
-            force_rollback: None,
-            disable_optimization: false,
-            debug_mode: false,
-        }
-    }
-}
+// Default is derived via #[derive(Default)] on the struct.
 
 impl fmt::Display for OverrideConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -659,8 +649,7 @@ fn compute_confidence(profile: &SubstrateProfile) -> u64 {
     }
     // More accesses = higher confidence, capped at 950_000 (95%).
     let raw = (profile.access_count as u128).saturating_mul(MILLIONTHS as u128) / 1_000_000u128;
-    let clamped = raw.min(950_000) as u64;
-    clamped
+    raw.min(950_000) as u64
 }
 
 /// Evaluate a substrate profile and produce an optimization decision.

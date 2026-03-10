@@ -17,7 +17,7 @@
 //!
 //! Reference: [RGC-613B]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -304,6 +304,7 @@ pub struct SynthesisCandidate {
 
 impl SynthesisCandidate {
     /// Create a new candidate with computed hash.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         candidate_id: impl Into<String>,
         original_schema_id: impl Into<String>,
@@ -578,6 +579,7 @@ impl Default for CounterexampleArchive {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(700)

@@ -68,7 +68,8 @@ const MAX_DEGRADATION_REASONS: usize = 32;
 const MAX_LEDGER_COMPONENTS: usize = 128;
 
 /// Maximum certificates in the canonical manifest.
-const _MAX_MANIFEST_CERTIFICATES: usize = 1024;
+#[allow(dead_code)]
+const MAX_MANIFEST_CERTIFICATES: usize = 1024;
 
 // ---------------------------------------------------------------------------
 // ArtifactKind — what kind of artifact is being transported
@@ -432,6 +433,7 @@ impl TransportCertificate {
     }
 
     /// Compute the certificate content hash from its fields.
+    #[allow(clippy::too_many_arguments)]
     fn compute_content_hash(
         certificate_id: &str,
         artifact_kind: ArtifactKind,
@@ -834,11 +836,7 @@ pub fn build_residual_ledger(
 
     // The unexplained remainder is the difference between what the
     // certificate says was transported and what the components account for.
-    let unexplained = if cert.target_perf_millionths >= total_transported {
-        cert.target_perf_millionths - total_transported
-    } else {
-        0
-    };
+    let unexplained = cert.target_perf_millionths.saturating_sub(total_transported);
 
     // Validate: component source total should not exceed certificate source.
     if total_source > cert.source_perf_millionths {

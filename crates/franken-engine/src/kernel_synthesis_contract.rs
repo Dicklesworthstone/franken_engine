@@ -581,6 +581,7 @@ fn envelope_hash_input(
 }
 
 /// Helper: create a `KernelSchema` with all fields.
+#[allow(clippy::too_many_arguments)]
 fn make_schema(
     id: &str,
     family: KernelFamily,

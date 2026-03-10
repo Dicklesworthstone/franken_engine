@@ -859,8 +859,8 @@ impl AdmissionController {
         }
 
         // Check stage-specific queue depth
-        if let Some(partition) = self.partitions.get(&stage) {
-            if partition.is_full() {
+        if let Some(partition) = self.partitions.get(&stage)
+            && partition.is_full() {
                 return AdmissionDecision::Shed {
                     reason: ShedReason::StageBudgetExhausted {
                         stage,
@@ -869,7 +869,6 @@ impl AdmissionController {
                     },
                 };
             }
-        }
 
         // Check token bucket
         if self.token_bucket.available < self.policy.tokens_per_admission {

@@ -347,7 +347,7 @@ fn dot_product_millionths(a: &[u64], b: &[u64]) -> u64 {
 /// Compute squared Euclidean distance in millionths between two vectors.
 fn squared_distance_millionths(a: &[u64], b: &[u64]) -> u64 {
     a.iter().zip(b.iter()).fold(0u64, |acc, (&ai, &bi)| {
-        let diff = if ai >= bi { ai - bi } else { bi - ai };
+        let diff = ai.abs_diff(bi);
         let sq = (diff as u128)
             .saturating_mul(diff as u128)
             .checked_div(MILLIONTHS as u128)

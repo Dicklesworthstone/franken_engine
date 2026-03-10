@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 //! Low-overhead hot-path telemetry kernels using NitroSketch-style thinning.
 //!
 //! Implements weighted sketch updates with explicit site inventories and
@@ -51,8 +50,6 @@ const MAX_SITES: usize = 4096;
 /// Default budget for new telemetry sites.
 const DEFAULT_BUDGET: u64 = 100_000;
 
-/// Default sampling rate (100% = 1_000_000 millionths).
-const DEFAULT_SAMPLING_RATE: u64 = MILLION;
 
 // ---------------------------------------------------------------------------
 // SketchKind — sketch algorithm selector
@@ -1790,8 +1787,8 @@ mod tests {
 
     #[test]
     fn record_with_sampling_accepted() {
-        let mut site = make_site_with_budget("rws1", 100);
-        site.sampling_rate_millionths = MILLION; // 100% rate
+        let mut site = make_site_with_rate("rws1", MILLION);
+        site.budget_remaining = 100;
         let result = record_update_with_sampling(
             &mut site,
             SamplingStrategy::Deterministic,

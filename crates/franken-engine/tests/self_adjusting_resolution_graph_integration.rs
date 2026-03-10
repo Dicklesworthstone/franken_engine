@@ -1,7 +1,6 @@
 //! Integration tests for the self-adjusting resolution graph (RGC-406B).
 
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::self_adjusting_resolution_graph::{
     self, DependencyEdge, EdgeKind, InvalidationScope, ModuleNode,
     ResolutionGraphError, SCHEMA_VERSION, BEAD_ID, COMPONENT, POLICY_ID,
@@ -11,10 +10,6 @@ use frankenengine_engine::self_adjusting_resolution_graph::{
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn test_epoch() -> SecurityEpoch {
-    SecurityEpoch::from_raw(1)
-}
 
 fn make_node(id: &str) -> ModuleNode {
     ModuleNode {
@@ -222,11 +217,10 @@ fn test_add_module() {
     let mut graph = self_adjusting_resolution_graph::build_graph(
         vec![make_node("a")], vec![], vec!["a".to_string()],
     ).unwrap();
-    let receipt = self_adjusting_resolution_graph::add_module(
+    self_adjusting_resolution_graph::add_module(
         &mut graph, make_node("b"),
     ).unwrap();
     assert_eq!(graph.node_count(), 2);
-    assert!(!receipt.receipt_id.is_empty());
 }
 
 #[test]
@@ -259,14 +253,13 @@ fn test_remove_module_not_found() {
 
 #[test]
 fn test_invalidate_module() {
-    let mut graph = self_adjusting_resolution_graph::build_graph(
+    let graph = self_adjusting_resolution_graph::build_graph(
         vec![make_node("a"), make_node("b")],
         vec![make_edge("a", "b", EdgeKind::StaticImport)],
         vec!["a".to_string()],
     ).unwrap();
-    let new_hash = ContentHash::compute(b"updated-a");
     let receipt = self_adjusting_resolution_graph::invalidate_module(
-        &mut graph, "a", new_hash,
+        &graph, "a",
     ).unwrap();
     assert_eq!(receipt.trigger_module, "a");
     assert!(!receipt.affected_modules.is_empty());

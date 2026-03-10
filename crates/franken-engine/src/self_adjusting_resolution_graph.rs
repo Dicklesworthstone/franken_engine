@@ -377,8 +377,8 @@ fn compute_receipt_hash(receipt: &InvalidationReceipt) -> ContentHash {
     hasher.update(receipt.trigger_module.as_bytes());
     hasher.update(receipt.old_hash.as_bytes());
     hasher.update(receipt.new_hash.as_bytes());
-    hasher.update(&receipt.recomputed_count.to_le_bytes());
-    hasher.update(&receipt.skipped_count.to_le_bytes());
+    hasher.update(receipt.recomputed_count.to_le_bytes());
+    hasher.update(receipt.skipped_count.to_le_bytes());
     ContentHash::compute(&hasher.finalize())
 }
 
@@ -387,7 +387,7 @@ fn compute_checkpoint_hash(checkpoint: &RollbackCheckpoint) -> ContentHash {
     let mut hasher = Sha256::new();
     hasher.update(b"RollbackCheckpoint:v1:");
     hasher.update(checkpoint.checkpoint_id.as_bytes());
-    hasher.update(&checkpoint.epoch.as_u64().to_le_bytes());
+    hasher.update(checkpoint.epoch.as_u64().to_le_bytes());
     hasher.update(checkpoint.graph_snapshot_hash.as_bytes());
     for rid in &checkpoint.invalidation_receipts {
         hasher.update(b"receipt:");
@@ -435,7 +435,7 @@ fn generate_checkpoint_id(graph_hash: &ContentHash, epoch: SecurityEpoch) -> Str
     let mut hasher = Sha256::new();
     hasher.update(b"checkpoint-id:");
     hasher.update(graph_hash.as_bytes());
-    hasher.update(&epoch.as_u64().to_le_bytes());
+    hasher.update(epoch.as_u64().to_le_bytes());
     let digest = hasher.finalize();
     format!("ckpt-{:02x}{:02x}{:02x}{:02x}", digest[0], digest[1], digest[2], digest[3])
 }
@@ -711,10 +711,8 @@ pub fn compute_affected_set(graph: &ResolutionGraph, module_id: &str) -> BTreeSe
     while let Some(current) = queue.pop_front() {
         if let Some(dependents) = reverse.get(&current) {
             for dep in dependents {
-                if visited.insert(dep.clone()) {
-                    if visited.len() <= MAX_AFFECTED {
-                        queue.push_back(dep.clone());
-                    }
+                if visited.insert(dep.clone()) && visited.len() <= MAX_AFFECTED {
+                    queue.push_back(dep.clone());
                 }
             }
         }

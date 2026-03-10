@@ -429,7 +429,10 @@ impl fmt::Display for StdlibDispatchError {
                 write!(f, "callback type is unsafe for requested dispatch strategy")
             }
             StdlibDispatchError::StackOverflow => {
-                write!(f, "callback stack depth exceeded maximum ({MAX_CALLBACK_STACK_DEPTH})")
+                write!(
+                    f,
+                    "callback stack depth exceeded maximum ({MAX_CALLBACK_STACK_DEPTH})"
+                )
             }
             StdlibDispatchError::InternalError(msg) => {
                 write!(f, "internal dispatch error: {msg}")
@@ -544,9 +547,7 @@ impl DispatchTrace {
         if count == 0 {
             return 0;
         }
-        self.total_cost_millionths
-            .checked_div(count)
-            .unwrap_or(0)
+        self.total_cost_millionths.checked_div(count).unwrap_or(0)
     }
 
     /// Maximum deopt risk across all decisions (millionths).
@@ -772,10 +773,7 @@ pub fn build_trace(decisions: Vec<DispatchDecision>) -> DispatchTrace {
         .map(|d| d.estimated_cost_millionths)
         .fold(0u64, |acc, c| acc.saturating_add(c));
 
-    let inlined_count = decisions
-        .iter()
-        .filter(|d| d.strategy.is_inlined())
-        .count() as u64;
+    let inlined_count = decisions.iter().filter(|d| d.strategy.is_inlined()).count() as u64;
 
     let fallback_count = decisions
         .iter()
@@ -1081,17 +1079,26 @@ mod tests {
 
     #[test]
     fn test_overhead_multiplier_reduce() {
-        assert_eq!(StdlibMethod::ArrayReduce.overhead_multiplier(), REDUCE_OVERHEAD_MULTIPLIER);
+        assert_eq!(
+            StdlibMethod::ArrayReduce.overhead_multiplier(),
+            REDUCE_OVERHEAD_MULTIPLIER
+        );
     }
 
     #[test]
     fn test_overhead_multiplier_sort() {
-        assert_eq!(StdlibMethod::ArraySort.overhead_multiplier(), SORT_OVERHEAD_MULTIPLIER);
+        assert_eq!(
+            StdlibMethod::ArraySort.overhead_multiplier(),
+            SORT_OVERHEAD_MULTIPLIER
+        );
     }
 
     #[test]
     fn test_overhead_multiplier_default() {
-        assert_eq!(StdlibMethod::ArrayMap.overhead_multiplier(), MILLIONTHS_UNIT);
+        assert_eq!(
+            StdlibMethod::ArrayMap.overhead_multiplier(),
+            MILLIONTHS_UNIT
+        );
     }
 
     // -- CallbackKind tests --
@@ -1103,7 +1110,10 @@ mod tests {
 
     #[test]
     fn test_pure_deopt_risk() {
-        assert_eq!(CallbackKind::PureFunction.deopt_risk_millionths(), PURE_DEOPT_RISK);
+        assert_eq!(
+            CallbackKind::PureFunction.deopt_risk_millionths(),
+            PURE_DEOPT_RISK
+        );
     }
 
     #[test]
@@ -1306,7 +1316,10 @@ mod tests {
             &DispatchStrategy::InterpreterCallback,
             100,
         );
-        assert!(reduce_cost > map_cost, "reduce should be more expensive than map");
+        assert!(
+            reduce_cost > map_cost,
+            "reduce should be more expensive than map"
+        );
     }
 
     #[test]
@@ -1321,7 +1334,10 @@ mod tests {
             &DispatchStrategy::InterpreterCallback,
             100,
         );
-        assert!(sort_cost > filter_cost, "sort should be more expensive than filter");
+        assert!(
+            sort_cost > filter_cost,
+            "sort should be more expensive than filter"
+        );
     }
 
     #[test]
@@ -1389,27 +1405,42 @@ mod tests {
 
     #[test]
     fn test_inlineable_pure_map() {
-        assert!(is_inlineable(&StdlibMethod::ArrayMap, &CallbackKind::PureFunction));
+        assert!(is_inlineable(
+            &StdlibMethod::ArrayMap,
+            &CallbackKind::PureFunction
+        ));
     }
 
     #[test]
     fn test_not_inlineable_mutating() {
-        assert!(!is_inlineable(&StdlibMethod::ArrayMap, &CallbackKind::MutatingFunction));
+        assert!(!is_inlineable(
+            &StdlibMethod::ArrayMap,
+            &CallbackKind::MutatingFunction
+        ));
     }
 
     #[test]
     fn test_not_inlineable_sort() {
-        assert!(!is_inlineable(&StdlibMethod::ArraySort, &CallbackKind::PureFunction));
+        assert!(!is_inlineable(
+            &StdlibMethod::ArraySort,
+            &CallbackKind::PureFunction
+        ));
     }
 
     #[test]
     fn test_not_inlineable_promise_then() {
-        assert!(!is_inlineable(&StdlibMethod::PromiseThen, &CallbackKind::PureFunction));
+        assert!(!is_inlineable(
+            &StdlibMethod::PromiseThen,
+            &CallbackKind::PureFunction
+        ));
     }
 
     #[test]
     fn test_inlineable_builtin_filter() {
-        assert!(is_inlineable(&StdlibMethod::ArrayFilter, &CallbackKind::BuiltinFunction));
+        assert!(is_inlineable(
+            &StdlibMethod::ArrayFilter,
+            &CallbackKind::BuiltinFunction
+        ));
     }
 
     // -- build_trace tests --
@@ -1581,9 +1612,10 @@ mod tests {
 
     #[test]
     fn test_build_profile_display() {
-        let trace = build_trace(vec![
-            build_decision(StdlibMethod::ArrayMap, CallbackKind::PureFunction),
-        ]);
+        let trace = build_trace(vec![build_decision(
+            StdlibMethod::ArrayMap,
+            CallbackKind::PureFunction,
+        )]);
         let profile = build_profile(&trace);
         let s = format!("{profile}");
         assert!(s.starts_with("profile("));
@@ -1641,12 +1673,28 @@ mod tests {
     #[test]
     fn test_batch_cost_additive() {
         let items = vec![
-            (StdlibMethod::ArrayMap, DispatchStrategy::InlinedCallback, 50),
-            (StdlibMethod::ArraySort, DispatchStrategy::InterpreterCallback, 100),
+            (
+                StdlibMethod::ArrayMap,
+                DispatchStrategy::InlinedCallback,
+                50,
+            ),
+            (
+                StdlibMethod::ArraySort,
+                DispatchStrategy::InterpreterCallback,
+                100,
+            ),
         ];
         let total = batch_cost(&items);
-        let c1 = estimate_dispatch_cost(StdlibMethod::ArrayMap, &DispatchStrategy::InlinedCallback, 50);
-        let c2 = estimate_dispatch_cost(StdlibMethod::ArraySort, &DispatchStrategy::InterpreterCallback, 100);
+        let c1 = estimate_dispatch_cost(
+            StdlibMethod::ArrayMap,
+            &DispatchStrategy::InlinedCallback,
+            50,
+        );
+        let c2 = estimate_dispatch_cost(
+            StdlibMethod::ArraySort,
+            &DispatchStrategy::InterpreterCallback,
+            100,
+        );
         assert_eq!(total, c1.saturating_add(c2));
     }
 
@@ -1654,12 +1702,18 @@ mod tests {
 
     #[test]
     fn test_optimal_pure_map() {
-        assert_eq!(optimal_pure_strategy(StdlibMethod::ArrayMap), DispatchStrategy::InlinedCallback);
+        assert_eq!(
+            optimal_pure_strategy(StdlibMethod::ArrayMap),
+            DispatchStrategy::InlinedCallback
+        );
     }
 
     #[test]
     fn test_worst_case_map() {
-        assert_eq!(worst_case_strategy(StdlibMethod::ArrayMap), DispatchStrategy::FallbackSlow);
+        assert_eq!(
+            worst_case_strategy(StdlibMethod::ArrayMap),
+            DispatchStrategy::FallbackSlow
+        );
     }
 
     // -- manifest tests --
@@ -1695,7 +1749,10 @@ mod tests {
     #[test]
     fn test_manifest_has_inlined_decisions() {
         let trace = franken_engine_stdlib_dispatch_manifest();
-        assert!(trace.inlined_count > 0, "manifest should contain inlined decisions");
+        assert!(
+            trace.inlined_count > 0,
+            "manifest should contain inlined decisions"
+        );
     }
 
     #[test]

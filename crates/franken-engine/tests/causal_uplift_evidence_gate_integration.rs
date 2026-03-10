@@ -673,7 +673,7 @@ fn gate_instrumental_no_adjustment_ok() {
 #[test]
 fn permissive_admits_mismatched_category() {
     let gate = EvidenceGate::with_config(GateConfig::permissive());
-    let mut b = good_backing(ClaimCategory::Optimization);
+    let b = good_backing(ClaimCategory::Optimization);
     // Permissive: no category match requirement, but we need adjustment path for non-randomized
     let v = gate.evaluate(&supremacy_claim(), Some(&b));
     assert!(v.is_admitted());

@@ -340,7 +340,7 @@ run_artifact_flow() {
     "cargo run -q -p frankenengine-engine --bin frankenctl -- react --help" \
     "0" \
     "" \
-    cargo run -q -p frankenengine-engine --bin frankenctl -- react --help
+    cargo run -q -p frankenengine-engine --bin frankenctl -- react --help || return $?
   rch_strip_ansi "${last_step_log_path}" | awk '/^react usage:$/,/^$/' >"$help_output_path"
   append_event "react_help_captured" "control" "pass" "${workflow_trace_id}" "${workflow_decision_id}" "${workflow_policy_id}" "null" "$(json_quote "${help_output_path}")"
 
@@ -352,7 +352,7 @@ run_artifact_flow() {
       --trace-id "${contract_trace_id}" \
       --decision-id "${contract_decision_id}" \
       --policy-id "${contract_policy_id}" \
-      --out "${contract_path}"
+      --out "${contract_path}" || return $?
   append_event "react_contract_emitted" "contract" "pass" "${contract_trace_id}" "${contract_decision_id}" "${contract_policy_id}" "null" "$(json_quote "${contract_path}")"
 
   run_step \
@@ -366,7 +366,7 @@ run_artifact_flow() {
       --trace-id "${compile_trace_id}" \
       --decision-id "${compile_decision_id}" \
       --policy-id "${compile_policy_id}" \
-      --out "${compile_report_path}"
+      --out "${compile_report_path}" || return $?
   append_event "react_compile_report_emitted" "deferred" "expected_fail_closed" "${compile_trace_id}" "${compile_decision_id}" "${compile_policy_id}" "$(json_quote "FE-RGC-016A-CAP-0005")" "$(json_quote "${compile_report_path}")"
 
   run_step \
@@ -379,7 +379,7 @@ run_artifact_flow() {
       --trace-id "${build_trace_id}" \
       --decision-id "${build_decision_id}" \
       --policy-id "${build_policy_id}" \
-      --out "${build_report_path}"
+      --out "${build_report_path}" || return $?
   append_event "react_build_report_emitted" "unsupported" "expected_fail_closed" "${build_trace_id}" "${build_decision_id}" "${build_policy_id}" "$(json_quote "FE-RGC-016A-CAP-0007")" "$(json_quote "${build_report_path}")"
 
   write_doctor_input
@@ -391,7 +391,7 @@ run_artifact_flow() {
     "${doctor_report_path}" \
     cargo run -q -p frankenengine-engine --bin frankenctl -- doctor \
       --input "${doctor_input_path}" \
-      --out-dir "${run_dir}"
+      --out-dir "${run_dir}" || return $?
   append_event "doctor_support_bundle_emitted" "support_bundle" "pass" "${doctor_trace_id}" "${doctor_decision_id}" "${doctor_policy_id}" "null" "$(json_quote "${doctor_report_path}")"
 
   emit_trace_ids
@@ -420,49 +420,49 @@ run_artifact_flow() {
 run_mode() {
   case "$mode" in
     artifacts)
-      run_artifact_flow
+      run_artifact_flow || return $?
       ;;
     check)
       run_step \
         "cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli" \
         "0" \
         "" \
-        cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli
-      run_artifact_flow
+        cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli || return $?
+      run_artifact_flow || return $?
       ;;
     test)
       run_step \
         "cargo test -p frankenengine-engine --test frankenctl_cli frankenctl_react_" \
         "0" \
         "" \
-        cargo test -p frankenengine-engine --test frankenctl_cli frankenctl_react_
-      run_artifact_flow
+        cargo test -p frankenengine-engine --test frankenctl_cli frankenctl_react_ || return $?
+      run_artifact_flow || return $?
       ;;
     clippy)
       run_step \
         "cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli -- -D warnings" \
         "0" \
         "" \
-        cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli -- -D warnings
-      run_artifact_flow
+        cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli -- -D warnings || return $?
+      run_artifact_flow || return $?
       ;;
     ci)
       run_step \
         "cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli" \
         "0" \
         "" \
-        cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli
+        cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli || return $?
       run_step \
         "cargo test -p frankenengine-engine --test frankenctl_cli frankenctl_react_" \
         "0" \
         "" \
-        cargo test -p frankenengine-engine --test frankenctl_cli frankenctl_react_
+        cargo test -p frankenengine-engine --test frankenctl_cli frankenctl_react_ || return $?
       run_step \
         "cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli -- -D warnings" \
         "0" \
         "" \
-        cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli -- -D warnings
-      run_artifact_flow
+        cargo clippy -p frankenengine-engine --bin frankenctl --test frankenctl_cli -- -D warnings || return $?
+      run_artifact_flow || return $?
       ;;
     *)
       echo "usage: $0 [artifacts|check|test|clippy|ci]" >&2

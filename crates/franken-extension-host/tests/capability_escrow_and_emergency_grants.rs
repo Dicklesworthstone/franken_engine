@@ -2,9 +2,9 @@ use frankenengine_extension_host::{
     compute_content_hash, BudgetExhaustionPolicy, Capability, CapabilityEscrowDecisionKind,
     CapabilityEscrowError, CapabilityEscrowReceiptQuery, CapabilityEscrowRoute,
     CapabilityEscrowState, DelegateCell, DelegateCellError, DelegateCellFactory,
-    DelegateCellManifest, DelegationScope, DenialReason, ExtensionManifest, FlowEnforcementContext,
-    HostcallResult, HostcallType, Labeled, LifecycleContext, ResourceBudget,
-    CURRENT_ENGINE_VERSION,
+    DelegateCellManifest, DelegationScope, DenialReason, ExtensionManifest, ExtensionState,
+    FlowEnforcementContext, HostcallResult, HostcallType, Labeled, LifecycleContext,
+    LifecycleTransition, ResourceBudget, CURRENT_ENGINE_VERSION,
 };
 
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -49,6 +49,22 @@ fn budget() -> ResourceBudget {
 
 fn make_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell {
     DelegateCellFactory::default()
+        .create_delegate_cell(
+            delegate_id,
+            delegate_manifest(capabilities, 1_000_000_000_000),
+            budget(),
+            BudgetExhaustionPolicy::Suspend,
+            100,
+            &lctx(),
+        )
+        .expect("delegate created")
+}
+
+fn make_low_penalty_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell {
+    let mut factory = DelegateCellFactory::default();
+    factory.policy.initial_posterior_micros = 0;
+    factory.policy.capability_escalation_penalty_micros = 10_000;
+    factory
         .create_delegate_cell(
             delegate_id,
             delegate_manifest(capabilities, 1_000_000_000_000),
@@ -120,6 +136,51 @@ fn escrow_state_machine_transitions_challenge_to_approved_to_expired() {
         .values()
         .any(|record| record.request_id == request_id
             && record.state == CapabilityEscrowState::Expired));
+}
+
+#[test]
+fn quarantined_delegate_cannot_approve_capability_escrow_request() {
+    let mut delegate = make_delegate("escrow-inactive-approval", &[Capability::FsRead]);
+
+    let _ = delegate
+        .dispatch_hostcall_with_escrow(
+            HostcallType::ProcessSpawn,
+            Capability::ProcessSpawn,
+            Labeled::system_generated("spawn".to_string()),
+            200,
+            &fctx(),
+            &lctx(),
+            Some("awaiting approval"),
+        )
+        .expect("dispatch result");
+    let request_id = delegate
+        .capability_escrow_records()
+        .keys()
+        .next()
+        .cloned()
+        .expect("escrow request id");
+
+    delegate
+        .apply_transition(LifecycleTransition::Quarantine, 210, &lctx())
+        .expect("quarantine");
+
+    let err = delegate.approve_capability_escrow_request(&request_id, 211, &fctx());
+    assert!(matches!(
+        err,
+        Err(DelegateCellError::InactiveState {
+            state: ExtensionState::Quarantined,
+            action: "approve_capability_escrow_request",
+            ..
+        })
+    ));
+    assert_eq!(
+        delegate
+            .capability_escrow_records()
+            .get(&request_id)
+            .expect("escrow record")
+            .state,
+        CapabilityEscrowState::Challenged
+    );
 }
 
 #[test]
@@ -269,6 +330,57 @@ fn emergency_grant_is_signed_bounded_and_requires_post_review() {
 }
 
 #[test]
+fn suspended_delegate_cannot_issue_emergency_capability_grant() {
+    let mut delegate = make_delegate("escrow-suspended-grant", &[Capability::FsRead]);
+
+    let _ = delegate
+        .dispatch_hostcall_with_escrow(
+            HostcallType::ProcessSpawn,
+            Capability::ProcessSpawn,
+            Labeled::system_generated("spawn".to_string()),
+            200,
+            &fctx(),
+            &lctx(),
+            Some("ops investigation"),
+        )
+        .expect("dispatch result");
+    let request_id = delegate
+        .capability_escrow_records()
+        .keys()
+        .next()
+        .cloned()
+        .expect("escrow request id");
+
+    delegate
+        .apply_transition(LifecycleTransition::Suspend, 210, &lctx())
+        .expect("suspend");
+    delegate
+        .apply_transition(LifecycleTransition::Freeze, 211, &lctx())
+        .expect("freeze");
+
+    let err = delegate.issue_emergency_capability_grant(
+        &request_id,
+        "ops@franken.engine",
+        "should fail once frozen",
+        1_000,
+        1,
+        true,
+        true,
+        212,
+        &fctx(),
+    );
+    assert!(matches!(
+        err,
+        Err(DelegateCellError::InactiveState {
+            state: ExtensionState::Suspended,
+            action: "issue_emergency_capability_grant",
+            ..
+        })
+    ));
+    assert!(delegate.active_emergency_grants().is_empty());
+}
+
+#[test]
 fn expired_emergency_grants_cannot_bypass_escrow() {
     let mut delegate = make_delegate("escrow-expired-grant", &[Capability::FsRead]);
 
@@ -330,6 +442,58 @@ fn expired_emergency_grants_cannot_bypass_escrow() {
         .capability_escrow_events()
         .iter()
         .any(|event| event.error_code.as_deref() == Some("FE-ESCROW-0007")));
+}
+
+#[test]
+fn expired_delegate_cannot_issue_emergency_capability_grant() {
+    let mut delegate = DelegateCellFactory::default()
+        .create_delegate_cell(
+            "escrow-expired-delegate-grant",
+            delegate_manifest(&[Capability::FsRead], 150),
+            budget(),
+            BudgetExhaustionPolicy::Suspend,
+            100,
+            &lctx(),
+        )
+        .expect("delegate created");
+
+    let _ = delegate
+        .dispatch_hostcall_with_escrow(
+            HostcallType::ProcessSpawn,
+            Capability::ProcessSpawn,
+            Labeled::system_generated("spawn".to_string()),
+            200,
+            &fctx(),
+            &lctx(),
+            Some("request before expiry"),
+        )
+        .expect("dispatch result");
+    let request_id = delegate
+        .capability_escrow_records()
+        .keys()
+        .next()
+        .cloned()
+        .expect("escrow request id");
+
+    let err = delegate.issue_emergency_capability_grant(
+        &request_id,
+        "ops@franken.engine",
+        "should fail after expiry",
+        1_000,
+        1,
+        false,
+        true,
+        251,
+        &fctx(),
+    );
+    assert!(matches!(
+        err,
+        Err(DelegateCellError::LifetimeExpired {
+            delegate_id,
+            expired_at_ns: 250,
+        }) if delegate_id == "escrow-expired-delegate-grant"
+    ));
+    assert!(delegate.active_emergency_grants().is_empty());
 }
 
 #[test]
@@ -399,7 +563,7 @@ fn emergency_grant_validation_rejects_invalid_fields() {
 
 #[test]
 fn escrow_receipts_expose_replay_linkage_and_index_queries() {
-    let mut delegate = make_delegate("escrow-receipt-replay", &[Capability::FsRead]);
+    let mut delegate = make_low_penalty_delegate("escrow-receipt-replay", &[Capability::FsRead]);
 
     let _ = delegate
         .dispatch_hostcall_with_escrow(

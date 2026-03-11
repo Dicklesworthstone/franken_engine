@@ -10,15 +10,15 @@ rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-180
 rch_exec_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-${rch_build_timeout_sec}}"
 artifact_root="${SEQLOCK_READER_WRITER_ARTIFACT_ROOT:-artifacts/seqlock_reader_writer_contract}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-default_target_dir="${root_dir}/target_rch_seqlock_reader_writer_contract"
+default_target_dir="/data/tmp/rch_target_franken_engine_seqlock_reader_writer_contract"
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
   target_dir="${CARGO_TARGET_DIR}"
   target_dir_strategy="env_override"
 else
-  # Keep a stable repo-local target dir by default so rch workers can reuse
-  # incremental artifacts across reruns instead of paying a cold-build penalty.
+  # Keep a stable target dir outside the synced workspace so rch workers can
+  # reuse incremental artifacts without trying to sync the build tree back.
   target_dir="${default_target_dir}"
-  target_dir_strategy="stable_repo_local_default"
+  target_dir_strategy="stable_data_tmp_default"
 fi
 generated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 run_dir="${artifact_root}/${timestamp}"

@@ -9,7 +9,7 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/data/projects/franken_engine/target_rch_rgc_security_enforcement_verification_pack}"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_security_enforcement_verification_pack}"
 artifact_root="${RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_ARTIFACT_ROOT:-artifacts/rgc_security_enforcement_verification_pack}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -296,6 +296,7 @@ write_manifest() {
     echo "    \"cat ${report_path}\"," 
     echo '    "jq empty docs/rgc_security_enforcement_verification_pack_v1.json",'
     echo '    "jq empty docs/rgc_security_enforcement_verification_vectors_v1.json",'
+    echo '    "rch exec -- env CARGO_TARGET_DIR=\"$PWD/target_rch_rgc_security_enforcement_verification_pack_verify\" cargo test -p frankenengine-engine --test rgc_security_enforcement_verification_pack",'
     echo "    \"${replay_command}\""
     echo '  ]'
     echo "}"

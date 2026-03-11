@@ -75,6 +75,11 @@ Each run emits:
 - `run_manifest.json`
 - `events.jsonl`
 - `commands.txt`
+- `trace_ids.json`
+- `summary.md`
+- `env.json`
+- `repro.lock`
+- `step_logs/`
 - `support_bundle/stats_verdict_report.json`
 
 under `artifacts/rgc_statistical_validation_pipeline/<UTC_TIMESTAMP>/`.
@@ -84,7 +89,7 @@ under `artifacts/rgc_statistical_validation_pipeline/<UTC_TIMESTAMP>/`.
 ```bash
 jq empty docs/rgc_statistical_validation_pipeline_v1.json
 
-rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_statistical_validation_pipeline \
+rch exec -- env CARGO_TARGET_DIR="$PWD/target_rch_rgc_statistical_validation_pipeline_verify" \
   cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline
 
 ./scripts/run_rgc_statistical_validation_pipeline.sh ci

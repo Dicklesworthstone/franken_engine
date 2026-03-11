@@ -18,6 +18,11 @@
     "run_manifest.json",
     "events.jsonl",
     "commands.txt",
+    "trace_ids.json",
+    "summary.md",
+    "env.json",
+    "repro.lock",
+    "step_logs/",
     "support_bundle/stats_verdict_report.json"
   ],
   "thresholds": {
@@ -58,6 +63,7 @@
     "manifest_schema_version": "franken-engine.rgc-statistical-validation-pipeline.run-manifest.v1"
   },
   "operator_verification": [
+    "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_statistical_validation_pipeline_verify cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline",
     "./scripts/run_rgc_statistical_validation_pipeline.sh ci",
     "./scripts/e2e/rgc_statistical_validation_pipeline_replay.sh ci",
     "jq empty docs/rgc_statistical_validation_pipeline_v1.json"

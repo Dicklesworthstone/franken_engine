@@ -9,7 +9,7 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/data/projects/franken_engine/target_rch_rgc_statistical_validation_pipeline}"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_statistical_validation_pipeline}"
 artifact_root="${RGC_STATISTICAL_VALIDATION_ARTIFACT_ROOT:-artifacts/rgc_statistical_validation_pipeline}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -17,6 +17,11 @@ run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
+trace_ids_path="${run_dir}/trace_ids.json"
+summary_path="${run_dir}/summary.md"
+env_path="${run_dir}/env.json"
+repro_lock_path="${run_dir}/repro.lock"
+step_logs_dir="${run_dir}/step_logs"
 support_bundle_dir="${run_dir}/support_bundle"
 stats_report_path="${support_bundle_dir}/stats_verdict_report.json"
 
@@ -27,7 +32,7 @@ component="rgc_statistical_validation_pipeline_gate"
 scenario_id="rgc-702"
 replay_command="./scripts/e2e/rgc_statistical_validation_pipeline_replay.sh ${mode}"
 
-mkdir -p "$run_dir" "$support_bundle_dir"
+mkdir -p "$run_dir" "$support_bundle_dir" "$step_logs_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for RGC statistical validation pipeline heavy commands" >&2
@@ -67,7 +72,7 @@ step_log_index=0
 
 run_step() {
   local command_text="$1"
-  local step_log_path="${run_dir}/step_$(printf '%03d' "$step_log_index").log"
+  local step_log_path="${step_logs_dir}/step_$(printf '%03d' "$step_log_index").log"
   step_log_index=$((step_log_index + 1))
   shift
 
@@ -138,6 +143,56 @@ write_support_bundle() {
 EOF_REPORT
 }
 
+write_trace_ids() {
+  cat >"${trace_ids_path}" <<EOF_TRACE
+{"schema_version":"franken-engine.rgc-statistical-validation-pipeline.trace-ids.v1","trace_ids":["${trace_id}"],"decision_ids":["${decision_id}"],"policy_ids":["${policy_id}"],"scenario_id":"${scenario_id}"}
+EOF_TRACE
+}
+
+write_env_bundle() {
+  cat >"${env_path}" <<EOF_ENV
+{"schema_version":"franken-engine.rgc-statistical-validation-pipeline.env.v1","bead_id":"bd-1lsy.8.2","mode":"${mode}","toolchain":"${toolchain}","cargo_target_dir":"${target_dir}","artifact_root":"${artifact_root}","root_dir":"${root_dir}","pwd":"${PWD}","rch_exec_timeout_seconds":${rch_timeout_seconds},"runner":"scripts/run_rgc_statistical_validation_pipeline.sh","replay_wrapper":"scripts/e2e/rgc_statistical_validation_pipeline_replay.sh","generated_at_utc":"${timestamp}"}
+EOF_ENV
+}
+
+write_repro_lock() {
+  local git_commit="$1"
+
+  cat >"${repro_lock_path}" <<EOF_LOCK
+schema_version=franken-engine.rgc-statistical-validation-pipeline.repro-lock.v1
+bead_id=bd-1lsy.8.2
+mode=${mode}
+toolchain=${toolchain}
+cargo_target_dir=${target_dir}
+git_commit=${git_commit}
+runner=scripts/run_rgc_statistical_validation_pipeline.sh
+replay_wrapper=scripts/e2e/rgc_statistical_validation_pipeline_replay.sh
+trace_id=${trace_id}
+decision_id=${decision_id}
+policy_id=${policy_id}
+generated_at_utc=${timestamp}
+EOF_LOCK
+}
+
+write_summary() {
+  local outcome="$1"
+
+  cat >"${summary_path}" <<EOF_SUMMARY
+# RGC Statistical Validation Pipeline
+
+- bead: \`bd-1lsy.8.2\`
+- scenario: \`${scenario_id}\`
+- outcome: \`${outcome}\`
+- trace_id: \`${trace_id}\`
+- decision_id: \`${decision_id}\`
+- policy_id: \`${policy_id}\`
+- cargo_target_dir: \`${target_dir}\`
+- stats_report: \`${stats_report_path}\`
+- replay: \`${replay_command}\`
+- failed_command: \`${failed_command:-none}\`
+EOF_SUMMARY
+}
+
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
@@ -156,6 +211,8 @@ write_manifest() {
   fi
 
   write_support_bundle "$outcome"
+  write_trace_ids
+  write_env_bundle
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
   if git diff --quiet --ignore-submodules HEAD -- >/dev/null 2>&1; then
@@ -163,6 +220,8 @@ write_manifest() {
   else
     dirty_worktree=true
   fi
+  write_repro_lock "$git_commit"
+  write_summary "$outcome"
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
@@ -216,6 +275,11 @@ write_manifest() {
     echo "    \"manifest\": \"${manifest_path}\"," 
     echo "    \"events\": \"${events_path}\"," 
     echo "    \"commands\": \"${commands_path}\"," 
+    echo "    \"trace_ids\": \"${trace_ids_path}\"," 
+    echo "    \"summary\": \"${summary_path}\"," 
+    echo "    \"env\": \"${env_path}\"," 
+    echo "    \"repro_lock\": \"${repro_lock_path}\"," 
+    echo "    \"step_logs\": \"${step_logs_dir}\"," 
     echo "    \"stats_verdict_report\": \"${stats_report_path}\"," 
     echo '    "contract_doc": "docs/RGC_STATISTICAL_VALIDATION_PIPELINE_V1.md",'
     echo '    "contract_json": "docs/rgc_statistical_validation_pipeline_v1.json",'
@@ -225,6 +289,10 @@ write_manifest() {
     echo "    \"cat ${manifest_path}\"," 
     echo "    \"cat ${events_path}\"," 
     echo "    \"cat ${commands_path}\"," 
+    echo "    \"cat ${trace_ids_path}\"," 
+    echo "    \"cat ${summary_path}\"," 
+    echo "    \"cat ${env_path}\"," 
+    echo "    \"cat ${repro_lock_path}\"," 
     echo '    "jq empty docs/rgc_statistical_validation_pipeline_v1.json",'
     echo "    \"${replay_command}\""
     echo '  ]'

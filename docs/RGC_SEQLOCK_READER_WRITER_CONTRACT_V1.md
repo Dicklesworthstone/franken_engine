@@ -72,12 +72,14 @@ deterministic fallback to the incumbent baseline.
 ./scripts/e2e/seqlock_reader_writer_contract_replay.sh ci
 ```
 
-The suite is `rch`-backed, defaults `CARGO_TARGET_DIR` to the stable repo-local
-path `target_rch_seqlock_reader_writer_contract`, and emits the contract bundle
-under
+The suite is `rch`-backed, defaults `CARGO_TARGET_DIR` to the stable external
+path `/data/tmp/rch_target_franken_engine_seqlock_reader_writer_contract`, and
+emits the contract bundle under
 `artifacts/seqlock_reader_writer_contract/<timestamp>/`.
 
 Override `CARGO_TARGET_DIR=...` only when you need isolated experimentation.
 The suite manifest records both `cargo_target_dir` and
 `cargo_target_dir_strategy` so timeout/debug traces show whether the run used
-the reusable default or an explicit override.
+the reusable default or an explicit override. The default lives outside the
+repo so `rch` can reuse incremental artifacts without syncing the build tree
+back through workspace artifact retrieval.

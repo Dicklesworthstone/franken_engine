@@ -1425,9 +1425,11 @@ rollout is considered.
 ```
 
 `run_seqlock_reader_writer_contract_suite.sh` defaults `CARGO_TARGET_DIR` to
-the stable repo-local path `target_rch_seqlock_reader_writer_contract` so rch
-workers can reuse incremental artifacts across reruns. Override with
-`CARGO_TARGET_DIR=...` if you need isolated lane-specific builds.
+the stable external path
+`/data/tmp/rch_target_franken_engine_seqlock_reader_writer_contract` so `rch`
+workers can reuse incremental artifacts without syncing the build tree back
+through the workspace. Override with `CARGO_TARGET_DIR=...` if you need
+isolated lane-specific builds.
 
 Contract and vectors:
 

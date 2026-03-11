@@ -391,11 +391,7 @@ impl FtrlState {
         self.cumulative_rewards_millionths
             .iter()
             .zip(self.arm_counts.iter())
-            .map(
-                |(&total, &count)| {
-                    if count > 0 { total / count as i64 } else { 0 }
-                },
-            )
+            .map(|(&total, &count)| total.checked_div(count as i64).unwrap_or(0))
             .collect()
     }
 
@@ -676,11 +672,7 @@ impl RegretBoundedRouter {
             .per_arm_cumulative
             .iter()
             .zip(self.per_arm_count.iter())
-            .map(
-                |(&total, &count)| {
-                    if count > 0 { total / count as i64 } else { 0 }
-                },
-            )
+            .map(|(&total, &count)| total.checked_div(count as i64).unwrap_or(0))
             .max()
             .unwrap_or(0);
         let projected_best = (best_mean as i128).saturating_mul(t as i128);

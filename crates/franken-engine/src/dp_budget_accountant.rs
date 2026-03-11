@@ -539,6 +539,7 @@ fn isqrt_millionths(n: i64) -> i64 {
 
 /// Errors from budget accountant operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AccountantError {
     /// Budget is exhausted (fail-closed).
     BudgetExhausted {

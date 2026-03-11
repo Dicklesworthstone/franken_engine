@@ -764,7 +764,7 @@ fn receipt_seal_is_stable() {
     let ih = ContentHash::compute(b"test");
     let mut r = compute_receipt(&epoch(1), &ih, MembraneVerdict::Healthy, 1000);
     r.seal();
-    let h1 = r.verdict_hash;
+    let h1 = r.verdict_hash.clone();
     r.seal();
     assert_eq!(r.verdict_hash, h1);
 }

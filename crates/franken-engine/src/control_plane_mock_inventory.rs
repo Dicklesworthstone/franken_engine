@@ -1152,16 +1152,18 @@ fn scan_rust_file_for_ambient_mock_violations(
         if is_mock_module_definition(trimmed) {
             pending_mock_module_scope = true;
             if !is_test_context {
-                violations.push(guard_violation(
-                    AmbientMockGuardRule::MockModuleMustBeCfgTest,
-                    "AMG-ARCH-UNGARDED-MOCK-MODULE",
-                    SeamSeverity::High,
+                violations.push(guard_violation(GuardViolationInput {
+                    rule: AmbientMockGuardRule::MockModuleMustBeCfgTest,
+                    diagnostic_code: "AMG-ARCH-UNGARDED-MOCK-MODULE",
+                    severity: SeamSeverity::High,
                     relative_path,
                     line_number,
-                    trimmed,
-                    "mock helper module is reachable from non-test production code because `pub mod mocks` is not gated behind `#[cfg(test)]`",
-                    "Add `#[cfg(test)]` to the mock module or move it behind a test-only feature gate.",
-                ));
+                    code_snippet: trimmed,
+                    detail:
+                        "mock helper module is reachable from non-test production code because `pub mod mocks` is not gated behind `#[cfg(test)]`",
+                    remediation:
+                        "Add `#[cfg(test)]` to the mock module or move it behind a test-only feature gate.",
+                }));
             }
         }
 
@@ -1224,55 +1226,63 @@ fn line_level_guard_violations(
     let mut violations = Vec::new();
 
     if is_production_mock_module_reference(trimmed) {
-        violations.push(guard_violation(
-            AmbientMockGuardRule::NoProductionMockModuleReference,
-            "AMG-PROD-MOCK-MODULE-REFERENCE",
-            SeamSeverity::Critical,
+        violations.push(guard_violation(GuardViolationInput {
+            rule: AmbientMockGuardRule::NoProductionMockModuleReference,
+            diagnostic_code: "AMG-PROD-MOCK-MODULE-REFERENCE",
+            severity: SeamSeverity::Critical,
             relative_path,
             line_number,
-            trimmed,
-            "production code references `control_plane::mocks` directly",
-            "Thread the canonical control-plane context instead of importing from `control_plane::mocks`.",
-        ));
+            code_snippet: trimmed,
+            detail: "production code references `control_plane::mocks` directly",
+            remediation:
+                "Thread the canonical control-plane context instead of importing from `control_plane::mocks`.",
+        }));
     }
 
     if let Some((diagnostic_code, detail)) = fake_context_symbol_match(trimmed) {
-        violations.push(guard_violation(
-            AmbientMockGuardRule::NoProductionFakeContextSymbol,
+        violations.push(guard_violation(GuardViolationInput {
+            rule: AmbientMockGuardRule::NoProductionFakeContextSymbol,
             diagnostic_code,
-            SeamSeverity::Critical,
+            severity: SeamSeverity::Critical,
             relative_path,
             line_number,
-            trimmed,
+            code_snippet: trimmed,
             detail,
-            "Replace the fake context symbol with canonical runtime-managed context threading.",
-        ));
+            remediation:
+                "Replace the fake context symbol with canonical runtime-managed context threading.",
+        }));
     }
 
     violations
 }
 
-fn guard_violation(
+struct GuardViolationInput<'a> {
     rule: AmbientMockGuardRule,
-    diagnostic_code: &str,
+    diagnostic_code: &'a str,
     severity: SeamSeverity,
-    relative_path: &str,
+    relative_path: &'a str,
     line_number: u32,
-    code_snippet: &str,
-    detail: &str,
-    remediation: &str,
-) -> AmbientMockGuardViolation {
-    let violation_id = ambient_mock_guard_violation_id(relative_path, line_number, diagnostic_code);
+    code_snippet: &'a str,
+    detail: &'a str,
+    remediation: &'a str,
+}
+
+fn guard_violation(input: GuardViolationInput<'_>) -> AmbientMockGuardViolation {
+    let violation_id = ambient_mock_guard_violation_id(
+        input.relative_path,
+        input.line_number,
+        input.diagnostic_code,
+    );
     AmbientMockGuardViolation {
         violation_id,
-        rule,
-        severity,
-        diagnostic_code: diagnostic_code.to_string(),
-        file_path: relative_path.to_string(),
-        line_number,
-        code_snippet: code_snippet.to_string(),
-        detail: detail.to_string(),
-        remediation: remediation.to_string(),
+        rule: input.rule,
+        severity: input.severity,
+        diagnostic_code: input.diagnostic_code.to_string(),
+        file_path: input.relative_path.to_string(),
+        line_number: input.line_number,
+        code_snippet: input.code_snippet.to_string(),
+        detail: input.detail.to_string(),
+        remediation: input.remediation.to_string(),
     }
 }
 

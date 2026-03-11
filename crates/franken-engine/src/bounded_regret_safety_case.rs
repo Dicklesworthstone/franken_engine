@@ -461,6 +461,7 @@ pub struct BenchmarkEligibility {
 
 /// Verdict of the bounded-regret safety case evaluation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SafetyCaseVerdict {
     /// Safety case passes.
     Pass {
@@ -590,6 +591,7 @@ impl Default for SafetyCaseConfig {
 
 /// Errors that can occur during safety case evaluation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SafetyCaseError {
     /// No regret observations recorded.
     EmptyAccounting,
@@ -989,11 +991,11 @@ mod tests {
 
     #[test]
     fn default_constants_positive() {
-        assert!(DEFAULT_CUMULATIVE_BUDGET > 0);
-        assert!(DEFAULT_PER_STEP_BUDGET > 0);
-        assert!(DEFAULT_DECAY_RATE > 0);
-        assert!(DEFAULT_MIN_STABILITY_STEPS > 0);
-        assert!(DEFAULT_MAX_ACTIVE_OVERRIDES > 0);
+        assert_eq!(DEFAULT_CUMULATIVE_BUDGET, 100_000);
+        assert_eq!(DEFAULT_PER_STEP_BUDGET, 50_000);
+        assert_eq!(DEFAULT_DECAY_RATE, 10_000);
+        assert_eq!(DEFAULT_MIN_STABILITY_STEPS, 100);
+        assert_eq!(DEFAULT_MAX_ACTIVE_OVERRIDES, 8);
     }
 
     // --- AdaptivePolicy ---

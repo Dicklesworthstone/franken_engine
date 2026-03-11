@@ -730,6 +730,7 @@ pub struct MembraneReport {
 
 /// Error conditions in the membrane module.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MembraneError {
     /// Handle limit exceeded.
     #[error("handle limit exceeded: {detail}")]
@@ -1663,7 +1664,7 @@ mod tests {
     #[test]
     fn handle_record_seal_changes_hash() {
         let mut rec = HandleRecord::new(1, HandleKind::ValueHandle, "addon-a", epoch(1));
-        let h1 = rec.content_hash;
+        let h1 = rec.content_hash.clone();
         rec.state = HandleState::Revoked;
         rec.seal();
         assert_ne!(h1, rec.content_hash);

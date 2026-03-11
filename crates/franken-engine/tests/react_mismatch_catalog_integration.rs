@@ -990,7 +990,7 @@ fn filter_entry_ids_works() {
 #[test]
 fn catalog_hash_changes_on_add() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    let h0 = cat.catalog_hash;
+    let h0 = cat.catalog_hash.clone();
     cat.add_entry(entry(
         "e1",
         MismatchDomain::CompileOutput,
@@ -1009,7 +1009,7 @@ fn catalog_hash_changes_on_remove() {
         MismatchSeverity::Error,
     ))
     .unwrap();
-    let h1 = cat.catalog_hash;
+    let h1 = cat.catalog_hash.clone();
     cat.remove_entry("e1").unwrap();
     assert_ne!(cat.catalog_hash, h1);
 }
@@ -1023,7 +1023,7 @@ fn catalog_hash_changes_on_remediation_update() {
         MismatchSeverity::Error,
     ))
     .unwrap();
-    let h1 = cat.catalog_hash;
+    let h1 = cat.catalog_hash.clone();
     cat.update_remediation("e1", RemediationStatus::Resolved)
         .unwrap();
     assert_ne!(cat.catalog_hash, h1);

@@ -91,6 +91,7 @@ impl fmt::Display for WitnessSchemaVersion {
 /// draft -> validated -> promoted -> active -> {superseded | revoked}
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LifecycleState {
     /// Synthesizer has emitted a candidate witness.
     Draft,
@@ -153,6 +154,7 @@ impl fmt::Display for LifecycleState {
 
 /// Errors from the capability witness subsystem.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WitnessError {
     /// Required capability set is empty.
     EmptyRequiredSet,
@@ -357,6 +359,7 @@ pub struct RollbackToken {
 
 /// Category of evidence justifying a capability's inclusion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProofKind {
     /// Static analysis evidence (code inspection, type analysis).
     StaticAnalysis,
@@ -439,6 +442,7 @@ pub struct CustomTheoremExtension {
 
 /// Theorem kinds evaluated before witness promotion.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PromotionTheoremKind {
     MergeLegality,
     AttenuationLegality,
@@ -1695,6 +1699,7 @@ pub struct WitnessIndexEvent {
 
 /// Error taxonomy for witness/index persistence and replay joins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WitnessIndexError {
     Storage(StorageError),
     Serialization { operation: String, detail: String },
@@ -2410,6 +2415,7 @@ fn escrow_receipt_key(
 
 /// Kind of transparency-log entry emitted by witness publication flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PublicationEntryKind {
     /// A witness was published after promotion.
     Publish,
@@ -2671,6 +2677,7 @@ pub struct WitnessPublicationEvent {
 
 /// Errors returned by witness publication pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WitnessPublicationError {
     InvalidConfig { reason: String },
     WitnessNotPromoted { state: LifecycleState },

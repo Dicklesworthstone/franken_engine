@@ -41,6 +41,7 @@ const FP_UNIT: u64 = 1_000_000;
 
 /// How a prop flows through the component render path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PropFlowKind {
     /// Rendered directly into JSX output.
     Rendered,
@@ -92,6 +93,7 @@ impl fmt::Display for PropFlowKind {
 
 /// Inferred type of a prop value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PropValueKind {
     StringLiteral,
     NumberLiteral,
@@ -210,6 +212,7 @@ impl fmt::Display for RenderPurityClass {
 
 /// Reason why a component's render was classified as impure.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ImpurityReason {
     /// Component uses an effect hook in render path.
     EffectInRenderPath,

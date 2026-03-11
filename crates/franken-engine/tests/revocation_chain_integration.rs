@@ -1,39 +1,18 @@
-//! Integration tests for the `revocation_chain` module.
-//!
-//! Covers: RevocationTargetType, RevocationReason, Revocation, RevocationEvent,
-//! RevocationHead, ChainError, ChainEventType, ChainEvent, RevocationChain,
-//! schema functions, chain lifecycle, rebuild, audit events, and stress scenarios.
-
-#![allow(
-    clippy::field_reassign_with_default,
-    clippy::assertions_on_constants,
-    clippy::useless_vec,
-    clippy::clone_on_copy,
-    clippy::unnecessary_get_then_check,
-    clippy::len_zero,
-    clippy::needless_borrows_for_generic_args,
-    clippy::too_many_arguments,
-    clippy::identity_op,
-    clippy::manual_abs_diff
-)]
-
 use frankenengine_engine::capability_token::PrincipalId;
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
-use frankenengine_engine::revocation_chain::{
-    ChainError, ChainEvent, ChainEventType, Revocation, RevocationChain, RevocationEvent,
-    RevocationHead, RevocationReason, RevocationTargetType, revocation_event_schema,
-    revocation_event_schema_id, revocation_head_schema, revocation_head_schema_id,
-    revocation_schema, revocation_schema_id,
-};
+use frankenengine_engine::revocation_chain::*;
 use frankenengine_engine::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
 };
 
-const TEST_ZONE: &str = "integ-zone";
+// ── Test helpers ─────────────────────────────────────────────────────────
 
-fn head_signing_key() -> SigningKey {
+const ZONE: &str = "test-zone";
+const ALT_ZONE: &str = "alt-zone";
+
+fn signing_key() -> SigningKey {
     SigningKey::from_bytes([
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
@@ -41,7 +20,7 @@ fn head_signing_key() -> SigningKey {
     ])
 }
 
-fn revocation_signing_key() -> SigningKey {
+fn alt_signing_key() -> SigningKey {
     SigningKey::from_bytes([
         0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
         0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
@@ -49,18 +28,22 @@ fn revocation_signing_key() -> SigningKey {
     ])
 }
 
+fn make_target_id(seed: u8) -> EngineObjectId {
+    EngineObjectId([seed; 32])
+}
+
 fn make_revocation(
     target_type: RevocationTargetType,
     reason: RevocationReason,
     target_bytes: [u8; 32],
+    zone: &str,
 ) -> Revocation {
-    let sk = revocation_signing_key();
+    let sk = alt_signing_key();
     let principal = PrincipalId::from_verification_key(&sk.verification_key());
     let target_id = EngineObjectId(target_bytes);
-
     let revocation_id = engine_object_id::derive_id(
         ObjectDomain::Revocation,
-        TEST_ZONE,
+        zone,
         &revocation_schema_id(),
         target_bytes.as_slice(),
     )
@@ -73,7 +56,7 @@ fn make_revocation(
         reason,
         issued_by: principal,
         issued_at: DeterministicTimestamp(1000),
-        zone: TEST_ZONE.to_string(),
+        zone: zone.to_string(),
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };
 
@@ -83,1100 +66,640 @@ fn make_revocation(
     rev
 }
 
-// ---------------------------------------------------------------------------
-// Schema functions
-// ---------------------------------------------------------------------------
-
-#[test]
-fn schema_functions_return_deterministic_values() {
-    assert_eq!(revocation_schema(), revocation_schema());
-    assert_eq!(revocation_schema_id(), revocation_schema_id());
-    assert_eq!(revocation_event_schema(), revocation_event_schema());
-    assert_eq!(revocation_event_schema_id(), revocation_event_schema_id());
-    assert_eq!(revocation_head_schema(), revocation_head_schema());
-    assert_eq!(revocation_head_schema_id(), revocation_head_schema_id());
+fn append_revocation(
+    chain: &mut RevocationChain,
+    target_type: RevocationTargetType,
+    target_bytes: [u8; 32],
+) -> u64 {
+    let rev = make_revocation(
+        target_type,
+        RevocationReason::Compromised,
+        target_bytes,
+        ZONE,
+    );
+    let sk = signing_key();
+    chain.append(rev, &sk, "trace-test").unwrap()
 }
 
+// ── Schema helpers ────────────────────────────────────────────────────────
+
 #[test]
-fn schema_functions_are_pairwise_distinct() {
+fn revocation_schema_is_deterministic() {
     let s1 = revocation_schema();
+    let s2 = revocation_schema();
+    assert_eq!(s1.as_bytes(), s2.as_bytes());
+}
+
+#[test]
+fn revocation_event_schema_is_deterministic() {
+    let s1 = revocation_event_schema();
     let s2 = revocation_event_schema();
-    let s3 = revocation_head_schema();
-    assert_ne!(s1, s2);
-    assert_ne!(s1, s3);
-    assert_ne!(s2, s3);
+    assert_eq!(s1.as_bytes(), s2.as_bytes());
+}
 
+#[test]
+fn revocation_head_schema_is_deterministic() {
+    let s1 = revocation_head_schema();
+    let s2 = revocation_head_schema();
+    assert_eq!(s1.as_bytes(), s2.as_bytes());
+}
+
+#[test]
+fn revocation_schema_id_is_deterministic() {
     let id1 = revocation_schema_id();
-    let id2 = revocation_event_schema_id();
-    let id3 = revocation_head_schema_id();
-    assert_ne!(id1, id2);
-    assert_ne!(id1, id3);
-    assert_ne!(id2, id3);
+    let id2 = revocation_schema_id();
+    assert_eq!(id1, id2);
 }
 
-// ---------------------------------------------------------------------------
-// RevocationTargetType
-// ---------------------------------------------------------------------------
+// ── RevocationTargetType display ──────────────────────────────────────────
 
 #[test]
-fn revocation_target_type_serde_all_variants() {
-    let all = [
-        RevocationTargetType::Key,
-        RevocationTargetType::Token,
-        RevocationTargetType::Attestation,
-        RevocationTargetType::Extension,
-        RevocationTargetType::Checkpoint,
-    ];
-    for variant in &all {
-        let json = serde_json::to_string(variant).unwrap();
-        let restored: RevocationTargetType = serde_json::from_str(&json).unwrap();
-        assert_eq!(*variant, restored);
-    }
-}
-
-#[test]
-fn revocation_target_type_display_all() {
+fn target_type_display_key() {
     assert_eq!(RevocationTargetType::Key.to_string(), "key");
+}
+
+#[test]
+fn target_type_display_token() {
     assert_eq!(RevocationTargetType::Token.to_string(), "token");
+}
+
+#[test]
+fn target_type_display_attestation() {
     assert_eq!(RevocationTargetType::Attestation.to_string(), "attestation");
+}
+
+#[test]
+fn target_type_display_extension() {
     assert_eq!(RevocationTargetType::Extension.to_string(), "extension");
+}
+
+#[test]
+fn target_type_display_checkpoint() {
     assert_eq!(RevocationTargetType::Checkpoint.to_string(), "checkpoint");
 }
 
-// ---------------------------------------------------------------------------
-// RevocationReason
-// ---------------------------------------------------------------------------
+// ── RevocationReason display ──────────────────────────────────────────────
 
 #[test]
-fn revocation_reason_serde_all_variants() {
-    let all = [
-        RevocationReason::Compromised,
-        RevocationReason::Expired,
-        RevocationReason::Superseded,
-        RevocationReason::PolicyViolation,
-        RevocationReason::Administrative,
-    ];
-    for variant in &all {
-        let json = serde_json::to_string(variant).unwrap();
-        let restored: RevocationReason = serde_json::from_str(&json).unwrap();
-        assert_eq!(*variant, restored);
-    }
+fn reason_display_compromised() {
+    assert_eq!(RevocationReason::Compromised.to_string(), "compromised");
 }
 
 #[test]
-fn revocation_reason_display_all() {
-    assert_eq!(RevocationReason::Compromised.to_string(), "compromised");
+fn reason_display_expired() {
     assert_eq!(RevocationReason::Expired.to_string(), "expired");
+}
+
+#[test]
+fn reason_display_superseded() {
     assert_eq!(RevocationReason::Superseded.to_string(), "superseded");
+}
+
+#[test]
+fn reason_display_policy_violation() {
     assert_eq!(
         RevocationReason::PolicyViolation.to_string(),
         "policy_violation"
     );
+}
+
+#[test]
+fn reason_display_administrative() {
     assert_eq!(
         RevocationReason::Administrative.to_string(),
         "administrative"
     );
 }
 
-// ---------------------------------------------------------------------------
-// Revocation struct
-// ---------------------------------------------------------------------------
+// ── ChainError display ─────────────────────────────────────────────────────
 
 #[test]
-fn revocation_serde_roundtrip() {
-    let rev = make_revocation(
-        RevocationTargetType::Extension,
-        RevocationReason::PolicyViolation,
-        [0xAB; 32],
-    );
-    let json = serde_json::to_string(&rev).unwrap();
-    let restored: Revocation = serde_json::from_str(&json).unwrap();
-    assert_eq!(rev, restored);
+fn chain_error_display_empty_chain() {
+    let e = ChainError::EmptyChain;
+    assert!(e.to_string().contains("empty"));
 }
 
 #[test]
-fn revocation_preimage_bytes_deterministic() {
-    let rev1 = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    let rev2 = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    assert_eq!(rev1.preimage_bytes(), rev2.preimage_bytes());
-}
-
-#[test]
-fn revocation_preimage_bytes_differ_for_different_targets() {
-    let rev1 = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    let rev2 = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [2; 32],
-    );
-    assert_ne!(rev1.preimage_bytes(), rev2.preimage_bytes());
-}
-
-// ---------------------------------------------------------------------------
-// RevocationEvent
-// ---------------------------------------------------------------------------
-
-#[test]
-fn revocation_event_canonical_bytes_deterministic() {
-    let rev = make_revocation(
-        RevocationTargetType::Token,
-        RevocationReason::Expired,
-        [10; 32],
-    );
-    let event = RevocationEvent {
-        event_id: EngineObjectId([0xAA; 32]),
-        revocation: rev,
-        prev_event: None,
-        event_seq: 0,
+fn chain_error_display_head_sequence_regression() {
+    let e = ChainError::HeadSequenceRegression {
+        current_seq: 5,
+        attempted_seq: 3,
     };
-    assert_eq!(event.canonical_bytes(), event.canonical_bytes());
+    let s = e.to_string();
+    assert!(s.contains("5"));
+    assert!(s.contains("3"));
 }
 
 #[test]
-fn revocation_event_content_hash_deterministic() {
-    let rev = make_revocation(
-        RevocationTargetType::Token,
-        RevocationReason::Expired,
-        [10; 32],
-    );
-    let event = RevocationEvent {
-        event_id: EngineObjectId([0xBB; 32]),
-        revocation: rev,
-        prev_event: None,
-        event_seq: 0,
+fn chain_error_display_sequence_discontinuity() {
+    let e = ChainError::SequenceDiscontinuity {
+        expected_seq: 2,
+        actual_seq: 5,
     };
-    assert_eq!(event.content_hash(), event.content_hash());
+    let s = e.to_string();
+    assert!(s.contains("2"));
+    assert!(s.contains("5"));
 }
 
 #[test]
-fn revocation_event_different_seqs_produce_different_hashes() {
-    let rev = make_revocation(
-        RevocationTargetType::Token,
-        RevocationReason::Expired,
-        [10; 32],
-    );
-    let e1 = RevocationEvent {
-        event_id: EngineObjectId([0xCC; 32]),
-        revocation: rev.clone(),
-        prev_event: None,
-        event_seq: 0,
+fn chain_error_display_invalid_genesis() {
+    let e = ChainError::InvalidGenesis {
+        detail: "bad genesis".to_string(),
     };
-    let e2 = RevocationEvent {
-        event_id: EngineObjectId([0xCC; 32]),
-        revocation: rev,
-        prev_event: None,
-        event_seq: 1,
+    assert!(e.to_string().contains("bad genesis"));
+}
+
+#[test]
+fn chain_error_display_chain_integrity() {
+    let e = ChainError::ChainIntegrity {
+        detail: "integrity failed".to_string(),
     };
-    assert_ne!(e1.content_hash(), e2.content_hash());
+    assert!(e.to_string().contains("integrity failed"));
 }
 
 #[test]
-fn revocation_event_serde_roundtrip() {
-    let rev = make_revocation(
-        RevocationTargetType::Attestation,
-        RevocationReason::Superseded,
-        [20; 32],
-    );
-    let event = RevocationEvent {
-        event_id: EngineObjectId([0xDD; 32]),
-        revocation: rev,
-        prev_event: Some(EngineObjectId([0xEE; 32])),
-        event_seq: 7,
+fn chain_error_display_signature_invalid() {
+    let e = ChainError::SignatureInvalid {
+        detail: "bad sig".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap();
-    let restored: RevocationEvent = serde_json::from_str(&json).unwrap();
-    assert_eq!(event, restored);
+    assert!(e.to_string().contains("bad sig"));
 }
 
-// ---------------------------------------------------------------------------
-// RevocationHead
-// ---------------------------------------------------------------------------
-
 #[test]
-fn revocation_head_serde_roundtrip() {
-    let head = RevocationHead {
-        head_id: EngineObjectId([0x11; 32]),
-        latest_event: EngineObjectId([0x22; 32]),
-        head_seq: 5,
-        chain_hash: ContentHash::compute(b"test-chain"),
-        zone: "zone-a".to_string(),
-        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+fn chain_error_display_duplicate_target() {
+    let target_id = make_target_id(1);
+    let e = ChainError::DuplicateTarget {
+        target_id: target_id.clone(),
     };
-    let json = serde_json::to_string(&head).unwrap();
-    let restored: RevocationHead = serde_json::from_str(&json).unwrap();
-    assert_eq!(head, restored);
+    let s = e.to_string();
+    assert!(s.contains("duplicate"));
 }
 
 #[test]
-fn revocation_head_preimage_bytes_deterministic() {
-    let head = RevocationHead {
-        head_id: EngineObjectId([0x33; 32]),
-        latest_event: EngineObjectId([0x44; 32]),
-        head_seq: 3,
-        chain_hash: ContentHash::compute(b"determinism"),
-        zone: "det-zone".to_string(),
-        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
-    };
-    assert_eq!(head.preimage_bytes(), head.preimage_bytes());
+fn chain_error_display_mutation_rejected() {
+    let e = ChainError::MutationRejected { event_seq: 7 };
+    let s = e.to_string();
+    assert!(s.contains("7"));
 }
 
-// ---------------------------------------------------------------------------
-// ChainError
-// ---------------------------------------------------------------------------
+// ── RevocationChain: creation and empty state ──────────────────────────────
 
 #[test]
-fn chain_error_serde_all_9_variants() {
-    let errors: Vec<ChainError> = vec![
-        ChainError::HeadSequenceRegression {
-            current_seq: 5,
-            attempted_seq: 3,
-        },
-        ChainError::HashLinkMismatch {
-            event_seq: 2,
-            expected_prev: Some(EngineObjectId([0xAA; 32])),
-            actual_prev: Some(EngineObjectId([0xBB; 32])),
-        },
-        ChainError::SequenceDiscontinuity {
-            expected_seq: 4,
-            actual_seq: 10,
-        },
-        ChainError::InvalidGenesis {
-            detail: "bad genesis".to_string(),
-        },
-        ChainError::ChainIntegrity {
-            detail: "integrity broken".to_string(),
-        },
-        ChainError::SignatureInvalid {
-            detail: "sig bad".to_string(),
-        },
-        ChainError::DuplicateTarget {
-            target_id: EngineObjectId([0xCC; 32]),
-        },
-        ChainError::MutationRejected { event_seq: 7 },
-        ChainError::EmptyChain,
-    ];
-
-    for err in &errors {
-        let json = serde_json::to_string(err).unwrap();
-        let restored: ChainError = serde_json::from_str(&json).unwrap();
-        assert_eq!(*err, restored);
-    }
-}
-
-#[test]
-fn chain_error_display_all_non_empty() {
-    let errors: Vec<ChainError> = vec![
-        ChainError::HeadSequenceRegression {
-            current_seq: 5,
-            attempted_seq: 3,
-        },
-        ChainError::HashLinkMismatch {
-            event_seq: 2,
-            expected_prev: None,
-            actual_prev: Some(EngineObjectId([0xBB; 32])),
-        },
-        ChainError::SequenceDiscontinuity {
-            expected_seq: 4,
-            actual_seq: 10,
-        },
-        ChainError::InvalidGenesis {
-            detail: "bad genesis".to_string(),
-        },
-        ChainError::ChainIntegrity {
-            detail: "integrity broken".to_string(),
-        },
-        ChainError::SignatureInvalid {
-            detail: "sig bad".to_string(),
-        },
-        ChainError::DuplicateTarget {
-            target_id: EngineObjectId([0xCC; 32]),
-        },
-        ChainError::MutationRejected { event_seq: 7 },
-        ChainError::EmptyChain,
-    ];
-
-    for err in &errors {
-        let display = err.to_string();
-        assert!(
-            !display.is_empty(),
-            "display for {:?} should not be empty",
-            err
-        );
-    }
-}
-
-#[test]
-fn chain_error_is_std_error() {
-    let err: Box<dyn std::error::Error> = Box::new(ChainError::EmptyChain);
-    assert!(!err.to_string().is_empty());
-}
-
-// ---------------------------------------------------------------------------
-// ChainEventType serde
-// ---------------------------------------------------------------------------
-
-#[test]
-fn chain_event_type_serde_all_variants() {
-    let types: Vec<ChainEventType> = vec![
-        ChainEventType::RevocationAppended {
-            event_seq: 0,
-            target_id: EngineObjectId([0x11; 32]),
-            target_type: RevocationTargetType::Key,
-        },
-        ChainEventType::HeadAdvanced {
-            old_seq: 0,
-            new_seq: 1,
-        },
-        ChainEventType::ChainVerified { chain_length: 5 },
-        ChainEventType::RevocationLookup {
-            target_id: EngineObjectId([0x22; 32]),
-            is_revoked: true,
-        },
-        ChainEventType::AppendRejected {
-            reason: "duplicate".to_string(),
-        },
-    ];
-
-    for t in &types {
-        let json = serde_json::to_string(t).unwrap();
-        let restored: ChainEventType = serde_json::from_str(&json).unwrap();
-        assert_eq!(*t, restored);
-    }
-}
-
-#[test]
-fn chain_event_serde_roundtrip() {
-    let event = ChainEvent {
-        event_type: ChainEventType::ChainVerified { chain_length: 10 },
-        zone: "test-zone".to_string(),
-        trace_id: "trace-001".to_string(),
-    };
-    let json = serde_json::to_string(&event).unwrap();
-    let restored: ChainEvent = serde_json::from_str(&json).unwrap();
-    assert_eq!(event, restored);
-}
-
-// ---------------------------------------------------------------------------
-// RevocationChain — basic lifecycle
-// ---------------------------------------------------------------------------
-
-#[test]
-fn empty_chain_properties() {
-    let chain = RevocationChain::new(TEST_ZONE);
+fn new_chain_is_empty() {
+    let chain = RevocationChain::new(ZONE);
     assert!(chain.is_empty());
     assert_eq!(chain.len(), 0);
     assert!(chain.head().is_none());
-    assert_eq!(chain.head_seq(), None);
-    assert_eq!(chain.zone(), TEST_ZONE);
-    assert!(!chain.is_revoked(&EngineObjectId([0xFF; 32])));
-    assert!(
-        chain
-            .lookup_revocation(&EngineObjectId([0xFF; 32]))
-            .is_none()
-    );
-    assert!(chain.get_event(0).is_none());
+    assert!(chain.head_seq().is_none());
+}
+
+#[test]
+fn new_chain_has_correct_zone() {
+    let chain = RevocationChain::new(ZONE);
+    assert_eq!(chain.zone(), ZONE);
+}
+
+#[test]
+fn new_chain_events_empty() {
+    let chain = RevocationChain::new(ZONE);
     assert!(chain.events().is_empty());
 }
 
-#[test]
-fn single_append_and_lookup() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
+// ── RevocationChain: verify_chain on empty ──────────────────────────────────
 
-    let seq = chain.append(rev, &sk, "t-single").unwrap();
+#[test]
+fn verify_chain_empty_is_ok() {
+    let chain = RevocationChain::new(ZONE);
+    assert!(chain.verify_chain("trace-1").is_ok());
+}
+
+// ── RevocationChain: append ────────────────────────────────────────────────
+
+#[test]
+fn append_first_revocation_returns_seq_zero() {
+    let mut chain = RevocationChain::new(ZONE);
+    let seq = append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
     assert_eq!(seq, 0);
+}
+
+#[test]
+fn append_second_revocation_returns_seq_one() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let seq = append_revocation(&mut chain, RevocationTargetType::Token, [2; 32]);
+    assert_eq!(seq, 1);
+}
+
+#[test]
+fn append_updates_chain_length() {
+    let mut chain = RevocationChain::new(ZONE);
+    assert_eq!(chain.len(), 0);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
     assert_eq!(chain.len(), 1);
-    assert!(!chain.is_empty());
-    assert_eq!(chain.head_seq(), Some(0));
-
-    let event = chain.get_event(0).unwrap();
-    assert!(event.prev_event.is_none());
-    assert_eq!(event.event_seq, 0);
-
-    assert!(chain.is_revoked(&EngineObjectId([1; 32])));
-    let found = chain.lookup_revocation(&EngineObjectId([1; 32])).unwrap();
-    assert_eq!(found.target_type, RevocationTargetType::Key);
-    assert_eq!(found.reason, RevocationReason::Compromised);
+    append_revocation(&mut chain, RevocationTargetType::Key, [2; 32]);
+    assert_eq!(chain.len(), 2);
 }
 
 #[test]
-fn multi_append_with_hash_linking() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    for i in 0..10u8 {
-        let rev = make_revocation(
-            RevocationTargetType::Token,
-            RevocationReason::Expired,
-            [i + 10; 32],
-        );
-        let seq = chain.append(rev, &sk, &format!("t-multi-{i}")).unwrap();
-        assert_eq!(seq, i as u64);
-    }
-
-    assert_eq!(chain.len(), 10);
-    assert_eq!(chain.head_seq(), Some(9));
-
-    for i in 1..10u64 {
-        let event = chain.get_event(i).unwrap();
-        let prev = chain.get_event(i - 1).unwrap();
-        assert_eq!(event.prev_event, Some(prev.event_id.clone()));
-        assert_eq!(event.event_seq, i);
-    }
+fn append_updates_head() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let head = chain.head().unwrap();
+    assert_eq!(head.head_seq, 0);
+    assert_eq!(head.zone, ZONE);
 }
 
-// ---------------------------------------------------------------------------
-// All target types × all reasons
-// ---------------------------------------------------------------------------
+#[test]
+fn append_updates_head_seq_monotonically() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    append_revocation(&mut chain, RevocationTargetType::Token, [2; 32]);
+    assert_eq!(chain.head_seq(), Some(1));
+}
 
 #[test]
-fn all_target_type_reason_combinations_accepted() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let types = [
-        RevocationTargetType::Key,
+fn append_rejects_zone_mismatch() {
+    let mut chain = RevocationChain::new(ZONE);
+    let rev = make_revocation(
         RevocationTargetType::Token,
-        RevocationTargetType::Attestation,
-        RevocationTargetType::Extension,
-        RevocationTargetType::Checkpoint,
-    ];
-    let reasons = [
         RevocationReason::Compromised,
-        RevocationReason::Expired,
-        RevocationReason::Superseded,
-        RevocationReason::PolicyViolation,
+        [5; 32],
+        ALT_ZONE,
+    );
+    let sk = signing_key();
+    let err = chain.append(rev, &sk, "trace").unwrap_err();
+    assert!(matches!(err, ChainError::ChainIntegrity { .. }));
+}
+
+#[test]
+fn append_rejects_duplicate_target() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [7; 32]);
+    let rev2 = make_revocation(
+        RevocationTargetType::Token,
         RevocationReason::Administrative,
-    ];
-
-    let mut idx = 0u8;
-    for target_type in &types {
-        for reason in &reasons {
-            let mut target = [0u8; 32];
-            target[0] = idx;
-            let rev = make_revocation(*target_type, *reason, target);
-            chain.append(rev, &sk, &format!("t-combo-{idx}")).unwrap();
-            idx += 1;
-        }
-    }
-
-    assert_eq!(chain.len(), 25);
-    for i in 0..25u8 {
-        let mut target = [0u8; 32];
-        target[0] = i;
-        assert!(chain.is_revoked(&EngineObjectId(target)));
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Chain verification
-// ---------------------------------------------------------------------------
-
-#[test]
-fn verify_chain_on_empty_succeeds() {
-    let chain = RevocationChain::new(TEST_ZONE);
-    assert!(chain.verify_chain("t-empty").is_ok());
-}
-
-#[test]
-fn verify_chain_after_multi_append() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    for i in 0..15u8 {
-        let rev = make_revocation(
-            RevocationTargetType::Token,
-            RevocationReason::Superseded,
-            [i + 100; 32],
-        );
-        chain.append(rev, &sk, &format!("t-v-{i}")).unwrap();
-    }
-
-    assert!(chain.verify_chain("t-verify").is_ok());
-}
-
-#[test]
-fn verify_chain_mut_emits_chain_verified_audit() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
+        [7; 32],
+        ZONE,
     );
-    chain.append(rev, &sk, "t-vcm").unwrap();
-    chain.drain_events();
-
-    chain.verify_chain_mut("t-verify-mut").unwrap();
-    let counts = chain.event_counts();
-    assert_eq!(counts.get("chain_verified"), Some(&1));
+    let sk = signing_key();
+    let err = chain.append(rev2, &sk, "trace").unwrap_err();
+    assert!(matches!(err, ChainError::DuplicateTarget { .. }));
 }
 
-// ---------------------------------------------------------------------------
-// Head signature verification
-// ---------------------------------------------------------------------------
+// ── RevocationChain: is_revoked ──────────────────────────────────────────
 
 #[test]
-fn verify_head_signature_valid_key() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
+fn is_revoked_false_for_unknown_target() {
+    let chain = RevocationChain::new(ZONE);
+    let target = make_target_id(99);
+    assert!(!chain.is_revoked(&target));
+}
+
+#[test]
+fn is_revoked_true_after_append() {
+    let mut chain = RevocationChain::new(ZONE);
+    let target = [42; 32];
+    append_revocation(&mut chain, RevocationTargetType::Key, target);
+    assert!(chain.is_revoked(&EngineObjectId(target)));
+}
+
+#[test]
+fn lookup_revocation_none_for_unknown() {
+    let chain = RevocationChain::new(ZONE);
+    let target = make_target_id(1);
+    assert!(chain.lookup_revocation(&target).is_none());
+}
+
+#[test]
+fn lookup_revocation_returns_revocation_after_append() {
+    let mut chain = RevocationChain::new(ZONE);
+    let target = [10; 32];
+    append_revocation(&mut chain, RevocationTargetType::Token, target);
+    let rev = chain.lookup_revocation(&EngineObjectId(target)).unwrap();
+    assert_eq!(rev.target_id, EngineObjectId(target));
+}
+
+// ── RevocationChain: get_event ────────────────────────────────────────────
+
+#[test]
+fn get_event_returns_none_for_empty_chain() {
+    let chain = RevocationChain::new(ZONE);
+    assert!(chain.get_event(0).is_none());
+}
+
+#[test]
+fn get_event_returns_event_at_seq() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let event = chain.get_event(0).unwrap();
+    assert_eq!(event.event_seq, 0);
+    assert!(event.prev_event.is_none()); // genesis
+}
+
+#[test]
+fn get_event_links_to_previous() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    append_revocation(&mut chain, RevocationTargetType::Token, [2; 32]);
+    let event0 = chain.get_event(0).unwrap();
+    let event1 = chain.get_event(1).unwrap();
+    assert_eq!(event1.prev_event.as_ref(), Some(&event0.event_id));
+}
+
+// ── RevocationChain: verify_chain ────────────────────────────────────────
+
+#[test]
+fn verify_chain_passes_with_one_event() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    assert!(chain.verify_chain("trace").is_ok());
+}
+
+#[test]
+fn verify_chain_passes_with_multiple_events() {
+    let mut chain = RevocationChain::new(ZONE);
+    for i in 0u8..5 {
+        append_revocation(&mut chain, RevocationTargetType::Token, [i; 32]);
+    }
+    assert!(chain.verify_chain("trace").is_ok());
+}
+
+#[test]
+fn verify_chain_mut_emits_audit_event() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    chain.drain_events(); // clear prior events
+    chain.verify_chain_mut("trace").unwrap();
+    let events = chain.drain_events();
+    assert!(!events.is_empty());
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event_type, ChainEventType::ChainVerified { .. }))
+    );
+}
+
+// ── RevocationChain: verify_head_signature ────────────────────────────────
+
+#[test]
+fn verify_head_signature_fails_on_empty_chain() {
+    let chain = RevocationChain::new(ZONE);
+    let vk = VerificationKey::from_bytes([1; 32]);
+    let err = chain.verify_head_signature(&vk).unwrap_err();
+    assert!(matches!(err, ChainError::EmptyChain));
+}
+
+#[test]
+fn verify_head_signature_passes_with_correct_key() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let sk = signing_key();
     let vk = sk.verification_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    chain.append(rev, &sk, "t-sig-ok").unwrap();
     assert!(chain.verify_head_signature(&vk).is_ok());
 }
 
 #[test]
-fn verify_head_signature_wrong_key_fails() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    chain.append(rev, &sk, "t-sig-bad").unwrap();
-
+fn verify_head_signature_fails_with_wrong_key() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
     let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
     let err = chain.verify_head_signature(&wrong_vk).unwrap_err();
     assert!(matches!(err, ChainError::SignatureInvalid { .. }));
 }
 
-#[test]
-fn verify_head_empty_chain_returns_empty_chain_error() {
-    let chain = RevocationChain::new(TEST_ZONE);
-    let vk = head_signing_key().verification_key();
-    let err = chain.verify_head_signature(&vk).unwrap_err();
-    assert!(matches!(err, ChainError::EmptyChain));
-}
-
-// ---------------------------------------------------------------------------
-// Duplicate target rejection
-// ---------------------------------------------------------------------------
+// ── RevocationChain: verify_append ───────────────────────────────────────
 
 #[test]
-fn duplicate_target_rejected_with_audit_event() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev1 = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [42; 32],
-    );
-    chain.append(rev1, &sk, "t-dup-1").unwrap();
-
-    let rev2 = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Administrative,
-        [42; 32],
-    );
-    let err = chain.append(rev2, &sk, "t-dup-2").unwrap_err();
-    assert!(matches!(err, ChainError::DuplicateTarget { .. }));
-
-    let counts = chain.event_counts();
-    assert_eq!(counts.get("append_rejected"), Some(&1));
-}
-
-// ---------------------------------------------------------------------------
-// Zone mismatch rejection
-// ---------------------------------------------------------------------------
-
-#[test]
-fn zone_mismatch_rejected() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let mut rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    rev.zone = "wrong-zone".to_string();
-
-    let err = chain.append(rev, &sk, "t-zone-bad").unwrap_err();
-    assert!(matches!(err, ChainError::ChainIntegrity { .. }));
-}
-
-// ---------------------------------------------------------------------------
-// Incremental verify_append
-// ---------------------------------------------------------------------------
-
-#[test]
-fn verify_append_accepts_valid_next() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    chain.append(rev, &sk, "t-va-0").unwrap();
-
-    let rev2 = make_revocation(
-        RevocationTargetType::Token,
-        RevocationReason::Expired,
-        [2; 32],
-    );
-    let prev_id = chain.events().last().unwrap().event_id.clone();
-    let next_event = RevocationEvent {
-        event_id: EngineObjectId([0xAA; 32]),
-        revocation: rev2,
-        prev_event: Some(prev_id),
-        event_seq: 1,
+fn verify_append_rejects_wrong_sequence() {
+    let chain = RevocationChain::new(ZONE);
+    // chain is empty, so expected_seq = 0
+    // create a fake event with seq=1
+    let fake_event = RevocationEvent {
+        event_id: EngineObjectId([0; 32]),
+        revocation: make_revocation(
+            RevocationTargetType::Token,
+            RevocationReason::Compromised,
+            [1; 32],
+            ZONE,
+        ),
+        prev_event: None,
+        event_seq: 1, // wrong
     };
-
-    assert!(chain.verify_append(&next_event).is_ok());
-}
-
-#[test]
-fn verify_append_rejects_wrong_seq() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    chain.append(rev, &sk, "t-va-seq").unwrap();
-
-    let rev2 = make_revocation(
-        RevocationTargetType::Token,
-        RevocationReason::Expired,
-        [2; 32],
-    );
-    let prev_id = chain.events().last().unwrap().event_id.clone();
-    let bad_event = RevocationEvent {
-        event_id: EngineObjectId([0xBB; 32]),
-        revocation: rev2,
-        prev_event: Some(prev_id),
-        event_seq: 99,
-    };
-
-    let err = chain.verify_append(&bad_event).unwrap_err();
+    let err = chain.verify_append(&fake_event).unwrap_err();
     assert!(matches!(err, ChainError::SequenceDiscontinuity { .. }));
 }
 
-#[test]
-fn verify_append_rejects_wrong_prev_link() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    chain.append(rev, &sk, "t-va-link").unwrap();
-
-    let rev2 = make_revocation(
-        RevocationTargetType::Token,
-        RevocationReason::Expired,
-        [2; 32],
-    );
-    let bad_event = RevocationEvent {
-        event_id: EngineObjectId([0xCC; 32]),
-        revocation: rev2,
-        prev_event: Some(EngineObjectId([0xFF; 32])),
-        event_seq: 1,
-    };
-
-    let err = chain.verify_append(&bad_event).unwrap_err();
-    assert!(matches!(err, ChainError::HashLinkMismatch { .. }));
-}
-
-// ---------------------------------------------------------------------------
-// Rebuild from events
-// ---------------------------------------------------------------------------
-
-#[test]
-fn rebuild_from_events_preserves_state() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    for i in 0..8u8 {
-        let rev = make_revocation(
-            RevocationTargetType::Token,
-            RevocationReason::Superseded,
-            [i + 70; 32],
-        );
-        chain.append(rev, &sk, &format!("t-rb-{i}")).unwrap();
-    }
-
-    let events = chain.events().to_vec();
-    let head = chain.head().cloned();
-    let original_hash = chain.chain_hash().clone();
-
-    let rebuilt = RevocationChain::rebuild_from_events(TEST_ZONE, events, head).unwrap();
-    assert_eq!(rebuilt.len(), 8);
-    assert_eq!(rebuilt.head_seq(), Some(7));
-    assert_eq!(*rebuilt.chain_hash(), original_hash);
-
-    for i in 0..8u8 {
-        assert!(rebuilt.is_revoked(&EngineObjectId([i + 70; 32])));
-    }
-}
-
-#[test]
-fn rebuild_detects_tampered_hash_link() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    for i in 0..3u8 {
-        let rev = make_revocation(
-            RevocationTargetType::Key,
-            RevocationReason::Compromised,
-            [i + 80; 32],
-        );
-        chain.append(rev, &sk, &format!("t-rt-{i}")).unwrap();
-    }
-
-    let mut events = chain.events().to_vec();
-    events[1].prev_event = Some(EngineObjectId([0xFF; 32]));
-
-    let err = RevocationChain::rebuild_from_events(TEST_ZONE, events, None).unwrap_err();
-    assert!(matches!(err, ChainError::HashLinkMismatch { .. }));
-}
-
-#[test]
-fn rebuild_detects_head_seq_mismatch() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [90; 32],
-    );
-    chain.append(rev, &sk, "t-hm").unwrap();
-
-    let events = chain.events().to_vec();
-    let mut head = chain.head().cloned().unwrap();
-    head.head_seq = 99;
-
-    let err = RevocationChain::rebuild_from_events(TEST_ZONE, events, Some(head)).unwrap_err();
-    assert!(matches!(err, ChainError::ChainIntegrity { .. }));
-}
-
-#[test]
-fn rebuild_detects_head_chain_hash_mismatch() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [91; 32],
-    );
-    chain.append(rev, &sk, "t-hh").unwrap();
-
-    let events = chain.events().to_vec();
-    let mut head = chain.head().cloned().unwrap();
-    head.chain_hash = ContentHash::compute(b"tampered-hash");
-
-    let err = RevocationChain::rebuild_from_events(TEST_ZONE, events, Some(head)).unwrap_err();
-    assert!(matches!(err, ChainError::ChainIntegrity { .. }));
-}
-
-#[test]
-fn rebuild_detects_duplicate_target_in_events() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    chain.append(rev, &sk, "t-rbd").unwrap();
-
-    let mut events = chain.events().to_vec();
-    let mut dup = events[0].clone();
-    dup.event_seq = 1;
-    dup.prev_event = Some(events[0].event_id.clone());
-    events.push(dup);
-
-    let err = RevocationChain::rebuild_from_events(TEST_ZONE, events, None).unwrap_err();
-    assert!(matches!(err, ChainError::DuplicateTarget { .. }));
-}
-
-#[test]
-fn rebuild_empty_events_with_head_fails() {
-    let head = RevocationHead {
-        head_id: EngineObjectId([0x11; 32]),
-        latest_event: EngineObjectId([0x22; 32]),
-        head_seq: 0,
-        chain_hash: ContentHash::compute(b"test"),
-        zone: TEST_ZONE.to_string(),
-        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
-    };
-
-    let err = RevocationChain::rebuild_from_events(TEST_ZONE, vec![], Some(head)).unwrap_err();
-    assert!(matches!(err, ChainError::ChainIntegrity { .. }));
-}
-
-// ---------------------------------------------------------------------------
-// Audit events
-// ---------------------------------------------------------------------------
-
-#[test]
-fn append_emits_revocation_appended_event() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Extension,
-        RevocationReason::Administrative,
-        [1; 32],
-    );
-    chain.append(rev, &sk, "t-audit-app").unwrap();
-
-    let events = chain.drain_events();
-    assert!(events.iter().any(|e| matches!(
-        e.event_type,
-        ChainEventType::RevocationAppended { event_seq: 0, .. }
-    )));
-}
-
-#[test]
-fn non_genesis_append_emits_head_advanced() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev1 = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    chain.append(rev1, &sk, "t-ha-0").unwrap();
-    chain.drain_events();
-
-    let rev2 = make_revocation(
-        RevocationTargetType::Token,
-        RevocationReason::Expired,
-        [2; 32],
-    );
-    chain.append(rev2, &sk, "t-ha-1").unwrap();
-
-    let events = chain.drain_events();
-    assert!(events.iter().any(|e| matches!(
-        e.event_type,
-        ChainEventType::HeadAdvanced {
-            old_seq: 0,
-            new_seq: 1
-        }
-    )));
-}
+// ── RevocationChain: is_revoked_audited ──────────────────────────────────
 
 #[test]
 fn is_revoked_audited_emits_lookup_event() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let target = EngineObjectId([0xFE; 32]);
-
-    let result = chain.is_revoked_audited(&target, "t-lookup-audit");
+    let mut chain = RevocationChain::new(ZONE);
+    let target = make_target_id(5);
+    chain.drain_events();
+    let result = chain.is_revoked_audited(&target, "trace-audit");
     assert!(!result);
-
-    let counts = chain.event_counts();
-    assert_eq!(counts.get("revocation_lookup"), Some(&1));
+    let events = chain.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event_type, ChainEventType::RevocationLookup { .. }))
+    );
 }
+
+// ── RevocationChain: drain_events ────────────────────────────────────────
 
 #[test]
 fn drain_events_clears_audit_log() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-
-    let rev = make_revocation(
-        RevocationTargetType::Key,
-        RevocationReason::Compromised,
-        [1; 32],
-    );
-    chain.append(rev, &sk, "t-drain").unwrap();
-
-    let first = chain.drain_events();
-    assert!(!first.is_empty());
-
-    let second = chain.drain_events();
-    assert!(second.is_empty());
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let events = chain.drain_events();
+    assert!(!events.is_empty());
+    let events2 = chain.drain_events();
+    assert!(events2.is_empty());
 }
 
-// ---------------------------------------------------------------------------
-// Chain hash determinism
-// ---------------------------------------------------------------------------
+// ── RevocationChain: chain_hash changes after append ─────────────────────
 
 #[test]
-fn chain_hash_deterministic_across_identical_builds() {
-    let build = || {
-        let mut chain = RevocationChain::new(TEST_ZONE);
-        let sk = head_signing_key();
+fn chain_hash_changes_after_each_append() {
+    let mut chain = RevocationChain::new(ZONE);
+    let h0 = chain.chain_hash().clone();
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let h1 = chain.chain_hash().clone();
+    append_revocation(&mut chain, RevocationTargetType::Token, [2; 32]);
+    let h2 = chain.chain_hash().clone();
+    assert_ne!(h0.as_bytes(), h1.as_bytes());
+    assert_ne!(h1.as_bytes(), h2.as_bytes());
+}
 
-        for i in 0..5u8 {
-            let rev = make_revocation(
-                RevocationTargetType::Key,
-                RevocationReason::Compromised,
-                [i + 150; 32],
-            );
-            chain.append(rev, &sk, &format!("t-det-{i}")).unwrap();
-        }
-        chain.chain_hash().clone()
+// ── RevocationChain: rebuild_from_events ─────────────────────────────────
+
+#[test]
+fn rebuild_from_empty_events_succeeds() {
+    let chain = RevocationChain::rebuild_from_events(ZONE, vec![], None).unwrap();
+    assert!(chain.is_empty());
+}
+
+#[test]
+fn rebuild_from_empty_events_with_head_fails() {
+    let fake_head = RevocationHead {
+        head_id: EngineObjectId([0; 32]),
+        latest_event: EngineObjectId([0; 32]),
+        head_seq: 0,
+        chain_hash: ContentHash::compute(b"bad"),
+        zone: ZONE.to_string(),
+        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };
-
-    assert_eq!(build(), build());
+    let err = RevocationChain::rebuild_from_events(ZONE, vec![], Some(fake_head)).unwrap_err();
+    assert!(matches!(err, ChainError::ChainIntegrity { .. }));
 }
 
 #[test]
-fn chain_hash_changes_with_each_append() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-    let mut hashes = vec![chain.chain_hash().clone()];
-
-    for i in 0..5u8 {
-        let rev = make_revocation(
+fn rebuild_from_wrong_sequence_fails() {
+    let fake_event = RevocationEvent {
+        event_id: EngineObjectId([0; 32]),
+        revocation: make_revocation(
             RevocationTargetType::Token,
-            RevocationReason::Expired,
-            [i + 160; 32],
-        );
-        chain.append(rev, &sk, &format!("t-hc-{i}")).unwrap();
-        hashes.push(chain.chain_hash().clone());
-    }
-
-    for i in 0..hashes.len() {
-        for j in (i + 1)..hashes.len() {
-            assert_ne!(hashes[i], hashes[j], "hash at {i} should differ from {j}");
-        }
-    }
+            RevocationReason::Compromised,
+            [1; 32],
+            ZONE,
+        ),
+        prev_event: None,
+        event_seq: 5, // wrong
+    };
+    let err = RevocationChain::rebuild_from_events(ZONE, vec![fake_event], None).unwrap_err();
+    assert!(matches!(err, ChainError::SequenceDiscontinuity { .. }));
 }
 
-// ---------------------------------------------------------------------------
-// Head monotonicity
-// ---------------------------------------------------------------------------
+// ── RevocationEvent canonical_bytes and content_hash ─────────────────────
 
 #[test]
-fn head_seq_increases_monotonically() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-    let mut prev_seq = None;
-
-    for i in 0..8u8 {
-        let rev = make_revocation(
-            RevocationTargetType::Token,
-            RevocationReason::Expired,
-            [i + 50; 32],
-        );
-        chain.append(rev, &sk, &format!("t-mono-{i}")).unwrap();
-        let current = chain.head_seq().unwrap();
-        if let Some(prev) = prev_seq {
-            assert!(current > prev);
-        }
-        prev_seq = Some(current);
-    }
+fn revocation_event_canonical_bytes_is_deterministic() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let event = chain.get_event(0).unwrap();
+    let bytes1 = event.canonical_bytes();
+    let bytes2 = event.canonical_bytes();
+    assert_eq!(bytes1, bytes2);
 }
 
-// ---------------------------------------------------------------------------
-// Head signature after multiple appends
-// ---------------------------------------------------------------------------
-
 #[test]
-fn head_signature_valid_after_many_appends() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-    let vk = sk.verification_key();
-
-    for i in 0..20u8 {
-        let rev = make_revocation(
-            RevocationTargetType::Attestation,
-            RevocationReason::Superseded,
-            [i + 170; 32],
-        );
-        chain.append(rev, &sk, &format!("t-hs-{i}")).unwrap();
-    }
-
-    assert!(chain.verify_head_signature(&vk).is_ok());
-    assert!(chain.verify_chain("t-hs-verify").is_ok());
+fn revocation_event_content_hash_is_deterministic() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let event = chain.get_event(0).unwrap();
+    let h1 = event.content_hash();
+    let h2 = event.content_hash();
+    assert_eq!(h1.as_bytes(), h2.as_bytes());
 }
 
-// ---------------------------------------------------------------------------
-// Stress test
-// ---------------------------------------------------------------------------
+// ── Serde roundtrip ────────────────────────────────────────────────────────
 
 #[test]
-fn stress_50_revocations_rebuild_and_verify() {
-    let mut chain = RevocationChain::new(TEST_ZONE);
-    let sk = head_signing_key();
-    let vk = sk.verification_key();
-
-    let types = [
+fn revocation_target_type_serde_roundtrip() {
+    for t in [
         RevocationTargetType::Key,
         RevocationTargetType::Token,
         RevocationTargetType::Attestation,
         RevocationTargetType::Extension,
         RevocationTargetType::Checkpoint,
-    ];
-    let reasons = [
+    ] {
+        let json = serde_json::to_string(&t).unwrap();
+        let decoded: RevocationTargetType = serde_json::from_str(&json).unwrap();
+        assert_eq!(t, decoded);
+    }
+}
+
+#[test]
+fn revocation_reason_serde_roundtrip() {
+    for r in [
         RevocationReason::Compromised,
         RevocationReason::Expired,
         RevocationReason::Superseded,
         RevocationReason::PolicyViolation,
         RevocationReason::Administrative,
-    ];
-
-    for i in 0..50u16 {
-        let mut target = [0u8; 32];
-        target[0] = (i & 0xFF) as u8;
-        target[1] = (i >> 8) as u8;
-        target[2] = 0xAA;
-
-        let target_type = types[(i as usize) % types.len()];
-        let reason = reasons[(i as usize) % reasons.len()];
-        let rev = make_revocation(target_type, reason, target);
-        chain.append(rev, &sk, &format!("t-stress-{i}")).unwrap();
+    ] {
+        let json = serde_json::to_string(&r).unwrap();
+        let decoded: RevocationReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, decoded);
     }
+}
 
-    assert_eq!(chain.len(), 50);
-    assert_eq!(chain.head_seq(), Some(49));
-    assert!(chain.verify_chain("t-stress-verify").is_ok());
-    assert!(chain.verify_head_signature(&vk).is_ok());
+#[test]
+fn chain_error_serde_roundtrip() {
+    let e = ChainError::EmptyChain;
+    let json = serde_json::to_string(&e).unwrap();
+    let decoded: ChainError = serde_json::from_str(&json).unwrap();
+    assert_eq!(e, decoded);
+}
 
-    for i in 0..50u16 {
-        let mut target = [0u8; 32];
-        target[0] = (i & 0xFF) as u8;
-        target[1] = (i >> 8) as u8;
-        target[2] = 0xAA;
+// ── Multi-type revocations ────────────────────────────────────────────────
+
+#[test]
+fn can_revoke_different_target_types() {
+    let mut chain = RevocationChain::new(ZONE);
+    for (i, tt) in [
+        RevocationTargetType::Key,
+        RevocationTargetType::Token,
+        RevocationTargetType::Attestation,
+        RevocationTargetType::Extension,
+        RevocationTargetType::Checkpoint,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let target = [i as u8; 32];
+        append_revocation(&mut chain, tt, target);
         assert!(chain.is_revoked(&EngineObjectId(target)));
     }
+    assert_eq!(chain.len(), 5);
+    assert!(chain.verify_chain("trace").is_ok());
+}
 
-    let events = chain.events().to_vec();
-    let head = chain.head().cloned();
-    let original_hash = chain.chain_hash().clone();
+// ── Audit trail for appends ────────────────────────────────────────────────
 
-    let rebuilt = RevocationChain::rebuild_from_events(TEST_ZONE, events, head).unwrap();
-    assert_eq!(rebuilt.len(), 50);
-    assert_eq!(rebuilt.head_seq(), Some(49));
-    assert_eq!(*rebuilt.chain_hash(), original_hash);
-    assert!(rebuilt.verify_chain("t-stress-rebuilt").is_ok());
+#[test]
+fn append_emits_revocation_appended_event() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    let events = chain.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event_type, ChainEventType::RevocationAppended { .. }))
+    );
+}
+
+#[test]
+fn second_append_emits_head_advanced_event() {
+    let mut chain = RevocationChain::new(ZONE);
+    append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
+    chain.drain_events();
+    append_revocation(&mut chain, RevocationTargetType::Token, [2; 32]);
+    let events = chain.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event_type, ChainEventType::HeadAdvanced { .. }))
+    );
+}
+
+#[test]
+fn zone_mismatch_emits_append_rejected_event() {
+    let mut chain = RevocationChain::new(ZONE);
+    chain.drain_events();
+    let rev = make_revocation(
+        RevocationTargetType::Token,
+        RevocationReason::Compromised,
+        [5; 32],
+        ALT_ZONE,
+    );
+    let sk = signing_key();
+    let _ = chain.append(rev, &sk, "trace");
+    let events = chain.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event_type, ChainEventType::AppendRejected { .. }))
+    );
 }

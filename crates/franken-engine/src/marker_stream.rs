@@ -1120,7 +1120,7 @@ mod tests {
                 trace_context: None,
                 principal_id: None,
                 zone_id: None,
-                error_code: if i % 2 == 0 {
+                error_code: if i.is_multiple_of(2) {
                     Some("FE-TEST-0001".to_string())
                 } else {
                     None

@@ -44,6 +44,7 @@ const MILLION: i64 = 1_000_000;
 
 /// Which family of features a component belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FeatureFamily {
     /// Instruction-distribution features (opcode histogram).
     InstructionDistribution,
@@ -143,6 +144,7 @@ impl FeatureExtractionConfig {
 
 /// Validity status for an embedding vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EmbeddingValidity {
     /// All requirements met; embedding is trustworthy.
     Valid,
@@ -375,6 +377,7 @@ impl EmbeddingBuilder {
 
 /// Which distance metric to use for embedding comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DistanceMetric {
     /// L1 (Manhattan) distance.
     Manhattan,
@@ -520,6 +523,7 @@ fn isqrt_i128(n: i128) -> i128 {
 
 /// Why a neighborhood certificate was issued or denied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CertificateVerdict {
     /// Embeddings are near enough; transfer is safe.
     Near,
@@ -544,6 +548,7 @@ impl fmt::Display for CertificateVerdict {
 
 /// A reason the certificate abstained instead of issuing a verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AbstentionReason {
     /// One or both embeddings are invalid.
     InvalidEmbedding,
@@ -947,6 +952,7 @@ pub struct TransferSafetyAssessment {
 
 /// Overall transfer recommendation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TransferRecommendation {
     /// Safe to transfer all applicable priors.
     TransferAll,
@@ -1064,6 +1070,7 @@ pub fn assess_transfer_safety(
 
 /// Specimen family for embedding evidence corpus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EmbeddingSpecimenFamily {
     /// Simple compute-bound workload.
     ComputeBound,

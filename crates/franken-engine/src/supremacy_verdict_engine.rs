@@ -622,6 +622,7 @@ pub struct DecisionReceipt {
 
 /// Errors from the supremacy verdict engine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum VerdictError {
     /// No measurements provided.
     NoMeasurements,
@@ -1204,9 +1205,9 @@ mod tests {
         let mut state = SequentialTestState::new(DEFAULT_ALPHA, DEFAULT_BETA);
         state.update(100, 200);
         state.update(300, 400);
-        // mean = 200
+        // sum_treatment = 100 + 300 = 400, n = 2, mean = 200
         let mean = state.mean_treatment_millionths();
-        assert_eq!(mean, 200 * MILLIONTHS / 2);
+        assert_eq!(mean, 400 * MILLIONTHS / 2);
     }
 
     #[test]
@@ -1214,8 +1215,9 @@ mod tests {
         let mut state = SequentialTestState::new(DEFAULT_ALPHA, DEFAULT_BETA);
         state.update(100, 200);
         state.update(300, 400);
+        // sum_baseline = 200 + 400 = 600, n = 2, mean = 300
         let mean = state.mean_baseline_millionths();
-        assert_eq!(mean, 300 * MILLIONTHS / 2);
+        assert_eq!(mean, 600 * MILLIONTHS / 2);
     }
 
     #[test]

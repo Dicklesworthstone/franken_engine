@@ -46,6 +46,7 @@ const STRING_FLATTEN_BUDGET_CODE_UNITS: usize = 256;
 /// When the interpreter encounters a call to a `Function` value whose index
 /// maps to a builtin, it dispatches here instead of executing user bytecode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BuiltinId {
     // -- Array --
     ArrayConstructor,
@@ -414,6 +415,7 @@ impl fmt::Display for BuiltinId {
 
 /// Errors from stdlib operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StdlibError {
     /// Type mismatch (e.g. calling string method on number).
     TypeError(String),
@@ -1187,6 +1189,7 @@ pub fn exec_array_method(
 
 /// Result of an array method execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ArrayMethodResult {
     /// A single return value (indexOf, includes, join, etc.).
     Value(JsValue),

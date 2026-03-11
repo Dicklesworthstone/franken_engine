@@ -992,11 +992,11 @@ mod tests {
 
     #[test]
     fn default_constants_valid() {
-        assert!(DEFAULT_MIN_COVERAGE_FRACTION > 0);
-        assert!(DEFAULT_MIN_COVERAGE_FRACTION <= MILLIONTHS);
-        assert!(DEFAULT_MAX_STALENESS_EPOCHS > 0);
-        assert!(MAX_CELLS_PER_BUNDLE > 0);
-        assert!(MAX_BLOCK_REASONS > 0);
+        assert_eq!(DEFAULT_MIN_COVERAGE_FRACTION, 1_000_000);
+        const { assert!(DEFAULT_MIN_COVERAGE_FRACTION <= MILLIONTHS) };
+        assert_eq!(DEFAULT_MAX_STALENESS_EPOCHS, 10);
+        assert_eq!(MAX_CELLS_PER_BUNDLE, 512);
+        assert_eq!(MAX_BLOCK_REASONS, 64);
     }
 
     // --- CellStatus ---

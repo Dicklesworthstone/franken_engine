@@ -635,7 +635,7 @@ pub fn run_reload_revoke_churn(profile: ScaleProfile, seed: u64) -> BenchmarkMea
         latencies.push(elapsed);
         total_ops += 1;
 
-        if iter % 50 == 0 {
+        if iter.is_multiple_of(50) {
             let alive = mgr.count_in_state(ExtensionState::Running);
             if alive > peak_alive {
                 peak_alive = alive;

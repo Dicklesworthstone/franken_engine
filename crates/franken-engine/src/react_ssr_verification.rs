@@ -723,6 +723,7 @@ impl BatchVerdict {
 
 /// Errors from verification operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
 pub enum VerificationError {
     /// Execution path kinds do not match.
     #[error("path kind mismatch: reference={reference}, candidate={candidate}")]
@@ -1201,12 +1202,12 @@ mod tests {
 
     #[test]
     fn default_max_divergence_within_bounds() {
-        assert!(DEFAULT_MAX_DIVERGENCE <= MILLIONTHS);
+        const { assert!(DEFAULT_MAX_DIVERGENCE <= MILLIONTHS) };
     }
 
     #[test]
     fn default_min_paths_positive() {
-        assert!(DEFAULT_MIN_PATHS >= 1);
+        assert_eq!(DEFAULT_MIN_PATHS, 2);
     }
 
     // --- ExecutionPathKind ---

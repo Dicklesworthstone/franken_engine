@@ -47,8 +47,9 @@ fn test_policy_id() {
 }
 #[test]
 fn test_thresholds_ordering() {
-    assert!(DEFAULT_HIGH_FIDELITY_THRESHOLD > DEFAULT_MODERATE_FIDELITY_THRESHOLD);
-    assert!(DEFAULT_MODERATE_FIDELITY_THRESHOLD > DEFAULT_DRIFT_ALARM_THRESHOLD);
+    assert_eq!(DEFAULT_HIGH_FIDELITY_THRESHOLD, 900_000);
+    assert_eq!(DEFAULT_MODERATE_FIDELITY_THRESHOLD, 700_000);
+    assert_eq!(DEFAULT_DRIFT_ALARM_THRESHOLD, 200_000);
 }
 #[test]
 fn test_default_min_sample_count() {

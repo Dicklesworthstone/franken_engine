@@ -462,6 +462,7 @@ impl fmt::Display for GateVerdict {
 
 /// Errors from catalog operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CatalogError {
     /// Catalog capacity exceeded.
     CapacityExceeded { current: usize, max: usize },

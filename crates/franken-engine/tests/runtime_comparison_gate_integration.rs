@@ -840,3 +840,135 @@ fn constants_stable() {
     assert!(GATE_SCHEMA_VERSION.contains("runtime-comparison-gate"));
     assert_eq!(REQUIRED_CATEGORIES.len(), 5);
 }
+
+// ---------------------------------------------------------------------------
+// Additional coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_passes_with_all_runtimes_and_categories() {
+    let results = full_benchmark_results();
+    let method = passing_methodology();
+    let artifacts = passing_artifacts();
+    let env = passing_environment();
+    let input = passing_input(&results, &method, &artifacts, &[], &env);
+    let bundle = evaluate_gate(&input).unwrap();
+    assert_eq!(bundle.outcome, GateOutcome::Pass);
+    assert!(bundle.blockers.is_empty());
+}
+
+#[test]
+fn gate_evidence_has_correct_schema_version() {
+    let results = full_benchmark_results();
+    let method = passing_methodology();
+    let artifacts = passing_artifacts();
+    let env = passing_environment();
+    let input = passing_input(&results, &method, &artifacts, &[], &env);
+    let bundle = evaluate_gate(&input).unwrap();
+    assert_eq!(bundle.schema_version, GATE_SCHEMA_VERSION);
+}
+
+#[test]
+fn gate_reproduces_epoch_in_bundle() {
+    let results = full_benchmark_results();
+    let method = passing_methodology();
+    let artifacts = passing_artifacts();
+    let env = passing_environment();
+    let epoch = SecurityEpoch::from_raw(42);
+    let input = GateInput {
+        run_id: "epoch-test",
+        trace_id: "t-epoch",
+        epoch,
+        results: &results,
+        methodology: &method,
+        artifacts: &artifacts,
+        reproducibility: &[],
+        environment: &env,
+        max_cv_millionths: DEFAULT_MAX_CV_MILLIONTHS,
+        min_runs_per_benchmark: DEFAULT_MIN_RUNS_PER_BENCHMARK,
+        benchmark_sniffing_check_passed: true,
+        benchmark_sniffing_detail: "",
+    };
+    let bundle = evaluate_gate(&input).unwrap();
+    assert_eq!(bundle.epoch.as_u64(), 42);
+}
+
+#[test]
+fn gate_multiple_blockers_accumulated() {
+    // Fail with both missing runtime and excessive variance.
+    let mut results: Vec<BenchmarkResult> = full_benchmark_results()
+        .into_iter()
+        .filter(|r| r.runtime != RuntimeId::BunStable)
+        .collect();
+    results[0].cv_millionths = 100_000; // > 30_000
+    let method = passing_methodology();
+    let artifacts = passing_artifacts();
+    let env = passing_environment();
+    let input = passing_input(&results, &method, &artifacts, &[], &env);
+    let bundle = evaluate_gate(&input).unwrap();
+    assert_eq!(bundle.outcome, GateOutcome::Fail);
+    // Should have at least 2 blockers.
+    assert!(bundle.blockers.len() >= 2);
+}
+
+#[test]
+fn reproducibility_passing_does_not_add_blocker() {
+    let results = full_benchmark_results();
+    let method = passing_methodology();
+    let artifacts = passing_artifacts();
+    let env = passing_environment();
+    let repro = vec![ReproducibilityResult {
+        benchmark_id: "b_repro".to_string(),
+        runtime: RuntimeId::NodeLts,
+        original_ns: 1_000_000,
+        replay_ns: 1_010_000,
+        deviation_millionths: 10_000,
+        within_tolerance: true,
+    }];
+    let input = passing_input(&results, &method, &artifacts, &repro, &env);
+    let bundle = evaluate_gate(&input).unwrap();
+    assert!(
+        !bundle
+            .blockers
+            .iter()
+            .any(|b| matches!(b, GateBlocker::ReproducibilityFailed { .. }))
+    );
+}
+
+#[test]
+fn gate_outcome_serde_roundtrip() {
+    for outcome in [GateOutcome::Pass, GateOutcome::Fail] {
+        let json = serde_json::to_string(&outcome).unwrap();
+        let back: GateOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, back);
+    }
+}
+
+#[test]
+fn performance_summary_total_benchmarks_matches_unique_ids() {
+    let results = full_benchmark_results();
+    let method = passing_methodology();
+    let artifacts = passing_artifacts();
+    let env = passing_environment();
+    let input = passing_input(&results, &method, &artifacts, &[], &env);
+    let bundle = evaluate_gate(&input).unwrap();
+    // Unique benchmark IDs across all runtimes.
+    let unique_ids: std::collections::BTreeSet<&str> =
+        results.iter().map(|r| r.benchmark_id.as_str()).collect();
+    assert_eq!(
+        bundle.performance_summary.total_benchmarks,
+        unique_ids.len() as u64
+    );
+}
+
+#[test]
+fn log_entries_trace_id_propagated() {
+    let results = full_benchmark_results();
+    let method = passing_methodology();
+    let artifacts = passing_artifacts();
+    let env = passing_environment();
+    let input = passing_input(&results, &method, &artifacts, &[], &env);
+    let bundle = evaluate_gate(&input).unwrap();
+    let entries = generate_log_entries("my-trace-42", &bundle);
+    assert!(entries.iter().all(|e| e.trace_id == "my-trace-42"));
+}

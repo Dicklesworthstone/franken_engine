@@ -95,6 +95,12 @@ fn parse_vectors() -> SecurityVerificationVectors {
     serde_json::from_str(VECTORS_JSON).expect("security verification vectors must parse")
 }
 
+fn read_gate_script() -> String {
+    let path = repo_root().join("scripts/run_rgc_security_enforcement_verification_pack.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 #[test]
 fn rgc_059_doc_contains_required_sections() {
     let path = repo_root().join("docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md");
@@ -220,6 +226,18 @@ fn rgc_059_contract_is_versioned_and_replay_bound() {
 
     assert!(
         contract.operator_verification.iter().any(|entry| {
+            entry.contains("$PWD/target_rch_rgc_security_enforcement_verification_pack_verify")
+        }),
+        "operator verification should document a repo-local target dir example"
+    );
+    assert!(
+        !contract.operator_verification.iter().any(|entry| {
+            entry.contains("/tmp/rch_target_rgc_security_enforcement_verification_pack")
+        }),
+        "operator verification must not point operators back to /tmp-backed targets"
+    );
+    assert!(
+        contract.operator_verification.iter().any(|entry| {
             entry.contains("run_rgc_security_enforcement_verification_pack.sh ci")
         })
     );
@@ -313,6 +331,20 @@ fn rgc_059_contract_and_vectors_files_exist_at_declared_paths() {
         let full = root.join(path);
         assert!(full.exists(), "expected path to exist: {}", full.display());
     }
+}
+
+#[test]
+fn rgc_059_gate_script_uses_repo_local_target_dir() {
+    let script = read_gate_script();
+
+    assert!(
+        script.contains("${root_dir}/target_rch_rgc_security_enforcement_verification_pack"),
+        "gate script should use a repo-local target dir rooted at the workspace"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_rgc_security_enforcement_verification_pack"),
+        "gate script must not route heavy remote builds through /tmp"
+    );
 }
 
 // ---------- parse_contract ----------

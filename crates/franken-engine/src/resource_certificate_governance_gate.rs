@@ -57,8 +57,8 @@ pub const DEFAULT_MAX_BUDGET_OVERRUN: u64 = 50_000;
 /// Default tail-risk threshold (95% = 950_000 millionths).
 pub const DEFAULT_TAIL_RISK_THRESHOLD: u64 = 950_000;
 
-/// Default maximum tail heaviness (200_000 millionths = 0.2).
-pub const DEFAULT_MAX_TAIL_HEAVINESS: u64 = 200_000;
+/// Default maximum tail heaviness (1_200_000 millionths = 1.2x ratio).
+pub const DEFAULT_MAX_TAIL_HEAVINESS: u64 = 1_200_000;
 
 /// Default regression sensitivity (30_000 millionths = 3%).
 pub const DEFAULT_REGRESSION_SENSITIVITY: u64 = 30_000;
@@ -480,7 +480,7 @@ impl GateConfig {
         Self {
             max_budget_overrun_fraction: 20_000, // 2%
             tail_risk_threshold: 980_000,        // 98%
-            max_tail_heaviness: 100_000,         // 0.1
+            max_tail_heaviness: 1_050_000,       // 1.05x ratio
             regression_sensitivity: 10_000,      // 1%
             min_sample_count: 100,
         }
@@ -491,7 +491,7 @@ impl GateConfig {
         Self {
             max_budget_overrun_fraction: 200_000, // 20%
             tail_risk_threshold: 800_000,         // 80%
-            max_tail_heaviness: 500_000,          // 0.5
+            max_tail_heaviness: 1_500_000,        // 1.5x ratio
             regression_sensitivity: 100_000,      // 10%
             min_sample_count: 5,
         }

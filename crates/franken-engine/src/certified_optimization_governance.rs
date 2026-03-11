@@ -1638,7 +1638,7 @@ mod tests {
 
     #[test]
     fn error_tag_all_variants() {
-        let errors = vec![
+        let errors = [
             GovernanceError::CertificateNotFound {
                 cert_id: "c".into(),
             },

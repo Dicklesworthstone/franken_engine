@@ -723,6 +723,7 @@ impl Default for BundleConfig {
 
 /// Result of evaluating a bundle against acceptance criteria.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[serde(tag = "verdict")]
 pub enum BundleVerdict {
     /// Bundle meets all acceptance criteria.
@@ -804,6 +805,7 @@ pub struct WorkloadStatEntry {
 
 /// Errors from evidence bundle operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BundleError {
     /// Bundle is already sealed.
     BundleSealed { bundle_id: String },

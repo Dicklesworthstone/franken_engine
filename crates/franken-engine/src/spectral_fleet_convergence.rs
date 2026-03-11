@@ -55,6 +55,7 @@ const CONVERGENCE_THRESHOLD_MILLIONTHS: i64 = 100; // 0.0001
 
 /// Errors from spectral analysis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SpectralError {
     /// Too many nodes for analysis.
     TooManyNodes { count: usize, max: usize },

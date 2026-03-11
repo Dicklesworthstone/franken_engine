@@ -771,6 +771,7 @@ impl ReceiptChain {
 
 /// Errors from receipt chain operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReceiptChainError {
     /// Parent hash mismatch (receipt doesn't link to chain tail).
     ParentHashMismatch {
@@ -805,6 +806,7 @@ pub struct ChainIntegrityResult {
 
 /// An integrity issue in a receipt chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChainIntegrityIssue {
     /// Parent hash doesn't match previous receipt's content hash.
     ParentHashBroken {
@@ -914,6 +916,7 @@ pub struct EmitInput {
 
 /// Result of an emit operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum EmitResult {
     /// Receipt was emitted and the optimization is approved.

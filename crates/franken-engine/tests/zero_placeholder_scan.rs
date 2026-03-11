@@ -63,7 +63,7 @@ fn zero_placeholder_scan_cli_writes_artifact_bundle() {
         inventory.findings.len(),
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(inventory.open_placeholder_finding_count(), 6);
+    assert_eq!(inventory.open_placeholder_finding_count(), 3);
 
     let manifest: ZeroPlaceholderScanRunManifest =
         serde_json::from_slice(&fs::read(out_dir.join("run_manifest.json")).unwrap())
@@ -78,7 +78,7 @@ fn zero_placeholder_scan_cli_writes_artifact_bundle() {
         manifest.finding_count as usize,
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(manifest.open_placeholder_finding_count, 6);
+    assert_eq!(manifest.open_placeholder_finding_count, 3);
     assert_eq!(
         manifest.open_placeholder_finding_count
             + manifest.fail_closed_finding_count
@@ -146,7 +146,7 @@ fn zero_placeholder_inventory_counts_match_expectations() {
         inventory.findings.len(),
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(inventory.open_placeholder_finding_count(), 6);
+    assert_eq!(inventory.open_placeholder_finding_count(), 3);
     assert_eq!(
         inventory.open_placeholder_finding_count()
             + inventory.fail_closed_finding_count()
@@ -178,7 +178,7 @@ fn zero_placeholder_inventory_runtime_findings_are_present() {
         .iter()
         .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::Runtime)
         .collect();
-    assert_eq!(runtime_findings.len(), 2);
+    assert_eq!(runtime_findings.len(), 3);
     assert!(runtime_findings.iter().all(|finding| {
         finding.finding_id.starts_with("runtime::")
             && finding.status == ZeroPlaceholderStatus::OpenPlaceholder
@@ -411,15 +411,32 @@ fn lowering_subsystem_has_six_findings() {
 }
 
 #[test]
-fn runtime_findings_reference_stdlib() {
+fn runtime_findings_reference_authoritative_sources() {
     let inventory = zscan::zero_placeholder_scan_inventory();
     for finding in &inventory.findings {
         if finding.subsystem == ZeroPlaceholderSubsystem::Runtime {
-            assert!(
-                finding.source_reference.contains("stdlib"),
-                "runtime finding {} should reference stdlib",
-                finding.finding_id
-            );
+            match finding.finding_id.as_str() {
+                "runtime::json_parse_compound_placeholder"
+                | "runtime::json_stringify_object_placeholder" => {
+                    assert!(
+                        finding.source_reference.contains("stdlib"),
+                        "runtime finding {} should reference stdlib",
+                        finding.finding_id
+                    );
+                }
+                "runtime::iterator_ir3_placeholder_execution" => {
+                    assert!(
+                        finding.source_reference.contains("lowering_pipeline"),
+                        "iterator runtime finding should reference lowering_pipeline"
+                    );
+                    assert!(
+                        finding.source_reference.contains("baseline_interpreter"),
+                        "iterator runtime finding should reference baseline_interpreter"
+                    );
+                    assert_eq!(finding.owner_bead_id, "bd-1lsy.4.8");
+                }
+                other => panic!("unexpected runtime finding {other}"),
+            }
         }
     }
 }

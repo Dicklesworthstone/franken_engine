@@ -553,6 +553,7 @@ impl SupportBundle {
 
 /// Errors from doctor and preflight operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DoctorError {
     /// Too many checks generated.
     CheckCapacityExceeded { current: usize, max: usize },
@@ -1462,8 +1463,10 @@ mod tests {
 
     #[test]
     fn doctor_config_is_entry_relevant_severity_filter() {
-        let mut cfg = DoctorConfig::default();
-        cfg.min_mismatch_severity = MismatchSeverity::Warning;
+        let cfg = DoctorConfig {
+            min_mismatch_severity: MismatchSeverity::Warning,
+            ..DoctorConfig::default()
+        };
         let info = make_entry(
             "info-1",
             MismatchDomain::Diagnostics,
@@ -1490,8 +1493,10 @@ mod tests {
         );
         assert!(!cfg.is_entry_relevant(&resolved));
 
-        let mut cfg2 = DoctorConfig::default();
-        cfg2.include_resolved = true;
+        let cfg2 = DoctorConfig {
+            include_resolved: true,
+            ..DoctorConfig::default()
+        };
         assert!(cfg2.is_entry_relevant(&resolved));
     }
 

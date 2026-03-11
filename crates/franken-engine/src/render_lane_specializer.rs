@@ -1022,10 +1022,10 @@ mod tests {
 
     #[test]
     fn default_constants_reasonable() {
-        assert!(DEFAULT_MAX_INLINE_DEPTH > 0);
-        assert!(DEFAULT_MIN_SPEEDUP_THRESHOLD > 0);
-        assert!(DEFAULT_MIN_SPEEDUP_THRESHOLD <= MILLION);
-        assert!(DEFAULT_MAX_SPECIALIZATIONS_PER_LANE > 0);
+        assert_eq!(DEFAULT_MAX_INLINE_DEPTH, 8);
+        assert_eq!(DEFAULT_MIN_SPEEDUP_THRESHOLD, 100_000);
+        const { assert!(DEFAULT_MIN_SPEEDUP_THRESHOLD <= MILLION) };
+        assert_eq!(DEFAULT_MAX_SPECIALIZATIONS_PER_LANE, 16);
     }
 
     // --- LaneKind ---
@@ -1467,7 +1467,7 @@ mod tests {
         let cfg = SpecializationConfig::default_config();
         let result = specialize_lane(&req, &cfg).unwrap();
         let genesis = DecisionReceipt::genesis_hash();
-        let r1 = DecisionReceipt::new(epoch(), &req, &result, genesis);
+        let r1 = DecisionReceipt::new(epoch(), &req, &result, genesis.clone());
         let r2 = DecisionReceipt::new(epoch(), &req, &result, genesis);
         assert_eq!(r1.content_hash, r2.content_hash);
     }
@@ -1479,7 +1479,7 @@ mod tests {
         let result = specialize_lane(&req, &cfg).unwrap();
         let genesis = DecisionReceipt::genesis_hash();
         let r1 = DecisionReceipt::new(epoch(), &req, &result, genesis);
-        let r2 = DecisionReceipt::new(epoch(), &req, &result, r1.content_hash);
+        let r2 = DecisionReceipt::new(epoch(), &req, &result, r1.content_hash.clone());
         assert_ne!(r1.content_hash, r2.content_hash);
     }
 
@@ -1489,7 +1489,7 @@ mod tests {
         let cfg = SpecializationConfig::default_config();
         let result = specialize_lane(&req, &cfg).unwrap();
         let genesis = DecisionReceipt::genesis_hash();
-        let r = DecisionReceipt::new(epoch(), &req, &result, genesis);
+        let r = DecisionReceipt::new(epoch(), &req, &result, genesis.clone());
         assert_eq!(r.lane_kind, LaneKind::ServerSideRender);
         assert_eq!(r.component_shape, ComponentShape::PureFunction);
         assert_eq!(r.verdict, SpecializationVerdict::Applied);

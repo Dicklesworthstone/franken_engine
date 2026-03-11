@@ -616,6 +616,7 @@ impl GateReport {
 
 /// Errors from the gate evaluation pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
 pub enum GateError {
     #[error("too many active waivers: {active} exceeds limit {limit}")]
     TooManyWaivers { active: usize, limit: usize },
@@ -900,7 +901,7 @@ mod tests {
             subsystem,
             justification: "deferred to next sprint".to_string(),
             owner: "team-alpha".to_string(),
-            expires_epoch: 200,
+            expires_epoch: 150,
             status: WaiverStatus::Active,
             created_epoch: 50,
         }
@@ -944,12 +945,12 @@ mod tests {
 
     #[test]
     fn default_max_waivers() {
-        assert!(DEFAULT_MAX_ACTIVE_WAIVERS > 0);
+        assert_eq!(DEFAULT_MAX_ACTIVE_WAIVERS, 20);
     }
 
     #[test]
     fn default_waiver_max_duration() {
-        assert!(DEFAULT_WAIVER_MAX_DURATION_EPOCHS > 0);
+        assert_eq!(DEFAULT_WAIVER_MAX_DURATION_EPOCHS, 100);
     }
 
     // --- Subsystem ---
@@ -1424,8 +1425,10 @@ mod tests {
 
     #[test]
     fn gate_too_many_waivers_error() {
-        let mut cfg = GateConfig::default();
-        cfg.max_active_waivers = 0;
+        let cfg = GateConfig {
+            max_active_waivers: 0,
+            ..GateConfig::default()
+        };
         let entry = blocking_entry(Subsystem::Parser);
         let waiver = make_waiver(&entry, Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
@@ -1455,8 +1458,10 @@ mod tests {
 
     #[test]
     fn gate_waiver_duration_exceeded_error() {
-        let mut cfg = GateConfig::default();
-        cfg.waiver_max_duration_epochs = 10;
+        let cfg = GateConfig {
+            waiver_max_duration_epochs: 10,
+            ..GateConfig::default()
+        };
         let entry = blocking_entry(Subsystem::Parser);
         let w = make_waiver(&entry, Subsystem::Parser); // duration = 200 - 50 = 150
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];

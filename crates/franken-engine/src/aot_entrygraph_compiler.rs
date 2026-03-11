@@ -1436,7 +1436,7 @@ mod tests {
         ];
         let graph = make_graph("gd", EntryKind::PackageMain, modules);
         let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
-        let r1 = build_receipt(&report, graph.graph_hash, &default_config());
+        let r1 = build_receipt(&report, graph.graph_hash.clone(), &default_config());
         let r2 = build_receipt(&report, graph.graph_hash, &default_config());
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
@@ -1642,8 +1642,8 @@ mod tests {
 
     #[test]
     fn test_max_constants() {
-        assert!(MAX_ENTRYGRAPH_MODULES > 0);
-        assert!(MAX_BATCH_SIZE > 0);
+        assert_eq!(MAX_ENTRYGRAPH_MODULES, 4096);
+        assert_eq!(MAX_BATCH_SIZE, 256);
     }
 
     // --- Compile with different targets ---

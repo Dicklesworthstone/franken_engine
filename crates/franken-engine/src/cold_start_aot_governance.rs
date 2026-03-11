@@ -1569,6 +1569,25 @@ mod tests {
     fn test_multiple_evidence_mixed_verdicts() {
         let cfg = default_config();
         let ev_fast = make_evidence(StartupPathKind::WarmCache, 1000, 800, 50);
+        // Regression exceeds max_regression_millionths (50_000), so rollback
+        // takes priority over a simple "Blocked" verdict.
+        let ev_slow = make_evidence(StartupPathKind::AotRestored, 1000, 1200, 50);
+        let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
+        let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &parity, &cfg).unwrap();
+        match verdict {
+            GovernanceVerdict::Rollback { triggers } => {
+                assert!(!triggers.is_empty());
+            }
+            other => panic!("expected Rollback, got {other}"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_evidence_mild_regression_blocked() {
+        let mut cfg = default_config();
+        cfg.max_regression_millionths = 300_000; // raise threshold so rollback doesn't trigger
+        let ev_fast = make_evidence(StartupPathKind::WarmCache, 1000, 800, 50);
+        // -200_000 speedup: below rollback threshold (300k) but still slower
         let ev_slow = make_evidence(StartupPathKind::AotRestored, 1000, 1200, 50);
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
         let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &parity, &cfg).unwrap();

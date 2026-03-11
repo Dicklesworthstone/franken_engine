@@ -58,12 +58,12 @@ fn test_fixed_one_value() {
 
 #[test]
 fn test_default_constants_sensible() {
-    assert!(DEFAULT_MIN_BENCHMARK_SAMPLES > 0);
-    assert!(DEFAULT_MAX_REGRESSION_MILLIONTHS > 0);
+    assert_eq!(DEFAULT_MIN_BENCHMARK_SAMPLES, 30);
+    assert_eq!(DEFAULT_MAX_REGRESSION_MILLIONTHS, 50_000);
     assert!(DEFAULT_MAX_REGRESSION_MILLIONTHS <= FIXED_ONE);
-    assert!(DEFAULT_MAX_STALENESS_EPOCHS > 0);
-    assert!(DEFAULT_MIN_SPEEDUP_THRESHOLD > 0);
-    assert!(DEFAULT_MAX_DIVERGENCE > 0);
+    assert_eq!(DEFAULT_MAX_STALENESS_EPOCHS, 10);
+    assert_eq!(DEFAULT_MIN_SPEEDUP_THRESHOLD, 10_000);
+    assert_eq!(DEFAULT_MAX_DIVERGENCE, 5_000);
 }
 
 // ============================================================================

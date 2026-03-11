@@ -3,7 +3,7 @@
 //! Validates governance evaluation across surfaces, claim categories,
 //! ratchet behavior, support boundaries, and serde roundtrips.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use frankenengine_engine::frontier_hole_governance::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;

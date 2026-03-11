@@ -403,6 +403,32 @@ fn operator_verification_includes_ci_command() {
     );
 }
 
+#[test]
+fn operator_verification_uses_data_tmp_target_dir() {
+    let contract = parse_contract();
+    assert!(
+        contract.operator_verification.iter().any(|entry| {
+            entry.contains(
+                "CARGO_TARGET_DIR=$PWD/target_rch_rgc_statistical_validation_pipeline_verify",
+            )
+        }),
+        "operator verification should pin the hardened repo-local verify target dir"
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .all(|entry| !entry.contains("/tmp/rch_target_rgc_statistical_validation_pipeline")),
+        "operator verification must not drift back to /tmp target dirs"
+    );
+    assert!(
+        contract.operator_verification.iter().all(
+            |entry| !entry.contains("/data/tmp/rch_target_rgc_statistical_validation_pipeline")
+        ),
+        "operator verification must not drift to worker-specific /data/tmp paths"
+    );
+}
+
 // ---------- required artifacts ----------
 
 #[test]
@@ -414,6 +440,87 @@ fn required_artifacts_includes_manifest() {
             .iter()
             .any(|a| a.contains("run_manifest")),
     );
+}
+
+#[test]
+fn required_artifacts_include_extended_replay_bundle() {
+    let contract = parse_contract();
+    for artifact in [
+        "trace_ids.json",
+        "summary.md",
+        "env.json",
+        "repro.lock",
+        "step_logs/",
+        "support_bundle/stats_verdict_report.json",
+    ] {
+        assert!(
+            contract.required_artifacts.iter().any(|a| a == artifact),
+            "required_artifacts missing {artifact}"
+        );
+    }
+}
+
+#[test]
+fn contract_doc_uses_hardened_target_dir_and_bundle() {
+    let path = repo_root().join("docs/RGC_STATISTICAL_VALIDATION_PIPELINE_V1.md");
+    let doc = read_to_string(&path);
+
+    assert!(
+        doc.contains("$PWD/target_rch_rgc_statistical_validation_pipeline_verify"),
+        "doc must use the hardened repo-local target dir example"
+    );
+    assert!(
+        !doc.contains("/tmp/rch_target_rgc_statistical_validation_pipeline"),
+        "doc must not reference stale /tmp target dirs"
+    );
+    assert!(
+        !doc.contains("/data/tmp/rch_target_rgc_statistical_validation_pipeline"),
+        "doc must not reference worker-specific /data/tmp target dirs"
+    );
+    for artifact in [
+        "trace_ids.json",
+        "summary.md",
+        "env.json",
+        "repro.lock",
+        "step_logs/",
+    ] {
+        assert!(doc.contains(artifact), "doc missing artifact {artifact}");
+    }
+}
+
+#[test]
+fn gate_script_emits_extended_artifact_bundle() {
+    let path = repo_root().join("scripts/run_rgc_statistical_validation_pipeline.sh");
+    let script = read_to_string(&path);
+
+    for needle in [
+        "target_dir=\"${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_statistical_validation_pipeline}\"",
+        "trace_ids_path=\"${run_dir}/trace_ids.json\"",
+        "summary_path=\"${run_dir}/summary.md\"",
+        "env_path=\"${run_dir}/env.json\"",
+        "repro_lock_path=\"${run_dir}/repro.lock\"",
+        "step_logs_dir=\"${run_dir}/step_logs\"",
+        "\"step_logs\": \"${step_logs_dir}\"",
+    ] {
+        assert!(script.contains(needle), "gate script missing {needle}");
+    }
+}
+
+#[test]
+fn replay_wrapper_checks_extended_artifact_bundle() {
+    let path = repo_root().join("scripts/e2e/rgc_statistical_validation_pipeline_replay.sh");
+    let script = read_to_string(&path);
+
+    for needle in [
+        "trace_ids.json",
+        "summary.md",
+        "env.json",
+        "repro.lock",
+        "support_bundle/stats_verdict_report.json",
+        "test -d \"${latest_run_dir}/step_logs\"",
+    ] {
+        assert!(script.contains(needle), "replay wrapper missing {needle}");
+    }
 }
 
 #[test]

@@ -20,13 +20,14 @@ pub const ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.zero-placeholder-scan.event.v1";
 pub const ZERO_PLACEHOLDER_SCAN_COMPONENT: &str = "zero_placeholder_scan";
 pub const ZERO_PLACEHOLDER_SCAN_POLICY_ID: &str = "franken-engine.zero-placeholder-scan.policy.v1";
-pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 15;
+pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 16;
 
 const DOCS_HELP_AUDIT_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_docs_help_surface_audit_v1.json");
 const CLI_DOCS_HELP_POLICY_ID: &str = "policy-rgc-docs-help-surface-audit-v1";
 const CLI_DOCS_HELP_BEAD_ID: &str = "bd-1lsy.10.11.1";
 const JSON_RUNTIME_BEAD_ID: &str = "bd-1lsy.4.9.1";
+const ITERATOR_RUNTIME_BEAD_ID: &str = "bd-1lsy.4.8";
 
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -456,6 +457,25 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
                     .to_string(),
             required_behavior:
                 "Stringify object graphs and callable values through deterministic heap traversal instead of placeholder output."
+                    .to_string(),
+            diagnostic_code: None,
+        },
+        ZeroPlaceholderFinding {
+            finding_id: "runtime::iterator_ir3_placeholder_execution".to_string(),
+            subsystem: ZeroPlaceholderSubsystem::Runtime,
+            status: ZeroPlaceholderStatus::OpenPlaceholder,
+            severity: ZeroPlaceholderSeverity::High,
+            owner: "iterator_protocol".to_string(),
+            owner_bead_id: ITERATOR_RUNTIME_BEAD_ID.to_string(),
+            subject_area: "iterator_protocol.ir3_execution".to_string(),
+            source_reference:
+                "crates/franken-engine/src/lowering_pipeline.rs::lower_ir1_to_ir3(iterator ops); crates/franken-engine/src/baseline_interpreter.rs"
+                    .to_string(),
+            observed_behavior:
+                "IR1 iterator ops (ForInInit/Next, ForOfInit/Next, IteratorClose) still degrade into Move/Jump placeholders or a no-op close in IR3 lowering, and baseline_interpreter has no dedicated iterator execution path."
+                    .to_string(),
+            required_behavior:
+                "Lower iterator protocol ops into dedicated IR3 instructions and execute deterministic next/done/close semantics in the baseline interpreter without placeholder moves or no-op close behavior."
                     .to_string(),
             diagnostic_code: None,
         },
@@ -1001,7 +1021,7 @@ mod tests {
             inventory.findings.len(),
             ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
         );
-        assert_eq!(inventory.open_placeholder_finding_count(), 2);
+        assert_eq!(inventory.open_placeholder_finding_count(), 3);
 
         let parser_count = inventory
             .findings
@@ -1026,7 +1046,7 @@ mod tests {
 
         assert_eq!(parser_count, 6);
         assert_eq!(lowering_count, 6);
-        assert_eq!(runtime_count, 2);
+        assert_eq!(runtime_count, 3);
         assert_eq!(cli_docs_count, 1);
     }
 
@@ -1038,7 +1058,7 @@ mod tests {
             .iter()
             .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::Runtime)
             .collect();
-        assert_eq!(runtime_findings.len(), 2);
+        assert_eq!(runtime_findings.len(), 3);
         assert!(
             runtime_findings
                 .iter()
@@ -1049,6 +1069,20 @@ mod tests {
                 .iter()
                 .all(|finding| finding.severity == ZeroPlaceholderSeverity::High)
         );
+    }
+
+    #[test]
+    fn runtime_findings_include_iterator_ir3_placeholder_gap() {
+        let inventory = zero_placeholder_scan_inventory();
+        let finding = inventory
+            .findings
+            .iter()
+            .find(|finding| finding.finding_id == "runtime::iterator_ir3_placeholder_execution")
+            .expect("iterator runtime placeholder finding");
+        assert_eq!(finding.owner_bead_id, ITERATOR_RUNTIME_BEAD_ID);
+        assert!(finding.source_reference.contains("lowering_pipeline"));
+        assert!(finding.source_reference.contains("baseline_interpreter"));
+        assert!(finding.observed_behavior.contains("Move/Jump placeholders"));
     }
 
     #[test]
@@ -1104,7 +1138,7 @@ mod tests {
             manifest.finding_count as usize,
             ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
         );
-        assert_eq!(manifest.open_placeholder_finding_count, 2);
+        assert_eq!(manifest.open_placeholder_finding_count, 3);
         assert_eq!(
             manifest.open_placeholder_finding_count
                 + manifest.fail_closed_finding_count

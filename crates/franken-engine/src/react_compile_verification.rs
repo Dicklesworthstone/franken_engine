@@ -648,6 +648,7 @@ impl VerificationReport {
 
 /// Errors from verification operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
 pub enum VerificationError {
     /// Both results used the same surface.
     #[error("same surface: both results are from {surface}")]
@@ -1209,7 +1210,7 @@ mod tests {
 
     #[test]
     fn default_size_divergence_valid() {
-        assert!(DEFAULT_MAX_SIZE_DIVERGENCE <= MILLIONTHS);
+        const { assert!(DEFAULT_MAX_SIZE_DIVERGENCE <= MILLIONTHS) };
     }
 
     // --- CompileMode ---

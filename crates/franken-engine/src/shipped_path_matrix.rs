@@ -564,6 +564,7 @@ pub struct MatrixReport {
 
 /// Errors produced by matrix evaluation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
 pub enum MatrixError {
     /// No cells provided.
     #[error("no cells provided for matrix evaluation")]

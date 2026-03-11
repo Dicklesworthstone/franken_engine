@@ -682,7 +682,7 @@ fn scan_inventory_has_runtime_findings() {
         .iter()
         .filter(|f| f.subsystem == ZeroPlaceholderSubsystem::Runtime)
         .count();
-    assert_eq!(count, 2, "exactly 2 runtime findings expected");
+    assert_eq!(count, 3, "exactly 3 runtime findings expected");
 }
 
 #[test]
@@ -862,13 +862,27 @@ fn scan_inventory_is_deterministic() {
 }
 
 #[test]
-fn scan_inventory_open_placeholder_count_is_at_least_two() {
-    // Runtime always contributes 2 open-placeholder findings
+fn scan_inventory_open_placeholder_count_is_at_least_three() {
+    // Runtime always contributes 3 open-placeholder findings
     let inv = zero_placeholder_scan_inventory();
     assert!(
-        inv.open_placeholder_finding_count() >= 2,
-        "at minimum the 2 runtime findings should be open_placeholder"
+        inv.open_placeholder_finding_count() >= 3,
+        "at minimum the 3 runtime findings should be open_placeholder"
     );
+}
+
+#[test]
+fn scan_inventory_routes_iterator_runtime_gap_to_iteration_bead() {
+    let inv = zero_placeholder_scan_inventory();
+    let finding = inv
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "runtime::iterator_ir3_placeholder_execution")
+        .expect("iterator runtime placeholder finding");
+    assert_eq!(finding.subsystem, ZeroPlaceholderSubsystem::Runtime);
+    assert_eq!(finding.owner_bead_id, "bd-1lsy.4.8");
+    assert!(finding.source_reference.contains("lowering_pipeline"));
+    assert!(finding.source_reference.contains("baseline_interpreter"));
 }
 
 // ---------------------------------------------------------------------------

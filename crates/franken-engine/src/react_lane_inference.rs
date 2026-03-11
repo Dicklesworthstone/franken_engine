@@ -171,6 +171,7 @@ pub struct ComponentInferenceResult {
 
 /// Reason why a component is blocked from partial evaluation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InferenceBlockingReason {
     /// Component is classified as impure.
     ImpureClassification,
@@ -694,6 +695,7 @@ pub fn partial_eval_coverage(results: &[ComponentInferenceResult]) -> u64 {
 mod tests {
     use super::*;
     use crate::ast::SourceSpan;
+    use crate::hook_effect_contract::{HookKind, HookSlot, HookSlotIndex};
     use crate::react_jsx_lowering::{
         CallConvention, ElementType, LoweredChild, LoweredElement, LoweredProp, LoweredPropValue,
         LoweredProps, PropsEntry,
@@ -701,6 +703,17 @@ mod tests {
 
     fn epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(100)
+    }
+
+    /// Config with min_observations=1 so purity fires after a single observation.
+    fn low_obs_config() -> InferenceConfig {
+        InferenceConfig {
+            purity_config: PurityConfig {
+                min_observations: 1,
+                ..PurityConfig::default()
+            },
+            ..InferenceConfig::default()
+        }
     }
 
     fn span() -> SourceSpan {
@@ -730,6 +743,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn make_component_element(name: &str) -> LoweredElement {
         LoweredElement {
             element_type: ElementType::Component {
@@ -793,7 +807,7 @@ mod tests {
             .map(|(i, kind)| HookSlot {
                 index: HookSlotIndex(i as u32),
                 kind,
-                deps_count: None,
+                deps: None,
             })
             .collect();
         HookManifest::new(name, slots)
@@ -886,7 +900,7 @@ mod tests {
 
     #[test]
     fn blocking_reason_ordering() {
-        let mut reasons = vec![
+        let mut reasons = [
             InferenceBlockingReason::MutableRefs,
             InferenceBlockingReason::EffectsInRender,
             InferenceBlockingReason::ConditionalHooks,
@@ -1022,7 +1036,7 @@ mod tests {
 
     #[test]
     fn pipeline_infer_pure_component() {
-        let mut p = ReactLaneInferencePipeline::new(epoch());
+        let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
         let el = make_element("div");
         let manifest = make_hook_manifest("PureComp", vec![HookKind::Memo]);
         let result = p.infer_component("PureComp", &el, Some(&manifest), None);
@@ -1034,7 +1048,7 @@ mod tests {
 
     #[test]
     fn pipeline_infer_impure_component_with_effect() {
-        let mut p = ReactLaneInferencePipeline::new(epoch());
+        let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
         let el = make_element("div");
         let manifest = make_hook_manifest("EffectComp", vec![HookKind::Effect]);
         let result = p.infer_component("EffectComp", &el, Some(&manifest), None);
@@ -1179,7 +1193,7 @@ mod tests {
 
     #[test]
     fn partial_eval_coverage_all_eligible() {
-        let mut p = ReactLaneInferencePipeline::new(epoch());
+        let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
         let el = make_element("div");
         let r1 = p.infer_component("A", &el, None, None);
         let r2 = p.infer_component("B", &el, None, None);
@@ -1232,7 +1246,7 @@ mod tests {
 
     #[test]
     fn summary_healthy_when_above_threshold() {
-        let mut p = ReactLaneInferencePipeline::new(epoch());
+        let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
         // No-hook pure components should all be eligible.
         for i in 0..5 {
             let el = make_element("div");
@@ -1296,11 +1310,19 @@ mod tests {
     fn blocking_deeply_nested() {
         let config = InferenceConfig {
             max_render_depth: 2,
+            purity_config: PurityConfig {
+                min_observations: 1,
+                ..PurityConfig::default()
+            },
             ..Default::default()
         };
         let mut p = ReactLaneInferencePipeline::with_config(config, epoch());
 
-        let mut inner = make_element("span");
+        let innermost = make_element("em");
+        let inner = LoweredElement {
+            children: vec![LoweredChild::Element(Box::new(innermost))],
+            ..make_element("span")
+        };
         let mid = LoweredElement {
             children: vec![LoweredChild::Element(Box::new(inner))],
             ..make_element("div")

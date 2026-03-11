@@ -38,6 +38,7 @@ const DEFAULT_CONFIDENCE_MILLIONTHS: i64 = 950_000;
 
 /// Which off-policy estimator to apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EstimatorKind {
     /// Inverse Propensity Scoring — unbiased when propensities are correct.
     Ips,
@@ -172,6 +173,7 @@ impl ConfidenceEnvelope {
 
 /// Classifies how an off-policy estimate relates to a safety threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EnvelopeStatus {
     /// Entire envelope above the safety threshold — safe to adopt.
     Safe,
@@ -222,6 +224,7 @@ pub struct EvaluationResult {
 
 /// Errors that can occur during off-policy evaluation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CounterfactualError {
     /// Batch is empty — cannot estimate.
     EmptyBatch,

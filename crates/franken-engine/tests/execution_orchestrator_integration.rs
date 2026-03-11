@@ -15,10 +15,12 @@
 )]
 
 use std::collections::BTreeMap;
+use std::fs;
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::bayesian_posterior::RiskState;
+use frankenengine_engine::execution_cell::CellError;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
     OrchestratorError, OrchestratorResult,
@@ -128,6 +130,44 @@ fn e2e_result_has_finalize_result() {
     let mut orch = default_orch();
     let result = execute_simple(&mut orch);
     assert!(result.finalize_result.is_some());
+}
+
+#[test]
+fn low_cell_close_budget_returns_cell_budget_exhausted_error() {
+    let cfg = OrchestratorConfig {
+        cell_close_budget_ms: 1,
+        ..OrchestratorConfig::default()
+    };
+    let mut orch = ExecutionOrchestrator::new(cfg);
+    let err = orch
+        .execute(&simple_package("ext-budget", "42"))
+        .expect_err("close budget should fail fast");
+
+    match err {
+        OrchestratorError::Cell(CellError::BudgetExhausted {
+            requested_ms,
+            remaining_ms,
+            ..
+        }) => {
+            assert_eq!(requested_ms, 2);
+            assert_eq!(remaining_ms, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn production_orchestrator_source_avoids_control_plane_mocks() {
+    let path = format!(
+        "{}/src/execution_orchestrator.rs",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let source = fs::read_to_string(path).expect("read execution_orchestrator source");
+
+    assert!(!source.contains("use crate::control_plane::mocks"));
+    assert!(!source.contains("MockCx::new("));
+    assert!(!source.contains("MockBudget::new("));
+    assert!(!source.contains("trace_id_from_seed"));
 }
 
 #[test]
@@ -290,6 +330,7 @@ fn default_config_field_values() {
     assert_eq!(cfg.loss_matrix_preset, LossMatrixPreset::Balanced);
     assert!(cfg.force_lane.is_none());
     assert_eq!(cfg.drain_deadline_ticks, 10_000);
+    assert_eq!(cfg.cell_close_budget_ms, 10_000);
     assert_eq!(cfg.max_concurrent_sagas, 4);
     assert_eq!(cfg.epoch, SecurityEpoch::from_raw(1));
     assert_eq!(cfg.parse_goal, ParseGoal::Script);
@@ -303,6 +344,7 @@ fn config_clone_preserves_all_fields() {
         loss_matrix_preset: LossMatrixPreset::Conservative,
         force_lane: Some(LaneChoice::V8),
         drain_deadline_ticks: 99_999,
+        cell_close_budget_ms: 77,
         max_concurrent_sagas: 16,
         epoch: SecurityEpoch::from_raw(77),
         parse_goal: ParseGoal::Module,
@@ -314,6 +356,7 @@ fn config_clone_preserves_all_fields() {
     assert_eq!(cloned.loss_matrix_preset, LossMatrixPreset::Conservative);
     assert_eq!(cloned.force_lane, Some(LaneChoice::V8));
     assert_eq!(cloned.drain_deadline_ticks, 99_999);
+    assert_eq!(cloned.cell_close_budget_ms, 77);
     assert_eq!(cloned.max_concurrent_sagas, 16);
     assert_eq!(cloned.epoch, SecurityEpoch::from_raw(77));
     assert_eq!(cloned.parse_goal, ParseGoal::Module);

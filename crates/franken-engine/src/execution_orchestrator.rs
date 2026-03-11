@@ -573,10 +573,7 @@ impl ExecutionOrchestrator {
         Ok(())
     }
 
-    fn build_cell_close_context(
-        trace_id: &str,
-        budget_ms: u64,
-    ) -> KernelContext<'static, NoCaps> {
+    fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'static, NoCaps> {
         KernelContext::new(Cx::new(
             Self::derive_cell_close_trace_id(trace_id),
             Budget::new(budget_ms),

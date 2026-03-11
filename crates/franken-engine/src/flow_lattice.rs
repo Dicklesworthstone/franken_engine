@@ -15,12 +15,13 @@
 //!
 //! Plan reference: Section 10.2 item 4, 9I.7, bd-1fm.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::ifc_artifacts::{DeclassificationDecision, DeclassificationReceipt, Label};
+use crate::signature_preimage::VerificationKey;
 
 // ---------------------------------------------------------------------------
 // Clearance — sink authorization level
@@ -415,6 +416,7 @@ pub struct Ir2FlowLattice {
     obligations: BTreeMap<String, DeclassificationObligation>,
     events: Vec<FlowLatticeEvent>,
     policy_id: String,
+    trusted_receipt_authorizers: BTreeSet<VerificationKey>,
 }
 
 impl Ir2FlowLattice {
@@ -423,6 +425,7 @@ impl Ir2FlowLattice {
             obligations: BTreeMap::new(),
             events: Vec::new(),
             policy_id: policy_id.into(),
+            trusted_receipt_authorizers: BTreeSet::new(),
         }
     }
 
@@ -436,6 +439,11 @@ impl Ir2FlowLattice {
 
     pub fn obligation(&self, obligation_id: &str) -> Option<&DeclassificationObligation> {
         self.obligations.get(obligation_id)
+    }
+
+    /// Trust a receipt authorizer verification key for runtime receipt use.
+    pub fn trust_receipt_authorizer(&mut self, verification_key: VerificationKey) {
+        self.trusted_receipt_authorizers.insert(verification_key);
     }
 
     /// Register a declassification obligation.
@@ -542,15 +550,32 @@ impl Ir2FlowLattice {
         receipt: &DeclassificationReceipt,
         trace_id: &str,
     ) -> Result<(), FlowLatticeError> {
+        if !self.obligations.contains_key(obligation_id) {
+            return Err(FlowLatticeError::ObligationNotFound {
+                obligation_id: obligation_id.to_string(),
+            });
+        }
+
+        if !self
+            .trusted_receipt_authorizers
+            .contains(&receipt.authorized_by)
+        {
+            return Err(FlowLatticeError::FlowBlocked {
+                detail: format!(
+                    "receipt {} authorizer is not trusted for obligation {obligation_id}",
+                    receipt.receipt_id
+                ),
+            });
+        }
+
         let decision_contract_id = self
             .obligations
             .get(obligation_id)
             .map(|obligation| obligation.decision_contract_id.clone());
-        let obligation = self.obligations.get_mut(obligation_id).ok_or_else(|| {
-            FlowLatticeError::ObligationNotFound {
-                obligation_id: obligation_id.to_string(),
-            }
-        })?;
+        let obligation = self
+            .obligations
+            .get_mut(obligation_id)
+            .expect("checked above");
 
         receipt
             .verify(&receipt.authorized_by)
@@ -574,6 +599,15 @@ impl Ir2FlowLattice {
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
                     "receipt {} source label does not match obligation {obligation_id}",
+                    receipt.receipt_id
+                ),
+            });
+        }
+
+        if receipt.replay_linkage != trace_id {
+            return Err(FlowLatticeError::FlowBlocked {
+                detail: format!(
+                    "receipt {} replay linkage does not match trace {trace_id} for obligation {obligation_id}",
                     receipt.receipt_id
                 ),
             });
@@ -1307,6 +1341,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         receipt.sign(&signing_key).unwrap();
+        lattice.trust_receipt_authorizer(signing_key.verification_key());
 
         lattice
             .use_declassification_with_receipt("obl-2", &receipt, "trace-rt")
@@ -1354,6 +1389,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         denied_receipt.sign(&signing_key).unwrap();
+        lattice.trust_receipt_authorizer(signing_key.verification_key());
 
         let err = lattice
             .use_declassification_with_receipt("obl-3", &denied_receipt, "trace-deny")
@@ -1397,6 +1433,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         tampered_receipt.sign(&signing_key).unwrap();
+        lattice.trust_receipt_authorizer(signing_key.verification_key());
         // Tamper after signing to simulate malicious receipt mutation.
         tampered_receipt.replay_linkage = "trace-modified".to_string();
 
@@ -1416,6 +1453,97 @@ mod tests {
         }
         assert_eq!(lattice.events().len(), event_count_before);
         assert_eq!(lattice.obligation("obl-4").map(|ob| ob.use_count), Some(0));
+    }
+
+    #[test]
+    fn use_declassification_with_untrusted_receipt_authorizer_fails_closed() {
+        let mut lattice = Ir2FlowLattice::new("policy-rt");
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "obl-5".to_string(),
+                source_label: LabelClass::Secret,
+                target_clearance: Clearance::NeverSink,
+                decision_contract_id: "decision-5".to_string(),
+                requires_operator_approval: true,
+                max_uses: 1,
+                use_count: 0,
+            })
+            .unwrap();
+
+        let signing_key = SigningKey::from_bytes([5u8; 32]);
+        let mut receipt = DeclassificationReceipt {
+            receipt_id: "rcpt-untrusted".to_string(),
+            source_label: Label::Secret,
+            sink_clearance: Label::Internal,
+            declassification_route_ref: "declass-5".to_string(),
+            policy_evaluation_summary: "approved".to_string(),
+            loss_assessment_milli: 1,
+            decision: DeclassificationDecision::Allow,
+            authorized_by: signing_key.verification_key(),
+            replay_linkage: "trace-rt".to_string(),
+            timestamp_ms: 1_700_000_000_005,
+            schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        receipt.sign(&signing_key).unwrap();
+
+        let err = lattice
+            .use_declassification_with_receipt("obl-5", &receipt, "trace-rt")
+            .expect_err("untrusted receipt authorizer must fail closed");
+        match err {
+            FlowLatticeError::FlowBlocked { detail } => {
+                assert!(detail.contains("authorizer is not trusted"));
+            }
+            other => panic!("expected FlowBlocked for untrusted authorizer, got {other:?}"),
+        }
+        assert_eq!(lattice.events().len(), 0);
+        assert_eq!(lattice.obligation("obl-5").map(|ob| ob.use_count), Some(0));
+    }
+
+    #[test]
+    fn use_declassification_with_cross_trace_receipt_fails_closed() {
+        let mut lattice = Ir2FlowLattice::new("policy-rt");
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "obl-6".to_string(),
+                source_label: LabelClass::Secret,
+                target_clearance: Clearance::NeverSink,
+                decision_contract_id: "decision-6".to_string(),
+                requires_operator_approval: true,
+                max_uses: 1,
+                use_count: 0,
+            })
+            .unwrap();
+
+        let signing_key = SigningKey::from_bytes([6u8; 32]);
+        let mut receipt = DeclassificationReceipt {
+            receipt_id: "rcpt-cross-trace".to_string(),
+            source_label: Label::Secret,
+            sink_clearance: Label::Internal,
+            declassification_route_ref: "declass-6".to_string(),
+            policy_evaluation_summary: "approved".to_string(),
+            loss_assessment_milli: 2,
+            decision: DeclassificationDecision::Allow,
+            authorized_by: signing_key.verification_key(),
+            replay_linkage: "trace-original".to_string(),
+            timestamp_ms: 1_700_000_000_006,
+            schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        receipt.sign(&signing_key).unwrap();
+        lattice.trust_receipt_authorizer(signing_key.verification_key());
+
+        let err = lattice
+            .use_declassification_with_receipt("obl-6", &receipt, "trace-other")
+            .expect_err("cross-trace receipt replay must fail closed");
+        match err {
+            FlowLatticeError::FlowBlocked { detail } => {
+                assert!(detail.contains("replay linkage does not match trace"));
+            }
+            other => panic!("expected FlowBlocked for cross-trace replay, got {other:?}"),
+        }
+        assert_eq!(lattice.events().len(), 0);
+        assert_eq!(lattice.obligation("obl-6").map(|ob| ob.use_count), Some(0));
     }
 
     // -----------------------------------------------------------------------
@@ -2130,6 +2258,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         receipt.sign(&signing_key).unwrap();
+        lattice.trust_receipt_authorizer(signing_key.verification_key());
 
         let err = lattice
             .use_declassification_with_receipt("obl-m", &receipt, "trace-m")

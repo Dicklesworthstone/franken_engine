@@ -130,6 +130,7 @@ fn runtime_lattice_emits_receipt_linkage_for_authorized_declassification() {
             &signing_key,
         )
         .expect("allow receipt");
+    lattice.trust_receipt_authorizer(signing_key.verification_key());
 
     lattice
         .use_declassification_with_receipt("obl-secret-egress", &receipt, "trace-ifc-runtime")
@@ -198,6 +199,7 @@ fn runtime_lattice_rejects_denied_receipt_and_keeps_obligation_unused() {
         )
         .expect("pipeline returns deny receipt");
     assert_eq!(denied_receipt.decision.to_string(), "deny");
+    lattice.trust_receipt_authorizer(signing_key.verification_key());
 
     let event_count_before = lattice.events().len();
     let err = lattice
@@ -242,6 +244,7 @@ fn runtime_lattice_rejects_tampered_allow_receipt_signature() {
             &signing_key,
         )
         .expect("allow receipt");
+    lattice.trust_receipt_authorizer(signing_key.verification_key());
     tampered_receipt.policy_evaluation_summary = "tampered summary".to_string();
 
     let event_count_before = lattice.events().len();
@@ -427,6 +430,7 @@ fn obligation_max_uses_enforced_after_exhaustion() {
             &signing_key,
         )
         .expect("allow receipt");
+    lattice.trust_receipt_authorizer(signing_key.verification_key());
 
     lattice
         .use_declassification_with_receipt("obl-limited", &receipt, "trace-use-1")
@@ -452,6 +456,95 @@ fn obligation_max_uses_enforced_after_exhaustion() {
         matches!(err, FlowLatticeError::ObligationExhausted { .. })
             || matches!(err, FlowLatticeError::FlowBlocked { .. }),
         "expected obligation exhausted or flow blocked, got: {err:?}"
+    );
+}
+
+#[test]
+fn runtime_lattice_rejects_untrusted_receipt_authorizer() {
+    let mut lattice = Ir2FlowLattice::new("policy-ifc-runtime");
+    lattice
+        .register_obligation(DeclassificationObligation {
+            obligation_id: "obl-secret-egress".to_string(),
+            source_label: LabelClass::Secret,
+            target_clearance: Clearance::NeverSink,
+            decision_contract_id: "decision-contract-ifc".to_string(),
+            requires_operator_approval: true,
+            max_uses: 1,
+            use_count: 0,
+        })
+        .expect("register obligation");
+
+    let mut pipeline = DeclassificationPipeline::default();
+    let signing_key = SigningKey::from_bytes([21u8; 32]);
+    let receipt = pipeline
+        .process(
+            &make_request("declass-secret-internal"),
+            &make_policy(),
+            &low_loss(),
+            &signing_key,
+        )
+        .expect("allow receipt");
+
+    let err = lattice
+        .use_declassification_with_receipt("obl-secret-egress", &receipt, "trace-ifc-runtime")
+        .expect_err("untrusted receipt authorizer must fail closed");
+    match err {
+        FlowLatticeError::FlowBlocked { detail } => {
+            assert!(
+                detail.contains("authorizer is not trusted"),
+                "unexpected error detail: {detail}"
+            );
+        }
+        other => panic!("expected FlowBlocked for untrusted authorizer, got {other:?}"),
+    }
+    assert_eq!(
+        lattice
+            .obligation("obl-secret-egress")
+            .map(|ob| ob.use_count),
+        Some(0)
+    );
+}
+
+#[test]
+fn runtime_lattice_rejects_cross_trace_receipt_replay() {
+    let mut lattice = Ir2FlowLattice::new("policy-ifc-runtime");
+    lattice
+        .register_obligation(DeclassificationObligation {
+            obligation_id: "obl-secret-egress".to_string(),
+            source_label: LabelClass::Secret,
+            target_clearance: Clearance::NeverSink,
+            decision_contract_id: "decision-contract-ifc".to_string(),
+            requires_operator_approval: true,
+            max_uses: 1,
+            use_count: 0,
+        })
+        .expect("register obligation");
+
+    let mut pipeline = DeclassificationPipeline::default();
+    let signing_key = SigningKey::from_bytes([22u8; 32]);
+    let request = make_request("declass-secret-internal");
+    let receipt = pipeline
+        .process(&request, &make_policy(), &low_loss(), &signing_key)
+        .expect("allow receipt");
+    lattice.trust_receipt_authorizer(signing_key.verification_key());
+
+    let err = lattice
+        .use_declassification_with_receipt("obl-secret-egress", &receipt, "trace-ifc-runtime-other")
+        .expect_err("cross-trace replay must fail closed");
+    match err {
+        FlowLatticeError::FlowBlocked { detail } => {
+            assert!(
+                detail.contains("replay linkage does not match trace"),
+                "unexpected error detail: {detail}"
+            );
+        }
+        other => panic!("expected FlowBlocked for cross-trace replay, got {other:?}"),
+    }
+    assert_eq!(
+        lattice
+            .obligation("obl-secret-egress")
+            .map(|ob| ob.use_count),
+        Some(0)
     );
 }
 

@@ -908,9 +908,7 @@ pub fn evaluate(
     // Verdict.
     let verdict = if !regressions.is_empty() && risk_level == RiskLevel::Critical {
         GateVerdict::Fail
-    } else if !regressions.is_empty() || !tail.acceptable {
-        GateVerdict::ConditionalPass
-    } else if evidence.is_overrun() {
+    } else if !regressions.is_empty() || !tail.acceptable || evidence.is_overrun() {
         GateVerdict::ConditionalPass
     } else {
         GateVerdict::Pass

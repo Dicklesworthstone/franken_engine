@@ -505,6 +505,7 @@ fn isqrt_i128(n: i128) -> i128 {
         return 1;
     }
     let mut x = n;
+    #[allow(clippy::manual_div_ceil)]
     let mut y = (x + 1) / 2;
     while y < x {
         x = y;

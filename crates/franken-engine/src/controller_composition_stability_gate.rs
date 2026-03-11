@@ -571,14 +571,13 @@ impl CompositionStabilityGate {
         }
 
         // Check stability assessment.
-        if let Some(assessment) = &evidence.stability_assessment {
-            if assessment_severity(assessment)
+        if let Some(assessment) = &evidence.stability_assessment
+            && assessment_severity(assessment)
                 > assessment_severity(&self.config.max_assessment_severity)
-            {
-                reasons.push(RejectionReason::AssessmentTooSevere {
-                    assessment: *assessment,
-                });
-            }
+        {
+            reasons.push(RejectionReason::AssessmentTooSevere {
+                assessment: *assessment,
+            });
         }
 
         // Check instability signals.

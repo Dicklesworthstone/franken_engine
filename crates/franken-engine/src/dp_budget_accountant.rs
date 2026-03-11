@@ -524,6 +524,7 @@ fn isqrt_millionths(n: i64) -> i64 {
     }
     // Newton's method for integer square root.
     let mut x = n;
+    #[allow(clippy::manual_div_ceil)]
     let mut y = (x + 1) / 2;
     while y < x {
         x = y;

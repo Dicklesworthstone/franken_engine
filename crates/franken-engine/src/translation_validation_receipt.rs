@@ -279,6 +279,7 @@ pub struct TranslationValidationReceipt {
 impl TranslationValidationReceipt {
     /// Create a new receipt.  Computes content hash and leaves signature
     /// as zero (caller must sign via `.sign()`).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sequence: u64,
         optimization_id: &str,
@@ -513,6 +514,7 @@ impl fmt::Display for FailureKind {
 
 impl FailureReceipt {
     /// Create a new failure receipt.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         optimization_id: &str,
         pack_id: &str,
@@ -871,7 +873,7 @@ pub struct ValidationReceiptEmitter {
 }
 
 /// Statistics tracked by the emitter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmitterStats {
     /// Total receipts emitted.
     pub total_receipts: u64,
@@ -893,22 +895,6 @@ pub struct EmitterStats {
     pub verification_failures: u64,
 }
 
-impl Default for EmitterStats {
-    fn default() -> Self {
-        Self {
-            total_receipts: 0,
-            total_proven: 0,
-            total_disproven: 0,
-            total_inconclusive: 0,
-            total_rules_applied: 0,
-            total_cost_improvement_millionths: 0,
-            total_quarantined: 0,
-            total_verifications: 0,
-            verification_failures: 0,
-        }
-    }
-}
-
 /// Input for emitting a validation receipt.
 #[derive(Debug, Clone)]
 pub struct EmitInput {
@@ -928,6 +914,7 @@ pub struct EmitInput {
 
 /// Result of an emit operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum EmitResult {
     /// Receipt was emitted and the optimization is approved.
     Approved {

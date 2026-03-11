@@ -398,6 +398,7 @@ impl SpectralAnalyzer {
         let mixing_time = if spectral_gap > 0 {
             let ratio = lambda_max as i128 * MILLION as i128 / spectral_gap as i128; // λ_max/λ₂ in millionths
             let mixed = ratio.saturating_mul(ln_n as i128) / MILLION as i128;
+            #[allow(clippy::manual_div_ceil)]
             let rounds = (mixed + MILLION as i128 - 1) / MILLION as i128;
             rounds.min(i64::MAX as i128) as i64
         } else {

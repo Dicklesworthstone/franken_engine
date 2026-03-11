@@ -1608,7 +1608,7 @@ mod tests {
             &config,
             epoch(),
         );
-        let report = summarize(&[result.clone()]);
+        let report = summarize(std::slice::from_ref(&result));
         assert_eq!(report.total_workloads, result.workloads_tested);
         assert_eq!(
             report.total_counterexamples,

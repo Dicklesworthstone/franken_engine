@@ -3,8 +3,6 @@
 //! Validates witness generation across surfaces, configurations, analysis
 //! helpers, serde roundtrips, and end-to-end coverage pipelines.
 
-use std::collections::BTreeSet;
-
 use frankenengine_engine::hole_witness_generator::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 

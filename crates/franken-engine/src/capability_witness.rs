@@ -325,6 +325,7 @@ fn isqrt_millionths(val: i64) -> i64 {
         return 0;
     }
     let mut x = val;
+    #[allow(clippy::manual_div_ceil)]
     let mut y = (x + 1) / 2;
     while y < x {
         x = y;

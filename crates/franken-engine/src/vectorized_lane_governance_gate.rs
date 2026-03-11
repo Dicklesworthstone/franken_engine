@@ -784,20 +784,20 @@ pub fn evaluate(
 
     // 3. Cold-start check.
     let cold_impact = cold_start.map(|cs| evaluate_cold_start(cs, config));
-    if let Some(impact) = cold_impact {
-        if !impact.is_acceptable() {
-            blocking_reasons.push(format!("cold-start impact: {impact}"));
-        }
+    if let Some(impact) = cold_impact
+        && !impact.is_acceptable()
+    {
+        blocking_reasons.push(format!("cold-start impact: {impact}"));
     }
 
     // 4. Tail-risk check.
-    if let Some(t) = tail {
-        if t.tail_ratio > config.max_tail_ratio {
-            blocking_reasons.push(format!(
-                "tail ratio {} > max {}",
-                t.tail_ratio, config.max_tail_ratio
-            ));
-        }
+    if let Some(t) = tail
+        && t.tail_ratio > config.max_tail_ratio
+    {
+        blocking_reasons.push(format!(
+            "tail ratio {} > max {}",
+            t.tail_ratio, config.max_tail_ratio
+        ));
     }
 
     // Determine verdict.
@@ -844,6 +844,7 @@ pub fn evaluate(
 }
 
 /// Evaluate a batch of vectorized lanes and produce results with summary.
+#[allow(clippy::type_complexity)]
 pub fn evaluate_batch(
     items: &[(
         ParityEvidence,

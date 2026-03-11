@@ -694,11 +694,9 @@ pub fn compute_tier_distribution(
         .map(|(k, v)| (k.clone(), *v))
         .unwrap_or_else(|| ("none".to_string(), 0));
 
-    let dominance_ratio_millionths = if total_functions > 0 {
-        (dominant_count * MILLIONTHS) / total_functions
-    } else {
-        0
-    };
+    let dominance_ratio_millionths = (dominant_count * MILLIONTHS)
+        .checked_div(total_functions)
+        .unwrap_or(0);
 
     // Compute content hash
     let mut hasher = Sha256::new();

@@ -2709,6 +2709,7 @@ fn isqrt_i64(n: i64) -> i64 {
         return 0;
     }
     let mut x = n;
+    #[allow(clippy::manual_div_ceil)]
     let mut y = (x + 1) / 2;
     while y < x {
         x = y;

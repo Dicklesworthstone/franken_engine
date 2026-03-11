@@ -1071,7 +1071,10 @@ fn render_attestation_summary_unsigned() {
     .unwrap();
     let summary = render_attestation_summary(&attestation);
     assert!(summary.contains("signed=false"), "summary: {summary}");
-    assert!(summary.contains("verifier=2.0.0"), "summary: {summary}");
+    assert!(
+        summary.contains("verifier=integ-verifier@2.0.0"),
+        "summary: {summary}"
+    );
 }
 
 #[test]

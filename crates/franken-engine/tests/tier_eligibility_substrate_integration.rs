@@ -531,6 +531,31 @@ fn evaluate_interpreted_to_baseline_no_feedback_required() {
     assert_eq!(verdict.target_tier, ExecutionTier::Baseline);
 }
 
+#[test]
+fn evaluate_eligibility_uses_policy_min_probe_samples() {
+    let policy = TierEligibilityPolicy {
+        min_probe_samples: 12,
+        min_feedback_stability_millionths: 800_000,
+        ..TierEligibilityPolicy::default()
+    };
+    let mut profile = make_profile(
+        "e-policy-samples",
+        "fn_policy_sensitive",
+        ExecutionTier::Baseline,
+        500,
+        0,
+    );
+    add_probe(&mut profile, ProbeKind::TypeProfile, "s0", 12, 900_000);
+    add_probe(&mut profile, ProbeKind::TypeProfile, "s1", 12, 900_000);
+    add_probe(&mut profile, ProbeKind::TypeProfile, "s2", 8, 900_000);
+    add_probe(&mut profile, ProbeKind::TypeProfile, "s3", 8, 900_000);
+    profile.rehash();
+
+    let verdict = evaluate_eligibility(&profile, &policy);
+    assert!(!verdict.eligible);
+    assert!(verdict.probe_summary.contains("feedback not stable"));
+}
+
 // =========================================================================
 // 9. compute_deopt_rate
 // =========================================================================
@@ -576,7 +601,7 @@ fn feedback_stable_all_probes_sufficient() {
             900_000,
         );
     }
-    assert!(is_feedback_stable(&profile, 800_000));
+    assert!(is_feedback_stable(&profile, 10, 800_000));
 }
 
 #[test]
@@ -587,17 +612,29 @@ fn feedback_unstable_half_insufficient() {
     add_probe(&mut profile, ProbeKind::TypeProfile, "s2", 3, 900_000);
     add_probe(&mut profile, ProbeKind::TypeProfile, "s3", 5, 900_000);
     // 50% stable (500_000) < 800_000 threshold
-    assert!(!is_feedback_stable(&profile, 800_000));
+    assert!(!is_feedback_stable(&profile, 10, 800_000));
     // But passes a lower threshold
-    assert!(is_feedback_stable(&profile, 400_000));
+    assert!(is_feedback_stable(&profile, 10, 400_000));
+}
+
+#[test]
+fn feedback_stability_respects_min_probe_samples() {
+    let mut profile = TierProfile::new("fs-policy", "fn_policy_sensitive");
+    add_probe(&mut profile, ProbeKind::TypeProfile, "s0", 12, 900_000);
+    add_probe(&mut profile, ProbeKind::TypeProfile, "s1", 12, 900_000);
+    add_probe(&mut profile, ProbeKind::TypeProfile, "s2", 8, 900_000);
+    add_probe(&mut profile, ProbeKind::TypeProfile, "s3", 8, 900_000);
+
+    assert!(is_feedback_stable(&profile, 10, 500_000));
+    assert!(!is_feedback_stable(&profile, 12, 800_000));
 }
 
 #[test]
 fn feedback_no_probes_not_stable() {
     let profile = TierProfile::new("fs-none", "fn_no_probes");
-    assert!(!is_feedback_stable(&profile, 800_000));
+    assert!(!is_feedback_stable(&profile, 10, 800_000));
     // Even with zero threshold, no probes means not stable.
-    assert!(!is_feedback_stable(&profile, 0));
+    assert!(!is_feedback_stable(&profile, 10, 0));
 }
 
 // =========================================================================

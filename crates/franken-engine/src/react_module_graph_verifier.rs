@@ -676,12 +676,12 @@ pub fn detect_format_mismatches(graph: &ModuleGraph) -> Vec<(GraphNodeId, GraphN
         .collect();
     let mut mismatches = Vec::new();
     for edge in &graph.edges {
-        if let Some(from_node) = node_map.get(edge.from_node.as_str()) {
-            if let Some(to_node) = node_map.get(edge.to_node.as_str()) {
-                if from_node.format == ModuleFormat::Cjs && to_node.format == ModuleFormat::Esm {
-                    mismatches.push((edge.from_node.clone(), edge.to_node.clone()));
-                }
-            }
+        if let Some(from_node) = node_map.get(edge.from_node.as_str())
+            && let Some(to_node) = node_map.get(edge.to_node.as_str())
+            && from_node.format == ModuleFormat::Cjs
+            && to_node.format == ModuleFormat::Esm
+        {
+            mismatches.push((edge.from_node.clone(), edge.to_node.clone()));
         }
     }
     mismatches

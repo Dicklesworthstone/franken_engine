@@ -6,15 +6,13 @@
 //! suppression, bundle manifests, deterministic hashing, serde roundtrips, and
 //! end-to-end escalation workflows.
 
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use frankenengine_engine::hindsight_trace_escalator::{
-    BundleArtifactSpec, EscalationDecision, EscalationLevel, EscalationPolicy,
-    EscalationTrigger, EscalationVerdict, EscalatorState, EscalatorSummary,
-    HindsightTraceEscalator, SupportBundleArtifact, SupportBundleManifest,
-    TriggerCategory, TriggerSeverity, ESCALATION_BEAD_ID, ESCALATION_SCHEMA_VERSION,
-    standard_artifact_specs,
+    BundleArtifactSpec, ESCALATION_BEAD_ID, ESCALATION_SCHEMA_VERSION, EscalationDecision,
+    EscalationLevel, EscalationPolicy, EscalationTrigger, EscalationVerdict, EscalatorState,
+    EscalatorSummary, HindsightTraceEscalator, SupportBundleArtifact, SupportBundleManifest,
+    TriggerCategory, TriggerSeverity, standard_artifact_specs,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -72,7 +70,12 @@ fn escalation_level_ordering_full() {
     ];
     for i in 0..levels.len() {
         for j in (i + 1)..levels.len() {
-            assert!(levels[i] < levels[j], "{:?} should be < {:?}", levels[i], levels[j]);
+            assert!(
+                levels[i] < levels[j],
+                "{:?} should be < {:?}",
+                levels[i],
+                levels[j]
+            );
         }
     }
 }
@@ -132,7 +135,10 @@ fn trigger_category_all_variants_display() {
         (TriggerCategory::Regression, "regression"),
         (TriggerCategory::OperatorRequest, "operator_request"),
         (TriggerCategory::ResourceExhaustion, "resource_exhaustion"),
-        (TriggerCategory::DeterminismViolation, "determinism_violation"),
+        (
+            TriggerCategory::DeterminismViolation,
+            "determinism_violation",
+        ),
     ];
     for (cat, expected) in categories {
         assert_eq!(cat.to_string(), expected);
@@ -171,10 +177,22 @@ fn trigger_severity_ordering() {
 
 #[test]
 fn trigger_severity_minimum_escalation_mapping() {
-    assert_eq!(TriggerSeverity::Info.minimum_escalation(), EscalationLevel::Extended);
-    assert_eq!(TriggerSeverity::Warning.minimum_escalation(), EscalationLevel::Extended);
-    assert_eq!(TriggerSeverity::Critical.minimum_escalation(), EscalationLevel::Full);
-    assert_eq!(TriggerSeverity::Fatal.minimum_escalation(), EscalationLevel::Forensic);
+    assert_eq!(
+        TriggerSeverity::Info.minimum_escalation(),
+        EscalationLevel::Extended
+    );
+    assert_eq!(
+        TriggerSeverity::Warning.minimum_escalation(),
+        EscalationLevel::Extended
+    );
+    assert_eq!(
+        TriggerSeverity::Critical.minimum_escalation(),
+        EscalationLevel::Full
+    );
+    assert_eq!(
+        TriggerSeverity::Fatal.minimum_escalation(),
+        EscalationLevel::Forensic
+    );
 }
 
 #[test]
@@ -211,7 +229,12 @@ fn trigger_severity_serde_roundtrip() {
 
 #[test]
 fn trigger_construction_fields() {
-    let t = make_trigger("trig-1", TriggerCategory::SecurityEvent, TriggerSeverity::Critical, epoch(42));
+    let t = make_trigger(
+        "trig-1",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Critical,
+        epoch(42),
+    );
     assert_eq!(t.trigger_id, "trig-1");
     assert_eq!(t.category, TriggerCategory::SecurityEvent);
     assert_eq!(t.severity, TriggerSeverity::Critical);
@@ -223,36 +246,86 @@ fn trigger_construction_fields() {
 
 #[test]
 fn trigger_content_hash_deterministic() {
-    let t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(10));
-    let t2 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(10));
+    let t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
+    let t2 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
     assert_eq!(t1.content_hash(), t2.content_hash());
 }
 
 #[test]
 fn trigger_content_hash_varies_by_id() {
-    let t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(10));
-    let t2 = make_trigger("t-2", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(10));
+    let t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
+    let t2 = make_trigger(
+        "t-2",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
     assert_ne!(t1.content_hash(), t2.content_hash());
 }
 
 #[test]
 fn trigger_content_hash_varies_by_category() {
-    let t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(10));
-    let t2 = make_trigger("t-1", TriggerCategory::SecurityEvent, TriggerSeverity::Warning, epoch(10));
+    let t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
+    let t2 = make_trigger(
+        "t-1",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
     assert_ne!(t1.content_hash(), t2.content_hash());
 }
 
 #[test]
 fn trigger_content_hash_varies_by_epoch() {
-    let t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(10));
-    let t2 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(20));
+    let t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
+    let t2 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(20),
+    );
     assert_ne!(t1.content_hash(), t2.content_hash());
 }
 
 #[test]
 fn trigger_with_correlation_id_hash_includes_it() {
-    let mut t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(10));
-    let mut t2 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(10));
+    let mut t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
+    let mut t2 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(10),
+    );
     t1.correlation_id = Some("corr-a".into());
     t2.correlation_id = Some("corr-b".into());
     assert_ne!(t1.content_hash(), t2.content_hash());
@@ -260,7 +333,12 @@ fn trigger_with_correlation_id_hash_includes_it() {
 
 #[test]
 fn trigger_serde_roundtrip_with_metadata() {
-    let mut t = make_trigger("t-meta", TriggerCategory::SecurityEvent, TriggerSeverity::Fatal, epoch(5));
+    let mut t = make_trigger(
+        "t-meta",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Fatal,
+        epoch(5),
+    );
     t.correlation_id = Some("corr-99".into());
     t.metadata.insert("key1".into(), "val1".into());
     t.metadata.insert("key2".into(), "val2".into());
@@ -294,7 +372,11 @@ fn standard_artifacts_nonempty_labels() {
 #[test]
 fn standard_artifacts_have_positive_estimates() {
     for spec in standard_artifact_specs() {
-        assert!(spec.estimated_bytes > 0, "artifact {} has zero bytes", spec.label);
+        assert!(
+            spec.estimated_bytes > 0,
+            "artifact {} has zero bytes",
+            spec.label
+        );
     }
 }
 
@@ -337,21 +419,36 @@ fn policy_default_forbids_forensic() {
 #[test]
 fn policy_resolve_severity_info_gives_extended() {
     let p = default_policy();
-    let t = make_trigger("t", TriggerCategory::Regression, TriggerSeverity::Info, epoch(1));
+    let t = make_trigger(
+        "t",
+        TriggerCategory::Regression,
+        TriggerSeverity::Info,
+        epoch(1),
+    );
     assert_eq!(p.resolve_level(&t), EscalationLevel::Extended);
 }
 
 #[test]
 fn policy_resolve_severity_critical_gives_full() {
     let p = default_policy();
-    let t = make_trigger("t", TriggerCategory::Regression, TriggerSeverity::Critical, epoch(1));
+    let t = make_trigger(
+        "t",
+        TriggerCategory::Regression,
+        TriggerSeverity::Critical,
+        epoch(1),
+    );
     assert_eq!(p.resolve_level(&t), EscalationLevel::Full);
 }
 
 #[test]
 fn policy_resolve_fatal_clamped_to_full_without_forensic() {
     let p = default_policy();
-    let t = make_trigger("t", TriggerCategory::SecurityEvent, TriggerSeverity::Fatal, epoch(1));
+    let t = make_trigger(
+        "t",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Fatal,
+        epoch(1),
+    );
     assert_eq!(p.resolve_level(&t), EscalationLevel::Full);
 }
 
@@ -359,7 +456,12 @@ fn policy_resolve_fatal_clamped_to_full_without_forensic() {
 fn policy_resolve_fatal_allowed_forensic() {
     let mut p = default_policy();
     p.allow_forensic = true;
-    let t = make_trigger("t", TriggerCategory::SecurityEvent, TriggerSeverity::Fatal, epoch(1));
+    let t = make_trigger(
+        "t",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Fatal,
+        epoch(1),
+    );
     assert_eq!(p.resolve_level(&t), EscalationLevel::Forensic);
 }
 
@@ -372,7 +474,12 @@ fn policy_category_override_takes_maximum() {
         EscalationLevel::Forensic,
     );
     // Info severity minimum is Extended, but category override is Forensic → Forensic wins.
-    let t = make_trigger("t", TriggerCategory::PerformanceAnomaly, TriggerSeverity::Info, epoch(1));
+    let t = make_trigger(
+        "t",
+        TriggerCategory::PerformanceAnomaly,
+        TriggerSeverity::Info,
+        epoch(1),
+    );
     assert_eq!(p.resolve_level(&t), EscalationLevel::Forensic);
 }
 
@@ -384,7 +491,12 @@ fn policy_severity_wins_over_low_override() {
         EscalationLevel::Extended,
     );
     // Critical severity minimum is Full, category override is Extended → Full wins.
-    let t = make_trigger("t", TriggerCategory::Regression, TriggerSeverity::Critical, epoch(1));
+    let t = make_trigger(
+        "t",
+        TriggerCategory::Regression,
+        TriggerSeverity::Critical,
+        epoch(1),
+    );
     assert_eq!(p.resolve_level(&t), EscalationLevel::Full);
 }
 
@@ -440,7 +552,8 @@ fn policy_content_hash_changes_with_config() {
 #[test]
 fn policy_serde_roundtrip() {
     let mut p = default_policy();
-    p.category_overrides.insert("regression".into(), EscalationLevel::Full);
+    p.category_overrides
+        .insert("regression".into(), EscalationLevel::Full);
     p.allow_forensic = true;
     p.max_active_escalations = 42;
     let json = serde_json::to_string(&p).unwrap();
@@ -454,7 +567,9 @@ fn policy_serde_roundtrip() {
 
 #[test]
 fn verdict_display_approved() {
-    let v = EscalationVerdict::Approved { level: EscalationLevel::Extended };
+    let v = EscalationVerdict::Approved {
+        level: EscalationLevel::Extended,
+    };
     assert_eq!(v.to_string(), "approved(extended)");
 }
 
@@ -487,9 +602,17 @@ fn verdict_display_below_threshold() {
 #[test]
 fn verdict_serde_all_variants() {
     let verdicts = vec![
-        EscalationVerdict::Approved { level: EscalationLevel::Full },
-        EscalationVerdict::SuppressedCapacity { active_count: 3, max_allowed: 10 },
-        EscalationVerdict::SuppressedCooldown { correlation_id: "c-1".into(), epochs_remaining: 2 },
+        EscalationVerdict::Approved {
+            level: EscalationLevel::Full,
+        },
+        EscalationVerdict::SuppressedCapacity {
+            active_count: 3,
+            max_allowed: 10,
+        },
+        EscalationVerdict::SuppressedCooldown {
+            correlation_id: "c-1".into(),
+            epochs_remaining: 2,
+        },
         EscalationVerdict::SuppressedBelowThreshold,
     ];
     for v in verdicts {
@@ -534,7 +657,12 @@ fn escalator_state_serde_roundtrip() {
 #[test]
 fn escalator_approves_warning_trigger() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d = esc.evaluate(t);
     assert!(matches!(d.verdict, EscalationVerdict::Approved { .. }));
     assert_eq!(esc.state.total_approved, 1);
@@ -544,16 +672,31 @@ fn escalator_approves_warning_trigger() {
 #[test]
 fn escalator_approves_critical_at_full_level() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::SecurityEvent, TriggerSeverity::Critical, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Critical,
+        epoch(100),
+    );
     let d = esc.evaluate(t);
     assert_eq!(d.resolved_level, EscalationLevel::Full);
-    assert!(matches!(d.verdict, EscalationVerdict::Approved { level: EscalationLevel::Full }));
+    assert!(matches!(
+        d.verdict,
+        EscalationVerdict::Approved {
+            level: EscalationLevel::Full
+        }
+    ));
 }
 
 #[test]
 fn approved_decision_includes_artifacts() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Critical, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Critical,
+        epoch(100),
+    );
     let d = esc.evaluate(t);
     assert!(!d.artifacts_included.is_empty());
     assert!(d.estimated_bundle_bytes > 0);
@@ -562,7 +705,12 @@ fn approved_decision_includes_artifacts() {
 #[test]
 fn approved_decision_has_schema_version() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d = esc.evaluate(t);
     assert_eq!(d.schema_version, ESCALATION_SCHEMA_VERSION);
 }
@@ -570,7 +718,12 @@ fn approved_decision_has_schema_version() {
 #[test]
 fn approved_decision_hash_nonempty() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d = esc.evaluate(t);
     assert!(!d.decision_hash.is_empty());
 }
@@ -586,14 +739,30 @@ fn escalator_suppresses_at_capacity() {
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
     // Fill capacity.
     for i in 0..2 {
-        let t = make_trigger(&format!("t-{i}"), TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+        let t = make_trigger(
+            &format!("t-{i}"),
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            epoch(100),
+        );
         let d = esc.evaluate(t);
         assert!(matches!(d.verdict, EscalationVerdict::Approved { .. }));
     }
     // Third should be suppressed.
-    let t = make_trigger("t-2", TriggerCategory::SecurityEvent, TriggerSeverity::Critical, epoch(100));
+    let t = make_trigger(
+        "t-2",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Critical,
+        epoch(100),
+    );
     let d = esc.evaluate(t);
-    assert!(matches!(d.verdict, EscalationVerdict::SuppressedCapacity { active_count: 2, max_allowed: 2 }));
+    assert!(matches!(
+        d.verdict,
+        EscalationVerdict::SuppressedCapacity {
+            active_count: 2,
+            max_allowed: 2
+        }
+    ));
     assert_eq!(esc.state.total_suppressed, 1);
 }
 
@@ -602,7 +771,12 @@ fn capacity_suppressed_decision_has_no_artifacts() {
     let mut policy = default_policy();
     policy.max_active_escalations = 0;
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d = esc.evaluate(t);
     assert!(d.artifacts_included.is_empty());
     assert_eq!(d.estimated_bundle_bytes, 0);
@@ -613,13 +787,23 @@ fn complete_escalation_frees_capacity() {
     let mut policy = default_policy();
     policy.max_active_escalations = 1;
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     esc.evaluate(t);
     assert_eq!(esc.state.active_escalations, 1);
     esc.complete_escalation();
     assert_eq!(esc.state.active_escalations, 0);
     // Now approved again.
-    let t2 = make_trigger("t-2", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t2 = make_trigger(
+        "t-2",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d = esc.evaluate(t2);
     assert!(matches!(d.verdict, EscalationVerdict::Approved { .. }));
 }
@@ -640,16 +824,29 @@ fn cooldown_suppresses_same_correlation_id() {
     let mut policy = default_policy();
     policy.cooldown_epochs = 5;
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
-    let mut t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let mut t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t1.correlation_id = Some("corr-a".into());
     let d1 = esc.evaluate(t1);
     assert!(matches!(d1.verdict, EscalationVerdict::Approved { .. }));
     esc.complete_escalation();
     // Same correlation_id → suppressed.
-    let mut t2 = make_trigger("t-2", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let mut t2 = make_trigger(
+        "t-2",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t2.correlation_id = Some("corr-a".into());
     let d2 = esc.evaluate(t2);
-    assert!(matches!(d2.verdict, EscalationVerdict::SuppressedCooldown { .. }));
+    assert!(matches!(
+        d2.verdict,
+        EscalationVerdict::SuppressedCooldown { .. }
+    ));
 }
 
 #[test]
@@ -657,12 +854,22 @@ fn cooldown_does_not_affect_different_correlation_id() {
     let mut policy = default_policy();
     policy.cooldown_epochs = 10;
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
-    let mut t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let mut t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t1.correlation_id = Some("corr-a".into());
     esc.evaluate(t1);
     esc.complete_escalation();
     // Different correlation_id → approved.
-    let mut t2 = make_trigger("t-2", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let mut t2 = make_trigger(
+        "t-2",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t2.correlation_id = Some("corr-b".into());
     let d2 = esc.evaluate(t2);
     assert!(matches!(d2.verdict, EscalationVerdict::Approved { .. }));
@@ -673,13 +880,23 @@ fn cooldown_expires_after_advance_epoch() {
     let mut policy = default_policy();
     policy.cooldown_epochs = 3;
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
-    let mut t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let mut t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t1.correlation_id = Some("corr-a".into());
     esc.evaluate(t1);
     esc.complete_escalation();
     // Advance past cooldown (100 + 3 = 103, advance to 200).
     esc.advance_epoch(epoch(200));
-    let mut t2 = make_trigger("t-2", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(200));
+    let mut t2 = make_trigger(
+        "t-2",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(200),
+    );
     t2.correlation_id = Some("corr-a".into());
     let d2 = esc.evaluate(t2);
     assert!(matches!(d2.verdict, EscalationVerdict::Approved { .. }));
@@ -691,10 +908,20 @@ fn no_correlation_id_skips_cooldown_check() {
     policy.cooldown_epochs = 100;
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
     // No correlation_id on either trigger.
-    let t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     esc.evaluate(t1);
     esc.complete_escalation();
-    let t2 = make_trigger("t-2", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t2 = make_trigger(
+        "t-2",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d2 = esc.evaluate(t2);
     assert!(matches!(d2.verdict, EscalationVerdict::Approved { .. }));
 }
@@ -728,7 +955,12 @@ fn below_threshold_when_resolved_minimal() {
     // So this branch is effectively dead for default trigger types. Let's just
     // verify that a standard trigger never gets below-threshold.
     let esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Info, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Info,
+        epoch(100),
+    );
     let level = esc.policy.resolve_level(&t);
     assert!(level.depth() > EscalationLevel::Minimal.depth());
 }
@@ -749,7 +981,12 @@ fn advance_epoch_cleans_expired_cooldowns() {
     let mut policy = default_policy();
     policy.cooldown_epochs = 5;
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
-    let mut t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let mut t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t.correlation_id = Some("c-1".into());
     esc.evaluate(t);
     assert!(!esc.state.cooldowns.is_empty());
@@ -819,10 +1056,20 @@ fn category_counts_increment() {
 #[test]
 fn level_counts_increment() {
     let mut esc = new_escalator();
-    let t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     esc.evaluate(t1);
     esc.complete_escalation();
-    let t2 = make_trigger("t-2", TriggerCategory::Regression, TriggerSeverity::Critical, epoch(100));
+    let t2 = make_trigger(
+        "t-2",
+        TriggerCategory::Regression,
+        TriggerSeverity::Critical,
+        epoch(100),
+    );
     esc.evaluate(t2);
     // Warning triggers resolve to Extended, Critical to Full.
     assert_eq!(esc.state.level_counts.get("extended"), Some(&1));
@@ -837,8 +1084,18 @@ fn level_counts_increment() {
 fn decision_hash_deterministic_across_instances() {
     let mut e1 = new_escalator();
     let mut e2 = new_escalator();
-    let t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
-    let t2 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
+    let t2 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d1 = e1.evaluate(t1);
     let d2 = e2.evaluate(t2);
     assert_eq!(d1.decision_hash, d2.decision_hash);
@@ -847,10 +1104,20 @@ fn decision_hash_deterministic_across_instances() {
 #[test]
 fn decision_hash_differs_for_different_triggers() {
     let mut esc = new_escalator();
-    let t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d1 = esc.evaluate(t1);
     esc.complete_escalation();
-    let t2 = make_trigger("t-2", TriggerCategory::SecurityEvent, TriggerSeverity::Critical, epoch(100));
+    let t2 = make_trigger(
+        "t-2",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Critical,
+        epoch(100),
+    );
     let d2 = esc.evaluate(t2);
     assert_ne!(d1.decision_hash, d2.decision_hash);
 }
@@ -862,7 +1129,12 @@ fn decision_hash_differs_for_different_triggers() {
 #[test]
 fn summary_reflects_state() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Critical, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Critical,
+        epoch(100),
+    );
     esc.evaluate(t);
     let summary = esc.summary();
     assert_eq!(summary.total_approved, 1);
@@ -875,7 +1147,12 @@ fn summary_reflects_state() {
 #[test]
 fn summary_serde_roundtrip() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     esc.evaluate(t);
     let summary = esc.summary();
     let json = serde_json::to_string(&summary).unwrap();
@@ -888,11 +1165,21 @@ fn summary_cooldown_count_tracks_active_cooldowns() {
     let mut policy = default_policy();
     policy.cooldown_epochs = 10;
     let mut esc = HindsightTraceEscalator::new(policy, epoch(100));
-    let mut t1 = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let mut t1 = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t1.correlation_id = Some("c-1".into());
     esc.evaluate(t1);
     esc.complete_escalation();
-    let mut t2 = make_trigger("t-2", TriggerCategory::SecurityEvent, TriggerSeverity::Warning, epoch(100));
+    let mut t2 = make_trigger(
+        "t-2",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t2.correlation_id = Some("c-2".into());
     esc.evaluate(t2);
     let summary = esc.summary();
@@ -906,7 +1193,12 @@ fn summary_cooldown_count_tracks_active_cooldowns() {
 #[test]
 fn support_bundle_from_decision() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let decision = esc.evaluate(t);
     let artifacts = vec![
         SupportBundleArtifact {
@@ -960,7 +1252,12 @@ fn support_bundle_manifest_serde_roundtrip() {
 #[test]
 fn support_bundle_empty_artifacts() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let decision = esc.evaluate(t);
     let manifest = SupportBundleManifest::from_decision(&decision, "empty-bundle", vec![]);
     assert_eq!(manifest.total_bytes, 0);
@@ -974,7 +1271,12 @@ fn support_bundle_empty_artifacts() {
 #[test]
 fn escalator_serde_roundtrip() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     esc.evaluate(t);
     let json = serde_json::to_string(&esc).unwrap();
     let back: HindsightTraceEscalator = serde_json::from_str(&json).unwrap();
@@ -984,7 +1286,12 @@ fn escalator_serde_roundtrip() {
 #[test]
 fn escalation_decision_serde_roundtrip() {
     let mut esc = new_escalator();
-    let t = make_trigger("t-1", TriggerCategory::SecurityEvent, TriggerSeverity::Critical, epoch(100));
+    let t = make_trigger(
+        "t-1",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Critical,
+        epoch(100),
+    );
     let d = esc.evaluate(t);
     let json = serde_json::to_string(&d).unwrap();
     let back: EscalationDecision = serde_json::from_str(&json).unwrap();
@@ -1017,24 +1324,45 @@ fn end_to_end_escalation_lifecycle() {
     assert_eq!(esc.state.active_escalations, 3);
 
     // 2. Next trigger suppressed (capacity).
-    let t4 = make_trigger("lifecycle-3", TriggerCategory::SecurityEvent, TriggerSeverity::Warning, epoch(100));
+    let t4 = make_trigger(
+        "lifecycle-3",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     let d4 = esc.evaluate(t4);
-    assert!(matches!(d4.verdict, EscalationVerdict::SuppressedCapacity { .. }));
+    assert!(matches!(
+        d4.verdict,
+        EscalationVerdict::SuppressedCapacity { .. }
+    ));
 
     // 3. Complete one escalation.
     esc.complete_escalation();
     assert_eq!(esc.state.active_escalations, 2);
 
     // 4. New trigger approved.
-    let t5 = make_trigger("lifecycle-4", TriggerCategory::PerformanceAnomaly, TriggerSeverity::Critical, epoch(100));
+    let t5 = make_trigger(
+        "lifecycle-4",
+        TriggerCategory::PerformanceAnomaly,
+        TriggerSeverity::Critical,
+        epoch(100),
+    );
     let d5 = esc.evaluate(t5);
     assert!(matches!(d5.verdict, EscalationVerdict::Approved { .. }));
 
     // 5. Same correlation ID suppressed by cooldown.
-    let mut t6 = make_trigger("lifecycle-5", TriggerCategory::Regression, TriggerSeverity::Warning, epoch(100));
+    let mut t6 = make_trigger(
+        "lifecycle-5",
+        TriggerCategory::Regression,
+        TriggerSeverity::Warning,
+        epoch(100),
+    );
     t6.correlation_id = Some("corr-0".into());
     let d6 = esc.evaluate(t6);
-    assert!(matches!(d6.verdict, EscalationVerdict::SuppressedCooldown { .. }));
+    assert!(matches!(
+        d6.verdict,
+        EscalationVerdict::SuppressedCooldown { .. }
+    ));
 
     // 6. Advance epoch past cooldowns.
     esc.advance_epoch(epoch(200));
@@ -1098,7 +1426,11 @@ fn mixed_severity_workflow() {
             epoch(100),
         );
         let d = esc.evaluate(t);
-        assert_eq!(d.resolved_level, *expected_level, "severity {:?} should resolve to {:?}", sev, expected_level);
+        assert_eq!(
+            d.resolved_level, *expected_level,
+            "severity {:?} should resolve to {:?}",
+            sev, expected_level
+        );
         esc.complete_escalation();
     }
 }

@@ -956,7 +956,7 @@ fn render_attestation_summary_contains_verifier_info() {
     let attestation = generate_attestation(&input).expect("create attestation");
     let summary = render_attestation_summary(&attestation);
     assert!(!summary.is_empty());
-    assert!(summary.contains("v1.2.0")); // verifier_version
+    assert!(summary.contains("verifier=Verifier@v1.2.0"));
     assert!(summary.contains("signed=true"));
 }
 

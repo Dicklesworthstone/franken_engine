@@ -258,7 +258,7 @@ impl ControllerConfig {
 // ---------------------------------------------------------------------------
 
 /// Mutable state for one PI controller instance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControllerState {
     /// Accumulated integrator value (in nanoseconds, clamped).
     pub integrator_ns: i64,
@@ -274,18 +274,7 @@ pub struct ControllerState {
     pub emergency_count: u64,
 }
 
-impl Default for ControllerState {
-    fn default() -> Self {
-        Self {
-            integrator_ns: 0,
-            epoch_count: 0,
-            last_error_ns: 0,
-            last_output_millionths: 0,
-            emergency_active: false,
-            emergency_count: 0,
-        }
-    }
-}
+// Default derived — all fields zero/false.
 
 // ---------------------------------------------------------------------------
 // Latency observation
@@ -564,19 +553,19 @@ impl FeedbackPolicy {
         let mut hasher = Sha256::new();
         hasher.update(self.schema_version.as_bytes());
         hasher.update(self.policy_id.as_bytes());
-        hasher.update(&(self.controllers.len() as u64).to_le_bytes());
+        hasher.update((self.controllers.len() as u64).to_le_bytes());
         for (key, config) in &self.controllers {
             hasher.update(key.as_bytes());
             hasher.update(config.content_hash().as_bytes());
         }
-        hasher.update(&(self.targets.len() as u64).to_le_bytes());
+        hasher.update((self.targets.len() as u64).to_le_bytes());
         for target in &self.targets {
-            hasher.update(&target.target_ns.to_le_bytes());
-            hasher.update(&target.deadband_ns.to_le_bytes());
-            hasher.update(&target.emergency_ns.to_le_bytes());
+            hasher.update(target.target_ns.to_le_bytes());
+            hasher.update(target.deadband_ns.to_le_bytes());
+            hasher.update(target.emergency_ns.to_le_bytes());
         }
-        hasher.update(&[u8::from(self.enabled)]);
-        hasher.update(&self.emergency_multiplier_millionths.to_le_bytes());
+        hasher.update([u8::from(self.enabled)]);
+        hasher.update(self.emergency_multiplier_millionths.to_le_bytes());
         hex_encode(&hasher.finalize())
     }
 
@@ -827,10 +816,10 @@ impl FeedbackCoordinator {
                 });
             let mut controller = PiController::new(config.clone(), target);
             // Preserve state if config hash matches.
-            if let Some(existing) = self.controllers.get(key) {
-                if existing.config.content_hash() == config.content_hash() {
-                    controller.state = existing.state.clone();
-                }
+            if let Some(existing) = self.controllers.get(key)
+                && existing.config.content_hash() == config.content_hash()
+            {
+                controller.state = existing.state.clone();
             }
             new_controllers.insert(key.clone(), controller);
         }
@@ -1598,8 +1587,10 @@ mod tests {
 
     #[test]
     fn disabled_policy_skips_tick() {
-        let mut policy = FeedbackPolicy::default();
-        policy.enabled = false;
+        let mut policy = FeedbackPolicy {
+            enabled: false,
+            ..Default::default()
+        };
         policy.controllers.insert(
             "test".into(),
             ControllerConfig {

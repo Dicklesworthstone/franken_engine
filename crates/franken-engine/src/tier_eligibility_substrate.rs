@@ -590,7 +590,11 @@ pub fn compute_deopt_rate(profile: &TierProfile) -> u64 {
 /// Stability is measured as the fraction of probes that have collected
 /// at least `min_probe_samples` samples. Returns true if that fraction
 /// (in millionths) meets or exceeds `stability_threshold`.
-pub fn is_feedback_stable(profile: &TierProfile, stability_threshold: u64) -> bool {
+pub fn is_feedback_stable(
+    profile: &TierProfile,
+    min_probe_samples: u64,
+    stability_threshold: u64,
+) -> bool {
     if profile.probes.is_empty() {
         // No probes means no feedback; not stable.
         return false;
@@ -598,7 +602,7 @@ pub fn is_feedback_stable(profile: &TierProfile, stability_threshold: u64) -> bo
     let sufficient_count = profile
         .probes
         .iter()
-        .filter(|p| p.sample_count >= 10)
+        .filter(|p| p.sample_count >= min_probe_samples)
         .count() as u64;
     let total = profile.probes.len() as u64;
     let stability_millionths = sufficient_count
@@ -688,7 +692,11 @@ pub fn evaluate_eligibility(
 
     // Check 4: feedback stability (only for tiers above Baseline)
     if tier_rank(target) >= tier_rank(ExecutionTier::Optimized) {
-        if is_feedback_stable(profile, policy.min_feedback_stability_millionths) {
+        if is_feedback_stable(
+            profile,
+            policy.min_probe_samples,
+            policy.min_feedback_stability_millionths,
+        ) {
             reasons.push(TierTransitionReason::TypeFeedbackStable);
         } else {
             rejection_reasons.push("feedback not stable".to_string());
@@ -1181,7 +1189,7 @@ mod tests {
     #[test]
     fn is_feedback_stable_no_probes() {
         let profile = TierProfile::new("p14", "fn_no_probes");
-        assert!(!is_feedback_stable(&profile, 800_000));
+        assert!(!is_feedback_stable(&profile, 10, 800_000));
     }
 
     #[test]
@@ -1196,7 +1204,7 @@ mod tests {
                 900_000,
             );
         }
-        assert!(is_feedback_stable(&profile, 800_000));
+        assert!(is_feedback_stable(&profile, 10, 800_000));
     }
 
     #[test]
@@ -1208,9 +1216,21 @@ mod tests {
         add_probe(&mut profile, ProbeKind::TypeProfile, "s2", 3, 900_000);
         add_probe(&mut profile, ProbeKind::TypeProfile, "s3", 5, 900_000);
         // 50% stable (500_000) — below 800_000 threshold.
-        assert!(!is_feedback_stable(&profile, 800_000));
+        assert!(!is_feedback_stable(&profile, 10, 800_000));
         // But above a lower threshold.
-        assert!(is_feedback_stable(&profile, 400_000));
+        assert!(is_feedback_stable(&profile, 10, 400_000));
+    }
+
+    #[test]
+    fn is_feedback_stable_respects_min_probe_samples() {
+        let mut profile = TierProfile::new("p16b", "fn_policy_sensitive");
+        add_probe(&mut profile, ProbeKind::TypeProfile, "s0", 12, 900_000);
+        add_probe(&mut profile, ProbeKind::TypeProfile, "s1", 12, 900_000);
+        add_probe(&mut profile, ProbeKind::TypeProfile, "s2", 8, 900_000);
+        add_probe(&mut profile, ProbeKind::TypeProfile, "s3", 8, 900_000);
+
+        assert!(is_feedback_stable(&profile, 10, 500_000));
+        assert!(!is_feedback_stable(&profile, 12, 800_000));
     }
 
     // -- build_eligibility_report --
@@ -1567,6 +1587,27 @@ mod tests {
         let verdict = evaluate_eligibility(&profile, &policy);
         assert!(verdict.eligible);
         assert_eq!(verdict.target_tier, ExecutionTier::Baseline);
+    }
+
+    #[test]
+    fn evaluate_eligibility_respects_policy_min_probe_samples() {
+        let policy = TierEligibilityPolicy {
+            min_probe_samples: 12,
+            min_feedback_stability_millionths: 800_000,
+            ..TierEligibilityPolicy::default()
+        };
+        let mut profile = TierProfile::new("p-policy-samples", "fn_policy_sensitive");
+        profile.current_tier = ExecutionTier::Baseline;
+        profile.invocation_count = 500;
+        add_probe(&mut profile, ProbeKind::TypeProfile, "s0", 12, 900_000);
+        add_probe(&mut profile, ProbeKind::TypeProfile, "s1", 12, 900_000);
+        add_probe(&mut profile, ProbeKind::TypeProfile, "s2", 8, 900_000);
+        add_probe(&mut profile, ProbeKind::TypeProfile, "s3", 8, 900_000);
+        profile.rehash();
+
+        let verdict = evaluate_eligibility(&profile, &policy);
+        assert!(!verdict.eligible);
+        assert!(verdict.probe_summary.contains("feedback not stable"));
     }
 
     #[test]

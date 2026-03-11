@@ -18,7 +18,6 @@
 //! The runtime never silently switches observability regimes without recording why.
 
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -405,13 +404,13 @@ impl EscalationPolicy {
         let mut hasher = Sha256::new();
         hasher.update(self.schema_version.as_bytes());
         hasher.update(self.policy_id.as_bytes());
-        hasher.update(&(self.default_level.depth()).to_le_bytes());
-        hasher.update(&self.max_active_escalations.to_le_bytes());
-        hasher.update(&self.cooldown_epochs.to_le_bytes());
-        hasher.update(&[u8::from(self.allow_forensic)]);
+        hasher.update((self.default_level.depth()).to_le_bytes());
+        hasher.update(self.max_active_escalations.to_le_bytes());
+        hasher.update(self.cooldown_epochs.to_le_bytes());
+        hasher.update([u8::from(self.allow_forensic)]);
         for (k, v) in &self.category_overrides {
             hasher.update(k.as_bytes());
-            hasher.update(&v.depth().to_le_bytes());
+            hasher.update(v.depth().to_le_bytes());
         }
         hex_encode(&hasher.finalize())
     }
@@ -428,10 +427,7 @@ pub enum EscalationVerdict {
     /// Escalation approved at the determined level.
     Approved { level: EscalationLevel },
     /// Suppressed: too many active escalations.
-    SuppressedCapacity {
-        active_count: u64,
-        max_allowed: u64,
-    },
+    SuppressedCapacity { active_count: u64, max_allowed: u64 },
     /// Suppressed: cooldown not expired for this correlation ID.
     SuppressedCooldown {
         correlation_id: String,
@@ -449,9 +445,9 @@ impl fmt::Display for EscalationVerdict {
                 active_count,
                 max_allowed,
             } => write!(f, "suppressed_capacity({active_count}/{max_allowed})"),
-            Self::SuppressedCooldown {
-                correlation_id, ..
-            } => write!(f, "suppressed_cooldown({correlation_id})"),
+            Self::SuppressedCooldown { correlation_id, .. } => {
+                write!(f, "suppressed_cooldown({correlation_id})")
+            }
             Self::SuppressedBelowThreshold => write!(f, "suppressed_below_threshold"),
         }
     }
@@ -566,20 +562,20 @@ impl HindsightTraceEscalator {
         }
 
         // Check cooldown.
-        if let Some(correlation_id) = &trigger.correlation_id.clone() {
-            if let Some(&expires) = self.state.cooldowns.get(correlation_id) {
-                let current = self.state.current_epoch.as_u64();
-                if current < expires {
-                    self.state.total_suppressed += 1;
-                    return self.make_decision(
-                        trigger,
-                        resolved_level,
-                        EscalationVerdict::SuppressedCooldown {
-                            correlation_id: correlation_id.clone(),
-                            epochs_remaining: expires - current,
-                        },
-                    );
-                }
+        if let Some(correlation_id) = &trigger.correlation_id.clone()
+            && let Some(&expires) = self.state.cooldowns.get(correlation_id)
+        {
+            let current = self.state.current_epoch.as_u64();
+            if current < expires {
+                self.state.total_suppressed += 1;
+                return self.make_decision(
+                    trigger,
+                    resolved_level,
+                    EscalationVerdict::SuppressedCooldown {
+                        correlation_id: correlation_id.clone(),
+                        epochs_remaining: expires - current,
+                    },
+                );
             }
         }
 
@@ -600,9 +596,7 @@ impl HindsightTraceEscalator {
         // Set cooldown for correlation ID.
         if let Some(correlation_id) = &trigger.correlation_id {
             let expires = self.state.current_epoch.as_u64() + self.policy.cooldown_epochs;
-            self.state
-                .cooldowns
-                .insert(correlation_id.clone(), expires);
+            self.state.cooldowns.insert(correlation_id.clone(), expires);
         }
 
         self.make_decision(
@@ -652,12 +646,11 @@ impl HindsightTraceEscalator {
             } else {
                 Vec::new()
             };
-        let estimated_bundle_bytes =
-            if matches!(verdict, EscalationVerdict::Approved { .. }) {
-                self.policy.estimate_bundle_size(resolved_level)
-            } else {
-                0
-            };
+        let estimated_bundle_bytes = if matches!(verdict, EscalationVerdict::Approved { .. }) {
+            self.policy.estimate_bundle_size(resolved_level)
+        } else {
+            0
+        };
 
         let hash_input = format!(
             "{}:{}:{}:{}:{}",
@@ -782,15 +775,13 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     fn test_epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(100)
     }
 
-    fn test_trigger(
-        category: TriggerCategory,
-        severity: TriggerSeverity,
-    ) -> EscalationTrigger {
+    fn test_trigger(category: TriggerCategory, severity: TriggerSeverity) -> EscalationTrigger {
         EscalationTrigger::new(
             "trigger-001",
             category,
@@ -826,10 +817,7 @@ mod tests {
 
     #[test]
     fn trigger_category_display() {
-        assert_eq!(
-            TriggerCategory::SecurityEvent.to_string(),
-            "security_event"
-        );
+        assert_eq!(TriggerCategory::SecurityEvent.to_string(), "security_event");
         assert_eq!(
             TriggerCategory::CorrectnessFailure.to_string(),
             "correctness_failure"
@@ -893,20 +881,24 @@ mod tests {
 
     #[test]
     fn policy_resolve_level_category_override() {
-        let mut policy = EscalationPolicy::default();
+        let mut policy = EscalationPolicy {
+            allow_forensic: true,
+            ..Default::default()
+        };
         policy.category_overrides.insert(
             TriggerCategory::Regression.to_string(),
             EscalationLevel::Forensic,
         );
-        policy.allow_forensic = true;
         let trigger = test_trigger(TriggerCategory::Regression, TriggerSeverity::Info);
         assert_eq!(policy.resolve_level(&trigger), EscalationLevel::Forensic);
     }
 
     #[test]
     fn policy_resolve_level_clamps_forensic_when_disallowed() {
-        let mut policy = EscalationPolicy::default();
-        policy.allow_forensic = false;
+        let policy = EscalationPolicy {
+            allow_forensic: false,
+            ..Default::default()
+        };
         let trigger = test_trigger(TriggerCategory::SecurityEvent, TriggerSeverity::Fatal);
         assert_eq!(policy.resolve_level(&trigger), EscalationLevel::Full);
     }
@@ -939,8 +931,7 @@ mod tests {
     fn escalator_approve_basic() {
         let policy = EscalationPolicy::default();
         let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
-        let trigger =
-            test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let trigger = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
         let decision = escalator.evaluate(trigger);
         assert!(matches!(
             decision.verdict,
@@ -952,8 +943,10 @@ mod tests {
 
     #[test]
     fn escalator_suppress_capacity() {
-        let mut policy = EscalationPolicy::default();
-        policy.max_active_escalations = 1;
+        let policy = EscalationPolicy {
+            max_active_escalations: 1,
+            ..Default::default()
+        };
         let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
         // First trigger approved.
         let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
@@ -977,8 +970,10 @@ mod tests {
 
     #[test]
     fn escalator_suppress_cooldown() {
-        let mut policy = EscalationPolicy::default();
-        policy.cooldown_epochs = 5;
+        let policy = EscalationPolicy {
+            cooldown_epochs: 5,
+            ..Default::default()
+        };
         let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
         let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
         t1.correlation_id = Some("corr-1".into());
@@ -999,8 +994,10 @@ mod tests {
 
     #[test]
     fn escalator_cooldown_expires() {
-        let mut policy = EscalationPolicy::default();
-        policy.cooldown_epochs = 3;
+        let policy = EscalationPolicy {
+            cooldown_epochs: 3,
+            ..Default::default()
+        };
         let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
         let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
         t1.correlation_id = Some("corr-1".into());
@@ -1018,8 +1015,10 @@ mod tests {
 
     #[test]
     fn escalator_complete_frees_capacity() {
-        let mut policy = EscalationPolicy::default();
-        policy.max_active_escalations = 1;
+        let policy = EscalationPolicy {
+            max_active_escalations: 1,
+            ..Default::default()
+        };
         let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
         let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
         escalator.evaluate(t1);
@@ -1095,8 +1094,10 @@ mod tests {
 
     #[test]
     fn suppressed_decision_has_no_artifacts() {
-        let mut policy = EscalationPolicy::default();
-        policy.max_active_escalations = 0;
+        let policy = EscalationPolicy {
+            max_active_escalations: 0,
+            ..Default::default()
+        };
         let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
         let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
         let d = escalator.evaluate(t);
@@ -1117,8 +1118,7 @@ mod tests {
             bytes: 4096,
             content_hash: "abc123".into(),
         }];
-        let manifest =
-            SupportBundleManifest::from_decision(&decision, "bundle-001", artifacts);
+        let manifest = SupportBundleManifest::from_decision(&decision, "bundle-001", artifacts);
         assert_eq!(manifest.bead_id, ESCALATION_BEAD_ID);
         assert_eq!(manifest.total_bytes, 4096);
         assert!(!manifest.manifest_hash.is_empty());
@@ -1212,10 +1212,7 @@ mod tests {
             test_epoch(),
         );
         escalator.evaluate(t2);
-        assert_eq!(
-            escalator.state.category_counts.get("regression"),
-            Some(&2)
-        );
+        assert_eq!(escalator.state.category_counts.get("regression"), Some(&2));
     }
 
     #[test]

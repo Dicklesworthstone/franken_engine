@@ -834,7 +834,10 @@ pub fn render_attestation_summary(attestation: &VerificationAttestation) -> Stri
         attestation.claim_type,
         verdict_label(attestation.verdict),
         attestation.signature_hex.is_some(),
-        attestation.verifier_version,
+        format_args!(
+            "{}@{}",
+            attestation.verifier_name, attestation.verifier_version
+        ),
         attestation.issued_at_utc,
     )
 }
@@ -1935,7 +1938,7 @@ mod tests {
         let summary = render_attestation_summary(&attestation);
         assert!(summary.contains("claim_type=containment"));
         assert!(summary.contains("signed=false"));
-        assert!(summary.contains("verifier=1.0.0"));
+        assert!(summary.contains("verifier=acme-verifier@1.0.0"));
     }
 
     #[test]

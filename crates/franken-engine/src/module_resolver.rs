@@ -1392,10 +1392,10 @@ fn external_referrer_directory(referrer: &str) -> String {
     let subpath = &segments[package_root_len..];
 
     if subpath.is_empty() {
-        if let Some(last) = package_root.last_mut() {
-            if is_module_file_name(last) {
-                *last = strip_module_file_extension(last);
-            }
+        if let Some(last) = package_root.last_mut()
+            && is_module_file_name(last)
+        {
+            *last = strip_module_file_extension(last);
         }
         return package_root.join("/");
     }

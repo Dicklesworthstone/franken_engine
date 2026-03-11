@@ -1061,6 +1061,26 @@ fn pause_distribution_report_contains_expected_contract_fields() {
 }
 
 #[test]
+fn pause_distribution_report_histogram_does_not_emit_invalid_bounds_for_identical_pauses() {
+    let mut tracker = PauseTracker::new(PauseBudget::new(10_000, 20_000, 30_000));
+    for sequence in 1..=4 {
+        tracker.record(&make_simple_event(sequence, "ext-a", 1000));
+    }
+
+    let report = tracker.pause_distribution_report();
+    assert_eq!(report.histogram.len(), 1);
+    assert_eq!(report.histogram[0].lower_bound_ns, 1000);
+    assert_eq!(report.histogram[0].upper_bound_ns, 1000);
+    assert_eq!(report.histogram[0].count, report.sample_count);
+    assert!(
+        report
+            .histogram
+            .iter()
+            .all(|bucket| bucket.lower_bound_ns <= bucket.upper_bound_ns)
+    );
+}
+
+#[test]
 fn pause_distribution_report_policy_transition_detects_budget_tightening() {
     let mut tracker = PauseTracker::new(PauseBudget::new(10_000, 20_000, 30_000));
     tracker.record(&make_simple_event(1, "ext-a", 500));

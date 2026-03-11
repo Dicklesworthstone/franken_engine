@@ -292,7 +292,12 @@ fn build_pause_histogram(sorted: &[u64]) -> Vec<PauseDistributionBucket> {
     }
     let min = sorted[0];
     let max = sorted[sorted.len() - 1];
-    let bucket_count = sorted.len().clamp(1, 10);
+    let range_width = max.saturating_sub(min).saturating_add(1);
+    let max_representable_buckets = usize::try_from(range_width).unwrap_or(usize::MAX);
+    let bucket_count = sorted
+        .len()
+        .clamp(1, 10)
+        .min(max_representable_buckets.max(1));
     let width = ((max.saturating_sub(min) + 1) / bucket_count as u64).max(1);
 
     let mut buckets = Vec::with_capacity(bucket_count);
@@ -1640,6 +1645,26 @@ mod tests {
         assert_eq!(report.sample_count, 25);
         assert!(report.per_extension_percentiles.contains_key("ext-a"));
         assert!(report.per_extension_percentiles.contains_key("ext-b"));
+    }
+
+    #[test]
+    fn pause_distribution_report_histogram_stays_valid_for_identical_pauses() {
+        let mut tracker = PauseTracker::new(PauseBudget::new(10_000, 20_000, 30_000));
+        for sequence in 1..=4 {
+            tracker.record(&make_event(sequence, "ext-a", 1_000, 0, 0));
+        }
+
+        let report = tracker.pause_distribution_report();
+        assert_eq!(report.histogram.len(), 1);
+        assert_eq!(report.histogram[0].lower_bound_ns, 1_000);
+        assert_eq!(report.histogram[0].upper_bound_ns, 1_000);
+        assert_eq!(report.histogram[0].count, report.sample_count);
+        assert!(
+            report
+                .histogram
+                .iter()
+                .all(|bucket| bucket.lower_bound_ns <= bucket.upper_bound_ns)
+        );
     }
 
     #[test]

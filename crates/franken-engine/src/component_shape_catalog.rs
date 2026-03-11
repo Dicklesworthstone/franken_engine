@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
 use crate::hook_effect_contract::{HookKind, HookManifest};
-use crate::react_jsx_lowering::{ElementType, LoweredChild, LoweredElement, LoweredPropValue};
+use crate::react_jsx_lowering::{ElementType, LoweredChild, LoweredElement};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -743,8 +743,10 @@ impl ComponentShapeCatalog {
 
     /// Compute catalog summary statistics.
     pub fn summary(&self) -> CatalogSummary {
-        let mut summary = CatalogSummary::default();
-        summary.total_components = self.components.len();
+        let mut summary = CatalogSummary {
+            total_components: self.components.len(),
+            ..Default::default()
+        };
         for shape in self.components.values() {
             match shape.render_purity {
                 RenderPurityClass::Pure => summary.pure_count += 1,
@@ -873,6 +875,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::hook_effect_contract::{HookSlot, HookSlotIndex};
+    use crate::react_jsx_lowering::LoweredPropValue;
 
     // -- PropFlowKind tests --
 
@@ -1260,8 +1263,8 @@ mod tests {
         let config = PurityConfig::default();
         let result = classify_purity(&shape, &config);
         assert!(result.reasons.contains(&ImpurityReason::ContextDependency));
-        // Context weight = 500_000, which equals max_conditional_severity.
-        assert_eq!(result.class, RenderPurityClass::Impure);
+        // Context weight = 500_000, equals max_conditional_severity (> not >=).
+        assert_eq!(result.class, RenderPurityClass::ConditionallyPure);
     }
 
     #[test]
@@ -1348,9 +1351,14 @@ mod tests {
     fn render_tree_analysis_nested() {
         let mut root = make_element("div");
         let mut child = make_element("span");
-        child.children.push(LoweredChild::Element(Box::new(make_element("a"))));
+        child
+            .children
+            .push(LoweredChild::Element(Box::new(make_element("a"))));
         root.children.push(LoweredChild::Element(Box::new(child)));
-        root.children.push(LoweredChild::Element(Box::new(make_component_element("Button"))));
+        root.children
+            .push(LoweredChild::Element(Box::new(make_component_element(
+                "Button",
+            ))));
 
         let analysis = analyze_render_tree(&root);
         assert_eq!(analysis.total_elements, 4);
@@ -1365,7 +1373,8 @@ mod tests {
     fn render_tree_analysis_fragment() {
         let mut root = make_element("div");
         root.element_type = ElementType::Fragment;
-        root.children.push(LoweredChild::Element(Box::new(make_element("p"))));
+        root.children
+            .push(LoweredChild::Element(Box::new(make_element("p"))));
         let analysis = analyze_render_tree(&root);
         assert_eq!(analysis.fragment_count, 1);
         assert_eq!(analysis.intrinsic_count, 1);
@@ -1383,7 +1392,9 @@ mod tests {
     #[test]
     fn render_tree_analysis_keyed_elements() {
         let mut el = make_element("li");
-        el.props.extracted_key = Some(LoweredPropValue::StringLiteral { value: "item-1".to_string() });
+        el.props.extracted_key = Some(LoweredPropValue::StringLiteral {
+            value: "item-1".to_string(),
+        });
         let analysis = analyze_render_tree(&el);
         assert_eq!(analysis.keyed_elements, 1);
     }
@@ -1685,7 +1696,9 @@ mod tests {
         let mut current = make_element("div");
         for i in 0..10 {
             let mut parent = make_element(&format!("level{i}"));
-            parent.children.push(LoweredChild::Element(Box::new(current)));
+            parent
+                .children
+                .push(LoweredChild::Element(Box::new(current)));
             current = parent;
         }
         let analysis = analyze_render_tree(&current);
@@ -1698,7 +1711,9 @@ mod tests {
         let mut root = make_element("ul");
         for i in 0..20 {
             let mut li = make_element("li");
-            li.props.extracted_key = Some(LoweredPropValue::StringLiteral { value: format!("item-{i}") });
+            li.props.extracted_key = Some(LoweredPropValue::StringLiteral {
+                value: format!("item-{i}"),
+            });
             root.children.push(LoweredChild::Element(Box::new(li)));
         }
         let analysis = analyze_render_tree(&root);

@@ -123,8 +123,12 @@ fn catalog_from_evidence_integration() {
 
     let manifest = make_manifest(&[HookKind::State, HookKind::Effect, HookKind::Memo]);
     let mut root = make_element("div");
-    root.children.push(LoweredChild::Element(Box::new(make_element("span"))));
-    root.children.push(LoweredChild::Element(Box::new(make_component_element("Child"))));
+    root.children
+        .push(LoweredChild::Element(Box::new(make_element("span"))));
+    root.children
+        .push(LoweredChild::Element(Box::new(make_component_element(
+            "Child",
+        ))));
     let tree_analysis = analyze_render_tree(&root);
 
     catalog.register_from_evidence("Parent", &manifest, &tree_analysis);
@@ -181,7 +185,11 @@ fn impure_effect_component() {
 
     let shape = catalog.get("EffectComp").unwrap();
     assert_eq!(shape.render_purity, RenderPurityClass::Impure);
-    assert!(shape.impurity_reasons.contains(&ImpurityReason::EffectInRenderPath));
+    assert!(
+        shape
+            .impurity_reasons
+            .contains(&ImpurityReason::EffectInRenderPath)
+    );
 }
 
 #[test]
@@ -199,7 +207,11 @@ fn conditionally_pure_with_spread() {
 
     let shape = catalog.get("SpreadComp").unwrap();
     assert_eq!(shape.render_purity, RenderPurityClass::ConditionallyPure);
-    assert!(shape.impurity_reasons.contains(&ImpurityReason::SpreadProps));
+    assert!(
+        shape
+            .impurity_reasons
+            .contains(&ImpurityReason::SpreadProps)
+    );
 }
 
 #[test]
@@ -216,7 +228,11 @@ fn context_dependency_classification() {
 
     let shape = catalog.get("CtxComp").unwrap();
     assert_eq!(shape.render_purity, RenderPurityClass::ConditionallyPure);
-    assert!(shape.impurity_reasons.contains(&ImpurityReason::ContextDependency));
+    assert!(
+        shape
+            .impurity_reasons
+            .contains(&ImpurityReason::ContextDependency)
+    );
 }
 
 #[test]
@@ -252,11 +268,22 @@ fn complex_tree_analysis() {
     let mut root = make_element("div");
     let mut section = make_element("section");
     let mut article = make_element("article");
-    article.children.push(LoweredChild::Element(Box::new(make_element("p"))));
-    article.children.push(LoweredChild::Element(Box::new(make_component_element("Highlight"))));
-    section.children.push(LoweredChild::Element(Box::new(article)));
+    article
+        .children
+        .push(LoweredChild::Element(Box::new(make_element("p"))));
+    article
+        .children
+        .push(LoweredChild::Element(Box::new(make_component_element(
+            "Highlight",
+        ))));
+    section
+        .children
+        .push(LoweredChild::Element(Box::new(article)));
     root.children.push(LoweredChild::Element(Box::new(section)));
-    root.children.push(LoweredChild::Element(Box::new(make_component_element("Footer"))));
+    root.children
+        .push(LoweredChild::Element(Box::new(make_component_element(
+            "Footer",
+        ))));
 
     let analysis = analyze_render_tree(&root);
     assert_eq!(analysis.total_elements, 6);
@@ -271,8 +298,10 @@ fn complex_tree_analysis() {
 #[test]
 fn fragment_tree_analysis() {
     let mut root = make_fragment();
-    root.children.push(LoweredChild::Element(Box::new(make_element("h1"))));
-    root.children.push(LoweredChild::Element(Box::new(make_element("p"))));
+    root.children
+        .push(LoweredChild::Element(Box::new(make_element("h1"))));
+    root.children
+        .push(LoweredChild::Element(Box::new(make_element("p"))));
 
     let analysis = analyze_render_tree(&root);
     assert_eq!(analysis.fragment_count, 1);
@@ -285,7 +314,9 @@ fn keyed_list_analysis() {
     let mut ul = make_element("ul");
     for i in 0..10 {
         let mut li = make_element("li");
-        li.props.extracted_key = Some(LoweredPropValue::StringLiteral { value: format!("key-{i}") });
+        li.props.extracted_key = Some(LoweredPropValue::StringLiteral {
+            value: format!("key-{i}"),
+        });
         ul.children.push(LoweredChild::Element(Box::new(li)));
     }
 
@@ -310,8 +341,13 @@ fn spread_detection_in_tree() {
 
 #[test]
 fn prop_flow_classification() {
-    let rendered = PropDescriptor::new("title", PropValueKind::StringLiteral, PropFlowKind::Rendered);
-    let callback = PropDescriptor::new("onClick", PropValueKind::Callback, PropFlowKind::EffectOnly);
+    let rendered = PropDescriptor::new(
+        "title",
+        PropValueKind::StringLiteral,
+        PropFlowKind::Rendered,
+    );
+    let callback =
+        PropDescriptor::new("onClick", PropValueKind::Callback, PropFlowKind::EffectOnly);
     let forwarded = PropDescriptor::new("style", PropValueKind::Object, PropFlowKind::PassedDown);
 
     assert!(rendered.is_render_relevant());
@@ -322,9 +358,21 @@ fn prop_flow_classification() {
 #[test]
 fn prop_dedup_preserves_non_unknown_type() {
     let mut shape = ComponentShape::new("Dedup");
-    shape.add_prop(PropDescriptor::new("data", PropValueKind::Unknown, PropFlowKind::Rendered));
-    shape.add_prop(PropDescriptor::new("data", PropValueKind::Array, PropFlowKind::Rendered));
-    shape.add_prop(PropDescriptor::new("data", PropValueKind::Unknown, PropFlowKind::Rendered));
+    shape.add_prop(PropDescriptor::new(
+        "data",
+        PropValueKind::Unknown,
+        PropFlowKind::Rendered,
+    ));
+    shape.add_prop(PropDescriptor::new(
+        "data",
+        PropValueKind::Array,
+        PropFlowKind::Rendered,
+    ));
+    shape.add_prop(PropDescriptor::new(
+        "data",
+        PropValueKind::Unknown,
+        PropFlowKind::Rendered,
+    ));
 
     assert_eq!(shape.prop_count(), 1);
     assert_eq!(shape.props[0].value_kind, PropValueKind::Array);
@@ -501,7 +549,10 @@ fn reclassify_with_new_config() {
     catalog.register(shape);
 
     // Context weight = 500_000 > 400_000 => Impure.
-    assert_eq!(catalog.get("CtxUser").unwrap().render_purity, RenderPurityClass::Impure);
+    assert_eq!(
+        catalog.get("CtxUser").unwrap().render_purity,
+        RenderPurityClass::Impure
+    );
 
     // Relax config and reclassify.
     catalog.config.max_conditional_severity = 600_000;
@@ -589,7 +640,9 @@ fn deep_nesting_detection_from_tree() {
     let mut current = make_element("span");
     for _ in 0..10 {
         let mut parent = make_element("div");
-        parent.children.push(LoweredChild::Element(Box::new(current)));
+        parent
+            .children
+            .push(LoweredChild::Element(Box::new(current)));
         current = parent;
     }
     let analysis = analyze_render_tree(&current);
@@ -615,8 +668,16 @@ fn serde_full_catalog_roundtrip() {
 
     let mut s = ComponentShape::new("Complete");
     s.observation_count = 10;
-    s.add_prop(PropDescriptor::new("title", PropValueKind::StringLiteral, PropFlowKind::Rendered));
-    s.add_prop(PropDescriptor::new("onClick", PropValueKind::Callback, PropFlowKind::EffectOnly));
+    s.add_prop(PropDescriptor::new(
+        "title",
+        PropValueKind::StringLiteral,
+        PropFlowKind::Rendered,
+    ));
+    s.add_prop(PropDescriptor::new(
+        "onClick",
+        PropValueKind::Callback,
+        PropFlowKind::EffectOnly,
+    ));
     catalog.register(s);
 
     let json = serde_json::to_string(&catalog).unwrap();
@@ -628,9 +689,12 @@ fn serde_full_catalog_roundtrip() {
 fn serde_purity_classification_roundtrip() {
     let classification = PurityClassification {
         class: RenderPurityClass::ConditionallyPure,
-        reasons: [ImpurityReason::SpreadProps, ImpurityReason::ContextDependency]
-            .into_iter()
-            .collect(),
+        reasons: [
+            ImpurityReason::SpreadProps,
+            ImpurityReason::ContextDependency,
+        ]
+        .into_iter()
+        .collect(),
         severity_total: 800_000,
         confidence_fp: 500_000,
     };
@@ -642,7 +706,10 @@ fn serde_purity_classification_roundtrip() {
 #[test]
 fn serde_render_tree_analysis_roundtrip() {
     let mut root = make_element("div");
-    root.children.push(LoweredChild::Element(Box::new(make_component_element("Child"))));
+    root.children
+        .push(LoweredChild::Element(Box::new(make_component_element(
+            "Child",
+        ))));
     let analysis = analyze_render_tree(&root);
 
     let json = serde_json::to_string(&analysis).unwrap();
@@ -745,12 +812,24 @@ fn catalog_with_all_impurity_reasons() {
 
     let s = catalog.get("AllImpure").unwrap();
     assert_eq!(s.render_purity, RenderPurityClass::Impure);
-    assert!(s.impurity_reasons.contains(&ImpurityReason::EffectInRenderPath));
-    assert!(s.impurity_reasons.contains(&ImpurityReason::ContextDependency));
+    assert!(
+        s.impurity_reasons
+            .contains(&ImpurityReason::EffectInRenderPath)
+    );
+    assert!(
+        s.impurity_reasons
+            .contains(&ImpurityReason::ContextDependency)
+    );
     assert!(s.impurity_reasons.contains(&ImpurityReason::MutableRef));
-    assert!(s.impurity_reasons.contains(&ImpurityReason::ConditionalHooks));
+    assert!(
+        s.impurity_reasons
+            .contains(&ImpurityReason::ConditionalHooks)
+    );
     assert!(s.impurity_reasons.contains(&ImpurityReason::SpreadProps));
-    assert!(s.impurity_reasons.contains(&ImpurityReason::DynamicElementType));
+    assert!(
+        s.impurity_reasons
+            .contains(&ImpurityReason::DynamicElementType)
+    );
 }
 
 // ---------------------------------------------------------------------------

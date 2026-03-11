@@ -1174,7 +1174,7 @@ mod tests {
     #[test]
     fn ratchet_seal_updates_hash() {
         let mut r = RatchetState::new();
-        let h1 = r.content_hash;
+        let h1 = r.content_hash.clone();
         r.initialized = true;
         r.seal();
         assert_ne!(h1, r.content_hash);

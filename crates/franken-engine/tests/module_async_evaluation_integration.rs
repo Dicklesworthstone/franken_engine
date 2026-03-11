@@ -29,7 +29,7 @@ use frankenengine_engine::module_async_evaluation::{
     SuspensionContext, SuspensionRecord, compute_async_evaluation_order,
 };
 use frankenengine_engine::module_live_binding::{
-    BindingCell, BindingCellState, BindingId, LiveBindingMap,
+    BindingCell, BindingCellState, BindingEvent, BindingId, LiveBindingMap,
 };
 use frankenengine_engine::object_model::JsValue;
 use frankenengine_engine::promise_model::PromiseHandle;
@@ -832,6 +832,34 @@ fn evaluator_reject_emits_witness_events() {
             .iter()
             .any(|e| e.event_type == AsyncEvalEventType::BindingMarkedDead)
     );
+}
+
+#[test]
+fn evaluator_reject_records_live_binding_cell_died_event() {
+    let mut eval = AsyncModuleEvaluator::with_defaults();
+    eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
+
+    let mut bindings = LiveBindingMap::new();
+    let binding_id = bindings.register_cell(BindingCell::new(
+        "bad.js",
+        "value",
+        "value",
+        BindingType::Direct,
+    ));
+
+    let linkage = eval
+        .reject_module("bad.js", &js_error("err"), &mut bindings)
+        .unwrap();
+
+    assert_eq!(linkage.dead_bindings, vec![binding_id.clone()]);
+    assert_eq!(
+        bindings.get_cell(&binding_id).map(|cell| cell.state),
+        Some(BindingCellState::Dead)
+    );
+    assert!(bindings.events.iter().any(|event| matches!(
+        event,
+        BindingEvent::CellDied { binding_id: event_id } if event_id == &binding_id
+    )));
 }
 
 // ---------------------------------------------------------------------------

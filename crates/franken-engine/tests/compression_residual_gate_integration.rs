@@ -17,12 +17,13 @@
 )]
 
 use frankenengine_engine::compression_residual_gate::{
-    build_artifact_record, build_pass_result, ArtifactRecord, BuildArtifactInput,
+    ArtifactRecord, BuildArtifactInput, COMPRESSION_RESIDUAL_GATE_BEAD_ID,
+    COMPRESSION_RESIDUAL_GATE_COMPONENT, COMPRESSION_RESIDUAL_GATE_SCHEMA_VERSION,
     ClaimBlockingReason, ClaimSurface, CompressionClaimVerdict, CompressionPassKind,
     CompressionPassResult, CompressionResidualError, CompressionResidualGate, DecisionReceipt,
     GateConfig, GateInput, GateSummary, HiddenExpansionRecord, LedgerAppendInput, ResidualLedger,
-    ResidualLedgerEntry, ReversibilityCheck, SupportCostRecord, COMPRESSION_RESIDUAL_GATE_BEAD_ID,
-    COMPRESSION_RESIDUAL_GATE_COMPONENT, COMPRESSION_RESIDUAL_GATE_SCHEMA_VERSION,
+    ResidualLedgerEntry, ReversibilityCheck, SupportCostRecord, build_artifact_record,
+    build_pass_result,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -1343,10 +1344,12 @@ fn test_memory_blocked_net_expansion() {
     let input = memory_input(pass, expansions);
     let receipt = gate.evaluate(&input).unwrap();
     assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::NetMemoryExpansion { .. }) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::NetMemoryExpansion { .. }) })
+    );
 }
 
 #[test]
@@ -1378,10 +1381,12 @@ fn test_memory_blocked_debug_readability_lost() {
     });
     let receipt = gate.evaluate(&input).unwrap();
     assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::DebugReadabilityLost { .. }) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::DebugReadabilityLost { .. }) })
+    );
 }
 
 #[test]
@@ -1436,10 +1441,12 @@ fn test_proof_surface_blocked_overhead() {
     let input = proof_input(pass);
     let receipt = gate.evaluate(&input).unwrap();
     assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::ProofOverheadExceedsThreshold { .. }) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::ProofOverheadExceedsThreshold { .. }) })
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1464,10 +1471,12 @@ fn test_reversibility_blocks_low_fidelity() {
     });
     let receipt = gate.evaluate(&input).unwrap();
     assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::InsufficientFidelity { .. }) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::InsufficientFidelity { .. }) })
+    );
 }
 
 #[test]
@@ -1506,10 +1515,12 @@ fn test_support_cost_blocks_ceiling_exceeded() {
         .push(simple_support_cost("s1", 1_000_000, 500_000));
     let receipt = gate.evaluate(&input).unwrap();
     assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::SupportCostCeilingExceeded { .. }) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::SupportCostCeilingExceeded { .. }) })
+    );
 }
 
 #[test]
@@ -1529,10 +1540,12 @@ fn test_support_cost_blocks_stack_trace_lost() {
     });
     let receipt = gate.evaluate(&input).unwrap();
     assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::StackTraceAccuracyLost { .. }) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::StackTraceAccuracyLost { .. }) })
+    );
 }
 
 #[test]
@@ -1575,10 +1588,12 @@ fn test_duplicate_mass_blocks_when_exceeded() {
     let input = cold_start_input(pass);
     let receipt = gate.evaluate(&input).unwrap();
     assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::ExcessiveDuplicateMass { .. }) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::ExcessiveDuplicateMass { .. }) })
+    );
 }
 
 #[test]
@@ -1613,10 +1628,12 @@ fn test_irreversible_artifact_blocks_when_required() {
     let input = cold_start_input(pass);
     let receipt = gate.evaluate(&input).unwrap();
     assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::IrreversibleArtifact { .. }) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::IrreversibleArtifact { .. }) })
+    );
 }
 
 #[test]
@@ -1660,10 +1677,12 @@ fn test_no_pass_results_are_insufficient_with_no_compression_data() {
     assert_eq!(gate.claims_insufficient(), 1);
     assert_eq!(gate.claims_blocked(), 0);
     assert!(gate.ledger().is_empty());
-    assert!(receipt
-        .blocking_reasons
-        .iter()
-        .any(|r| { matches!(r, ClaimBlockingReason::NoCompressionData) }));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| { matches!(r, ClaimBlockingReason::NoCompressionData) })
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1830,6 +1849,35 @@ fn test_evaluate_all_surfaces_increments_counters() {
     };
     gate.evaluate_all_surfaces(&template).unwrap();
     assert_eq!(gate.evaluations_run(), 3);
+}
+
+#[test]
+fn test_evaluate_all_surfaces_records_ledger_once() {
+    let mut gate = CompressionResidualGate::new();
+    let arts = vec![
+        simple_artifact("a1", 1000, 500, true),
+        simple_artifact("a2", 2000, 800, true),
+    ];
+    let pass = simple_pass(arts);
+    let template = GateInput {
+        surface: ClaimSurface::ColdStart,
+        pass_results: vec![pass],
+        hidden_expansions: vec![simple_hidden_expansion("s1", 1000, 10)],
+        support_costs: Vec::new(),
+        reversibility_checks: Vec::new(),
+        epoch: epoch(1),
+        timestamp_ns: ts(),
+        cold_start_total_budget_us: 1_000_000,
+        proof_total_size_bytes: 10_000,
+    };
+
+    let results = gate.evaluate_all_surfaces(&template).unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(gate.receipts().len(), 3);
+    assert_eq!(gate.ledger().len(), 2);
+    assert_eq!(gate.ledger().distinct_artifact_count(), 2);
+    assert_eq!(gate.ledger().total_original_bytes(), 3000);
+    assert_eq!(gate.ledger().total_compressed_bytes(), 1300);
 }
 
 // ---------------------------------------------------------------------------

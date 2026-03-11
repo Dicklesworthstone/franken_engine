@@ -541,11 +541,7 @@ pub struct ObservabilityImpact {
 
 impl ObservabilityImpact {
     /// Create new observability impact evidence.
-    pub fn new(
-        instrumented_overhead: u64,
-        uninstrumented_baseline: u64,
-        acceptable: bool,
-    ) -> Self {
+    pub fn new(instrumented_overhead: u64, uninstrumented_baseline: u64, acceptable: bool) -> Self {
         let delta_fraction = instrumented_overhead.saturating_sub(uninstrumented_baseline);
         Self {
             instrumented_overhead,
@@ -883,10 +879,7 @@ pub fn evaluate_cache_locality(
 /// Returns `ConditionalApprove` if local access is within 80%-100% of the
 /// minimum threshold.
 /// Returns `Reject` otherwise.
-pub fn evaluate_numa(
-    evidence: &NumaEvidence,
-    config: &GateConfig,
-) -> GovernanceDecision {
+pub fn evaluate_numa(evidence: &NumaEvidence, config: &GateConfig) -> GovernanceDecision {
     if evidence.local_access_fraction >= config.min_local_access_fraction {
         return GovernanceDecision::Approve;
     }
@@ -983,7 +976,9 @@ pub fn evaluate(
             locality_verdict: LocalityDomain::RemoteMemory,
             portability_verdict: PortabilityVerdict::Unknown,
             blocking_reasons: vec!["no evidence provided".to_string()],
-            recommendations: vec!["collect cache, NUMA, portability, and observability evidence".to_string()],
+            recommendations: vec![
+                "collect cache, NUMA, portability, and observability evidence".to_string(),
+            ],
             receipt_hash,
         };
     }
@@ -1001,7 +996,8 @@ pub fn evaluate(
                 recommendations.push("optimize data layout for cache locality".to_string());
             }
             GovernanceDecision::ConditionalApprove => {
-                recommendations.push("cache miss rates are marginal — consider layout tuning".to_string());
+                recommendations
+                    .push("cache miss rates are marginal — consider layout tuning".to_string());
             }
             GovernanceDecision::RequireEvidence => {
                 blocking_reasons.push(format!(
@@ -1047,15 +1043,19 @@ pub fn evaluate(
                     "substrate is machine-specific: transferable fraction {} below {}",
                     pe.transferable_fraction, config.min_portability_fraction,
                 ));
-                recommendations.push("remove hardware-specific optimizations or provide fallback".to_string());
+                recommendations
+                    .push("remove hardware-specific optimizations or provide fallback".to_string());
             }
             PortabilityVerdict::Unknown => {
-                worst_decision = merge_decisions(worst_decision, GovernanceDecision::RequireEvidence);
+                worst_decision =
+                    merge_decisions(worst_decision, GovernanceDecision::RequireEvidence);
                 blocking_reasons.push("portability is unknown — pathological evidence".to_string());
-                recommendations.push("re-run portability assessment with valid topologies".to_string());
+                recommendations
+                    .push("re-run portability assessment with valid topologies".to_string());
             }
             PortabilityVerdict::ConditionallyPortable => {
-                worst_decision = merge_decisions(worst_decision, GovernanceDecision::ConditionalApprove);
+                worst_decision =
+                    merge_decisions(worst_decision, GovernanceDecision::ConditionalApprove);
                 for factor in &pe.degradation_factors {
                     recommendations.push(format!("address degradation factor: {factor}"));
                 }
@@ -1078,8 +1078,10 @@ pub fn evaluate(
             ));
             recommendations.push("reduce instrumentation overhead or use sampling".to_string());
         } else if !oe.acceptable {
-            worst_decision = merge_decisions(worst_decision, GovernanceDecision::ConditionalApprove);
-            recommendations.push("observability impact flagged as unacceptable by operator".to_string());
+            worst_decision =
+                merge_decisions(worst_decision, GovernanceDecision::ConditionalApprove);
+            recommendations
+                .push("observability impact flagged as unacceptable by operator".to_string());
         }
     }
 
@@ -1107,15 +1109,21 @@ fn merge_decisions(a: GovernanceDecision, b: GovernanceDecision) -> GovernanceDe
             GovernanceDecision::Reject => 3,
         }
     };
-    if rank(b) > rank(a) { b } else { a }
+    if rank(b) > rank(a) {
+        b
+    } else {
+        a
+    }
 }
 
 /// Build a `DecisionReceipt` from a `GateResult`.
-pub fn build_receipt(
-    result: &GateResult,
-    epoch: SecurityEpoch,
-) -> DecisionReceipt {
-    DecisionReceipt::new(COMPONENT, epoch, result.decision, result.receipt_hash.clone())
+pub fn build_receipt(result: &GateResult, epoch: SecurityEpoch) -> DecisionReceipt {
+    DecisionReceipt::new(
+        COMPONENT,
+        epoch,
+        result.decision,
+        result.receipt_hash.clone(),
+    )
 }
 
 /// Build a default set of realistic cache-miss evidence profiles for testing
@@ -1124,13 +1132,53 @@ pub fn build_canonical_evidence() -> Vec<CacheMissEvidence> {
     let epoch = SecurityEpoch::from_raw(1);
     vec![
         CacheMissEvidence::new("hot_metadata", 10_000, 30_000, 50_000, 5_000, 1000, epoch),
-        CacheMissEvidence::new("cold_metadata", 80_000, 200_000, 400_000, 30_000, 500, epoch),
-        CacheMissEvidence::new("mixed_metadata", 40_000, 90_000, 150_000, 15_000, 800, epoch),
+        CacheMissEvidence::new(
+            "cold_metadata",
+            80_000,
+            200_000,
+            400_000,
+            30_000,
+            500,
+            epoch,
+        ),
+        CacheMissEvidence::new(
+            "mixed_metadata",
+            40_000,
+            90_000,
+            150_000,
+            15_000,
+            800,
+            epoch,
+        ),
         CacheMissEvidence::new("streaming", 60_000, 150_000, 300_000, 25_000, 200, epoch),
-        CacheMissEvidence::new("pointer_chasing", 90_000, 250_000, 500_000, 40_000, 300, epoch),
+        CacheMissEvidence::new(
+            "pointer_chasing",
+            90_000,
+            250_000,
+            500_000,
+            40_000,
+            300,
+            epoch,
+        ),
         CacheMissEvidence::new("sequential_scan", 5_000, 10_000, 20_000, 2_000, 2000, epoch),
-        CacheMissEvidence::new("random_access", 100_000, 300_000, 600_000, 50_000, 150, epoch),
-        CacheMissEvidence::new("prefetch_friendly", 15_000, 25_000, 40_000, 3_000, 1200, epoch),
+        CacheMissEvidence::new(
+            "random_access",
+            100_000,
+            300_000,
+            600_000,
+            50_000,
+            150,
+            epoch,
+        ),
+        CacheMissEvidence::new(
+            "prefetch_friendly",
+            15_000,
+            25_000,
+            40_000,
+            3_000,
+            1200,
+            epoch,
+        ),
     ]
 }
 
@@ -1151,7 +1199,15 @@ mod tests {
     }
 
     fn bad_cache_evidence() -> CacheMissEvidence {
-        CacheMissEvidence::new("test", 200_000, 500_000, 800_000, 100_000, 100, test_epoch())
+        CacheMissEvidence::new(
+            "test",
+            200_000,
+            500_000,
+            800_000,
+            100_000,
+            100,
+            test_epoch(),
+        )
     }
 
     fn marginal_cache_evidence() -> CacheMissEvidence {
@@ -1194,9 +1250,15 @@ mod tests {
 
     #[test]
     fn locality_domain_latency_ordering() {
-        let weights: Vec<u64> = LocalityDomain::ALL.iter().map(|d| d.latency_weight()).collect();
+        let weights: Vec<u64> = LocalityDomain::ALL
+            .iter()
+            .map(|d| d.latency_weight())
+            .collect();
         for i in 1..weights.len() {
-            assert!(weights[i] >= weights[i - 1], "latency should be non-decreasing");
+            assert!(
+                weights[i] >= weights[i - 1],
+                "latency should be non-decreasing"
+            );
         }
     }
 
@@ -1205,7 +1267,10 @@ mod tests {
     #[test]
     fn portability_verdict_display() {
         assert_eq!(PortabilityVerdict::Portable.to_string(), "portable");
-        assert_eq!(PortabilityVerdict::MachineSpecific.to_string(), "machine_specific");
+        assert_eq!(
+            PortabilityVerdict::MachineSpecific.to_string(),
+            "machine_specific"
+        );
     }
 
     #[test]
@@ -1341,7 +1406,9 @@ mod tests {
     #[test]
     fn portability_evidence_with_degradation() {
         let ev = PortabilityEvidence::new(
-            "x86_64", "aarch64", 800_000,
+            "x86_64",
+            "aarch64",
+            800_000,
             vec!["simd_width_mismatch".to_string()],
             test_epoch(),
         );
@@ -1392,9 +1459,18 @@ mod tests {
     fn gate_config_default() {
         let cfg = GateConfig::default();
         assert_eq!(cfg.max_l1_miss_rate, DEFAULT_MAX_L1_MISS_RATE);
-        assert_eq!(cfg.min_local_access_fraction, DEFAULT_MIN_LOCAL_ACCESS_FRACTION);
-        assert_eq!(cfg.max_observability_overhead, DEFAULT_MAX_OBSERVABILITY_OVERHEAD);
-        assert_eq!(cfg.min_portability_fraction, DEFAULT_MIN_PORTABILITY_FRACTION);
+        assert_eq!(
+            cfg.min_local_access_fraction,
+            DEFAULT_MIN_LOCAL_ACCESS_FRACTION
+        );
+        assert_eq!(
+            cfg.max_observability_overhead,
+            DEFAULT_MAX_OBSERVABILITY_OVERHEAD
+        );
+        assert_eq!(
+            cfg.min_portability_fraction,
+            DEFAULT_MIN_PORTABILITY_FRACTION
+        );
     }
 
     #[test]
@@ -1470,7 +1546,9 @@ mod tests {
     #[test]
     fn portability_conditionally_portable_with_degradation() {
         let ev = PortabilityEvidence::new(
-            "x86_64", "aarch64", 900_000,
+            "x86_64",
+            "aarch64",
+            900_000,
             vec!["cache_line_size_difference".to_string()],
             test_epoch(),
         );
@@ -1480,18 +1558,14 @@ mod tests {
 
     #[test]
     fn portability_machine_specific() {
-        let ev = PortabilityEvidence::new(
-            "x86_64", "aarch64", 200_000, vec![], test_epoch(),
-        );
+        let ev = PortabilityEvidence::new("x86_64", "aarch64", 200_000, vec![], test_epoch());
         let verdict = evaluate_portability(&ev, &default_config());
         assert_eq!(verdict, PortabilityVerdict::MachineSpecific);
     }
 
     #[test]
     fn portability_unknown_same_topology_zero_transfer() {
-        let ev = PortabilityEvidence::new(
-            "x86_64", "x86_64", 0, vec![], test_epoch(),
-        );
+        let ev = PortabilityEvidence::new("x86_64", "x86_64", 0, vec![], test_epoch());
         let verdict = evaluate_portability(&ev, &default_config());
         assert_eq!(verdict, PortabilityVerdict::Unknown);
     }
@@ -1511,7 +1585,13 @@ mod tests {
         let numa = good_numa_evidence();
         let port = good_portability_evidence();
         let obs = good_observability();
-        let result = evaluate(Some(&cache), Some(&numa), Some(&port), Some(&obs), &default_config());
+        let result = evaluate(
+            Some(&cache),
+            Some(&numa),
+            Some(&port),
+            Some(&obs),
+            &default_config(),
+        );
         assert_eq!(result.decision, GovernanceDecision::Approve);
         assert!(result.blocking_reasons.is_empty());
     }
@@ -1546,7 +1626,10 @@ mod tests {
         let obs = ObservabilityImpact::new(500_000, 10_000, false);
         let result = evaluate(Some(&cache), None, None, Some(&obs), &default_config());
         assert_eq!(result.decision, GovernanceDecision::Reject);
-        assert!(result.blocking_reasons.iter().any(|r| r.contains("observability")));
+        assert!(result
+            .blocking_reasons
+            .iter()
+            .any(|r| r.contains("observability")));
     }
 
     #[test]
@@ -1595,7 +1678,8 @@ mod tests {
     #[test]
     fn decision_receipt_new() {
         let hash = ContentHash::compute(b"test");
-        let receipt = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
+        let receipt =
+            DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         assert_eq!(receipt.component, COMPONENT);
         assert_eq!(receipt.decision, GovernanceDecision::Approve);
     }
@@ -1603,7 +1687,8 @@ mod tests {
     #[test]
     fn decision_receipt_display() {
         let hash = ContentHash::compute(b"test");
-        let receipt = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
+        let receipt =
+            DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         let s = receipt.to_string();
         assert!(s.contains("Receipt"));
         assert!(s.contains(COMPONENT));
@@ -1612,7 +1697,12 @@ mod tests {
     #[test]
     fn decision_receipt_deterministic() {
         let hash = ContentHash::compute(b"test");
-        let a = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash.clone());
+        let a = DecisionReceipt::new(
+            COMPONENT,
+            test_epoch(),
+            GovernanceDecision::Approve,
+            hash.clone(),
+        );
         let b = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         assert_eq!(a.receipt_hash, b.receipt_hash);
     }
@@ -1694,7 +1784,10 @@ mod tests {
             GovernanceDecision::Reject,
         );
         assert_eq!(
-            merge_decisions(GovernanceDecision::ConditionalApprove, GovernanceDecision::RequireEvidence),
+            merge_decisions(
+                GovernanceDecision::ConditionalApprove,
+                GovernanceDecision::RequireEvidence
+            ),
             GovernanceDecision::RequireEvidence,
         );
     }

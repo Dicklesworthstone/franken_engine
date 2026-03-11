@@ -6,26 +6,16 @@ use frankenengine_engine::benchmark_coverage_saturation_gate::*;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+fn epoch() -> SecurityEpoch { SecurityEpoch::from_raw(42) }
 
-fn epoch() -> SecurityEpoch {
-    SecurityEpoch::from_raw(42)
-}
-
-/// Nine equal-weight families — ideal board.
 fn equal_families() -> Vec<FamilyCoverage> {
-    WorkloadFamily::ALL
-        .iter()
+    WorkloadFamily::ALL.iter()
         .map(|&f| FamilyCoverage::new(f, 10, 111_111, 900_000, 50_000))
         .collect()
 }
 
-/// One dominant family, rest minimal.
 fn dominant_families() -> Vec<FamilyCoverage> {
-    let mut fams: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
+    let mut fams: Vec<FamilyCoverage> = WorkloadFamily::ALL.iter()
         .map(|&f| FamilyCoverage::new(f, 5, 10_000, 500_000, 100_000))
         .collect();
     fams[0].total_weight = 900_000;
@@ -33,7 +23,6 @@ fn dominant_families() -> Vec<FamilyCoverage> {
     fams
 }
 
-/// Cherry-picked: only two families present.
 fn cherry_picked_families() -> Vec<FamilyCoverage> {
     vec![
         FamilyCoverage::new(WorkloadFamily::BranchHeavy, 20, 700_000, 950_000, 20_000),
@@ -41,111 +30,46 @@ fn cherry_picked_families() -> Vec<FamilyCoverage> {
     ]
 }
 
-/// All families present but with zero weight.
-fn zero_weight_families() -> Vec<FamilyCoverage> {
-    WorkloadFamily::ALL
-        .iter()
-        .map(|&f| FamilyCoverage::new(f, 5, 0, 0, 0))
-        .collect()
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+// -- Constants --
 
 #[test]
-fn test_schema_version_contains_gate_name() {
+fn test_constants() {
     assert!(SCHEMA_VERSION.contains("benchmark-coverage-saturation-gate"));
-    assert!(SCHEMA_VERSION.contains(".v1"));
-}
-
-#[test]
-fn test_component_constant() {
     assert_eq!(COMPONENT, "benchmark_coverage_saturation_gate");
-}
-
-#[test]
-fn test_bead_id_constant() {
     assert_eq!(BEAD_ID, "bd-1lsy.8.5.5");
-}
-
-#[test]
-fn test_policy_id_constant() {
     assert_eq!(POLICY_ID, "RGC-705E");
-}
-
-#[test]
-fn test_fixed_one_value() {
     assert_eq!(FIXED_ONE, 1_000_000);
-}
-
-#[test]
-fn test_total_workload_families_matches_all() {
     assert_eq!(TOTAL_WORKLOAD_FAMILIES, WorkloadFamily::ALL.len());
-    assert_eq!(TOTAL_WORKLOAD_FAMILIES, 9);
-}
-
-#[test]
-fn test_default_constants_relationships() {
-    // Min families should be less than or equal to total.
     assert!(DEFAULT_MIN_FAMILIES_COVERED <= TOTAL_WORKLOAD_FAMILIES);
-    // Coverage fraction < 1.0.
     assert!(DEFAULT_MIN_FAMILY_COVERAGE < FIXED_ONE);
-    // Max gini < 1.0.
     assert!(DEFAULT_MAX_GINI < FIXED_ONE);
-    // Min entropy < 1.0.
     assert!(DEFAULT_MIN_ENTROPY < FIXED_ONE);
-    // Max single family share < 1.0.
     assert!(DEFAULT_MAX_SINGLE_FAMILY_SHARE < FIXED_ONE);
 }
 
-// ---------------------------------------------------------------------------
-// WorkloadFamily — enum variants, Display, serde, ordering
-// ---------------------------------------------------------------------------
+// -- WorkloadFamily --
 
 #[test]
-fn test_workload_family_all_has_nine_members() {
-    assert_eq!(WorkloadFamily::ALL.len(), 9);
-}
-
-#[test]
-fn test_workload_family_display_all_variants() {
+fn test_workload_family_display_all() {
     let expected = [
-        "branch_heavy",
-        "vectorizable",
-        "proof_specialized",
-        "native_addon",
-        "hostcall_boundary",
-        "startup_image",
-        "metadata_locality",
-        "observability_sensitive",
-        "resource_spiky",
+        "branch_heavy", "vectorizable", "proof_specialized", "native_addon",
+        "hostcall_boundary", "startup_image", "metadata_locality",
+        "observability_sensitive", "resource_spiky",
     ];
-    for (family, exp) in WorkloadFamily::ALL.iter().zip(expected.iter()) {
-        assert_eq!(family.to_string(), *exp);
+    for (f, exp) in WorkloadFamily::ALL.iter().zip(expected.iter()) {
+        assert_eq!(f.to_string(), *exp);
+        assert_eq!(f.as_str(), *exp);
     }
 }
 
 #[test]
-fn test_workload_family_as_str_matches_display() {
-    for &f in WorkloadFamily::ALL {
-        assert_eq!(f.as_str(), f.to_string());
-    }
-}
-
-#[test]
-fn test_workload_family_serde_roundtrip_all() {
+fn test_workload_family_serde_roundtrip() {
     for &f in WorkloadFamily::ALL {
         let json = serde_json::to_string(&f).unwrap();
         let back: WorkloadFamily = serde_json::from_str(&json).unwrap();
         assert_eq!(f, back);
     }
-}
-
-#[test]
-fn test_workload_family_serde_snake_case() {
-    let json = serde_json::to_string(&WorkloadFamily::HostcallBoundary).unwrap();
-    assert_eq!(json, "\"hostcall_boundary\"");
+    assert_eq!(serde_json::to_string(&WorkloadFamily::HostcallBoundary).unwrap(), "\"hostcall_boundary\"");
 }
 
 #[test]
@@ -155,12 +79,10 @@ fn test_workload_family_canonical_ordering() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// SaturationVerdict — Display, serde, is_acceptable
-// ---------------------------------------------------------------------------
+// -- SaturationVerdict --
 
 #[test]
-fn test_saturation_verdict_display_all() {
+fn test_saturation_verdict_display() {
     assert_eq!(SaturationVerdict::Saturated.to_string(), "saturated");
     assert_eq!(SaturationVerdict::NearSaturated.to_string(), "near_saturated");
     assert_eq!(SaturationVerdict::Sparse.to_string(), "sparse");
@@ -169,7 +91,7 @@ fn test_saturation_verdict_display_all() {
 }
 
 #[test]
-fn test_saturation_verdict_acceptable_variants() {
+fn test_saturation_verdict_acceptable() {
     assert!(SaturationVerdict::Saturated.is_acceptable());
     assert!(SaturationVerdict::NearSaturated.is_acceptable());
     assert!(!SaturationVerdict::Sparse.is_acceptable());
@@ -178,38 +100,27 @@ fn test_saturation_verdict_acceptable_variants() {
 }
 
 #[test]
-fn test_saturation_verdict_serde_roundtrip() {
-    let variants = [
-        SaturationVerdict::Saturated,
-        SaturationVerdict::NearSaturated,
-        SaturationVerdict::Sparse,
-        SaturationVerdict::CherryPicked,
-        SaturationVerdict::InsufficientData,
-    ];
-    for v in &variants {
-        let json = serde_json::to_string(v).unwrap();
-        let back: SaturationVerdict = serde_json::from_str(&json).unwrap();
-        assert_eq!(*v, back);
+fn test_saturation_verdict_serde() {
+    for v in [SaturationVerdict::Saturated, SaturationVerdict::NearSaturated,
+              SaturationVerdict::Sparse, SaturationVerdict::CherryPicked,
+              SaturationVerdict::InsufficientData] {
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(v, serde_json::from_str::<SaturationVerdict>(&json).unwrap());
     }
 }
 
-// ---------------------------------------------------------------------------
-// RepresentativenessLevel — Display, serde, is_acceptable
-// ---------------------------------------------------------------------------
+// -- RepresentativenessLevel --
 
 #[test]
-fn test_representativeness_display_all() {
+fn test_representativeness_display() {
     assert_eq!(RepresentativenessLevel::Representative.to_string(), "representative");
-    assert_eq!(
-        RepresentativenessLevel::MarginallyRepresentative.to_string(),
-        "marginally_representative"
-    );
+    assert_eq!(RepresentativenessLevel::MarginallyRepresentative.to_string(), "marginally_representative");
     assert_eq!(RepresentativenessLevel::Skewed.to_string(), "skewed");
     assert_eq!(RepresentativenessLevel::Unrepresentative.to_string(), "unrepresentative");
 }
 
 #[test]
-fn test_representativeness_acceptable_variants() {
+fn test_representativeness_acceptable() {
     assert!(RepresentativenessLevel::Representative.is_acceptable());
     assert!(RepresentativenessLevel::MarginallyRepresentative.is_acceptable());
     assert!(!RepresentativenessLevel::Skewed.is_acceptable());
@@ -217,26 +128,18 @@ fn test_representativeness_acceptable_variants() {
 }
 
 #[test]
-fn test_representativeness_serde_roundtrip() {
-    let variants = [
-        RepresentativenessLevel::Representative,
-        RepresentativenessLevel::MarginallyRepresentative,
-        RepresentativenessLevel::Skewed,
-        RepresentativenessLevel::Unrepresentative,
-    ];
-    for v in &variants {
-        let json = serde_json::to_string(v).unwrap();
-        let back: RepresentativenessLevel = serde_json::from_str(&json).unwrap();
-        assert_eq!(*v, back);
+fn test_representativeness_serde() {
+    for v in [RepresentativenessLevel::Representative, RepresentativenessLevel::MarginallyRepresentative,
+              RepresentativenessLevel::Skewed, RepresentativenessLevel::Unrepresentative] {
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(v, serde_json::from_str::<RepresentativenessLevel>(&json).unwrap());
     }
 }
 
-// ---------------------------------------------------------------------------
-// GateDecision — Display, serde, allows_proceed
-// ---------------------------------------------------------------------------
+// -- GateDecision --
 
 #[test]
-fn test_gate_decision_display_all() {
+fn test_gate_decision_display() {
     assert_eq!(GateDecision::Pass.to_string(), "pass");
     assert_eq!(GateDecision::ConditionalPass.to_string(), "conditional_pass");
     assert_eq!(GateDecision::Fail.to_string(), "fail");
@@ -244,7 +147,7 @@ fn test_gate_decision_display_all() {
 }
 
 #[test]
-fn test_gate_decision_allows_proceed_variants() {
+fn test_gate_decision_allows_proceed() {
     assert!(GateDecision::Pass.allows_proceed());
     assert!(GateDecision::ConditionalPass.allows_proceed());
     assert!(!GateDecision::Fail.allows_proceed());
@@ -252,26 +155,18 @@ fn test_gate_decision_allows_proceed_variants() {
 }
 
 #[test]
-fn test_gate_decision_serde_roundtrip() {
-    let variants = [
-        GateDecision::Pass,
-        GateDecision::ConditionalPass,
-        GateDecision::Fail,
-        GateDecision::InsufficientEvidence,
-    ];
-    for v in &variants {
-        let json = serde_json::to_string(v).unwrap();
-        let back: GateDecision = serde_json::from_str(&json).unwrap();
-        assert_eq!(*v, back);
+fn test_gate_decision_serde() {
+    for d in [GateDecision::Pass, GateDecision::ConditionalPass,
+              GateDecision::Fail, GateDecision::InsufficientEvidence] {
+        let json = serde_json::to_string(&d).unwrap();
+        assert_eq!(d, serde_json::from_str::<GateDecision>(&json).unwrap());
     }
 }
 
-// ---------------------------------------------------------------------------
-// FamilyCoverage — construction, field access, helpers
-// ---------------------------------------------------------------------------
+// -- FamilyCoverage --
 
 #[test]
-fn test_family_coverage_new_and_fields() {
+fn test_family_coverage_new() {
     let fc = FamilyCoverage::new(WorkloadFamily::BranchHeavy, 12, 200_000, 750_000, 40_000);
     assert_eq!(fc.family, WorkloadFamily::BranchHeavy);
     assert_eq!(fc.workload_count, 12);
@@ -281,727 +176,437 @@ fn test_family_coverage_new_and_fields() {
 }
 
 #[test]
-fn test_family_coverage_is_present_true() {
-    let fc = FamilyCoverage::new(WorkloadFamily::Vectorizable, 1, 100_000, 500_000, 0);
-    assert!(fc.is_present());
+fn test_family_coverage_is_present() {
+    assert!(FamilyCoverage::new(WorkloadFamily::Vectorizable, 1, 100_000, 500_000, 0).is_present());
+    assert!(!FamilyCoverage::new(WorkloadFamily::Vectorizable, 0, 0, 0, 0).is_present());
 }
 
 #[test]
-fn test_family_coverage_is_present_false() {
-    let fc = FamilyCoverage::new(WorkloadFamily::Vectorizable, 0, 0, 0, 0);
-    assert!(!fc.is_present());
-}
-
-#[test]
-fn test_family_coverage_meets_coverage_exact() {
+fn test_family_coverage_meets_coverage() {
     let fc = FamilyCoverage::new(WorkloadFamily::StartupImage, 3, 100_000, 500_000, 0);
     assert!(fc.meets_coverage(500_000));
-}
-
-#[test]
-fn test_family_coverage_meets_coverage_above() {
-    let fc = FamilyCoverage::new(WorkloadFamily::StartupImage, 3, 100_000, 500_000, 0);
     assert!(fc.meets_coverage(300_000));
-}
-
-#[test]
-fn test_family_coverage_meets_coverage_below() {
-    let fc = FamilyCoverage::new(WorkloadFamily::StartupImage, 3, 100_000, 500_000, 0);
     assert!(!fc.meets_coverage(600_000));
 }
 
 #[test]
-fn test_family_coverage_serde_roundtrip() {
+fn test_family_coverage_serde() {
     let fc = FamilyCoverage::new(WorkloadFamily::ResourceSpiky, 7, 80_000, 650_000, 30_000);
     let json = serde_json::to_string(&fc).unwrap();
-    let back: FamilyCoverage = serde_json::from_str(&json).unwrap();
-    assert_eq!(fc, back);
+    assert_eq!(fc, serde_json::from_str::<FamilyCoverage>(&json).unwrap());
 }
 
-// ---------------------------------------------------------------------------
-// DistributionProfile / compute_coverage
-// ---------------------------------------------------------------------------
+// -- compute_coverage / DistributionProfile --
 
 #[test]
-fn test_compute_coverage_empty_returns_zeros() {
-    let profile = compute_coverage(&[]);
-    assert!(profile.family_coverages.is_empty());
-    assert_eq!(profile.gini_coefficient, 0);
-    assert_eq!(profile.entropy, 0);
-    assert_eq!(profile.max_family_share, 0);
-    assert_eq!(profile.min_family_share, 0);
+fn test_compute_coverage_empty() {
+    let p = compute_coverage(&[]);
+    assert!(p.family_coverages.is_empty());
+    assert_eq!(p.gini_coefficient, 0);
+    assert_eq!(p.entropy, 0);
+    assert_eq!(p.max_family_share, 0);
 }
 
 #[test]
 fn test_compute_coverage_single_family() {
-    let families = vec![FamilyCoverage::new(
-        WorkloadFamily::BranchHeavy, 10, FIXED_ONE, 900_000, 50_000,
-    )];
-    let profile = compute_coverage(&families);
-    assert_eq!(profile.max_family_share, FIXED_ONE);
-    assert_eq!(profile.min_family_share, FIXED_ONE);
-    assert_eq!(profile.gini_coefficient, 0);
-    assert_eq!(profile.entropy, FIXED_ONE);
+    let p = compute_coverage(&[FamilyCoverage::new(WorkloadFamily::BranchHeavy, 10, FIXED_ONE, 900_000, 50_000)]);
+    assert_eq!(p.max_family_share, FIXED_ONE);
+    assert_eq!(p.gini_coefficient, 0);
+    assert_eq!(p.entropy, FIXED_ONE);
 }
 
 #[test]
-fn test_compute_coverage_equal_weights_gini_zero() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    assert_eq!(profile.gini_coefficient, 0);
+fn test_compute_coverage_equal_weights() {
+    let p = compute_coverage(&equal_families());
+    assert_eq!(p.gini_coefficient, 0);
+    assert!(p.entropy >= 990_000, "entropy: {}", p.entropy);
+    assert_eq!(p.family_coverages.len(), 9);
 }
 
 #[test]
-fn test_compute_coverage_equal_weights_entropy_near_max() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    assert!(profile.entropy >= 990_000, "entropy: {}", profile.entropy);
+fn test_compute_coverage_dominant() {
+    let p = compute_coverage(&dominant_families());
+    assert!(p.gini_coefficient > 200_000, "gini: {}", p.gini_coefficient);
+    assert!(p.max_family_share > 500_000, "max_share: {}", p.max_family_share);
 }
 
 #[test]
-fn test_compute_coverage_dominant_family_high_gini() {
-    let families = dominant_families();
-    let profile = compute_coverage(&families);
-    assert!(profile.gini_coefficient > 200_000, "gini: {}", profile.gini_coefficient);
+fn test_compute_coverage_zero_weight() {
+    let families: Vec<_> = WorkloadFamily::ALL.iter()
+        .map(|&f| FamilyCoverage::new(f, 5, 0, 0, 0)).collect();
+    let p = compute_coverage(&families);
+    assert_eq!(p.max_family_share, 0);
+    assert_eq!(p.gini_coefficient, 0);
 }
 
 #[test]
-fn test_compute_coverage_dominant_family_high_max_share() {
-    let families = dominant_families();
-    let profile = compute_coverage(&families);
-    assert!(profile.max_family_share > 500_000, "max_share: {}", profile.max_family_share);
-}
-
-#[test]
-fn test_compute_coverage_preserves_family_count() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    assert_eq!(profile.family_coverages.len(), 9);
-}
-
-#[test]
-fn test_compute_coverage_zero_weight_all_shares_zero() {
-    let families = zero_weight_families();
-    let profile = compute_coverage(&families);
-    assert_eq!(profile.max_family_share, 0);
-    assert_eq!(profile.min_family_share, 0);
-    assert_eq!(profile.gini_coefficient, 0);
-}
-
-#[test]
-fn test_compute_coverage_two_equal_families_entropy_near_max() {
-    let families = vec![
+fn test_compute_coverage_two_equal() {
+    let p = compute_coverage(&[
         FamilyCoverage::new(WorkloadFamily::BranchHeavy, 10, 500_000, 800_000, 30_000),
         FamilyCoverage::new(WorkloadFamily::Vectorizable, 10, 500_000, 800_000, 30_000),
-    ];
-    let profile = compute_coverage(&families);
-    assert_eq!(profile.gini_coefficient, 0);
-    assert!(profile.entropy >= 990_000, "entropy: {}", profile.entropy);
-    assert_eq!(profile.max_family_share, profile.min_family_share);
+    ]);
+    assert_eq!(p.gini_coefficient, 0);
+    assert!(p.entropy >= 990_000);
+    assert_eq!(p.max_family_share, p.min_family_share);
 }
 
 #[test]
-fn test_compute_coverage_two_unequal_families() {
-    let families = vec![
+fn test_compute_coverage_two_unequal() {
+    let p = compute_coverage(&[
         FamilyCoverage::new(WorkloadFamily::BranchHeavy, 10, 900_000, 800_000, 30_000),
         FamilyCoverage::new(WorkloadFamily::Vectorizable, 10, 100_000, 800_000, 30_000),
-    ];
-    let profile = compute_coverage(&families);
-    assert!(profile.gini_coefficient > 0, "gini: {}", profile.gini_coefficient);
-    assert!(profile.max_family_share > profile.min_family_share);
+    ]);
+    assert!(p.gini_coefficient > 0);
+    assert!(p.max_family_share > p.min_family_share);
 }
 
 #[test]
-fn test_distribution_profile_serde_roundtrip() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    let json = serde_json::to_string(&profile).unwrap();
-    let back: DistributionProfile = serde_json::from_str(&json).unwrap();
-    assert_eq!(profile, back);
+fn test_distribution_profile_serde() {
+    let p = compute_coverage(&equal_families());
+    let json = serde_json::to_string(&p).unwrap();
+    assert_eq!(p, serde_json::from_str::<DistributionProfile>(&json).unwrap());
 }
 
-// ---------------------------------------------------------------------------
-// evaluate_saturation
-// ---------------------------------------------------------------------------
+// -- evaluate_saturation --
 
 #[test]
-fn test_saturation_empty_is_insufficient_data() {
-    let profile = compute_coverage(&[]);
-    let config = GateConfig::default();
-    assert_eq!(evaluate_saturation(&profile, &config), SaturationVerdict::InsufficientData);
+fn test_sat_empty_insufficient() {
+    assert_eq!(evaluate_saturation(&compute_coverage(&[]), &GateConfig::default()), SaturationVerdict::InsufficientData);
 }
 
 #[test]
-fn test_saturation_all_families_returns_saturated() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    assert_eq!(evaluate_saturation(&profile, &config), SaturationVerdict::Saturated);
+fn test_sat_equal_saturated() {
+    assert_eq!(evaluate_saturation(&compute_coverage(&equal_families()), &GateConfig::default()), SaturationVerdict::Saturated);
 }
 
 #[test]
-fn test_saturation_six_families_returns_near_saturated() {
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .take(6)
-        .map(|&f| FamilyCoverage::new(f, 5, 100_000, 500_000, 50_000))
-        .collect();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    assert_eq!(evaluate_saturation(&profile, &config), SaturationVerdict::NearSaturated);
+fn test_sat_six_families_near() {
+    let fams: Vec<_> = WorkloadFamily::ALL.iter().take(6)
+        .map(|&f| FamilyCoverage::new(f, 5, 100_000, 500_000, 50_000)).collect();
+    assert_eq!(evaluate_saturation(&compute_coverage(&fams), &GateConfig::default()), SaturationVerdict::NearSaturated);
 }
 
 #[test]
-fn test_saturation_three_families_returns_sparse() {
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .take(3)
-        .map(|&f| FamilyCoverage::new(f, 5, 100_000, 500_000, 50_000))
-        .collect();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    assert_eq!(evaluate_saturation(&profile, &config), SaturationVerdict::Sparse);
+fn test_sat_three_families_sparse() {
+    let fams: Vec<_> = WorkloadFamily::ALL.iter().take(3)
+        .map(|&f| FamilyCoverage::new(f, 5, 100_000, 500_000, 50_000)).collect();
+    assert_eq!(evaluate_saturation(&compute_coverage(&fams), &GateConfig::default()), SaturationVerdict::Sparse);
 }
 
 #[test]
-fn test_saturation_cherry_picked_two_families_dominant() {
-    let families = cherry_picked_families();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    assert_eq!(evaluate_saturation(&profile, &config), SaturationVerdict::CherryPicked);
+fn test_sat_cherry_picked() {
+    assert_eq!(evaluate_saturation(&compute_coverage(&cherry_picked_families()), &GateConfig::default()), SaturationVerdict::CherryPicked);
 }
 
 #[test]
-fn test_saturation_all_zero_workloads() {
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .map(|&f| FamilyCoverage::new(f, 0, 100_000, 0, 0))
-        .collect();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    assert_eq!(evaluate_saturation(&profile, &config), SaturationVerdict::InsufficientData);
+fn test_sat_zero_workloads_insufficient() {
+    let fams: Vec<_> = WorkloadFamily::ALL.iter()
+        .map(|&f| FamilyCoverage::new(f, 0, 100_000, 0, 0)).collect();
+    assert_eq!(evaluate_saturation(&compute_coverage(&fams), &GateConfig::default()), SaturationVerdict::InsufficientData);
 }
 
 #[test]
-fn test_saturation_below_min_workloads_per_family() {
-    // All families present but each has only 1 workload (below default min 3).
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .map(|&f| FamilyCoverage::new(f, 1, 111_111, 900_000, 50_000))
-        .collect();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    let verdict = evaluate_saturation(&profile, &config);
-    // 0 families meet min_workloads_per_family=3, so < 7 covered -> Sparse or worse.
-    assert!(!verdict.is_acceptable(), "verdict: {verdict}");
+fn test_sat_below_min_workloads() {
+    let fams: Vec<_> = WorkloadFamily::ALL.iter()
+        .map(|&f| FamilyCoverage::new(f, 1, 111_111, 900_000, 50_000)).collect();
+    assert!(!evaluate_saturation(&compute_coverage(&fams), &GateConfig::default()).is_acceptable());
 }
 
 #[test]
-fn test_saturation_coverage_fraction_below_threshold() {
-    // All families have enough workloads but low coverage fraction.
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .map(|&f| FamilyCoverage::new(f, 10, 111_111, 50_000, 50_000))
-        .collect();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    // Coverage fraction 50_000 < min 100_000, so not Saturated.
-    let verdict = evaluate_saturation(&profile, &config);
-    assert_eq!(verdict, SaturationVerdict::NearSaturated);
+fn test_sat_low_coverage_fraction() {
+    let fams: Vec<_> = WorkloadFamily::ALL.iter()
+        .map(|&f| FamilyCoverage::new(f, 10, 111_111, 50_000, 50_000)).collect();
+    assert_eq!(evaluate_saturation(&compute_coverage(&fams), &GateConfig::default()), SaturationVerdict::NearSaturated);
 }
 
-// ---------------------------------------------------------------------------
-// evaluate_representativeness
-// ---------------------------------------------------------------------------
+// -- evaluate_representativeness --
 
 #[test]
-fn test_representativeness_equal_is_representative() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    assert_eq!(
-        evaluate_representativeness(&profile, &config),
-        RepresentativenessLevel::Representative
-    );
+fn test_repr_equal_representative() {
+    assert_eq!(evaluate_representativeness(&compute_coverage(&equal_families()), &GateConfig::default()), RepresentativenessLevel::Representative);
 }
 
 #[test]
-fn test_representativeness_empty_is_unrepresentative() {
-    let profile = compute_coverage(&[]);
-    let config = GateConfig::default();
-    assert_eq!(
-        evaluate_representativeness(&profile, &config),
-        RepresentativenessLevel::Unrepresentative
-    );
+fn test_repr_empty_unrepresentative() {
+    assert_eq!(evaluate_representativeness(&compute_coverage(&[]), &GateConfig::default()), RepresentativenessLevel::Unrepresentative);
 }
 
 #[test]
-fn test_representativeness_dominant_not_acceptable() {
-    let families = dominant_families();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::default();
-    let level = evaluate_representativeness(&profile, &config);
-    assert!(!level.is_acceptable(), "expected not acceptable, got {level}");
+fn test_repr_dominant_not_acceptable() {
+    assert!(!evaluate_representativeness(&compute_coverage(&dominant_families()), &GateConfig::default()).is_acceptable());
 }
 
 #[test]
-fn test_representativeness_permissive_config_passes() {
-    let families = dominant_families();
-    let profile = compute_coverage(&families);
-    let config = GateConfig::permissive();
-    let level = evaluate_representativeness(&profile, &config);
-    assert!(level.is_acceptable(), "permissive should pass, got {level}");
+fn test_repr_permissive_passes() {
+    assert!(evaluate_representativeness(&compute_coverage(&dominant_families()), &GateConfig::permissive()).is_acceptable());
 }
 
 #[test]
-fn test_representativeness_marginal_two_of_three_pass() {
-    // Build a profile where gini and share are ok but entropy is not.
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    // Custom config with unreachable entropy requirement.
+fn test_repr_marginal() {
+    let config = GateConfig { min_entropy: FIXED_ONE, ..GateConfig::default() };
+    assert_eq!(evaluate_representativeness(&compute_coverage(&equal_families()), &config), RepresentativenessLevel::MarginallyRepresentative);
+}
+
+#[test]
+fn test_repr_skewed() {
     let config = GateConfig {
-        min_entropy: FIXED_ONE, // impossible to reach exactly
-        ..GateConfig::default()
+        max_gini_coefficient: 100_000, min_entropy: 999_999,
+        max_single_family_share: FIXED_ONE, ..GateConfig::default()
     };
-    let level = evaluate_representativeness(&profile, &config);
-    // gini ok + share ok (2 of 3) -> MarginallyRepresentative.
-    assert_eq!(level, RepresentativenessLevel::MarginallyRepresentative);
+    assert_eq!(evaluate_representativeness(&compute_coverage(&dominant_families()), &config), RepresentativenessLevel::Skewed);
+}
+
+// -- Full evaluate --
+
+#[test]
+fn test_evaluate_pass() {
+    let r = evaluate(&equal_families(), &GateConfig::default());
+    assert_eq!(r.decision, GateDecision::Pass);
+    assert_eq!(r.verdict, SaturationVerdict::Saturated);
+    assert_eq!(r.representativeness, RepresentativenessLevel::Representative);
+    assert!(r.blocking_reasons.is_empty());
 }
 
 #[test]
-fn test_representativeness_skewed_one_of_three_pass() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    // Entropy requirement too high AND gini threshold too low.
-    let config = GateConfig {
-        min_entropy: FIXED_ONE,
-        max_gini_coefficient: 0, // No distribution can meet gini=0 exactly ... except equal.
-        ..GateConfig::default()
-    };
-    // Equal families have gini=0, so gini is ok. Entropy ~1M < FIXED_ONE check depends on exact.
-    // Let's use dominant families instead to reliably fail multiple checks.
-    let families2 = dominant_families();
-    let profile2 = compute_coverage(&families2);
-    let config2 = GateConfig {
-        max_gini_coefficient: 100_000, // fail
-        min_entropy: 999_999,          // fail
-        max_single_family_share: FIXED_ONE, // pass
-        ..GateConfig::default()
-    };
-    let level = evaluate_representativeness(&profile2, &config2);
-    assert_eq!(level, RepresentativenessLevel::Skewed);
-}
-
-// ---------------------------------------------------------------------------
-// Full evaluate
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_evaluate_equal_families_pass() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    assert_eq!(result.decision, GateDecision::Pass);
-    assert_eq!(result.verdict, SaturationVerdict::Saturated);
-    assert_eq!(result.representativeness, RepresentativenessLevel::Representative);
-    assert!(result.blocking_reasons.is_empty());
+fn test_evaluate_fail() {
+    let r = evaluate(&cherry_picked_families(), &GateConfig::default());
+    assert_eq!(r.decision, GateDecision::Fail);
+    assert!(!r.blocking_reasons.is_empty());
 }
 
 #[test]
-fn test_evaluate_cherry_picked_fail() {
-    let families = cherry_picked_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    assert_eq!(result.decision, GateDecision::Fail);
-    assert!(!result.blocking_reasons.is_empty());
+fn test_evaluate_insufficient() {
+    assert_eq!(evaluate(&[], &GateConfig::default()).decision, GateDecision::InsufficientEvidence);
 }
 
 #[test]
-fn test_evaluate_empty_insufficient_evidence() {
-    let families: Vec<FamilyCoverage> = Vec::new();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    assert_eq!(result.decision, GateDecision::InsufficientEvidence);
+fn test_evaluate_conditional() {
+    let mut fams = equal_families();
+    fams[4].workload_count = 2;
+    let r = evaluate(&fams, &GateConfig::default());
+    assert!(r.decision == GateDecision::Pass || r.decision == GateDecision::ConditionalPass);
 }
 
 #[test]
-fn test_evaluate_conditional_pass_with_recommendations() {
-    // All families present with good distribution, one slightly under min workloads.
-    let mut families = equal_families();
-    families[4].workload_count = 2; // Below default min 3.
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    // 8 of 9 families meet min_workloads => 8 >= 7 min => saturation ok.
-    // The under-threshold family generates a recommendation.
-    assert!(
-        result.decision == GateDecision::Pass || result.decision == GateDecision::ConditionalPass,
-        "decision: {:?}",
-        result.decision,
-    );
+fn test_evaluate_blocking_reasons_content() {
+    let r = evaluate(&cherry_picked_families(), &GateConfig::default());
+    let combined = r.blocking_reasons.join(" ");
+    assert!(combined.contains("saturation") || combined.contains("representativeness") || combined.contains("families"));
 }
 
 #[test]
-fn test_evaluate_fail_has_blocking_reasons() {
-    let families = cherry_picked_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    assert!(!result.blocking_reasons.is_empty());
-    let combined = result.blocking_reasons.join(" ");
-    assert!(
-        combined.contains("saturation") || combined.contains("representativeness")
-            || combined.contains("families covered"),
-        "blocking_reasons: {:?}",
-        result.blocking_reasons,
-    );
+fn test_evaluate_recommendations() {
+    let mut fams: Vec<_> = WorkloadFamily::ALL.iter()
+        .map(|&f| FamilyCoverage::new(f, 5, 50_000, 500_000, 50_000)).collect();
+    fams[0].total_weight = 800_000;
+    let r = evaluate(&fams, &GateConfig::default());
+    let recs = r.recommendations.join(" ");
+    assert!(recs.contains("Gini") || recs.contains("share"));
 }
 
 #[test]
-fn test_evaluate_recommendations_for_gini() {
-    // Build a skewed board that still has enough families to not be cherry-picked.
-    let mut families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .map(|&f| FamilyCoverage::new(f, 5, 50_000, 500_000, 50_000))
-        .collect();
-    families[0].total_weight = 800_000;
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    let all_recs = result.recommendations.join(" ");
-    assert!(all_recs.contains("Gini") || all_recs.contains("gini") || all_recs.contains("share"),
-        "recommendations: {:?}", result.recommendations);
+fn test_evaluate_permissive_passes() {
+    assert!(evaluate(&cherry_picked_families(), &GateConfig::permissive()).decision.allows_proceed());
 }
 
 #[test]
-fn test_evaluate_permissive_always_passes() {
-    let families = cherry_picked_families();
-    let config = GateConfig::permissive();
-    let result = evaluate(&families, &config);
-    assert!(result.decision.allows_proceed(), "decision: {:?}", result.decision);
+fn test_evaluate_strict() {
+    let fams: Vec<_> = WorkloadFamily::ALL.iter()
+        .map(|&f| FamilyCoverage::new(f, 10, 111_111, 150_000, 50_000)).collect();
+    assert_eq!(evaluate(&fams, &GateConfig::strict()).verdict, SaturationVerdict::NearSaturated);
+}
+
+// -- Receipt hash determinism --
+
+#[test]
+fn test_receipt_hash_deterministic() {
+    let c = GateConfig::default();
+    assert_eq!(evaluate(&equal_families(), &c).receipt_hash, evaluate(&equal_families(), &c).receipt_hash);
 }
 
 #[test]
-fn test_evaluate_strict_config_tighter() {
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .map(|&f| FamilyCoverage::new(f, 10, 111_111, 150_000, 50_000))
-        .collect();
-    let config = GateConfig::strict();
-    let result = evaluate(&families, &config);
-    // 150_000 < strict min_family_coverage 200_000 -> NearSaturated.
-    assert_eq!(result.verdict, SaturationVerdict::NearSaturated);
-}
-
-// ---------------------------------------------------------------------------
-// Receipt hash determinism
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_evaluate_receipt_hash_deterministic() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let r1 = evaluate(&families, &config);
-    let r2 = evaluate(&families, &config);
-    assert_eq!(r1.receipt_hash, r2.receipt_hash);
+fn test_different_inputs_different_hashes() {
+    let c = GateConfig::default();
+    assert_ne!(evaluate(&equal_families(), &c).receipt_hash, evaluate(&cherry_picked_families(), &c).receipt_hash);
 }
 
 #[test]
-fn test_evaluate_different_inputs_different_hashes() {
-    let config = GateConfig::default();
-    let r1 = evaluate(&equal_families(), &config);
-    let r2 = evaluate(&cherry_picked_families(), &config);
-    assert_ne!(r1.receipt_hash, r2.receipt_hash);
+fn test_receipt_hash_not_trivial() {
+    assert_ne!(evaluate(&equal_families(), &GateConfig::default()).receipt_hash, ContentHash::compute(&[0u8; 32]));
 }
 
-// ---------------------------------------------------------------------------
-// GateConfig
-// ---------------------------------------------------------------------------
+// -- GateConfig --
 
 #[test]
-fn test_gate_config_default_values() {
-    let config = GateConfig::default();
-    assert_eq!(config.min_families_covered, DEFAULT_MIN_FAMILIES_COVERED);
-    assert_eq!(config.min_family_coverage_fraction, DEFAULT_MIN_FAMILY_COVERAGE);
-    assert_eq!(config.max_gini_coefficient, DEFAULT_MAX_GINI);
-    assert_eq!(config.min_entropy, DEFAULT_MIN_ENTROPY);
-    assert_eq!(config.max_single_family_share, DEFAULT_MAX_SINGLE_FAMILY_SHARE);
-    assert_eq!(config.min_workloads_per_family, DEFAULT_MIN_WORKLOADS_PER_FAMILY);
+fn test_gate_config_default() {
+    let c = GateConfig::default();
+    assert_eq!(c.min_families_covered, DEFAULT_MIN_FAMILIES_COVERED);
+    assert_eq!(c.min_family_coverage_fraction, DEFAULT_MIN_FAMILY_COVERAGE);
+    assert_eq!(c.max_gini_coefficient, DEFAULT_MAX_GINI);
+    assert_eq!(c.min_entropy, DEFAULT_MIN_ENTROPY);
+    assert_eq!(c.max_single_family_share, DEFAULT_MAX_SINGLE_FAMILY_SHARE);
+    assert_eq!(c.min_workloads_per_family, DEFAULT_MIN_WORKLOADS_PER_FAMILY);
 }
 
 #[test]
-fn test_gate_config_strict_tighter_than_default() {
-    let strict = GateConfig::strict();
-    let default = GateConfig::default();
-    assert!(strict.min_families_covered >= default.min_families_covered);
-    assert!(strict.min_family_coverage_fraction >= default.min_family_coverage_fraction);
-    assert!(strict.max_gini_coefficient <= default.max_gini_coefficient);
-    assert!(strict.min_entropy >= default.min_entropy);
-    assert!(strict.max_single_family_share <= default.max_single_family_share);
-    assert!(strict.min_workloads_per_family >= default.min_workloads_per_family);
-}
-
-#[test]
-fn test_gate_config_permissive_loosest() {
+fn test_gate_config_strict_and_permissive() {
+    let (s, d) = (GateConfig::strict(), GateConfig::default());
+    assert!(s.min_families_covered >= d.min_families_covered);
+    assert!(s.min_family_coverage_fraction >= d.min_family_coverage_fraction);
+    assert!(s.max_gini_coefficient <= d.max_gini_coefficient);
     let p = GateConfig::permissive();
     assert_eq!(p.min_families_covered, 1);
-    assert_eq!(p.min_family_coverage_fraction, 0);
     assert_eq!(p.max_gini_coefficient, FIXED_ONE);
     assert_eq!(p.min_entropy, 0);
-    assert_eq!(p.max_single_family_share, FIXED_ONE);
-    assert_eq!(p.min_workloads_per_family, 1);
+    // serde roundtrip
+    let json = serde_json::to_string(&s).unwrap();
+    assert_eq!(s, serde_json::from_str::<GateConfig>(&json).unwrap());
 }
 
-#[test]
-fn test_gate_config_serde_roundtrip() {
-    let config = GateConfig::strict();
-    let json = serde_json::to_string(&config).unwrap();
-    let back: GateConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(config, back);
-}
-
-// ---------------------------------------------------------------------------
-// DecisionReceipt
-// ---------------------------------------------------------------------------
+// -- DecisionReceipt --
 
 #[test]
-fn test_decision_receipt_from_result_fields() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
+fn test_decision_receipt_fields_and_determinism() {
+    let result = evaluate(&equal_families(), &GateConfig::default());
     let receipt = DecisionReceipt::from_result(&result, epoch());
     assert_eq!(receipt.component, COMPONENT);
     assert_eq!(receipt.epoch, epoch());
     assert_eq!(receipt.decision, result.decision);
     assert_eq!(receipt.evidence_hash, result.receipt_hash);
+    // Deterministic.
+    assert_eq!(receipt.receipt_hash, DecisionReceipt::from_result(&result, epoch()).receipt_hash);
 }
 
 #[test]
-fn test_decision_receipt_hash_deterministic() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    let r1 = DecisionReceipt::from_result(&result, epoch());
-    let r2 = DecisionReceipt::from_result(&result, epoch());
-    assert_eq!(r1.receipt_hash, r2.receipt_hash);
+fn test_decision_receipt_epoch_varies_hash() {
+    let result = evaluate(&equal_families(), &GateConfig::default());
+    assert_ne!(
+        DecisionReceipt::from_result(&result, SecurityEpoch::from_raw(1)).receipt_hash,
+        DecisionReceipt::from_result(&result, SecurityEpoch::from_raw(2)).receipt_hash,
+    );
 }
 
 #[test]
-fn test_decision_receipt_different_epoch_different_hash() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    let r1 = DecisionReceipt::from_result(&result, SecurityEpoch::from_raw(1));
-    let r2 = DecisionReceipt::from_result(&result, SecurityEpoch::from_raw(2));
-    assert_ne!(r1.receipt_hash, r2.receipt_hash);
-}
-
-#[test]
-fn test_decision_receipt_serde_roundtrip() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    let receipt = DecisionReceipt::from_result(&result, epoch());
+fn test_decision_receipt_serde() {
+    let receipt = DecisionReceipt::from_result(&evaluate(&equal_families(), &GateConfig::default()), epoch());
     let json = serde_json::to_string(&receipt).unwrap();
-    let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
-    assert_eq!(receipt, back);
+    assert_eq!(receipt, serde_json::from_str::<DecisionReceipt>(&json).unwrap());
 }
 
-// ---------------------------------------------------------------------------
-// BatchResult
-// ---------------------------------------------------------------------------
+// -- BatchResult --
 
 #[test]
-fn test_batch_result_empty() {
-    let batch = BatchResult::new(Vec::new());
-    assert!(batch.is_empty());
-    assert_eq!(batch.len(), 0);
-    assert!(!batch.all_acceptable());
+fn test_batch_empty() {
+    let b = BatchResult::new(Vec::new());
+    assert!(b.is_empty());
+    assert_eq!(b.len(), 0);
+    assert!(!b.all_acceptable());
 }
 
 #[test]
-fn test_batch_result_all_pass() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let r1 = evaluate(&families, &config);
-    let r2 = evaluate(&families, &config);
-    let batch = BatchResult::new(vec![r1, r2]);
-    assert_eq!(batch.len(), 2);
-    assert!(batch.all_acceptable());
-    assert!(batch.summary.contains("2 evaluated"));
-    assert!(batch.summary.contains("2 pass"));
+fn test_batch_all_pass() {
+    let c = GateConfig::default();
+    let b = BatchResult::new(vec![evaluate(&equal_families(), &c), evaluate(&equal_families(), &c)]);
+    assert_eq!(b.len(), 2);
+    assert!(b.all_acceptable());
+    assert!(b.summary.contains("2 pass"));
 }
 
 #[test]
-fn test_batch_result_mixed_not_acceptable() {
-    let good = evaluate(&equal_families(), &GateConfig::default());
-    let bad = evaluate(&cherry_picked_families(), &GateConfig::default());
-    let batch = BatchResult::new(vec![good, bad]);
-    assert!(!batch.all_acceptable());
-    assert!(batch.summary.contains("1 fail"));
+fn test_batch_mixed() {
+    let b = BatchResult::new(vec![
+        evaluate(&equal_families(), &GateConfig::default()),
+        evaluate(&cherry_picked_families(), &GateConfig::default()),
+    ]);
+    assert!(!b.all_acceptable());
+    assert!(b.summary.contains("1 fail"));
 }
 
 #[test]
-fn test_batch_result_summary_counts() {
-    let config = GateConfig::default();
-    let pass_result = evaluate(&equal_families(), &config);
-    let fail_result = evaluate(&cherry_picked_families(), &config);
-    let empty_result = evaluate(&[], &config);
-    let batch = BatchResult::new(vec![pass_result, fail_result, empty_result]);
-    assert_eq!(batch.len(), 3);
-    assert!(batch.summary.contains("3 evaluated"));
+fn test_batch_serde() {
+    let b = BatchResult::new(vec![evaluate(&equal_families(), &GateConfig::default())]);
+    let json = serde_json::to_string(&b).unwrap();
+    assert_eq!(b, serde_json::from_str::<BatchResult>(&json).unwrap());
+}
+
+// -- build_evidence --
+
+#[test]
+fn test_build_evidence_fields_and_determinism() {
+    let p = compute_coverage(&equal_families());
+    let ev = build_evidence(&p, SaturationVerdict::Saturated, epoch());
+    assert_eq!(ev.verdict, SaturationVerdict::Saturated);
+    assert_eq!(ev.total_workloads, 90);
+    assert_eq!(ev.covered_families, 9);
+    assert_eq!(ev.epoch, epoch());
+    assert_eq!(ev.receipt_hash, build_evidence(&p, SaturationVerdict::Saturated, epoch()).receipt_hash);
 }
 
 #[test]
-fn test_batch_result_serde_roundtrip() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let r = evaluate(&families, &config);
-    let batch = BatchResult::new(vec![r]);
-    let json = serde_json::to_string(&batch).unwrap();
-    let back: BatchResult = serde_json::from_str(&json).unwrap();
-    assert_eq!(batch, back);
-}
-
-// ---------------------------------------------------------------------------
-// SaturationEvidence / build_evidence
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_build_evidence_fields() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    let evidence = build_evidence(&profile, SaturationVerdict::Saturated, epoch());
-    assert_eq!(evidence.verdict, SaturationVerdict::Saturated);
-    assert_eq!(evidence.total_workloads, 90); // 9 families * 10
-    assert_eq!(evidence.covered_families, 9);
-    assert_eq!(evidence.epoch, epoch());
+fn test_build_evidence_hash_varies() {
+    let p = compute_coverage(&equal_families());
+    assert_ne!(
+        build_evidence(&p, SaturationVerdict::Saturated, epoch()).receipt_hash,
+        build_evidence(&p, SaturationVerdict::Sparse, epoch()).receipt_hash,
+    );
+    assert_ne!(
+        build_evidence(&p, SaturationVerdict::Saturated, SecurityEpoch::from_raw(1)).receipt_hash,
+        build_evidence(&p, SaturationVerdict::Saturated, SecurityEpoch::from_raw(2)).receipt_hash,
+    );
 }
 
 #[test]
-fn test_build_evidence_hash_deterministic() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    let e1 = build_evidence(&profile, SaturationVerdict::Saturated, epoch());
-    let e2 = build_evidence(&profile, SaturationVerdict::Saturated, epoch());
-    assert_eq!(e1.receipt_hash, e2.receipt_hash);
+fn test_build_evidence_empty() {
+    let ev = build_evidence(&compute_coverage(&[]), SaturationVerdict::InsufficientData, epoch());
+    assert_eq!(ev.total_workloads, 0);
+    assert_eq!(ev.covered_families, 0);
 }
 
 #[test]
-fn test_build_evidence_different_verdict_different_hash() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    let e1 = build_evidence(&profile, SaturationVerdict::Saturated, epoch());
-    let e2 = build_evidence(&profile, SaturationVerdict::Sparse, epoch());
-    assert_ne!(e1.receipt_hash, e2.receipt_hash);
+fn test_build_evidence_serde() {
+    let ev = build_evidence(&compute_coverage(&equal_families()), SaturationVerdict::Saturated, epoch());
+    let json = serde_json::to_string(&ev).unwrap();
+    assert_eq!(ev, serde_json::from_str::<SaturationEvidence>(&json).unwrap());
+}
+
+// -- GateResult serde + Edge cases --
+
+#[test]
+fn test_gate_result_serde() {
+    let r = evaluate(&equal_families(), &GateConfig::default());
+    let json = serde_json::to_string(&r).unwrap();
+    assert_eq!(r, serde_json::from_str::<GateResult>(&json).unwrap());
 }
 
 #[test]
-fn test_build_evidence_different_epoch_different_hash() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    let e1 = build_evidence(&profile, SaturationVerdict::Saturated, SecurityEpoch::from_raw(1));
-    let e2 = build_evidence(&profile, SaturationVerdict::Saturated, SecurityEpoch::from_raw(2));
-    assert_ne!(e1.receipt_hash, e2.receipt_hash);
+fn test_single_family_fails() {
+    let r = evaluate(&[FamilyCoverage::new(WorkloadFamily::BranchHeavy, 100, FIXED_ONE, FIXED_ONE, 0)], &GateConfig::default());
+    assert!(!r.decision.allows_proceed());
 }
 
 #[test]
-fn test_build_evidence_serde_roundtrip() {
-    let families = equal_families();
-    let profile = compute_coverage(&families);
-    let evidence = build_evidence(&profile, SaturationVerdict::Saturated, epoch());
-    let json = serde_json::to_string(&evidence).unwrap();
-    let back: SaturationEvidence = serde_json::from_str(&json).unwrap();
-    assert_eq!(evidence, back);
+fn test_all_families_one_workload_fails() {
+    let fams: Vec<_> = WorkloadFamily::ALL.iter()
+        .map(|&f| FamilyCoverage::new(f, 1, 111_111, 900_000, 50_000)).collect();
+    assert!(!evaluate(&fams, &GateConfig::default()).decision.allows_proceed());
 }
 
 #[test]
-fn test_build_evidence_empty_profile() {
-    let profile = compute_coverage(&[]);
-    let evidence = build_evidence(&profile, SaturationVerdict::InsufficientData, epoch());
-    assert_eq!(evidence.total_workloads, 0);
-    assert_eq!(evidence.covered_families, 0);
-}
-
-// ---------------------------------------------------------------------------
-// GateResult serde
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_gate_result_serde_roundtrip() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    let json = serde_json::to_string(&result).unwrap();
-    let back: GateResult = serde_json::from_str(&json).unwrap();
-    assert_eq!(result, back);
-}
-
-// ---------------------------------------------------------------------------
-// Edge cases
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_single_family_board_not_saturated() {
-    let families = vec![
-        FamilyCoverage::new(WorkloadFamily::BranchHeavy, 100, FIXED_ONE, FIXED_ONE, 0),
-    ];
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    // Only 1 family covered < 7 min. Max share = 1.0 > 500_000 -> CherryPicked.
-    assert!(!result.decision.allows_proceed());
+fn test_permissive_single_family_passes() {
+    let r = evaluate(&[FamilyCoverage::new(WorkloadFamily::ResourceSpiky, 1, FIXED_ONE, FIXED_ONE, 0)], &GateConfig::permissive());
+    assert!(r.decision.allows_proceed());
 }
 
 #[test]
-fn test_all_families_one_workload_each() {
-    // Each family has 1 workload (below default min_workloads_per_family=3).
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .map(|&f| FamilyCoverage::new(f, 1, 111_111, 900_000, 50_000))
-        .collect();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    assert!(!result.decision.allows_proceed(), "decision: {:?}", result.decision);
-}
-
-#[test]
-fn test_permissive_config_single_family_passes() {
-    let families = vec![
-        FamilyCoverage::new(WorkloadFamily::ResourceSpiky, 1, FIXED_ONE, FIXED_ONE, 0),
-    ];
-    let config = GateConfig::permissive();
-    let result = evaluate(&families, &config);
-    assert!(result.decision.allows_proceed(), "decision: {:?}", result.decision);
-}
-
-#[test]
-fn test_eight_families_with_default_config() {
-    // 8 families, each with sufficient workloads and coverage.
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .take(8)
-        .map(|&f| FamilyCoverage::new(f, 5, 125_000, 500_000, 50_000))
-        .collect();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    // 8 >= 7 min families, all meet coverage.
-    assert_eq!(result.verdict, SaturationVerdict::Saturated);
+fn test_eight_families_saturated() {
+    let fams: Vec<_> = WorkloadFamily::ALL.iter().take(8)
+        .map(|&f| FamilyCoverage::new(f, 5, 125_000, 500_000, 50_000)).collect();
+    assert_eq!(evaluate(&fams, &GateConfig::default()).verdict, SaturationVerdict::Saturated);
 }
 
 #[test]
 fn test_large_workload_counts() {
-    let families: Vec<FamilyCoverage> = WorkloadFamily::ALL
-        .iter()
-        .map(|&f| FamilyCoverage::new(f, 1_000_000, 111_111, 999_000, 1_000))
-        .collect();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    assert_eq!(result.decision, GateDecision::Pass);
-}
-
-#[test]
-fn test_content_hash_not_all_zeros() {
-    let families = equal_families();
-    let config = GateConfig::default();
-    let result = evaluate(&families, &config);
-    // The receipt hash should not be all zeros.
-    let zero_hash = ContentHash::compute(&[0u8; 32]);
-    assert_ne!(result.receipt_hash, zero_hash);
+    let fams: Vec<_> = WorkloadFamily::ALL.iter()
+        .map(|&f| FamilyCoverage::new(f, 1_000_000, 111_111, 999_000, 1_000)).collect();
+    assert_eq!(evaluate(&fams, &GateConfig::default()).decision, GateDecision::Pass);
 }

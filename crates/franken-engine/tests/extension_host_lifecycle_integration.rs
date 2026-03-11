@@ -563,6 +563,24 @@ fn unload_extension_closes_sessions_first() {
 }
 
 #[test]
+fn unload_extension_clears_session_record() {
+    let mut mgr = ExtensionHostLifecycleManager::new();
+    let mut cx = mock_cx(20000);
+    mgr.load_extension("ext-a", &mut cx).unwrap();
+    mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+    mgr.create_session("ext-a", "s2", &mut cx).unwrap();
+    assert_eq!(mgr.session_count("ext-a"), 2);
+
+    let outcome = mgr.unload_extension("ext-a", &mut cx).unwrap();
+    assert!(outcome.success);
+
+    let record = mgr.extension_record("ext-a").unwrap();
+    assert!(record.unloaded);
+    assert!(record.sessions.is_empty());
+    assert_eq!(mgr.session_count("ext-a"), 0);
+}
+
+#[test]
 fn unload_extension_emits_event() {
     let mut mgr = ExtensionHostLifecycleManager::new();
     let mut cx = mock_cx(5000);

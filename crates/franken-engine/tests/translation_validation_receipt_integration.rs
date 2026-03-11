@@ -9,7 +9,7 @@
     clippy::clone_on_copy
 )]
 
-use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::translation_validation_receipt::*;
 use frankenengine_engine::versioned_rewrite_pack::{PackVersion, RewriteCategory};
@@ -291,7 +291,8 @@ fn test_signature_verification_across_chain() {
         em.emit(input(&format!("opt-{i}"), proven()));
     }
 
-    for receipt in &em.chain.receipts {
+    let receipts: Vec<_> = em.chain.receipts.clone();
+    for receipt in &receipts {
         assert!(em.verify_receipt(receipt));
     }
     assert_eq!(em.stats.total_verifications, 5);

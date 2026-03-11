@@ -454,7 +454,11 @@ impl PromotionRecord {
 
 impl fmt::Display for PromotionRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "promotion[{}]: {} — {}", self.claim_id, self.decision, self.reason)
+        write!(
+            f,
+            "promotion[{}]: {} — {}",
+            self.claim_id, self.decision, self.reason
+        )
     }
 }
 
@@ -607,13 +611,22 @@ impl GateSummary {
     /// Compute a summary from a list of verdicts.
     pub fn from_verdicts(verdicts: &[ClaimVerdict]) -> Self {
         let total_claims = verdicts.len();
-        let confirmed = verdicts.iter().filter(|v| **v == ClaimVerdict::Confirmed).count();
-        let downgraded = verdicts.iter().filter(|v| **v == ClaimVerdict::Downgraded).count();
+        let confirmed = verdicts
+            .iter()
+            .filter(|v| **v == ClaimVerdict::Confirmed)
+            .count();
+        let downgraded = verdicts
+            .iter()
+            .filter(|v| **v == ClaimVerdict::Downgraded)
+            .count();
         let requires_local = verdicts
             .iter()
             .filter(|v| **v == ClaimVerdict::RequiresLocal)
             .count();
-        let unsupported = verdicts.iter().filter(|v| **v == ClaimVerdict::Unsupported).count();
+        let unsupported = verdicts
+            .iter()
+            .filter(|v| **v == ClaimVerdict::Unsupported)
+            .count();
         let insufficient = verdicts
             .iter()
             .filter(|v| **v == ClaimVerdict::InsufficientEvidence)
@@ -702,11 +715,7 @@ pub struct DecisionReceipt {
 
 impl DecisionReceipt {
     /// Create a new decision receipt with computed hash.
-    pub fn new(
-        epoch: SecurityEpoch,
-        verdict: ClaimVerdict,
-        claim_hash: ContentHash,
-    ) -> Self {
+    pub fn new(epoch: SecurityEpoch, verdict: ClaimVerdict, claim_hash: ContentHash) -> Self {
         let component = COMPONENT.to_string();
         let mut h = Sha256::new();
         h.update(component.as_bytes());
@@ -739,7 +748,10 @@ impl fmt::Display for DecisionReceipt {
 // ---------------------------------------------------------------------------
 
 /// Collect degradation reasons from a hardware claim's properties.
-fn collect_degradation_reasons(claim: &HardwareClaim, config: &GateConfig) -> Vec<DegradationReason> {
+fn collect_degradation_reasons(
+    claim: &HardwareClaim,
+    config: &GateConfig,
+) -> Vec<DegradationReason> {
     let mut reasons = Vec::new();
 
     // If residual is below the full transport threshold, something is degraded.
@@ -823,10 +835,7 @@ fn build_explanation(
         ),
         ClaimVerdict::InsufficientEvidence => format!(
             "{} claim from {} to {} has insufficient evidence: {} sample(s) collected",
-            claim.kind,
-            claim.source_cell_id,
-            claim.target_cell_id,
-            claim.sample_count,
+            claim.kind, claim.source_cell_id, claim.target_cell_id, claim.sample_count,
         ),
     }
 }
@@ -890,7 +899,9 @@ pub fn evaluate_promotion(evidence: &ClaimEvidence, config: &GateConfig) -> Prom
         ClaimVerdict::Downgraded => {
             // Downgraded can still promote if residual is close enough.
             if evidence.residual_fraction
-                >= config.full_transport_threshold.saturating_sub(config.rollback_regression_threshold)
+                >= config
+                    .full_transport_threshold
+                    .saturating_sub(config.rollback_regression_threshold)
             {
                 (
                     PromotionDecision::Promote,
@@ -930,7 +941,8 @@ pub fn evaluate_promotion(evidence: &ClaimEvidence, config: &GateConfig) -> Prom
     };
 
     let claim_id = format!(
-        "{}:{}->{}", evidence.claim.kind, evidence.claim.source_cell_id, evidence.claim.target_cell_id,
+        "{}:{}->{}",
+        evidence.claim.kind, evidence.claim.source_cell_id, evidence.claim.target_cell_id,
     );
 
     PromotionRecord {
@@ -1514,10 +1526,8 @@ mod tests {
 
     #[test]
     fn test_gate_summary_has_unsupported() {
-        let summary = GateSummary::from_verdicts(&[
-            ClaimVerdict::Confirmed,
-            ClaimVerdict::Unsupported,
-        ]);
+        let summary =
+            GateSummary::from_verdicts(&[ClaimVerdict::Confirmed, ClaimVerdict::Unsupported]);
         assert!(summary.has_unsupported());
     }
 

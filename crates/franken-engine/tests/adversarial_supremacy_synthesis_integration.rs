@@ -3,7 +3,6 @@
 //! Integration tests for the adversarial_supremacy_synthesis module.
 
 use frankenengine_engine::adversarial_supremacy_synthesis::*;
-use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 fn epoch() -> SecurityEpoch {
@@ -13,9 +12,9 @@ fn epoch() -> SecurityEpoch {
 fn make_workload(
     archetype: WorkloadArchetype,
     strategy: SynthesisStrategy,
-    gen: u64,
+    generation: u64,
 ) -> SyntheticWorkload {
-    generate_workload(archetype, strategy, gen, b"integration-seed", epoch())
+    generate_workload(archetype, strategy, generation, b"integration-seed", epoch())
 }
 
 fn small_config() -> MiningConfig {

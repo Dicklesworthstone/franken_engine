@@ -1,6 +1,5 @@
 //! Integration tests for resource_certificate_governance_gate module.
 
-use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::resource_certificate_governance_gate::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 

@@ -1023,12 +1023,17 @@ impl CompressionResidualGate {
         self.claims_blocked
     }
 
-    /// Evaluate a compression claim and produce a decision receipt.
-    pub fn evaluate(
-        &mut self,
-        input: &GateInput,
-    ) -> Result<DecisionReceipt, CompressionResidualError> {
-        // Validate input sizes.
+    /// Number of claims approved with caveats.
+    pub fn claims_with_caveats(&self) -> u64 {
+        self.claims_with_caveats
+    }
+
+    /// Number of claims with insufficient data.
+    pub fn claims_insufficient(&self) -> u64 {
+        self.claims_insufficient
+    }
+
+    fn validate_artifact_count(input: &GateInput) -> Result<usize, CompressionResidualError> {
         let total_artifacts: usize = input.pass_results.iter().map(|p| p.artifacts.len()).sum();
         if total_artifacts > MAX_ARTIFACTS_PER_PASS {
             return Err(CompressionResidualError::TooManyArtifacts {
@@ -1036,6 +1041,81 @@ impl CompressionResidualGate {
                 max: MAX_ARTIFACTS_PER_PASS,
             });
         }
+        Ok(total_artifacts)
+    }
+
+    fn ensure_ledger_capacity(
+        &self,
+        additional_entries: usize,
+    ) -> Result<(), CompressionResidualError> {
+        let count = self.ledger.len().saturating_add(additional_entries);
+        if count > MAX_LEDGER_ENTRIES {
+            return Err(CompressionResidualError::LedgerFull {
+                count,
+                max: MAX_LEDGER_ENTRIES,
+            });
+        }
+        Ok(())
+    }
+
+    fn record_pass_results(&mut self, input: &GateInput) -> Result<(), CompressionResidualError> {
+        let total_artifacts = Self::validate_artifact_count(input)?;
+        self.ensure_ledger_capacity(total_artifacts)?;
+
+        for pass in &input.pass_results {
+            for artifact in &pass.artifacts {
+                self.ledger.append(&LedgerAppendInput {
+                    artifact_id: artifact.artifact_id.clone(),
+                    pass_kind: artifact.pass_kind,
+                    original_size_bytes: artifact.original_size_bytes,
+                    compressed_size_bytes: artifact.compressed_size_bytes,
+                    duplicate_mass_removed_bytes: artifact.duplicates_removed,
+                    duplicate_mass_remaining_bytes: artifact.duplicates_remaining,
+                    reversible: artifact.reversible,
+                    bytes_lost: if artifact.reversible {
+                        0
+                    } else {
+                        artifact
+                            .original_size_bytes
+                            .saturating_sub(artifact.compressed_size_bytes)
+                    },
+                    restoration_overhead_us: artifact.restoration_overhead_us,
+                    epoch: input.epoch,
+                    timestamp_ns: input.timestamp_ns,
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn commit_receipt(&mut self, receipt: DecisionReceipt) {
+        self.evaluations_run += 1;
+        match receipt.verdict {
+            CompressionClaimVerdict::Approved => self.claims_approved += 1,
+            CompressionClaimVerdict::ApprovedWithCaveats => self.claims_with_caveats += 1,
+            CompressionClaimVerdict::Blocked => self.claims_blocked += 1,
+            CompressionClaimVerdict::Insufficient => self.claims_insufficient += 1,
+        }
+        self.receipts.push(receipt);
+    }
+
+    /// Evaluate a compression claim and produce a decision receipt.
+    pub fn evaluate(
+        &mut self,
+        input: &GateInput,
+    ) -> Result<DecisionReceipt, CompressionResidualError> {
+        let receipt = self.build_receipt(input)?;
+        self.record_pass_results(input)?;
+        self.commit_receipt(receipt.clone());
+        Ok(receipt)
+    }
+
+    fn build_receipt(
+        &self,
+        input: &GateInput,
+    ) -> Result<DecisionReceipt, CompressionResidualError> {
+        let total_artifacts_count = Self::validate_artifact_count(input)?;
 
         let mut blocking_reasons = Vec::new();
         let mut caveats = Vec::new();
@@ -1052,7 +1132,6 @@ impl CompressionResidualGate {
         let mut agg_restoration_us: u64 = 0;
         let mut agg_dup_removed: u64 = 0;
         let mut agg_dup_remaining: u64 = 0;
-        let mut total_artifacts_count: usize = 0;
 
         for pass in &input.pass_results {
             agg_original_bytes = agg_original_bytes.saturating_add(pass.total_original_bytes);
@@ -1061,7 +1140,6 @@ impl CompressionResidualGate {
                 agg_restoration_us.saturating_add(pass.total_restoration_overhead_us);
             agg_dup_removed = agg_dup_removed.saturating_add(pass.total_duplicates_removed);
             agg_dup_remaining = agg_dup_remaining.saturating_add(pass.total_duplicates_remaining);
-            total_artifacts_count += pass.artifacts.len();
 
             // Check irreversibility if required.
             if self.config.require_full_reversibility && pass.irreversible_count > 0 {
@@ -1160,7 +1238,7 @@ impl CompressionResidualGate {
         );
         let receipt_hash = ContentHash::compute(receipt_hash_input.as_bytes());
 
-        let receipt = DecisionReceipt {
+        Ok(DecisionReceipt {
             schema_version: COMPRESSION_RESIDUAL_GATE_SCHEMA_VERSION.to_string(),
             component: COMPRESSION_RESIDUAL_GATE_COMPONENT.to_string(),
             bead_id: COMPRESSION_RESIDUAL_GATE_BEAD_ID.to_string(),
@@ -1184,44 +1262,7 @@ impl CompressionResidualGate {
             epoch: input.epoch,
             timestamp_ns: input.timestamp_ns,
             receipt_hash,
-        };
-
-        // Update counters.
-        self.evaluations_run += 1;
-        match receipt.verdict {
-            CompressionClaimVerdict::Approved => self.claims_approved += 1,
-            CompressionClaimVerdict::ApprovedWithCaveats => self.claims_with_caveats += 1,
-            CompressionClaimVerdict::Blocked => self.claims_blocked += 1,
-            CompressionClaimVerdict::Insufficient => self.claims_insufficient += 1,
-        }
-
-        // Record pass results into the ledger.
-        for pass in &input.pass_results {
-            for artifact in &pass.artifacts {
-                let _ = self.ledger.append(&LedgerAppendInput {
-                    artifact_id: artifact.artifact_id.clone(),
-                    pass_kind: artifact.pass_kind,
-                    original_size_bytes: artifact.original_size_bytes,
-                    compressed_size_bytes: artifact.compressed_size_bytes,
-                    duplicate_mass_removed_bytes: artifact.duplicates_removed,
-                    duplicate_mass_remaining_bytes: artifact.duplicates_remaining,
-                    reversible: artifact.reversible,
-                    bytes_lost: if artifact.reversible {
-                        0
-                    } else {
-                        artifact
-                            .original_size_bytes
-                            .saturating_sub(artifact.compressed_size_bytes)
-                    },
-                    restoration_overhead_us: artifact.restoration_overhead_us,
-                    epoch: input.epoch,
-                    timestamp_ns: input.timestamp_ns,
-                });
-            }
-        }
-
-        self.receipts.push(receipt.clone());
-        Ok(receipt)
+        })
     }
 
     /// Cold-start specific checks.
@@ -1447,7 +1488,11 @@ impl CompressionResidualGate {
                 cold_start_total_budget_us: template.cold_start_total_budget_us,
                 proof_total_size_bytes: template.proof_total_size_bytes,
             };
-            results.push(self.evaluate(&input)?);
+            results.push(self.build_receipt(&input)?);
+        }
+        self.record_pass_results(template)?;
+        for receipt in results.iter().cloned() {
+            self.commit_receipt(receipt);
         }
         Ok(results)
     }
@@ -2612,10 +2657,12 @@ mod tests {
         assert_eq!(gate.claims_insufficient, 1);
         assert_eq!(gate.claims_blocked, 0);
         assert!(gate.ledger().is_empty());
-        assert!(receipt
-            .blocking_reasons
-            .iter()
-            .any(|reason| matches!(reason, ClaimBlockingReason::NoCompressionData)));
+        assert!(
+            receipt
+                .blocking_reasons
+                .iter()
+                .any(|reason| matches!(reason, ClaimBlockingReason::NoCompressionData))
+        );
     }
 
     // ── Irreversible artifact gate tests ──────────────────────────────
@@ -2672,6 +2719,35 @@ mod tests {
         assert_eq!(results[0].surface, ClaimSurface::ColdStart);
         assert_eq!(results[1].surface, ClaimSurface::Memory);
         assert_eq!(results[2].surface, ClaimSurface::ProofSurface);
+    }
+
+    #[test]
+    fn test_evaluate_all_surfaces_records_ledger_once() {
+        let mut gate = CompressionResidualGate::new();
+        let arts = vec![
+            simple_artifact("a1", 1000, 500, true),
+            simple_artifact("a2", 2000, 800, true),
+        ];
+        let pass = simple_pass(arts);
+        let template = GateInput {
+            surface: ClaimSurface::ColdStart,
+            pass_results: vec![pass],
+            hidden_expansions: vec![simple_hidden_expansion("s1", 1000, 10)],
+            support_costs: Vec::new(),
+            reversibility_checks: Vec::new(),
+            epoch: epoch(),
+            timestamp_ns: ts(),
+            cold_start_total_budget_us: 1_000_000,
+            proof_total_size_bytes: 10_000,
+        };
+
+        let results = gate.evaluate_all_surfaces(&template).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(gate.receipts().len(), 3);
+        assert_eq!(gate.ledger().len(), 2);
+        assert_eq!(gate.ledger().distinct_artifact_count(), 2);
+        assert_eq!(gate.ledger().total_original_bytes(), 3000);
+        assert_eq!(gate.ledger().total_compressed_bytes(), 1300);
     }
 
     // ── Counter/summary tests ─────────────────────────────────────────
@@ -2897,6 +2973,37 @@ mod tests {
         assert_eq!(gate.claims_approved(), 5);
         assert_eq!(gate.receipts().len(), 5);
         assert_eq!(gate.ledger().len(), 5);
+    }
+
+    #[test]
+    fn test_evaluate_propagates_ledger_full_without_mutating_state() {
+        let mut gate = CompressionResidualGate::new();
+        for i in 0..MAX_LEDGER_ENTRIES {
+            gate.ledger_mut()
+                .append(&ledger_input(
+                    &format!("filled-{i}"),
+                    CompressionPassKind::Deduplication,
+                    1000,
+                    500,
+                    10,
+                    2,
+                    true,
+                ))
+                .unwrap();
+        }
+
+        let pass = simple_pass(vec![simple_artifact("overflow", 1000, 500, true)]);
+        let err = gate.evaluate(&cold_start_input(pass)).unwrap_err();
+        assert_eq!(
+            err,
+            CompressionResidualError::LedgerFull {
+                count: MAX_LEDGER_ENTRIES + 1,
+                max: MAX_LEDGER_ENTRIES,
+            }
+        );
+        assert_eq!(gate.evaluations_run(), 0);
+        assert!(gate.receipts().is_empty());
+        assert_eq!(gate.ledger().len(), MAX_LEDGER_ENTRIES);
     }
 
     // ── Edge case: large values ───────────────────────────────────────

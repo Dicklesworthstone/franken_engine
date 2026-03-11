@@ -840,10 +840,10 @@ pub fn synthesize_batch(
                     .unwrap_or(0);
                 let observed = expected.saturating_sub(pressure);
 
-                if let Some(ce) = evaluate_counterexample(&workload, claim_id, expected, observed) {
-                    if ce.severity.meets_threshold(config.severity_threshold) {
-                        counterexamples.push(ce);
-                    }
+                if let Some(ce) = evaluate_counterexample(&workload, claim_id, expected, observed)
+                    && ce.severity.meets_threshold(config.severity_threshold)
+                {
+                    counterexamples.push(ce);
                 }
 
                 workloads_tested = workloads_tested.saturating_add(1);

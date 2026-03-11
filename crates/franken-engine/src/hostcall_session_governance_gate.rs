@@ -774,10 +774,10 @@ pub fn evaluate_degraded_mode(
 ) -> Vec<DegradedModeReason> {
     let mut reasons = Vec::new();
     for record in records {
-        if record.severity > config.max_degraded_severity || record.is_security_critical() {
-            if !reasons.contains(&record.reason) {
-                reasons.push(record.reason);
-            }
+        if (record.severity > config.max_degraded_severity || record.is_security_critical())
+            && !reasons.contains(&record.reason)
+        {
+            reasons.push(record.reason);
         }
     }
     reasons
@@ -856,25 +856,18 @@ pub fn evaluate(
     }
 
     // 4. Observability overhead evaluation.
-    if let Some(delta) = observability {
-        if delta.overhead_fraction > config.max_observability_overhead {
-            recommendations.push(format!(
-                "observability overhead {} exceeds max {}",
-                delta.overhead_fraction, config.max_observability_overhead,
-            ));
-        }
+    if let Some(delta) = observability
+        && delta.overhead_fraction > config.max_observability_overhead
+    {
+        recommendations.push(format!(
+            "observability overhead {} exceeds max {}",
+            delta.overhead_fraction, config.max_observability_overhead,
+        ));
     }
 
     // Determine overall verdict.
-    let has_security_block = degraded_reasons.iter().any(|r| r.is_security_critical());
     let verdict = if !blocking_reasons.is_empty() {
-        if has_security_block {
-            GateVerdict::Fail
-        } else if conformance_level == ConformanceLevel::NonConformant {
-            GateVerdict::Fail
-        } else {
-            GateVerdict::Fail
-        }
+        GateVerdict::Fail
     } else if !degraded_reasons.is_empty() {
         GateVerdict::DegradedMode
     } else if !recommendations.is_empty() {

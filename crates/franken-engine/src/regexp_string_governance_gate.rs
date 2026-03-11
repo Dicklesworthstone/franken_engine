@@ -348,11 +348,10 @@ impl StringParityEvidence {
         known_gaps: Vec<String>,
         epoch: SecurityEpoch,
     ) -> Self {
-        let parity_fraction = if test_count == 0 {
-            0
-        } else {
-            pass_count.saturating_mul(FIXED_ONE) / test_count
-        };
+        let parity_fraction = pass_count
+            .saturating_mul(FIXED_ONE)
+            .checked_div(test_count)
+            .unwrap_or(0);
         Self {
             surface,
             test_count,
@@ -411,11 +410,10 @@ impl RegExpParityEvidence {
         unicode_coverage: UnicodeCompliance,
         epoch: SecurityEpoch,
     ) -> Self {
-        let parity_fraction = if test_count == 0 {
-            0
-        } else {
-            pass_count.saturating_mul(FIXED_ONE) / test_count
-        };
+        let parity_fraction = pass_count
+            .saturating_mul(FIXED_ONE)
+            .checked_div(test_count)
+            .unwrap_or(0);
         Self {
             surface,
             test_count,
@@ -538,11 +536,10 @@ impl TailRiskRecord {
         p999_latency: u64,
         max_latency: u64,
     ) -> Self {
-        let tail_ratio = if p99_latency == 0 {
-            0
-        } else {
-            p999_latency.saturating_mul(FIXED_ONE) / p99_latency
-        };
+        let tail_ratio = p999_latency
+            .saturating_mul(FIXED_ONE)
+            .checked_div(p99_latency)
+            .unwrap_or(0);
         let acceptable = tail_ratio <= DEFAULT_MAX_TAIL_RATIO;
         Self {
             surface_name: surface_name.into(),
@@ -768,11 +765,10 @@ impl GateSummary {
             }
         }
 
-        let pass_rate = if total == 0 {
-            0
-        } else {
-            (shipped + conditional).saturating_mul(FIXED_ONE) / total
-        };
+        let pass_rate = (shipped + conditional)
+            .saturating_mul(FIXED_ONE)
+            .checked_div(total)
+            .unwrap_or(0);
 
         Self {
             total,
@@ -875,13 +871,9 @@ pub fn evaluate_regexp_parity(
 /// Evaluate Unicode compliance from RegExp evidence.
 pub fn evaluate_unicode(
     evidence: &RegExpParityEvidence,
-    config: &GateConfig,
+    _config: &GateConfig,
 ) -> UnicodeCompliance {
-    if evidence.unicode_coverage.meets_minimum(config.min_unicode_compliance) {
-        evidence.unicode_coverage
-    } else {
-        evidence.unicode_coverage
-    }
+    evidence.unicode_coverage
 }
 
 /// Main gate evaluation: merge all evidence channels into a single result.

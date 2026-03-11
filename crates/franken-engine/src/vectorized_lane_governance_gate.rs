@@ -1513,7 +1513,7 @@ mod tests {
     #[test]
     fn decision_receipt_deterministic() {
         let evidence_hash = compute_content_hash(b"test-evidence");
-        let r1 = DecisionReceipt::new(epoch(), LaneVerdict::Approved, evidence_hash);
+        let r1 = DecisionReceipt::new(epoch(), LaneVerdict::Approved, evidence_hash.clone());
         let r2 = DecisionReceipt::new(epoch(), LaneVerdict::Approved, evidence_hash);
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
@@ -1521,7 +1521,7 @@ mod tests {
     #[test]
     fn decision_receipt_differs_by_verdict() {
         let evidence_hash = compute_content_hash(b"test-evidence");
-        let r1 = DecisionReceipt::new(epoch(), LaneVerdict::Approved, evidence_hash);
+        let r1 = DecisionReceipt::new(epoch(), LaneVerdict::Approved, evidence_hash.clone());
         let r2 = DecisionReceipt::new(epoch(), LaneVerdict::Rejected, evidence_hash);
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }

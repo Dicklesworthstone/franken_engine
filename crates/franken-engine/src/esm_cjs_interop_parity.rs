@@ -214,6 +214,38 @@ pub enum InteropVerdict {
     Fail,
 }
 
+/// Operator-facing compatibility disposition for a specimen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteropCompatibilityDisposition {
+    Supported,
+    Degraded,
+    Unsupported,
+}
+
+impl InteropCompatibilityDisposition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::Degraded => "degraded",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+impl fmt::Display for InteropCompatibilityDisposition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Deterministic remediation guidance for a specimen disposition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InteropRemediationGuidance {
+    pub guidance_code: String,
+    pub message: String,
+}
+
 /// Evidence for a single specimen execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InteropSpecimenEvidence {
@@ -222,6 +254,8 @@ pub struct InteropSpecimenEvidence {
     pub expected_outcome: InteropExpectedOutcome,
     pub actual_outcome: InteropActualOutcome,
     pub verdict: InteropVerdict,
+    pub compatibility_disposition: InteropCompatibilityDisposition,
+    pub remediation_guidance: InteropRemediationGuidance,
     pub module_count: u64,
     pub linked_count: u64,
     pub cycle_count: u64,
@@ -262,6 +296,9 @@ pub struct InteropParityInventory {
     pub specimen_count: u64,
     pub pass_count: u64,
     pub fail_count: u64,
+    pub supported_count: u64,
+    pub degraded_count: u64,
+    pub unsupported_count: u64,
     pub family_coverage: BTreeMap<String, u64>,
     pub esm_only_count: u64,
     pub cjs_only_count: u64,
@@ -292,6 +329,9 @@ pub struct InteropParityRunManifest {
     pub specimen_count: u64,
     pub pass_count: u64,
     pub fail_count: u64,
+    pub supported_count: u64,
+    pub degraded_count: u64,
+    pub unsupported_count: u64,
     pub contract_satisfied: bool,
     pub artifact_paths: InteropParityArtifactPaths,
 }
@@ -1108,14 +1148,23 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
 fn compute_evidence_hash(
     specimen_id: &str,
     actual_outcome: InteropActualOutcome,
+    compatibility_disposition: InteropCompatibilityDisposition,
+    guidance_code: &str,
     binding_count: usize,
     async_count: usize,
     linked_count: u64,
     cycle_count: u64,
 ) -> String {
     let hash_input = format!(
-        "{}:{}:{}:{}:{}:{}",
-        specimen_id, actual_outcome as u8, binding_count, async_count, linked_count, cycle_count,
+        "{}:{}:{}:{}:{}:{}:{}:{}",
+        specimen_id,
+        actual_outcome as u8,
+        compatibility_disposition as u8,
+        guidance_code,
+        binding_count,
+        async_count,
+        linked_count,
+        cycle_count,
     );
     hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes())
 }
@@ -1131,6 +1180,78 @@ fn build_esm_module(sm: &SpecimenModule) -> EsmModule {
         module.add_export(exp.clone());
     }
     module
+}
+
+fn remediation_guidance(
+    guidance_code: &str,
+    message: impl Into<String>,
+) -> InteropRemediationGuidance {
+    InteropRemediationGuidance {
+        guidance_code: guidance_code.to_string(),
+        message: message.into(),
+    }
+}
+
+fn classify_compatibility(
+    specimen: &InteropSpecimen,
+    actual_outcome: InteropActualOutcome,
+    verdict: InteropVerdict,
+) -> (InteropCompatibilityDisposition, InteropRemediationGuidance) {
+    if verdict == InteropVerdict::Fail {
+        return (
+            InteropCompatibilityDisposition::Unsupported,
+            remediation_guidance(
+                "interop_contract_violation",
+                format!(
+                    "specimen '{}' drifted from the declared interop contract; rerun the module interop verification matrix and inspect the emitted evidence bundle before shipping this boundary",
+                    specimen.specimen_id
+                ),
+            ),
+        );
+    }
+
+    match specimen.expected_outcome {
+        InteropExpectedOutcome::Success => (
+            InteropCompatibilityDisposition::Supported,
+            remediation_guidance(
+                "no_remediation_required",
+                format!(
+                    "specimen '{}' is supported under the current ESM/CJS interop contract; no mitigation is required",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
+        InteropExpectedOutcome::EvalFailure => (
+            InteropCompatibilityDisposition::Degraded,
+            remediation_guidance(
+                "stabilize_async_boundary",
+                format!(
+                    "specimen '{}' degrades at evaluation time; handle the rejected async boundary explicitly or avoid bridging top-level-await rejection through this interop edge",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
+        InteropExpectedOutcome::CycleDetected => (
+            InteropCompatibilityDisposition::Unsupported,
+            remediation_guidance(
+                "break_mixed_module_cycle",
+                format!(
+                    "specimen '{}' remains unsupported because the module graph forms a cycle across this boundary; break the cycle or collapse the edge to a single module system before retrying",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
+        InteropExpectedOutcome::LinkFailure => (
+            InteropCompatibilityDisposition::Unsupported,
+            remediation_guidance(
+                "repair_link_boundary",
+                format!(
+                    "specimen '{}' remains unsupported because the graph does not link cleanly; align exports/imports or replace the boundary with an explicit shim before retrying",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
+    }
 }
 
 /// Build a quick evidence record for early-return scenarios.
@@ -1163,12 +1284,16 @@ fn early_return_evidence(
     } else {
         InteropVerdict::Fail
     };
+    let (compatibility_disposition, remediation_guidance) =
+        classify_compatibility(specimen, actual_outcome, verdict);
     InteropSpecimenEvidence {
         specimen_id: specimen.specimen_id.clone(),
         family: specimen.family,
         expected_outcome: specimen.expected_outcome,
         actual_outcome,
         verdict,
+        compatibility_disposition,
+        remediation_guidance: remediation_guidance.clone(),
         module_count,
         linked_count,
         cycle_count,
@@ -1178,6 +1303,8 @@ fn early_return_evidence(
         evidence_hash: Some(compute_evidence_hash(
             &specimen.specimen_id,
             actual_outcome,
+            compatibility_disposition,
+            &remediation_guidance.guidance_code,
             0,
             0,
             linked_count,
@@ -1399,6 +1526,8 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
     } else {
         InteropVerdict::Fail
     };
+    let (compatibility_disposition, remediation_guidance) =
+        classify_compatibility(specimen, actual_outcome, verdict);
 
     let binding_count = binding_verdicts.len();
     let async_count = async_phase_verdicts.len();
@@ -1409,6 +1538,8 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         expected_outcome: specimen.expected_outcome,
         actual_outcome,
         verdict,
+        compatibility_disposition,
+        remediation_guidance: remediation_guidance.clone(),
         module_count,
         linked_count,
         cycle_count,
@@ -1418,6 +1549,8 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         evidence_hash: Some(compute_evidence_hash(
             &specimen.specimen_id,
             actual_outcome,
+            compatibility_disposition,
+            &remediation_guidance.guidance_code,
             binding_count,
             async_count,
             linked_count,
@@ -1432,6 +1565,9 @@ pub fn run_interop_parity_corpus() -> InteropParityInventory {
     let mut evidence = Vec::with_capacity(corpus.len());
     let mut pass_count: u64 = 0;
     let mut fail_count: u64 = 0;
+    let mut supported_count: u64 = 0;
+    let mut degraded_count: u64 = 0;
+    let mut unsupported_count: u64 = 0;
     let mut family_coverage: BTreeMap<String, u64> = BTreeMap::new();
     let mut esm_only_count: u64 = 0;
     let mut cjs_only_count: u64 = 0;
@@ -1443,6 +1579,11 @@ pub fn run_interop_parity_corpus() -> InteropParityInventory {
             pass_count += 1;
         } else {
             fail_count += 1;
+        }
+        match ev.compatibility_disposition {
+            InteropCompatibilityDisposition::Supported => supported_count += 1,
+            InteropCompatibilityDisposition::Degraded => degraded_count += 1,
+            InteropCompatibilityDisposition::Unsupported => unsupported_count += 1,
         }
 
         *family_coverage
@@ -1468,6 +1609,9 @@ pub fn run_interop_parity_corpus() -> InteropParityInventory {
         specimen_count: corpus.len() as u64,
         pass_count,
         fail_count,
+        supported_count,
+        degraded_count,
+        unsupported_count,
         family_coverage,
         esm_only_count,
         cjs_only_count,
@@ -1512,6 +1656,16 @@ pub fn write_interop_parity_bundle(
 
     // Per-specimen events.
     for ev in &inv.evidence {
+        let detail = match &ev.error_detail {
+            Some(error_detail) => Some(format!(
+                "disposition={} guidance_code={} error={}",
+                ev.compatibility_disposition, ev.remediation_guidance.guidance_code, error_detail
+            )),
+            None => Some(format!(
+                "disposition={} guidance_code={}",
+                ev.compatibility_disposition, ev.remediation_guidance.guidance_code,
+            )),
+        };
         let specimen_event = InteropParityEvent {
             schema_version: INTEROP_PARITY_EVENT_SCHEMA_VERSION.to_string(),
             component: INTEROP_PARITY_COMPONENT.to_string(),
@@ -1523,7 +1677,7 @@ pub fn write_interop_parity_bundle(
             } else {
                 "fail".to_string()
             }),
-            detail: ev.error_detail.clone(),
+            detail,
         };
         event_lines.push(serde_json::to_string(&specimen_event).map_err(std::io::Error::other)?);
     }
@@ -1541,8 +1695,13 @@ pub fn write_interop_parity_bundle(
             "violated".to_string()
         }),
         detail: Some(format!(
-            "pass={} fail={} total={}",
-            inv.pass_count, inv.fail_count, inv.specimen_count
+            "pass={} fail={} supported={} degraded={} unsupported={} total={}",
+            inv.pass_count,
+            inv.fail_count,
+            inv.supported_count,
+            inv.degraded_count,
+            inv.unsupported_count,
+            inv.specimen_count
         )),
     };
     event_lines.push(serde_json::to_string(&end).map_err(std::io::Error::other)?);
@@ -1570,6 +1729,9 @@ pub fn write_interop_parity_bundle(
         specimen_count: inv.specimen_count,
         pass_count: inv.pass_count,
         fail_count: inv.fail_count,
+        supported_count: inv.supported_count,
+        degraded_count: inv.degraded_count,
+        unsupported_count: inv.unsupported_count,
         contract_satisfied: inv.contract_satisfied(),
         artifact_paths: InteropParityArtifactPaths {
             evidence_inventory: "esm_cjs_interop_parity_inventory.json".to_string(),
@@ -1728,6 +1890,27 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_disposition_serde_roundtrip() {
+        for disposition in [
+            InteropCompatibilityDisposition::Supported,
+            InteropCompatibilityDisposition::Degraded,
+            InteropCompatibilityDisposition::Unsupported,
+        ] {
+            let json = serde_json::to_string(&disposition).unwrap();
+            let back: InteropCompatibilityDisposition = serde_json::from_str(&json).unwrap();
+            assert_eq!(disposition, back);
+        }
+    }
+
+    #[test]
+    fn remediation_guidance_serde_roundtrip() {
+        let guidance = remediation_guidance("g-1", "fix the bridge");
+        let json = serde_json::to_string(&guidance).unwrap();
+        let back: InteropRemediationGuidance = serde_json::from_str(&json).unwrap();
+        assert_eq!(guidance, back);
+    }
+
+    #[test]
     fn all_specimens_pass() {
         let inv = run_interop_parity_corpus();
         for ev in &inv.evidence {
@@ -1752,7 +1935,59 @@ mod tests {
     fn counts_consistent() {
         let inv = run_interop_parity_corpus();
         assert_eq!(inv.pass_count + inv.fail_count, inv.specimen_count);
+        assert_eq!(
+            inv.supported_count + inv.degraded_count + inv.unsupported_count,
+            inv.specimen_count
+        );
         assert_eq!(inv.evidence.len() as u64, inv.specimen_count);
+    }
+
+    #[test]
+    fn compatibility_dispositions_are_explicit_for_all_specimens() {
+        let inv = run_interop_parity_corpus();
+        assert!(inv.supported_count > 0);
+        assert!(inv.degraded_count > 0);
+        assert!(inv.unsupported_count > 0);
+        for ev in &inv.evidence {
+            assert!(!ev.remediation_guidance.guidance_code.is_empty());
+            assert!(!ev.remediation_guidance.message.is_empty());
+        }
+    }
+
+    #[test]
+    fn async_rejection_is_degraded_with_guidance() {
+        let inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == "async_rejection_propagation")
+            .unwrap();
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Degraded
+        );
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "stabilize_async_boundary"
+        );
+    }
+
+    #[test]
+    fn mixed_cycle_is_unsupported_with_guidance() {
+        let inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == "cycle_mixed_esm_cjs")
+            .unwrap();
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Unsupported
+        );
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "break_mixed_module_cycle"
+        );
     }
 
     #[test]
@@ -1877,6 +2112,9 @@ mod tests {
             specimen_count: 20,
             pass_count: 20,
             fail_count: 0,
+            supported_count: 18,
+            degraded_count: 1,
+            unsupported_count: 1,
             contract_satisfied: true,
             artifact_paths: InteropParityArtifactPaths {
                 evidence_inventory: "a.json".to_string(),
@@ -1914,6 +2152,9 @@ mod tests {
             specimen_count: 10,
             pass_count: 9,
             fail_count: 1,
+            supported_count: 8,
+            degraded_count: 1,
+            unsupported_count: 1,
             family_coverage: BTreeMap::new(),
             esm_only_count: 3,
             cjs_only_count: 3,
@@ -1931,6 +2172,9 @@ mod tests {
             specimen_count: 0,
             pass_count: 0,
             fail_count: 0,
+            supported_count: 0,
+            degraded_count: 0,
+            unsupported_count: 0,
             family_coverage: BTreeMap::new(),
             esm_only_count: 0,
             cjs_only_count: 0,

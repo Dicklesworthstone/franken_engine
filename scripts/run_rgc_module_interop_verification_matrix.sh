@@ -248,6 +248,7 @@ write_manifest() {
     echo "    \"module_resolution_trace\": \"${module_resolution_trace_path}\"," 
     echo '    "matrix_doc": "docs/module_compatibility_matrix_v1.json",'
     echo '    "matrix_impl": "crates/franken-engine/src/module_compatibility_matrix.rs",'
+    echo '    "interop_parity_impl": "crates/franken-engine/src/esm_cjs_interop_parity.rs",'
     echo '    "unit_tests": "crates/franken-engine/tests/module_compatibility_matrix.rs",'
     echo '    "integration_tests": "crates/franken-engine/tests/module_compatibility_matrix_integration.rs",'
     echo '    "resolver_integration_tests": "crates/franken-engine/tests/module_resolver_integration.rs",'
@@ -259,6 +260,7 @@ write_manifest() {
     echo "    \"cat ${commands_path}\"," 
     echo "    \"cat ${module_resolution_trace_path}\"," 
     echo "    \"./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh ${module_resolution_trace_path}\"," 
+    echo '    "rg -n '\''compatibility_disposition|remediation_guidance'\'' crates/franken-engine/src/esm_cjs_interop_parity.rs",' 
     echo "    \"${replay_command}\""
     echo "  ]"
     echo "}"

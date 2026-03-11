@@ -27,7 +27,7 @@ use crate::bayesian_posterior::{
 use crate::containment_executor::{
     ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt, SandboxPolicy,
 };
-use crate::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
+use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
 use crate::entropy_evidence_compressor::{
     ArithmeticCoder, CompressionCertificate, EntropyEstimator,
 };
@@ -70,6 +70,7 @@ use crate::ts_normalization::{
 const ADAPTIVE_ROUTER_GAMMA_MILLIONTHS: i64 = 100_000;
 const STOPPING_CUSUM_THRESHOLD_MILLIONTHS: i64 = 5_000_000;
 const STOPPING_CUSUM_REFERENCE_MILLIONTHS: i64 = 500_000;
+const ORCHESTRATOR_CELL_CLOSE_BUDGET_MS: u64 = 10_000;
 const SCALE_MILLION: i64 = 1_000_000;
 
 // ---------------------------------------------------------------------------
@@ -107,6 +108,8 @@ pub struct OrchestratorConfig {
     pub force_lane: Option<LaneChoice>,
     /// Max drain ticks for cell close.
     pub drain_deadline_ticks: u64,
+    /// Root budget used for the canonical cell-close context.
+    pub cell_close_budget_ms: u64,
     /// Saga concurrency limit.
     pub max_concurrent_sagas: usize,
     /// Security epoch.
@@ -127,6 +130,7 @@ impl Default for OrchestratorConfig {
             loss_matrix_preset: LossMatrixPreset::Balanced,
             force_lane: None,
             drain_deadline_ticks: 10_000,
+            cell_close_budget_ms: ORCHESTRATOR_CELL_CLOSE_BUDGET_MS,
             max_concurrent_sagas: 4,
             epoch: SecurityEpoch::from_raw(1),
             parse_goal: ParseGoal::Script,
@@ -515,9 +519,12 @@ impl ExecutionOrchestrator {
         let deadline = DrainDeadline {
             max_ticks: self.config.drain_deadline_ticks,
         };
-        let trace_seed = attempt_index.wrapping_add(1000);
-        let mut cx = MockCx::new(trace_id_from_seed(trace_seed), MockBudget::new(10_000));
-        let finalize_result = cell.close(&mut cx, cancel_reason, deadline).ok();
+        let mut close_cx =
+            Self::build_cell_close_context(&trace_id, self.config.cell_close_budget_ms);
+        let finalize_result = Some(
+            cell.close(&mut close_cx, cancel_reason, deadline)
+                .map_err(OrchestratorError::Cell)?,
+        );
 
         // Step 12: Drain cell events and assemble result.
         let cell_events = cell.drain_events();
@@ -564,6 +571,24 @@ impl ExecutionOrchestrator {
             return Err(OrchestratorError::EmptyExtensionId);
         }
         Ok(())
+    }
+
+    fn build_cell_close_context(
+        trace_id: &str,
+        budget_ms: u64,
+    ) -> KernelContext<'static, NoCaps> {
+        KernelContext::new(Cx::new(
+            Self::derive_cell_close_trace_id(trace_id),
+            Budget::new(budget_ms),
+            NoCaps,
+        ))
+    }
+
+    fn derive_cell_close_trace_id(trace_id: &str) -> TraceId {
+        let hash = ContentHash::compute(trace_id.as_bytes());
+        let mut bytes = [0_u8; 16];
+        bytes.copy_from_slice(&hash.as_bytes()[..16]);
+        TraceId::from_bytes(bytes)
     }
 
     fn phase_execute(
@@ -1868,6 +1893,7 @@ mod tests {
         let cfg = OrchestratorConfig {
             loss_matrix_preset: LossMatrixPreset::Conservative,
             drain_deadline_ticks: 99_999,
+            cell_close_budget_ms: 77,
             max_concurrent_sagas: 16,
             epoch: SecurityEpoch::from_raw(77),
             trace_id_prefix: "clone-test".to_string(),
@@ -1877,10 +1903,21 @@ mod tests {
         let cloned = cfg.clone();
         assert_eq!(cloned.loss_matrix_preset, LossMatrixPreset::Conservative);
         assert_eq!(cloned.drain_deadline_ticks, 99_999);
+        assert_eq!(cloned.cell_close_budget_ms, 77);
         assert_eq!(cloned.max_concurrent_sagas, 16);
         assert_eq!(cloned.epoch, SecurityEpoch::from_raw(77));
         assert_eq!(cloned.trace_id_prefix, "clone-test");
         assert_eq!(cloned.policy_id, "policy-clone");
+    }
+
+    #[test]
+    fn cell_close_trace_id_derivation_is_deterministic() {
+        let first = ExecutionOrchestrator::derive_cell_close_trace_id("orch:0");
+        let second = ExecutionOrchestrator::derive_cell_close_trace_id("orch:0");
+        let third = ExecutionOrchestrator::derive_cell_close_trace_id("orch:1");
+
+        assert_eq!(first, second);
+        assert_ne!(first, third);
     }
 
     // -- Enrichment: ExtensionPackage deterministic serde --
@@ -1960,6 +1997,30 @@ mod tests {
             result.finalize_result.is_some(),
             "finalize_result should be populated"
         );
+    }
+
+    #[test]
+    fn execute_propagates_cell_close_budget_exhaustion() {
+        let cfg = OrchestratorConfig {
+            cell_close_budget_ms: 1,
+            ..OrchestratorConfig::default()
+        };
+        let mut orch = ExecutionOrchestrator::new(cfg);
+        let err = orch
+            .execute(&simple_package())
+            .expect_err("cell close should fail on insufficient canonical budget");
+
+        match err {
+            OrchestratorError::Cell(CellError::BudgetExhausted {
+                requested_ms,
+                remaining_ms,
+                ..
+            }) => {
+                assert_eq!(requested_ms, 2);
+                assert_eq!(remaining_ms, 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     // -- Enrichment: evidence entries have trace_id --

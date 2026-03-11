@@ -62,10 +62,15 @@ pub enum TransferDomain {
 
 impl TransferDomain {
     pub const ALL: &[Self] = &[
-        Self::RewritePrior, Self::TieringPolicy, Self::CachePolicy,
-        Self::SchedulingHeuristic, Self::InliningDecision, Self::SpecializationStrategy,
+        Self::RewritePrior,
+        Self::TieringPolicy,
+        Self::CachePolicy,
+        Self::SchedulingHeuristic,
+        Self::InliningDecision,
+        Self::SpecializationStrategy,
     ];
-    #[must_use] pub const fn as_str(&self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::RewritePrior => "rewrite_prior",
             Self::TieringPolicy => "tiering_policy",
@@ -78,7 +83,9 @@ impl TransferDomain {
 }
 
 impl fmt::Display for TransferDomain {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.as_str()) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Verdict from evaluating a single piece of transfer evidence.
@@ -93,7 +100,8 @@ pub enum TransferVerdict {
 }
 
 impl TransferVerdict {
-    #[must_use] pub const fn as_str(&self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Validated => "validated",
             Self::ConditionallyValid => "conditionally_valid",
@@ -102,47 +110,64 @@ impl TransferVerdict {
             Self::InsufficientEvidence => "insufficient_evidence",
         }
     }
-    #[must_use] pub const fn allows_unconditional_rollout(&self) -> bool {
+    #[must_use]
+    pub const fn allows_unconditional_rollout(&self) -> bool {
         matches!(self, Self::Validated)
     }
 }
 
 impl fmt::Display for TransferVerdict {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.as_str()) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// How thoroughly transfer evidence covers target workload regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageLevel {
-    Full, Partial, Sparse, Uncovered,
+    Full,
+    Partial,
+    Sparse,
+    Uncovered,
 }
 
 impl CoverageLevel {
-    #[must_use] pub const fn as_str(&self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Full => "full", Self::Partial => "partial",
-            Self::Sparse => "sparse", Self::Uncovered => "uncovered",
+            Self::Full => "full",
+            Self::Partial => "partial",
+            Self::Sparse => "sparse",
+            Self::Uncovered => "uncovered",
         }
     }
-    #[must_use] pub const fn sufficient_for_rollout(&self) -> bool {
+    #[must_use]
+    pub const fn sufficient_for_rollout(&self) -> bool {
         matches!(self, Self::Full | Self::Partial)
     }
 }
 
 impl fmt::Display for CoverageLevel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.as_str()) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Action prescribed by the governance gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GovernanceAction {
-    AllowRollout, ConditionalRollout, BlockRollout, RequireFreshEvidence, DowngradeSupremacy,
+    AllowRollout,
+    ConditionalRollout,
+    BlockRollout,
+    RequireFreshEvidence,
+    DowngradeSupremacy,
 }
 
 impl GovernanceAction {
-    #[must_use] pub const fn as_str(&self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::AllowRollout => "allow_rollout",
             Self::ConditionalRollout => "conditional_rollout",
@@ -154,7 +179,9 @@ impl GovernanceAction {
 }
 
 impl fmt::Display for GovernanceAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.as_str()) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Evidence of how well a prior transfers from source to target workload.
@@ -173,8 +200,13 @@ pub struct TransferEvidence {
 impl TransferEvidence {
     #[must_use]
     pub fn new(
-        domain: TransferDomain, source: &str, target: &str,
-        fidelity: u64, drift: u64, samples: u64, epoch: SecurityEpoch,
+        domain: TransferDomain,
+        source: &str,
+        target: &str,
+        fidelity: u64,
+        drift: u64,
+        samples: u64,
+        epoch: SecurityEpoch,
     ) -> Self {
         let mut h = Sha256::new();
         h.update(SCHEMA_VERSION.as_bytes());
@@ -187,18 +219,30 @@ impl TransferEvidence {
         h.update(epoch.as_u64().to_le_bytes());
         let evidence_hash = ContentHash::compute(&h.finalize());
         Self {
-            domain, source_workload_id: source.into(), target_workload_id: target.into(),
-            transfer_fidelity: fidelity, drift_magnitude: drift,
-            sample_count: samples, epoch, evidence_hash,
+            domain,
+            source_workload_id: source.into(),
+            target_workload_id: target.into(),
+            transfer_fidelity: fidelity,
+            drift_magnitude: drift,
+            sample_count: samples,
+            epoch,
+            evidence_hash,
         }
     }
 }
 
 impl fmt::Display for TransferEvidence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TransferEvidence({} {}->{} fidelity={} drift={} n={})",
-            self.domain, self.source_workload_id, self.target_workload_id,
-            self.transfer_fidelity, self.drift_magnitude, self.sample_count)
+        write!(
+            f,
+            "TransferEvidence({} {}->{} fidelity={} drift={} n={})",
+            self.domain,
+            self.source_workload_id,
+            self.target_workload_id,
+            self.transfer_fidelity,
+            self.drift_magnitude,
+            self.sample_count
+        )
     }
 }
 
@@ -215,11 +259,19 @@ pub struct CoverageRecord {
 impl CoverageRecord {
     #[must_use]
     pub fn new(
-        domain: TransferDomain, region_id: &str, coverage_level: CoverageLevel,
-        transfer_evidence_hash: ContentHash, last_validated_epoch: SecurityEpoch,
+        domain: TransferDomain,
+        region_id: &str,
+        coverage_level: CoverageLevel,
+        transfer_evidence_hash: ContentHash,
+        last_validated_epoch: SecurityEpoch,
     ) -> Self {
-        Self { domain, region_id: region_id.into(), coverage_level,
-               transfer_evidence_hash, last_validated_epoch }
+        Self {
+            domain,
+            region_id: region_id.into(),
+            coverage_level,
+            transfer_evidence_hash,
+            last_validated_epoch,
+        }
     }
 
     #[must_use]
@@ -239,7 +291,11 @@ impl CoverageRecord {
 
 impl fmt::Display for CoverageRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Coverage({} region={} level={})", self.domain, self.region_id, self.coverage_level)
+        write!(
+            f,
+            "Coverage({} region={} level={})",
+            self.domain, self.region_id, self.coverage_level
+        )
     }
 }
 
@@ -269,9 +325,15 @@ impl Default for GateConfig {
 
 impl fmt::Display for GateConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GateConfig(high={} mod={} drift={} min_n={} cov={})",
-            self.min_transfer_fidelity_high, self.min_transfer_fidelity_moderate,
-            self.drift_alarm_threshold, self.min_sample_count, self.min_coverage_fraction)
+        write!(
+            f,
+            "GateConfig(high={} mod={} drift={} min_n={} cov={})",
+            self.min_transfer_fidelity_high,
+            self.min_transfer_fidelity_moderate,
+            self.drift_alarm_threshold,
+            self.min_sample_count,
+            self.min_coverage_fraction
+        )
     }
 }
 
@@ -287,23 +349,40 @@ pub struct GovernanceDecision {
 
 impl GovernanceDecision {
     #[must_use]
-    pub fn new(action: GovernanceAction, evidence_hashes: Vec<ContentHash>,
-               explanation: &str, epoch: SecurityEpoch) -> Self {
+    pub fn new(
+        action: GovernanceAction,
+        evidence_hashes: Vec<ContentHash>,
+        explanation: &str,
+        epoch: SecurityEpoch,
+    ) -> Self {
         let mut h = Sha256::new();
         h.update(COMPONENT.as_bytes());
         h.update(action.as_str().as_bytes());
-        for eh in &evidence_hashes { h.update(eh.as_bytes()); }
+        for eh in &evidence_hashes {
+            h.update(eh.as_bytes());
+        }
         h.update(explanation.as_bytes());
         h.update(epoch.as_u64().to_le_bytes());
         let receipt_hash = ContentHash::compute(&h.finalize());
-        Self { action, evidence_hashes, explanation: explanation.into(), epoch, receipt_hash }
+        Self {
+            action,
+            evidence_hashes,
+            explanation: explanation.into(),
+            epoch,
+            receipt_hash,
+        }
     }
 }
 
 impl fmt::Display for GovernanceDecision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GovernanceDecision({} evidence_count={} epoch={})",
-            self.action, self.evidence_hashes.len(), self.epoch.as_u64())
+        write!(
+            f,
+            "GovernanceDecision({} evidence_count={} epoch={})",
+            self.action,
+            self.evidence_hashes.len(),
+            self.epoch.as_u64()
+        )
     }
 }
 
@@ -317,23 +396,51 @@ pub struct RolloutGateResult {
 }
 
 impl RolloutGateResult {
-    #[must_use] pub fn allowed(cov: CoverageLevel) -> Self {
-        Self { allowed: true, conditions: Vec::new(), blocking_reasons: Vec::new(), coverage_summary: cov }
+    #[must_use]
+    pub fn allowed(cov: CoverageLevel) -> Self {
+        Self {
+            allowed: true,
+            conditions: Vec::new(),
+            blocking_reasons: Vec::new(),
+            coverage_summary: cov,
+        }
     }
-    #[must_use] pub fn blocked(reasons: Vec<String>, cov: CoverageLevel) -> Self {
-        Self { allowed: false, conditions: Vec::new(), blocking_reasons: reasons, coverage_summary: cov }
+    #[must_use]
+    pub fn blocked(reasons: Vec<String>, cov: CoverageLevel) -> Self {
+        Self {
+            allowed: false,
+            conditions: Vec::new(),
+            blocking_reasons: reasons,
+            coverage_summary: cov,
+        }
     }
-    #[must_use] pub fn conditional(conds: Vec<String>, cov: CoverageLevel) -> Self {
-        Self { allowed: true, conditions: conds, blocking_reasons: Vec::new(), coverage_summary: cov }
+    #[must_use]
+    pub fn conditional(conds: Vec<String>, cov: CoverageLevel) -> Self {
+        Self {
+            allowed: true,
+            conditions: conds,
+            blocking_reasons: Vec::new(),
+            coverage_summary: cov,
+        }
     }
 }
 
 impl fmt::Display for RolloutGateResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.allowed {
-            write!(f, "RolloutGate(BLOCKED reasons={} coverage={})", self.blocking_reasons.len(), self.coverage_summary)
+            write!(
+                f,
+                "RolloutGate(BLOCKED reasons={} coverage={})",
+                self.blocking_reasons.len(),
+                self.coverage_summary
+            )
         } else if !self.conditions.is_empty() {
-            write!(f, "RolloutGate(CONDITIONAL conditions={} coverage={})", self.conditions.len(), self.coverage_summary)
+            write!(
+                f,
+                "RolloutGate(CONDITIONAL conditions={} coverage={})",
+                self.conditions.len(),
+                self.coverage_summary
+            )
         } else {
             write!(f, "RolloutGate(ALLOWED coverage={})", self.coverage_summary)
         }
@@ -352,11 +459,19 @@ pub struct SupremacyConstraint {
 impl SupremacyConstraint {
     #[must_use]
     pub fn new(claim_id: &str, kind: &str, severity: u64, explanation: &str) -> Self {
-        Self { claim_id: claim_id.into(), constraint_kind: kind.into(),
-               severity, explanation: explanation.into() }
+        Self {
+            claim_id: claim_id.into(),
+            constraint_kind: kind.into(),
+            severity,
+            explanation: explanation.into(),
+        }
     }
-    #[must_use] pub fn is_critical(&self) -> bool { self.severity >= 800_000 }
-    #[must_use] pub fn content_hash(&self) -> ContentHash {
+    #[must_use]
+    pub fn is_critical(&self) -> bool {
+        self.severity >= 800_000
+    }
+    #[must_use]
+    pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(96);
         buf.extend_from_slice(self.claim_id.as_bytes());
         buf.push(b'|');
@@ -371,8 +486,11 @@ impl SupremacyConstraint {
 
 impl fmt::Display for SupremacyConstraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SupremacyConstraint(claim={} kind={} severity={})",
-            self.claim_id, self.constraint_kind, self.severity)
+        write!(
+            f,
+            "SupremacyConstraint(claim={} kind={} severity={})",
+            self.claim_id, self.constraint_kind, self.severity
+        )
     }
 }
 
@@ -396,13 +514,25 @@ impl DecisionReceipt {
         h.update(action.as_str().as_bytes());
         h.update(evidence_hash.as_bytes());
         let receipt_hash = ContentHash::compute(&h.finalize());
-        Self { receipt_hash, component: COMPONENT.into(), epoch, action, evidence_hash }
+        Self {
+            receipt_hash,
+            component: COMPONENT.into(),
+            epoch,
+            action,
+            evidence_hash,
+        }
     }
 }
 
 impl fmt::Display for DecisionReceipt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DecisionReceipt({} action={} epoch={})", self.component, self.action, self.epoch.as_u64())
+        write!(
+            f,
+            "DecisionReceipt({} action={} epoch={})",
+            self.component,
+            self.action,
+            self.epoch.as_u64()
+        )
     }
 }
 
@@ -421,23 +551,55 @@ pub struct GovernanceSummary {
 impl GovernanceSummary {
     #[must_use]
     pub fn from_counts(v: u64, cv: u64, dd: u64, r: u64, ins: u64) -> Self {
-        let total = v.saturating_add(cv).saturating_add(dd).saturating_add(r).saturating_add(ins);
+        let total = v
+            .saturating_add(cv)
+            .saturating_add(dd)
+            .saturating_add(r)
+            .saturating_add(ins);
         let passing = v.saturating_add(cv);
-        let frac = if total == 0 { 0 } else { passing.saturating_mul(MILLION).checked_div(total).unwrap_or(0) };
-        Self { total_transfers: total, validated: v, conditionally_valid: cv,
-               drift_detected: dd, rejected: r, insufficient: ins, coverage_fraction: frac }
+        let frac = if total == 0 {
+            0
+        } else {
+            passing
+                .saturating_mul(MILLION)
+                .checked_div(total)
+                .unwrap_or(0)
+        };
+        Self {
+            total_transfers: total,
+            validated: v,
+            conditionally_valid: cv,
+            drift_detected: dd,
+            rejected: r,
+            insufficient: ins,
+            coverage_fraction: frac,
+        }
     }
-    #[must_use] pub fn pass_rate(&self) -> u64 {
-        if self.total_transfers == 0 { return 0; }
-        self.validated.saturating_mul(MILLION).checked_div(self.total_transfers).unwrap_or(0)
+    #[must_use]
+    pub fn pass_rate(&self) -> u64 {
+        if self.total_transfers == 0 {
+            return 0;
+        }
+        self.validated
+            .saturating_mul(MILLION)
+            .checked_div(self.total_transfers)
+            .unwrap_or(0)
     }
 }
 
 impl fmt::Display for GovernanceSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GovernanceSummary(total={} v={} cv={} dd={} r={} ins={} cov={})",
-            self.total_transfers, self.validated, self.conditionally_valid,
-            self.drift_detected, self.rejected, self.insufficient, self.coverage_fraction)
+        write!(
+            f,
+            "GovernanceSummary(total={} v={} cv={} dd={} r={} ins={} cov={})",
+            self.total_transfers,
+            self.validated,
+            self.conditionally_valid,
+            self.drift_detected,
+            self.rejected,
+            self.insufficient,
+            self.coverage_fraction
+        )
     }
 }
 
@@ -450,62 +612,136 @@ impl fmt::Display for GovernanceSummary {
 /// Priority: insufficient samples > drift > high fidelity > moderate > rejected.
 #[must_use]
 pub fn evaluate_transfer(ev: &TransferEvidence, cfg: &GateConfig) -> TransferVerdict {
-    if ev.sample_count < cfg.min_sample_count { return TransferVerdict::InsufficientEvidence; }
-    if ev.drift_magnitude > cfg.drift_alarm_threshold { return TransferVerdict::DriftDetected; }
-    if ev.transfer_fidelity >= cfg.min_transfer_fidelity_high { return TransferVerdict::Validated; }
-    if ev.transfer_fidelity >= cfg.min_transfer_fidelity_moderate { return TransferVerdict::ConditionallyValid; }
+    if ev.sample_count < cfg.min_sample_count {
+        return TransferVerdict::InsufficientEvidence;
+    }
+    if ev.drift_magnitude > cfg.drift_alarm_threshold {
+        return TransferVerdict::DriftDetected;
+    }
+    if ev.transfer_fidelity >= cfg.min_transfer_fidelity_high {
+        return TransferVerdict::Validated;
+    }
+    if ev.transfer_fidelity >= cfg.min_transfer_fidelity_moderate {
+        return TransferVerdict::ConditionallyValid;
+    }
     TransferVerdict::Rejected
 }
 
 fn fraction_to_coverage(frac: u64, min_cov: u64) -> CoverageLevel {
-    if frac >= min_cov { CoverageLevel::Full }
-    else if frac >= PARTIAL_THRESHOLD { CoverageLevel::Partial }
-    else if frac >= SPARSE_THRESHOLD { CoverageLevel::Sparse }
-    else { CoverageLevel::Uncovered }
+    if frac >= min_cov {
+        CoverageLevel::Full
+    } else if frac >= PARTIAL_THRESHOLD {
+        CoverageLevel::Partial
+    } else if frac >= SPARSE_THRESHOLD {
+        CoverageLevel::Sparse
+    } else {
+        CoverageLevel::Uncovered
+    }
+}
+
+fn fraction_to_partial_or_lower(frac: u64) -> CoverageLevel {
+    if frac >= PARTIAL_THRESHOLD {
+        CoverageLevel::Partial
+    } else if frac >= SPARSE_THRESHOLD {
+        CoverageLevel::Sparse
+    } else {
+        CoverageLevel::Uncovered
+    }
 }
 
 /// Evaluate coverage level from a set of coverage records.
 #[must_use]
 pub fn evaluate_coverage(records: &[CoverageRecord], cfg: &GateConfig) -> CoverageLevel {
-    if records.is_empty() { return CoverageLevel::Uncovered; }
-    let covered = records.iter().filter(|r| r.coverage_level.sufficient_for_rollout()).count() as u64;
+    if records.is_empty() {
+        return CoverageLevel::Uncovered;
+    }
     let total = records.len() as u64;
-    let frac = covered.saturating_mul(MILLION).checked_div(total).unwrap_or(0);
-    fraction_to_coverage(frac, cfg.min_coverage_fraction)
+    let full = records
+        .iter()
+        .filter(|r| r.coverage_level == CoverageLevel::Full)
+        .count() as u64;
+    let full_frac = full.saturating_mul(MILLION).checked_div(total).unwrap_or(0);
+    if full_frac >= cfg.min_coverage_fraction {
+        return CoverageLevel::Full;
+    }
+
+    let sufficient = records
+        .iter()
+        .filter(|r| r.coverage_level.sufficient_for_rollout())
+        .count() as u64;
+    let sufficient_frac = sufficient
+        .saturating_mul(MILLION)
+        .checked_div(total)
+        .unwrap_or(0);
+    if sufficient_frac >= cfg.min_coverage_fraction {
+        CoverageLevel::Partial
+    } else {
+        fraction_to_partial_or_lower(sufficient_frac)
+    }
 }
 
 /// Evaluate rollout readiness from a batch of transfer evidence.
 #[must_use]
 pub fn evaluate_rollout(evidences: &[TransferEvidence], cfg: &GateConfig) -> RolloutGateResult {
     if evidences.is_empty() {
-        return RolloutGateResult::blocked(vec!["no transfer evidence provided".into()], CoverageLevel::Uncovered);
+        return RolloutGateResult::blocked(
+            vec!["no transfer evidence provided".into()],
+            CoverageLevel::Uncovered,
+        );
     }
     let mut passing: u64 = 0;
     let mut blocking = Vec::new();
     let mut conditions = Vec::new();
     for ev in evidences {
         match evaluate_transfer(ev, cfg) {
-            TransferVerdict::Validated => { passing += 1; }
+            TransferVerdict::Validated => {
+                passing += 1;
+            }
             TransferVerdict::ConditionallyValid => {
                 passing += 1;
-                conditions.push(format!("conditional: {} {}->{}", ev.domain, ev.source_workload_id, ev.target_workload_id));
+                conditions.push(format!(
+                    "conditional: {} {}->{}",
+                    ev.domain, ev.source_workload_id, ev.target_workload_id
+                ));
             }
             TransferVerdict::DriftDetected => {
-                blocking.push(format!("drift: {} {}->{} ({})", ev.domain, ev.source_workload_id, ev.target_workload_id, ev.drift_magnitude));
+                blocking.push(format!(
+                    "drift: {} {}->{} ({})",
+                    ev.domain, ev.source_workload_id, ev.target_workload_id, ev.drift_magnitude
+                ));
             }
             TransferVerdict::Rejected => {
-                blocking.push(format!("rejected: {} {}->{}", ev.domain, ev.source_workload_id, ev.target_workload_id));
+                blocking.push(format!(
+                    "rejected: {} {}->{}",
+                    ev.domain, ev.source_workload_id, ev.target_workload_id
+                ));
             }
             TransferVerdict::InsufficientEvidence => {
-                blocking.push(format!("insufficient: {} {}->{}", ev.domain, ev.source_workload_id, ev.target_workload_id));
+                blocking.push(format!(
+                    "insufficient: {} {}->{}",
+                    ev.domain, ev.source_workload_id, ev.target_workload_id
+                ));
             }
         }
     }
     let total = evidences.len() as u64;
-    let cov_frac = passing.saturating_mul(MILLION).checked_div(total).unwrap_or(0);
+    let cov_frac = passing
+        .saturating_mul(MILLION)
+        .checked_div(total)
+        .unwrap_or(0);
     let cov = fraction_to_coverage(cov_frac, cfg.min_coverage_fraction);
+    let cov = if !conditions.is_empty() && cov == CoverageLevel::Full {
+        CoverageLevel::Partial
+    } else {
+        cov
+    };
     if !blocking.is_empty() {
-        RolloutGateResult { allowed: false, conditions, blocking_reasons: blocking, coverage_summary: cov }
+        RolloutGateResult {
+            allowed: false,
+            conditions,
+            blocking_reasons: blocking,
+            coverage_summary: cov,
+        }
     } else if !conditions.is_empty() {
         RolloutGateResult::conditional(conditions, cov)
     } else {
@@ -515,25 +751,77 @@ pub fn evaluate_rollout(evidences: &[TransferEvidence], cfg: &GateConfig) -> Rol
 
 /// Evaluate a batch of transfer evidence producing decisions and a summary.
 #[must_use]
-pub fn evaluate_batch(evidences: &[TransferEvidence], cfg: &GateConfig) -> (Vec<GovernanceDecision>, GovernanceSummary) {
-    let batch = if evidences.len() > cfg.max_batch_size { &evidences[..cfg.max_batch_size] } else { evidences };
+pub fn evaluate_batch(
+    evidences: &[TransferEvidence],
+    cfg: &GateConfig,
+) -> (Vec<GovernanceDecision>, GovernanceSummary) {
+    let batch = if evidences.len() > cfg.max_batch_size {
+        &evidences[..cfg.max_batch_size]
+    } else {
+        evidences
+    };
     let (mut v, mut cv, mut dd, mut r, mut ins) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut decisions = Vec::with_capacity(batch.len());
     for ev in batch {
         let verdict = evaluate_transfer(ev, cfg);
         let (action, explanation) = match verdict {
-            TransferVerdict::Validated => { v += 1; (GovernanceAction::AllowRollout,
-                format!("validated: {} {}->{}", ev.domain, ev.source_workload_id, ev.target_workload_id)) }
-            TransferVerdict::ConditionallyValid => { cv += 1; (GovernanceAction::ConditionalRollout,
-                format!("conditional: {} {}->{}", ev.domain, ev.source_workload_id, ev.target_workload_id)) }
-            TransferVerdict::DriftDetected => { dd += 1; (GovernanceAction::DowngradeSupremacy,
-                format!("drift: {} {}->{}", ev.domain, ev.source_workload_id, ev.target_workload_id)) }
-            TransferVerdict::Rejected => { r += 1; (GovernanceAction::BlockRollout,
-                format!("rejected: {} {}->{}", ev.domain, ev.source_workload_id, ev.target_workload_id)) }
-            TransferVerdict::InsufficientEvidence => { ins += 1; (GovernanceAction::RequireFreshEvidence,
-                format!("insufficient: {} {}->{}", ev.domain, ev.source_workload_id, ev.target_workload_id)) }
+            TransferVerdict::Validated => {
+                v += 1;
+                (
+                    GovernanceAction::AllowRollout,
+                    format!(
+                        "validated: {} {}->{}",
+                        ev.domain, ev.source_workload_id, ev.target_workload_id
+                    ),
+                )
+            }
+            TransferVerdict::ConditionallyValid => {
+                cv += 1;
+                (
+                    GovernanceAction::ConditionalRollout,
+                    format!(
+                        "conditional: {} {}->{}",
+                        ev.domain, ev.source_workload_id, ev.target_workload_id
+                    ),
+                )
+            }
+            TransferVerdict::DriftDetected => {
+                dd += 1;
+                (
+                    GovernanceAction::DowngradeSupremacy,
+                    format!(
+                        "drift: {} {}->{}",
+                        ev.domain, ev.source_workload_id, ev.target_workload_id
+                    ),
+                )
+            }
+            TransferVerdict::Rejected => {
+                r += 1;
+                (
+                    GovernanceAction::BlockRollout,
+                    format!(
+                        "rejected: {} {}->{}",
+                        ev.domain, ev.source_workload_id, ev.target_workload_id
+                    ),
+                )
+            }
+            TransferVerdict::InsufficientEvidence => {
+                ins += 1;
+                (
+                    GovernanceAction::RequireFreshEvidence,
+                    format!(
+                        "insufficient: {} {}->{}",
+                        ev.domain, ev.source_workload_id, ev.target_workload_id
+                    ),
+                )
+            }
         };
-        decisions.push(GovernanceDecision::new(action, vec![ev.evidence_hash.clone()], &explanation, ev.epoch));
+        decisions.push(GovernanceDecision::new(
+            action,
+            vec![ev.evidence_hash.clone()],
+            &explanation,
+            ev.epoch,
+        ));
     }
     (decisions, GovernanceSummary::from_counts(v, cv, dd, r, ins))
 }
@@ -546,7 +834,9 @@ pub fn evaluate_batch(evidences: &[TransferEvidence], cfg: &GateConfig) -> (Vec<
 mod tests {
     use super::*;
 
-    fn ep(n: u64) -> SecurityEpoch { SecurityEpoch::from_raw(n) }
+    fn ep(n: u64) -> SecurityEpoch {
+        SecurityEpoch::from_raw(n)
+    }
     fn ev(dom: TransferDomain, fid: u64, drift: u64, n: u64) -> TransferEvidence {
         TransferEvidence::new(dom, "src", "tgt", fid, drift, n, ep(10))
     }
@@ -554,7 +844,8 @@ mod tests {
         CoverageRecord::new(dom, reg, lvl, ContentHash::compute(b"h"), ep(5))
     }
 
-    #[test] fn test_constants() {
+    #[test]
+    fn test_constants() {
         assert!(SCHEMA_VERSION.contains("transfer-governance-gate"));
         assert_eq!(COMPONENT, "transfer_governance_gate");
         assert_eq!(BEAD_ID, "bd-1lsy.7.12.3");
@@ -562,120 +853,192 @@ mod tests {
         assert!(DEFAULT_HIGH_FIDELITY_THRESHOLD > DEFAULT_MODERATE_FIDELITY_THRESHOLD);
     }
 
-    #[test] fn test_domain_all_count() { assert_eq!(TransferDomain::ALL.len(), 6); }
-    #[test] fn test_domain_display() {
-        assert_eq!(TransferDomain::RewritePrior.to_string(), "rewrite_prior");
-        assert_eq!(TransferDomain::SpecializationStrategy.to_string(), "specialization_strategy");
+    #[test]
+    fn test_domain_all_count() {
+        assert_eq!(TransferDomain::ALL.len(), 6);
     }
-    #[test] fn test_domain_serde() {
+    #[test]
+    fn test_domain_display() {
+        assert_eq!(TransferDomain::RewritePrior.to_string(), "rewrite_prior");
+        assert_eq!(
+            TransferDomain::SpecializationStrategy.to_string(),
+            "specialization_strategy"
+        );
+    }
+    #[test]
+    fn test_domain_serde() {
         for d in TransferDomain::ALL {
             let j = serde_json::to_string(d).unwrap();
             assert_eq!(*d, serde_json::from_str::<TransferDomain>(&j).unwrap());
         }
     }
 
-    #[test] fn test_verdict_display() {
+    #[test]
+    fn test_verdict_display() {
         assert_eq!(TransferVerdict::Validated.to_string(), "validated");
         assert_eq!(TransferVerdict::DriftDetected.to_string(), "drift_detected");
-        assert_eq!(TransferVerdict::InsufficientEvidence.to_string(), "insufficient_evidence");
+        assert_eq!(
+            TransferVerdict::InsufficientEvidence.to_string(),
+            "insufficient_evidence"
+        );
     }
-    #[test] fn test_verdict_serde() {
-        for v in [TransferVerdict::Validated, TransferVerdict::ConditionallyValid,
-                   TransferVerdict::DriftDetected, TransferVerdict::Rejected, TransferVerdict::InsufficientEvidence] {
+    #[test]
+    fn test_verdict_serde() {
+        for v in [
+            TransferVerdict::Validated,
+            TransferVerdict::ConditionallyValid,
+            TransferVerdict::DriftDetected,
+            TransferVerdict::Rejected,
+            TransferVerdict::InsufficientEvidence,
+        ] {
             let j = serde_json::to_string(&v).unwrap();
             assert_eq!(v, serde_json::from_str::<TransferVerdict>(&j).unwrap());
         }
     }
-    #[test] fn test_verdict_unconditional() {
+    #[test]
+    fn test_verdict_unconditional() {
         assert!(TransferVerdict::Validated.allows_unconditional_rollout());
         assert!(!TransferVerdict::ConditionallyValid.allows_unconditional_rollout());
         assert!(!TransferVerdict::Rejected.allows_unconditional_rollout());
     }
 
-    #[test] fn test_coverage_level_display() {
+    #[test]
+    fn test_coverage_level_display() {
         assert_eq!(CoverageLevel::Full.to_string(), "full");
         assert_eq!(CoverageLevel::Uncovered.to_string(), "uncovered");
     }
-    #[test] fn test_coverage_level_serde() {
-        for l in [CoverageLevel::Full, CoverageLevel::Partial, CoverageLevel::Sparse, CoverageLevel::Uncovered] {
+    #[test]
+    fn test_coverage_level_serde() {
+        for l in [
+            CoverageLevel::Full,
+            CoverageLevel::Partial,
+            CoverageLevel::Sparse,
+            CoverageLevel::Uncovered,
+        ] {
             let j = serde_json::to_string(&l).unwrap();
             assert_eq!(l, serde_json::from_str::<CoverageLevel>(&j).unwrap());
         }
     }
-    #[test] fn test_coverage_sufficient() {
+    #[test]
+    fn test_coverage_sufficient() {
         assert!(CoverageLevel::Full.sufficient_for_rollout());
         assert!(CoverageLevel::Partial.sufficient_for_rollout());
         assert!(!CoverageLevel::Sparse.sufficient_for_rollout());
         assert!(!CoverageLevel::Uncovered.sufficient_for_rollout());
     }
 
-    #[test] fn test_action_display() {
+    #[test]
+    fn test_action_display() {
         assert_eq!(GovernanceAction::AllowRollout.to_string(), "allow_rollout");
-        assert_eq!(GovernanceAction::DowngradeSupremacy.to_string(), "downgrade_supremacy");
+        assert_eq!(
+            GovernanceAction::DowngradeSupremacy.to_string(),
+            "downgrade_supremacy"
+        );
     }
-    #[test] fn test_action_serde() {
-        for a in [GovernanceAction::AllowRollout, GovernanceAction::ConditionalRollout,
-                   GovernanceAction::BlockRollout, GovernanceAction::RequireFreshEvidence,
-                   GovernanceAction::DowngradeSupremacy] {
+    #[test]
+    fn test_action_serde() {
+        for a in [
+            GovernanceAction::AllowRollout,
+            GovernanceAction::ConditionalRollout,
+            GovernanceAction::BlockRollout,
+            GovernanceAction::RequireFreshEvidence,
+            GovernanceAction::DowngradeSupremacy,
+        ] {
             let j = serde_json::to_string(&a).unwrap();
             assert_eq!(a, serde_json::from_str::<GovernanceAction>(&j).unwrap());
         }
     }
 
-    #[test] fn test_evidence_creation() {
+    #[test]
+    fn test_evidence_creation() {
         let e = ev(TransferDomain::CachePolicy, 950_000, 10_000, 100);
         assert_eq!(e.domain, TransferDomain::CachePolicy);
         assert_eq!(e.transfer_fidelity, 950_000);
         assert_eq!(e.sample_count, 100);
     }
-    #[test] fn test_evidence_hash_deterministic() {
+    #[test]
+    fn test_evidence_hash_deterministic() {
         let a = ev(TransferDomain::RewritePrior, 900_000, 50_000, 50);
         let b = ev(TransferDomain::RewritePrior, 900_000, 50_000, 50);
         assert_eq!(a.evidence_hash, b.evidence_hash);
     }
-    #[test] fn test_evidence_hash_differs() {
+    #[test]
+    fn test_evidence_hash_differs() {
         let a = ev(TransferDomain::RewritePrior, 900_000, 50_000, 50);
         let b = ev(TransferDomain::CachePolicy, 900_000, 50_000, 50);
         assert_ne!(a.evidence_hash, b.evidence_hash);
     }
-    #[test] fn test_evidence_display() {
+    #[test]
+    fn test_evidence_display() {
         let e = ev(TransferDomain::TieringPolicy, 800_000, 20_000, 40);
         assert!(e.to_string().contains("tiering_policy"));
     }
-    #[test] fn test_evidence_serde() {
+    #[test]
+    fn test_evidence_serde() {
         let e = ev(TransferDomain::InliningDecision, 750_000, 100_000, 60);
         let j = serde_json::to_string(&e).unwrap();
         assert_eq!(e, serde_json::from_str::<TransferEvidence>(&j).unwrap());
     }
 
-    #[test] fn test_eval_validated() {
+    #[test]
+    fn test_eval_validated() {
         let c = GateConfig::default();
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 100_000, 50), &c), TransferVerdict::Validated);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 100_000, 50), &c),
+            TransferVerdict::Validated
+        );
     }
-    #[test] fn test_eval_conditionally_valid() {
+    #[test]
+    fn test_eval_conditionally_valid() {
         let c = GateConfig::default();
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::CachePolicy, 750_000, 100_000, 50), &c), TransferVerdict::ConditionallyValid);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::CachePolicy, 750_000, 100_000, 50), &c),
+            TransferVerdict::ConditionallyValid
+        );
     }
-    #[test] fn test_eval_drift() {
+    #[test]
+    fn test_eval_drift() {
         let c = GateConfig::default();
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::TieringPolicy, 950_000, 300_000, 50), &c), TransferVerdict::DriftDetected);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::TieringPolicy, 950_000, 300_000, 50), &c),
+            TransferVerdict::DriftDetected
+        );
     }
-    #[test] fn test_eval_rejected() {
+    #[test]
+    fn test_eval_rejected() {
         let c = GateConfig::default();
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::SchedulingHeuristic, 500_000, 100_000, 50), &c), TransferVerdict::Rejected);
+        assert_eq!(
+            evaluate_transfer(
+                &ev(TransferDomain::SchedulingHeuristic, 500_000, 100_000, 50),
+                &c
+            ),
+            TransferVerdict::Rejected
+        );
     }
-    #[test] fn test_eval_insufficient() {
+    #[test]
+    fn test_eval_insufficient() {
         let c = GateConfig::default();
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::InliningDecision, 950_000, 0, 5), &c), TransferVerdict::InsufficientEvidence);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::InliningDecision, 950_000, 0, 5), &c),
+            TransferVerdict::InsufficientEvidence
+        );
     }
-    #[test] fn test_eval_priority_drift_over_fidelity() {
+    #[test]
+    fn test_eval_priority_drift_over_fidelity() {
         let c = GateConfig::default();
         // Drift takes priority even with perfect fidelity; insufficient takes priority over everything
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::RewritePrior, 990_000, 500_000, 100), &c), TransferVerdict::DriftDetected);
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::CachePolicy, 1_000_000, 500_000, 1), &c), TransferVerdict::InsufficientEvidence);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::RewritePrior, 990_000, 500_000, 100), &c),
+            TransferVerdict::DriftDetected
+        );
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::CachePolicy, 1_000_000, 500_000, 1), &c),
+            TransferVerdict::InsufficientEvidence
+        );
     }
 
-    #[test] fn test_coverage_record_hashing() {
+    #[test]
+    fn test_coverage_record_hashing() {
         let a = cov(TransferDomain::RewritePrior, "r1", CoverageLevel::Full);
         let b = cov(TransferDomain::RewritePrior, "r1", CoverageLevel::Full);
         let c = cov(TransferDomain::RewritePrior, "r1", CoverageLevel::Sparse);
@@ -684,24 +1047,92 @@ mod tests {
         assert!(a.to_string().contains("Coverage"));
     }
 
-    #[test] fn test_coverage_empty() {
-        assert_eq!(evaluate_coverage(&[], &GateConfig::default()), CoverageLevel::Uncovered);
+    #[test]
+    fn test_coverage_empty() {
+        assert_eq!(
+            evaluate_coverage(&[], &GateConfig::default()),
+            CoverageLevel::Uncovered
+        );
     }
-    #[test] fn test_coverage_all_full() {
-        let recs = (0..5).map(|i| cov(TransferDomain::RewritePrior, &format!("r{i}"), CoverageLevel::Full)).collect::<Vec<_>>();
-        assert_eq!(evaluate_coverage(&recs, &GateConfig::default()), CoverageLevel::Full);
+    #[test]
+    fn test_coverage_all_full() {
+        let recs = (0..5)
+            .map(|i| {
+                cov(
+                    TransferDomain::RewritePrior,
+                    &format!("r{i}"),
+                    CoverageLevel::Full,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            evaluate_coverage(&recs, &GateConfig::default()),
+            CoverageLevel::Full
+        );
     }
-    #[test] fn test_coverage_mixed_partial() {
+    #[test]
+    fn test_coverage_mixed_partial() {
         let recs = vec![
             cov(TransferDomain::RewritePrior, "a", CoverageLevel::Full),
             cov(TransferDomain::CachePolicy, "b", CoverageLevel::Sparse),
             cov(TransferDomain::TieringPolicy, "c", CoverageLevel::Full),
             cov(TransferDomain::InliningDecision, "d", CoverageLevel::Full),
         ]; // 3/4=750k -> Partial
-        assert_eq!(evaluate_coverage(&recs, &GateConfig::default()), CoverageLevel::Partial);
+        assert_eq!(
+            evaluate_coverage(&recs, &GateConfig::default()),
+            CoverageLevel::Partial
+        );
+    }
+    #[test]
+    fn test_coverage_all_partial_stays_partial() {
+        let recs = (0..10)
+            .map(|i| {
+                cov(
+                    TransferDomain::CachePolicy,
+                    &format!("r{i}"),
+                    CoverageLevel::Partial,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            evaluate_coverage(&recs, &GateConfig::default()),
+            CoverageLevel::Partial
+        );
+    }
+    #[test]
+    fn test_coverage_full_majority_still_counts_as_full() {
+        let recs = vec![
+            cov(TransferDomain::RewritePrior, "a", CoverageLevel::Full),
+            cov(TransferDomain::CachePolicy, "b", CoverageLevel::Full),
+            cov(TransferDomain::TieringPolicy, "c", CoverageLevel::Full),
+            cov(TransferDomain::InliningDecision, "d", CoverageLevel::Full),
+            cov(
+                TransferDomain::SchedulingHeuristic,
+                "e",
+                CoverageLevel::Full,
+            ),
+            cov(
+                TransferDomain::SpecializationStrategy,
+                "f",
+                CoverageLevel::Full,
+            ),
+            cov(TransferDomain::RewritePrior, "g", CoverageLevel::Full),
+            cov(TransferDomain::CachePolicy, "h", CoverageLevel::Full),
+            cov(TransferDomain::TieringPolicy, "i", CoverageLevel::Full),
+            cov(
+                TransferDomain::InliningDecision,
+                "j",
+                CoverageLevel::Partial,
+            ),
+        ];
+        assert_eq!(
+            evaluate_coverage(&recs, &GateConfig::default()),
+            CoverageLevel::Full
+        );
     }
 
-    #[test] fn test_config_default_and_serde() {
+    #[test]
+    fn test_config_default_and_serde() {
         let c = GateConfig::default();
         assert_eq!(c.min_transfer_fidelity_high, 900_000);
         assert_eq!(c.min_sample_count, 30);
@@ -709,15 +1140,31 @@ mod tests {
         let j = serde_json::to_string(&c).unwrap();
         assert_eq!(c, serde_json::from_str::<GateConfig>(&j).unwrap());
     }
-    #[test] fn test_config_custom() {
-        let c = GateConfig { min_transfer_fidelity_high: 800_000, min_transfer_fidelity_moderate: 600_000,
-            drift_alarm_threshold: 300_000, min_sample_count: 10, min_coverage_fraction: 500_000, max_batch_size: 100 };
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::CachePolicy, 750_000, 100_000, 20), &c), TransferVerdict::ConditionallyValid);
+    #[test]
+    fn test_config_custom() {
+        let c = GateConfig {
+            min_transfer_fidelity_high: 800_000,
+            min_transfer_fidelity_moderate: 600_000,
+            drift_alarm_threshold: 300_000,
+            min_sample_count: 10,
+            min_coverage_fraction: 500_000,
+            max_batch_size: 100,
+        };
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::CachePolicy, 750_000, 100_000, 20), &c),
+            TransferVerdict::ConditionallyValid
+        );
     }
 
-    #[test] fn test_decision_lifecycle() {
+    #[test]
+    fn test_decision_lifecycle() {
         let h = ContentHash::compute(b"ev");
-        let d = GovernanceDecision::new(GovernanceAction::AllowRollout, vec![h.clone()], "ok", ep(10));
+        let d = GovernanceDecision::new(
+            GovernanceAction::AllowRollout,
+            vec![h.clone()],
+            "ok",
+            ep(10),
+        );
         assert_eq!(d.action, GovernanceAction::AllowRollout);
         assert_eq!(d.evidence_hashes.len(), 1);
         // Determinism
@@ -726,7 +1173,8 @@ mod tests {
         assert!(d.to_string().contains("allow_rollout"));
     }
 
-    #[test] fn test_rollout_gate_result_constructors() {
+    #[test]
+    fn test_rollout_gate_result_constructors() {
         let a = RolloutGateResult::allowed(CoverageLevel::Full);
         assert!(a.allowed && a.conditions.is_empty() && a.blocking_reasons.is_empty());
         assert!(a.to_string().contains("ALLOWED"));
@@ -737,7 +1185,8 @@ mod tests {
         assert!(c.allowed && c.conditions.len() == 1);
     }
 
-    #[test] fn test_supremacy_constraint() {
+    #[test]
+    fn test_supremacy_constraint() {
         let c = SupremacyConstraint::new("c1", "drift", 600_000, "drift");
         assert!(!c.is_critical());
         assert!(SupremacyConstraint::new("c2", "gap", 900_000, "gap").is_critical());
@@ -747,7 +1196,8 @@ mod tests {
         assert!(c.to_string().contains("c1"));
     }
 
-    #[test] fn test_receipt_lifecycle() {
+    #[test]
+    fn test_receipt_lifecycle() {
         let h = ContentHash::compute(b"ev");
         let r = DecisionReceipt::new(ep(15), GovernanceAction::AllowRollout, h.clone());
         assert_eq!(r.component, COMPONENT);
@@ -761,30 +1211,42 @@ mod tests {
         assert!(r3.to_string().contains("block_rollout"));
     }
 
-    #[test] fn test_rollout_empty_blocked() {
+    #[test]
+    fn test_rollout_empty_blocked() {
         let r = evaluate_rollout(&[], &GateConfig::default());
         assert!(!r.allowed);
     }
-    #[test] fn test_rollout_all_validated() {
-        let evs = vec![ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
-                       ev(TransferDomain::CachePolicy, 920_000, 30_000, 80)];
+    #[test]
+    fn test_rollout_all_validated() {
+        let evs = vec![
+            ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
+            ev(TransferDomain::CachePolicy, 920_000, 30_000, 80),
+        ];
         let r = evaluate_rollout(&evs, &GateConfig::default());
         assert!(r.allowed && r.conditions.is_empty());
         assert_eq!(r.coverage_summary, CoverageLevel::Full);
     }
-    #[test] fn test_rollout_with_drift() {
-        let evs = vec![ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
-                       ev(TransferDomain::CachePolicy, 920_000, 400_000, 80)];
+    #[test]
+    fn test_rollout_with_drift() {
+        let evs = vec![
+            ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
+            ev(TransferDomain::CachePolicy, 920_000, 400_000, 80),
+        ];
         assert!(!evaluate_rollout(&evs, &GateConfig::default()).allowed);
     }
-    #[test] fn test_rollout_conditional() {
-        let evs = vec![ev(TransferDomain::RewritePrior, 750_000, 50_000, 100),
-                       ev(TransferDomain::CachePolicy, 800_000, 100_000, 80)];
+    #[test]
+    fn test_rollout_conditional() {
+        let evs = vec![
+            ev(TransferDomain::RewritePrior, 750_000, 50_000, 100),
+            ev(TransferDomain::CachePolicy, 800_000, 100_000, 80),
+        ];
         let r = evaluate_rollout(&evs, &GateConfig::default());
         assert!(r.allowed && !r.conditions.is_empty());
+        assert_eq!(r.coverage_summary, CoverageLevel::Partial);
     }
 
-    #[test] fn test_batch_mixed() {
+    #[test]
+    fn test_batch_mixed() {
         let c = GateConfig::default();
         let evs = vec![
             ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
@@ -801,46 +1263,82 @@ mod tests {
         assert_eq!(sum.rejected, 1);
         assert_eq!(sum.insufficient, 1);
     }
-    #[test] fn test_batch_all_validated() {
-        let evs = vec![ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
-                       ev(TransferDomain::CachePolicy, 920_000, 30_000, 80)];
+    #[test]
+    fn test_batch_all_validated() {
+        let evs = vec![
+            ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
+            ev(TransferDomain::CachePolicy, 920_000, 30_000, 80),
+        ];
         let (_, sum) = evaluate_batch(&evs, &GateConfig::default());
         assert_eq!(sum.validated, 2);
         assert_eq!(sum.coverage_fraction, MILLION);
     }
-    #[test] fn test_batch_max_size() {
-        let c = GateConfig { max_batch_size: 2, ..GateConfig::default() };
-        let evs = vec![ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
-                       ev(TransferDomain::CachePolicy, 920_000, 30_000, 80),
-                       ev(TransferDomain::TieringPolicy, 910_000, 40_000, 90)];
+    #[test]
+    fn test_batch_max_size() {
+        let c = GateConfig {
+            max_batch_size: 2,
+            ..GateConfig::default()
+        };
+        let evs = vec![
+            ev(TransferDomain::RewritePrior, 950_000, 50_000, 100),
+            ev(TransferDomain::CachePolicy, 920_000, 30_000, 80),
+            ev(TransferDomain::TieringPolicy, 910_000, 40_000, 90),
+        ];
         let (decs, sum) = evaluate_batch(&evs, &c);
         assert_eq!(decs.len(), 2);
         assert_eq!(sum.total_transfers, 2);
     }
 
-    #[test] fn test_summary_metrics() {
+    #[test]
+    fn test_summary_metrics() {
         let s = GovernanceSummary::from_counts(3, 1, 1, 0, 0);
         assert_eq!(s.pass_rate(), 600_000);
-        assert_eq!(GovernanceSummary::from_counts(2, 2, 1, 0, 0).coverage_fraction, 800_000);
+        assert_eq!(
+            GovernanceSummary::from_counts(2, 2, 1, 0, 0).coverage_fraction,
+            800_000
+        );
         let empty = GovernanceSummary::from_counts(0, 0, 0, 0, 0);
         assert_eq!(empty.total_transfers, 0);
         assert_eq!(empty.pass_rate(), 0);
-        assert!(GovernanceSummary::from_counts(5, 2, 1, 1, 1).to_string().contains("total=10"));
+        assert!(
+            GovernanceSummary::from_counts(5, 2, 1, 1, 1)
+                .to_string()
+                .contains("total=10")
+        );
     }
 
-    #[test] fn test_boundary_conditions() {
+    #[test]
+    fn test_boundary_conditions() {
         let c = GateConfig::default();
         // Fidelity exactly at high threshold -> Validated
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::RewritePrior, 900_000, 100_000, 50), &c), TransferVerdict::Validated);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::RewritePrior, 900_000, 100_000, 50), &c),
+            TransferVerdict::Validated
+        );
         // Fidelity exactly at moderate threshold -> ConditionallyValid
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::RewritePrior, 700_000, 100_000, 50), &c), TransferVerdict::ConditionallyValid);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::RewritePrior, 700_000, 100_000, 50), &c),
+            TransferVerdict::ConditionallyValid
+        );
         // Drift exactly at threshold -> NOT drift (must exceed)
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 200_000, 50), &c), TransferVerdict::Validated);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 200_000, 50), &c),
+            TransferVerdict::Validated
+        );
         // Drift one over -> DriftDetected
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 200_001, 50), &c), TransferVerdict::DriftDetected);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 200_001, 50), &c),
+            TransferVerdict::DriftDetected
+        );
         // Samples exactly at min -> sufficient
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 50_000, 30), &c), TransferVerdict::Validated);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 50_000, 30), &c),
+            TransferVerdict::Validated
+        );
         // Samples one below min -> insufficient
-        assert_eq!(evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 50_000, 29), &c), TransferVerdict::InsufficientEvidence);
+        assert_eq!(
+            evaluate_transfer(&ev(TransferDomain::RewritePrior, 950_000, 50_000, 29), &c),
+            TransferVerdict::InsufficientEvidence
+        );
     }
 }

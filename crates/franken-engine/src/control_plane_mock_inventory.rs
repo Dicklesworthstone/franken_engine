@@ -39,8 +39,7 @@ pub const BEAD_ID: &str = "bd-3nr.1.1.1";
 pub const INVENTORY_SCHEMA_VERSION: &str = "frankenengine.control-plane-mock-inventory.v1";
 pub const AMBIENT_MOCK_GUARD_COMPONENT: &str = "ambient_mock_guard";
 pub const AMBIENT_MOCK_GUARD_BEAD_ID: &str = "bd-3nr.1.2.2";
-pub const AMBIENT_MOCK_GUARD_POLICY_ID: &str =
-    "frankenengine.control-plane-mocks.fail-closed.v1";
+pub const AMBIENT_MOCK_GUARD_POLICY_ID: &str = "frankenengine.control-plane-mocks.fail-closed.v1";
 pub const AMBIENT_MOCK_GUARD_REPORT_SCHEMA_VERSION: &str =
     "frankenengine.ambient-mock-guard-report.v1";
 pub const AMBIENT_MOCK_GUARD_TRACE_IDS_SCHEMA_VERSION: &str =
@@ -855,10 +854,8 @@ pub fn evaluate_ambient_mock_guard_in_root(
 ) -> Result<AmbientMockGuardReport, AmbientMockGuardError> {
     let workspace_root = workspace_root.as_ref();
     let canonical_inventory = build_canonical_inventory();
-    let (scanned_file_count, mut violations) = scan_workspace_for_ambient_mock_violations(
-        workspace_root,
-        AMBIENT_MOCK_GUARD_SCAN_ROOT,
-    )?;
+    let (scanned_file_count, mut violations) =
+        scan_workspace_for_ambient_mock_violations(workspace_root, AMBIENT_MOCK_GUARD_SCAN_ROOT)?;
     violations.sort_by(|left, right| {
         left.file_path
             .cmp(&right.file_path)
@@ -954,11 +951,10 @@ pub fn write_ambient_mock_guard_bundle_in_root(
     let events = build_ambient_mock_guard_events(&report, &trace_id, &decision_id);
     let mut events_jsonl = String::new();
     for event in &events {
-        let line =
-            serde_json::to_string(event).map_err(|source| AmbientMockGuardError::Json {
-                path: events_path.display().to_string(),
-                source,
-            })?;
+        let line = serde_json::to_string(event).map_err(|source| AmbientMockGuardError::Json {
+            path: events_path.display().to_string(),
+            source,
+        })?;
         events_jsonl.push_str(&line);
         events_jsonl.push('\n');
     }
@@ -1032,7 +1028,10 @@ pub fn write_ambient_mock_guard_bundle_in_root(
         source,
     })?;
     let step_log = render_ambient_mock_guard_step_log(&report, &trace_id, &decision_id);
-    write_ambient_mock_guard_atomic(&step_logs_dir.join("step_001_scan.log"), step_log.as_bytes())?;
+    write_ambient_mock_guard_atomic(
+        &step_logs_dir.join("step_001_scan.log"),
+        step_log.as_bytes(),
+    )?;
     write_ambient_mock_guard_atomic(&summary_path, summary_md.as_bytes())?;
     write_ambient_mock_guard_atomic(&env_path, &env_json)?;
     write_ambient_mock_guard_atomic(&repro_lock_path, &repro_lock)?;
@@ -1070,12 +1069,14 @@ fn scan_workspace_for_ambient_mock_violations(
     let mut rust_files = Vec::new();
     collect_rust_files(&source_root, &mut rust_files)?;
 
+    let mut scanned_file_count = 0u64;
     let mut violations = Vec::new();
     for file_path in &rust_files {
         let relative_path = relative_path_from(workspace_root, file_path);
         if relative_path == "crates/franken-engine/src/control_plane_mock_inventory.rs" {
             continue;
         }
+        scanned_file_count += 1;
         violations.extend(scan_rust_file_for_ambient_mock_violations(
             workspace_root,
             file_path,
@@ -1083,13 +1084,10 @@ fn scan_workspace_for_ambient_mock_violations(
         )?);
     }
 
-    Ok((rust_files.len() as u64, violations))
+    Ok((scanned_file_count, violations))
 }
 
-fn collect_rust_files(
-    dir: &Path,
-    files: &mut Vec<PathBuf>,
-) -> Result<(), AmbientMockGuardError> {
+fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), AmbientMockGuardError> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(dir).map_err(|source| AmbientMockGuardError::Io {
         path: dir.display().to_string(),
@@ -1168,7 +1166,11 @@ fn scan_rust_file_for_ambient_mock_violations(
         }
 
         if !trimmed.is_empty() && !is_test_context && !is_mock_module_context {
-            violations.extend(line_level_guard_violations(relative_path, line_number, trimmed));
+            violations.extend(line_level_guard_violations(
+                relative_path,
+                line_number,
+                trimmed,
+            ));
         }
 
         let open_braces = trimmed.chars().filter(|ch| *ch == '{').count();
@@ -1203,7 +1205,10 @@ fn scan_rust_file_for_ambient_mock_violations(
 
     // Ensure relative paths in diagnostics are always workspace-relative.
     for violation in &mut violations {
-        if violation.file_path.starts_with(workspace_root.display().to_string().as_str()) {
+        if violation
+            .file_path
+            .starts_with(workspace_root.display().to_string().as_str())
+        {
             violation.file_path = relative_path.to_string();
         }
     }
@@ -1282,7 +1287,12 @@ fn ambient_mock_guard_violation_id(
 }
 
 fn is_cfg_test_attribute(line: &str) -> bool {
-    line.starts_with("#[cfg(") && line.contains("test")
+    let compact = line.replace(' ', "");
+    compact.starts_with("#[cfg(test")
+        || compact.contains("cfg(any(test")
+        || compact.contains("cfg(all(test")
+        || compact.contains(",test")
+        || compact.contains("(test,")
 }
 
 fn is_mock_module_definition(line: &str) -> bool {
@@ -1290,7 +1300,10 @@ fn is_mock_module_definition(line: &str) -> bool {
 }
 
 fn is_production_mock_module_reference(line: &str) -> bool {
-    (line.starts_with("use ") && line.contains("mocks"))
+    (line.starts_with("use ")
+        && (line.contains("crate::control_plane::mocks")
+            || line.contains("super::mocks")
+            || line.contains("super::super::mocks")))
         || line.contains("crate::control_plane::mocks::")
         || line.contains("control_plane::mocks::")
         || line.contains("super::mocks::")
@@ -1365,7 +1378,9 @@ fn contains_ident(line: &str, ident: &str) -> bool {
             break;
         };
         let absolute = start + offset;
-        let before = absolute.checked_sub(1).and_then(|index| bytes.get(index).copied());
+        let before = absolute
+            .checked_sub(1)
+            .and_then(|index| bytes.get(index).copied());
         let after = bytes.get(absolute + ident_bytes.len()).copied();
         if !is_ident_byte(before) && !is_ident_byte(after) {
             return true;
@@ -1376,10 +1391,7 @@ fn contains_ident(line: &str, ident: &str) -> bool {
 }
 
 fn is_ident_byte(byte: Option<u8>) -> bool {
-    matches!(
-        byte,
-        Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
-    )
+    matches!(byte, Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
 }
 
 fn strip_non_code_segments(line: &str, in_block_comment: &mut bool) -> String {
@@ -1548,8 +1560,14 @@ fn render_ambient_mock_guard_step_log(
     output.push_str(&format!("decision_id={decision_id}\n"));
     output.push_str(&format!("policy_id={}\n", report.policy_id));
     output.push_str(&format!("outcome={}\n", report.outcome));
-    output.push_str(&format!("scanned_file_count={}\n", report.summary.scanned_file_count));
-    output.push_str(&format!("violation_count={}\n", report.summary.violation_count));
+    output.push_str(&format!(
+        "scanned_file_count={}\n",
+        report.summary.scanned_file_count
+    ));
+    output.push_str(&format!(
+        "violation_count={}\n",
+        report.summary.violation_count
+    ));
     for violation in &report.violations {
         output.push_str(&format!(
             "violation={} {}:{} {}\n",
@@ -1591,10 +1609,7 @@ fn acquire_ambient_mock_guard_bundle_lock(
     }
 }
 
-fn write_ambient_mock_guard_atomic(
-    path: &Path,
-    bytes: &[u8],
-) -> Result<(), AmbientMockGuardError> {
+fn write_ambient_mock_guard_atomic(path: &Path, bytes: &[u8]) -> Result<(), AmbientMockGuardError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| AmbientMockGuardError::Io {
             path: parent.display().to_string(),
@@ -2194,16 +2209,16 @@ fn build() {
             evaluate_ambient_mock_guard_in_root(&root).expect("guard should evaluate fixture");
 
         assert_eq!(report.outcome, AmbientMockGuardOutcome::FailClosed);
-        assert!(report
-            .violations
-            .iter()
-            .any(|violation| violation.rule
-                == AmbientMockGuardRule::NoProductionMockModuleReference));
-        assert!(report
-            .violations
-            .iter()
-            .any(|violation| violation.rule
-                == AmbientMockGuardRule::NoProductionFakeContextSymbol));
+        assert!(report.violations.iter().any(
+            |violation| violation.rule == AmbientMockGuardRule::NoProductionMockModuleReference
+        ));
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule
+                    == AmbientMockGuardRule::NoProductionFakeContextSymbol)
+        );
 
         let _ = fs::remove_dir_all(root);
     }

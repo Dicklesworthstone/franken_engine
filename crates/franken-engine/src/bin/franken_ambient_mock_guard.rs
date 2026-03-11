@@ -69,9 +69,10 @@ fn run() -> Result<i32, String> {
         write_ambient_mock_guard_bundle(&out_dir, &args).map_err(|error| error.to_string())?
     };
 
-    let report: AmbientMockGuardReport =
-        serde_json::from_slice(&fs::read(&artifacts.report_path).map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
+    let report: AmbientMockGuardReport = serde_json::from_slice(
+        &fs::read(&artifacts.report_path).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     let output = CommandOutput {
         schema_version: OUTPUT_SCHEMA_VERSION.to_string(),
         out_dir: artifacts.out_dir.display().to_string(),

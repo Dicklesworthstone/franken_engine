@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 //! Differentially verify supported React SSR and client-entry execution
 //! paths so runtime claims are grounded in actual shipped-path evidence
 //! rather than only compile-time parity.

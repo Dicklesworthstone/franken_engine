@@ -1653,6 +1653,10 @@ pub enum DenialReason {
         action: CapabilityEscrowRoute,
         escrow_id: String,
     },
+    CapabilityEscrowDenied {
+        attempted: Capability,
+        escrow_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4593,6 +4597,11 @@ pub enum DelegateCellError {
     ManifestValidation(ManifestValidationError),
     Lifecycle(LifecycleError),
     CapabilityEscrow(CapabilityEscrowError),
+    InactiveState {
+        delegate_id: String,
+        state: ExtensionState,
+        action: &'static str,
+    },
     LifetimeExpired {
         delegate_id: String,
         expired_at_ns: u64,
@@ -4624,6 +4633,14 @@ impl fmt::Display for DelegateCellError {
             Self::CapabilityEscrow(error) => {
                 write!(f, "delegate capability escrow error: {error}")
             }
+            Self::InactiveState {
+                delegate_id,
+                state,
+                action,
+            } => write!(
+                f,
+                "delegate '{delegate_id}' cannot {action} while in {state}"
+            ),
             Self::LifetimeExpired {
                 delegate_id,
                 expired_at_ns,
@@ -5019,8 +5036,11 @@ impl DelegateCell {
             }
 
             if self.lifecycle_manager.state() == ExtensionState::Terminating {
+                let forced_completion_timestamp = timestamp_ns
+                    .saturating_add(self.lifecycle_manager.cancellation.grace_period_ns)
+                    .saturating_add(1);
                 let _ = self.lifecycle_manager.complete_termination(
-                    timestamp_ns.saturating_add(1),
+                    forced_completion_timestamp,
                     context,
                     false,
                     false,
@@ -5079,6 +5099,7 @@ impl DelegateCell {
         escrow_justification: Option<&str>,
     ) -> Result<HostcallDispatchOutcome<T>, DelegateCellError> {
         self.check_lifetime(timestamp_ns, lifecycle_context)?;
+        self.ensure_running_for("dispatch_hostcall")?;
         self.lifecycle_manager
             .consume_hostcall(timestamp_ns, lifecycle_context)?;
 
@@ -5201,9 +5222,8 @@ impl DelegateCell {
                     );
                     return Ok(HostcallDispatchOutcome {
                         result: HostcallResult::Denied {
-                            reason: DenialReason::CapabilityEscrowPending {
+                            reason: DenialReason::CapabilityEscrowDenied {
                                 attempted: attempted_capability,
-                                action: hostcall_type.default_escrow_route(),
                                 escrow_id: decision.request_id,
                             },
                         },
@@ -5270,6 +5290,10 @@ impl DelegateCell {
                         attempted: _,
                         action: _,
                         escrow_id: _,
+                    }
+                    | DenialReason::CapabilityEscrowDenied {
+                        attempted: _,
+                        escrow_id: _,
                     },
             } => {
                 self.apply_guardplane_penalty(self.policy.capability_escalation_penalty_micros);
@@ -5321,6 +5345,7 @@ impl DelegateCell {
         lifecycle_context: &LifecycleContext<'_>,
     ) -> Result<DeclassificationOutcome, DelegateCellError> {
         self.check_lifetime(request.timestamp_ns, lifecycle_context)?;
+        self.ensure_running_for("request_declassification")?;
         let timestamp_ns = request.timestamp_ns;
         let outcome = self.declassification_gateway.evaluate_request(
             request,
@@ -5400,6 +5425,19 @@ impl DelegateCell {
         self.guardplane_state.posterior_micros = (self.guardplane_state.posterior_micros
             + penalty_micros)
             .min(GUARDPLANE_MAX_POSTERIOR_MICROS);
+    }
+
+    fn ensure_running_for(&self, action: &'static str) -> Result<(), DelegateCellError> {
+        let state = self.lifecycle_manager.state();
+        if state == ExtensionState::Running {
+            Ok(())
+        } else {
+            Err(DelegateCellError::InactiveState {
+                delegate_id: self.delegate_id.clone(),
+                state,
+                action,
+            })
+        }
     }
 
     fn evaluate_guardplane_policy_action(
@@ -7135,12 +7173,66 @@ mod delegate_cell_tests {
         assert!(matches!(err, DelegateCellError::LifetimeExpired { .. }));
         assert!(matches!(
             delegate.state(),
-            ExtensionState::Terminated | ExtensionState::Quarantined | ExtensionState::Terminating
+            ExtensionState::Terminated | ExtensionState::Quarantined
         ));
+        assert!(delegate
+            .lifecycle_manager()
+            .pending_cancel_token()
+            .is_none());
         assert!(delegate
             .evidence()
             .iter()
             .any(|item| matches!(item, DelegateCellEvidence::LifetimeExpired { .. })));
+    }
+
+    #[test]
+    fn escrow_flood_denial_reports_hard_denial_to_callers() {
+        let factory = DelegateCellFactory::default();
+        let mut delegate = factory
+            .create_delegate_cell(
+                "delegate-flood",
+                delegate_manifest(&[Capability::FsRead, Capability::NetClient], 1_000_000),
+                ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 100),
+                BudgetExhaustionPolicy::Suspend,
+                450,
+                &lifecycle_context(),
+            )
+            .expect("delegate created");
+
+        let mut terminal_outcome = None;
+        for index in 0..17 {
+            let outcome = delegate
+                .dispatch_hostcall(
+                    HostcallType::ProcessSpawn,
+                    Capability::ProcessSpawn,
+                    Labeled::system_generated(format!("diag-{index}")),
+                    500 + index as u64,
+                    &flow_context(),
+                    &lifecycle_context(),
+                )
+                .expect("hostcall dispatch");
+            terminal_outcome = Some(outcome);
+        }
+
+        let outcome = terminal_outcome.expect("final outcome");
+        let escrow_id = match outcome.result {
+            HostcallResult::Denied {
+                reason:
+                    DenialReason::CapabilityEscrowDenied {
+                        attempted: Capability::ProcessSpawn,
+                        escrow_id,
+                    },
+            } => escrow_id,
+            other => panic!("expected hard escrow denial, got {other:?}"),
+        };
+
+        let receipt = delegate
+            .capability_escrow_receipts()
+            .last()
+            .expect("capability escrow receipt");
+        assert_eq!(receipt.request_id, escrow_id);
+        assert_eq!(receipt.state, CapabilityEscrowState::Denied);
+        assert_eq!(receipt.error_code.as_deref(), Some(ESCROW_FLOOD_ERROR_CODE));
     }
 
     #[test]
@@ -7228,6 +7320,95 @@ mod delegate_cell_tests {
             .evidence()
             .iter()
             .any(|item| matches!(item, DelegateCellEvidence::DeclassificationDenied(_))));
+    }
+
+    #[test]
+    fn non_running_delegate_cannot_dispatch_hostcalls() {
+        let factory = DelegateCellFactory::default();
+        let mut delegate = factory
+            .create_delegate_cell(
+                "delegate-inactive-hostcall",
+                delegate_manifest(&[Capability::FsRead, Capability::NetClient], 1_000_000),
+                ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 100),
+                BudgetExhaustionPolicy::Suspend,
+                675,
+                &lifecycle_context(),
+            )
+            .expect("delegate created");
+
+        delegate
+            .apply_transition(LifecycleTransition::Terminate, 700, &lifecycle_context())
+            .expect("terminate");
+
+        let err = delegate
+            .dispatch_hostcall(
+                HostcallType::FsRead,
+                Capability::FsRead,
+                Labeled::system_generated("probe".to_string()),
+                701,
+                &flow_context(),
+                &lifecycle_context(),
+            )
+            .expect_err("hostcall should fail-closed outside running state");
+        assert!(matches!(
+            err,
+            DelegateCellError::InactiveState {
+                state: ExtensionState::Terminating,
+                action: "dispatch_hostcall",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn non_running_delegate_cannot_request_declassification() {
+        let factory = DelegateCellFactory::default();
+        let mut delegate = factory
+            .create_delegate_cell(
+                "delegate-inactive-declass",
+                delegate_manifest(
+                    &[
+                        Capability::FsRead,
+                        Capability::NetClient,
+                        Capability::Declassify,
+                    ],
+                    1_000_000,
+                ),
+                ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 100),
+                BudgetExhaustionPolicy::Suspend,
+                725,
+                &lifecycle_context(),
+            )
+            .expect("delegate created");
+
+        delegate
+            .apply_transition(LifecycleTransition::Quarantine, 750, &lifecycle_context())
+            .expect("quarantine");
+
+        let err = delegate
+            .request_declassification(
+                DeclassificationRequest {
+                    request_id: "delegate-inactive-declass-request".to_string(),
+                    requester: "delegate-inactive-declass".to_string(),
+                    data_ref: DataRef::new("memory", "token"),
+                    current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+                    target_label: FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated),
+                    purpose: DeclassificationPurpose::DiagnosticExport,
+                    justification: "should fail closed outside running state".to_string(),
+                    timestamp_ns: 751,
+                },
+                &flow_context(),
+                &lifecycle_context(),
+            )
+            .expect_err("declassification should fail-closed outside running state");
+        assert!(matches!(
+            err,
+            DelegateCellError::InactiveState {
+                state: ExtensionState::Quarantined,
+                action: "request_declassification",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -9491,6 +9672,10 @@ mod enrichment_tests {
                 attempted: Capability::NetClient,
                 action: CapabilityEscrowRoute::Challenge,
                 escrow_id: "esc-1".to_string(),
+            },
+            DenialReason::CapabilityEscrowDenied {
+                attempted: Capability::ProcessSpawn,
+                escrow_id: "esc-2".to_string(),
             },
         ];
         for reason in &variants {

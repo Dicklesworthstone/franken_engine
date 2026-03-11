@@ -6,10 +6,20 @@ cd "$root_dir"
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-1800}"
+rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-1800}}"
+rch_exec_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-${rch_build_timeout_sec}}"
 artifact_root="${SEQLOCK_READER_WRITER_ARTIFACT_ROOT:-artifacts/seqlock_reader_writer_contract}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-target_dir="${CARGO_TARGET_DIR:-/var/tmp/rch_target_franken_engine_seqlock_reader_writer_contract_${timestamp}}"
+default_target_dir="${root_dir}/target_rch_seqlock_reader_writer_contract"
+if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  target_dir="${CARGO_TARGET_DIR}"
+  target_dir_strategy="env_override"
+else
+  # Keep a stable repo-local target dir by default so rch workers can reuse
+  # incremental artifacts across reruns instead of paying a cold-build penalty.
+  target_dir="${default_target_dir}"
+  target_dir_strategy="stable_repo_local_default"
+fi
 generated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/suite_run_manifest.json"
@@ -22,8 +32,16 @@ suite_commands_path="${run_dir}/suite_commands.txt"
 
 mkdir -p "$run_dir"
 
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "timeout is required to fail closed on seqlock reader/writer rch steps" >&2
+  exit 2
+fi
+
 run_rch() {
+  RCH_EXEC_TIMEOUT_SECONDS="${rch_exec_timeout_seconds}" \
   RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
+    RCH_BUILD_TIMEOUT_SECONDS="${rch_build_timeout_sec}" \
+    timeout --kill-after=30 "${rch_exec_timeout_seconds}" \
     rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
 }
 
@@ -158,6 +176,7 @@ write_manifest() {
     echo "  \"decision_id\": \"${decision_id}\","
     echo "  \"policy_id\": \"${policy_id}\","
     echo "  \"toolchain\": \"${toolchain}\","
+    echo "  \"cargo_target_dir_strategy\": \"${target_dir_strategy}\","
     echo "  \"cargo_target_dir\": \"${target_dir}\","
     echo "  \"git_commit\": \"${source_commit}\","
     echo "  \"dirty_worktree\": ${dirty_worktree},"

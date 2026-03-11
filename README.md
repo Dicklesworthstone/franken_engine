@@ -1424,6 +1424,11 @@ rollout is considered.
 ./scripts/e2e/seqlock_reader_writer_contract_replay.sh ci
 ```
 
+`run_seqlock_reader_writer_contract_suite.sh` defaults `CARGO_TARGET_DIR` to
+the stable repo-local path `target_rch_seqlock_reader_writer_contract` so rch
+workers can reuse incremental artifacts across reruns. Override with
+`CARGO_TARGET_DIR=...` if you need isolated lane-specific builds.
+
 Contract and vectors:
 
 - [`docs/RGC_SEQLOCK_READER_WRITER_CONTRACT_V1.md`](./docs/RGC_SEQLOCK_READER_WRITER_CONTRACT_V1.md)

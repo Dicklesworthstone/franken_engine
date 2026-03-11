@@ -198,6 +198,10 @@ fn normalize_path(path: PathBuf) -> PathBuf {
     }
 }
 
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
 #[test]
 fn runner_writes_summary_and_workload_evidence_lines() {
     let fixture = build_fixture();
@@ -646,4 +650,41 @@ fn build_fixture_observations_contain_both_workloads() {
     let content = fs::read_to_string(&fixture.observations_jsonl).unwrap();
     assert!(content.contains("benign-echo-read"));
     assert!(content.contains("malicious-credential-exfil"));
+}
+
+#[test]
+fn security_conformance_suite_script_uses_replay_wrapper_contract() {
+    let script = fs::read_to_string(repo_root().join("scripts/run_security_conformance_runner.sh"))
+        .expect("security conformance suite script should be readable");
+
+    for expected in [
+        "replay_command=\"./scripts/e2e/security_conformance_runner_replay.sh ${mode}\"",
+        "\"cat \" + $manifest",
+        "\"cat \" + $events",
+        "\"cat \" + $commands",
+        "\"cat \" + $stdout",
+        "\"ls -R \" + $output_root",
+        "$replay",
+    ] {
+        assert!(
+            script.contains(expected),
+            "suite script should contain contract fragment `{expected}`"
+        );
+    }
+}
+
+#[test]
+fn security_conformance_replay_wrapper_defaults_to_run_mode() {
+    let script =
+        fs::read_to_string(repo_root().join("scripts/e2e/security_conformance_runner_replay.sh"))
+            .expect("security conformance replay wrapper should be readable");
+
+    assert!(
+        script.contains("mode=\"${1:-run}\""),
+        "replay wrapper should default to run mode"
+    );
+    assert!(
+        script.contains("\"${root_dir}/scripts/run_security_conformance_runner.sh\" \"${mode}\""),
+        "replay wrapper should delegate to the suite script with the selected mode"
+    );
 }

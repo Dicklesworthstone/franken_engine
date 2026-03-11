@@ -463,8 +463,8 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
         ZeroPlaceholderFinding {
             finding_id: "runtime::iterator_ir3_placeholder_execution".to_string(),
             subsystem: ZeroPlaceholderSubsystem::Runtime,
-            status: ZeroPlaceholderStatus::OpenPlaceholder,
-            severity: ZeroPlaceholderSeverity::High,
+            status: ZeroPlaceholderStatus::Resolved,
+            severity: ZeroPlaceholderSeverity::Low,
             owner: "iterator_protocol".to_string(),
             owner_bead_id: ITERATOR_RUNTIME_BEAD_ID.to_string(),
             subject_area: "iterator_protocol.ir3_execution".to_string(),
@@ -472,7 +472,7 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
                 "crates/franken-engine/src/lowering_pipeline.rs::lower_ir1_to_ir3(iterator ops); crates/franken-engine/src/baseline_interpreter.rs"
                     .to_string(),
             observed_behavior:
-                "IR1 iterator ops (ForInInit/Next, ForOfInit/Next, IteratorClose) still degrade into Move/Jump placeholders or a no-op close in IR3 lowering, and baseline_interpreter has no dedicated iterator execution path."
+                "IR1 iterator ops now lower into dedicated IR3 iterator instructions, and baseline_interpreter executes deterministic for..in/for..of next/done/close state transitions without placeholder Move/Jump lowering."
                     .to_string(),
             required_behavior:
                 "Lower iterator protocol ops into dedicated IR3 instructions and execute deterministic next/done/close semantics in the baseline interpreter without placeholder moves or no-op close behavior."
@@ -1021,7 +1021,7 @@ mod tests {
             inventory.findings.len(),
             ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
         );
-        assert_eq!(inventory.open_placeholder_finding_count(), 3);
+        assert_eq!(inventory.open_placeholder_finding_count(), 2);
 
         let parser_count = inventory
             .findings
@@ -1051,7 +1051,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_findings_are_high_severity_open_placeholders() {
+    fn runtime_findings_keep_iterator_gap_resolved() {
         let inventory = zero_placeholder_scan_inventory();
         let runtime_findings: Vec<_> = inventory
             .findings
@@ -1059,16 +1059,19 @@ mod tests {
             .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::Runtime)
             .collect();
         assert_eq!(runtime_findings.len(), 3);
-        assert!(
+        assert_eq!(
             runtime_findings
                 .iter()
-                .all(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
+                .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
+                .count(),
+            2
         );
-        assert!(
-            runtime_findings
-                .iter()
-                .all(|finding| finding.severity == ZeroPlaceholderSeverity::High)
-        );
+        let iterator_finding = runtime_findings
+            .iter()
+            .find(|finding| finding.finding_id == "runtime::iterator_ir3_placeholder_execution")
+            .expect("iterator runtime finding");
+        assert_eq!(iterator_finding.status, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(iterator_finding.severity, ZeroPlaceholderSeverity::Low);
     }
 
     #[test]
@@ -1082,7 +1085,11 @@ mod tests {
         assert_eq!(finding.owner_bead_id, ITERATOR_RUNTIME_BEAD_ID);
         assert!(finding.source_reference.contains("lowering_pipeline"));
         assert!(finding.source_reference.contains("baseline_interpreter"));
-        assert!(finding.observed_behavior.contains("Move/Jump placeholders"));
+        assert!(
+            finding
+                .observed_behavior
+                .contains("dedicated IR3 iterator instructions")
+        );
     }
 
     #[test]
@@ -1138,7 +1145,7 @@ mod tests {
             manifest.finding_count as usize,
             ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
         );
-        assert_eq!(manifest.open_placeholder_finding_count, 3);
+        assert_eq!(manifest.open_placeholder_finding_count, 2);
         assert_eq!(
             manifest.open_placeholder_finding_count
                 + manifest.fail_closed_finding_count

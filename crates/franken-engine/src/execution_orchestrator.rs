@@ -948,6 +948,11 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::Sub { .. } => "sub",
             crate::ir_contract::Ir3Instruction::Mul { .. } => "mul",
             crate::ir_contract::Ir3Instruction::Div { .. } => "div",
+            crate::ir_contract::Ir3Instruction::ForInInit { .. } => "for_in_init",
+            crate::ir_contract::Ir3Instruction::ForInNext { .. } => "for_in_next",
+            crate::ir_contract::Ir3Instruction::ForOfInit { .. } => "for_of_init",
+            crate::ir_contract::Ir3Instruction::ForOfNext { .. } => "for_of_next",
+            crate::ir_contract::Ir3Instruction::IteratorClose { .. } => "iterator_close",
             crate::ir_contract::Ir3Instruction::UnaryNeg { .. } => "unary_neg",
             crate::ir_contract::Ir3Instruction::UnaryPlus { .. } => "unary_plus",
             crate::ir_contract::Ir3Instruction::LogicalNot { .. } => "logical_not",
@@ -1023,6 +1028,16 @@ impl ExecutionOrchestrator {
                 }
                 if target < instruction_count {
                     out.push(target);
+                }
+            }
+            crate::ir_contract::Ir3Instruction::ForInNext { done_target, .. }
+            | crate::ir_contract::Ir3Instruction::ForOfNext { done_target, .. } => {
+                let done_target = *done_target as usize;
+                if next < instruction_count {
+                    out.push(next);
+                }
+                if done_target < instruction_count {
+                    out.push(done_target);
                 }
             }
             crate::ir_contract::Ir3Instruction::Return { .. }

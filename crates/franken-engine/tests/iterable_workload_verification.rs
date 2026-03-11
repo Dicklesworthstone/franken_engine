@@ -462,6 +462,74 @@ fn for_of_full_pipeline_produces_valid_ir3() {
 }
 
 #[test]
+fn for_in_full_pipeline_emits_iterator_specific_ir3_ops() {
+    let ir0 = ir0_from_stmts(
+        vec![for_in_stmt(
+            "key",
+            Some(VariableDeclarationKind::Let),
+            "obj",
+            expr_stmt(Expression::Identifier("key".into())),
+        )],
+        "for_in_iterator_ir3.js",
+    );
+    let output = lower_ir0_to_ir3(&ir0, &ctx()).expect("for-in iterator ir3");
+    assert!(
+        output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, Ir3Instruction::ForInInit { .. })),
+        "for-in lowering must emit dedicated ForInInit"
+    );
+    assert!(
+        output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, Ir3Instruction::ForInNext { .. })),
+        "for-in lowering must emit dedicated ForInNext"
+    );
+}
+
+#[test]
+fn for_of_full_pipeline_emits_iterator_specific_ir3_ops() {
+    let ir0 = ir0_from_stmts(
+        vec![for_of_stmt(
+            "value",
+            Some(VariableDeclarationKind::Let),
+            "items",
+            expr_stmt(Expression::Identifier("value".into())),
+        )],
+        "for_of_iterator_ir3.js",
+    );
+    let output = lower_ir0_to_ir3(&ir0, &ctx()).expect("for-of iterator ir3");
+    assert!(
+        output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, Ir3Instruction::ForOfInit { .. })),
+        "for-of lowering must emit dedicated ForOfInit"
+    );
+    assert!(
+        output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, Ir3Instruction::ForOfNext { .. })),
+        "for-of lowering must emit dedicated ForOfNext"
+    );
+    assert!(
+        output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instr| matches!(instr, Ir3Instruction::IteratorClose { .. })),
+        "for-of lowering must emit dedicated IteratorClose"
+    );
+}
+
+#[test]
 fn mixed_iteration_full_pipeline() {
     let ir0 = ir0_from_stmts(
         vec![

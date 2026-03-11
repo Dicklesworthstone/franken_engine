@@ -33,7 +33,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
-    HostcallDecisionRecord, Ir3Instruction, Ir3Module, WitnessEvent, WitnessEventKind,
+    HostcallDecisionRecord, Ir3Instruction, Ir3Module, IteratorCloseReason, WitnessEvent,
+    WitnessEventKind,
 };
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,8 @@ pub enum Value {
     Object(ObjectId),
     /// Function reference (function table index).
     Function(u32),
+    /// Internal iterator state handle used by dedicated iteration instructions.
+    Iterator(u32),
 }
 
 impl Value {
@@ -100,7 +103,7 @@ impl Value {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Str(s) => !s.is_empty(),
-            Self::Object(_) | Self::Function(_) => true,
+            Self::Object(_) | Self::Function(_) | Self::Iterator(_) => true,
         }
     }
 
@@ -118,6 +121,7 @@ impl Value {
             Self::Str(_) => "string",
             Self::Object(_) => "object",
             Self::Function(_) => "function",
+            Self::Iterator(_) => "iterator",
         }
     }
 
@@ -129,6 +133,7 @@ impl Value {
             Self::Int(_) => "number",
             Self::Str(_) => "string",
             Self::Function(_) => "function",
+            Self::Iterator(_) => "object",
         }
     }
 }
@@ -143,6 +148,7 @@ impl fmt::Display for Value {
             Self::Str(s) => write!(f, "{s}"),
             Self::Object(id) => write!(f, "[object#{}]", id.0),
             Self::Function(idx) => write!(f, "[function#{idx}]"),
+            Self::Iterator(idx) => write!(f, "[iterator#{idx}]"),
         }
     }
 }
@@ -170,6 +176,30 @@ impl HeapObject {
     pub fn new() -> Self {
         Self::default()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeForInState {
+    object_id: ObjectId,
+    keys: Vec<String>,
+    next_index: usize,
+    deleted_keys: BTreeSet<String>,
+    done: bool,
+    closed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeForOfState {
+    values: Vec<Value>,
+    next_index: usize,
+    done: bool,
+    closed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeIteratorState {
+    ForIn(RuntimeForInState),
+    ForOf(RuntimeForOfState),
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +257,8 @@ pub enum InterpreterError {
     CapabilityDenied { capability: String },
     /// The baseline heap cannot safely answer prototype-aware membership.
     UnsupportedMembershipSemantics { operator: String },
+    /// Iterator handle not found in interpreter state.
+    IteratorNotFound { handle: u32 },
     /// Halt instruction reached (normal termination).
     Halted,
 }
@@ -276,6 +308,7 @@ impl fmt::Display for InterpreterError {
                 f,
                 "unsupported {operator} semantics: baseline interpreter heap is not prototype-aware"
             ),
+            Self::IteratorNotFound { handle } => write!(f, "iterator#{handle} not found"),
             Self::Halted => write!(f, "execution halted"),
         }
     }
@@ -366,6 +399,8 @@ pub struct InterpreterCore {
     call_stack: Vec<CallFrame>,
     /// Object heap.
     heap: Vec<HeapObject>,
+    /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
+    iterators: Vec<RuntimeIteratorState>,
     /// Lazily allocated prototype objects for constructor functions.
     function_prototypes: BTreeMap<u32, ObjectId>,
     /// Current instruction pointer.
@@ -395,6 +430,7 @@ impl InterpreterCore {
             registers: vec![Value::Undefined; max_regs],
             call_stack: Vec::new(),
             heap: Vec::new(),
+            iterators: Vec::new(),
             function_prototypes: BTreeMap::new(),
             ip: 0,
             instructions_executed: 0,
@@ -517,6 +553,49 @@ impl InterpreterCore {
                 Ir3Instruction::Div { dst, lhs, rhs } => {
                     let result = self.eval_div(lhs, rhs)?;
                     self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::ForInInit { src, dst } => {
+                    let value = self.read_reg(src)?;
+                    let iterator = self.init_for_in_iterator(value)?;
+                    self.write_reg(dst, iterator)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::ForInNext {
+                    iterator,
+                    value_dst,
+                    done_target,
+                } => {
+                    let iterator = self.read_reg(iterator)?;
+                    if let Some(value) = self.advance_for_in_iterator(iterator)? {
+                        self.write_reg(value_dst, value)?;
+                        self.ip += 1;
+                    } else {
+                        self.ip = done_target as usize;
+                    }
+                }
+                Ir3Instruction::ForOfInit { src, dst } => {
+                    let value = self.read_reg(src)?;
+                    let iterator = self.init_for_of_iterator(value)?;
+                    self.write_reg(dst, iterator)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::ForOfNext {
+                    iterator,
+                    value_dst,
+                    done_target,
+                } => {
+                    let iterator = self.read_reg(iterator)?;
+                    if let Some(value) = self.advance_for_of_iterator(iterator)? {
+                        self.write_reg(value_dst, value)?;
+                        self.ip += 1;
+                    } else {
+                        self.ip = done_target as usize;
+                    }
+                }
+                Ir3Instruction::IteratorClose { iterator, reason } => {
+                    let iterator = self.read_reg(iterator)?;
+                    self.close_iterator(iterator, reason)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Move { dst, src } => {
@@ -716,14 +795,16 @@ impl InterpreterCore {
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
+                    let key_str = Self::property_key(&key_val);
 
                     match obj_val {
                         Value::Object(oid) => {
-                            let heap_obj = self
-                                .heap
+                            self.heap
                                 .get_mut(oid.0 as usize)
-                                .ok_or(InterpreterError::ObjectNotFound { id: oid.0 })?;
-                            heap_obj.properties.remove(&Self::property_key(&key_val));
+                                .ok_or(InterpreterError::ObjectNotFound { id: oid.0 })?
+                                .properties
+                                .remove(&key_str);
+                            self.mark_deleted_for_in_iterators(oid, &key_str);
                             self.write_reg(dst, Value::Bool(true))?;
                         }
                         _ => {
@@ -935,7 +1016,9 @@ impl InterpreterCore {
                             Value::Bool(b) => result.push_str(if b { "true" } else { "false" }),
                             Value::Null => result.push_str("null"),
                             Value::Undefined => result.push_str("undefined"),
-                            Value::Object(_) => result.push_str("[object Object]"),
+                            Value::Object(_) | Value::Iterator(_) => {
+                                result.push_str("[object Object]");
+                            }
                             Value::Function(_) => result.push_str("function"),
                         }
                     }
@@ -1175,6 +1258,110 @@ impl InterpreterCore {
         }
     }
 
+    fn init_for_in_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
+        let Value::Object(object_id) = value else {
+            return Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: value.type_name().to_string(),
+            });
+        };
+
+        let keys = self.collect_for_in_keys(object_id)?;
+        let handle = self.alloc_iterator(RuntimeIteratorState::ForIn(RuntimeForInState {
+            object_id,
+            keys,
+            next_index: 0,
+            deleted_keys: BTreeSet::new(),
+            done: false,
+            closed: false,
+        }));
+        Ok(Value::Iterator(handle))
+    }
+
+    fn advance_for_in_iterator(
+        &mut self,
+        iterator: Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let handle = self.expect_iterator_handle(iterator)?;
+        match self.iterator_state_mut(handle)? {
+            RuntimeIteratorState::ForIn(state) => {
+                if state.closed || state.done {
+                    state.done = true;
+                    return Ok(None);
+                }
+                while state.next_index < state.keys.len() {
+                    let key = state.keys[state.next_index].clone();
+                    state.next_index += 1;
+                    if !state.deleted_keys.contains(&key) {
+                        return Ok(Some(Value::Str(key)));
+                    }
+                }
+                state.done = true;
+                Ok(None)
+            }
+            RuntimeIteratorState::ForOf(_) => Err(InterpreterError::TypeError {
+                expected: "for..in iterator".to_string(),
+                got: "for..of iterator".to_string(),
+            }),
+        }
+    }
+
+    fn init_for_of_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
+        let values = self.collect_for_of_values(&value)?;
+        let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+            values,
+            next_index: 0,
+            done: false,
+            closed: false,
+        }));
+        Ok(Value::Iterator(handle))
+    }
+
+    fn advance_for_of_iterator(
+        &mut self,
+        iterator: Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let handle = self.expect_iterator_handle(iterator)?;
+        match self.iterator_state_mut(handle)? {
+            RuntimeIteratorState::ForOf(state) => {
+                if state.closed || state.done {
+                    state.done = true;
+                    return Ok(None);
+                }
+                if let Some(value) = state.values.get(state.next_index).cloned() {
+                    state.next_index += 1;
+                    Ok(Some(value))
+                } else {
+                    state.done = true;
+                    Ok(None)
+                }
+            }
+            RuntimeIteratorState::ForIn(_) => Err(InterpreterError::TypeError {
+                expected: "for..of iterator".to_string(),
+                got: "for..in iterator".to_string(),
+            }),
+        }
+    }
+
+    fn close_iterator(
+        &mut self,
+        iterator: Value,
+        _reason: IteratorCloseReason,
+    ) -> Result<(), InterpreterError> {
+        let handle = self.expect_iterator_handle(iterator)?;
+        match self.iterator_state_mut(handle)? {
+            RuntimeIteratorState::ForIn(state) => {
+                state.closed = true;
+                state.done = true;
+            }
+            RuntimeIteratorState::ForOf(state) => {
+                state.closed = true;
+                state.done = true;
+            }
+        }
+        Ok(())
+    }
+
     fn prototype_chain_contains(
         &self,
         object_id: ObjectId,
@@ -1255,7 +1442,7 @@ impl InterpreterCore {
                     trimmed.parse::<i64>().ok()
                 }
             }
-            Value::Undefined | Value::Object(_) | Value::Function(_) => None,
+            Value::Undefined | Value::Object(_) | Value::Function(_) | Value::Iterator(_) => None,
         }
     }
 
@@ -1267,7 +1454,8 @@ impl InterpreterCore {
             | (Value::Int(_), Value::Int(_))
             | (Value::Str(_), Value::Str(_))
             | (Value::Object(_), Value::Object(_))
-            | (Value::Function(_), Value::Function(_)) => a == b,
+            | (Value::Function(_), Value::Function(_))
+            | (Value::Iterator(_), Value::Iterator(_)) => a == b,
             (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
             _ => match (Self::coerce_to_number(a), Self::coerce_to_number(b)) {
                 (Some(lhs), Some(rhs)) => lhs == rhs,
@@ -1322,6 +1510,100 @@ impl InterpreterCore {
     /// Allocate a new object on the heap and return its ID.
     pub fn alloc_object(&mut self) -> ObjectId {
         self.alloc_object_with_prototype(None)
+    }
+
+    fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> u32 {
+        let handle = self.iterators.len() as u32;
+        self.iterators.push(iterator);
+        handle
+    }
+
+    fn expect_iterator_handle(&self, iterator: Value) -> Result<u32, InterpreterError> {
+        match iterator {
+            Value::Iterator(handle) => Ok(handle),
+            other => Err(InterpreterError::TypeError {
+                expected: "iterator".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn iterator_state_mut(
+        &mut self,
+        handle: u32,
+    ) -> Result<&mut RuntimeIteratorState, InterpreterError> {
+        self.iterators
+            .get_mut(handle as usize)
+            .ok_or(InterpreterError::IteratorNotFound { handle })
+    }
+
+    fn collect_for_in_keys(&self, object_id: ObjectId) -> Result<Vec<String>, InterpreterError> {
+        let mut keys = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                break;
+            }
+            let object = self
+                .heap
+                .get(id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+            for key in object.properties.keys() {
+                if seen.insert(key.clone()) {
+                    keys.push(key.clone());
+                }
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+
+        Ok(keys)
+    }
+
+    fn collect_for_of_values(&self, iterable: &Value) -> Result<Vec<Value>, InterpreterError> {
+        match iterable {
+            Value::Str(text) => Ok(text.chars().map(|ch| Value::Str(ch.to_string())).collect()),
+            Value::Object(object_id) => {
+                let object = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                let mut indexed_values = object
+                    .properties
+                    .iter()
+                    .filter_map(|(key, value)| key.parse::<u64>().ok().map(|index| (index, value)))
+                    .collect::<Vec<_>>();
+                indexed_values.sort_by_key(|(index, _)| *index);
+                if indexed_values.is_empty() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "iterable".to_string(),
+                        got: iterable.type_name().to_string(),
+                    });
+                }
+                Ok(indexed_values
+                    .into_iter()
+                    .map(|(_, value)| value.clone())
+                    .collect())
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "iterable".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn mark_deleted_for_in_iterators(&mut self, object_id: ObjectId, key: &str) {
+        for iterator in &mut self.iterators {
+            if let RuntimeIteratorState::ForIn(state) = iterator
+                && state.object_id == object_id
+            {
+                state.deleted_keys.insert(key.to_string());
+            }
+        }
     }
 
     fn ensure_function_prototype(&mut self, func_idx: u32) -> ObjectId {
@@ -4122,5 +4404,156 @@ mod tests {
         ]);
         let result = quickjs_execute(&m).unwrap();
         assert_eq!(result.value, Value::Str("undefined".to_string()));
+    }
+
+    #[test]
+    fn for_in_iterator_enumerates_deterministic_keys() {
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::NewObject { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 1 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 1,
+                },
+                Ir3Instruction::LoadInt { dst: 4, value: 2 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 3,
+                    val: 4,
+                },
+                Ir3Instruction::ForInInit { src: 0, dst: 5 },
+                Ir3Instruction::ForInNext {
+                    iterator: 5,
+                    value_dst: 6,
+                    done_target: 12,
+                },
+                Ir3Instruction::ForInNext {
+                    iterator: 5,
+                    value_dst: 7,
+                    done_target: 12,
+                },
+                Ir3Instruction::Return { value: 7 },
+                Ir3Instruction::LoadUndefined { dst: 8 },
+                Ir3Instruction::Return { value: 8 },
+            ],
+            vec!["a".to_string(), "b".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Str("b".to_string()));
+    }
+
+    #[test]
+    fn for_in_iterator_done_target_skips_body_when_empty() {
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::NewObject { dst: 0 },
+                Ir3Instruction::ForInInit { src: 0, dst: 1 },
+                Ir3Instruction::ForInNext {
+                    iterator: 1,
+                    value_dst: 2,
+                    done_target: 5,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 3 },
+                Ir3Instruction::LoadStr {
+                    dst: 4,
+                    pool_index: 1,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ],
+            vec!["unexpected".to_string(), "done".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Str("done".to_string()));
+    }
+
+    #[test]
+    fn for_of_iterator_yields_numeric_key_order_and_close_stops_iteration() {
+        let yielded = test_module_with_pool(
+            vec![
+                Ir3Instruction::NewObject { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 22 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 1,
+                },
+                Ir3Instruction::LoadInt { dst: 4, value: 11 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 3,
+                    val: 4,
+                },
+                Ir3Instruction::ForOfInit { src: 0, dst: 5 },
+                Ir3Instruction::ForOfNext {
+                    iterator: 5,
+                    value_dst: 6,
+                    done_target: 12,
+                },
+                Ir3Instruction::ForOfNext {
+                    iterator: 5,
+                    value_dst: 7,
+                    done_target: 12,
+                },
+                Ir3Instruction::Return { value: 7 },
+                Ir3Instruction::LoadUndefined { dst: 8 },
+                Ir3Instruction::Return { value: 8 },
+            ],
+            vec!["1".to_string(), "0".to_string()],
+        );
+        assert_eq!(quickjs_execute(&yielded).unwrap().value, Value::Int(22));
+
+        let closed = test_module_with_pool(
+            vec![
+                Ir3Instruction::NewObject { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 2, value: 7 },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::ForOfInit { src: 0, dst: 3 },
+                Ir3Instruction::IteratorClose {
+                    iterator: 3,
+                    reason: IteratorCloseReason::Break,
+                },
+                Ir3Instruction::ForOfNext {
+                    iterator: 3,
+                    value_dst: 4,
+                    done_target: 9,
+                },
+                Ir3Instruction::LoadInt { dst: 5, value: 999 },
+                Ir3Instruction::Return { value: 5 },
+                Ir3Instruction::LoadInt { dst: 6, value: 1 },
+                Ir3Instruction::Return { value: 6 },
+            ],
+            vec!["0".to_string()],
+        );
+        assert_eq!(quickjs_execute(&closed).unwrap().value, Value::Int(1));
     }
 }

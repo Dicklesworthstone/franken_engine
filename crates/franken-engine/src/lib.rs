@@ -24,6 +24,7 @@ pub mod attested_execution_cell;
 pub mod baseline_interpreter;
 pub mod bayesian_error_recovery;
 pub mod bayesian_posterior;
+pub mod benchmark_behavior_equivalence;
 pub mod benchmark_coverage_saturation_gate;
 pub mod benchmark_denominator;
 pub mod benchmark_e2e;
@@ -1286,6 +1287,10 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::Sub { dst, .. }
         | Ir3Instruction::Mul { dst, .. }
         | Ir3Instruction::Div { dst, .. }
+        | Ir3Instruction::ForInInit { dst, .. }
+        | Ir3Instruction::ForInNext { value_dst: dst, .. }
+        | Ir3Instruction::ForOfInit { dst, .. }
+        | Ir3Instruction::ForOfNext { value_dst: dst, .. }
         | Ir3Instruction::Mod { dst, .. }
         | Ir3Instruction::Exp { dst, .. }
         | Ir3Instruction::UnaryNeg { dst, .. }

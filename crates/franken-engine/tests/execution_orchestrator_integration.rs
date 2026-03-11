@@ -15,10 +15,17 @@
 )]
 
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::control_plane_mock_inventory::{
+    OrchestratorContextRefactorOutcome, OrchestratorContextRefactorRunManifest,
+    write_orchestrator_context_refactor_bundle_in_root,
+};
 use frankenengine_engine::bayesian_posterior::RiskState;
 use frankenengine_engine::execution_cell::CellError;
 use frankenengine_engine::execution_orchestrator::{
@@ -78,6 +85,16 @@ fn orch_with_preset(preset: LossMatrixPreset) -> ExecutionOrchestrator {
         loss_matrix_preset: preset,
         ..OrchestratorConfig::default()
     })
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic enough for temp paths")
+        .as_nanos();
+    let dir = env::temp_dir().join(format!("{prefix}-{nanos}"));
+    fs::create_dir_all(&dir).expect("create temp dir");
+    dir
 }
 
 fn execute_simple(orch: &mut ExecutionOrchestrator) -> OrchestratorResult {
@@ -168,6 +185,53 @@ fn production_orchestrator_source_avoids_control_plane_mocks() {
     assert!(!source.contains("MockCx::new("));
     assert!(!source.contains("MockBudget::new("));
     assert!(!source.contains("trace_id_from_seed"));
+}
+
+#[test]
+fn orchestrator_context_refactor_bundle_emits_expected_artifacts() {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("canonicalize workspace root");
+    let out_dir = unique_temp_dir("orchestrator-context-refactor");
+    let commands = vec![
+        "cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir /tmp/out"
+            .to_string(),
+    ];
+
+    let artifacts = write_orchestrator_context_refactor_bundle_in_root(
+        &workspace_root,
+        &out_dir,
+        &commands,
+    )
+    .expect("bundle should be written");
+
+    assert_eq!(artifacts.outcome, OrchestratorContextRefactorOutcome::Pass);
+    assert!(artifacts.contract_path.exists());
+    assert!(artifacts.report_path.exists());
+    assert!(artifacts.trace_ids_path.exists());
+    assert!(artifacts.run_manifest_path.exists());
+    assert!(artifacts.events_path.exists());
+    assert!(artifacts.commands_path.exists());
+    assert!(artifacts.step_logs_dir.join("step_001_scan.log").exists());
+    assert!(artifacts.summary_path.exists());
+    assert!(artifacts.env_path.exists());
+    assert!(artifacts.repro_lock_path.exists());
+
+    let manifest: OrchestratorContextRefactorRunManifest =
+        serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
+            .expect("manifest should deserialize");
+    assert_eq!(manifest.outcome, OrchestratorContextRefactorOutcome::Pass);
+    assert_eq!(
+        manifest.artifact_paths.production_context_path_contract,
+        "production_context_path_contract.json"
+    );
+    assert_eq!(
+        manifest.artifact_paths.orchestrator_context_refactor_report,
+        "orchestrator_context_refactor_report.json"
+    );
+
+    let _ = fs::remove_dir_all(out_dir);
 }
 
 #[test]

@@ -697,26 +697,35 @@ fn scan_inventory_has_cli_docs_finding() {
 }
 
 #[test]
-fn scan_inventory_runtime_findings_are_open_placeholder_high_severity() {
+fn scan_inventory_runtime_findings_match_expected_status_and_severity_split() {
     let inv = zero_placeholder_scan_inventory();
-    for finding in inv
+    let runtime_findings: Vec<_> = inv
         .findings
         .iter()
         .filter(|f| f.subsystem == ZeroPlaceholderSubsystem::Runtime)
-    {
-        assert_eq!(
-            finding.status,
-            ZeroPlaceholderStatus::OpenPlaceholder,
-            "runtime finding {} must be OpenPlaceholder",
-            finding.finding_id
-        );
-        assert_eq!(
-            finding.severity,
-            ZeroPlaceholderSeverity::High,
-            "runtime finding {} must be High severity",
-            finding.finding_id
-        );
-    }
+        .collect();
+    assert_eq!(runtime_findings.len(), 3);
+    assert_eq!(
+        runtime_findings
+            .iter()
+            .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
+            .count(),
+        2
+    );
+    assert_eq!(
+        runtime_findings
+            .iter()
+            .filter(|finding| finding.severity == ZeroPlaceholderSeverity::High)
+            .count(),
+        2
+    );
+
+    let iterator_finding = runtime_findings
+        .iter()
+        .find(|finding| finding.finding_id == "runtime::iterator_ir3_placeholder_execution")
+        .expect("iterator runtime finding");
+    assert_eq!(iterator_finding.status, ZeroPlaceholderStatus::Resolved);
+    assert_eq!(iterator_finding.severity, ZeroPlaceholderSeverity::Low);
 }
 
 #[test]
@@ -862,13 +871,10 @@ fn scan_inventory_is_deterministic() {
 }
 
 #[test]
-fn scan_inventory_open_placeholder_count_is_at_least_three() {
-    // Runtime always contributes 3 open-placeholder findings
+fn scan_inventory_open_placeholder_count_tracks_remaining_runtime_gaps() {
+    // Two runtime gaps remain open; iterator execution is now resolved.
     let inv = zero_placeholder_scan_inventory();
-    assert!(
-        inv.open_placeholder_finding_count() >= 3,
-        "at minimum the 3 runtime findings should be open_placeholder"
-    );
+    assert_eq!(inv.open_placeholder_finding_count(), 2);
 }
 
 #[test]
@@ -878,9 +884,11 @@ fn scan_inventory_routes_iterator_runtime_gap_to_iteration_bead() {
         .findings
         .iter()
         .find(|finding| finding.finding_id == "runtime::iterator_ir3_placeholder_execution")
-        .expect("iterator runtime placeholder finding");
+        .expect("iterator runtime finding");
     assert_eq!(finding.subsystem, ZeroPlaceholderSubsystem::Runtime);
     assert_eq!(finding.owner_bead_id, "bd-1lsy.4.8");
+    assert_eq!(finding.status, ZeroPlaceholderStatus::Resolved);
+    assert_eq!(finding.severity, ZeroPlaceholderSeverity::Low);
     assert!(finding.source_reference.contains("lowering_pipeline"));
     assert!(finding.source_reference.contains("baseline_interpreter"));
 }

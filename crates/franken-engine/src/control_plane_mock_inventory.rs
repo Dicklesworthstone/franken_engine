@@ -795,6 +795,250 @@ pub struct AmbientMockGuardArtifacts {
     pub violation_count: usize,
 }
 
+pub const ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT: &str = "orchestrator_context_refactor";
+pub const ORCHESTRATOR_CONTEXT_REFACTOR_BEAD_ID: &str = "bd-3nr.1.2.1";
+pub const ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID: &str =
+    "frankenengine.orchestrator-context-refactor.v1";
+pub const ORCHESTRATOR_CONTEXT_PATH_CONTRACT_SCHEMA_VERSION: &str =
+    "frankenengine.orchestrator-context-path-contract.v1";
+pub const ORCHESTRATOR_CONTEXT_REFACTOR_REPORT_SCHEMA_VERSION: &str =
+    "frankenengine.orchestrator-context-refactor-report.v1";
+pub const ORCHESTRATOR_CONTEXT_REFACTOR_TRACE_IDS_SCHEMA_VERSION: &str =
+    "frankenengine.orchestrator-context-refactor.trace-ids.v1";
+pub const ORCHESTRATOR_CONTEXT_REFACTOR_RUN_MANIFEST_SCHEMA_VERSION: &str =
+    "frankenengine.orchestrator-context-refactor.run-manifest.v1";
+pub const ORCHESTRATOR_CONTEXT_REFACTOR_EVENT_SCHEMA_VERSION: &str =
+    "frankenengine.orchestrator-context-refactor.event.v1";
+pub const ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE: &str =
+    "crates/franken-engine/src/execution_orchestrator.rs";
+pub const ORCHESTRATOR_CONTEXT_PATH_ID: &str = "orchestrator-cell-close-canonical-context";
+
+const ORCHESTRATOR_CONTEXT_REFACTOR_FORBIDDEN_TOKENS: &[(&str, &str)] = &[
+    ("forbidden_mock_import", "use crate::control_plane::mocks"),
+    ("forbidden_mock_context_ctor", "MockCx::new("),
+    ("forbidden_mock_budget_ctor", "MockBudget::new("),
+    ("forbidden_seed_trace_id", "trace_id_from_seed"),
+];
+
+const ORCHESTRATOR_CONTEXT_REFACTOR_REQUIRED_TOKENS: &[(&str, &str)] = &[
+    (
+        "required_cell_close_context_factory",
+        "Self::build_cell_close_context(&trace_id, self.config.cell_close_budget_ms)",
+    ),
+    (
+        "required_kernel_context_construction",
+        "KernelContext::new(Cx::new(",
+    ),
+    ("required_budget_propagation", "Budget::new(budget_ms)"),
+    (
+        "required_trace_derivation",
+        "Self::derive_cell_close_trace_id(trace_id)",
+    ),
+    ("required_capability_scope", "NoCaps"),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrchestratorContextRefactorOutcome {
+    Pass,
+    FailClosed,
+}
+
+impl OrchestratorContextRefactorOutcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::FailClosed => "fail_closed",
+        }
+    }
+}
+
+impl fmt::Display for OrchestratorContextRefactorOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionContextPath {
+    pub path_id: String,
+    pub source_file: String,
+    pub source_symbol: String,
+    pub context_origin: String,
+    pub trace_origin: String,
+    pub budget_origin: String,
+    pub capability_scope: String,
+    pub deterministic_fallback: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CorrectedProductionSeam {
+    pub seam_id: String,
+    pub occurrence_hash: String,
+    pub original_file_path: String,
+    pub original_line_number: u32,
+    pub seam_kind: SeamKind,
+    pub previous_pattern: String,
+    pub corrected_path_id: String,
+    pub corrected_context_source: String,
+    pub corrected_trace_source: String,
+    pub corrected_budget_source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextRefactorGuard {
+    pub guard_id: String,
+    pub guard_kind: String,
+    pub needle: String,
+    pub passed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionContextPathContract {
+    pub schema_version: String,
+    pub component: String,
+    pub bead_id: String,
+    pub policy_id: String,
+    pub canonical_inventory_hash: String,
+    pub source_file: String,
+    pub context_paths: Vec<ProductionContextPath>,
+    pub corrected_seams: Vec<CorrectedProductionSeam>,
+    pub deferred_seams: Vec<String>,
+    pub guards: Vec<ContextRefactorGuard>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrchestratorContextRefactorSummary {
+    pub corrected_seam_count: u64,
+    pub deferred_seam_count: u64,
+    pub guard_count: u64,
+    pub failed_guard_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrchestratorContextRefactorReport {
+    pub schema_version: String,
+    pub component: String,
+    pub bead_id: String,
+    pub policy_id: String,
+    pub canonical_inventory_hash: String,
+    pub contract_hash: String,
+    pub source_file: String,
+    pub outcome: OrchestratorContextRefactorOutcome,
+    pub summary: OrchestratorContextRefactorSummary,
+    pub corrected_seams: Vec<CorrectedProductionSeam>,
+    pub deferred_seams: Vec<String>,
+    pub guards: Vec<ContextRefactorGuard>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrchestratorContextRefactorArtifactPaths {
+    pub production_context_path_contract: String,
+    pub orchestrator_context_refactor_report: String,
+    pub trace_ids: String,
+    pub run_manifest: String,
+    pub events_jsonl: String,
+    pub commands_txt: String,
+    pub step_logs_dir: String,
+    pub summary_md: String,
+    pub env_json: String,
+    pub repro_lock: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrchestratorContextRefactorTraceIds {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub report_hash: String,
+    pub contract_hash: String,
+    pub canonical_inventory_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrchestratorContextRefactorRunManifest {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub report_hash: String,
+    pub contract_hash: String,
+    pub canonical_inventory_hash: String,
+    pub outcome: OrchestratorContextRefactorOutcome,
+    pub corrected_seam_count: u64,
+    pub failed_guard_count: u64,
+    pub artifact_paths: OrchestratorContextRefactorArtifactPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrchestratorContextRefactorEvent {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub event: String,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    pub seed: String,
+    pub scenario_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_number: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestratorContextRefactorArtifacts {
+    pub out_dir: PathBuf,
+    pub contract_path: PathBuf,
+    pub report_path: PathBuf,
+    pub trace_ids_path: PathBuf,
+    pub run_manifest_path: PathBuf,
+    pub events_path: PathBuf,
+    pub commands_path: PathBuf,
+    pub step_logs_dir: PathBuf,
+    pub summary_path: PathBuf,
+    pub env_path: PathBuf,
+    pub repro_lock_path: PathBuf,
+    pub outcome: OrchestratorContextRefactorOutcome,
+    pub contract_hash: String,
+    pub report_hash: String,
+    pub corrected_seam_count: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OrchestratorContextRefactorError {
+    #[error("failed to read `{path}`: {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to serialize `{path}`: {source}")]
+    Json {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "orchestrator context refactor output directory is already locked by another writer: `{path}`"
+    )]
+    Busy { path: String },
+    #[error("orchestrator source is missing: `{path}`")]
+    MissingSource { path: String },
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AmbientMockGuardError {
     #[error("failed to read `{path}`: {source}")]
@@ -833,6 +1077,17 @@ struct AmbientMockGuardBundleLock {
 }
 
 impl Drop for AmbientMockGuardBundleLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[derive(Debug)]
+struct OrchestratorContextRefactorBundleLock {
+    path: PathBuf,
+}
+
+impl Drop for OrchestratorContextRefactorBundleLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
@@ -1052,6 +1307,544 @@ pub fn write_ambient_mock_guard_bundle_in_root(
         report_hash,
         violation_count: report.violations.len(),
     })
+}
+
+pub fn orchestrator_context_refactor_exit_code(report: &OrchestratorContextRefactorReport) -> i32 {
+    match report.outcome {
+        OrchestratorContextRefactorOutcome::Pass => 0,
+        OrchestratorContextRefactorOutcome::FailClosed => 2,
+    }
+}
+
+pub fn evaluate_orchestrator_context_refactor() -> Result<
+    (
+        ProductionContextPathContract,
+        OrchestratorContextRefactorReport,
+    ),
+    OrchestratorContextRefactorError,
+> {
+    evaluate_orchestrator_context_refactor_in_root(repo_root())
+}
+
+pub fn evaluate_orchestrator_context_refactor_in_root(
+    workspace_root: impl AsRef<Path>,
+) -> Result<
+    (
+        ProductionContextPathContract,
+        OrchestratorContextRefactorReport,
+    ),
+    OrchestratorContextRefactorError,
+> {
+    let workspace_root = workspace_root.as_ref();
+    let orchestrator_path = workspace_root.join(ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE);
+    let source = fs::read_to_string(&orchestrator_path).map_err(|source| {
+        if source.kind() == ErrorKind::NotFound {
+            OrchestratorContextRefactorError::MissingSource {
+                path: orchestrator_path.display().to_string(),
+            }
+        } else {
+            OrchestratorContextRefactorError::Io {
+                path: orchestrator_path.display().to_string(),
+                source,
+            }
+        }
+    })?;
+
+    let canonical_inventory = build_canonical_inventory();
+    let corrected_seams = canonical_inventory
+        .occurrences
+        .iter()
+        .filter(|occurrence| {
+            occurrence.file_path == ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE
+                && occurrence.classification == SeamClassification::MustFixProduction
+                && occurrence.remediation_bead == ORCHESTRATOR_CONTEXT_REFACTOR_BEAD_ID
+        })
+        .map(build_corrected_production_seam)
+        .collect::<Vec<_>>();
+
+    let guards = build_orchestrator_context_refactor_guards(&source);
+    let contract = ProductionContextPathContract {
+        schema_version: ORCHESTRATOR_CONTEXT_PATH_CONTRACT_SCHEMA_VERSION.to_string(),
+        component: ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT.to_string(),
+        bead_id: ORCHESTRATOR_CONTEXT_REFACTOR_BEAD_ID.to_string(),
+        policy_id: ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID.to_string(),
+        canonical_inventory_hash: canonical_inventory.inventory_hash.to_string(),
+        source_file: ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE.to_string(),
+        context_paths: vec![ProductionContextPath {
+            path_id: ORCHESTRATOR_CONTEXT_PATH_ID.to_string(),
+            source_file: ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE.to_string(),
+            source_symbol: "ExecutionOrchestrator::build_cell_close_context".to_string(),
+            context_origin:
+                "KernelContext::new(Cx::new(Self::derive_cell_close_trace_id(trace_id), Budget::new(budget_ms), NoCaps))"
+                    .to_string(),
+            trace_origin: "ExecutionOrchestrator::derive_cell_close_trace_id(trace_id)"
+                .to_string(),
+            budget_origin: "OrchestratorConfig.cell_close_budget_ms -> Budget::new(budget_ms)"
+                .to_string(),
+            capability_scope: "NoCaps".to_string(),
+            deterministic_fallback:
+                "OrchestratorError::Cell(CellError::BudgetExhausted { .. })".to_string(),
+        }],
+        corrected_seams: corrected_seams.clone(),
+        deferred_seams: Vec::new(),
+        guards: guards.clone(),
+    };
+
+    let contract_bytes = ambient_mock_guard_json_bytes(&contract, &orchestrator_path)
+        .map_err(map_refactor_json_error(&orchestrator_path))?;
+    let contract_hash = sha256_hex(&contract_bytes);
+    let failed_guard_count = guards.iter().filter(|guard| !guard.passed).count() as u64;
+    let outcome = if corrected_seams.is_empty() || failed_guard_count > 0 {
+        OrchestratorContextRefactorOutcome::FailClosed
+    } else {
+        OrchestratorContextRefactorOutcome::Pass
+    };
+    let report = OrchestratorContextRefactorReport {
+        schema_version: ORCHESTRATOR_CONTEXT_REFACTOR_REPORT_SCHEMA_VERSION.to_string(),
+        component: ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT.to_string(),
+        bead_id: ORCHESTRATOR_CONTEXT_REFACTOR_BEAD_ID.to_string(),
+        policy_id: ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID.to_string(),
+        canonical_inventory_hash: canonical_inventory.inventory_hash.to_string(),
+        contract_hash,
+        source_file: ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE.to_string(),
+        outcome,
+        summary: OrchestratorContextRefactorSummary {
+            corrected_seam_count: corrected_seams.len() as u64,
+            deferred_seam_count: 0,
+            guard_count: guards.len() as u64,
+            failed_guard_count,
+        },
+        corrected_seams,
+        deferred_seams: Vec::new(),
+        guards,
+    };
+
+    Ok((contract, report))
+}
+
+pub fn write_orchestrator_context_refactor_bundle(
+    out_dir: impl AsRef<Path>,
+    command_lines: &[String],
+) -> Result<OrchestratorContextRefactorArtifacts, OrchestratorContextRefactorError> {
+    write_orchestrator_context_refactor_bundle_in_root(repo_root(), out_dir, command_lines)
+}
+
+pub fn write_orchestrator_context_refactor_bundle_in_root(
+    workspace_root: impl AsRef<Path>,
+    out_dir: impl AsRef<Path>,
+    command_lines: &[String],
+) -> Result<OrchestratorContextRefactorArtifacts, OrchestratorContextRefactorError> {
+    let workspace_root = workspace_root.as_ref();
+    let out_dir = out_dir.as_ref().to_path_buf();
+    fs::create_dir_all(&out_dir).map_err(|source| OrchestratorContextRefactorError::Io {
+        path: out_dir.display().to_string(),
+        source,
+    })?;
+
+    let (contract, report) = evaluate_orchestrator_context_refactor_in_root(workspace_root)?;
+    let contract_path = out_dir.join("production_context_path_contract.json");
+    let report_path = out_dir.join("orchestrator_context_refactor_report.json");
+    let trace_ids_path = out_dir.join("trace_ids.json");
+    let run_manifest_path = out_dir.join("run_manifest.json");
+    let events_path = out_dir.join("events.jsonl");
+    let commands_path = out_dir.join("commands.txt");
+    let step_logs_dir = out_dir.join("step_logs");
+    let summary_path = out_dir.join("summary.md");
+    let env_path = out_dir.join("env.json");
+    let repro_lock_path = out_dir.join("repro.lock");
+
+    let contract_bytes = ambient_mock_guard_json_bytes(&contract, &contract_path)
+        .map_err(map_refactor_json_error(&contract_path))?;
+    let report_bytes = ambient_mock_guard_json_bytes(&report, &report_path)
+        .map_err(map_refactor_json_error(&report_path))?;
+    let contract_hash = sha256_hex(&contract_bytes);
+    let report_hash = sha256_hex(&report_bytes);
+    let short_hash = report_hash.chars().take(16).collect::<String>();
+    let trace_id = format!("trace-orchestrator-context-refactor-{short_hash}");
+    let decision_id = format!("decision-orchestrator-context-refactor-{short_hash}");
+
+    let trace_ids = OrchestratorContextRefactorTraceIds {
+        schema_version: ORCHESTRATOR_CONTEXT_REFACTOR_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        component: ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT.to_string(),
+        trace_id: trace_id.clone(),
+        decision_id: decision_id.clone(),
+        policy_id: ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID.to_string(),
+        report_hash: report_hash.clone(),
+        contract_hash: contract_hash.clone(),
+        canonical_inventory_hash: report.canonical_inventory_hash.clone(),
+    };
+    let trace_ids_bytes = ambient_mock_guard_json_bytes(&trace_ids, &trace_ids_path)
+        .map_err(map_refactor_json_error(&trace_ids_path))?;
+
+    let events = build_orchestrator_context_refactor_events(&report, &trace_id, &decision_id);
+    let mut events_jsonl = String::new();
+    for event in &events {
+        let line = serde_json::to_string(event).map_err(|source| {
+            OrchestratorContextRefactorError::Json {
+                path: events_path.display().to_string(),
+                source,
+            }
+        })?;
+        events_jsonl.push_str(&line);
+        events_jsonl.push('\n');
+    }
+
+    let mut commands_buf = String::new();
+    for command in command_lines {
+        commands_buf.push_str(command);
+        commands_buf.push('\n');
+    }
+
+    let summary_md = render_orchestrator_context_refactor_summary(&report, &trace_id, &decision_id);
+    let env_json = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "frankenengine.orchestrator-context-refactor.env.v1",
+        "component": ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT,
+        "policy_id": ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID,
+        "workspace_root": workspace_root.display().to_string(),
+        "source_file": ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE,
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "toolchain": std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "unknown".to_string()),
+    }))
+    .map_err(|source| OrchestratorContextRefactorError::Json {
+        path: env_path.display().to_string(),
+        source,
+    })?;
+    let repro_lock = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "franken-engine.repro-lock.v1",
+        "component": ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT,
+        "policy_id": ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID,
+        "source_file": ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE,
+        "canonical_inventory_hash": report.canonical_inventory_hash,
+        "contract_hash": contract_hash,
+        "report_hash": report_hash,
+        "replay_command": "cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir <DIR>",
+    }))
+    .map_err(|source| OrchestratorContextRefactorError::Json {
+        path: repro_lock_path.display().to_string(),
+        source,
+    })?;
+
+    let manifest = OrchestratorContextRefactorRunManifest {
+        schema_version: ORCHESTRATOR_CONTEXT_REFACTOR_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+        component: ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT.to_string(),
+        trace_id: trace_id.clone(),
+        decision_id: decision_id.clone(),
+        policy_id: ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID.to_string(),
+        report_hash: report_hash.clone(),
+        contract_hash: contract_hash.clone(),
+        canonical_inventory_hash: report.canonical_inventory_hash.clone(),
+        outcome: report.outcome,
+        corrected_seam_count: report.summary.corrected_seam_count,
+        failed_guard_count: report.summary.failed_guard_count,
+        artifact_paths: OrchestratorContextRefactorArtifactPaths {
+            production_context_path_contract: "production_context_path_contract.json".to_string(),
+            orchestrator_context_refactor_report: "orchestrator_context_refactor_report.json"
+                .to_string(),
+            trace_ids: "trace_ids.json".to_string(),
+            run_manifest: "run_manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+            step_logs_dir: "step_logs".to_string(),
+            summary_md: "summary.md".to_string(),
+            env_json: "env.json".to_string(),
+            repro_lock: "repro.lock".to_string(),
+        },
+    };
+    let manifest_bytes = ambient_mock_guard_json_bytes(&manifest, &run_manifest_path)
+        .map_err(map_refactor_json_error(&run_manifest_path))?;
+
+    let _bundle_lock = acquire_orchestrator_context_refactor_bundle_lock(&out_dir)?;
+    write_orchestrator_context_refactor_atomic(&contract_path, &contract_bytes)?;
+    write_orchestrator_context_refactor_atomic(&report_path, &report_bytes)?;
+    write_orchestrator_context_refactor_atomic(&trace_ids_path, &trace_ids_bytes)?;
+    write_orchestrator_context_refactor_atomic(&events_path, events_jsonl.as_bytes())?;
+    write_orchestrator_context_refactor_atomic(&commands_path, commands_buf.as_bytes())?;
+    fs::create_dir_all(&step_logs_dir).map_err(|source| OrchestratorContextRefactorError::Io {
+        path: step_logs_dir.display().to_string(),
+        source,
+    })?;
+    let step_log = render_orchestrator_context_refactor_step_log(&report, &trace_id, &decision_id);
+    write_orchestrator_context_refactor_atomic(
+        &step_logs_dir.join("step_001_scan.log"),
+        step_log.as_bytes(),
+    )?;
+    write_orchestrator_context_refactor_atomic(&summary_path, summary_md.as_bytes())?;
+    write_orchestrator_context_refactor_atomic(&env_path, &env_json)?;
+    write_orchestrator_context_refactor_atomic(&repro_lock_path, &repro_lock)?;
+    write_orchestrator_context_refactor_atomic(&run_manifest_path, &manifest_bytes)?;
+
+    Ok(OrchestratorContextRefactorArtifacts {
+        out_dir,
+        contract_path,
+        report_path,
+        trace_ids_path,
+        run_manifest_path,
+        events_path,
+        commands_path,
+        step_logs_dir,
+        summary_path,
+        env_path,
+        repro_lock_path,
+        outcome: report.outcome,
+        contract_hash,
+        report_hash,
+        corrected_seam_count: report.corrected_seams.len(),
+    })
+}
+
+fn build_corrected_production_seam(occurrence: &SeamOccurrence) -> CorrectedProductionSeam {
+    CorrectedProductionSeam {
+        seam_id: format!(
+            "{}:{}:{}",
+            occurrence.file_path, occurrence.line_number, occurrence.kind
+        ),
+        occurrence_hash: occurrence.content_hash().to_string(),
+        original_file_path: occurrence.file_path.clone(),
+        original_line_number: occurrence.line_number,
+        seam_kind: occurrence.kind,
+        previous_pattern: occurrence.description.clone(),
+        corrected_path_id: ORCHESTRATOR_CONTEXT_PATH_ID.to_string(),
+        corrected_context_source: "ExecutionOrchestrator::build_cell_close_context".to_string(),
+        corrected_trace_source: "ExecutionOrchestrator::derive_cell_close_trace_id(trace_id)"
+            .to_string(),
+        corrected_budget_source: "OrchestratorConfig.cell_close_budget_ms".to_string(),
+    }
+}
+
+fn build_orchestrator_context_refactor_guards(source: &str) -> Vec<ContextRefactorGuard> {
+    let mut guards = Vec::new();
+    for (guard_id, needle) in ORCHESTRATOR_CONTEXT_REFACTOR_FORBIDDEN_TOKENS {
+        let passed = !source.contains(needle);
+        guards.push(ContextRefactorGuard {
+            guard_id: (*guard_id).to_string(),
+            guard_kind: "forbidden_token".to_string(),
+            needle: (*needle).to_string(),
+            passed,
+            error_code: (!passed).then(|| format!("OCR-FORBIDDEN-{}", guard_id.to_uppercase())),
+        });
+    }
+    for (guard_id, needle) in ORCHESTRATOR_CONTEXT_REFACTOR_REQUIRED_TOKENS {
+        let passed = source.contains(needle);
+        guards.push(ContextRefactorGuard {
+            guard_id: (*guard_id).to_string(),
+            guard_kind: "required_token".to_string(),
+            needle: (*needle).to_string(),
+            passed,
+            error_code: (!passed).then(|| format!("OCR-REQUIRED-{}", guard_id.to_uppercase())),
+        });
+    }
+    guards
+}
+
+fn build_orchestrator_context_refactor_events(
+    report: &OrchestratorContextRefactorReport,
+    trace_id: &str,
+    decision_id: &str,
+) -> Vec<OrchestratorContextRefactorEvent> {
+    let mut events = report
+        .guards
+        .iter()
+        .map(|guard| OrchestratorContextRefactorEvent {
+            schema_version: ORCHESTRATOR_CONTEXT_REFACTOR_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: trace_id.to_string(),
+            decision_id: decision_id.to_string(),
+            policy_id: ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID.to_string(),
+            component: ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT.to_string(),
+            event: "guard_evaluated".to_string(),
+            outcome: if guard.passed { "pass" } else { "fail" }.to_string(),
+            error_code: guard.error_code.clone(),
+            seed: "orchestrator-context-refactor-static-scan-v1".to_string(),
+            scenario_id: "workspace-source-scan".to_string(),
+            diagnostic_id: Some(guard.guard_id.clone()),
+            file_path: Some(ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE.to_string()),
+            line_number: None,
+            detail: Some(format!("{} => `{}`", guard.guard_kind, guard.needle)),
+        })
+        .collect::<Vec<_>>();
+
+    events.push(OrchestratorContextRefactorEvent {
+        schema_version: ORCHESTRATOR_CONTEXT_REFACTOR_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID.to_string(),
+        component: ORCHESTRATOR_CONTEXT_REFACTOR_COMPONENT.to_string(),
+        event: "refactor_evaluated".to_string(),
+        outcome: report.outcome.as_str().to_string(),
+        error_code: None,
+        seed: "orchestrator-context-refactor-static-scan-v1".to_string(),
+        scenario_id: "workspace-source-scan".to_string(),
+        diagnostic_id: None,
+        file_path: Some(report.source_file.clone()),
+        line_number: None,
+        detail: Some(format!(
+            "{} corrected seam(s); {} guard failure(s)",
+            report.summary.corrected_seam_count, report.summary.failed_guard_count
+        )),
+    });
+
+    events
+}
+
+fn render_orchestrator_context_refactor_summary(
+    report: &OrchestratorContextRefactorReport,
+    trace_id: &str,
+    decision_id: &str,
+) -> String {
+    let mut lines = vec![
+        "# Orchestrator Context Refactor Summary".to_string(),
+        String::new(),
+        format!("Outcome: `{}`", report.outcome),
+        format!("Policy: `{}`", report.policy_id),
+        format!("Bead: `{}`", report.bead_id),
+        format!("Trace: `{trace_id}`"),
+        format!("Decision: `{decision_id}`"),
+        format!("Source file: `{}`", report.source_file),
+        format!(
+            "Canonical inventory hash: `{}`",
+            report.canonical_inventory_hash
+        ),
+        format!("Contract hash: `{}`", report.contract_hash),
+        format!("Corrected seams: {}", report.summary.corrected_seam_count),
+        format!("Failed guards: {}", report.summary.failed_guard_count),
+        String::new(),
+        "## Corrected seams".to_string(),
+        String::new(),
+    ];
+
+    for seam in &report.corrected_seams {
+        lines.push(format!(
+            "- `{}` {}:{} -> `{}`",
+            seam.seam_kind,
+            seam.original_file_path,
+            seam.original_line_number,
+            seam.corrected_context_source
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push("## Guard results".to_string());
+    lines.push(String::new());
+    for guard in &report.guards {
+        lines.push(format!(
+            "- `{}` [{}] `{}`",
+            guard.guard_id,
+            if guard.passed { "pass" } else { "fail" },
+            guard.needle
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn render_orchestrator_context_refactor_step_log(
+    report: &OrchestratorContextRefactorReport,
+    trace_id: &str,
+    decision_id: &str,
+) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("trace_id={trace_id}\n"));
+    output.push_str(&format!("decision_id={decision_id}\n"));
+    output.push_str(&format!(
+        "policy_id={}\n",
+        ORCHESTRATOR_CONTEXT_REFACTOR_POLICY_ID
+    ));
+    output.push_str(&format!("outcome={}\n", report.outcome));
+    output.push_str(&format!(
+        "corrected_seam_count={}\n",
+        report.summary.corrected_seam_count
+    ));
+    output.push_str(&format!(
+        "failed_guard_count={}\n",
+        report.summary.failed_guard_count
+    ));
+    for seam in &report.corrected_seams {
+        output.push_str(&format!(
+            "corrected_seam={} {}:{} -> {}\n",
+            seam.seam_kind,
+            seam.original_file_path,
+            seam.original_line_number,
+            seam.corrected_context_source
+        ));
+    }
+    for guard in &report.guards {
+        output.push_str(&format!(
+            "guard={} kind={} passed={} needle={}\n",
+            guard.guard_id, guard.guard_kind, guard.passed, guard.needle
+        ));
+    }
+    output
+}
+
+fn acquire_orchestrator_context_refactor_bundle_lock(
+    out_dir: &Path,
+) -> Result<OrchestratorContextRefactorBundleLock, OrchestratorContextRefactorError> {
+    let lock_path = out_dir.join(".orchestrator_context_refactor.lock");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => Ok(OrchestratorContextRefactorBundleLock { path: lock_path }),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+            Err(OrchestratorContextRefactorError::Busy {
+                path: lock_path.display().to_string(),
+            })
+        }
+        Err(source) => Err(OrchestratorContextRefactorError::Io {
+            path: lock_path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn write_orchestrator_context_refactor_atomic(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), OrchestratorContextRefactorError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| OrchestratorContextRefactorError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+
+    let temp_path = ambient_mock_guard_temp_path(path);
+    fs::write(&temp_path, bytes).map_err(|source| OrchestratorContextRefactorError::Io {
+        path: temp_path.display().to_string(),
+        source,
+    })?;
+    if let Err(source) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(OrchestratorContextRefactorError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn map_refactor_json_error(
+    path: &Path,
+) -> impl FnOnce(AmbientMockGuardError) -> OrchestratorContextRefactorError + '_ {
+    move |error| match error {
+        AmbientMockGuardError::Json { source, .. } => OrchestratorContextRefactorError::Json {
+            path: path.display().to_string(),
+            source,
+        },
+        AmbientMockGuardError::Io { source, .. } => OrchestratorContextRefactorError::Io {
+            path: path.display().to_string(),
+            source,
+        },
+        AmbientMockGuardError::Busy { .. } => OrchestratorContextRefactorError::Busy {
+            path: path.display().to_string(),
+        },
+        AmbientMockGuardError::MissingScanRoot { .. } => {
+            OrchestratorContextRefactorError::MissingSource {
+                path: path.display().to_string(),
+            }
+        }
+    }
 }
 
 fn scan_workspace_for_ambient_mock_violations(
@@ -2330,6 +3123,129 @@ mod tests {
         assert_eq!(
             manifest.artifact_paths.ambient_mock_guard_report,
             "ambient_mock_guard_report.json"
+        );
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(out_dir);
+    }
+
+    #[test]
+    fn orchestrator_context_refactor_passes_corrected_fixture() {
+        let root = unique_temp_dir("orchestrator-context-refactor-pass");
+        write_fixture_file(
+            &root,
+            ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE,
+            r#"
+use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
+
+fn close_cell(trace_id: &str) {
+    let _close_cx =
+        Self::build_cell_close_context(&trace_id, self.config.cell_close_budget_ms);
+}
+
+fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'static, NoCaps> {
+    KernelContext::new(Cx::new(
+        Self::derive_cell_close_trace_id(trace_id),
+        Budget::new(budget_ms),
+        NoCaps,
+    ))
+}
+"#,
+        );
+
+        let (_contract, report) = evaluate_orchestrator_context_refactor_in_root(&root)
+            .expect("context refactor evaluation should succeed");
+
+        assert_eq!(report.outcome, OrchestratorContextRefactorOutcome::Pass);
+        assert_eq!(report.summary.corrected_seam_count, 5);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn orchestrator_context_refactor_fails_when_mock_context_returns() {
+        let root = unique_temp_dir("orchestrator-context-refactor-fail-mock");
+        write_fixture_file(
+            &root,
+            ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE,
+            r#"
+use crate::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
+
+fn close_cell() {
+    let _cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10_000));
+}
+"#,
+        );
+
+        let (_contract, report) = evaluate_orchestrator_context_refactor_in_root(&root)
+            .expect("context refactor evaluation should succeed");
+
+        assert_eq!(
+            report.outcome,
+            OrchestratorContextRefactorOutcome::FailClosed
+        );
+        assert!(
+            report
+                .guards
+                .iter()
+                .any(|guard| { guard.guard_id == "forbidden_mock_context_ctor" && !guard.passed })
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_orchestrator_context_refactor_bundle_emits_expected_artifacts() {
+        let root = unique_temp_dir("orchestrator-context-refactor-bundle-root");
+        let out_dir = unique_temp_dir("orchestrator-context-refactor-bundle-out");
+        write_fixture_file(
+            &root,
+            ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE,
+            r#"
+use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
+
+fn close_cell(trace_id: &str) {
+    let _close_cx =
+        Self::build_cell_close_context(&trace_id, self.config.cell_close_budget_ms);
+}
+
+fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'static, NoCaps> {
+    KernelContext::new(Cx::new(
+        Self::derive_cell_close_trace_id(trace_id),
+        Budget::new(budget_ms),
+        NoCaps,
+    ))
+}
+"#,
+        );
+
+        let commands = vec![
+            "cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir /tmp/out"
+                .to_string(),
+        ];
+        let artifacts =
+            write_orchestrator_context_refactor_bundle_in_root(&root, &out_dir, &commands)
+                .expect("bundle should be written");
+
+        assert_eq!(artifacts.outcome, OrchestratorContextRefactorOutcome::Pass);
+        assert!(artifacts.contract_path.exists());
+        assert!(artifacts.report_path.exists());
+        assert!(artifacts.trace_ids_path.exists());
+        assert!(artifacts.run_manifest_path.exists());
+        assert!(artifacts.events_path.exists());
+        assert!(artifacts.commands_path.exists());
+        assert!(artifacts.step_logs_dir.join("step_001_scan.log").exists());
+        assert!(artifacts.summary_path.exists());
+        assert!(artifacts.env_path.exists());
+        assert!(artifacts.repro_lock_path.exists());
+
+        let manifest: OrchestratorContextRefactorRunManifest =
+            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
+                .expect("manifest should deserialize");
+        assert_eq!(manifest.outcome, OrchestratorContextRefactorOutcome::Pass);
+        assert_eq!(
+            manifest.artifact_paths.production_context_path_contract,
+            "production_context_path_contract.json"
         );
 
         let _ = fs::remove_dir_all(root);

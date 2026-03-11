@@ -1159,6 +1159,27 @@ pub enum Ir3Instruction {
         args: RegRange,
         dst: Reg,
     },
+    /// Initialize deterministic `for..in` enumeration state.
+    ForInInit { src: Reg, dst: Reg },
+    /// Advance deterministic `for..in` enumeration state or jump to done target.
+    ForInNext {
+        iterator: Reg,
+        value_dst: Reg,
+        done_target: InstrIndex,
+    },
+    /// Initialize deterministic `for..of` iteration state.
+    ForOfInit { src: Reg, dst: Reg },
+    /// Advance deterministic `for..of` iteration state or jump to done target.
+    ForOfNext {
+        iterator: Reg,
+        value_dst: Reg,
+        done_target: InstrIndex,
+    },
+    /// Close active deterministic iteration state.
+    IteratorClose {
+        iterator: Reg,
+        reason: IteratorCloseReason,
+    },
     /// Copy register.
     Move { dst: Reg, src: Reg },
     /// Unconditional jump.
@@ -1266,6 +1287,80 @@ impl Ir3Instruction {
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
                 map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
+            }
+            Self::ForInInit { src, dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("for_in_init".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+            }
+            Self::ForInNext {
+                iterator,
+                value_dst,
+                done_target,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("for_in_next".to_string()),
+                );
+                map.insert(
+                    "done_target".to_string(),
+                    CanonicalValue::U64(u64::from(*done_target)),
+                );
+                map.insert(
+                    "iterator".to_string(),
+                    CanonicalValue::U64(u64::from(*iterator)),
+                );
+                map.insert(
+                    "value_dst".to_string(),
+                    CanonicalValue::U64(u64::from(*value_dst)),
+                );
+            }
+            Self::ForOfInit { src, dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("for_of_init".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+            }
+            Self::ForOfNext {
+                iterator,
+                value_dst,
+                done_target,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("for_of_next".to_string()),
+                );
+                map.insert(
+                    "done_target".to_string(),
+                    CanonicalValue::U64(u64::from(*done_target)),
+                );
+                map.insert(
+                    "iterator".to_string(),
+                    CanonicalValue::U64(u64::from(*iterator)),
+                );
+                map.insert(
+                    "value_dst".to_string(),
+                    CanonicalValue::U64(u64::from(*value_dst)),
+                );
+            }
+            Self::IteratorClose { iterator, reason } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("iterator_close".to_string()),
+                );
+                map.insert(
+                    "iterator".to_string(),
+                    CanonicalValue::U64(u64::from(*iterator)),
+                );
+                map.insert(
+                    "reason".to_string(),
+                    CanonicalValue::String(reason.as_str().to_string()),
+                );
             }
             Self::Move { dst, src } => {
                 map.insert("op".to_string(), CanonicalValue::String("move".to_string()));
@@ -2717,6 +2812,22 @@ mod tests {
                 lhs: 1,
                 rhs: 2,
             },
+            Ir3Instruction::ForInInit { src: 1, dst: 2 },
+            Ir3Instruction::ForInNext {
+                iterator: 2,
+                value_dst: 3,
+                done_target: 4,
+            },
+            Ir3Instruction::ForOfInit { src: 1, dst: 2 },
+            Ir3Instruction::ForOfNext {
+                iterator: 2,
+                value_dst: 3,
+                done_target: 4,
+            },
+            Ir3Instruction::IteratorClose {
+                iterator: 2,
+                reason: IteratorCloseReason::Break,
+            },
             Ir3Instruction::UnaryNeg { dst: 0, src: 1 },
             Ir3Instruction::UnaryPlus { dst: 0, src: 1 },
             Ir3Instruction::LogicalNot { dst: 0, src: 1 },
@@ -3717,6 +3828,22 @@ mod tests {
                 lhs: 0,
                 rhs: 1,
             },
+            Ir3Instruction::ForInInit { src: 0, dst: 5 },
+            Ir3Instruction::ForInNext {
+                iterator: 5,
+                value_dst: 6,
+                done_target: 12,
+            },
+            Ir3Instruction::ForOfInit { src: 0, dst: 5 },
+            Ir3Instruction::ForOfNext {
+                iterator: 5,
+                value_dst: 6,
+                done_target: 12,
+            },
+            Ir3Instruction::IteratorClose {
+                iterator: 5,
+                reason: IteratorCloseReason::Break,
+            },
             Ir3Instruction::UnaryNeg { dst: 5, src: 0 },
             Ir3Instruction::UnaryPlus { dst: 5, src: 0 },
             Ir3Instruction::LogicalNot { dst: 5, src: 0 },
@@ -4127,6 +4254,31 @@ mod tests {
                     rhs: 2,
                 },
                 "div",
+            ),
+            (Ir3Instruction::ForInInit { src: 1, dst: 2 }, "for_in_init"),
+            (
+                Ir3Instruction::ForInNext {
+                    iterator: 2,
+                    value_dst: 3,
+                    done_target: 4,
+                },
+                "for_in_next",
+            ),
+            (Ir3Instruction::ForOfInit { src: 1, dst: 2 }, "for_of_init"),
+            (
+                Ir3Instruction::ForOfNext {
+                    iterator: 2,
+                    value_dst: 3,
+                    done_target: 4,
+                },
+                "for_of_next",
+            ),
+            (
+                Ir3Instruction::IteratorClose {
+                    iterator: 2,
+                    reason: IteratorCloseReason::Break,
+                },
+                "iterator_close",
             ),
             (Ir3Instruction::UnaryNeg { dst: 0, src: 1 }, "unary_neg"),
             (Ir3Instruction::UnaryPlus { dst: 0, src: 1 }, "unary_plus"),

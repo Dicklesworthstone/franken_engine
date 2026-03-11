@@ -42,7 +42,7 @@ decision_id="decision-security-conformance-${timestamp}"
 policy_id="policy-security-conformance-v1"
 component="security_conformance_runner_suite"
 scenario_id="bd-2rk"
-replay_command="${0} ${mode}"
+replay_command="./scripts/e2e/security_conformance_runner_replay.sh ${mode}"
 
 mkdir -p "$run_dir" "$command_logs_dir"
 

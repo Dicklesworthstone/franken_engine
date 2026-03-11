@@ -88,7 +88,7 @@ struct NpmCompatibilityReport {
     snapshot_epoch: u64,
     package_count: usize,
     incompatibility_count: usize,
-    cohort_summaries: Vec<CohortSummary>,
+    cohort_summaries: Vec<ReportCohortSummary>,
     root_cause_distribution: Vec<RootCauseCount>,
     top_blockers: Vec<TopBlocker>,
     packages: Vec<PackageOutcomeRecord>,
@@ -99,6 +99,22 @@ struct NpmCompatibilityReport {
 struct RootCauseCount {
     root_cause: String,
     open_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReportCohortSummary {
+    tier: String,
+    total_packages: u32,
+    compatible_count: u32,
+    partially_compatible_count: u32,
+    incompatible_count: u32,
+    skipped_count: u32,
+    untested_count: u32,
+    compatibility_rate_millionths: u64,
+    unblock_threshold_millionths: u64,
+    unblocked: bool,
+    open_incompatibilities: u32,
+    blocker_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -187,7 +203,7 @@ fn run() -> Result<(), String> {
         policy_id: POLICY_ID.to_string(),
         scenario_id: SCENARIO_ID.to_string(),
     };
-    let commands = vec![
+    let commands = [
         format!(
             "franken_npm_compatibility_matrix --out-dir {}",
             out_dir.display()
@@ -500,7 +516,7 @@ fn build_report(matrix: &NpmCompatibilityMatrix, matrix_hash: &str) -> NpmCompat
     .into_iter()
     .filter_map(|tier| {
         let summary = matrix.cohort_summary(tier);
-        (summary.total_packages > 0).then_some(summary)
+        (summary.total_packages > 0).then_some(report_cohort_summary(&summary))
     })
     .collect();
 
@@ -589,6 +605,23 @@ fn build_report(matrix: &NpmCompatibilityMatrix, matrix_hash: &str) -> NpmCompat
         top_blockers,
         packages,
         unresolved_failures,
+    }
+}
+
+fn report_cohort_summary(summary: &CohortSummary) -> ReportCohortSummary {
+    ReportCohortSummary {
+        tier: summary.tier.as_str().to_string(),
+        total_packages: summary.total_packages,
+        compatible_count: summary.compatible_count,
+        partially_compatible_count: summary.partially_compatible_count,
+        incompatible_count: summary.incompatible_count,
+        skipped_count: summary.skipped_count,
+        untested_count: summary.untested_count,
+        compatibility_rate_millionths: summary.compatibility_rate_millionths,
+        unblock_threshold_millionths: summary.unblock_threshold_millionths,
+        unblocked: summary.unblocked,
+        open_incompatibilities: summary.open_incompatibilities,
+        blocker_count: summary.blocker_count,
     }
 }
 

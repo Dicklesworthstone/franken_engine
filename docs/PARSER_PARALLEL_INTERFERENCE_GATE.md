@@ -26,6 +26,13 @@ Baseline campaign dimensions for this lane:
   - synthetic witness-diff mismatch explanation coverage
 
 The gate runner records the active matrix profile in run-manifest metadata.
+Its focused test lane also keeps two hard-earned regression anchors in the
+official replayable surface:
+
+- `parallel_parser::tests::chunk_plan_worker_count_capped_to_input_bytes`
+  for the UTF-8/safe-boundary worker-count cap
+- `parallel_interference_gate_integration::flake_rate_excess_mismatches_clamp_to_full_rate`
+  for the flake-rate saturation contract
 
 ## Determinism and Drift-Explanation Contract
 

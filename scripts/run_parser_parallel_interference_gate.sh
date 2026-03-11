@@ -192,6 +192,9 @@ run_step() {
 
 run_test_lane() {
   run_step \
+    "cargo test -p frankenengine-engine --lib -- --exact chunk_plan_worker_count_capped_to_input_bytes" \
+    cargo test -p frankenengine-engine --lib -- --exact chunk_plan_worker_count_capped_to_input_bytes
+  run_step \
     "cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact evaluate_gate_correct_run_count" \
     cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact evaluate_gate_correct_run_count
   run_step \
@@ -209,6 +212,9 @@ run_test_lane() {
   run_step \
     "cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact build_replay_bundle_deduplicates_seeds_and_workers" \
     cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact build_replay_bundle_deduplicates_seeds_and_workers
+  run_step \
+    "cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact flake_rate_excess_mismatches_clamp_to_full_rate" \
+    cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact flake_rate_excess_mismatches_clamp_to_full_rate
   run_step \
     "cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact operator_summary_multiple_classes_sorted_by_count" \
     cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact operator_summary_multiple_classes_sorted_by_count

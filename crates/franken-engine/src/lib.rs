@@ -82,6 +82,7 @@ pub mod counterfactual_evaluator;
 pub mod counterfactual_intervention_planner;
 pub mod counterfactual_replay_engine;
 pub mod cross_repo_contract;
+pub mod cross_workload_transfer;
 pub mod cut_line_automation;
 pub mod cx_threading;
 pub mod dark_matter_saturation_gate;
@@ -204,6 +205,7 @@ pub mod module_live_binding;
 pub mod module_resolver;
 pub mod monitor_scheduler;
 pub mod moonshot_contract;
+pub mod native_addon_cohort_gate;
 pub mod native_addon_membrane;
 pub mod nitrosketch_telemetry;
 pub mod northstar_scorecard;
@@ -265,6 +267,7 @@ pub mod proof_specialization_receipt;
 pub mod quarantine_mesh_gate;
 pub mod queueing_admission_control;
 pub mod quickening_feedback_lattice;
+pub mod react_compile_run_parity;
 pub mod react_compile_verification;
 pub mod react_doctor_preflight;
 pub mod react_jsx_lowering;
@@ -272,6 +275,7 @@ pub mod react_lane_inference;
 pub mod react_mismatch_catalog;
 pub mod react_module_graph_verifier;
 pub mod react_package_cohort;
+pub mod react_specialization_benchmark_gate;
 pub mod react_ssr_verification;
 pub mod receipt_verifier_pipeline;
 pub mod recovery_artifact;
@@ -426,6 +430,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Canonical error classes for deterministic VM semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EvalErrorClass {
     Parse,
     Resolution,
@@ -469,6 +474,7 @@ impl fmt::Display for EvalErrorClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EvalErrorCode {
     EmptySource,
     ParseFailure,
@@ -750,6 +756,7 @@ stable sorting for multi-error contexts, and explicit propagation helpers for sy
 boundaries.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExceptionBoundary {
     SyncCallframe,
     AsyncJob,

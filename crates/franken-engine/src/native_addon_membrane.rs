@@ -1,3604 +1,2561 @@
-//! Capability-safe Node-API and native-addon membrane planning.
-//!
-//! This module inventories native-addon cohorts, derives deterministic ABI
-//! fingerprints, and plans whether an addon can run directly behind a
-//! capability membrane, through a fallback lane, or not at all.
+#![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+//! Native-Addon Safety Membrane and Fast-Path Routing — RGC-407B
+//!
+//! Bead: bd-1lsy.5.9.2
+//!
+//! Implements the native-addon membrane, handle discipline,
+//! crash-containment behavior, and fast-path versus fallback routing
+//! over the hostcall session channel.  The membrane is a safety layer
+//! ensuring native addons cannot escape capability confinement.
+//!
+//! All fractional values use fixed-point millionths (1_000_000 = 1.0).
+
+use std::collections::BTreeSet;
 use std::fmt;
-use std::fs;
-use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{CapabilityProfile, RuntimeCapability};
-use crate::deterministic_serde::{CanonicalValue, encode_value};
 use crate::hash_tiers::ContentHash;
-use crate::module_resolver::ResolutionContext;
-use crate::self_replacement::{DelegateType, SandboxConfiguration};
-use crate::slot_registry::{AuthorityEnvelope, SlotCapability};
+use crate::security_epoch::SecurityEpoch;
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Schema version for native-addon membrane artifacts.
+pub const SCHEMA_VERSION: &str = "franken-engine.native-addon-membrane.v1";
+/// Component name used in evidence records and receipts.
 pub const COMPONENT: &str = "native_addon_membrane";
-pub const EVENT: &str = "native_addon_route_plan";
-pub const INVENTORY_SCHEMA_VERSION: &str = "franken-engine.native-addon-membrane.v1";
-pub const MEMBRANE_REPORT_SCHEMA_VERSION: &str = "franken-engine.native-addon-membrane.report.v1";
-pub const HANDLE_SAFETY_REPORT_SCHEMA_VERSION: &str =
-    "franken-engine.native-addon-membrane.handle-safety.v1";
-pub const EXECUTION_DISPOSITION_SCHEMA_VERSION: &str =
-    "franken-engine.native-addon-membrane.execution-disposition.v1";
-pub const FALLBACK_RECEIPTS_SCHEMA_VERSION: &str =
-    "franken-engine.native-addon-membrane.fallback-receipts.v1";
-pub const TRACE_IDS_SCHEMA_VERSION: &str = "franken-engine.trace-ids.v1";
-pub const RUN_MANIFEST_SCHEMA_VERSION: &str =
-    "franken-engine.native-addon-membrane.run-manifest.v1";
-pub const BEAD_ID: &str = "bd-1lsy.5.9";
+/// Bead identifier originating this module.
+pub const BEAD_ID: &str = "bd-1lsy.5.9.2";
+/// Policy reference.
+pub const POLICY_ID: &str = "RGC-407B";
 
-pub type NativeAddonMembraneResult<T> = Result<T, Box<NativeAddonMembraneError>>;
+/// Fixed-point unit: 1.0 in millionths.
+pub const MILLIONTHS: u64 = 1_000_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeAddonAbiSurface {
-    NodeApi,
-    Nan,
-    V8Direct,
-    ForeignFfi,
-    Unknown,
+/// Default maximum active handles per membrane.
+pub const DEFAULT_MAX_ACTIVE_HANDLES: u64 = 4096;
+/// Default maximum handle age in microseconds (60 seconds).
+pub const DEFAULT_MAX_HANDLE_AGE_MICROS: u64 = 60_000_000;
+/// Default crash containment mode.
+pub const DEFAULT_CRASH_CONTAINMENT: CrashContainmentMode = CrashContainmentMode::Isolate;
+/// Default fast-path max latency in microseconds (1 ms).
+pub const DEFAULT_FAST_PATH_MAX_LATENCY_MICROS: u64 = 1_000;
+/// Default fallback threshold failures.
+pub const DEFAULT_FALLBACK_THRESHOLD_FAILURES: u64 = 5;
+/// Crash count threshold to move to Shutdown verdict.
+pub const CRASH_SHUTDOWN_THRESHOLD: u64 = 10;
+/// Crash count threshold to move to Breached verdict.
+pub const CRASH_BREACHED_THRESHOLD: u64 = 3;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn append_u64(buf: &mut Vec<u8>, val: u64) {
+    buf.extend_from_slice(&val.to_be_bytes());
 }
 
-impl NativeAddonAbiSurface {
-    pub const fn as_str(self) -> &'static str {
+fn append_str(buf: &mut Vec<u8>, val: &str) {
+    let bytes = val.as_bytes();
+    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    buf.extend_from_slice(bytes);
+}
+
+fn compute_digest(data: &[u8]) -> ContentHash {
+    ContentHash::compute(data)
+}
+
+// ---------------------------------------------------------------------------
+// AddonAbi
+// ---------------------------------------------------------------------------
+
+/// ABI surface a native addon speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AddonAbi {
+    /// Node-API (napi) stable ABI.
+    NodeApi,
+    /// WASI preview-1 ABI.
+    WasiPreview1,
+    /// Native ES module ABI.
+    NativeEsm,
+    /// Custom FFI surface.
+    CustomFfi,
+}
+
+impl AddonAbi {
+    /// All ABI variants.
+    pub const ALL: &[Self] = &[
+        Self::NodeApi,
+        Self::WasiPreview1,
+        Self::NativeEsm,
+        Self::CustomFfi,
+    ];
+
+    /// String label.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::NodeApi => "node_api",
-            Self::Nan => "nan",
-            Self::V8Direct => "v8_direct",
-            Self::ForeignFfi => "foreign_ffi",
-            Self::Unknown => "unknown",
+            Self::WasiPreview1 => "wasi_preview1",
+            Self::NativeEsm => "native_esm",
+            Self::CustomFfi => "custom_ffi",
         }
     }
 }
 
-impl fmt::Display for NativeAddonAbiSurface {
+impl fmt::Display for AddonAbi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+// ---------------------------------------------------------------------------
+// HandleKind
+// ---------------------------------------------------------------------------
+
+/// Kind of handle managed by the membrane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NativeAddonCohort {
-    NodeApiPortable,
-    NodeApiIsolateBound,
-    NodeApiPrivileged,
-    LegacyNan,
-    V8Binding,
-    ForeignFfi,
-    Unknown,
+pub enum HandleKind {
+    /// Opaque JS value handle.
+    ValueHandle,
+    /// Buffer / ArrayBuffer backing.
+    BufferHandle,
+    /// Callback reference.
+    CallbackHandle,
+    /// Externally-owned resource.
+    ExternalHandle,
+    /// TypedArray view handle.
+    TypedArrayHandle,
 }
 
-impl NativeAddonCohort {
-    pub const fn as_str(self) -> &'static str {
+impl HandleKind {
+    pub const ALL: &[Self] = &[
+        Self::ValueHandle,
+        Self::BufferHandle,
+        Self::CallbackHandle,
+        Self::ExternalHandle,
+        Self::TypedArrayHandle,
+    ];
+
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::NodeApiPortable => "node_api_portable",
-            Self::NodeApiIsolateBound => "node_api_isolate_bound",
-            Self::NodeApiPrivileged => "node_api_privileged",
-            Self::LegacyNan => "legacy_nan",
-            Self::V8Binding => "v8_binding",
-            Self::ForeignFfi => "foreign_ffi",
-            Self::Unknown => "unknown",
+            Self::ValueHandle => "value_handle",
+            Self::BufferHandle => "buffer_handle",
+            Self::CallbackHandle => "callback_handle",
+            Self::ExternalHandle => "external_handle",
+            Self::TypedArrayHandle => "typed_array_handle",
         }
     }
 }
 
-impl fmt::Display for NativeAddonCohort {
+impl fmt::Display for HandleKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+// ---------------------------------------------------------------------------
+// HandleState
+// ---------------------------------------------------------------------------
+
+/// Lifecycle state of a membrane handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NativeAddonFallbackMode {
-    WasmPort,
-    DelegateCell,
+pub enum HandleState {
+    /// Handle is live and reachable.
+    Active,
+    /// Handle has been explicitly revoked.
+    Revoked,
+    /// Handle escaped capability containment.
+    Escaped,
+    /// Handle has been finalized and cannot be used.
+    Finalized,
 }
 
-impl NativeAddonFallbackMode {
-    pub const fn as_str(self) -> &'static str {
+impl HandleState {
+    pub const ALL: &[Self] = &[Self::Active, Self::Revoked, Self::Escaped, Self::Finalized];
+
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::WasmPort => "wasm_port",
-            Self::DelegateCell => "delegate_cell",
+            Self::Active => "active",
+            Self::Revoked => "revoked",
+            Self::Escaped => "escaped",
+            Self::Finalized => "finalized",
         }
+    }
+
+    /// Whether this state means the handle is still usable.
+    #[must_use]
+    pub const fn is_live(&self) -> bool {
+        matches!(self, Self::Active)
     }
 }
 
-impl fmt::Display for NativeAddonFallbackMode {
+impl fmt::Display for HandleState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+// ---------------------------------------------------------------------------
+// CrashContainmentMode
+// ---------------------------------------------------------------------------
+
+/// Strategy for containing crashes in native addons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NativeAddonRoute {
-    DirectMembrane,
-    WasmPort,
-    DelegateCell,
+pub enum CrashContainmentMode {
+    /// Terminate the entire host process.
+    Terminate,
+    /// Isolate the crashing addon; other addons continue.
+    Isolate,
+    /// Route to a fallback implementation.
+    Fallback,
+    /// Log the crash and continue execution.
+    LogAndContinue,
 }
 
-impl NativeAddonRoute {
-    pub const fn as_str(self) -> &'static str {
+impl CrashContainmentMode {
+    pub const ALL: &[Self] = &[
+        Self::Terminate,
+        Self::Isolate,
+        Self::Fallback,
+        Self::LogAndContinue,
+    ];
+
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::DirectMembrane => "direct_membrane",
-            Self::WasmPort => "wasm_port",
-            Self::DelegateCell => "delegate_cell",
+            Self::Terminate => "terminate",
+            Self::Isolate => "isolate",
+            Self::Fallback => "fallback",
+            Self::LogAndContinue => "log_and_continue",
         }
     }
 }
 
-impl fmt::Display for NativeAddonRoute {
+impl fmt::Display for CrashContainmentMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+// ---------------------------------------------------------------------------
+// RouteDecision
+// ---------------------------------------------------------------------------
+
+/// Routing decision for an addon invocation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NativeAddonSupportStatus {
-    Direct,
-    FallbackOnly,
-    Unsupported,
+pub enum RouteDecision {
+    /// Use the fast path (direct hostcall channel).
+    FastPath,
+    /// Use the slow path (checked channel).
+    SlowPath,
+    /// Route to a fallback implementation.
+    Fallback,
+    /// Deny the invocation entirely.
+    Deny {
+        /// Reason for denial.
+        reason: String,
+    },
 }
 
-impl NativeAddonSupportStatus {
-    pub const fn as_str(self) -> &'static str {
+impl RouteDecision {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Direct => "direct",
-            Self::FallbackOnly => "fallback_only",
-            Self::Unsupported => "unsupported",
+            Self::FastPath => "fast_path",
+            Self::SlowPath => "slow_path",
+            Self::Fallback => "fallback",
+            Self::Deny { .. } => "deny",
+        }
+    }
+
+    /// Whether the call is allowed (not denied).
+    #[must_use]
+    pub const fn is_allowed(&self) -> bool {
+        !matches!(self, Self::Deny { .. })
+    }
+
+    /// Whether this is the fast path.
+    #[must_use]
+    pub const fn is_fast_path(&self) -> bool {
+        matches!(self, Self::FastPath)
+    }
+}
+
+impl fmt::Display for RouteDecision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Deny { reason } => write!(f, "deny: {reason}"),
+            other => f.write_str(other.as_str()),
         }
     }
 }
 
-impl fmt::Display for NativeAddonSupportStatus {
+// ---------------------------------------------------------------------------
+// CapabilityKind
+// ---------------------------------------------------------------------------
+
+/// Capability a native addon may request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityKind {
+    /// Filesystem read.
+    ReadFs,
+    /// Filesystem write.
+    WriteFs,
+    /// Network access.
+    Network,
+    /// Process spawning.
+    Process,
+    /// Cryptographic operations.
+    Crypto,
+    /// Timer / scheduling.
+    Timer,
+    /// Console I/O.
+    Console,
+    /// Buffer allocation.
+    Buffer,
+}
+
+impl CapabilityKind {
+    pub const ALL: &[Self] = &[
+        Self::ReadFs,
+        Self::WriteFs,
+        Self::Network,
+        Self::Process,
+        Self::Crypto,
+        Self::Timer,
+        Self::Console,
+        Self::Buffer,
+    ];
+
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::ReadFs => "read_fs",
+            Self::WriteFs => "write_fs",
+            Self::Network => "network",
+            Self::Process => "process",
+            Self::Crypto => "crypto",
+            Self::Timer => "timer",
+            Self::Console => "console",
+            Self::Buffer => "buffer",
+        }
+    }
+}
+
+impl fmt::Display for CapabilityKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+// ---------------------------------------------------------------------------
+// ViolationKind
+// ---------------------------------------------------------------------------
+
+/// Kind of membrane violation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NativeAddonRiskClassification {
-    Low,
-    Medium,
-    High,
-    Critical,
+pub enum ViolationKind {
+    /// Active handle count exceeds policy limit.
+    HandleLimitExceeded,
+    /// A handle escaped capability containment.
+    HandleEscaped,
+    /// Addon used a capability it wasn't granted.
+    UnauthorizedCapability,
+    /// Addon process crashed.
+    CrashDetected,
+    /// Addon declared one ABI but used another.
+    AbiMismatch,
+    /// Addon was not registered with the membrane.
+    UnregisteredAddon,
 }
 
-impl NativeAddonRiskClassification {
-    pub const fn as_str(self) -> &'static str {
+impl ViolationKind {
+    pub const ALL: &[Self] = &[
+        Self::HandleLimitExceeded,
+        Self::HandleEscaped,
+        Self::UnauthorizedCapability,
+        Self::CrashDetected,
+        Self::AbiMismatch,
+        Self::UnregisteredAddon,
+    ];
+
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Critical => "critical",
+            Self::HandleLimitExceeded => "handle_limit_exceeded",
+            Self::HandleEscaped => "handle_escaped",
+            Self::UnauthorizedCapability => "unauthorized_capability",
+            Self::CrashDetected => "crash_detected",
+            Self::AbiMismatch => "abi_mismatch",
+            Self::UnregisteredAddon => "unregistered_addon",
         }
     }
 }
 
-impl fmt::Display for NativeAddonRiskClassification {
+impl fmt::Display for ViolationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+// ---------------------------------------------------------------------------
+// MembraneVerdict
+// ---------------------------------------------------------------------------
+
+/// Overall membrane health verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NativeAddonHandleDiscipline {
-    NodeApiOnly,
-    ThreadSafeFunctionOnly,
-    FinalizerBounded,
-    ExternalBuffer,
-    RawPointerEscape,
+pub enum MembraneVerdict {
+    /// All invariants satisfied; no violations.
+    Healthy,
+    /// Minor violations detected but containment holds.
+    Degraded,
+    /// Capability containment has been breached.
+    Breached,
+    /// Membrane must shut down due to unrecoverable state.
+    Shutdown,
 }
 
-impl NativeAddonHandleDiscipline {
-    pub const fn as_str(self) -> &'static str {
+impl MembraneVerdict {
+    pub const ALL: &[Self] = &[
+        Self::Healthy,
+        Self::Degraded,
+        Self::Breached,
+        Self::Shutdown,
+    ];
+
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::NodeApiOnly => "node_api_only",
-            Self::ThreadSafeFunctionOnly => "thread_safe_function_only",
-            Self::FinalizerBounded => "finalizer_bounded",
-            Self::ExternalBuffer => "external_buffer",
-            Self::RawPointerEscape => "raw_pointer_escape",
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Breached => "breached",
+            Self::Shutdown => "shutdown",
         }
     }
 
-    pub const fn is_direct_safe(self) -> bool {
-        matches!(
-            self,
-            Self::NodeApiOnly | Self::ThreadSafeFunctionOnly | Self::FinalizerBounded
-        )
+    /// Whether the membrane is still operational.
+    #[must_use]
+    pub const fn is_operational(&self) -> bool {
+        matches!(self, Self::Healthy | Self::Degraded)
     }
 }
 
-impl fmt::Display for NativeAddonHandleDiscipline {
+impl fmt::Display for MembraneVerdict {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeAddonSymbolClass {
-    ValueExport,
-    FunctionExport,
-    ThreadSafeFunction,
-    Finalizer,
-    PropertyAccessor,
-    ExternalBuffer,
-    ForeignCallback,
-    GlobalStateHook,
-    Unknown,
-}
+// ---------------------------------------------------------------------------
+// HandleRecord
+// ---------------------------------------------------------------------------
 
-impl NativeAddonSymbolClass {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ValueExport => "value_export",
-            Self::FunctionExport => "function_export",
-            Self::ThreadSafeFunction => "thread_safe_function",
-            Self::Finalizer => "finalizer",
-            Self::PropertyAccessor => "property_accessor",
-            Self::ExternalBuffer => "external_buffer",
-            Self::ForeignCallback => "foreign_callback",
-            Self::GlobalStateHook => "global_state_hook",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    pub const fn is_direct_safe(self) -> bool {
-        matches!(
-            self,
-            Self::ValueExport
-                | Self::FunctionExport
-                | Self::ThreadSafeFunction
-                | Self::Finalizer
-                | Self::PropertyAccessor
-        )
-    }
-}
-
-impl fmt::Display for NativeAddonSymbolClass {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeAddonInvocationChannel {
-    InProcessMembrane,
-    HostcallSession,
-}
-
-impl NativeAddonInvocationChannel {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::InProcessMembrane => "in_process_membrane",
-            Self::HostcallSession => "hostcall_session",
-        }
-    }
-}
-
-impl fmt::Display for NativeAddonInvocationChannel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeAddonCrashContainment {
-    InProcessMembrane,
-    WasmSandbox,
-    DelegateCellBoundary,
-}
-
-impl NativeAddonCrashContainment {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::InProcessMembrane => "in_process_membrane",
-            Self::WasmSandbox => "wasm_sandbox",
-            Self::DelegateCellBoundary => "delegate_cell_boundary",
-        }
-    }
-}
-
-impl fmt::Display for NativeAddonCrashContainment {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeAddonMembraneErrorCode {
-    MissingCapability,
-    UnsupportedAbiSurface,
-    UnsafeDirectSurface,
-    NoFallbackRoute,
-}
-
-impl NativeAddonMembraneErrorCode {
-    pub const fn stable_code(self) -> &'static str {
-        match self {
-            Self::MissingCapability => "FE-NAM-0001",
-            Self::UnsupportedAbiSurface => "FE-NAM-0002",
-            Self::UnsafeDirectSurface => "FE-NAM-0003",
-            Self::NoFallbackRoute => "FE-NAM-0004",
-        }
-    }
-}
-
+/// A single handle tracked by the membrane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonSymbol {
-    pub symbol_name: String,
-    pub class: NativeAddonSymbolClass,
-    pub required_capabilities: BTreeSet<RuntimeCapability>,
+pub struct HandleRecord {
+    /// Unique handle identifier.
+    pub id: u64,
+    /// Handle kind.
+    pub kind: HandleKind,
+    /// Current lifecycle state.
+    pub state: HandleState,
+    /// Scope that owns this handle.
+    pub owner_scope: String,
+    /// Security epoch at creation.
+    pub creation_epoch: SecurityEpoch,
+    /// Content hash for integrity.
+    pub content_hash: ContentHash,
 }
 
-impl NativeAddonSymbol {
-    pub fn new(symbol_name: impl Into<String>, class: NativeAddonSymbolClass) -> Self {
-        Self {
-            symbol_name: symbol_name.into(),
-            class,
-            required_capabilities: BTreeSet::new(),
-        }
-    }
-
-    pub fn require_capability(mut self, capability: RuntimeCapability) -> Self {
-        self.required_capabilities.insert(capability);
-        self
-    }
-
-    fn normalized(&self) -> Self {
-        Self {
-            symbol_name: self.symbol_name.trim().to_string(),
-            class: self.class,
-            required_capabilities: self.required_capabilities.clone(),
-        }
-    }
-
-    fn canonical_value(&self) -> CanonicalValue {
-        let normalized = self.normalized();
-        let mut map = BTreeMap::new();
-        map.insert(
-            "class".to_string(),
-            CanonicalValue::String(normalized.class.as_str().to_string()),
-        );
-        map.insert(
-            "required_capabilities".to_string(),
-            CanonicalValue::Array(
-                normalized
-                    .required_capabilities
-                    .iter()
-                    .map(|cap| CanonicalValue::String(cap.to_string()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "symbol_name".to_string(),
-            CanonicalValue::String(normalized.symbol_name),
-        );
-        CanonicalValue::Map(map)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonLoadRequest {
-    pub addon_id: String,
-    pub package_name: String,
-    pub package_version: String,
-    pub module_specifier: String,
-    pub addon_path: String,
-    pub abi_surface: NativeAddonAbiSurface,
-    pub node_api_version: Option<u32>,
-    pub supported_fallbacks: BTreeSet<NativeAddonFallbackMode>,
-    pub symbol_exports: Vec<NativeAddonSymbol>,
-    pub handle_discipline: NativeAddonHandleDiscipline,
-    pub uses_foreign_heap: bool,
-    pub uses_process_global_state: bool,
-    pub requires_filesystem_read: bool,
-    pub requires_filesystem_write: bool,
-    pub requires_network_egress: bool,
-    pub requires_process_spawn: bool,
-    pub requires_module_linkage: bool,
-    pub uses_async_workers: bool,
-    pub wasm_portable: bool,
-}
-
-impl NativeAddonLoadRequest {
+impl HandleRecord {
+    /// Create a new active handle record.
+    #[must_use]
     pub fn new(
-        addon_id: impl Into<String>,
-        package_name: impl Into<String>,
-        package_version: impl Into<String>,
-        module_specifier: impl Into<String>,
-        addon_path: impl Into<String>,
-        abi_surface: NativeAddonAbiSurface,
+        id: u64,
+        kind: HandleKind,
+        owner_scope: &str,
+        creation_epoch: SecurityEpoch,
+    ) -> Self {
+        let mut buf = Vec::new();
+        append_u64(&mut buf, id);
+        append_str(&mut buf, kind.as_str());
+        append_str(&mut buf, owner_scope);
+        append_u64(&mut buf, creation_epoch.as_u64());
+        let content_hash = compute_digest(&buf);
+        Self {
+            id,
+            kind,
+            state: HandleState::Active,
+            owner_scope: owner_scope.to_string(),
+            creation_epoch,
+            content_hash,
+        }
+    }
+
+    /// Seal (recompute) the content hash.
+    pub fn seal(&mut self) {
+        let mut buf = Vec::new();
+        append_u64(&mut buf, self.id);
+        append_str(&mut buf, self.kind.as_str());
+        append_str(&mut buf, self.state.as_str());
+        append_str(&mut buf, &self.owner_scope);
+        append_u64(&mut buf, self.creation_epoch.as_u64());
+        self.content_hash = compute_digest(&buf);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MembranePolicy
+// ---------------------------------------------------------------------------
+
+/// Configuration for the membrane enforcement policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MembranePolicy {
+    /// Maximum number of concurrently active handles.
+    pub max_active_handles: u64,
+    /// Maximum handle age in microseconds before forced revocation.
+    pub max_handle_age_micros: u64,
+    /// Whether external handles (raw resource) are allowed.
+    pub allow_external_handles: bool,
+    /// Whether callbacks may escape scope.
+    pub allow_callback_escape: bool,
+    /// Strategy for crash containment.
+    pub crash_containment_mode: CrashContainmentMode,
+}
+
+impl Default for MembranePolicy {
+    fn default() -> Self {
+        Self {
+            max_active_handles: DEFAULT_MAX_ACTIVE_HANDLES,
+            max_handle_age_micros: DEFAULT_MAX_HANDLE_AGE_MICROS,
+            allow_external_handles: false,
+            allow_callback_escape: false,
+            crash_containment_mode: DEFAULT_CRASH_CONTAINMENT,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RoutingConfig
+// ---------------------------------------------------------------------------
+
+/// Configuration for fast-path / slow-path routing decisions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutingConfig {
+    /// Maximum latency (microseconds) for a call to qualify for fast path.
+    pub fast_path_max_latency_micros: u64,
+    /// Set of ABIs allowed on the fast path.
+    pub fast_path_allowed_abis: BTreeSet<AddonAbi>,
+    /// Number of recent failures before triggering fallback.
+    pub fallback_threshold_failures: u64,
+    /// Whether to deny invocations from unregistered addons.
+    pub deny_unregistered: bool,
+}
+
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        let mut allowed = BTreeSet::new();
+        allowed.insert(AddonAbi::NodeApi);
+        allowed.insert(AddonAbi::WasiPreview1);
+        Self {
+            fast_path_max_latency_micros: DEFAULT_FAST_PATH_MAX_LATENCY_MICROS,
+            fast_path_allowed_abis: allowed,
+            fallback_threshold_failures: DEFAULT_FALLBACK_THRESHOLD_FAILURES,
+            deny_unregistered: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AddonRegistration
+// ---------------------------------------------------------------------------
+
+/// Registration entry for a native addon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddonRegistration {
+    /// Unique addon identifier.
+    pub addon_id: String,
+    /// ABI the addon speaks.
+    pub abi: AddonAbi,
+    /// Content hash of the addon binary.
+    pub content_hash: ContentHash,
+    /// Capabilities granted to this addon.
+    pub capabilities: BTreeSet<CapabilityKind>,
+    /// Epoch at which the addon was registered.
+    pub registered_epoch: SecurityEpoch,
+}
+
+impl AddonRegistration {
+    /// Create a new registration.
+    #[must_use]
+    pub fn new(
+        addon_id: &str,
+        abi: AddonAbi,
+        content_hash: ContentHash,
+        capabilities: BTreeSet<CapabilityKind>,
+        registered_epoch: SecurityEpoch,
     ) -> Self {
         Self {
-            addon_id: addon_id.into(),
-            package_name: package_name.into(),
-            package_version: package_version.into(),
-            module_specifier: module_specifier.into(),
-            addon_path: addon_path.into(),
-            abi_surface,
-            node_api_version: None,
-            supported_fallbacks: BTreeSet::new(),
-            symbol_exports: Vec::new(),
-            handle_discipline: NativeAddonHandleDiscipline::NodeApiOnly,
-            uses_foreign_heap: false,
-            uses_process_global_state: false,
-            requires_filesystem_read: false,
-            requires_filesystem_write: false,
-            requires_network_egress: false,
-            requires_process_spawn: false,
-            requires_module_linkage: false,
-            uses_async_workers: false,
-            wasm_portable: false,
+            addon_id: addon_id.to_string(),
+            abi,
+            content_hash,
+            capabilities,
+            registered_epoch,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Violation
+// ---------------------------------------------------------------------------
+
+/// A recorded membrane violation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Violation {
+    /// Category of violation.
+    pub kind: ViolationKind,
+    /// Addon that caused the violation (empty if unknown).
+    pub addon_id: String,
+    /// Human-readable detail.
+    pub detail: String,
+    /// When the violation occurred (microseconds since epoch).
+    pub timestamp_micros: u64,
+}
+
+impl Violation {
+    /// Create a new violation record.
+    #[must_use]
+    pub fn new(kind: ViolationKind, addon_id: &str, detail: &str, timestamp_micros: u64) -> Self {
+        Self {
+            kind,
+            addon_id: addon_id.to_string(),
+            detail: detail.to_string(),
+            timestamp_micros,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DecisionReceipt
+// ---------------------------------------------------------------------------
+
+/// Auditable receipt for a membrane evaluation decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionReceipt {
+    /// Schema version.
+    pub schema_version: String,
+    /// Component label.
+    pub component: String,
+    /// Bead identifier.
+    pub bead_id: String,
+    /// Policy identifier.
+    pub policy_id: String,
+    /// Security epoch of the evaluation.
+    pub epoch: SecurityEpoch,
+    /// Hash of the inputs considered.
+    pub input_hash: ContentHash,
+    /// Hash of the verdict.
+    pub verdict_hash: ContentHash,
+    /// Timestamp in microseconds.
+    pub timestamp_micros: u64,
+}
+
+impl DecisionReceipt {
+    /// Seal the receipt by recomputing content hashes.
+    pub fn seal(&mut self) {
+        let mut buf = Vec::new();
+        append_str(&mut buf, &self.schema_version);
+        append_str(&mut buf, &self.component);
+        append_str(&mut buf, &self.bead_id);
+        append_str(&mut buf, &self.policy_id);
+        append_u64(&mut buf, self.epoch.as_u64());
+        buf.extend_from_slice(self.input_hash.as_bytes());
+        append_u64(&mut buf, self.timestamp_micros);
+        self.verdict_hash = compute_digest(&buf);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MembraneReport
+// ---------------------------------------------------------------------------
+
+/// Report produced by membrane evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MembraneReport {
+    /// Number of registered addons.
+    pub registered_addon_count: usize,
+    /// Number of currently active handles.
+    pub active_handles: u64,
+    /// Number of revoked handles.
+    pub revoked_handles: u64,
+    /// Number of escaped handles.
+    pub escaped_handles: u64,
+    /// Total crash count.
+    pub crash_count: u64,
+    /// Routing statistics: total calls.
+    pub total_calls: u64,
+    /// Routing statistics: fast-path calls.
+    pub fast_path_calls: u64,
+    /// Routing statistics: slow-path calls.
+    pub slow_path_calls: u64,
+    /// Routing statistics: fallback calls.
+    pub fallback_calls: u64,
+    /// Routing statistics: denied calls.
+    pub denied_calls: u64,
+    /// Overall verdict.
+    pub verdict: MembraneVerdict,
+    /// List of violations detected.
+    pub violations: Vec<Violation>,
+    /// Decision receipt.
+    pub receipt: DecisionReceipt,
+}
+
+// ---------------------------------------------------------------------------
+// MembraneError
+// ---------------------------------------------------------------------------
+
+/// Error conditions in the membrane module.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize, Deserialize)]
+pub enum MembraneError {
+    /// Handle limit exceeded.
+    #[error("handle limit exceeded: {detail}")]
+    HandleLimitExceeded {
+        /// Details about the exceeded limit.
+        detail: String,
+    },
+    /// Handle not found.
+    #[error("handle not found: id={handle_id}")]
+    HandleNotFound {
+        /// The handle ID that was not found.
+        handle_id: u64,
+    },
+    /// Handle already revoked.
+    #[error("handle already revoked: id={handle_id}")]
+    HandleAlreadyRevoked {
+        /// The handle ID.
+        handle_id: u64,
+    },
+    /// Handle already finalized.
+    #[error("handle already finalized: id={handle_id}")]
+    HandleAlreadyFinalized {
+        /// The handle ID.
+        handle_id: u64,
+    },
+    /// Addon not registered.
+    #[error("addon not registered: {addon_id}")]
+    AddonNotRegistered {
+        /// The addon identifier.
+        addon_id: String,
+    },
+    /// Addon already registered.
+    #[error("addon already registered: {addon_id}")]
+    AddonAlreadyRegistered {
+        /// The addon identifier.
+        addon_id: String,
+    },
+    /// External handles not allowed by policy.
+    #[error("external handles not allowed by policy")]
+    ExternalHandlesNotAllowed,
+    /// Callback escape not allowed by policy.
+    #[error("callback escape not allowed by policy")]
+    CallbackEscapeNotAllowed,
+    /// Membrane is shut down.
+    #[error("membrane is shut down")]
+    MembraneShutDown,
+}
+
+// ---------------------------------------------------------------------------
+// MembraneState
+// ---------------------------------------------------------------------------
+
+/// Mutable membrane state tracking registrations, handles, and statistics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MembraneState {
+    /// Registered addons.
+    pub registrations: Vec<AddonRegistration>,
+    /// Handle table.
+    pub handle_table: Vec<HandleRecord>,
+    /// Number of currently active handles.
+    pub active_handles: u64,
+    /// Number of revoked handles.
+    pub revoked_handles: u64,
+    /// Cumulative crash count.
+    pub crash_count: u64,
+    /// Total calls routed through the membrane.
+    pub total_calls: u64,
+    /// Calls that went through the fast path.
+    pub fast_path_calls: u64,
+    /// Calls that went through the slow path.
+    pub slow_path_calls: u64,
+    /// Calls that fell back.
+    pub fallback_calls: u64,
+    /// Calls that were denied.
+    pub denied_calls: u64,
+    /// Violations recorded.
+    pub violations: Vec<Violation>,
+    /// Next handle ID to allocate.
+    next_handle_id: u64,
+    /// Whether the membrane is shut down.
+    is_shutdown: bool,
+    /// Per-addon recent failure counts (addon_id, failure_count).
+    addon_failure_counts: Vec<(String, u64)>,
+}
+
+impl MembraneState {
+    /// Create a new empty membrane state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            registrations: Vec::new(),
+            handle_table: Vec::new(),
+            active_handles: 0,
+            revoked_handles: 0,
+            crash_count: 0,
+            total_calls: 0,
+            fast_path_calls: 0,
+            slow_path_calls: 0,
+            fallback_calls: 0,
+            denied_calls: 0,
+            violations: Vec::new(),
+            next_handle_id: 1,
+            is_shutdown: false,
+            addon_failure_counts: Vec::new(),
         }
     }
 
-    pub fn with_node_api_version(mut self, version: u32) -> Self {
-        self.node_api_version = Some(version);
-        self
+    /// Whether the membrane is in shutdown state.
+    #[must_use]
+    pub fn is_shutdown(&self) -> bool {
+        self.is_shutdown
     }
 
-    pub fn with_symbol(mut self, symbol: NativeAddonSymbol) -> Self {
-        self.symbol_exports.push(symbol);
-        self
-    }
-
-    pub fn allow_fallback(mut self, fallback: NativeAddonFallbackMode) -> Self {
-        self.supported_fallbacks.insert(fallback);
-        self
-    }
-
-    pub fn with_handle_discipline(mut self, discipline: NativeAddonHandleDiscipline) -> Self {
-        self.handle_discipline = discipline;
-        self
-    }
-
-    pub fn cohort(&self) -> NativeAddonCohort {
-        match self.abi_surface {
-            NativeAddonAbiSurface::NodeApi => {
-                if self.uses_process_global_state
-                    || self.uses_foreign_heap
-                    || !self.handle_discipline.is_direct_safe()
-                {
-                    NativeAddonCohort::NodeApiPrivileged
-                } else if self.uses_async_workers
-                    || self
-                        .symbol_exports
-                        .iter()
-                        .any(|symbol| symbol.class == NativeAddonSymbolClass::ThreadSafeFunction)
-                {
-                    NativeAddonCohort::NodeApiIsolateBound
-                } else {
-                    NativeAddonCohort::NodeApiPortable
-                }
-            }
-            NativeAddonAbiSurface::Nan => NativeAddonCohort::LegacyNan,
-            NativeAddonAbiSurface::V8Direct => NativeAddonCohort::V8Binding,
-            NativeAddonAbiSurface::ForeignFfi => NativeAddonCohort::ForeignFfi,
-            NativeAddonAbiSurface::Unknown => NativeAddonCohort::Unknown,
+    /// Register a native addon with the membrane.
+    pub fn register_addon(&mut self, registration: AddonRegistration) -> Result<(), MembraneError> {
+        if self.is_shutdown {
+            return Err(MembraneError::MembraneShutDown);
         }
-    }
-
-    pub fn required_capabilities(&self) -> BTreeSet<RuntimeCapability> {
-        let mut caps = BTreeSet::from([RuntimeCapability::ExtensionLifecycle]);
-        if self.requires_filesystem_read {
-            caps.insert(RuntimeCapability::FsRead);
-        }
-        if self.requires_filesystem_write {
-            caps.insert(RuntimeCapability::FsWrite);
-        }
-        if self.requires_network_egress {
-            caps.insert(RuntimeCapability::NetworkEgress);
-        }
-        if self.requires_process_spawn {
-            caps.insert(RuntimeCapability::ProcessSpawn);
-        }
-        if self.uses_foreign_heap
-            || matches!(
-                self.handle_discipline,
-                NativeAddonHandleDiscipline::ExternalBuffer
-                    | NativeAddonHandleDiscipline::RawPointerEscape
-            )
-        {
-            caps.insert(RuntimeCapability::HeapAllocate);
-        }
-        for symbol in &self.symbol_exports {
-            caps.extend(symbol.required_capabilities.iter().copied());
-        }
-        caps
-    }
-
-    pub fn required_slot_capabilities(&self) -> Vec<SlotCapability> {
-        let mut caps = vec![SlotCapability::EmitEvidence, SlotCapability::InvokeHostcall];
-        if self.requires_module_linkage {
-            push_slot_capability(&mut caps, SlotCapability::ModuleAccess);
-        }
-        if self.uses_async_workers
-            || self
-                .symbol_exports
-                .iter()
-                .any(|symbol| symbol.class == NativeAddonSymbolClass::ThreadSafeFunction)
-        {
-            push_slot_capability(&mut caps, SlotCapability::ScheduleAsync);
-        }
-        if self.uses_foreign_heap
-            || matches!(
-                self.handle_discipline,
-                NativeAddonHandleDiscipline::ExternalBuffer
-                    | NativeAddonHandleDiscipline::RawPointerEscape
-            )
-        {
-            push_slot_capability(&mut caps, SlotCapability::HeapAlloc);
-        }
-        caps.sort_by_key(|cap| slot_capability_sort_key(*cap));
-        caps
-    }
-
-    pub fn symbol_families(&self) -> Vec<String> {
-        self.symbol_exports
+        if self
+            .registrations
             .iter()
-            .map(|symbol| symbol.class.as_str().to_string())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .any(|r| r.addon_id == registration.addon_id)
+        {
+            return Err(MembraneError::AddonAlreadyRegistered {
+                addon_id: registration.addon_id,
+            });
+        }
+        self.registrations.push(registration);
+        Ok(())
+    }
+
+    /// Look up a registration by addon ID.
+    #[must_use]
+    pub fn find_registration(&self, addon_id: &str) -> Option<&AddonRegistration> {
+        self.registrations.iter().find(|r| r.addon_id == addon_id)
+    }
+
+    /// Allocate a new handle, returning its ID.
+    pub fn allocate_handle(
+        &mut self,
+        addon_id: &str,
+        kind: HandleKind,
+        epoch: SecurityEpoch,
+        policy: &MembranePolicy,
+    ) -> Result<u64, MembraneError> {
+        if self.is_shutdown {
+            return Err(MembraneError::MembraneShutDown);
+        }
+        // Verify addon is registered.
+        if !self.registrations.iter().any(|r| r.addon_id == addon_id) {
+            return Err(MembraneError::AddonNotRegistered {
+                addon_id: addon_id.to_string(),
+            });
+        }
+        // Check policy: external handles.
+        if kind == HandleKind::ExternalHandle && !policy.allow_external_handles {
+            return Err(MembraneError::ExternalHandlesNotAllowed);
+        }
+        // Check active handle limit.
+        if self.active_handles >= policy.max_active_handles {
+            return Err(MembraneError::HandleLimitExceeded {
+                detail: format!(
+                    "active={}, max={}",
+                    self.active_handles, policy.max_active_handles
+                ),
+            });
+        }
+        let id = self.next_handle_id;
+        self.next_handle_id += 1;
+        let record = HandleRecord::new(id, kind, addon_id, epoch);
+        self.handle_table.push(record);
+        self.active_handles += 1;
+        Ok(id)
+    }
+
+    /// Revoke an active handle.
+    pub fn revoke_handle(&mut self, handle_id: u64) -> Result<(), MembraneError> {
+        if self.is_shutdown {
+            return Err(MembraneError::MembraneShutDown);
+        }
+        let record = self
+            .handle_table
+            .iter_mut()
+            .find(|r| r.id == handle_id)
+            .ok_or(MembraneError::HandleNotFound { handle_id })?;
+        match record.state {
+            HandleState::Active => {
+                record.state = HandleState::Revoked;
+                record.seal();
+                self.active_handles = self.active_handles.saturating_sub(1);
+                self.revoked_handles += 1;
+                Ok(())
+            }
+            HandleState::Revoked => Err(MembraneError::HandleAlreadyRevoked { handle_id }),
+            HandleState::Finalized => Err(MembraneError::HandleAlreadyFinalized { handle_id }),
+            HandleState::Escaped => {
+                // Escaped handles can be revoked to contain them.
+                record.state = HandleState::Revoked;
+                record.seal();
+                self.revoked_handles += 1;
+                Ok(())
+            }
+        }
+    }
+
+    /// Finalize an active or revoked handle (terminal state).
+    pub fn finalize_handle(&mut self, handle_id: u64) -> Result<(), MembraneError> {
+        if self.is_shutdown {
+            return Err(MembraneError::MembraneShutDown);
+        }
+        let record = self
+            .handle_table
+            .iter_mut()
+            .find(|r| r.id == handle_id)
+            .ok_or(MembraneError::HandleNotFound { handle_id })?;
+        match record.state {
+            HandleState::Finalized => Err(MembraneError::HandleAlreadyFinalized { handle_id }),
+            HandleState::Active => {
+                record.state = HandleState::Finalized;
+                record.seal();
+                self.active_handles = self.active_handles.saturating_sub(1);
+                Ok(())
+            }
+            HandleState::Revoked | HandleState::Escaped => {
+                record.state = HandleState::Finalized;
+                record.seal();
+                Ok(())
+            }
+        }
+    }
+
+    /// Mark a handle as escaped (capability breach).
+    pub fn mark_handle_escaped(
+        &mut self,
+        handle_id: u64,
+        timestamp_micros: u64,
+    ) -> Result<(), MembraneError> {
+        if self.is_shutdown {
+            return Err(MembraneError::MembraneShutDown);
+        }
+        let record = self
+            .handle_table
+            .iter_mut()
+            .find(|r| r.id == handle_id)
+            .ok_or(MembraneError::HandleNotFound { handle_id })?;
+        if record.state == HandleState::Finalized {
+            return Err(MembraneError::HandleAlreadyFinalized { handle_id });
+        }
+        let addon_id = record.owner_scope.clone();
+        if record.state == HandleState::Active {
+            self.active_handles = self.active_handles.saturating_sub(1);
+        }
+        record.state = HandleState::Escaped;
+        record.seal();
+        self.violations.push(Violation::new(
+            ViolationKind::HandleEscaped,
+            &addon_id,
+            &format!("handle {handle_id} escaped containment"),
+            timestamp_micros,
+        ));
+        Ok(())
+    }
+
+    /// Route a call for the given addon through the membrane.
+    pub fn route_call(&mut self, addon_id: &str, config: &RoutingConfig) -> RouteDecision {
+        self.total_calls += 1;
+
+        // Check registration.
+        let registration = match self.find_registration(addon_id) {
+            Some(r) => r.clone(),
+            None => {
+                if config.deny_unregistered {
+                    self.denied_calls += 1;
+                    return RouteDecision::Deny {
+                        reason: format!("unregistered addon: {addon_id}"),
+                    };
+                }
+                // Unregistered but not denied: slow path.
+                self.slow_path_calls += 1;
+                return RouteDecision::SlowPath;
+            }
+        };
+
+        // Check failure count for fallback.
+        let failure_count = self
+            .addon_failure_counts
+            .iter()
+            .find(|(id, _)| id == addon_id)
+            .map(|(_, c)| *c)
+            .unwrap_or(0);
+        if failure_count >= config.fallback_threshold_failures {
+            self.fallback_calls += 1;
+            return RouteDecision::Fallback;
+        }
+
+        // Check if ABI is allowed on fast path.
+        if config.fast_path_allowed_abis.contains(&registration.abi) {
+            self.fast_path_calls += 1;
+            RouteDecision::FastPath
+        } else {
+            self.slow_path_calls += 1;
+            RouteDecision::SlowPath
+        }
+    }
+
+    /// Record a crash for the given addon.
+    pub fn record_crash(&mut self, addon_id: &str, detail: &str, timestamp_micros: u64) {
+        self.crash_count += 1;
+        self.violations.push(Violation::new(
+            ViolationKind::CrashDetected,
+            addon_id,
+            detail,
+            timestamp_micros,
+        ));
+        // Increment failure count.
+        if let Some(entry) = self
+            .addon_failure_counts
+            .iter_mut()
+            .find(|(id, _)| id == addon_id)
+        {
+            entry.1 += 1;
+        } else {
+            self.addon_failure_counts.push((addon_id.to_string(), 1));
+        }
+    }
+
+    /// Record a violation.
+    pub fn record_violation(&mut self, violation: Violation) {
+        self.violations.push(violation);
+    }
+
+    /// Get the failure count for a given addon.
+    #[must_use]
+    pub fn addon_failure_count(&self, addon_id: &str) -> u64 {
+        self.addon_failure_counts
+            .iter()
+            .find(|(id, _)| id == addon_id)
+            .map(|(_, c)| *c)
+            .unwrap_or(0)
+    }
+
+    /// Count handles in a given state.
+    #[must_use]
+    pub fn count_handles_in_state(&self, state: HandleState) -> u64 {
+        self.handle_table
+            .iter()
+            .filter(|h| h.state == state)
+            .count() as u64
+    }
+
+    /// Get a handle record by ID.
+    #[must_use]
+    pub fn get_handle(&self, handle_id: u64) -> Option<&HandleRecord> {
+        self.handle_table.iter().find(|h| h.id == handle_id)
+    }
+
+    /// Get all handles owned by a specific addon.
+    #[must_use]
+    pub fn handles_for_addon(&self, addon_id: &str) -> Vec<&HandleRecord> {
+        self.handle_table
+            .iter()
+            .filter(|h| h.owner_scope == addon_id)
             .collect()
     }
 
-    pub fn abi_fingerprint(&self) -> ContentHash {
-        ContentHash::compute(&encode_value(&self.canonical_value()))
+    /// Mark the membrane as shut down.
+    pub fn shutdown(&mut self) {
+        self.is_shutdown = true;
     }
 
-    fn normalized_symbols(&self) -> Vec<NativeAddonSymbol> {
-        let mut symbols: Vec<_> = self
-            .symbol_exports
-            .iter()
-            .map(NativeAddonSymbol::normalized)
-            .collect();
-        symbols.sort_by(|lhs, rhs| {
-            (lhs.symbol_name.as_str(), lhs.class.as_str())
-                .cmp(&(rhs.symbol_name.as_str(), rhs.class.as_str()))
-        });
-        symbols
+    /// Reset failure count for an addon (e.g., after recovery).
+    pub fn reset_failure_count(&mut self, addon_id: &str) {
+        if let Some(entry) = self
+            .addon_failure_counts
+            .iter_mut()
+            .find(|(id, _)| id == addon_id)
+        {
+            entry.1 = 0;
+        }
     }
 
-    fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "abi_surface".to_string(),
-            CanonicalValue::String(self.abi_surface.as_str().to_string()),
-        );
-        map.insert(
-            "addon_id".to_string(),
-            CanonicalValue::String(self.addon_id.trim().to_string()),
-        );
-        map.insert(
-            "addon_path".to_string(),
-            CanonicalValue::String(self.addon_path.trim().to_string()),
-        );
-        map.insert(
-            "handle_discipline".to_string(),
-            CanonicalValue::String(self.handle_discipline.as_str().to_string()),
-        );
-        map.insert(
-            "module_specifier".to_string(),
-            CanonicalValue::String(self.module_specifier.trim().to_string()),
-        );
-        map.insert(
-            "node_api_version".to_string(),
-            self.node_api_version
-                .map(|value| CanonicalValue::U64(u64::from(value)))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "package_name".to_string(),
-            CanonicalValue::String(self.package_name.trim().to_string()),
-        );
-        map.insert(
-            "package_version".to_string(),
-            CanonicalValue::String(self.package_version.trim().to_string()),
-        );
-        map.insert(
-            "requires_filesystem_read".to_string(),
-            CanonicalValue::Bool(self.requires_filesystem_read),
-        );
-        map.insert(
-            "requires_filesystem_write".to_string(),
-            CanonicalValue::Bool(self.requires_filesystem_write),
-        );
-        map.insert(
-            "requires_module_linkage".to_string(),
-            CanonicalValue::Bool(self.requires_module_linkage),
-        );
-        map.insert(
-            "requires_network_egress".to_string(),
-            CanonicalValue::Bool(self.requires_network_egress),
-        );
-        map.insert(
-            "requires_process_spawn".to_string(),
-            CanonicalValue::Bool(self.requires_process_spawn),
-        );
-        map.insert(
-            "supported_fallbacks".to_string(),
-            CanonicalValue::Array(
-                self.supported_fallbacks
-                    .iter()
-                    .map(|mode| CanonicalValue::String(mode.as_str().to_string()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "symbol_exports".to_string(),
-            CanonicalValue::Array(
-                self.normalized_symbols()
-                    .iter()
-                    .map(NativeAddonSymbol::canonical_value)
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "uses_async_workers".to_string(),
-            CanonicalValue::Bool(self.uses_async_workers),
-        );
-        map.insert(
-            "uses_foreign_heap".to_string(),
-            CanonicalValue::Bool(self.uses_foreign_heap),
-        );
-        map.insert(
-            "uses_process_global_state".to_string(),
-            CanonicalValue::Bool(self.uses_process_global_state),
-        );
-        map.insert(
-            "wasm_portable".to_string(),
-            CanonicalValue::Bool(self.wasm_portable),
-        );
-        CanonicalValue::Map(map)
+    /// Total number of handles (all states).
+    #[must_use]
+    pub fn total_handle_count(&self) -> usize {
+        self.handle_table.len()
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonSupportSurface {
-    pub addon_id: String,
-    pub package_name: String,
-    pub package_version: String,
-    pub module_specifier: String,
-    pub addon_path: String,
-    pub cohort: NativeAddonCohort,
-    pub abi_surface: NativeAddonAbiSurface,
-    pub support_status: NativeAddonSupportStatus,
-    pub selected_route: Option<NativeAddonRoute>,
-    pub missing_capabilities: BTreeSet<RuntimeCapability>,
-    pub direct_blockers: Vec<String>,
-    pub supported_fallbacks: Vec<NativeAddonFallbackMode>,
-    pub required_capabilities: BTreeSet<RuntimeCapability>,
-    pub required_slot_capabilities: Vec<SlotCapability>,
-    pub symbol_families: Vec<String>,
-    pub risk_classification: NativeAddonRiskClassification,
-    pub owner_route: String,
-    pub remediation_hint: String,
-    pub abi_fingerprint: ContentHash,
-}
-
-impl NativeAddonSupportSurface {
-    fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "abi_fingerprint".to_string(),
-            CanonicalValue::String(self.abi_fingerprint.to_hex()),
-        );
-        map.insert(
-            "abi_surface".to_string(),
-            CanonicalValue::String(self.abi_surface.as_str().to_string()),
-        );
-        map.insert(
-            "addon_id".to_string(),
-            CanonicalValue::String(self.addon_id.clone()),
-        );
-        map.insert(
-            "addon_path".to_string(),
-            CanonicalValue::String(self.addon_path.clone()),
-        );
-        map.insert(
-            "cohort".to_string(),
-            CanonicalValue::String(self.cohort.as_str().to_string()),
-        );
-        map.insert(
-            "direct_blockers".to_string(),
-            CanonicalValue::Array(
-                self.direct_blockers
-                    .iter()
-                    .map(|value| CanonicalValue::String(value.clone()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "missing_capabilities".to_string(),
-            CanonicalValue::Array(
-                self.missing_capabilities
-                    .iter()
-                    .map(|cap| CanonicalValue::String(cap.to_string()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "module_specifier".to_string(),
-            CanonicalValue::String(self.module_specifier.clone()),
-        );
-        map.insert(
-            "package_name".to_string(),
-            CanonicalValue::String(self.package_name.clone()),
-        );
-        map.insert(
-            "package_version".to_string(),
-            CanonicalValue::String(self.package_version.clone()),
-        );
-        map.insert(
-            "owner_route".to_string(),
-            CanonicalValue::String(self.owner_route.clone()),
-        );
-        map.insert(
-            "required_capabilities".to_string(),
-            CanonicalValue::Array(
-                self.required_capabilities
-                    .iter()
-                    .map(|cap| CanonicalValue::String(cap.to_string()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "required_slot_capabilities".to_string(),
-            CanonicalValue::Array(
-                self.required_slot_capabilities
-                    .iter()
-                    .map(|cap| CanonicalValue::String(format!("{cap:?}")))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "selected_route".to_string(),
-            self.selected_route
-                .map(|route| CanonicalValue::String(route.as_str().to_string()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "remediation_hint".to_string(),
-            CanonicalValue::String(self.remediation_hint.clone()),
-        );
-        map.insert(
-            "risk_classification".to_string(),
-            CanonicalValue::String(self.risk_classification.as_str().to_string()),
-        );
-        map.insert(
-            "symbol_families".to_string(),
-            CanonicalValue::Array(
-                self.symbol_families
-                    .iter()
-                    .map(|family| CanonicalValue::String(family.clone()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "support_status".to_string(),
-            CanonicalValue::String(self.support_status.as_str().to_string()),
-        );
-        map.insert(
-            "supported_fallbacks".to_string(),
-            CanonicalValue::Array(
-                self.supported_fallbacks
-                    .iter()
-                    .map(|mode| CanonicalValue::String(mode.as_str().to_string()))
-                    .collect(),
-            ),
-        );
-        CanonicalValue::Map(map)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonDecisionEvent {
-    pub trace_id: String,
-    pub decision_id: String,
-    pub policy_id: String,
-    pub component: String,
-    pub event: String,
-    pub outcome: String,
-    pub error_code: String,
-    pub decision_stable_id: String,
-    pub addon_id: String,
-    pub module_specifier: String,
-    pub package_name: String,
-    pub cohort: NativeAddonCohort,
-    pub abi_surface: NativeAddonAbiSurface,
-    pub support_status: NativeAddonSupportStatus,
-    pub selected_route: Option<NativeAddonRoute>,
-    pub missing_capabilities: BTreeSet<RuntimeCapability>,
-    pub direct_blockers: Vec<String>,
-    pub abi_fingerprint: ContentHash,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonExecutionPlan {
-    pub route: NativeAddonRoute,
-    pub invocation_channel: NativeAddonInvocationChannel,
-    pub crash_containment: NativeAddonCrashContainment,
-    pub delegate_type: Option<DelegateType>,
-    pub capability_envelope: Option<AuthorityEnvelope>,
-    pub sandbox: Option<SandboxConfiguration>,
-    pub required_capabilities: BTreeSet<RuntimeCapability>,
-    pub support_surface: NativeAddonSupportSurface,
-    pub event: NativeAddonDecisionEvent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonCompatibilityMatrixEntry {
-    pub addon_id: String,
-    pub package_name: String,
-    pub package_version: String,
-    pub cohort: NativeAddonCohort,
-    pub abi_surface: NativeAddonAbiSurface,
-    pub support_status: NativeAddonSupportStatus,
-    pub selected_route: Option<NativeAddonRoute>,
-    pub abi_fingerprint: ContentHash,
-    pub notes: String,
-}
-
-impl NativeAddonCompatibilityMatrixEntry {
-    fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "abi_fingerprint".to_string(),
-            CanonicalValue::String(self.abi_fingerprint.to_hex()),
-        );
-        map.insert(
-            "abi_surface".to_string(),
-            CanonicalValue::String(self.abi_surface.as_str().to_string()),
-        );
-        map.insert(
-            "addon_id".to_string(),
-            CanonicalValue::String(self.addon_id.clone()),
-        );
-        map.insert(
-            "cohort".to_string(),
-            CanonicalValue::String(self.cohort.as_str().to_string()),
-        );
-        map.insert(
-            "notes".to_string(),
-            CanonicalValue::String(self.notes.clone()),
-        );
-        map.insert(
-            "package_name".to_string(),
-            CanonicalValue::String(self.package_name.clone()),
-        );
-        map.insert(
-            "package_version".to_string(),
-            CanonicalValue::String(self.package_version.clone()),
-        );
-        map.insert(
-            "selected_route".to_string(),
-            self.selected_route
-                .map(|route| CanonicalValue::String(route.as_str().to_string()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "support_status".to_string(),
-            CanonicalValue::String(self.support_status.as_str().to_string()),
-        );
-        CanonicalValue::Map(map)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonAbiFingerprintEntry {
-    pub addon_id: String,
-    pub package_name: String,
-    pub cohort: NativeAddonCohort,
-    pub abi_surface: NativeAddonAbiSurface,
-    pub supported_fallbacks: Vec<NativeAddonFallbackMode>,
-    pub symbol_families: Vec<String>,
-    pub fingerprint: ContentHash,
-}
-
-impl NativeAddonAbiFingerprintEntry {
-    fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "abi_surface".to_string(),
-            CanonicalValue::String(self.abi_surface.as_str().to_string()),
-        );
-        map.insert(
-            "addon_id".to_string(),
-            CanonicalValue::String(self.addon_id.clone()),
-        );
-        map.insert(
-            "cohort".to_string(),
-            CanonicalValue::String(self.cohort.as_str().to_string()),
-        );
-        map.insert(
-            "fingerprint".to_string(),
-            CanonicalValue::String(self.fingerprint.to_hex()),
-        );
-        map.insert(
-            "package_name".to_string(),
-            CanonicalValue::String(self.package_name.clone()),
-        );
-        map.insert(
-            "symbol_families".to_string(),
-            CanonicalValue::Array(
-                self.symbol_families
-                    .iter()
-                    .map(|family| CanonicalValue::String(family.clone()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "supported_fallbacks".to_string(),
-            CanonicalValue::Array(
-                self.supported_fallbacks
-                    .iter()
-                    .map(|mode| CanonicalValue::String(mode.as_str().to_string()))
-                    .collect(),
-            ),
-        );
-        CanonicalValue::Map(map)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonCoverageGap {
-    pub addon_id: String,
-    pub reason_code: String,
-    pub message: String,
-}
-
-impl NativeAddonCoverageGap {
-    fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "addon_id".to_string(),
-            CanonicalValue::String(self.addon_id.clone()),
-        );
-        map.insert(
-            "message".to_string(),
-            CanonicalValue::String(self.message.clone()),
-        );
-        map.insert(
-            "reason_code".to_string(),
-            CanonicalValue::String(self.reason_code.clone()),
-        );
-        CanonicalValue::Map(map)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonInventoryReport {
-    pub schema_version: String,
-    pub support_surface: Vec<NativeAddonSupportSurface>,
-    pub compatibility_matrix: Vec<NativeAddonCompatibilityMatrixEntry>,
-    pub abi_fingerprint_index: Vec<NativeAddonAbiFingerprintEntry>,
-    pub cohort_counts: BTreeMap<String, u32>,
-    pub required_addon_ids: Vec<String>,
-    pub coverage_gaps: Vec<NativeAddonCoverageGap>,
-    pub coverage_complete: bool,
-    pub report_hash: ContentHash,
-}
-
-impl NativeAddonInventoryReport {
-    pub fn canonical_bytes(&self) -> Vec<u8> {
-        encode_value(&self.canonical_value())
-    }
-
-    pub fn canonical_hash(&self) -> ContentHash {
-        ContentHash::compute(&self.canonical_bytes())
-    }
-
-    fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "abi_fingerprint_index".to_string(),
-            CanonicalValue::Array(
-                self.abi_fingerprint_index
-                    .iter()
-                    .map(NativeAddonAbiFingerprintEntry::canonical_value)
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "cohort_counts".to_string(),
-            CanonicalValue::Map(
-                self.cohort_counts
-                    .iter()
-                    .map(|(key, value)| (key.clone(), CanonicalValue::U64(u64::from(*value))))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "coverage_complete".to_string(),
-            CanonicalValue::Bool(self.coverage_complete),
-        );
-        map.insert(
-            "coverage_gaps".to_string(),
-            CanonicalValue::Array(
-                self.coverage_gaps
-                    .iter()
-                    .map(NativeAddonCoverageGap::canonical_value)
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "compatibility_matrix".to_string(),
-            CanonicalValue::Array(
-                self.compatibility_matrix
-                    .iter()
-                    .map(NativeAddonCompatibilityMatrixEntry::canonical_value)
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "required_addon_ids".to_string(),
-            CanonicalValue::Array(
-                self.required_addon_ids
-                    .iter()
-                    .map(|addon_id| CanonicalValue::String(addon_id.clone()))
-                    .collect(),
-            ),
-        );
-        map.insert(
-            "schema_version".to_string(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        map.insert(
-            "support_surface".to_string(),
-            CanonicalValue::Array(
-                self.support_surface
-                    .iter()
-                    .map(NativeAddonSupportSurface::canonical_value)
-                    .collect(),
-            ),
-        );
-        CanonicalValue::Map(map)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonMembraneReport {
-    pub schema_version: String,
-    pub bead_id: String,
-    pub component: String,
-    pub generated_at_unix_ms: u64,
-    pub trace_id: String,
-    pub decision_id: String,
-    pub policy_id: String,
-    pub addon_count: usize,
-    pub direct_count: usize,
-    pub fallback_only_count: usize,
-    pub unsupported_count: usize,
-    pub inventory_hash: ContentHash,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonHandleSafetyEntry {
-    pub addon_id: String,
-    pub package_name: String,
-    pub handle_discipline: NativeAddonHandleDiscipline,
-    pub required_slot_capabilities: Vec<SlotCapability>,
-    pub direct_safe: bool,
-    pub direct_blockers: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonExecutionDispositionEntry {
-    pub addon_id: String,
-    pub package_name: String,
-    pub support_status: NativeAddonSupportStatus,
-    pub selected_route: Option<NativeAddonRoute>,
-    pub invocation_channel: Option<NativeAddonInvocationChannel>,
-    pub crash_containment: Option<NativeAddonCrashContainment>,
-    pub error_code: String,
-    pub missing_capabilities: BTreeSet<RuntimeCapability>,
-    pub direct_blockers: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonFallbackReceipt {
-    pub addon_id: String,
-    pub package_name: String,
-    pub route: NativeAddonRoute,
-    pub crash_containment: NativeAddonCrashContainment,
-    pub delegate_type: Option<DelegateType>,
-    pub capability_envelope: Option<AuthorityEnvelope>,
-    pub sandbox: Option<SandboxConfiguration>,
-    pub direct_blockers: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonTraceIdsArtifact {
-    pub schema_version: String,
-    pub trace_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonRunManifest {
-    pub schema_version: String,
-    pub bead_id: String,
-    pub component: String,
-    pub run_id: String,
-    pub generated_at_unix_ms: u64,
-    pub trace_id: String,
-    pub decision_id: String,
-    pub policy_id: String,
-    pub addon_count: usize,
-    pub inventory_hash: ContentHash,
-    pub artifacts: Vec<String>,
-    pub operator_verification: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonArtifactWriteRequest {
-    pub run_id: String,
-    pub command_transcript: Vec<String>,
-    pub generated_at_unix_ms: u64,
-    pub required_addon_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeAddonArtifactBundle {
-    pub run_dir: PathBuf,
-    pub step_logs_dir: PathBuf,
-    pub run_manifest_path: PathBuf,
-    pub events_path: PathBuf,
-    pub commands_path: PathBuf,
-    pub trace_ids_path: PathBuf,
-    pub inventory_path: PathBuf,
-    pub support_surface_path: PathBuf,
-    pub compatibility_matrix_path: PathBuf,
-    pub abi_fingerprint_index_path: PathBuf,
-    pub membrane_report_path: PathBuf,
-    pub handle_safety_report_path: PathBuf,
-    pub execution_disposition_path: PathBuf,
-    pub fallback_receipts_path: PathBuf,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeAddonArtifactWriteErrorCode {
-    InvalidRunId,
-    Io,
-    Serialization,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonArtifactWriteError {
-    pub code: NativeAddonArtifactWriteErrorCode,
-    pub path: String,
-    pub message: String,
-}
-
-impl fmt::Display for NativeAddonArtifactWriteError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}: {} ({})", self.code, self.message, self.path)
-    }
-}
-
-impl std::error::Error for NativeAddonArtifactWriteError {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonMembraneError {
-    pub code: NativeAddonMembraneErrorCode,
-    pub message: String,
-    pub event: NativeAddonDecisionEvent,
-}
-
-impl fmt::Display for NativeAddonMembraneError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}: {} (trace_id={}, decision_id={}, policy_id={})",
-            self.code.stable_code(),
-            self.message,
-            self.event.trace_id,
-            self.event.decision_id,
-            self.event.policy_id
-        )
-    }
-}
-
-impl std::error::Error for NativeAddonMembraneError {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeAddonMembrane {
-    pub max_direct_node_api_version: u32,
-    pub delegate_cell_type: DelegateType,
-    pub base_delegate_sandbox: SandboxConfiguration,
-}
-
-impl Default for NativeAddonMembrane {
+impl Default for MembraneState {
     fn default() -> Self {
-        Self::standard()
+        Self::new()
     }
 }
 
-impl NativeAddonMembrane {
-    pub fn standard() -> Self {
-        Self {
-            max_direct_node_api_version: 10,
-            delegate_cell_type: DelegateType::ExternalProcess,
-            base_delegate_sandbox: SandboxConfiguration::default(),
-        }
-    }
+// ---------------------------------------------------------------------------
+// evaluate_membrane
+// ---------------------------------------------------------------------------
 
-    pub fn assess_support_surface(
-        &self,
-        request: &NativeAddonLoadRequest,
-        profile: &CapabilityProfile,
-    ) -> NativeAddonSupportSurface {
-        let required_capabilities = request.required_capabilities();
-        let missing_capabilities: BTreeSet<_> = required_capabilities
-            .iter()
-            .filter(|cap| !profile.has(**cap))
-            .copied()
-            .collect();
-        let mut direct_blockers = self.direct_blockers(request);
-        direct_blockers.sort();
-        direct_blockers.dedup();
-        let symbol_families = request.symbol_families();
+/// Evaluate the membrane state against the given policy, producing a report.
+#[must_use]
+pub fn evaluate_membrane(
+    state: &MembraneState,
+    policy: &MembranePolicy,
+    epoch: &SecurityEpoch,
+    timestamp_micros: u64,
+) -> MembraneReport {
+    let mut violations: Vec<Violation> = state.violations.clone();
 
-        let selected_route = if !missing_capabilities.is_empty() {
-            None
-        } else if direct_blockers.is_empty() {
-            Some(NativeAddonRoute::DirectMembrane)
-        } else if request.wasm_portable
-            && request
-                .supported_fallbacks
-                .contains(&NativeAddonFallbackMode::WasmPort)
-        {
-            Some(NativeAddonRoute::WasmPort)
-        } else if request
-            .supported_fallbacks
-            .contains(&NativeAddonFallbackMode::DelegateCell)
-        {
-            Some(NativeAddonRoute::DelegateCell)
-        } else {
-            None
-        };
-
-        let support_status = match selected_route {
-            Some(NativeAddonRoute::DirectMembrane) => NativeAddonSupportStatus::Direct,
-            Some(NativeAddonRoute::WasmPort | NativeAddonRoute::DelegateCell) => {
-                NativeAddonSupportStatus::FallbackOnly
-            }
-            None => NativeAddonSupportStatus::Unsupported,
-        };
-        let risk_classification = classify_risk(
-            request,
-            support_status,
-            selected_route,
-            &missing_capabilities,
-        );
-        let owner_route = owner_route(
-            request,
-            support_status,
-            selected_route,
-            &missing_capabilities,
-        );
-        let remediation_hint = remediation_hint(
-            request,
-            selected_route,
-            &missing_capabilities,
-            &direct_blockers,
-        );
-
-        NativeAddonSupportSurface {
-            addon_id: request.addon_id.trim().to_string(),
-            package_name: request.package_name.trim().to_string(),
-            package_version: request.package_version.trim().to_string(),
-            module_specifier: request.module_specifier.trim().to_string(),
-            addon_path: request.addon_path.trim().to_string(),
-            cohort: request.cohort(),
-            abi_surface: request.abi_surface,
-            support_status,
-            selected_route,
-            missing_capabilities,
-            direct_blockers,
-            supported_fallbacks: request.supported_fallbacks.iter().copied().collect(),
-            required_capabilities,
-            required_slot_capabilities: request.required_slot_capabilities(),
-            symbol_families,
-            risk_classification,
-            owner_route,
-            remediation_hint,
-            abi_fingerprint: request.abi_fingerprint(),
-        }
-    }
-
-    pub fn plan(
-        &self,
-        request: &NativeAddonLoadRequest,
-        context: &ResolutionContext,
-        profile: &CapabilityProfile,
-    ) -> NativeAddonMembraneResult<NativeAddonExecutionPlan> {
-        let support_surface = self.assess_support_surface(request, profile);
-        let route = match support_surface.selected_route {
-            Some(route) => route,
-            None => {
-                return Err(Box::new(self.build_error(
-                    context,
-                    &support_surface,
-                    self.classify_failure(&support_surface),
-                )));
-            }
-        };
-
-        let (invocation_channel, crash_containment, delegate_type, capability_envelope, sandbox) =
-            match route {
-                NativeAddonRoute::DirectMembrane => (
-                    NativeAddonInvocationChannel::InProcessMembrane,
-                    NativeAddonCrashContainment::InProcessMembrane,
-                    None,
-                    None,
-                    None,
-                ),
-                NativeAddonRoute::WasmPort => (
-                    NativeAddonInvocationChannel::HostcallSession,
-                    NativeAddonCrashContainment::WasmSandbox,
-                    Some(DelegateType::WasmBacked),
-                    Some(self.delegate_authority_envelope(request)),
-                    Some(self.delegate_sandbox(request)),
-                ),
-                NativeAddonRoute::DelegateCell => (
-                    NativeAddonInvocationChannel::HostcallSession,
-                    NativeAddonCrashContainment::DelegateCellBoundary,
-                    Some(self.delegate_cell_type),
-                    Some(self.delegate_authority_envelope(request)),
-                    Some(self.delegate_sandbox(request)),
-                ),
-            };
-
-        let outcome = if route == NativeAddonRoute::DirectMembrane {
-            "allow"
-        } else {
-            "fallback"
-        };
-        let event = self.build_event(&support_surface, context, outcome, "none", Some(route));
-
-        Ok(NativeAddonExecutionPlan {
-            route,
-            invocation_channel,
-            crash_containment,
-            delegate_type,
-            capability_envelope,
-            sandbox,
-            required_capabilities: support_surface.required_capabilities.clone(),
-            support_surface,
-            event,
-        })
-    }
-
-    pub fn inventory_report(
-        &self,
-        requests: &[NativeAddonLoadRequest],
-        profile: &CapabilityProfile,
-    ) -> NativeAddonInventoryReport {
-        self.inventory_report_with_requirements(requests, profile, &[])
-    }
-
-    pub fn inventory_report_with_requirements(
-        &self,
-        requests: &[NativeAddonLoadRequest],
-        profile: &CapabilityProfile,
-        required_addon_ids: &[String],
-    ) -> NativeAddonInventoryReport {
-        let mut support_surface = Vec::with_capacity(requests.len());
-        let mut compatibility_matrix = Vec::with_capacity(requests.len());
-        let mut abi_fingerprint_index = Vec::with_capacity(requests.len());
-        let mut cohort_counts = BTreeMap::new();
-
-        for request in requests {
-            let surface = self.assess_support_surface(request, profile);
-            *cohort_counts
-                .entry(surface.cohort.as_str().to_string())
-                .or_insert(0) += 1;
-            compatibility_matrix.push(NativeAddonCompatibilityMatrixEntry {
-                addon_id: surface.addon_id.clone(),
-                package_name: surface.package_name.clone(),
-                package_version: surface.package_version.clone(),
-                cohort: surface.cohort,
-                abi_surface: surface.abi_surface,
-                support_status: surface.support_status,
-                selected_route: surface.selected_route,
-                abi_fingerprint: surface.abi_fingerprint.clone(),
-                notes: compatibility_notes(&surface),
-            });
-            abi_fingerprint_index.push(NativeAddonAbiFingerprintEntry {
-                addon_id: surface.addon_id.clone(),
-                package_name: surface.package_name.clone(),
-                cohort: surface.cohort,
-                abi_surface: surface.abi_surface,
-                supported_fallbacks: surface.supported_fallbacks.clone(),
-                symbol_families: surface.symbol_families.clone(),
-                fingerprint: surface.abi_fingerprint.clone(),
-            });
-            support_surface.push(surface);
-        }
-
-        support_surface.sort_by(|lhs, rhs| {
-            (
-                lhs.addon_id.as_str(),
-                lhs.package_name.as_str(),
-                lhs.module_specifier.as_str(),
-                lhs.abi_fingerprint.to_hex(),
-            )
-                .cmp(&(
-                    rhs.addon_id.as_str(),
-                    rhs.package_name.as_str(),
-                    rhs.module_specifier.as_str(),
-                    rhs.abi_fingerprint.to_hex(),
-                ))
-        });
-        compatibility_matrix.sort_by(|lhs, rhs| {
-            (
-                lhs.addon_id.as_str(),
-                lhs.package_name.as_str(),
-                lhs.abi_fingerprint.to_hex(),
-            )
-                .cmp(&(
-                    rhs.addon_id.as_str(),
-                    rhs.package_name.as_str(),
-                    rhs.abi_fingerprint.to_hex(),
-                ))
-        });
-        abi_fingerprint_index.sort_by(|lhs, rhs| {
-            (
-                lhs.addon_id.as_str(),
-                lhs.package_name.as_str(),
-                lhs.fingerprint.to_hex(),
-            )
-                .cmp(&(
-                    rhs.addon_id.as_str(),
-                    rhs.package_name.as_str(),
-                    rhs.fingerprint.to_hex(),
-                ))
-        });
-
-        let required_addon_ids = normalize_required_addon_ids(required_addon_ids);
-        let observed_addon_ids = support_surface
-            .iter()
-            .map(|surface| surface.addon_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let coverage_gaps = required_addon_ids
-            .iter()
-            .filter(|addon_id| !observed_addon_ids.contains(addon_id.as_str()))
-            .map(|addon_id| NativeAddonCoverageGap {
-                addon_id: addon_id.clone(),
-                reason_code: "missing_from_inventory_input".to_string(),
-                message: format!(
-                    "required addon '{}' is missing from the inventory input",
-                    addon_id
-                ),
-            })
-            .collect::<Vec<_>>();
-        let coverage_complete = coverage_gaps.is_empty();
-
-        let mut report = NativeAddonInventoryReport {
-            schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
-            support_surface,
-            compatibility_matrix,
-            abi_fingerprint_index,
-            cohort_counts,
-            required_addon_ids,
-            coverage_gaps,
-            coverage_complete,
-            report_hash: ContentHash::compute(b"pending-native-addon-report"),
-        };
-        report.report_hash = report.canonical_hash();
-        report
-    }
-
-    pub fn write_artifact_bundle(
-        &self,
-        artifact_root: impl AsRef<Path>,
-        context: &ResolutionContext,
-        requests: &[NativeAddonLoadRequest],
-        profile: &CapabilityProfile,
-        artifact_request: &NativeAddonArtifactWriteRequest,
-    ) -> Result<NativeAddonArtifactBundle, NativeAddonArtifactWriteError> {
-        let run_id = normalize_run_id(artifact_request.run_id.clone())?;
-        let run_dir = artifact_root.as_ref().join(&run_id);
-        fs::create_dir_all(&run_dir).map_err(|err| NativeAddonArtifactWriteError {
-            code: NativeAddonArtifactWriteErrorCode::Io,
-            path: run_dir.display().to_string(),
-            message: err.to_string(),
-        })?;
-        let step_logs_dir = run_dir.join("step_logs");
-        fs::create_dir_all(&step_logs_dir).map_err(|err| NativeAddonArtifactWriteError {
-            code: NativeAddonArtifactWriteErrorCode::Io,
-            path: step_logs_dir.display().to_string(),
-            message: err.to_string(),
-        })?;
-
-        let inventory = self.inventory_report_with_requirements(
-            requests,
-            profile,
-            &artifact_request.required_addon_ids,
-        );
-        let mut events = Vec::with_capacity(requests.len());
-        let mut handle_safety = Vec::with_capacity(requests.len());
-        let mut execution_disposition = Vec::with_capacity(requests.len());
-        let mut fallback_receipts = Vec::new();
-
-        for request in requests {
-            let support_surface = self.assess_support_surface(request, profile);
-            handle_safety.push(NativeAddonHandleSafetyEntry {
-                addon_id: support_surface.addon_id.clone(),
-                package_name: support_surface.package_name.clone(),
-                handle_discipline: request.handle_discipline,
-                required_slot_capabilities: support_surface.required_slot_capabilities.clone(),
-                direct_safe: support_surface.direct_blockers.is_empty()
-                    && support_surface.missing_capabilities.is_empty(),
-                direct_blockers: support_surface.direct_blockers.clone(),
-            });
-
-            match self.plan(request, context, profile) {
-                Ok(plan) => {
-                    events.push(plan.event.clone());
-                    execution_disposition.push(NativeAddonExecutionDispositionEntry {
-                        addon_id: plan.support_surface.addon_id.clone(),
-                        package_name: plan.support_surface.package_name.clone(),
-                        support_status: plan.support_surface.support_status,
-                        selected_route: Some(plan.route),
-                        invocation_channel: Some(plan.invocation_channel),
-                        crash_containment: Some(plan.crash_containment),
-                        error_code: plan.event.error_code.clone(),
-                        missing_capabilities: plan.support_surface.missing_capabilities.clone(),
-                        direct_blockers: plan.support_surface.direct_blockers.clone(),
-                    });
-                    if plan.route != NativeAddonRoute::DirectMembrane {
-                        fallback_receipts.push(NativeAddonFallbackReceipt {
-                            addon_id: plan.support_surface.addon_id.clone(),
-                            package_name: plan.support_surface.package_name.clone(),
-                            route: plan.route,
-                            crash_containment: plan.crash_containment,
-                            delegate_type: plan.delegate_type,
-                            capability_envelope: plan.capability_envelope.clone(),
-                            sandbox: plan.sandbox.clone(),
-                            direct_blockers: plan.support_surface.direct_blockers.clone(),
-                        });
-                    }
-                }
-                Err(err) => {
-                    let err = *err;
-                    events.push(err.event.clone());
-                    execution_disposition.push(NativeAddonExecutionDispositionEntry {
-                        addon_id: err.event.addon_id.clone(),
-                        package_name: err.event.package_name.clone(),
-                        support_status: err.event.support_status,
-                        selected_route: err.event.selected_route,
-                        invocation_channel: None,
-                        crash_containment: None,
-                        error_code: err.event.error_code.clone(),
-                        missing_capabilities: err.event.missing_capabilities.clone(),
-                        direct_blockers: err.event.direct_blockers.clone(),
-                    });
-                }
-            }
-        }
-
-        handle_safety.sort_by(|lhs, rhs| {
-            (lhs.addon_id.as_str(), lhs.package_name.as_str())
-                .cmp(&(rhs.addon_id.as_str(), rhs.package_name.as_str()))
-        });
-        execution_disposition.sort_by(|lhs, rhs| {
-            (lhs.addon_id.as_str(), lhs.package_name.as_str())
-                .cmp(&(rhs.addon_id.as_str(), rhs.package_name.as_str()))
-        });
-        fallback_receipts.sort_by(|lhs, rhs| {
-            (lhs.addon_id.as_str(), lhs.package_name.as_str())
-                .cmp(&(rhs.addon_id.as_str(), rhs.package_name.as_str()))
-        });
-        events.sort_by(|lhs, rhs| {
-            (
-                lhs.addon_id.as_str(),
-                lhs.package_name.as_str(),
-                lhs.decision_stable_id.as_str(),
-            )
-                .cmp(&(
-                    rhs.addon_id.as_str(),
-                    rhs.package_name.as_str(),
-                    rhs.decision_stable_id.as_str(),
-                ))
-        });
-
-        let membrane_report = NativeAddonMembraneReport {
-            schema_version: MEMBRANE_REPORT_SCHEMA_VERSION.to_string(),
-            bead_id: BEAD_ID.to_string(),
-            component: COMPONENT.to_string(),
-            generated_at_unix_ms: artifact_request.generated_at_unix_ms,
-            trace_id: context.trace_id.clone(),
-            decision_id: context.decision_id.clone(),
-            policy_id: context.policy_id.clone(),
-            addon_count: inventory.support_surface.len(),
-            direct_count: inventory
-                .support_surface
-                .iter()
-                .filter(|surface| surface.support_status == NativeAddonSupportStatus::Direct)
-                .count(),
-            fallback_only_count: inventory
-                .support_surface
-                .iter()
-                .filter(|surface| surface.support_status == NativeAddonSupportStatus::FallbackOnly)
-                .count(),
-            unsupported_count: inventory
-                .support_surface
-                .iter()
-                .filter(|surface| surface.support_status == NativeAddonSupportStatus::Unsupported)
-                .count(),
-            inventory_hash: inventory.report_hash.clone(),
-        };
-        let trace_ids = NativeAddonTraceIdsArtifact {
-            schema_version: TRACE_IDS_SCHEMA_VERSION.to_string(),
-            trace_ids: vec![context.trace_id.clone()],
-        };
-
-        let run_manifest_path = run_dir.join("run_manifest.json");
-        let events_path = run_dir.join("events.jsonl");
-        let commands_path = run_dir.join("commands.txt");
-        let trace_ids_path = run_dir.join("trace_ids.json");
-        let inventory_path = run_dir.join("native_addon_inventory.json");
-        let support_surface_path = run_dir.join("native_addon_support_surface.json");
-        let compatibility_matrix_path = run_dir.join("addon_compatibility_matrix.json");
-        let abi_fingerprint_index_path = run_dir.join("addon_abi_fingerprint_index.json");
-        let membrane_report_path = run_dir.join("native_addon_membrane_report.json");
-        let handle_safety_report_path = run_dir.join("addon_handle_safety_report.json");
-        let execution_disposition_path = run_dir.join("addon_execution_disposition.json");
-        let fallback_receipts_path = run_dir.join("addon_fallback_receipts.json");
-        let artifact_names = artifact_names();
-        let run_dir_display = run_dir.display().to_string();
-        let mut commands = artifact_request.command_transcript.clone();
-        commands.extend([
-            format!("cat {}/run_manifest.json", run_dir_display),
-            format!(
-                "jq '.' {}/native_addon_membrane_report.json",
-                run_dir_display
+    // Check handle limit.
+    if state.active_handles > policy.max_active_handles {
+        violations.push(Violation::new(
+            ViolationKind::HandleLimitExceeded,
+            "",
+            &format!(
+                "active handles {} exceed limit {}",
+                state.active_handles, policy.max_active_handles
             ),
-            format!(
-                "jq '.support_surface[]' {}/native_addon_inventory.json",
-                run_dir_display
-            ),
-            format!("ls -1 {}/step_logs", run_dir_display),
-            format!("cat {}/commands.txt", run_dir_display),
-        ]);
-        let run_manifest = NativeAddonRunManifest {
-            schema_version: RUN_MANIFEST_SCHEMA_VERSION.to_string(),
-            bead_id: BEAD_ID.to_string(),
-            component: COMPONENT.to_string(),
-            run_id,
-            generated_at_unix_ms: artifact_request.generated_at_unix_ms,
-            trace_id: context.trace_id.clone(),
-            decision_id: context.decision_id.clone(),
-            policy_id: context.policy_id.clone(),
-            addon_count: inventory.support_surface.len(),
-            inventory_hash: inventory.report_hash.clone(),
-            artifacts: artifact_names,
-            operator_verification: commands.clone(),
-        };
-
-        write_json_artifact(&inventory_path, &inventory)?;
-        write_json_artifact(&support_surface_path, &inventory.support_surface)?;
-        write_json_artifact(&compatibility_matrix_path, &inventory.compatibility_matrix)?;
-        write_json_artifact(
-            &abi_fingerprint_index_path,
-            &inventory.abi_fingerprint_index,
-        )?;
-        write_json_artifact(&membrane_report_path, &membrane_report)?;
-        write_json_artifact(&handle_safety_report_path, &handle_safety)?;
-        write_json_artifact(&execution_disposition_path, &execution_disposition)?;
-        write_json_artifact(&fallback_receipts_path, &fallback_receipts)?;
-        write_json_artifact(&trace_ids_path, &trace_ids)?;
-        write_json_artifact(&run_manifest_path, &run_manifest)?;
-        write_jsonl_artifact(&events_path, &events)?;
-        write_text_artifact(&commands_path, &commands.join("\n"))?;
-
-        Ok(NativeAddonArtifactBundle {
-            run_dir,
-            step_logs_dir,
-            run_manifest_path,
-            events_path,
-            commands_path,
-            trace_ids_path,
-            inventory_path,
-            support_surface_path,
-            compatibility_matrix_path,
-            abi_fingerprint_index_path,
-            membrane_report_path,
-            handle_safety_report_path,
-            execution_disposition_path,
-            fallback_receipts_path,
-        })
+            timestamp_micros,
+        ));
     }
 
-    fn direct_blockers(&self, request: &NativeAddonLoadRequest) -> Vec<String> {
-        let mut blockers = Vec::new();
-        if request.abi_surface != NativeAddonAbiSurface::NodeApi {
-            blockers.push(format!(
-                "direct membrane requires node_api surface, found {}",
-                request.abi_surface.as_str()
+    // Check for escaped handles.
+    let escaped = state.count_handles_in_state(HandleState::Escaped);
+
+    // Check external handles policy.
+    if !policy.allow_external_handles {
+        let external_active = state
+            .handle_table
+            .iter()
+            .filter(|h| h.kind == HandleKind::ExternalHandle && h.state == HandleState::Active)
+            .count() as u64;
+        if external_active > 0 {
+            violations.push(Violation::new(
+                ViolationKind::UnauthorizedCapability,
+                "",
+                &format!("{external_active} active external handles violate policy"),
+                timestamp_micros,
             ));
         }
-        if request
-            .node_api_version
-            .is_some_and(|version| version > self.max_direct_node_api_version)
-        {
-            blockers.push(format!(
-                "node_api version {} exceeds direct membrane ceiling {}",
-                request.node_api_version.unwrap_or_default(),
-                self.max_direct_node_api_version
-            ));
-        }
-        if !request.handle_discipline.is_direct_safe() {
-            blockers.push(format!(
-                "handle discipline '{}' is not direct-safe",
-                request.handle_discipline.as_str()
-            ));
-        }
-        if request.uses_foreign_heap {
-            blockers.push("foreign heap access requires fallback containment".to_string());
-        }
-        if request.uses_process_global_state {
-            blockers.push("process-global state requires fallback containment".to_string());
-        }
-        for symbol in request.normalized_symbols() {
-            if !symbol.class.is_direct_safe() {
-                blockers.push(format!(
-                    "symbol '{}' uses non-direct-safe class '{}'",
-                    symbol.symbol_name,
-                    symbol.class.as_str()
-                ));
-            }
-        }
-        blockers
     }
 
-    fn classify_failure(
-        &self,
-        support_surface: &NativeAddonSupportSurface,
-    ) -> NativeAddonMembraneErrorCode {
-        if !support_surface.missing_capabilities.is_empty() {
-            NativeAddonMembraneErrorCode::MissingCapability
-        } else if support_surface.abi_surface != NativeAddonAbiSurface::NodeApi
-            && support_surface.selected_route.is_none()
-        {
-            NativeAddonMembraneErrorCode::UnsupportedAbiSurface
-        } else if !support_surface.direct_blockers.is_empty()
-            && support_surface.supported_fallbacks.is_empty()
-        {
-            NativeAddonMembraneErrorCode::UnsafeDirectSurface
-        } else {
-            NativeAddonMembraneErrorCode::NoFallbackRoute
-        }
-    }
+    // Determine verdict.
+    let verdict = if state.crash_count >= CRASH_SHUTDOWN_THRESHOLD {
+        MembraneVerdict::Shutdown
+    } else if escaped > 0 || state.crash_count >= CRASH_BREACHED_THRESHOLD {
+        MembraneVerdict::Breached
+    } else if state.active_handles > policy.max_active_handles || !state.violations.is_empty() {
+        MembraneVerdict::Degraded
+    } else {
+        MembraneVerdict::Healthy
+    };
 
-    fn build_error(
-        &self,
-        context: &ResolutionContext,
-        support_surface: &NativeAddonSupportSurface,
-        code: NativeAddonMembraneErrorCode,
-    ) -> NativeAddonMembraneError {
-        let event = self.build_event(support_surface, context, "deny", code.stable_code(), None);
-        let message = match code {
-            NativeAddonMembraneErrorCode::MissingCapability => format!(
-                "native addon '{}' is missing required capabilities [{}]",
-                support_surface.addon_id,
-                support_surface
-                    .missing_capabilities
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
-            NativeAddonMembraneErrorCode::UnsupportedAbiSurface => format!(
-                "native addon '{}' uses unsupported abi surface '{}'",
-                support_surface.addon_id,
-                support_surface.abi_surface.as_str()
-            ),
-            NativeAddonMembraneErrorCode::UnsafeDirectSurface => format!(
-                "native addon '{}' is unsafe for direct routing and exposes no approved fallback",
-                support_surface.addon_id
-            ),
-            NativeAddonMembraneErrorCode::NoFallbackRoute => format!(
-                "native addon '{}' cannot be routed because no viable fallback remained after direct blockers [{}]",
-                support_surface.addon_id,
-                support_surface.direct_blockers.join("; ")
-            ),
-        };
-        NativeAddonMembraneError {
-            code,
-            message,
-            event,
-        }
-    }
+    // Compute input hash over state summary.
+    let input_hash = {
+        let mut buf = Vec::new();
+        append_u64(&mut buf, state.active_handles);
+        append_u64(&mut buf, state.revoked_handles);
+        append_u64(&mut buf, state.crash_count);
+        append_u64(&mut buf, state.total_calls);
+        append_u64(&mut buf, escaped);
+        append_u64(&mut buf, state.registrations.len() as u64);
+        compute_digest(&buf)
+    };
 
-    fn build_event(
-        &self,
-        support_surface: &NativeAddonSupportSurface,
-        context: &ResolutionContext,
-        outcome: &str,
-        error_code: &str,
-        selected_route: Option<NativeAddonRoute>,
-    ) -> NativeAddonDecisionEvent {
-        NativeAddonDecisionEvent {
-            trace_id: context.trace_id.clone(),
-            decision_id: context.decision_id.clone(),
-            policy_id: context.policy_id.clone(),
-            component: COMPONENT.to_string(),
-            event: EVENT.to_string(),
-            outcome: outcome.to_string(),
-            error_code: error_code.to_string(),
-            decision_stable_id: native_addon_decision_stable_id(
-                context,
-                &support_surface.addon_id,
-                &support_surface.abi_fingerprint,
-                support_surface.support_status,
-                selected_route,
-                error_code,
-            ),
-            addon_id: support_surface.addon_id.clone(),
-            module_specifier: support_surface.module_specifier.clone(),
-            package_name: support_surface.package_name.clone(),
-            cohort: support_surface.cohort,
-            abi_surface: support_surface.abi_surface,
-            support_status: support_surface.support_status,
-            selected_route,
-            missing_capabilities: support_surface.missing_capabilities.clone(),
-            direct_blockers: support_surface.direct_blockers.clone(),
-            abi_fingerprint: support_surface.abi_fingerprint.clone(),
-        }
-    }
+    let receipt = compute_receipt(epoch, &input_hash, verdict, timestamp_micros);
 
-    fn delegate_authority_envelope(&self, request: &NativeAddonLoadRequest) -> AuthorityEnvelope {
-        let required = request.required_slot_capabilities();
-        AuthorityEnvelope {
-            required: required.clone(),
-            permitted: required,
-        }
-    }
-
-    fn delegate_sandbox(&self, request: &NativeAddonLoadRequest) -> SandboxConfiguration {
-        let mut sandbox = self.base_delegate_sandbox.clone();
-        if request.uses_foreign_heap
-            || matches!(
-                request.handle_discipline,
-                NativeAddonHandleDiscipline::ExternalBuffer
-                    | NativeAddonHandleDiscipline::RawPointerEscape
-            )
-        {
-            sandbox.max_heap_bytes = sandbox.max_heap_bytes.max(128 * 1024 * 1024);
-        }
-        if request.uses_async_workers {
-            sandbox.max_execution_ns = sandbox.max_execution_ns.max(10_000_000_000);
-            sandbox.max_hostcalls = sandbox.max_hostcalls.max(20_000);
-        }
-        if request.requires_network_egress {
-            sandbox.network_egress_allowed = true;
-        }
-        if request.requires_filesystem_read || request.requires_filesystem_write {
-            sandbox.filesystem_access_allowed = true;
-        }
-        sandbox
+    MembraneReport {
+        registered_addon_count: state.registrations.len(),
+        active_handles: state.active_handles,
+        revoked_handles: state.revoked_handles,
+        escaped_handles: escaped,
+        crash_count: state.crash_count,
+        total_calls: state.total_calls,
+        fast_path_calls: state.fast_path_calls,
+        slow_path_calls: state.slow_path_calls,
+        fallback_calls: state.fallback_calls,
+        denied_calls: state.denied_calls,
+        verdict,
+        violations,
+        receipt,
     }
 }
 
-fn compatibility_notes(surface: &NativeAddonSupportSurface) -> String {
-    let metadata_prefix = format!(
-        "risk={} owner_route={} remediation={}",
-        surface.risk_classification.as_str(),
-        surface.owner_route,
-        surface.remediation_hint
-    );
-    if !surface.missing_capabilities.is_empty() {
-        return format!(
-            "{metadata_prefix}; missing capabilities: {}",
-            surface
-                .missing_capabilities
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-    if !surface.direct_blockers.is_empty() {
-        let fallback = surface
-            .selected_route
-            .map(|route| route.as_str().to_string())
-            .unwrap_or_else(|| "none".to_string());
-        return format!(
-            "{metadata_prefix}; direct blockers: {}; selected fallback: {}",
-            surface.direct_blockers.join("; "),
-            fallback
-        );
-    }
-    format!("{metadata_prefix}; direct membrane eligible")
-}
+// ---------------------------------------------------------------------------
+// compute_receipt
+// ---------------------------------------------------------------------------
 
-fn normalize_required_addon_ids(required_addon_ids: &[String]) -> Vec<String> {
-    required_addon_ids
-        .iter()
-        .map(|addon_id| addon_id.trim())
-        .filter(|addon_id| !addon_id.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
+/// Build a decision receipt for the membrane evaluation.
+#[must_use]
+pub fn compute_receipt(
+    epoch: &SecurityEpoch,
+    input_hash: &ContentHash,
+    verdict: MembraneVerdict,
+    timestamp_micros: u64,
+) -> DecisionReceipt {
+    let verdict_data = {
+        let mut buf = Vec::new();
+        append_str(&mut buf, SCHEMA_VERSION);
+        append_str(&mut buf, COMPONENT);
+        append_str(&mut buf, BEAD_ID);
+        append_str(&mut buf, POLICY_ID);
+        append_u64(&mut buf, epoch.as_u64());
+        buf.extend_from_slice(input_hash.as_bytes());
+        append_str(&mut buf, verdict.as_str());
+        append_u64(&mut buf, timestamp_micros);
+        compute_digest(&buf)
+    };
 
-fn classify_risk(
-    request: &NativeAddonLoadRequest,
-    support_status: NativeAddonSupportStatus,
-    selected_route: Option<NativeAddonRoute>,
-    missing_capabilities: &BTreeSet<RuntimeCapability>,
-) -> NativeAddonRiskClassification {
-    if !missing_capabilities.is_empty() {
-        return NativeAddonRiskClassification::Critical;
-    }
-
-    if matches!(
-        request.abi_surface,
-        NativeAddonAbiSurface::V8Direct
-            | NativeAddonAbiSurface::ForeignFfi
-            | NativeAddonAbiSurface::Unknown
-    ) {
-        return NativeAddonRiskClassification::Critical;
-    }
-
-    if matches!(selected_route, Some(NativeAddonRoute::DelegateCell))
-        || request.uses_foreign_heap
-        || request.uses_process_global_state
-        || matches!(
-            request.handle_discipline,
-            NativeAddonHandleDiscipline::ExternalBuffer
-                | NativeAddonHandleDiscipline::RawPointerEscape
-        )
-    {
-        return NativeAddonRiskClassification::High;
-    }
-
-    if matches!(selected_route, Some(NativeAddonRoute::WasmPort))
-        || matches!(
-            request.cohort(),
-            NativeAddonCohort::NodeApiIsolateBound | NativeAddonCohort::LegacyNan
-        )
-        || support_status == NativeAddonSupportStatus::FallbackOnly
-    {
-        return NativeAddonRiskClassification::Medium;
-    }
-
-    NativeAddonRiskClassification::Low
-}
-
-fn owner_route(
-    request: &NativeAddonLoadRequest,
-    support_status: NativeAddonSupportStatus,
-    selected_route: Option<NativeAddonRoute>,
-    missing_capabilities: &BTreeSet<RuntimeCapability>,
-) -> String {
-    if !missing_capabilities.is_empty()
-        || matches!(request.cohort(), NativeAddonCohort::NodeApiPrivileged)
-    {
-        return "security-capability-review".to_string();
-    }
-
-    match selected_route {
-        Some(NativeAddonRoute::DirectMembrane) => match request.cohort() {
-            NativeAddonCohort::NodeApiPortable => "interop-native-addon".to_string(),
-            NativeAddonCohort::NodeApiIsolateBound => "runtime-async-isolation".to_string(),
-            NativeAddonCohort::NodeApiPrivileged => "security-capability-review".to_string(),
-            NativeAddonCohort::LegacyNan => "interop-wasm-porting".to_string(),
-            NativeAddonCohort::V8Binding => "compatibility-v8-binding".to_string(),
-            NativeAddonCohort::ForeignFfi => "compatibility-ffi-review".to_string(),
-            NativeAddonCohort::Unknown => "interop-native-addon".to_string(),
-        },
-        Some(NativeAddonRoute::WasmPort) => "interop-wasm-porting".to_string(),
-        Some(NativeAddonRoute::DelegateCell) => "runtime-delegate-cell".to_string(),
-        None => match (support_status, request.abi_surface) {
-            (_, NativeAddonAbiSurface::V8Direct) => "compatibility-v8-binding".to_string(),
-            (_, NativeAddonAbiSurface::ForeignFfi) => "compatibility-ffi-review".to_string(),
-            (_, NativeAddonAbiSurface::Unknown) => "interop-native-addon".to_string(),
-            (NativeAddonSupportStatus::Unsupported, _) => "interop-native-addon".to_string(),
-            _ => "interop-native-addon".to_string(),
-        },
+    DecisionReceipt {
+        schema_version: SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        bead_id: BEAD_ID.to_string(),
+        policy_id: POLICY_ID.to_string(),
+        epoch: *epoch,
+        input_hash: input_hash.clone(),
+        verdict_hash: verdict_data,
+        timestamp_micros,
     }
 }
 
-fn remediation_hint(
-    request: &NativeAddonLoadRequest,
-    selected_route: Option<NativeAddonRoute>,
-    missing_capabilities: &BTreeSet<RuntimeCapability>,
-    direct_blockers: &[String],
-) -> String {
-    if !missing_capabilities.is_empty() {
-        return format!(
-            "grant missing capabilities ({}) or keep the addon unsupported until the package matrix and policy contract are updated",
-            missing_capabilities
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
+// ---------------------------------------------------------------------------
+// Capability checking helpers
+// ---------------------------------------------------------------------------
 
-    match selected_route {
-        Some(NativeAddonRoute::DirectMembrane) => match request.cohort() {
-            NativeAddonCohort::NodeApiIsolateBound => {
-                "keep the direct membrane path, but preserve async-worker isolation and threadsafe-function coverage in verification".to_string()
-            }
-            _ => "retain the stable Node-API surface and current handle discipline".to_string(),
-        },
-        Some(NativeAddonRoute::WasmPort) => {
-            "prefer a maintained WASM port for this cohort and keep delegate-cell fallback for unsupported host features".to_string()
-        }
-        Some(NativeAddonRoute::DelegateCell) => {
-            "route through the delegate cell and isolate unsafe pointer or heap behavior behind the hostcall session boundary".to_string()
-        }
-        None if direct_blockers.iter().any(|blocker| blocker.contains("node_api surface")) => {
-            "port the addon to the stable Node-API surface or publish it as fallback-only/unsupported with explicit operator guidance".to_string()
-        }
-        None => {
-            "publish the unsupported disposition with owner-routed remediation instead of silently omitting the addon cohort".to_string()
-        }
-    }
+/// Check whether an addon has a specific capability.
+#[must_use]
+pub fn addon_has_capability(state: &MembraneState, addon_id: &str, cap: CapabilityKind) -> bool {
+    state
+        .find_registration(addon_id)
+        .map(|r| r.capabilities.contains(&cap))
+        .unwrap_or(false)
 }
 
-fn native_addon_decision_stable_id(
-    context: &ResolutionContext,
+/// Validate that an addon only uses capabilities it was granted.
+#[must_use]
+pub fn validate_capabilities(
+    state: &MembraneState,
     addon_id: &str,
-    abi_fingerprint: &ContentHash,
-    support_status: NativeAddonSupportStatus,
-    selected_route: Option<NativeAddonRoute>,
-    error_code: &str,
-) -> String {
-    let mut map = BTreeMap::new();
-    map.insert(
-        "abi_fingerprint".to_string(),
-        CanonicalValue::String(abi_fingerprint.to_hex()),
-    );
-    map.insert(
-        "addon_id".to_string(),
-        CanonicalValue::String(addon_id.to_string()),
-    );
-    map.insert(
-        "decision_id".to_string(),
-        CanonicalValue::String(context.decision_id.clone()),
-    );
-    map.insert(
-        "error_code".to_string(),
-        CanonicalValue::String(error_code.to_string()),
-    );
-    map.insert(
-        "policy_id".to_string(),
-        CanonicalValue::String(context.policy_id.clone()),
-    );
-    map.insert(
-        "selected_route".to_string(),
-        selected_route
-            .map(|route| CanonicalValue::String(route.as_str().to_string()))
-            .unwrap_or(CanonicalValue::Null),
-    );
-    map.insert(
-        "support_status".to_string(),
-        CanonicalValue::String(support_status.as_str().to_string()),
-    );
-    map.insert(
-        "trace_id".to_string(),
-        CanonicalValue::String(context.trace_id.clone()),
-    );
-    let digest = ContentHash::compute(&encode_value(&CanonicalValue::Map(map))).to_hex();
-    format!("native-addon-dec-{}", &digest[..16])
+    requested: &BTreeSet<CapabilityKind>,
+) -> Vec<CapabilityKind> {
+    let granted = state
+        .find_registration(addon_id)
+        .map(|r| &r.capabilities)
+        .cloned()
+        .unwrap_or_default();
+    requested.difference(&granted).copied().collect()
 }
 
-fn push_slot_capability(caps: &mut Vec<SlotCapability>, capability: SlotCapability) {
-    if !caps.contains(&capability) {
-        caps.push(capability);
+/// Revoke all active handles for a given addon.
+pub fn revoke_all_handles_for_addon(state: &mut MembraneState, addon_id: &str) -> Vec<u64> {
+    let ids: Vec<u64> = state
+        .handle_table
+        .iter()
+        .filter(|h| h.owner_scope == addon_id && h.state == HandleState::Active)
+        .map(|h| h.id)
+        .collect();
+    let mut revoked = Vec::new();
+    for id in ids {
+        if state.revoke_handle(id).is_ok() {
+            revoked.push(id);
+        }
     }
+    revoked
 }
 
-fn slot_capability_sort_key(capability: SlotCapability) -> u8 {
-    match capability {
-        SlotCapability::ReadSource => 0,
-        SlotCapability::EmitIr => 1,
-        SlotCapability::HeapAlloc => 2,
-        SlotCapability::ScheduleAsync => 3,
-        SlotCapability::InvokeHostcall => 4,
-        SlotCapability::ModuleAccess => 5,
-        SlotCapability::TriggerGc => 6,
-        SlotCapability::EmitEvidence => 7,
+/// Count registrations by ABI.
+#[must_use]
+pub fn count_registrations_by_abi(state: &MembraneState, abi: AddonAbi) -> usize {
+    state.registrations.iter().filter(|r| r.abi == abi).count()
+}
+
+/// Compute a summary content hash over the entire membrane state.
+#[must_use]
+pub fn compute_state_hash(state: &MembraneState) -> ContentHash {
+    let mut buf = Vec::new();
+    append_u64(&mut buf, state.active_handles);
+    append_u64(&mut buf, state.revoked_handles);
+    append_u64(&mut buf, state.crash_count);
+    append_u64(&mut buf, state.total_calls);
+    append_u64(&mut buf, state.fast_path_calls);
+    append_u64(&mut buf, state.slow_path_calls);
+    append_u64(&mut buf, state.fallback_calls);
+    append_u64(&mut buf, state.denied_calls);
+    append_u64(&mut buf, state.registrations.len() as u64);
+    append_u64(&mut buf, state.handle_table.len() as u64);
+    for reg in &state.registrations {
+        append_str(&mut buf, &reg.addon_id);
+        append_str(&mut buf, reg.abi.as_str());
     }
-}
-
-fn normalize_run_id(run_id: String) -> Result<String, NativeAddonArtifactWriteError> {
-    let trimmed = run_id.trim();
-    let path = Path::new(trimmed);
-    if trimmed.is_empty()
-        || path.components().count() != 1
-        || !matches!(path.components().next(), Some(Component::Normal(_)))
-    {
-        return Err(NativeAddonArtifactWriteError {
-            code: NativeAddonArtifactWriteErrorCode::InvalidRunId,
-            path: trimmed.to_string(),
-            message: "run_id must be a single normal path component".to_string(),
-        });
+    for handle in &state.handle_table {
+        append_u64(&mut buf, handle.id);
+        append_str(&mut buf, handle.kind.as_str());
+        append_str(&mut buf, handle.state.as_str());
     }
-    Ok(trimmed.to_string())
+    compute_digest(&buf)
 }
 
-fn artifact_names() -> Vec<String> {
-    [
-        "addon_abi_fingerprint_index.json",
-        "addon_compatibility_matrix.json",
-        "addon_execution_disposition.json",
-        "addon_fallback_receipts.json",
-        "addon_handle_safety_report.json",
-        "commands.txt",
-        "events.jsonl",
-        "native_addon_inventory.json",
-        "native_addon_membrane_report.json",
-        "native_addon_support_surface.json",
-        "run_manifest.json",
-        "step_logs/",
-        "trace_ids.json",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
-fn write_json_artifact<T: Serialize>(
-    path: &Path,
-    value: &T,
-) -> Result<(), NativeAddonArtifactWriteError> {
-    let bytes = serde_json::to_vec_pretty(value).map_err(|err| NativeAddonArtifactWriteError {
-        code: NativeAddonArtifactWriteErrorCode::Serialization,
-        path: path.display().to_string(),
-        message: err.to_string(),
-    })?;
-    fs::write(path, bytes).map_err(|err| NativeAddonArtifactWriteError {
-        code: NativeAddonArtifactWriteErrorCode::Io,
-        path: path.display().to_string(),
-        message: err.to_string(),
-    })
-}
-
-fn write_jsonl_artifact<T: Serialize>(
-    path: &Path,
-    values: &[T],
-) -> Result<(), NativeAddonArtifactWriteError> {
-    let mut jsonl = String::new();
-    for value in values {
-        let line = serde_json::to_string(value).map_err(|err| NativeAddonArtifactWriteError {
-            code: NativeAddonArtifactWriteErrorCode::Serialization,
-            path: path.display().to_string(),
-            message: err.to_string(),
-        })?;
-        jsonl.push_str(&line);
-        jsonl.push('\n');
-    }
-    fs::write(path, jsonl).map_err(|err| NativeAddonArtifactWriteError {
-        code: NativeAddonArtifactWriteErrorCode::Io,
-        path: path.display().to_string(),
-        message: err.to_string(),
-    })
-}
-
-fn write_text_artifact(path: &Path, text: &str) -> Result<(), NativeAddonArtifactWriteError> {
-    fs::write(path, text).map_err(|err| NativeAddonArtifactWriteError {
-        code: NativeAddonArtifactWriteErrorCode::Io,
-        path: path.display().to_string(),
-        message: err.to_string(),
-    })
-}
+// ===========================================================================
+// Unit tests
+// ===========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn context() -> ResolutionContext {
-        ResolutionContext::new("trace-test", "decision-test", "policy-test")
+    fn epoch(n: u64) -> SecurityEpoch {
+        SecurityEpoch::from_raw(n)
     }
 
-    fn simple_request() -> NativeAddonLoadRequest {
-        NativeAddonLoadRequest::new(
-            "test-addon",
-            "test-pkg",
-            "1.0.0",
-            "test-pkg",
-            "./build/test.node",
-            NativeAddonAbiSurface::NodeApi,
+    fn default_policy() -> MembranePolicy {
+        MembranePolicy::default()
+    }
+
+    fn default_routing() -> RoutingConfig {
+        RoutingConfig::default()
+    }
+
+    fn make_registration(
+        addon_id: &str,
+        abi: AddonAbi,
+        caps: &[CapabilityKind],
+    ) -> AddonRegistration {
+        AddonRegistration::new(
+            addon_id,
+            abi,
+            ContentHash::compute(addon_id.as_bytes()),
+            caps.iter().copied().collect(),
+            epoch(1),
         )
     }
 
-    fn full_profile() -> CapabilityProfile {
-        CapabilityProfile::full()
+    fn make_state_with_addon(addon_id: &str) -> MembraneState {
+        let mut state = MembraneState::new();
+        let reg = make_registration(addon_id, AddonAbi::NodeApi, &[CapabilityKind::Buffer]);
+        state.register_addon(reg).unwrap();
+        state
     }
 
-    // -----------------------------------------------------------------------
-    // Constants
-    // -----------------------------------------------------------------------
+    // -- AddonAbi --
 
     #[test]
-    fn constants_non_empty() {
-        assert!(!COMPONENT.is_empty());
-        assert!(!EVENT.is_empty());
-        assert!(!INVENTORY_SCHEMA_VERSION.is_empty());
-        assert!(!MEMBRANE_REPORT_SCHEMA_VERSION.is_empty());
-        assert!(!HANDLE_SAFETY_REPORT_SCHEMA_VERSION.is_empty());
-        assert!(!EXECUTION_DISPOSITION_SCHEMA_VERSION.is_empty());
-        assert!(!FALLBACK_RECEIPTS_SCHEMA_VERSION.is_empty());
-        assert!(!TRACE_IDS_SCHEMA_VERSION.is_empty());
-        assert!(!RUN_MANIFEST_SCHEMA_VERSION.is_empty());
-        assert!(!BEAD_ID.is_empty());
+    fn addon_abi_as_str() {
+        assert_eq!(AddonAbi::NodeApi.as_str(), "node_api");
+        assert_eq!(AddonAbi::WasiPreview1.as_str(), "wasi_preview1");
+        assert_eq!(AddonAbi::NativeEsm.as_str(), "native_esm");
+        assert_eq!(AddonAbi::CustomFfi.as_str(), "custom_ffi");
     }
 
     #[test]
-    fn schema_versions_prefixed() {
-        assert!(INVENTORY_SCHEMA_VERSION.starts_with("franken-engine."));
-        assert!(MEMBRANE_REPORT_SCHEMA_VERSION.starts_with("franken-engine."));
-        assert!(HANDLE_SAFETY_REPORT_SCHEMA_VERSION.starts_with("franken-engine."));
-        assert!(EXECUTION_DISPOSITION_SCHEMA_VERSION.starts_with("franken-engine."));
-        assert!(FALLBACK_RECEIPTS_SCHEMA_VERSION.starts_with("franken-engine."));
-        assert!(TRACE_IDS_SCHEMA_VERSION.starts_with("franken-engine."));
-        assert!(RUN_MANIFEST_SCHEMA_VERSION.starts_with("franken-engine."));
-    }
-
-    // -----------------------------------------------------------------------
-    // NativeAddonAbiSurface
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn abi_surface_as_str_all_distinct() {
-        let variants = [
-            NativeAddonAbiSurface::NodeApi,
-            NativeAddonAbiSurface::Nan,
-            NativeAddonAbiSurface::V8Direct,
-            NativeAddonAbiSurface::ForeignFfi,
-            NativeAddonAbiSurface::Unknown,
-        ];
-        let strs: BTreeSet<_> = variants.iter().map(|v| v.as_str()).collect();
-        assert_eq!(strs.len(), variants.len());
+    fn addon_abi_display() {
+        assert_eq!(format!("{}", AddonAbi::NodeApi), "node_api");
+        assert_eq!(format!("{}", AddonAbi::CustomFfi), "custom_ffi");
     }
 
     #[test]
-    fn abi_surface_display_matches_as_str() {
-        for variant in [
-            NativeAddonAbiSurface::NodeApi,
-            NativeAddonAbiSurface::Nan,
-            NativeAddonAbiSurface::V8Direct,
-        ] {
-            assert_eq!(variant.to_string(), variant.as_str());
+    fn addon_abi_all_count() {
+        assert_eq!(AddonAbi::ALL.len(), 4);
+    }
+
+    #[test]
+    fn addon_abi_serde_roundtrip() {
+        for abi in AddonAbi::ALL {
+            let json = serde_json::to_string(abi).unwrap();
+            let back: AddonAbi = serde_json::from_str(&json).unwrap();
+            assert_eq!(*abi, back);
         }
     }
 
     #[test]
-    fn abi_surface_serde_roundtrip() {
-        for variant in [
-            NativeAddonAbiSurface::NodeApi,
-            NativeAddonAbiSurface::Nan,
-            NativeAddonAbiSurface::V8Direct,
-            NativeAddonAbiSurface::ForeignFfi,
-            NativeAddonAbiSurface::Unknown,
-        ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: NativeAddonAbiSurface = serde_json::from_str(&json).unwrap();
-            assert_eq!(variant, back);
+    fn addon_abi_ordering() {
+        assert!(AddonAbi::NodeApi < AddonAbi::WasiPreview1);
+        assert!(AddonAbi::WasiPreview1 < AddonAbi::NativeEsm);
+        assert!(AddonAbi::NativeEsm < AddonAbi::CustomFfi);
+    }
+
+    // -- HandleKind --
+
+    #[test]
+    fn handle_kind_as_str() {
+        assert_eq!(HandleKind::ValueHandle.as_str(), "value_handle");
+        assert_eq!(HandleKind::BufferHandle.as_str(), "buffer_handle");
+        assert_eq!(HandleKind::CallbackHandle.as_str(), "callback_handle");
+        assert_eq!(HandleKind::ExternalHandle.as_str(), "external_handle");
+        assert_eq!(HandleKind::TypedArrayHandle.as_str(), "typed_array_handle");
+    }
+
+    #[test]
+    fn handle_kind_display() {
+        assert_eq!(format!("{}", HandleKind::ValueHandle), "value_handle");
+    }
+
+    #[test]
+    fn handle_kind_all_count() {
+        assert_eq!(HandleKind::ALL.len(), 5);
+    }
+
+    #[test]
+    fn handle_kind_serde_roundtrip() {
+        for kind in HandleKind::ALL {
+            let json = serde_json::to_string(kind).unwrap();
+            let back: HandleKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*kind, back);
         }
     }
 
-    // -----------------------------------------------------------------------
-    // NativeAddonCohort
-    // -----------------------------------------------------------------------
+    // -- HandleState --
 
     #[test]
-    fn cohort_as_str_all_distinct() {
-        let variants = [
-            NativeAddonCohort::NodeApiPortable,
-            NativeAddonCohort::NodeApiIsolateBound,
-            NativeAddonCohort::NodeApiPrivileged,
-            NativeAddonCohort::LegacyNan,
-            NativeAddonCohort::V8Binding,
-            NativeAddonCohort::ForeignFfi,
-            NativeAddonCohort::Unknown,
-        ];
-        let strs: BTreeSet<_> = variants.iter().map(|v| v.as_str()).collect();
-        assert_eq!(strs.len(), variants.len());
+    fn handle_state_as_str() {
+        assert_eq!(HandleState::Active.as_str(), "active");
+        assert_eq!(HandleState::Revoked.as_str(), "revoked");
+        assert_eq!(HandleState::Escaped.as_str(), "escaped");
+        assert_eq!(HandleState::Finalized.as_str(), "finalized");
     }
 
     #[test]
-    fn cohort_display_matches_as_str() {
-        assert_eq!(
-            NativeAddonCohort::NodeApiPortable.to_string(),
-            NativeAddonCohort::NodeApiPortable.as_str()
-        );
+    fn handle_state_is_live() {
+        assert!(HandleState::Active.is_live());
+        assert!(!HandleState::Revoked.is_live());
+        assert!(!HandleState::Escaped.is_live());
+        assert!(!HandleState::Finalized.is_live());
     }
 
     #[test]
-    fn cohort_serde_roundtrip() {
-        for variant in [
-            NativeAddonCohort::NodeApiPortable,
-            NativeAddonCohort::LegacyNan,
-            NativeAddonCohort::V8Binding,
-            NativeAddonCohort::ForeignFfi,
-            NativeAddonCohort::Unknown,
-        ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: NativeAddonCohort = serde_json::from_str(&json).unwrap();
-            assert_eq!(variant, back);
+    fn handle_state_display() {
+        assert_eq!(format!("{}", HandleState::Escaped), "escaped");
+    }
+
+    #[test]
+    fn handle_state_serde_roundtrip() {
+        for st in HandleState::ALL {
+            let json = serde_json::to_string(st).unwrap();
+            let back: HandleState = serde_json::from_str(&json).unwrap();
+            assert_eq!(*st, back);
         }
     }
 
-    // -----------------------------------------------------------------------
-    // NativeAddonFallbackMode
-    // -----------------------------------------------------------------------
+    // -- CrashContainmentMode --
 
     #[test]
-    fn fallback_mode_as_str_distinct() {
-        assert_ne!(
-            NativeAddonFallbackMode::WasmPort.as_str(),
-            NativeAddonFallbackMode::DelegateCell.as_str()
-        );
-    }
-
-    #[test]
-    fn fallback_mode_display_matches_as_str() {
-        assert_eq!(NativeAddonFallbackMode::WasmPort.to_string(), "wasm_port");
+    fn crash_containment_as_str() {
+        assert_eq!(CrashContainmentMode::Terminate.as_str(), "terminate");
+        assert_eq!(CrashContainmentMode::Isolate.as_str(), "isolate");
+        assert_eq!(CrashContainmentMode::Fallback.as_str(), "fallback");
         assert_eq!(
-            NativeAddonFallbackMode::DelegateCell.to_string(),
-            "delegate_cell"
+            CrashContainmentMode::LogAndContinue.as_str(),
+            "log_and_continue"
         );
     }
 
     #[test]
-    fn fallback_mode_serde_roundtrip() {
-        for variant in [
-            NativeAddonFallbackMode::WasmPort,
-            NativeAddonFallbackMode::DelegateCell,
-        ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: NativeAddonFallbackMode = serde_json::from_str(&json).unwrap();
-            assert_eq!(variant, back);
+    fn crash_containment_display() {
+        assert_eq!(format!("{}", CrashContainmentMode::Isolate), "isolate");
+    }
+
+    #[test]
+    fn crash_containment_serde_roundtrip() {
+        for mode in CrashContainmentMode::ALL {
+            let json = serde_json::to_string(mode).unwrap();
+            let back: CrashContainmentMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(*mode, back);
         }
     }
 
-    // -----------------------------------------------------------------------
-    // NativeAddonRoute
-    // -----------------------------------------------------------------------
+    // -- RouteDecision --
 
     #[test]
-    fn route_as_str_all_distinct() {
-        let variants = [
-            NativeAddonRoute::DirectMembrane,
-            NativeAddonRoute::WasmPort,
-            NativeAddonRoute::DelegateCell,
-        ];
-        let strs: BTreeSet<_> = variants.iter().map(|v| v.as_str()).collect();
-        assert_eq!(strs.len(), variants.len());
+    fn route_decision_as_str() {
+        assert_eq!(RouteDecision::FastPath.as_str(), "fast_path");
+        assert_eq!(RouteDecision::SlowPath.as_str(), "slow_path");
+        assert_eq!(RouteDecision::Fallback.as_str(), "fallback");
+        assert_eq!(RouteDecision::Deny { reason: "x".into() }.as_str(), "deny");
     }
 
     #[test]
-    fn route_serde_roundtrip() {
-        for variant in [
-            NativeAddonRoute::DirectMembrane,
-            NativeAddonRoute::WasmPort,
-            NativeAddonRoute::DelegateCell,
-        ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: NativeAddonRoute = serde_json::from_str(&json).unwrap();
-            assert_eq!(variant, back);
+    fn route_decision_is_allowed() {
+        assert!(RouteDecision::FastPath.is_allowed());
+        assert!(RouteDecision::SlowPath.is_allowed());
+        assert!(RouteDecision::Fallback.is_allowed());
+        assert!(!RouteDecision::Deny { reason: "x".into() }.is_allowed());
+    }
+
+    #[test]
+    fn route_decision_is_fast_path() {
+        assert!(RouteDecision::FastPath.is_fast_path());
+        assert!(!RouteDecision::SlowPath.is_fast_path());
+    }
+
+    #[test]
+    fn route_decision_display() {
+        assert_eq!(format!("{}", RouteDecision::FastPath), "fast_path");
+        assert_eq!(
+            format!(
+                "{}",
+                RouteDecision::Deny {
+                    reason: "bad".into()
+                }
+            ),
+            "deny: bad"
+        );
+    }
+
+    #[test]
+    fn route_decision_serde_roundtrip() {
+        let decisions = vec![
+            RouteDecision::FastPath,
+            RouteDecision::SlowPath,
+            RouteDecision::Fallback,
+            RouteDecision::Deny {
+                reason: "test".into(),
+            },
+        ];
+        for d in &decisions {
+            let json = serde_json::to_string(d).unwrap();
+            let back: RouteDecision = serde_json::from_str(&json).unwrap();
+            assert_eq!(*d, back);
         }
     }
 
-    // -----------------------------------------------------------------------
-    // NativeAddonSupportStatus
-    // -----------------------------------------------------------------------
+    // -- CapabilityKind --
 
     #[test]
-    fn support_status_as_str_all_distinct() {
-        let variants = [
-            NativeAddonSupportStatus::Direct,
-            NativeAddonSupportStatus::FallbackOnly,
-            NativeAddonSupportStatus::Unsupported,
-        ];
-        let strs: BTreeSet<_> = variants.iter().map(|v| v.as_str()).collect();
-        assert_eq!(strs.len(), variants.len());
+    fn capability_kind_as_str() {
+        assert_eq!(CapabilityKind::ReadFs.as_str(), "read_fs");
+        assert_eq!(CapabilityKind::WriteFs.as_str(), "write_fs");
+        assert_eq!(CapabilityKind::Network.as_str(), "network");
+        assert_eq!(CapabilityKind::Process.as_str(), "process");
+        assert_eq!(CapabilityKind::Crypto.as_str(), "crypto");
+        assert_eq!(CapabilityKind::Timer.as_str(), "timer");
+        assert_eq!(CapabilityKind::Console.as_str(), "console");
+        assert_eq!(CapabilityKind::Buffer.as_str(), "buffer");
     }
 
     #[test]
-    fn support_status_serde_roundtrip() {
-        for variant in [
-            NativeAddonSupportStatus::Direct,
-            NativeAddonSupportStatus::FallbackOnly,
-            NativeAddonSupportStatus::Unsupported,
-        ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: NativeAddonSupportStatus = serde_json::from_str(&json).unwrap();
-            assert_eq!(variant, back);
+    fn capability_kind_all_count() {
+        assert_eq!(CapabilityKind::ALL.len(), 8);
+    }
+
+    #[test]
+    fn capability_kind_display() {
+        assert_eq!(format!("{}", CapabilityKind::Network), "network");
+    }
+
+    #[test]
+    fn capability_kind_serde_roundtrip() {
+        for cap in CapabilityKind::ALL {
+            let json = serde_json::to_string(cap).unwrap();
+            let back: CapabilityKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*cap, back);
         }
     }
 
-    // -----------------------------------------------------------------------
-    // NativeAddonHandleDiscipline
-    // -----------------------------------------------------------------------
+    // -- ViolationKind --
 
     #[test]
-    fn handle_discipline_as_str_all_distinct() {
-        let variants = [
-            NativeAddonHandleDiscipline::NodeApiOnly,
-            NativeAddonHandleDiscipline::ThreadSafeFunctionOnly,
-            NativeAddonHandleDiscipline::FinalizerBounded,
-            NativeAddonHandleDiscipline::ExternalBuffer,
-            NativeAddonHandleDiscipline::RawPointerEscape,
-        ];
-        let strs: BTreeSet<_> = variants.iter().map(|v| v.as_str()).collect();
-        assert_eq!(strs.len(), variants.len());
+    fn violation_kind_as_str() {
+        assert_eq!(
+            ViolationKind::HandleLimitExceeded.as_str(),
+            "handle_limit_exceeded"
+        );
+        assert_eq!(ViolationKind::HandleEscaped.as_str(), "handle_escaped");
+        assert_eq!(
+            ViolationKind::UnauthorizedCapability.as_str(),
+            "unauthorized_capability"
+        );
+        assert_eq!(ViolationKind::CrashDetected.as_str(), "crash_detected");
+        assert_eq!(ViolationKind::AbiMismatch.as_str(), "abi_mismatch");
+        assert_eq!(
+            ViolationKind::UnregisteredAddon.as_str(),
+            "unregistered_addon"
+        );
     }
 
     #[test]
-    fn handle_discipline_is_direct_safe() {
-        assert!(NativeAddonHandleDiscipline::NodeApiOnly.is_direct_safe());
-        assert!(NativeAddonHandleDiscipline::ThreadSafeFunctionOnly.is_direct_safe());
-        assert!(NativeAddonHandleDiscipline::FinalizerBounded.is_direct_safe());
-        assert!(!NativeAddonHandleDiscipline::ExternalBuffer.is_direct_safe());
-        assert!(!NativeAddonHandleDiscipline::RawPointerEscape.is_direct_safe());
+    fn violation_kind_all_count() {
+        assert_eq!(ViolationKind::ALL.len(), 6);
     }
 
     #[test]
-    fn handle_discipline_serde_roundtrip() {
-        for variant in [
-            NativeAddonHandleDiscipline::NodeApiOnly,
-            NativeAddonHandleDiscipline::ExternalBuffer,
-            NativeAddonHandleDiscipline::RawPointerEscape,
-        ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: NativeAddonHandleDiscipline = serde_json::from_str(&json).unwrap();
-            assert_eq!(variant, back);
+    fn violation_kind_serde_roundtrip() {
+        for kind in ViolationKind::ALL {
+            let json = serde_json::to_string(kind).unwrap();
+            let back: ViolationKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*kind, back);
         }
     }
 
-    // -----------------------------------------------------------------------
-    // NativeAddonSymbolClass
-    // -----------------------------------------------------------------------
+    // -- MembraneVerdict --
 
     #[test]
-    fn symbol_class_as_str_all_distinct() {
-        let variants = [
-            NativeAddonSymbolClass::ValueExport,
-            NativeAddonSymbolClass::FunctionExport,
-            NativeAddonSymbolClass::ThreadSafeFunction,
-            NativeAddonSymbolClass::Finalizer,
-            NativeAddonSymbolClass::PropertyAccessor,
-            NativeAddonSymbolClass::ExternalBuffer,
-            NativeAddonSymbolClass::ForeignCallback,
-            NativeAddonSymbolClass::GlobalStateHook,
-            NativeAddonSymbolClass::Unknown,
-        ];
-        let strs: BTreeSet<_> = variants.iter().map(|v| v.as_str()).collect();
-        assert_eq!(strs.len(), variants.len());
+    fn membrane_verdict_as_str() {
+        assert_eq!(MembraneVerdict::Healthy.as_str(), "healthy");
+        assert_eq!(MembraneVerdict::Degraded.as_str(), "degraded");
+        assert_eq!(MembraneVerdict::Breached.as_str(), "breached");
+        assert_eq!(MembraneVerdict::Shutdown.as_str(), "shutdown");
     }
 
     #[test]
-    fn symbol_class_is_direct_safe() {
-        assert!(NativeAddonSymbolClass::ValueExport.is_direct_safe());
-        assert!(NativeAddonSymbolClass::FunctionExport.is_direct_safe());
-        assert!(NativeAddonSymbolClass::ThreadSafeFunction.is_direct_safe());
-        assert!(NativeAddonSymbolClass::Finalizer.is_direct_safe());
-        assert!(NativeAddonSymbolClass::PropertyAccessor.is_direct_safe());
-        assert!(!NativeAddonSymbolClass::ExternalBuffer.is_direct_safe());
-        assert!(!NativeAddonSymbolClass::ForeignCallback.is_direct_safe());
-        assert!(!NativeAddonSymbolClass::GlobalStateHook.is_direct_safe());
-        assert!(!NativeAddonSymbolClass::Unknown.is_direct_safe());
-    }
-
-    // -----------------------------------------------------------------------
-    // NativeAddonInvocationChannel
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn invocation_channel_as_str_distinct() {
-        assert_ne!(
-            NativeAddonInvocationChannel::InProcessMembrane.as_str(),
-            NativeAddonInvocationChannel::HostcallSession.as_str()
-        );
+    fn membrane_verdict_is_operational() {
+        assert!(MembraneVerdict::Healthy.is_operational());
+        assert!(MembraneVerdict::Degraded.is_operational());
+        assert!(!MembraneVerdict::Breached.is_operational());
+        assert!(!MembraneVerdict::Shutdown.is_operational());
     }
 
     #[test]
-    fn invocation_channel_display_matches_as_str() {
-        assert_eq!(
-            NativeAddonInvocationChannel::InProcessMembrane.to_string(),
-            "in_process_membrane"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // NativeAddonCrashContainment
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn crash_containment_as_str_all_distinct() {
-        let variants = [
-            NativeAddonCrashContainment::InProcessMembrane,
-            NativeAddonCrashContainment::WasmSandbox,
-            NativeAddonCrashContainment::DelegateCellBoundary,
-        ];
-        let strs: BTreeSet<_> = variants.iter().map(|v| v.as_str()).collect();
-        assert_eq!(strs.len(), variants.len());
-    }
-
-    // -----------------------------------------------------------------------
-    // NativeAddonMembraneErrorCode
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn error_code_stable_codes_all_distinct() {
-        let codes = [
-            NativeAddonMembraneErrorCode::MissingCapability,
-            NativeAddonMembraneErrorCode::UnsupportedAbiSurface,
-            NativeAddonMembraneErrorCode::UnsafeDirectSurface,
-            NativeAddonMembraneErrorCode::NoFallbackRoute,
-        ];
-        let strs: BTreeSet<_> = codes.iter().map(|c| c.stable_code()).collect();
-        assert_eq!(strs.len(), codes.len());
+    fn membrane_verdict_display() {
+        assert_eq!(format!("{}", MembraneVerdict::Breached), "breached");
     }
 
     #[test]
-    fn error_code_stable_codes_prefixed() {
-        for code in [
-            NativeAddonMembraneErrorCode::MissingCapability,
-            NativeAddonMembraneErrorCode::UnsupportedAbiSurface,
-            NativeAddonMembraneErrorCode::UnsafeDirectSurface,
-            NativeAddonMembraneErrorCode::NoFallbackRoute,
-        ] {
-            assert!(code.stable_code().starts_with("FE-NAM-"));
+    fn membrane_verdict_serde_roundtrip() {
+        for v in MembraneVerdict::ALL {
+            let json = serde_json::to_string(v).unwrap();
+            let back: MembraneVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(*v, back);
         }
     }
 
-    // -----------------------------------------------------------------------
-    // NativeAddonSymbol
-    // -----------------------------------------------------------------------
+    // -- HandleRecord --
 
     #[test]
-    fn symbol_new_defaults() {
-        let sym = NativeAddonSymbol::new("test_fn", NativeAddonSymbolClass::FunctionExport);
-        assert_eq!(sym.symbol_name, "test_fn");
-        assert_eq!(sym.class, NativeAddonSymbolClass::FunctionExport);
-        assert!(sym.required_capabilities.is_empty());
+    fn handle_record_new_is_active() {
+        let rec = HandleRecord::new(1, HandleKind::ValueHandle, "addon-a", epoch(1));
+        assert_eq!(rec.state, HandleState::Active);
+        assert_eq!(rec.id, 1);
+        assert_eq!(rec.kind, HandleKind::ValueHandle);
+        assert_eq!(rec.owner_scope, "addon-a");
     }
 
     #[test]
-    fn symbol_require_capability_adds() {
-        let sym = NativeAddonSymbol::new("test_fn", NativeAddonSymbolClass::FunctionExport)
-            .require_capability(RuntimeCapability::HeapAllocate);
-        assert!(
-            sym.required_capabilities
-                .contains(&RuntimeCapability::HeapAllocate)
-        );
+    fn handle_record_seal_changes_hash() {
+        let mut rec = HandleRecord::new(1, HandleKind::ValueHandle, "addon-a", epoch(1));
+        let h1 = rec.content_hash;
+        rec.state = HandleState::Revoked;
+        rec.seal();
+        assert_ne!(h1, rec.content_hash);
     }
 
     #[test]
-    fn symbol_normalized_trims_name() {
-        let sym = NativeAddonSymbol::new("  spaced  ", NativeAddonSymbolClass::ValueExport);
-        let normalized = sym.normalized();
-        assert_eq!(normalized.symbol_name, "spaced");
+    fn handle_record_serde_roundtrip() {
+        let rec = HandleRecord::new(42, HandleKind::BufferHandle, "test", epoch(5));
+        let json = serde_json::to_string(&rec).unwrap();
+        let back: HandleRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(rec, back);
+    }
+
+    // -- MembranePolicy --
+
+    #[test]
+    fn membrane_policy_default() {
+        let p = MembranePolicy::default();
+        assert_eq!(p.max_active_handles, DEFAULT_MAX_ACTIVE_HANDLES);
+        assert_eq!(p.max_handle_age_micros, DEFAULT_MAX_HANDLE_AGE_MICROS);
+        assert!(!p.allow_external_handles);
+        assert!(!p.allow_callback_escape);
+        assert_eq!(p.crash_containment_mode, CrashContainmentMode::Isolate);
     }
 
     #[test]
-    fn symbol_serde_roundtrip() {
-        let sym = NativeAddonSymbol::new("fn1", NativeAddonSymbolClass::Finalizer)
-            .require_capability(RuntimeCapability::GcInvoke);
-        let json = serde_json::to_string(&sym).unwrap();
-        let back: NativeAddonSymbol = serde_json::from_str(&json).unwrap();
-        assert_eq!(sym, back);
+    fn membrane_policy_serde_roundtrip() {
+        let p = MembranePolicy::default();
+        let json = serde_json::to_string(&p).unwrap();
+        let back: MembranePolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
     }
 
-    // -----------------------------------------------------------------------
-    // NativeAddonLoadRequest
-    // -----------------------------------------------------------------------
+    // -- RoutingConfig --
 
     #[test]
-    fn load_request_new_defaults() {
-        let req = simple_request();
-        assert_eq!(req.addon_id, "test-addon");
-        assert_eq!(req.abi_surface, NativeAddonAbiSurface::NodeApi);
-        assert!(req.node_api_version.is_none());
-        assert!(req.supported_fallbacks.is_empty());
-        assert!(req.symbol_exports.is_empty());
+    fn routing_config_default() {
+        let r = RoutingConfig::default();
         assert_eq!(
-            req.handle_discipline,
-            NativeAddonHandleDiscipline::NodeApiOnly
+            r.fast_path_max_latency_micros,
+            DEFAULT_FAST_PATH_MAX_LATENCY_MICROS
         );
-        assert!(!req.uses_foreign_heap);
-        assert!(!req.uses_process_global_state);
-    }
-
-    #[test]
-    fn load_request_builder_methods() {
-        let req = simple_request()
-            .with_node_api_version(8)
-            .with_symbol(NativeAddonSymbol::new(
-                "fn1",
-                NativeAddonSymbolClass::FunctionExport,
-            ))
-            .allow_fallback(NativeAddonFallbackMode::WasmPort)
-            .with_handle_discipline(NativeAddonHandleDiscipline::ExternalBuffer);
-        assert_eq!(req.node_api_version, Some(8));
-        assert_eq!(req.symbol_exports.len(), 1);
-        assert!(
-            req.supported_fallbacks
-                .contains(&NativeAddonFallbackMode::WasmPort)
-        );
+        assert!(r.fast_path_allowed_abis.contains(&AddonAbi::NodeApi));
+        assert!(r.fast_path_allowed_abis.contains(&AddonAbi::WasiPreview1));
         assert_eq!(
-            req.handle_discipline,
-            NativeAddonHandleDiscipline::ExternalBuffer
+            r.fallback_threshold_failures,
+            DEFAULT_FALLBACK_THRESHOLD_FAILURES
         );
+        assert!(r.deny_unregistered);
     }
 
     #[test]
-    fn load_request_cohort_portable() {
-        let req = simple_request();
-        assert_eq!(req.cohort(), NativeAddonCohort::NodeApiPortable);
+    fn routing_config_serde_roundtrip() {
+        let r = RoutingConfig::default();
+        let json = serde_json::to_string(&r).unwrap();
+        let back: RoutingConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
     }
 
-    #[test]
-    fn load_request_cohort_isolate_bound() {
-        let mut req = simple_request();
-        req.uses_async_workers = true;
-        assert_eq!(req.cohort(), NativeAddonCohort::NodeApiIsolateBound);
-    }
+    // -- AddonRegistration --
 
     #[test]
-    fn load_request_cohort_privileged() {
-        let mut req = simple_request();
-        req.uses_process_global_state = true;
-        assert_eq!(req.cohort(), NativeAddonCohort::NodeApiPrivileged);
-    }
-
-    #[test]
-    fn load_request_cohort_nan() {
-        let req = NativeAddonLoadRequest::new(
-            "nan-addon",
-            "nan-pkg",
-            "1.0.0",
-            "nan-pkg",
-            "./nan.node",
-            NativeAddonAbiSurface::Nan,
+    fn addon_registration_creation() {
+        let caps: BTreeSet<CapabilityKind> = [CapabilityKind::ReadFs, CapabilityKind::Crypto]
+            .into_iter()
+            .collect();
+        let reg = AddonRegistration::new(
+            "my-addon",
+            AddonAbi::NodeApi,
+            ContentHash::compute(b"test"),
+            caps.clone(),
+            epoch(1),
         );
-        assert_eq!(req.cohort(), NativeAddonCohort::LegacyNan);
+        assert_eq!(reg.addon_id, "my-addon");
+        assert_eq!(reg.abi, AddonAbi::NodeApi);
+        assert_eq!(reg.capabilities, caps);
     }
 
     #[test]
-    fn load_request_cohort_v8_direct() {
-        let req = NativeAddonLoadRequest::new(
-            "v8-addon",
-            "v8-pkg",
-            "1.0.0",
-            "v8-pkg",
-            "./v8.node",
-            NativeAddonAbiSurface::V8Direct,
-        );
-        assert_eq!(req.cohort(), NativeAddonCohort::V8Binding);
+    fn addon_registration_serde_roundtrip() {
+        let reg = make_registration("test", AddonAbi::WasiPreview1, &[CapabilityKind::Network]);
+        let json = serde_json::to_string(&reg).unwrap();
+        let back: AddonRegistration = serde_json::from_str(&json).unwrap();
+        assert_eq!(reg, back);
+    }
+
+    // -- Violation --
+
+    #[test]
+    fn violation_new() {
+        let v = Violation::new(ViolationKind::CrashDetected, "addon-x", "segfault", 1000);
+        assert_eq!(v.kind, ViolationKind::CrashDetected);
+        assert_eq!(v.addon_id, "addon-x");
+        assert_eq!(v.detail, "segfault");
+        assert_eq!(v.timestamp_micros, 1000);
     }
 
     #[test]
-    fn load_request_cohort_foreign_ffi() {
-        let req = NativeAddonLoadRequest::new(
-            "ffi-addon",
-            "ffi-pkg",
-            "1.0.0",
-            "ffi-pkg",
-            "./ffi.node",
-            NativeAddonAbiSurface::ForeignFfi,
-        );
-        assert_eq!(req.cohort(), NativeAddonCohort::ForeignFfi);
+    fn violation_serde_roundtrip() {
+        let v = Violation::new(ViolationKind::AbiMismatch, "a", "b", 42);
+        let json = serde_json::to_string(&v).unwrap();
+        let back: Violation = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, back);
+    }
+
+    // -- MembraneState --
+
+    #[test]
+    fn membrane_state_new_is_empty() {
+        let s = MembraneState::new();
+        assert_eq!(s.registrations.len(), 0);
+        assert_eq!(s.handle_table.len(), 0);
+        assert_eq!(s.active_handles, 0);
+        assert_eq!(s.crash_count, 0);
+        assert_eq!(s.total_calls, 0);
+        assert!(!s.is_shutdown());
     }
 
     #[test]
-    fn load_request_required_capabilities_base() {
-        let req = simple_request();
-        let caps = req.required_capabilities();
-        assert!(caps.contains(&RuntimeCapability::ExtensionLifecycle));
+    fn membrane_state_default_eq_new() {
+        assert_eq!(MembraneState::default(), MembraneState::new());
     }
 
     #[test]
-    fn load_request_required_capabilities_fs_read() {
-        let mut req = simple_request();
-        req.requires_filesystem_read = true;
-        let caps = req.required_capabilities();
-        assert!(caps.contains(&RuntimeCapability::FsRead));
+    fn register_addon_success() {
+        let mut s = MembraneState::new();
+        let reg = make_registration("a", AddonAbi::NodeApi, &[]);
+        assert!(s.register_addon(reg).is_ok());
+        assert_eq!(s.registrations.len(), 1);
     }
 
     #[test]
-    fn load_request_required_capabilities_network() {
-        let mut req = simple_request();
-        req.requires_network_egress = true;
-        let caps = req.required_capabilities();
-        assert!(caps.contains(&RuntimeCapability::NetworkEgress));
-    }
-
-    #[test]
-    fn load_request_required_capabilities_foreign_heap() {
-        let mut req = simple_request();
-        req.uses_foreign_heap = true;
-        let caps = req.required_capabilities();
-        assert!(caps.contains(&RuntimeCapability::HeapAllocate));
-    }
-
-    #[test]
-    fn load_request_required_slot_capabilities_base() {
-        let req = simple_request();
-        let caps = req.required_slot_capabilities();
-        assert!(caps.contains(&SlotCapability::EmitEvidence));
-        assert!(caps.contains(&SlotCapability::InvokeHostcall));
-    }
-
-    #[test]
-    fn load_request_required_slot_capabilities_module_linkage() {
-        let mut req = simple_request();
-        req.requires_module_linkage = true;
-        let caps = req.required_slot_capabilities();
-        assert!(caps.contains(&SlotCapability::ModuleAccess));
-    }
-
-    #[test]
-    fn load_request_abi_fingerprint_deterministic() {
-        let r1 = simple_request();
-        let r2 = simple_request();
-        assert_eq!(r1.abi_fingerprint(), r2.abi_fingerprint());
-    }
-
-    #[test]
-    fn load_request_abi_fingerprint_differs_with_different_addon() {
-        let r1 = simple_request();
-        let r2 = NativeAddonLoadRequest::new(
-            "other-addon",
-            "test-pkg",
-            "1.0.0",
-            "test-pkg",
-            "./build/test.node",
-            NativeAddonAbiSurface::NodeApi,
-        );
-        assert_ne!(r1.abi_fingerprint(), r2.abi_fingerprint());
-    }
-
-    #[test]
-    fn load_request_serde_roundtrip() {
-        let req = simple_request()
-            .with_node_api_version(8)
-            .with_symbol(NativeAddonSymbol::new(
-                "fn1",
-                NativeAddonSymbolClass::FunctionExport,
-            ));
-        let json = serde_json::to_string(&req).unwrap();
-        let back: NativeAddonLoadRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(req, back);
-    }
-
-    // -----------------------------------------------------------------------
-    // NativeAddonMembrane
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn membrane_standard_defaults() {
-        let m = NativeAddonMembrane::standard();
-        assert_eq!(m.max_direct_node_api_version, 10);
-        assert_eq!(m.delegate_cell_type, DelegateType::ExternalProcess);
-    }
-
-    #[test]
-    fn membrane_default_equals_standard() {
-        assert_eq!(
-            NativeAddonMembrane::default(),
-            NativeAddonMembrane::standard()
-        );
-    }
-
-    #[test]
-    fn membrane_assess_direct_for_safe_addon() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert_eq!(surface.support_status, NativeAddonSupportStatus::Direct);
-        assert_eq!(
-            surface.selected_route,
-            Some(NativeAddonRoute::DirectMembrane)
-        );
-        assert!(surface.missing_capabilities.is_empty());
-        assert!(surface.direct_blockers.is_empty());
-    }
-
-    #[test]
-    fn membrane_assess_fallback_for_unsafe_handle() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request()
-            .with_handle_discipline(NativeAddonHandleDiscipline::ExternalBuffer)
-            .allow_fallback(NativeAddonFallbackMode::DelegateCell);
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert_eq!(
-            surface.support_status,
-            NativeAddonSupportStatus::FallbackOnly
-        );
-        assert_eq!(surface.selected_route, Some(NativeAddonRoute::DelegateCell));
-    }
-
-    #[test]
-    fn membrane_assess_unsupported_no_fallback() {
-        let m = NativeAddonMembrane::standard();
-        let req =
-            simple_request().with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape);
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert_eq!(
-            surface.support_status,
-            NativeAddonSupportStatus::Unsupported
-        );
-        assert_eq!(surface.selected_route, None);
-    }
-
-    #[test]
-    fn membrane_assess_unsupported_missing_capabilities() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.requires_network_egress = true;
-        let surface = m.assess_support_surface(&req, &CapabilityProfile::compute_only());
-        assert_eq!(
-            surface.support_status,
-            NativeAddonSupportStatus::Unsupported
-        );
-        assert!(!surface.missing_capabilities.is_empty());
-    }
-
-    #[test]
-    fn membrane_assess_wasm_fallback_preferred_over_delegate() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request()
-            .with_handle_discipline(NativeAddonHandleDiscipline::ExternalBuffer)
-            .allow_fallback(NativeAddonFallbackMode::WasmPort)
-            .allow_fallback(NativeAddonFallbackMode::DelegateCell);
-        req.wasm_portable = true;
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert_eq!(surface.selected_route, Some(NativeAddonRoute::WasmPort));
-    }
-
-    #[test]
-    fn membrane_assess_non_node_api_blocked() {
-        let m = NativeAddonMembrane::standard();
-        let req = NativeAddonLoadRequest::new(
-            "nan-addon",
-            "nan-pkg",
-            "1.0.0",
-            "nan-pkg",
-            "./nan.node",
-            NativeAddonAbiSurface::Nan,
-        );
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert!(!surface.direct_blockers.is_empty());
-    }
-
-    #[test]
-    fn membrane_assess_high_api_version_blocked() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request().with_node_api_version(99);
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert!(!surface.direct_blockers.is_empty());
-    }
-
-    // -----------------------------------------------------------------------
-    // NativeAddonMembrane::plan
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn membrane_plan_success_direct() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let plan = m.plan(&req, &context(), &full_profile()).unwrap();
-        assert_eq!(plan.route, NativeAddonRoute::DirectMembrane);
-        assert_eq!(
-            plan.invocation_channel,
-            NativeAddonInvocationChannel::InProcessMembrane
-        );
-        assert_eq!(
-            plan.crash_containment,
-            NativeAddonCrashContainment::InProcessMembrane
-        );
-        assert!(plan.delegate_type.is_none());
-        assert!(plan.capability_envelope.is_none());
-        assert!(plan.sandbox.is_none());
-    }
-
-    #[test]
-    fn membrane_plan_success_delegate_cell() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request()
-            .with_handle_discipline(NativeAddonHandleDiscipline::ExternalBuffer)
-            .allow_fallback(NativeAddonFallbackMode::DelegateCell);
-        let plan = m.plan(&req, &context(), &full_profile()).unwrap();
-        assert_eq!(plan.route, NativeAddonRoute::DelegateCell);
-        assert_eq!(
-            plan.invocation_channel,
-            NativeAddonInvocationChannel::HostcallSession
-        );
-        assert_eq!(
-            plan.crash_containment,
-            NativeAddonCrashContainment::DelegateCellBoundary
-        );
-        assert!(plan.delegate_type.is_some());
-        assert!(plan.capability_envelope.is_some());
-        assert!(plan.sandbox.is_some());
-    }
-
-    #[test]
-    fn membrane_plan_failure_returns_error() {
-        let m = NativeAddonMembrane::standard();
-        let req =
-            simple_request().with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape);
-        let err = m.plan(&req, &context(), &full_profile()).unwrap_err();
-        assert!(!err.message.is_empty());
-        assert!(!err.event.trace_id.is_empty());
-    }
-
-    #[test]
-    fn membrane_plan_error_missing_capability() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.requires_network_egress = true;
-        let err = m
-            .plan(&req, &context(), &CapabilityProfile::compute_only())
-            .unwrap_err();
-        assert_eq!(err.code, NativeAddonMembraneErrorCode::MissingCapability);
-    }
-
-    // -----------------------------------------------------------------------
-    // NativeAddonMembrane::inventory_report
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn inventory_report_empty_requests() {
-        let m = NativeAddonMembrane::standard();
-        let report = m.inventory_report(&[], &full_profile());
-        assert_eq!(report.schema_version, INVENTORY_SCHEMA_VERSION);
-        assert!(report.support_surface.is_empty());
-        assert!(report.compatibility_matrix.is_empty());
-        assert!(report.abi_fingerprint_index.is_empty());
-        assert!(report.cohort_counts.is_empty());
-    }
-
-    #[test]
-    fn inventory_report_single_request() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let report = m.inventory_report(&[req], &full_profile());
-        assert_eq!(report.support_surface.len(), 1);
-        assert_eq!(report.compatibility_matrix.len(), 1);
-        assert_eq!(report.abi_fingerprint_index.len(), 1);
-        assert_eq!(*report.cohort_counts.get("node_api_portable").unwrap(), 1);
-    }
-
-    #[test]
-    fn inventory_report_hash_deterministic() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let r1 = m.inventory_report(std::slice::from_ref(&req), &full_profile());
-        let r2 = m.inventory_report(std::slice::from_ref(&req), &full_profile());
-        assert_eq!(r1.report_hash, r2.report_hash);
-    }
-
-    #[test]
-    fn inventory_report_multiple_requests_counted() {
-        let m = NativeAddonMembrane::standard();
-        let r1 = simple_request();
-        let r2 = NativeAddonLoadRequest::new(
-            "addon-2",
-            "pkg-2",
-            "2.0.0",
-            "pkg-2",
-            "./build/a2.node",
-            NativeAddonAbiSurface::NodeApi,
-        );
-        let report = m.inventory_report(&[r1, r2], &full_profile());
-        assert_eq!(report.support_surface.len(), 2);
-        assert_eq!(*report.cohort_counts.get("node_api_portable").unwrap(), 2);
-    }
-
-    #[test]
-    fn inventory_report_required_addon_coverage_is_explicit() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let report = m.inventory_report_with_requirements(
-            std::slice::from_ref(&req),
-            &full_profile(),
-            &[
-                " missing-addon ".to_string(),
-                req.addon_id.clone(),
-                "missing-addon".to_string(),
-            ],
-        );
-
-        assert_eq!(
-            report.required_addon_ids,
-            vec!["missing-addon".to_string(), req.addon_id.clone()]
-        );
-        assert!(!report.coverage_complete);
-        assert_eq!(report.coverage_gaps.len(), 1);
-        assert_eq!(report.coverage_gaps[0].addon_id, "missing-addon");
-        assert_eq!(
-            report.coverage_gaps[0].reason_code,
-            "missing_from_inventory_input"
-        );
-        assert!(report.coverage_gaps[0].message.contains("missing-addon"));
-    }
-
-    // -----------------------------------------------------------------------
-    // direct_blockers
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn direct_blockers_empty_for_safe_addon() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let blockers = m.direct_blockers(&req);
-        assert!(blockers.is_empty());
-    }
-
-    #[test]
-    fn direct_blockers_non_node_api() {
-        let m = NativeAddonMembrane::standard();
-        let req = NativeAddonLoadRequest::new(
-            "v8",
-            "v8-pkg",
-            "1.0.0",
-            "v8-pkg",
-            "./v8.node",
-            NativeAddonAbiSurface::V8Direct,
-        );
-        let blockers = m.direct_blockers(&req);
-        assert!(!blockers.is_empty());
-        assert!(blockers[0].contains("node_api"));
-    }
-
-    #[test]
-    fn direct_blockers_high_api_version() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request().with_node_api_version(99);
-        let blockers = m.direct_blockers(&req);
-        assert!(blockers.iter().any(|b| b.contains("version")));
-    }
-
-    #[test]
-    fn direct_blockers_unsafe_handle() {
-        let m = NativeAddonMembrane::standard();
-        let req =
-            simple_request().with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape);
-        let blockers = m.direct_blockers(&req);
-        assert!(blockers.iter().any(|b| b.contains("direct-safe")));
-    }
-
-    #[test]
-    fn direct_blockers_foreign_heap() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.uses_foreign_heap = true;
-        let blockers = m.direct_blockers(&req);
-        assert!(blockers.iter().any(|b| b.contains("foreign heap")));
-    }
-
-    #[test]
-    fn direct_blockers_process_global_state() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.uses_process_global_state = true;
-        let blockers = m.direct_blockers(&req);
-        assert!(blockers.iter().any(|b| b.contains("process-global")));
-    }
-
-    #[test]
-    fn direct_blockers_unsafe_symbol_class() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request().with_symbol(NativeAddonSymbol::new(
-            "unsafe_buf",
-            NativeAddonSymbolClass::ExternalBuffer,
+    fn register_addon_duplicate_error() {
+        let mut s = MembraneState::new();
+        let reg = make_registration("a", AddonAbi::NodeApi, &[]);
+        s.register_addon(reg).unwrap();
+        let reg2 = make_registration("a", AddonAbi::WasiPreview1, &[]);
+        assert!(matches!(
+            s.register_addon(reg2),
+            Err(MembraneError::AddonAlreadyRegistered { .. })
         ));
-        let blockers = m.direct_blockers(&req);
-        assert!(blockers.iter().any(|b| b.contains("non-direct-safe")));
-    }
-
-    // -----------------------------------------------------------------------
-    // classify_failure
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn classify_failure_missing_capability() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.requires_network_egress = true;
-        let surface = m.assess_support_surface(&req, &CapabilityProfile::compute_only());
-        assert_eq!(
-            m.classify_failure(&surface),
-            NativeAddonMembraneErrorCode::MissingCapability
-        );
     }
 
     #[test]
-    fn classify_failure_unsupported_abi() {
-        let m = NativeAddonMembrane::standard();
-        let req = NativeAddonLoadRequest::new(
-            "v8-addon",
-            "v8-pkg",
-            "1.0.0",
-            "v8-pkg",
-            "./v8.node",
-            NativeAddonAbiSurface::V8Direct,
-        );
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert_eq!(
-            m.classify_failure(&surface),
-            NativeAddonMembraneErrorCode::UnsupportedAbiSurface
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Error display
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn membrane_error_display_contains_stable_code() {
-        let m = NativeAddonMembrane::standard();
-        let req =
-            simple_request().with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape);
-        let err = m.plan(&req, &context(), &full_profile()).unwrap_err();
-        let display = err.to_string();
-        assert!(display.contains("FE-NAM-"));
+    fn register_addon_when_shutdown() {
+        let mut s = MembraneState::new();
+        s.shutdown();
+        let reg = make_registration("a", AddonAbi::NodeApi, &[]);
+        assert!(matches!(
+            s.register_addon(reg),
+            Err(MembraneError::MembraneShutDown)
+        ));
     }
 
     #[test]
-    fn membrane_error_is_std_error() {
-        let m = NativeAddonMembrane::standard();
-        let req =
-            simple_request().with_handle_discipline(NativeAddonHandleDiscipline::RawPointerEscape);
-        let err = m.plan(&req, &context(), &full_profile()).unwrap_err();
-        let _: &dyn std::error::Error = &*err;
+    fn find_registration() {
+        let s = make_state_with_addon("foo");
+        assert!(s.find_registration("foo").is_some());
+        assert!(s.find_registration("bar").is_none());
     }
 
     #[test]
-    fn artifact_write_error_display() {
-        let err = NativeAddonArtifactWriteError {
-            code: NativeAddonArtifactWriteErrorCode::InvalidRunId,
-            path: "bad/path".to_string(),
-            message: "invalid".to_string(),
+    fn allocate_handle_success() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        assert_eq!(id, 1);
+        assert_eq!(s.active_handles, 1);
+        assert_eq!(s.handle_table.len(), 1);
+    }
+
+    #[test]
+    fn allocate_handle_increments_id() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id1 = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        let id2 = s
+            .allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
+            .unwrap();
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+    }
+
+    #[test]
+    fn allocate_handle_unregistered_addon() {
+        let mut s = MembraneState::new();
+        let policy = default_policy();
+        assert!(matches!(
+            s.allocate_handle("nonexistent", HandleKind::ValueHandle, epoch(1), &policy),
+            Err(MembraneError::AddonNotRegistered { .. })
+        ));
+    }
+
+    #[test]
+    fn allocate_handle_external_denied() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy(); // allow_external_handles = false
+        assert!(matches!(
+            s.allocate_handle("a", HandleKind::ExternalHandle, epoch(1), &policy),
+            Err(MembraneError::ExternalHandlesNotAllowed)
+        ));
+    }
+
+    #[test]
+    fn allocate_handle_external_allowed() {
+        let mut s = make_state_with_addon("a");
+        let mut policy = default_policy();
+        policy.allow_external_handles = true;
+        let id = s
+            .allocate_handle("a", HandleKind::ExternalHandle, epoch(1), &policy)
+            .unwrap();
+        assert!(id > 0);
+    }
+
+    #[test]
+    fn allocate_handle_limit_exceeded() {
+        let mut s = make_state_with_addon("a");
+        let mut policy = default_policy();
+        policy.max_active_handles = 2;
+        s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        assert!(matches!(
+            s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy),
+            Err(MembraneError::HandleLimitExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn allocate_handle_when_shutdown() {
+        let mut s = make_state_with_addon("a");
+        s.shutdown();
+        let policy = default_policy();
+        assert!(matches!(
+            s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy),
+            Err(MembraneError::MembraneShutDown)
+        ));
+    }
+
+    #[test]
+    fn revoke_handle_success() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        assert!(s.revoke_handle(id).is_ok());
+        assert_eq!(s.active_handles, 0);
+        assert_eq!(s.revoked_handles, 1);
+        assert_eq!(s.get_handle(id).unwrap().state, HandleState::Revoked);
+    }
+
+    #[test]
+    fn revoke_handle_not_found() {
+        let mut s = MembraneState::new();
+        assert!(matches!(
+            s.revoke_handle(999),
+            Err(MembraneError::HandleNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn revoke_handle_already_revoked() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.revoke_handle(id).unwrap();
+        assert!(matches!(
+            s.revoke_handle(id),
+            Err(MembraneError::HandleAlreadyRevoked { .. })
+        ));
+    }
+
+    #[test]
+    fn revoke_handle_already_finalized() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.finalize_handle(id).unwrap();
+        assert!(matches!(
+            s.revoke_handle(id),
+            Err(MembraneError::HandleAlreadyFinalized { .. })
+        ));
+    }
+
+    #[test]
+    fn finalize_active_handle() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        assert!(s.finalize_handle(id).is_ok());
+        assert_eq!(s.active_handles, 0);
+        assert_eq!(s.get_handle(id).unwrap().state, HandleState::Finalized);
+    }
+
+    #[test]
+    fn finalize_revoked_handle() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.revoke_handle(id).unwrap();
+        assert!(s.finalize_handle(id).is_ok());
+        assert_eq!(s.get_handle(id).unwrap().state, HandleState::Finalized);
+    }
+
+    #[test]
+    fn finalize_already_finalized() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.finalize_handle(id).unwrap();
+        assert!(matches!(
+            s.finalize_handle(id),
+            Err(MembraneError::HandleAlreadyFinalized { .. })
+        ));
+    }
+
+    #[test]
+    fn mark_handle_escaped() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        assert!(s.mark_handle_escaped(id, 1000).is_ok());
+        assert_eq!(s.get_handle(id).unwrap().state, HandleState::Escaped);
+        assert_eq!(s.active_handles, 0);
+        assert_eq!(s.violations.len(), 1);
+        assert_eq!(s.violations[0].kind, ViolationKind::HandleEscaped);
+    }
+
+    #[test]
+    fn mark_handle_escaped_creates_violation() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::CallbackHandle, epoch(1), &policy)
+            .unwrap();
+        s.mark_handle_escaped(id, 5000).unwrap();
+        assert_eq!(s.violations.len(), 1);
+        assert_eq!(s.violations[0].addon_id, "a");
+        assert_eq!(s.violations[0].timestamp_micros, 5000);
+    }
+
+    #[test]
+    fn revoke_escaped_handle() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.mark_handle_escaped(id, 1000).unwrap();
+        assert!(s.revoke_handle(id).is_ok());
+        assert_eq!(s.get_handle(id).unwrap().state, HandleState::Revoked);
+    }
+
+    #[test]
+    fn route_call_fast_path() {
+        let mut s = make_state_with_addon("a");
+        let config = default_routing();
+        let decision = s.route_call("a", &config);
+        assert_eq!(decision, RouteDecision::FastPath);
+        assert_eq!(s.fast_path_calls, 1);
+        assert_eq!(s.total_calls, 1);
+    }
+
+    #[test]
+    fn route_call_slow_path_non_fast_abi() {
+        let mut s = MembraneState::new();
+        let reg = make_registration("a", AddonAbi::CustomFfi, &[]);
+        s.register_addon(reg).unwrap();
+        let config = default_routing();
+        let decision = s.route_call("a", &config);
+        assert_eq!(decision, RouteDecision::SlowPath);
+        assert_eq!(s.slow_path_calls, 1);
+    }
+
+    #[test]
+    fn route_call_unregistered_denied() {
+        let mut s = MembraneState::new();
+        let config = default_routing(); // deny_unregistered = true
+        let decision = s.route_call("nonexistent", &config);
+        assert!(matches!(decision, RouteDecision::Deny { .. }));
+        assert_eq!(s.denied_calls, 1);
+    }
+
+    #[test]
+    fn route_call_unregistered_allowed() {
+        let mut s = MembraneState::new();
+        let mut config = default_routing();
+        config.deny_unregistered = false;
+        let decision = s.route_call("nonexistent", &config);
+        assert_eq!(decision, RouteDecision::SlowPath);
+    }
+
+    #[test]
+    fn route_call_fallback_on_failures() {
+        let mut s = make_state_with_addon("a");
+        let config = default_routing();
+        for _ in 0..DEFAULT_FALLBACK_THRESHOLD_FAILURES {
+            s.record_crash("a", "crash", 100);
+        }
+        let decision = s.route_call("a", &config);
+        assert_eq!(decision, RouteDecision::Fallback);
+        assert_eq!(s.fallback_calls, 1);
+    }
+
+    #[test]
+    fn record_crash_increments_count() {
+        let mut s = make_state_with_addon("a");
+        s.record_crash("a", "crash1", 100);
+        s.record_crash("a", "crash2", 200);
+        assert_eq!(s.crash_count, 2);
+        assert_eq!(s.addon_failure_count("a"), 2);
+        assert_eq!(s.violations.len(), 2);
+    }
+
+    #[test]
+    fn reset_failure_count() {
+        let mut s = make_state_with_addon("a");
+        s.record_crash("a", "crash", 100);
+        assert_eq!(s.addon_failure_count("a"), 1);
+        s.reset_failure_count("a");
+        assert_eq!(s.addon_failure_count("a"), 0);
+    }
+
+    #[test]
+    fn count_handles_in_state() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id1 = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        let _id2 = s
+            .allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
+            .unwrap();
+        assert_eq!(s.count_handles_in_state(HandleState::Active), 2);
+        s.revoke_handle(id1).unwrap();
+        assert_eq!(s.count_handles_in_state(HandleState::Active), 1);
+        assert_eq!(s.count_handles_in_state(HandleState::Revoked), 1);
+    }
+
+    #[test]
+    fn handles_for_addon() {
+        let mut s = MembraneState::new();
+        let reg_a = make_registration("a", AddonAbi::NodeApi, &[]);
+        let reg_b = make_registration("b", AddonAbi::NodeApi, &[]);
+        s.register_addon(reg_a).unwrap();
+        s.register_addon(reg_b).unwrap();
+        let policy = default_policy();
+        s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.allocate_handle("b", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
+            .unwrap();
+        assert_eq!(s.handles_for_addon("a").len(), 2);
+        assert_eq!(s.handles_for_addon("b").len(), 1);
+    }
+
+    #[test]
+    fn total_handle_count() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        assert_eq!(s.total_handle_count(), 2);
+    }
+
+    #[test]
+    fn shutdown_prevents_operations() {
+        let mut s = make_state_with_addon("a");
+        s.shutdown();
+        assert!(s.is_shutdown());
+        let policy = default_policy();
+        assert!(matches!(
+            s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy),
+            Err(MembraneError::MembraneShutDown)
+        ));
+    }
+
+    // -- evaluate_membrane --
+
+    #[test]
+    fn evaluate_healthy_state() {
+        let s = MembraneState::new();
+        let policy = default_policy();
+        let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
+        assert_eq!(report.verdict, MembraneVerdict::Healthy);
+        assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn evaluate_degraded_on_violations() {
+        let mut s = MembraneState::new();
+        s.record_violation(Violation::new(
+            ViolationKind::AbiMismatch,
+            "x",
+            "mismatch",
+            100,
+        ));
+        let policy = default_policy();
+        let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
+        assert_eq!(report.verdict, MembraneVerdict::Degraded);
+    }
+
+    #[test]
+    fn evaluate_breached_on_escaped_handles() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.mark_handle_escaped(id, 100).unwrap();
+        let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
+        assert_eq!(report.verdict, MembraneVerdict::Breached);
+    }
+
+    #[test]
+    fn evaluate_breached_on_crash_threshold() {
+        let mut s = make_state_with_addon("a");
+        for i in 0..CRASH_BREACHED_THRESHOLD {
+            s.record_crash("a", &format!("crash-{i}"), i * 100);
+        }
+        let policy = default_policy();
+        let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
+        assert_eq!(report.verdict, MembraneVerdict::Breached);
+    }
+
+    #[test]
+    fn evaluate_shutdown_on_high_crash_count() {
+        let mut s = make_state_with_addon("a");
+        for i in 0..CRASH_SHUTDOWN_THRESHOLD {
+            s.record_crash("a", &format!("crash-{i}"), i * 100);
+        }
+        let policy = default_policy();
+        let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
+        assert_eq!(report.verdict, MembraneVerdict::Shutdown);
+    }
+
+    #[test]
+    fn evaluate_report_statistics() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let config = default_routing();
+        s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.route_call("a", &config);
+        s.route_call("a", &config);
+        let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
+        assert_eq!(report.active_handles, 1);
+        assert_eq!(report.total_calls, 2);
+        assert_eq!(report.fast_path_calls, 2);
+    }
+
+    #[test]
+    fn evaluate_receipt_fields() {
+        let s = MembraneState::new();
+        let policy = default_policy();
+        let report = evaluate_membrane(&s, &policy, &epoch(5), 2000);
+        assert_eq!(report.receipt.schema_version, SCHEMA_VERSION);
+        assert_eq!(report.receipt.component, COMPONENT);
+        assert_eq!(report.receipt.bead_id, BEAD_ID);
+        assert_eq!(report.receipt.policy_id, POLICY_ID);
+        assert_eq!(report.receipt.epoch, epoch(5));
+        assert_eq!(report.receipt.timestamp_micros, 2000);
+    }
+
+    // -- compute_receipt --
+
+    #[test]
+    fn compute_receipt_deterministic() {
+        let ih = ContentHash::compute(b"test");
+        let r1 = compute_receipt(&epoch(1), &ih, MembraneVerdict::Healthy, 1000);
+        let r2 = compute_receipt(&epoch(1), &ih, MembraneVerdict::Healthy, 1000);
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn compute_receipt_different_epoch() {
+        let ih = ContentHash::compute(b"test");
+        let r1 = compute_receipt(&epoch(1), &ih, MembraneVerdict::Healthy, 1000);
+        let r2 = compute_receipt(&epoch(2), &ih, MembraneVerdict::Healthy, 1000);
+        assert_ne!(r1.verdict_hash, r2.verdict_hash);
+    }
+
+    #[test]
+    fn compute_receipt_different_verdict() {
+        let ih = ContentHash::compute(b"test");
+        let r1 = compute_receipt(&epoch(1), &ih, MembraneVerdict::Healthy, 1000);
+        let r2 = compute_receipt(&epoch(1), &ih, MembraneVerdict::Breached, 1000);
+        assert_ne!(r1.verdict_hash, r2.verdict_hash);
+    }
+
+    #[test]
+    fn decision_receipt_seal() {
+        let ih = ContentHash::compute(b"test");
+        let mut r = compute_receipt(&epoch(1), &ih, MembraneVerdict::Healthy, 1000);
+        let original_hash = r.verdict_hash.clone();
+        r.seal();
+        // seal recomputes based on fields, should produce a stable hash
+        let mut r2 = r.clone();
+        r2.seal();
+        assert_eq!(r.verdict_hash, r2.verdict_hash);
+        // but different from the original since seal uses different computation
+        // (it doesn't include the verdict string)
+        assert_ne!(original_hash, r.verdict_hash);
+    }
+
+    // -- Helper functions --
+
+    #[test]
+    fn addon_has_capability_positive() {
+        let s = make_state_with_addon("a"); // has Buffer
+        assert!(addon_has_capability(&s, "a", CapabilityKind::Buffer));
+    }
+
+    #[test]
+    fn addon_has_capability_negative() {
+        let s = make_state_with_addon("a"); // has Buffer
+        assert!(!addon_has_capability(&s, "a", CapabilityKind::Network));
+    }
+
+    #[test]
+    fn addon_has_capability_unregistered() {
+        let s = MembraneState::new();
+        assert!(!addon_has_capability(&s, "x", CapabilityKind::Buffer));
+    }
+
+    #[test]
+    fn validate_capabilities_all_granted() {
+        let s = make_state_with_addon("a"); // has Buffer
+        let requested: BTreeSet<CapabilityKind> = [CapabilityKind::Buffer].into_iter().collect();
+        let denied = validate_capabilities(&s, "a", &requested);
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn validate_capabilities_some_denied() {
+        let s = make_state_with_addon("a"); // has Buffer only
+        let requested: BTreeSet<CapabilityKind> = [CapabilityKind::Buffer, CapabilityKind::Network]
+            .into_iter()
+            .collect();
+        let denied = validate_capabilities(&s, "a", &requested);
+        assert_eq!(denied.len(), 1);
+        assert_eq!(denied[0], CapabilityKind::Network);
+    }
+
+    #[test]
+    fn revoke_all_handles_for_addon_test() {
+        let mut s = MembraneState::new();
+        let reg_a = make_registration("a", AddonAbi::NodeApi, &[]);
+        let reg_b = make_registration("b", AddonAbi::NodeApi, &[]);
+        s.register_addon(reg_a).unwrap();
+        s.register_addon(reg_b).unwrap();
+        let policy = default_policy();
+        s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
+            .unwrap();
+        s.allocate_handle("b", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        let revoked = revoke_all_handles_for_addon(&mut s, "a");
+        assert_eq!(revoked.len(), 2);
+        assert_eq!(s.active_handles, 1); // only b's handle
+    }
+
+    #[test]
+    fn count_registrations_by_abi_test() {
+        let mut s = MembraneState::new();
+        s.register_addon(make_registration("a", AddonAbi::NodeApi, &[]))
+            .unwrap();
+        s.register_addon(make_registration("b", AddonAbi::NodeApi, &[]))
+            .unwrap();
+        s.register_addon(make_registration("c", AddonAbi::CustomFfi, &[]))
+            .unwrap();
+        assert_eq!(count_registrations_by_abi(&s, AddonAbi::NodeApi), 2);
+        assert_eq!(count_registrations_by_abi(&s, AddonAbi::CustomFfi), 1);
+        assert_eq!(count_registrations_by_abi(&s, AddonAbi::WasiPreview1), 0);
+    }
+
+    #[test]
+    fn compute_state_hash_deterministic() {
+        let s = MembraneState::new();
+        let h1 = compute_state_hash(&s);
+        let h2 = compute_state_hash(&s);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn compute_state_hash_changes_with_state() {
+        let mut s = MembraneState::new();
+        let h1 = compute_state_hash(&s);
+        s.register_addon(make_registration("a", AddonAbi::NodeApi, &[]))
+            .unwrap();
+        let h2 = compute_state_hash(&s);
+        assert_ne!(h1, h2);
+    }
+
+    // -- MembraneError --
+
+    #[test]
+    fn membrane_error_display() {
+        let e = MembraneError::HandleNotFound { handle_id: 42 };
+        assert!(format!("{e}").contains("42"));
+    }
+
+    #[test]
+    fn membrane_error_serde_roundtrip() {
+        let e = MembraneError::HandleLimitExceeded {
+            detail: "full".into(),
         };
-        let display = err.to_string();
-        assert!(display.contains("invalid"));
-        assert!(display.contains("bad/path"));
+        let json = serde_json::to_string(&e).unwrap();
+        let back: MembraneError = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
     }
 
-    #[test]
-    fn artifact_write_error_is_std_error() {
-        let err = NativeAddonArtifactWriteError {
-            code: NativeAddonArtifactWriteErrorCode::Io,
-            path: String::new(),
-            message: String::new(),
-        };
-        let _: &dyn std::error::Error = &err;
-    }
-
-    // -----------------------------------------------------------------------
-    // normalize_run_id
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn normalize_run_id_valid() {
-        assert_eq!(
-            normalize_run_id("valid-run-id".to_string()).unwrap(),
-            "valid-run-id"
-        );
-    }
-
-    #[test]
-    fn normalize_run_id_trims() {
-        assert_eq!(
-            normalize_run_id("  trimmed  ".to_string()).unwrap(),
-            "trimmed"
-        );
-    }
-
-    #[test]
-    fn normalize_run_id_rejects_empty() {
-        assert!(normalize_run_id(String::new()).is_err());
-    }
-
-    #[test]
-    fn normalize_run_id_rejects_path_traversal() {
-        assert!(normalize_run_id("../escape".to_string()).is_err());
-    }
-
-    #[test]
-    fn normalize_run_id_rejects_absolute() {
-        assert!(normalize_run_id("/absolute".to_string()).is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // artifact_names
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn artifact_names_non_empty() {
-        let names = artifact_names();
-        assert!(!names.is_empty());
-        for name in &names {
-            assert!(!name.is_empty());
-        }
-    }
-
-    #[test]
-    fn artifact_names_sorted() {
-        let names = artifact_names();
-        let mut sorted = names.clone();
-        sorted.sort();
-        assert_eq!(names, sorted);
-    }
-
-    // -----------------------------------------------------------------------
-    // compatibility_notes
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn load_request_symbol_families_are_sorted_and_deduped() {
-        let req = simple_request()
-            .with_symbol(NativeAddonSymbol::new(
-                "beta",
-                NativeAddonSymbolClass::FunctionExport,
-            ))
-            .with_symbol(NativeAddonSymbol::new(
-                "alpha",
-                NativeAddonSymbolClass::ValueExport,
-            ))
-            .with_symbol(NativeAddonSymbol::new(
-                "gamma",
-                NativeAddonSymbolClass::FunctionExport,
-            ));
-
-        assert_eq!(
-            req.symbol_families(),
-            vec!["function_export".to_string(), "value_export".to_string()]
-        );
-    }
-
-    #[test]
-    fn compatibility_notes_direct_eligible() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert_eq!(
-            surface.risk_classification,
-            NativeAddonRiskClassification::Low
-        );
-        assert_eq!(surface.owner_route, "interop-native-addon");
-        assert_eq!(
-            surface.remediation_hint,
-            "retain the stable Node-API surface and current handle discipline"
-        );
-        assert!(surface.symbol_families.is_empty());
-        let notes = compatibility_notes(&surface);
-        assert_eq!(
-            notes,
-            "risk=low owner_route=interop-native-addon remediation=retain the stable Node-API surface and current handle discipline; direct membrane eligible"
-        );
-    }
-
-    #[test]
-    fn compatibility_notes_missing_caps() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.requires_network_egress = true;
-        let surface = m.assess_support_surface(&req, &CapabilityProfile::compute_only());
-        assert_eq!(
-            surface.risk_classification,
-            NativeAddonRiskClassification::Critical
-        );
-        assert_eq!(surface.owner_route, "security-capability-review");
-        assert_eq!(
-            surface.remediation_hint,
-            "grant missing capabilities (network_egress) or keep the addon unsupported until the package matrix and policy contract are updated"
-        );
-        let notes = compatibility_notes(&surface);
-        assert!(notes.starts_with(
-            "risk=critical owner_route=security-capability-review remediation=grant missing capabilities (network_egress)"
-        ));
-        assert!(notes.contains("missing capabilities: network_egress"));
-    }
-
-    #[test]
-    fn compatibility_notes_direct_blockers() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request()
-            .with_handle_discipline(NativeAddonHandleDiscipline::ExternalBuffer)
-            .allow_fallback(NativeAddonFallbackMode::DelegateCell);
-        let surface = m.assess_support_surface(&req, &full_profile());
-        assert_eq!(surface.symbol_families, vec!["external_buffer".to_string()]);
-        assert_eq!(
-            surface.risk_classification,
-            NativeAddonRiskClassification::High
-        );
-        assert_eq!(surface.owner_route, "runtime-delegate-cell");
-        assert_eq!(
-            surface.remediation_hint,
-            "route through the delegate cell and isolate unsafe pointer or heap behavior behind the hostcall session boundary"
-        );
-        let notes = compatibility_notes(&surface);
-        assert!(notes.starts_with(
-            "risk=high owner_route=runtime-delegate-cell remediation=route through the delegate cell"
-        ));
-        assert!(notes.contains("direct blockers:"));
-        assert!(notes.contains("selected fallback: delegate_cell"));
-    }
-
-    // -----------------------------------------------------------------------
-    // slot_capability_sort_key
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn slot_capability_sort_key_ordered() {
-        let caps = [
-            SlotCapability::ReadSource,
-            SlotCapability::EmitIr,
-            SlotCapability::HeapAlloc,
-            SlotCapability::ScheduleAsync,
-            SlotCapability::InvokeHostcall,
-            SlotCapability::ModuleAccess,
-            SlotCapability::TriggerGc,
-            SlotCapability::EmitEvidence,
-        ];
-        for pair in caps.windows(2) {
-            assert!(slot_capability_sort_key(pair[0]) < slot_capability_sort_key(pair[1]));
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // push_slot_capability
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn push_slot_capability_adds_new() {
-        let mut caps = Vec::new();
-        push_slot_capability(&mut caps, SlotCapability::HeapAlloc);
-        assert_eq!(caps.len(), 1);
-    }
-
-    #[test]
-    fn push_slot_capability_deduplicates() {
-        let mut caps = vec![SlotCapability::HeapAlloc];
-        push_slot_capability(&mut caps, SlotCapability::HeapAlloc);
-        assert_eq!(caps.len(), 1);
-    }
-
-    // -----------------------------------------------------------------------
-    // NativeAddonMembrane serde
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn membrane_serde_roundtrip() {
-        let m = NativeAddonMembrane::standard();
-        let json = serde_json::to_string(&m).unwrap();
-        let back: NativeAddonMembrane = serde_json::from_str(&json).unwrap();
-        assert_eq!(m, back);
-    }
-
-    // -----------------------------------------------------------------------
-    // delegate_sandbox adjustments
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn delegate_sandbox_base_when_simple() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let sandbox = m.delegate_sandbox(&req);
-        assert_eq!(sandbox, SandboxConfiguration::default());
-    }
-
-    #[test]
-    fn delegate_sandbox_increases_heap_for_foreign_heap() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.uses_foreign_heap = true;
-        let sandbox = m.delegate_sandbox(&req);
-        assert!(sandbox.max_heap_bytes >= 128 * 1024 * 1024);
-    }
-
-    #[test]
-    fn delegate_sandbox_increases_timeout_for_async_workers() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.uses_async_workers = true;
-        let sandbox = m.delegate_sandbox(&req);
-        assert!(sandbox.max_execution_ns >= 10_000_000_000);
-        assert!(sandbox.max_hostcalls >= 20_000);
-    }
-
-    #[test]
-    fn delegate_sandbox_allows_network_when_required() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.requires_network_egress = true;
-        let sandbox = m.delegate_sandbox(&req);
-        assert!(sandbox.network_egress_allowed);
-    }
-
-    #[test]
-    fn delegate_sandbox_allows_fs_when_required() {
-        let m = NativeAddonMembrane::standard();
-        let mut req = simple_request();
-        req.requires_filesystem_read = true;
-        let sandbox = m.delegate_sandbox(&req);
-        assert!(sandbox.filesystem_access_allowed);
-    }
-
-    // -----------------------------------------------------------------------
-    // decision_stable_id
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn decision_stable_id_deterministic() {
-        let ctx = context();
-        let fingerprint = ContentHash::compute(b"test");
-        let id1 = native_addon_decision_stable_id(
-            &ctx,
-            "addon-1",
-            &fingerprint,
-            NativeAddonSupportStatus::Direct,
-            Some(NativeAddonRoute::DirectMembrane),
-            "none",
-        );
-        let id2 = native_addon_decision_stable_id(
-            &ctx,
-            "addon-1",
-            &fingerprint,
-            NativeAddonSupportStatus::Direct,
-            Some(NativeAddonRoute::DirectMembrane),
-            "none",
-        );
-        assert_eq!(id1, id2);
-    }
-
-    #[test]
-    fn decision_stable_id_prefixed() {
-        let ctx = context();
-        let fingerprint = ContentHash::compute(b"test");
-        let id = native_addon_decision_stable_id(
-            &ctx,
-            "addon-1",
-            &fingerprint,
-            NativeAddonSupportStatus::Direct,
-            Some(NativeAddonRoute::DirectMembrane),
-            "none",
-        );
-        assert!(id.starts_with("native-addon-dec-"));
-    }
-
-    #[test]
-    fn decision_stable_id_differs_for_different_addons() {
-        let ctx = context();
-        let fingerprint = ContentHash::compute(b"test");
-        let id1 = native_addon_decision_stable_id(
-            &ctx,
-            "addon-1",
-            &fingerprint,
-            NativeAddonSupportStatus::Direct,
-            Some(NativeAddonRoute::DirectMembrane),
-            "none",
-        );
-        let id2 = native_addon_decision_stable_id(
-            &ctx,
-            "addon-2",
-            &fingerprint,
-            NativeAddonSupportStatus::Direct,
-            Some(NativeAddonRoute::DirectMembrane),
-            "none",
-        );
-        assert_ne!(id1, id2);
-    }
-
-    // -----------------------------------------------------------------------
-    // Canonical hash / report hash
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn inventory_report_canonical_hash_stable() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let r1 = m.inventory_report(std::slice::from_ref(&req), &full_profile());
-        let r2 = m.inventory_report(std::slice::from_ref(&req), &full_profile());
-        assert_eq!(r1.canonical_hash(), r2.canonical_hash());
-    }
-
-    #[test]
-    fn inventory_report_canonical_bytes_non_empty() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let report = m.inventory_report(&[req], &full_profile());
-        assert!(!report.canonical_bytes().is_empty());
-    }
-
-    // -----------------------------------------------------------------------
-    // Struct serde roundtrips
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn decision_event_serde_roundtrip() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let surface = m.assess_support_surface(&req, &full_profile());
-        let event = m.build_event(
-            &surface,
-            &context(),
-            "allow",
-            "none",
-            Some(NativeAddonRoute::DirectMembrane),
-        );
-        let json = serde_json::to_string(&event).unwrap();
-        let back: NativeAddonDecisionEvent = serde_json::from_str(&json).unwrap();
-        assert_eq!(event, back);
-    }
-
-    #[test]
-    fn support_surface_serde_roundtrip() {
-        let m = NativeAddonMembrane::standard();
-        let req = simple_request();
-        let surface = m.assess_support_surface(&req, &full_profile());
-        let json = serde_json::to_string(&surface).unwrap();
-        let back: NativeAddonSupportSurface = serde_json::from_str(&json).unwrap();
-        assert_eq!(surface, back);
-    }
+    // -- MembraneReport serde --
 
     #[test]
     fn membrane_report_serde_roundtrip() {
-        let report = NativeAddonMembraneReport {
-            schema_version: MEMBRANE_REPORT_SCHEMA_VERSION.to_string(),
-            bead_id: BEAD_ID.to_string(),
-            component: COMPONENT.to_string(),
-            generated_at_unix_ms: 1_000_000,
-            trace_id: "t1".to_string(),
-            decision_id: "d1".to_string(),
-            policy_id: "p1".to_string(),
-            addon_count: 5,
-            direct_count: 3,
-            fallback_only_count: 1,
-            unsupported_count: 1,
-            inventory_hash: ContentHash::compute(b"test"),
-        };
+        let s = MembraneState::new();
+        let policy = default_policy();
+        let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
         let json = serde_json::to_string(&report).unwrap();
-        let back: NativeAddonMembraneReport = serde_json::from_str(&json).unwrap();
+        let back: MembraneReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, back);
     }
 
+    // -- Constants --
+
     #[test]
-    fn inventory_report_serde_roundtrip() {
-        let report = NativeAddonInventoryReport {
-            schema_version: INVENTORY_SCHEMA_VERSION.to_string(),
-            support_surface: Vec::new(),
-            compatibility_matrix: Vec::new(),
-            abi_fingerprint_index: Vec::new(),
-            cohort_counts: BTreeMap::new(),
-            required_addon_ids: Vec::new(),
-            coverage_gaps: Vec::new(),
-            coverage_complete: true,
-            report_hash: ContentHash::compute(b"empty"),
-        };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: NativeAddonInventoryReport = serde_json::from_str(&json).unwrap();
-        assert_eq!(report, back);
+    fn constants_non_empty() {
+        assert!(!SCHEMA_VERSION.is_empty());
+        assert!(!COMPONENT.is_empty());
+        assert!(!BEAD_ID.is_empty());
+        assert!(!POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn constants_values() {
+        assert_eq!(BEAD_ID, "bd-1lsy.5.9.2");
+        assert_eq!(POLICY_ID, "RGC-407B");
+    }
+
+    #[test]
+    fn millionths_constant() {
+        assert_eq!(MILLIONTHS, 1_000_000);
+    }
+
+    // -- Edge cases --
+
+    #[test]
+    fn finalize_escaped_handle() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.mark_handle_escaped(id, 100).unwrap();
+        assert!(s.finalize_handle(id).is_ok());
+        assert_eq!(s.get_handle(id).unwrap().state, HandleState::Finalized);
+    }
+
+    #[test]
+    fn mark_finalized_handle_escaped_error() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.finalize_handle(id).unwrap();
+        assert!(matches!(
+            s.mark_handle_escaped(id, 100),
+            Err(MembraneError::HandleAlreadyFinalized { .. })
+        ));
+    }
+
+    #[test]
+    fn multiple_addons_independent_routing() {
+        let mut s = MembraneState::new();
+        s.register_addon(make_registration("fast", AddonAbi::NodeApi, &[]))
+            .unwrap();
+        s.register_addon(make_registration("slow", AddonAbi::CustomFfi, &[]))
+            .unwrap();
+        let config = default_routing();
+        let d1 = s.route_call("fast", &config);
+        let d2 = s.route_call("slow", &config);
+        assert_eq!(d1, RouteDecision::FastPath);
+        assert_eq!(d2, RouteDecision::SlowPath);
+    }
+
+    #[test]
+    fn crash_isolation_per_addon() {
+        let mut s = MembraneState::new();
+        s.register_addon(make_registration("a", AddonAbi::NodeApi, &[]))
+            .unwrap();
+        s.register_addon(make_registration("b", AddonAbi::NodeApi, &[]))
+            .unwrap();
+        for _ in 0..DEFAULT_FALLBACK_THRESHOLD_FAILURES {
+            s.record_crash("a", "crash", 100);
+        }
+        let config = default_routing();
+        let da = s.route_call("a", &config);
+        let db = s.route_call("b", &config);
+        assert_eq!(da, RouteDecision::Fallback);
+        assert_eq!(db, RouteDecision::FastPath);
+    }
+
+    #[test]
+    fn revoke_handle_when_shutdown() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.shutdown();
+        assert!(matches!(
+            s.revoke_handle(id),
+            Err(MembraneError::MembraneShutDown)
+        ));
+    }
+
+    #[test]
+    fn finalize_handle_when_shutdown() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.shutdown();
+        assert!(matches!(
+            s.finalize_handle(id),
+            Err(MembraneError::MembraneShutDown)
+        ));
+    }
+
+    #[test]
+    fn mark_escape_when_shutdown() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        let id = s
+            .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.shutdown();
+        assert!(matches!(
+            s.mark_handle_escaped(id, 100),
+            Err(MembraneError::MembraneShutDown)
+        ));
+    }
+
+    #[test]
+    fn membrane_state_serde_roundtrip() {
+        let mut s = make_state_with_addon("a");
+        let policy = default_policy();
+        s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
+            .unwrap();
+        s.record_crash("a", "boom", 100);
+        let json = serde_json::to_string(&s).unwrap();
+        let back: MembraneState = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn record_violation_directly() {
+        let mut s = MembraneState::new();
+        let v = Violation::new(ViolationKind::UnregisteredAddon, "x", "details", 99);
+        s.record_violation(v.clone());
+        assert_eq!(s.violations.len(), 1);
+        assert_eq!(s.violations[0], v);
+    }
+
+    #[test]
+    fn addon_failure_count_unknown_addon() {
+        let s = MembraneState::new();
+        assert_eq!(s.addon_failure_count("nonexistent"), 0);
     }
 }

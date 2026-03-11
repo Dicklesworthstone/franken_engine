@@ -437,6 +437,26 @@ fn rgc_011_operator_verification_commands_are_present() {
 }
 
 #[test]
+fn rgc_011_operator_verification_uses_repo_local_rch_target_dir() {
+    let matrix = parse_matrix();
+
+    assert!(
+        matrix
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_")),
+        "operator verification must pin rch-heavy commands to a repo-local target dir"
+    );
+    assert!(
+        matrix
+            .operator_verification
+            .iter()
+            .all(|cmd| !cmd.contains("/tmp/rch_target")),
+        "operator verification must not rely on /tmp rch target dirs"
+    );
+}
+
+#[test]
 fn rgc_011_react_capability_extension_is_bound_and_covered() {
     let matrix = parse_matrix();
     let react = &matrix.react_capability_contract_ref;

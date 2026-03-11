@@ -112,6 +112,11 @@ with:
 ```bash
 jq empty docs/rgc_react_capability_contract_v1.json
 
+rch exec -- env \
+  CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_rgc_react_capability_contract \
+  cargo test -p frankenengine-engine --test rgc_react_capability_contract \
+  --test rgc_executable_compatibility_target_matrix
+
 ./scripts/run_rgc_react_capability_contract.sh ci
 
 ./scripts/e2e/rgc_react_capability_contract_replay.sh ci

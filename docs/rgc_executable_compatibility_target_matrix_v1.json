@@ -383,7 +383,7 @@
   "operator_verification": [
     "jq empty docs/rgc_executable_compatibility_target_matrix_v1.json",
     "jq empty docs/rgc_react_capability_contract_v1.json",
-    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_contract cargo test -p frankenengine-engine --test rgc_executable_compatibility_target_matrix",
+    "rch exec -- env CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_rgc_contract cargo test -p frankenengine-engine --test rgc_executable_compatibility_target_matrix",
     "./scripts/run_rgc_react_capability_contract.sh ci",
     "./scripts/run_phase_a_exit_gate.sh check"
   ]

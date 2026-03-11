@@ -476,3 +476,405 @@ fn dedup_across_domains() {
     // All three should use dedup; first is representative, other two deduped
     assert_eq!(pipeline.dedup_entries.len(), 2);
 }
+
+// ===========================================================================
+// CompressionResult integration tests
+// ===========================================================================
+
+#[test]
+fn result_bytes_saved() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let d = desc(
+        "save-test",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        5000,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    let result = pipeline.result_for("save-test").unwrap();
+    // Dictionary compression ratio is 350_000 = 35% of original.
+    assert!(result.bytes_saved() > 0);
+    assert!(result.compressed_size_bytes < result.original_size_bytes);
+}
+
+#[test]
+fn result_ratio_bounded() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let d = desc(
+        "ratio-bounded",
+        ArtifactDomain::Aot,
+        ArtifactFamily::BytecodeArtifact,
+        10000,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    let result = pipeline.result_for("ratio-bounded").unwrap();
+    assert!(result.ratio_millionths <= 1_000_000);
+    assert!(result.ratio_millionths > 0);
+}
+
+#[test]
+fn result_serde_roundtrip() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let d = desc(
+        "serde-result",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        3000,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    let result = pipeline.result_for("serde-result").unwrap();
+    let json = serde_json::to_string(result).unwrap();
+    let back: frankenengine_engine::proof_backed_compression::CompressionResult =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(*result, back);
+}
+
+#[test]
+fn result_dedup_has_representative_id() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let canonical = b"dedup-rep-test";
+    let d1 = desc(
+        "rep-first",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        3000,
+        Some(canonical),
+    );
+    let d2 = desc(
+        "rep-second",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        3000,
+        Some(canonical),
+    );
+    pipeline.process_artifact(&d1);
+    pipeline.process_artifact(&d2);
+    let r2 = pipeline.result_for("rep-second").unwrap();
+    assert!(r2.dedup_representative_id.is_some());
+    assert_eq!(r2.dedup_representative_id.as_deref(), Some("rep-first"));
+}
+
+// ===========================================================================
+// CompressionReceipt integration tests
+// ===========================================================================
+
+#[test]
+fn receipt_fields_populated() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let d = desc(
+        "rcpt-fields",
+        ArtifactDomain::Evidence,
+        ArtifactFamily::EvidenceRecord,
+        2000,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    let receipt = pipeline.receipt_for("rcpt-fields").unwrap();
+    assert_eq!(receipt.artifact_id, "rcpt-fields");
+    assert_eq!(receipt.domain, ArtifactDomain::Evidence);
+    assert_eq!(receipt.strategy, CompressionStrategy::DictionaryCompression);
+    assert!(receipt.restoration_verified);
+    assert_eq!(receipt.receipt_epoch, epoch(10));
+}
+
+#[test]
+fn receipt_hash_nonempty() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let d = desc(
+        "rcpt-hash",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        1000,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    let receipt = pipeline.receipt_for("rcpt-hash").unwrap();
+    assert_ne!(receipt.receipt_hash, ContentHash::compute(b"placeholder"));
+}
+
+#[test]
+fn receipt_serde_roundtrip() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let d = desc(
+        "rcpt-serde",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        3000,
+        Some(b"can-serde"),
+    );
+    pipeline.process_artifact(&d);
+    let receipt = pipeline.receipt_for("rcpt-serde").unwrap();
+    let json = serde_json::to_string(receipt).unwrap();
+    let back: frankenengine_engine::proof_backed_compression::CompressionReceipt =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(*receipt, back);
+}
+
+// ===========================================================================
+// DedupEntry integration tests
+// ===========================================================================
+
+#[test]
+fn dedup_entries_track_savings() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let canonical = b"savings-track";
+    for i in 0..5 {
+        let d = desc(
+            &format!("sav-{i}"),
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            4000,
+            Some(canonical),
+        );
+        pipeline.process_artifact(&d);
+    }
+    // First is representative; 4 duplicates
+    assert_eq!(pipeline.dedup_entries.len(), 4);
+    let total_saved: u64 = pipeline
+        .dedup_entries
+        .iter()
+        .map(|e| e.size_saved_bytes)
+        .sum();
+    assert_eq!(total_saved, 4 * 4000);
+}
+
+#[test]
+fn dedup_entries_for_canonical() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let canonical = b"lookup-can";
+    for i in 0..3 {
+        let d = desc(
+            &format!("look-{i}"),
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            2000,
+            Some(canonical),
+        );
+        pipeline.process_artifact(&d);
+    }
+    let canonical_hash = ContentHash::compute(canonical);
+    let entries = pipeline.dedup_entries_for_canonical(&canonical_hash);
+    assert_eq!(entries.len(), 2);
+}
+
+#[test]
+fn dedup_entry_serde_roundtrip() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let canonical = b"serde-entry";
+    for i in 0..2 {
+        let d = desc(
+            &format!("ent-{i}"),
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1500,
+            Some(canonical),
+        );
+        pipeline.process_artifact(&d);
+    }
+    let entry = &pipeline.dedup_entries[0];
+    let json = serde_json::to_string(entry).unwrap();
+    let back: frankenengine_engine::proof_backed_compression::DedupEntry =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(*entry, back);
+}
+
+// ===========================================================================
+// CompressionSummary integration tests
+// ===========================================================================
+
+#[test]
+fn summary_total_counts_correct() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    for i in 0..8 {
+        let size = if i < 3 { 10 } else { 2000 }; // first 3 too small
+        let d = desc(
+            &format!("sum-{i}"),
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            size,
+            None,
+        );
+        pipeline.process_artifact(&d);
+    }
+    let s = pipeline.summary_report();
+    assert_eq!(s.total_artifacts, 5);
+    assert_eq!(s.refusal_count, 3);
+}
+
+#[test]
+fn summary_by_strategy_populated() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    // Cache → DictionaryCompression, Aot → DeltaEncoding
+    pipeline.process_artifact(&desc(
+        "strat-cache",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        3000,
+        None,
+    ));
+    pipeline.process_artifact(&desc(
+        "strat-aot",
+        ArtifactDomain::Aot,
+        ArtifactFamily::BytecodeArtifact,
+        3000,
+        None,
+    ));
+    let s = pipeline.summary_report();
+    assert!(s.by_strategy.len() >= 2);
+}
+
+#[test]
+fn summary_by_domain_populated() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    for (i, domain) in ArtifactDomain::ALL.iter().enumerate() {
+        let d = desc(
+            &format!("dom-s-{i}"),
+            *domain,
+            ArtifactFamily::CacheEntry,
+            2000,
+            None,
+        );
+        pipeline.process_artifact(&d);
+    }
+    let s = pipeline.summary_report();
+    assert_eq!(s.by_domain.len(), 3);
+}
+
+#[test]
+fn summary_serde_roundtrip() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    for i in 0..5 {
+        let d = desc(
+            &format!("sum-s-{i}"),
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            3000,
+            None,
+        );
+        pipeline.process_artifact(&d);
+    }
+    let s = pipeline.summary_report();
+    let json = serde_json::to_string(&s).unwrap();
+    let back: frankenengine_engine::proof_backed_compression::CompressionSummary =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(s, back);
+}
+
+#[test]
+fn summary_empty_pipeline() {
+    let pipeline = CompressionPipeline::new(epoch(10));
+    let s = pipeline.summary_report();
+    assert_eq!(s.total_artifacts, 0);
+    assert_eq!(s.total_original_bytes, 0);
+    assert_eq!(s.total_compressed_bytes, 0);
+    assert_eq!(s.total_saved_bytes, 0);
+    assert_eq!(s.dedup_count, 0);
+    assert_eq!(s.refusal_count, 0);
+}
+
+// ===========================================================================
+// Pipeline hash determinism
+// ===========================================================================
+
+#[test]
+fn pipeline_hash_changes_on_process() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let initial_hash = pipeline.pipeline_hash.clone();
+    let d = desc(
+        "hash-change",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        2000,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    assert_ne!(pipeline.pipeline_hash, initial_hash);
+}
+
+#[test]
+fn pipeline_hash_differs_by_epoch() {
+    let p1 = CompressionPipeline::new(epoch(10));
+    let p2 = CompressionPipeline::new(epoch(20));
+    assert_ne!(p1.pipeline_hash, p2.pipeline_hash);
+}
+
+#[test]
+fn pipeline_batch_order_deterministic() {
+    let descriptors: Vec<_> = (0..5)
+        .map(|i| {
+            desc(
+                &format!("ord-{i}"),
+                ArtifactDomain::Cache,
+                ArtifactFamily::CacheEntry,
+                2000,
+                None,
+            )
+        })
+        .collect();
+
+    let mut p1 = CompressionPipeline::new(epoch(10));
+    let mut p2 = CompressionPipeline::new(epoch(10));
+    p1.process_batch(&descriptors);
+    p2.process_batch(&descriptors);
+    assert_eq!(p1.pipeline_hash, p2.pipeline_hash);
+}
+
+// ===========================================================================
+// Edge cases
+// ===========================================================================
+
+#[test]
+fn pipeline_zero_size_artifact_refused() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let d = desc(
+        "zero-size",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        0,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    assert!(pipeline.results.is_empty());
+    assert_eq!(pipeline.refusals.len(), 1);
+}
+
+#[test]
+fn pipeline_boundary_size_artifact() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    // Exactly at minimum size boundary (64 bytes)
+    let d = desc(
+        "boundary-64",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        64,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    assert_eq!(pipeline.results.len(), 1);
+    assert!(pipeline.refusals.is_empty());
+}
+
+#[test]
+fn pipeline_just_under_min_size() {
+    let mut pipeline = CompressionPipeline::new(epoch(10));
+    let d = desc(
+        "under-min",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        63,
+        None,
+    );
+    pipeline.process_artifact(&d);
+    assert!(pipeline.results.is_empty());
+    assert_eq!(pipeline.refusals.len(), 1);
+}
+
+#[test]
+fn pipeline_result_for_missing_returns_none() {
+    let pipeline = CompressionPipeline::new(epoch(10));
+    assert!(pipeline.result_for("nonexistent").is_none());
+    assert!(pipeline.receipt_for("nonexistent").is_none());
+}

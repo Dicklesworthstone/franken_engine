@@ -98,7 +98,7 @@ under `artifacts/rgc_docs_help_surface_audit/<UTC_TIMESTAMP>/`.
 ```bash
 jq empty docs/rgc_docs_help_surface_audit_v1.json
 
-rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_docs_help_surface_audit \
+rch exec -- env CARGO_TARGET_DIR="$PWD/target_rch_rgc_docs_help_surface_audit_verify" \
   cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit
 
 ./scripts/run_rgc_docs_help_surface_audit.sh ci

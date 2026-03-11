@@ -339,11 +339,29 @@ fn rgc_016a_operator_verification_commands_are_present() {
         "operator verification must include the gate script"
     );
     assert!(
+        contract.operator_verification.iter().any(|cmd| cmd.contains(
+            "CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_rgc_react_capability_contract"
+        )),
+        "operator verification must include a repo-local rch target dir for direct test validation"
+    );
+    assert!(
         contract
             .operator_verification
             .iter()
             .any(|cmd| cmd.contains("./scripts/e2e/rgc_react_capability_contract_replay.sh ci")),
         "operator verification must include the replay wrapper"
+    );
+}
+
+#[test]
+fn rgc_016a_operator_verification_avoids_tmp_rch_targets() {
+    let contract = parse_contract();
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .all(|cmd| !cmd.contains("/tmp/rch_target")),
+        "operator verification must not rely on /tmp rch target dirs"
     );
 }
 

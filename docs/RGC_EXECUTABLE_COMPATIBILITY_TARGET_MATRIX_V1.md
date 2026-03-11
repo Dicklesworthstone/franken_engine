@@ -108,7 +108,8 @@ be accepted by the validation tests in
 ```bash
 jq empty docs/rgc_executable_compatibility_target_matrix_v1.json
 
-rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_contract \
+rch exec -- env \
+  CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_rgc_contract \
   cargo test -p frankenengine-engine --test rgc_executable_compatibility_target_matrix
 
 ./scripts/run_rgc_react_capability_contract.sh ci

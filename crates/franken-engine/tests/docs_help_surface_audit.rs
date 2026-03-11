@@ -321,12 +321,32 @@ fn rgc_911a_gate_script_fails_closed_on_help_validation_and_uses_isolated_target
         "gate script must not ignore help-validation failures"
     );
     assert!(
-        script.contains("/tmp/rch_target_rgc_docs_help_surface_audit_"),
-        "gate script should use an isolated remote target dir"
+        script.contains("${root_dir}/target_rch_rgc_docs_help_surface_audit_"),
+        "gate script should use a repo-local, namespaced remote target dir"
     );
     assert!(
-        !script.contains("/data/projects/franken_engine/target_rch_rgc_docs_help_surface_audit"),
-        "gate script must not reuse a fixed repo-local remote target dir"
+        !script.contains("/tmp/rch_target_rgc_docs_help_surface_audit_"),
+        "gate script must not route heavy remote builds through /tmp"
+    );
+}
+
+#[test]
+fn rgc_911a_operator_verification_uses_repo_local_target_dir_examples() {
+    let contract = parse_contract();
+
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|command| command.contains("$PWD/target_rch_rgc_docs_help_surface_audit_verify")),
+        "operator verification should document a repo-local target dir example"
+    );
+    assert!(
+        !contract
+            .operator_verification
+            .iter()
+            .any(|command| command.contains("/tmp/rch_target_rgc_docs_help_surface_audit")),
+        "operator verification must not point operators back to /tmp-backed targets"
     );
 }
 

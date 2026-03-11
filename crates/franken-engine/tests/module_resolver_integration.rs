@@ -519,14 +519,15 @@ fn relative_from_builtin_referrer_returns_unsupported() {
 }
 
 #[test]
-fn relative_from_external_referrer_returns_unsupported() {
+fn relative_from_external_referrer_resolves_against_package_root() {
     let mut r = DeterministicModuleResolver::new("/app");
-    r.register_external_module("ext-mod", esm("export default 1;"))
+    r.register_external_module("ext-mod/sub.mjs", esm("export default 1;"))
         .unwrap();
 
     let req = ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:ext-mod");
-    let err = r.resolve(&req, &ctx(), &AllowAllPolicy).unwrap_err();
-    assert_eq!(err.code, ResolutionErrorCode::UnsupportedSpecifier);
+    let outcome = r.resolve(&req, &ctx(), &AllowAllPolicy).unwrap();
+    assert_eq!(outcome.module.canonical_specifier, "ext-mod/sub.mjs");
+    assert_eq!(outcome.module.record.id, "external:ext-mod/sub.mjs");
 }
 
 #[test]
@@ -1138,6 +1139,41 @@ fn end_to_end_mixed_module_chain() {
     assert!(kinds.contains(&ModuleSourceKind::Workspace));
     assert!(kinds.contains(&ModuleSourceKind::BuiltIn));
     assert!(kinds.contains(&ModuleSourceKind::ExternalRegistry));
+}
+
+#[test]
+fn end_to_end_scoped_external_relative_chain_inherits_bun_compat_mode() {
+    let mut r = DeterministicModuleResolver::new("/project");
+    r.register_external_module(
+        "@scope/pkg/index.cjs",
+        cjs("const lib = require('./internal/lib.mjs'); module.exports = lib;")
+            .with_dependency(ModuleDependency::new(
+                "./internal/lib.mjs",
+                ImportStyle::Require,
+            ))
+            .with_provenance("npm:@scope/pkg@1.0.0"),
+    )
+    .unwrap();
+    r.register_external_module(
+        "@scope/pkg/internal/lib.mjs",
+        esm("export default 'scoped-lib';").with_provenance("npm:@scope/pkg@1.0.0"),
+    )
+    .unwrap();
+
+    let req = ModuleRequest::new("@scope/pkg", ImportStyle::Require)
+        .with_compatibility_mode(CompatibilityMode::BunCompat);
+    let chain = r.resolve_chain(&req, &ctx(), &AllowAllPolicy).unwrap();
+    let ids = chain
+        .iter()
+        .map(|outcome| outcome.module.record.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            "external:@scope/pkg/index.cjs",
+            "external:@scope/pkg/internal/lib.mjs"
+        ]
+    );
 }
 
 #[test]

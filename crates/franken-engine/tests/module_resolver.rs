@@ -167,6 +167,28 @@ fn node_compat_still_rejects_require_of_esm_package_entry() {
     assert!(error.message.contains("ERR_REQUIRE_ESM"));
 }
 
+#[test]
+fn external_relative_dependency_resolves_from_package_root() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_module(
+            "some-pkg/sub.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'sub';"),
+        )
+        .unwrap();
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:some-pkg"),
+            &context(),
+            &AllowAllPolicy,
+        )
+        .expect("external package relative dependency should resolve");
+
+    assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
+    assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
+}
+
 // ────────────────────────────────────────────────────────────
 // Enrichment: error paths, builtins, registration, serde
 // ────────────────────────────────────────────────────────────

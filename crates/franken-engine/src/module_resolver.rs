@@ -1072,6 +1072,27 @@ impl DeterministicModuleResolver {
                     context,
                 ))
             })?;
+            if let Some(external_referrer) = referrer.strip_prefix("external:") {
+                let base_dir = external_referrer_directory(external_referrer);
+                let resolved_base =
+                    normalize_external_specifier_path(&join_paths(&base_dir, specifier));
+                let (relative_probes, candidate) =
+                    self.lookup_external_candidate_with_probes(&resolved_base, request.style);
+                probe_sequence.extend(relative_probes);
+                return candidate.map_or_else(
+                    || {
+                        Err(Box::new(ResolutionError::new(
+                            ResolutionErrorCode::ModuleNotFound,
+                            format!(
+                                "unable to resolve relative specifier '{}' from '{}'",
+                                request.specifier, referrer
+                            ),
+                            context,
+                        )))
+                    },
+                    |(resolved, record)| Ok((resolved, record, probe_sequence)),
+                );
+            }
             let base_dir = self.referrer_directory(referrer, context)?;
             let resolved_base = normalize_absolute_path(&join_paths(&base_dir, specifier));
             let (relative_probes, candidate) =
@@ -1136,7 +1157,7 @@ impl DeterministicModuleResolver {
         referrer: &str,
         context: &ResolutionContext,
     ) -> ResolutionResult<String> {
-        if referrer.starts_with("builtin:") || referrer.starts_with("external:") {
+        if referrer.starts_with("builtin:") {
             return Err(Box::new(ResolutionError::new(
                 ResolutionErrorCode::UnsupportedSpecifier,
                 format!(
@@ -1340,6 +1361,35 @@ fn join_paths(base: &str, child: &str) -> String {
         format!("{base}{child}")
     } else {
         format!("{base}/{child}")
+    }
+}
+
+fn normalize_external_specifier_path(path: &str) -> String {
+    normalize_absolute_path(&format!("/{path}"))
+        .trim_start_matches('/')
+        .to_string()
+}
+
+fn external_referrer_directory(referrer: &str) -> String {
+    let normalized = normalize_external_specifier_path(referrer);
+    if is_package_root_specifier(&normalized) {
+        return normalized;
+    }
+
+    parent_directory(&format!("/{normalized}"))
+        .trim_start_matches('/')
+        .to_string()
+}
+
+fn is_package_root_specifier(specifier: &str) -> bool {
+    let segments: Vec<&str> = specifier
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    match segments.len() {
+        0 | 1 => true,
+        2 if segments[0].starts_with('@') => true,
+        _ => false,
     }
 }
 
@@ -2856,14 +2906,57 @@ mod tests {
     // ── Enrichment: relative from external referrer ──────────────
 
     #[test]
-    fn relative_from_external_referrer_returns_unsupported_specifier() {
-        let resolver = DeterministicModuleResolver::new("/app");
+    fn relative_from_external_referrer_resolves_against_package_root() {
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_external_module(
+                "some-pkg/sub.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
+            )
+            .unwrap();
+
         let request =
             ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:some-pkg");
-        let error = resolver
+        let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect_err("relative from external referrer should fail");
-        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+            .expect("relative dependency should resolve within external package");
+        assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
+        assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
+    }
+
+    #[test]
+    fn resolve_chain_supports_external_relative_require_edges_in_bun_compat_mode() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_module(
+                "pkg/index.cjs",
+                ModuleDefinition::new(
+                    ModuleSyntax::CommonJs,
+                    "const lib = require('./lib.mjs'); module.exports = lib;",
+                )
+                .with_dependency(ModuleDependency::new("./lib.mjs", ImportStyle::Require)),
+            )
+            .unwrap();
+        resolver
+            .register_external_module(
+                "pkg/lib.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'esm';"),
+            )
+            .unwrap();
+
+        let outcomes = resolver
+            .resolve_chain(
+                &ModuleRequest::new("pkg", ImportStyle::Require)
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("bun_compat chain should follow external package relative require");
+        let ids = outcomes
+            .iter()
+            .map(|outcome| outcome.module.record.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["external:pkg/index.cjs", "external:pkg/lib.mjs"]);
     }
 
     // ── Enrichment: ModuleRequest with_referrer serde ────────────

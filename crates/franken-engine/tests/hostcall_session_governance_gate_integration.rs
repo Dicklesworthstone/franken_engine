@@ -2,8 +2,8 @@
 
 //! Integration tests for the hostcall_session_governance_gate module.
 
-use frankenengine_engine::hostcall_session_governance_gate::*;
 use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::hostcall_session_governance_gate::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 fn epoch() -> SecurityEpoch {
@@ -160,7 +160,10 @@ fn test_conformance_level_display() {
     assert_eq!(ConformanceLevel::Full.to_string(), "full");
     assert_eq!(ConformanceLevel::Partial.to_string(), "partial");
     assert_eq!(ConformanceLevel::Degraded.to_string(), "degraded");
-    assert_eq!(ConformanceLevel::NonConformant.to_string(), "non_conformant");
+    assert_eq!(
+        ConformanceLevel::NonConformant.to_string(),
+        "non_conformant"
+    );
 }
 
 #[test]
@@ -192,8 +195,14 @@ fn test_degraded_mode_reason_serde_roundtrip() {
 #[test]
 fn test_degraded_mode_reason_display() {
     assert_eq!(DegradedModeReason::HighLatency.to_string(), "high_latency");
-    assert_eq!(DegradedModeReason::SecurityViolation.to_string(), "security_violation");
-    assert_eq!(DegradedModeReason::ProtocolMismatch.to_string(), "protocol_mismatch");
+    assert_eq!(
+        DegradedModeReason::SecurityViolation.to_string(),
+        "security_violation"
+    );
+    assert_eq!(
+        DegradedModeReason::ProtocolMismatch.to_string(),
+        "protocol_mismatch"
+    );
 }
 
 #[test]
@@ -268,7 +277,10 @@ fn test_replay_drop_kind_serde_roundtrip() {
 #[test]
 fn test_replay_drop_kind_display() {
     assert_eq!(ReplayDropKind::Timeout.to_string(), "timeout");
-    assert_eq!(ReplayDropKind::BufferOverflow.to_string(), "buffer_overflow");
+    assert_eq!(
+        ReplayDropKind::BufferOverflow.to_string(),
+        "buffer_overflow"
+    );
     assert_eq!(ReplayDropKind::SessionExpiry.to_string(), "session_expiry");
 }
 
@@ -451,7 +463,10 @@ fn test_gate_config_default() {
     assert_eq!(cfg.min_conformance_fraction, DEFAULT_MIN_CONFORMANCE);
     assert_eq!(cfg.max_replay_drop_rate, DEFAULT_MAX_REPLAY_DROP_RATE);
     assert_eq!(cfg.max_degraded_severity, DEFAULT_MAX_DEGRADED_SEVERITY);
-    assert_eq!(cfg.max_observability_overhead, DEFAULT_MAX_OBSERVABILITY_OVERHEAD);
+    assert_eq!(
+        cfg.max_observability_overhead,
+        DEFAULT_MAX_OBSERVABILITY_OVERHEAD
+    );
     assert_eq!(cfg.min_operations_tested, DEFAULT_MIN_OPERATIONS_TESTED);
 }
 
@@ -598,20 +613,38 @@ fn test_evaluate_low_operations_fail() {
 
 #[test]
 fn test_evaluate_excessive_replay_drops_fail() {
-    let result = evaluate(&good_conformance(), &[bad_drop()], &[], None, &default_config());
+    let result = evaluate(
+        &good_conformance(),
+        &[bad_drop()],
+        &[],
+        None,
+        &default_config(),
+    );
     assert_eq!(result.verdict, GateVerdict::Fail);
 }
 
 #[test]
 fn test_evaluate_security_degradation_fail() {
-    let result = evaluate(&good_conformance(), &[], &[security_degraded()], None, &default_config());
+    let result = evaluate(
+        &good_conformance(),
+        &[],
+        &[security_degraded()],
+        None,
+        &default_config(),
+    );
     assert_eq!(result.verdict, GateVerdict::Fail);
 }
 
 #[test]
 fn test_evaluate_severe_degradation_not_security() {
     // severe but not security-critical, severity exceeds threshold -> degraded_reasons populated
-    let result = evaluate(&good_conformance(), &[], &[severe_degraded()], None, &default_config());
+    let result = evaluate(
+        &good_conformance(),
+        &[],
+        &[severe_degraded()],
+        None,
+        &default_config(),
+    );
     // Non-security critical degradation with severity > threshold -> DegradedMode
     assert_eq!(result.verdict, GateVerdict::DegradedMode);
 }

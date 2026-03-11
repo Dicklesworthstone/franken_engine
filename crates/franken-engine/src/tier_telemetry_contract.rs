@@ -23,8 +23,7 @@ use crate::security_epoch::SecurityEpoch;
 // ---------------------------------------------------------------------------
 
 /// Schema version for tier telemetry contract artifacts.
-pub const TELEMETRY_CONTRACT_SCHEMA_VERSION: &str =
-    "franken-engine.tier-telemetry-contract.v1";
+pub const TELEMETRY_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.tier-telemetry-contract.v1";
 
 /// Bead reference.
 pub const TELEMETRY_CONTRACT_BEAD_ID: &str = "bd-1lsy.4.11.3";
@@ -46,9 +45,7 @@ const MILLIONTHS: u64 = 1_000_000;
 ///
 /// Mirrors `tier_eligibility_substrate::ExecutionTier` but serves as the
 /// canonical representation for telemetry and benchmark reporting.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TelemetryTier {
     /// Interpreted execution (slowest, no compilation).
@@ -96,9 +93,7 @@ impl fmt::Display for TelemetryTier {
 // ---------------------------------------------------------------------------
 
 /// The kind of telemetry event being recorded.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TelemetryEventKind {
     /// A function transitioned between execution tiers.
@@ -172,9 +167,7 @@ impl fmt::Display for TelemetryEvent {
 // ---------------------------------------------------------------------------
 
 /// The kind of benchmark evidence being collected.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BenchmarkEvidenceKind {
     /// Operations per second.
@@ -212,9 +205,7 @@ impl fmt::Display for BenchmarkEvidenceKind {
 // ---------------------------------------------------------------------------
 
 /// Classification of a benchmark delta relative to baseline.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeltaClassification {
     /// Performance regressed beyond the threshold.
@@ -315,12 +306,7 @@ pub fn build_benchmark_sample(
     let hash_bytes: [u8; 32] = hasher.finalize().into();
     let content_hash = ContentHash(hash_bytes);
 
-    let sample_id = format!(
-        "sample-{}-{}-{}",
-        kind,
-        tier,
-        &content_hash.to_hex()[..16]
-    );
+    let sample_id = format!("sample-{}-{}-{}", kind, tier, &content_hash.to_hex()[..16]);
 
     BenchmarkSample {
         sample_id,
@@ -511,9 +497,7 @@ impl fmt::Display for PublicationContract {
         write!(
             f,
             "PublicationContract({}, min_samples={}, max_reg_rate={})",
-            self.contract_id,
-            self.required_min_samples,
-            self.max_regression_rate_millionths
+            self.contract_id, self.required_min_samples, self.max_regression_rate_millionths
         )
     }
 }
@@ -1103,9 +1087,11 @@ mod tests {
         assert_eq!(contract.max_regression_rate_millionths, 100_000);
         assert!(contract.require_all_tiers_represented);
         assert_eq!(contract.staleness_limit_epochs, 5);
-        assert!(contract
-            .contract_id
-            .starts_with("publication-contract-default"));
+        assert!(
+            contract
+                .contract_id
+                .starts_with("publication-contract-default")
+        );
     }
 
     #[test]
@@ -1155,10 +1141,12 @@ mod tests {
         let verdict = evaluate_publication(&bundle, &contract, &epoch);
 
         assert!(!verdict.is_publishable);
-        assert!(verdict
-            .reasons
-            .iter()
-            .any(|r| r.contains("insufficient samples")));
+        assert!(
+            verdict
+                .reasons
+                .iter()
+                .any(|r| r.contains("insufficient samples"))
+        );
     }
 
     #[test]
@@ -1190,10 +1178,12 @@ mod tests {
         let verdict = evaluate_publication(&bundle, &contract, &epoch);
 
         assert!(!verdict.is_publishable);
-        assert!(verdict
-            .reasons
-            .iter()
-            .any(|r| r.contains("regression rate")));
+        assert!(
+            verdict
+                .reasons
+                .iter()
+                .any(|r| r.contains("regression rate"))
+        );
     }
 
     #[test]
@@ -1322,8 +1312,7 @@ mod tests {
     #[test]
     fn test_build_telemetry_report() {
         let epoch = SecurityEpoch::from_raw(5);
-        let report =
-            build_telemetry_report(Vec::new(), Vec::new(), Vec::new(), None, &epoch);
+        let report = build_telemetry_report(Vec::new(), Vec::new(), Vec::new(), None, &epoch);
         assert_eq!(report.total_events, 0);
         assert_eq!(report.epoch, epoch);
         assert!(report.report_id.starts_with("report-"));
@@ -1439,10 +1428,7 @@ mod tests {
     #[test]
     fn test_delta_classification_display() {
         assert_eq!(DeltaClassification::Regression.to_string(), "regression");
-        assert_eq!(
-            DeltaClassification::Improvement.to_string(),
-            "improvement"
-        );
+        assert_eq!(DeltaClassification::Improvement.to_string(), "improvement");
         assert_eq!(DeltaClassification::Neutral.to_string(), "neutral");
     }
 

@@ -338,6 +338,8 @@ pub enum CompilationRejectReason {
     TierUpIneligible,
     SuperblockFormationRejected,
     DuplicateCandidateOffset,
+    CandidateProfileMismatch,
+    MissingDeoptContinuations,
 }
 
 /// Deterministic rejection record for one compilation candidate.
@@ -443,12 +445,36 @@ impl OptimizedTierCompilationPlan {
                     continue;
                 }
 
+                if let Err(detail) = validate_candidate_profile(candidate, profile) {
+                    rejected_candidates.push(OptimizedCompilationReject {
+                        candidate_id,
+                        candidate: candidate.clone(),
+                        reason: CompilationRejectReason::CandidateProfileMismatch,
+                        formation_outcome: None,
+                        detail,
+                    });
+                    continue;
+                }
+
                 let record = form_superblock(profile, candidate.ip, policy, formation_epoch);
                 match record.outcome {
                     FormationOutcome::Formed => {
                         let block = record
                             .block
                             .expect("formed superblock records must include a block");
+                        if block.deopt_continuations().is_empty() {
+                            rejected_candidates.push(OptimizedCompilationReject {
+                                candidate_id,
+                                candidate: candidate.clone(),
+                                reason: CompilationRejectReason::MissingDeoptContinuations,
+                                formation_outcome: Some(FormationOutcome::Formed),
+                                detail: format!(
+                                    "candidate entry@{} formed a superblock with no deopt continuations",
+                                    candidate.ip
+                                ),
+                            });
+                            continue;
+                        }
                         units.push(OptimizedCompilationUnit::from_candidate(
                             &decision.trace_id,
                             candidate.clone(),
@@ -504,6 +530,27 @@ impl OptimizedTierCompilationPlan {
     pub fn compilable_unit_count(&self) -> usize {
         self.units.len()
     }
+}
+
+fn validate_candidate_profile(
+    candidate: &TierUpCandidate,
+    profile: &QuickeningProfile,
+) -> Result<(), String> {
+    let Some(entry) = profile.get(candidate.ip) else {
+        return Err(format!(
+            "candidate entry@{} opcode {} missing from quickening profile {}",
+            candidate.ip, candidate.opcode, profile.function_id
+        ));
+    };
+
+    if entry.opcode != candidate.opcode {
+        return Err(format!(
+            "candidate entry@{} opcode mismatch: tier-up selected {}, quickening profile {} has {}",
+            candidate.ip, candidate.opcode, profile.function_id, entry.opcode
+        ));
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2038,6 +2085,123 @@ mod tests {
         assert_eq!(
             plan.rejected_candidates[0].formation_outcome,
             Some(FormationOutcome::NoEligibleInstructions)
+        );
+    }
+
+    #[test]
+    fn optimized_tier_plan_rejects_candidate_profile_opcode_mismatch() {
+        let (mut profile, _qp) = make_hot_profile();
+        profile.record_execution(0, "different_opcode");
+        let decision = TierUpDecision {
+            schema_version: "franken-engine.tier-up-policy.v1".into(),
+            trace_id: "trace-mismatch".into(),
+            policy_hash: "policy-hash".into(),
+            eligible: true,
+            selected_candidates: vec![TierUpCandidate {
+                ip: 0,
+                opcode: "different_opcode".into(),
+                invocations: 100,
+                cache_hit_rate_millionths: 950_000,
+                rationale: "hot_path_meets_tier_up_thresholds".into(),
+            }],
+            rejected_paths: Vec::new(),
+            profile: HotPathProfile {
+                trace_id: "trace-mismatch".into(),
+                total_steps: 100,
+                observed_instruction_events: 100,
+                top_paths: Vec::new(),
+                profile_hash: "profile-hash".into(),
+            },
+            decision_hash: "decision-hash".into(),
+            events: Vec::new(),
+        };
+
+        let plan = OptimizedTierCompilationPlan::build(
+            &decision,
+            &profile,
+            &SuperblockPolicy::default(),
+            4,
+        );
+
+        assert!(plan.units.is_empty());
+        assert_eq!(plan.rejected_candidates.len(), 1);
+        assert_eq!(
+            plan.rejected_candidates[0].reason,
+            CompilationRejectReason::CandidateProfileMismatch
+        );
+        assert!(plan.rejected_candidates[0].formation_outcome.is_none());
+        assert!(
+            plan.rejected_candidates[0]
+                .detail
+                .contains("opcode mismatch")
+        );
+    }
+
+    #[test]
+    fn optimized_tier_plan_rejects_guardless_superblock_without_deopt_continuations() {
+        let qpolicy = QPolicy {
+            warm_threshold: 2,
+            hot_threshold: 4,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+        let mut profile = QuickeningProfile::new("guardless_fn");
+        for offset in (0..8).step_by(4) {
+            for _ in 0..100 {
+                profile.record_execution(offset, &format!("op_{offset}"));
+            }
+        }
+        for _ in 0..4 {
+            profile.evaluate_all(&qpolicy);
+        }
+
+        let decision = TierUpDecision {
+            schema_version: "franken-engine.tier-up-policy.v1".into(),
+            trace_id: "trace-guardless".into(),
+            policy_hash: "policy-hash".into(),
+            eligible: true,
+            selected_candidates: vec![TierUpCandidate {
+                ip: 0,
+                opcode: "op_0".into(),
+                invocations: 100,
+                cache_hit_rate_millionths: 0,
+                rationale: "hot_path_meets_tier_up_thresholds".into(),
+            }],
+            rejected_paths: Vec::new(),
+            profile: HotPathProfile {
+                trace_id: "trace-guardless".into(),
+                total_steps: 100,
+                observed_instruction_events: 100,
+                top_paths: Vec::new(),
+                profile_hash: "profile-hash".into(),
+            },
+            decision_hash: "decision-hash".into(),
+            events: Vec::new(),
+        };
+
+        let plan = OptimizedTierCompilationPlan::build(
+            &decision,
+            &profile,
+            &SuperblockPolicy::default(),
+            5,
+        );
+
+        assert!(plan.units.is_empty());
+        assert_eq!(plan.rejected_candidates.len(), 1);
+        assert_eq!(
+            plan.rejected_candidates[0].reason,
+            CompilationRejectReason::MissingDeoptContinuations
+        );
+        assert_eq!(
+            plan.rejected_candidates[0].formation_outcome,
+            Some(FormationOutcome::Formed)
+        );
+        assert!(
+            plan.rejected_candidates[0]
+                .detail
+                .contains("no deopt continuations")
         );
     }
 

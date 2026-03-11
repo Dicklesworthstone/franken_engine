@@ -519,7 +519,8 @@ pub struct MiningConfig {
 impl MiningConfig {
     /// Total maximum workloads across all generations.
     pub fn max_total_workloads(&self) -> u64 {
-        self.max_generations.saturating_mul(self.workloads_per_generation)
+        self.max_generations
+            .saturating_mul(self.workloads_per_generation)
     }
 
     /// Whether the given coverage fraction meets the minimum.
@@ -661,7 +662,10 @@ impl DecisionReceipt {
         ContentHash::compute(&h.finalize())
     }
 
-    fn compute_receipt_hash(evidence_hash: &ContentHash, result: &FalsificationResult) -> ContentHash {
+    fn compute_receipt_hash(
+        evidence_hash: &ContentHash,
+        result: &FalsificationResult,
+    ) -> ContentHash {
         let mut h = Sha256::new();
         h.update(b"adversarial-receipt-v1:");
         h.update(COMPONENT.as_bytes());
@@ -717,7 +721,10 @@ pub fn generate_workload(
     // Compute complexity from archetype base and strategy multiplier.
     let base = archetype.base_complexity();
     let mult = strategy.effectiveness_multiplier();
-    let complexity_score = base.saturating_mul(mult).checked_div(MILLIONTHS).unwrap_or(base);
+    let complexity_score = base
+        .saturating_mul(mult)
+        .checked_div(MILLIONTHS)
+        .unwrap_or(base);
 
     // Size is a deterministic function of generation and seed length.
     let size_bytes = 256_u64
@@ -821,7 +828,11 @@ pub fn synthesize_batch(
                 }
 
                 // Derive a deterministic seed for this combination.
-                let seed_data = format!("{claim_id}:{generation}:{}:{}", archetype.as_str(), strategy.as_str());
+                let seed_data = format!(
+                    "{claim_id}:{generation}:{}:{}",
+                    archetype.as_str(),
+                    strategy.as_str()
+                );
                 let workload = generate_workload(
                     *archetype,
                     *strategy,
@@ -1009,16 +1020,18 @@ mod tests {
 
     #[test]
     fn constant_invariants() {
-        assert!(DEFAULT_MAX_GENERATIONS > 0);
-        assert!(DEFAULT_WORKLOADS_PER_GENERATION > 0);
-        assert!(DEFAULT_MUTATION_RATE > 0);
-        assert!(DEFAULT_MUTATION_RATE <= MILLIONTHS);
-        assert!(DEFAULT_MIN_COVERAGE > 0);
-        assert!(DEFAULT_MIN_COVERAGE <= MILLIONTHS);
-        assert!(DEFAULT_MAX_SEARCH_BUDGET > 0);
-        assert!(CRITICAL_GAP_THRESHOLD > MAJOR_GAP_THRESHOLD);
-        assert!(MAJOR_GAP_THRESHOLD > MINOR_GAP_THRESHOLD);
-        assert!(MINOR_GAP_THRESHOLD > 0);
+        const {
+            assert!(DEFAULT_MAX_GENERATIONS > 0);
+            assert!(DEFAULT_WORKLOADS_PER_GENERATION > 0);
+            assert!(DEFAULT_MUTATION_RATE > 0);
+            assert!(DEFAULT_MUTATION_RATE <= MILLIONTHS);
+            assert!(DEFAULT_MIN_COVERAGE > 0);
+            assert!(DEFAULT_MIN_COVERAGE <= MILLIONTHS);
+            assert!(DEFAULT_MAX_SEARCH_BUDGET > 0);
+            assert!(CRITICAL_GAP_THRESHOLD > MAJOR_GAP_THRESHOLD);
+            assert!(MAJOR_GAP_THRESHOLD > MINOR_GAP_THRESHOLD);
+            assert!(MINOR_GAP_THRESHOLD > 0);
+        }
         assert_eq!(STRATEGY_COUNT, SynthesisStrategy::ALL.len());
         assert_eq!(ARCHETYPE_COUNT, WorkloadArchetype::ALL.len());
     }
@@ -1079,7 +1092,9 @@ mod tests {
     fn severity_meets_threshold() {
         assert!(CounterexampleSeverity::Critical.meets_threshold(CounterexampleSeverity::Minor));
         assert!(CounterexampleSeverity::Minor.meets_threshold(CounterexampleSeverity::Minor));
-        assert!(!CounterexampleSeverity::Informational.meets_threshold(CounterexampleSeverity::Minor));
+        assert!(
+            !CounterexampleSeverity::Informational.meets_threshold(CounterexampleSeverity::Minor)
+        );
     }
 
     #[test]
@@ -1315,7 +1330,10 @@ mod tests {
     #[test]
     fn classify_informational() {
         assert_eq!(classify_severity(0), CounterexampleSeverity::Informational);
-        assert_eq!(classify_severity(49_999), CounterexampleSeverity::Informational);
+        assert_eq!(
+            classify_severity(49_999),
+            CounterexampleSeverity::Informational
+        );
     }
 
     // --- evaluate_counterexample ---
@@ -1450,7 +1468,13 @@ mod tests {
     #[test]
     fn synthesize_batch_empty_archetypes() {
         let config = small_config();
-        let result = synthesize_batch(&[], &[SynthesisStrategy::GradientGuided], "claim-3", &config, epoch());
+        let result = synthesize_batch(
+            &[],
+            &[SynthesisStrategy::GradientGuided],
+            "claim-3",
+            &config,
+            epoch(),
+        );
         assert_eq!(result.workloads_tested, 0);
         // No workloads => insufficient coverage => InsufficientSearch.
         assert_eq!(result.verdict, FalsificationVerdict::InsufficientSearch);
@@ -1586,7 +1610,10 @@ mod tests {
         );
         let report = summarize(&[result.clone()]);
         assert_eq!(report.total_workloads, result.workloads_tested);
-        assert_eq!(report.total_counterexamples, result.counterexamples.len() as u64);
+        assert_eq!(
+            report.total_counterexamples,
+            result.counterexamples.len() as u64
+        );
         assert_eq!(report.total_claims(), 1);
     }
 

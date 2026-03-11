@@ -478,10 +478,10 @@ impl GateConfig {
     /// Strict configuration with low tolerances.
     pub fn strict() -> Self {
         Self {
-            max_budget_overrun_fraction: 20_000,  // 2%
-            tail_risk_threshold: 980_000,          // 98%
-            max_tail_heaviness: 100_000,           // 0.1
-            regression_sensitivity: 10_000,        // 1%
+            max_budget_overrun_fraction: 20_000, // 2%
+            tail_risk_threshold: 980_000,        // 98%
+            max_tail_heaviness: 100_000,         // 0.1
+            regression_sensitivity: 10_000,      // 1%
             min_sample_count: 100,
         }
     }
@@ -489,10 +489,10 @@ impl GateConfig {
     /// Permissive configuration with high tolerances.
     pub fn permissive() -> Self {
         Self {
-            max_budget_overrun_fraction: 200_000,  // 20%
-            tail_risk_threshold: 800_000,           // 80%
-            max_tail_heaviness: 500_000,            // 0.5
-            regression_sensitivity: 100_000,        // 10%
+            max_budget_overrun_fraction: 200_000, // 20%
+            tail_risk_threshold: 800_000,         // 80%
+            max_tail_heaviness: 500_000,          // 0.5
+            regression_sensitivity: 100_000,      // 10%
             min_sample_count: 5,
         }
     }
@@ -660,10 +660,7 @@ pub fn evaluate_regression(
     }
 
     // 2. Tail spike: tail_risk_fraction grew.
-    let tail_delta = fractional_delta(
-        baseline.tail_risk_fraction,
-        evidence.tail_risk_fraction,
-    );
+    let tail_delta = fractional_delta(baseline.tail_risk_fraction, evidence.tail_risk_fraction);
     if tail_delta > config.regression_sensitivity {
         regressions.push(RegressionRecord {
             kind: RegressionKind::TailSpike,
@@ -679,12 +676,12 @@ pub fn evaluate_regression(
     // 3. Resource-specific regressions.
     match evidence.resource_kind {
         ResourceKind::EffectBudget => {
-            let effect_delta = fractional_delta(
-                baseline.consumed_millionths,
-                evidence.consumed_millionths,
-            );
+            let effect_delta =
+                fractional_delta(baseline.consumed_millionths, evidence.consumed_millionths);
             if effect_delta > config.regression_sensitivity
-                && !regressions.iter().any(|r| r.kind == RegressionKind::BudgetOverrun)
+                && !regressions
+                    .iter()
+                    .any(|r| r.kind == RegressionKind::BudgetOverrun)
             {
                 regressions.push(RegressionRecord {
                     kind: RegressionKind::EffectLeak,
@@ -698,12 +695,12 @@ pub fn evaluate_regression(
             }
         }
         ResourceKind::AllocationBudget => {
-            let alloc_delta = fractional_delta(
-                baseline.consumed_millionths,
-                evidence.consumed_millionths,
-            );
+            let alloc_delta =
+                fractional_delta(baseline.consumed_millionths, evidence.consumed_millionths);
             if alloc_delta > config.regression_sensitivity
-                && !regressions.iter().any(|r| r.kind == RegressionKind::BudgetOverrun)
+                && !regressions
+                    .iter()
+                    .any(|r| r.kind == RegressionKind::BudgetOverrun)
             {
                 regressions.push(RegressionRecord {
                     kind: RegressionKind::AllocationBurst,
@@ -717,12 +714,12 @@ pub fn evaluate_regression(
             }
         }
         ResourceKind::LatencyBudget => {
-            let lat_delta = fractional_delta(
-                baseline.consumed_millionths,
-                evidence.consumed_millionths,
-            );
+            let lat_delta =
+                fractional_delta(baseline.consumed_millionths, evidence.consumed_millionths);
             if lat_delta > config.regression_sensitivity
-                && !regressions.iter().any(|r| r.kind == RegressionKind::BudgetOverrun)
+                && !regressions
+                    .iter()
+                    .any(|r| r.kind == RegressionKind::BudgetOverrun)
             {
                 regressions.push(RegressionRecord {
                     kind: RegressionKind::LatencyRegression,
@@ -742,18 +739,14 @@ pub fn evaluate_regression(
 }
 
 /// Assess tail risk from a single evidence observation.
-pub fn assess_tail_risk(
-    evidence: &CertificateEvidence,
-    config: &GateConfig,
-) -> TailRiskAssessment {
+pub fn assess_tail_risk(evidence: &CertificateEvidence, config: &GateConfig) -> TailRiskAssessment {
     // Derive synthetic p99/p999 from evidence fields.
     // p99 ≈ consumed + tail_risk_fraction scaled by budget.
-    let p99_fraction = evidence.utilisation_fraction()
+    let p99_fraction = evidence
+        .utilisation_fraction()
         .saturating_add(evidence.tail_risk_fraction / 10);
-    let p999_fraction = p99_fraction
-        .saturating_add(evidence.tail_risk_fraction / 5);
-    let max_observed = p999_fraction
-        .saturating_add(evidence.tail_risk_fraction / 3);
+    let p999_fraction = p99_fraction.saturating_add(evidence.tail_risk_fraction / 5);
+    let max_observed = p999_fraction.saturating_add(evidence.tail_risk_fraction / 3);
 
     // Tail heaviness: ratio of p999 to p99 (millionths).
     let tail_heaviness = if p99_fraction == 0 {
@@ -766,8 +759,8 @@ pub fn assess_tail_risk(
     };
 
     // Acceptable if p99 below threshold AND tail heaviness below max.
-    let acceptable = p99_fraction <= config.tail_risk_threshold
-        && tail_heaviness <= config.max_tail_heaviness;
+    let acceptable =
+        p99_fraction <= config.tail_risk_threshold && tail_heaviness <= config.max_tail_heaviness;
 
     TailRiskAssessment {
         p99_fraction,
@@ -779,10 +772,7 @@ pub fn assess_tail_risk(
 }
 
 /// Determine risk level from regressions and tail assessment.
-fn determine_risk_level(
-    regressions: &[RegressionRecord],
-    tail: &TailRiskAssessment,
-) -> RiskLevel {
+fn determine_risk_level(regressions: &[RegressionRecord], tail: &TailRiskAssessment) -> RiskLevel {
     let max_severity = regressions.iter().map(|r| r.severity).max().unwrap_or(0);
 
     if max_severity > 500_000 || (!tail.acceptable && tail.tail_heaviness > 2 * MILLION) {
@@ -808,10 +798,7 @@ fn build_publication_constraints(
     // If there are regressions, must disclose and cap claims.
     let has_regressions = !regressions.is_empty();
     if has_regressions {
-        caveats.push(format!(
-            "{} regression(s) detected",
-            regressions.len(),
-        ));
+        caveats.push(format!("{} regression(s) detected", regressions.len(),));
     }
 
     // If tail risk is unacceptable, add caveat.
@@ -929,13 +916,7 @@ pub fn evaluate(
         GateVerdict::Pass
     };
 
-    let receipt_hash = compute_receipt_hash(
-        verdict,
-        risk_level,
-        &regressions,
-        &tail,
-        evidence,
-    );
+    let receipt_hash = compute_receipt_hash(verdict, risk_level, &regressions, &tail, evidence);
 
     GateResult {
         verdict,
@@ -958,12 +939,18 @@ pub fn evaluate_batch(
         .collect();
 
     let total = results.len() as u64;
-    let passed = results.iter().filter(|r| r.verdict == GateVerdict::Pass).count() as u64;
+    let passed = results
+        .iter()
+        .filter(|r| r.verdict == GateVerdict::Pass)
+        .count() as u64;
     let conditional = results
         .iter()
         .filter(|r| r.verdict == GateVerdict::ConditionalPass)
         .count() as u64;
-    let failed = results.iter().filter(|r| r.verdict == GateVerdict::Fail).count() as u64;
+    let failed = results
+        .iter()
+        .filter(|r| r.verdict == GateVerdict::Fail)
+        .count() as u64;
     let insufficient = results
         .iter()
         .filter(|r| r.verdict == GateVerdict::InsufficientEvidence)

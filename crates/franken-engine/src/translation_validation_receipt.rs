@@ -29,9 +29,7 @@ use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::security_epoch::SecurityEpoch;
-use crate::versioned_rewrite_pack::{
-    PackVersion, RewriteCategory,
-};
+use crate::versioned_rewrite_pack::{PackVersion, RewriteCategory};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -293,10 +291,8 @@ impl TranslationValidationReceipt {
         verdict: ReceiptVerdict,
         cost_model_id: &str,
     ) -> Self {
-        let total_cost_delta_millionths: i64 = applied_rules
-            .iter()
-            .map(|r| r.cost_delta_millionths)
-            .sum();
+        let total_cost_delta_millionths: i64 =
+            applied_rules.iter().map(|r| r.cost_delta_millionths).sum();
 
         let rewrite_categories: BTreeSet<RewriteCategory> =
             applied_rules.iter().map(|r| r.category).collect();
@@ -363,7 +359,10 @@ impl TranslationValidationReceipt {
 
     /// Number of rules that are proven sound at pack level.
     pub fn proven_sound_rule_count(&self) -> usize {
-        self.applied_rules.iter().filter(|r| r.rule_proven_sound).count()
+        self.applied_rules
+            .iter()
+            .filter(|r| r.rule_proven_sound)
+            .count()
     }
 
     /// Whether all applied rules were proven sound at pack level.
@@ -463,11 +462,18 @@ pub enum FailureKind {
     /// Counterexample found: the rewrite changes semantics.
     CounterexampleFound { divergence: String },
     /// Proof budget exceeded: could not verify within time limit.
-    BudgetExceeded { consumed_ticks: u64, limit_ticks: u64 },
+    BudgetExceeded {
+        consumed_ticks: u64,
+        limit_ticks: u64,
+    },
     /// Interference detected: rules in the application set conflict.
     InterferenceDetected { conflicting_rules: Vec<String> },
     /// IR structure too complex for the chosen proof mode.
-    ComplexityExceeded { metric: String, value: u64, limit: u64 },
+    ComplexityExceeded {
+        metric: String,
+        value: u64,
+        limit: u64,
+    },
     /// Rule application produced malformed IR.
     MalformedOutput { detail: String },
 }
@@ -478,13 +484,24 @@ impl fmt::Display for FailureKind {
             Self::CounterexampleFound { divergence } => {
                 write!(f, "counterexample: {divergence}")
             }
-            Self::BudgetExceeded { consumed_ticks, limit_ticks } => {
+            Self::BudgetExceeded {
+                consumed_ticks,
+                limit_ticks,
+            } => {
                 write!(f, "budget exceeded: {consumed_ticks}/{limit_ticks} ticks")
             }
             Self::InterferenceDetected { conflicting_rules } => {
-                write!(f, "interference: {} rules conflict", conflicting_rules.len())
+                write!(
+                    f,
+                    "interference: {} rules conflict",
+                    conflicting_rules.len()
+                )
             }
-            Self::ComplexityExceeded { metric, value, limit } => {
+            Self::ComplexityExceeded {
+                metric,
+                value,
+                limit,
+            } => {
                 write!(f, "complexity exceeded: {metric}={value} > {limit}")
             }
             Self::MalformedOutput { detail } => {
@@ -605,7 +622,10 @@ impl ReceiptChain {
 
     /// Append a receipt to the chain.  Returns an error if the receipt's
     /// parent hash doesn't match the chain's last receipt hash.
-    pub fn append(&mut self, receipt: TranslationValidationReceipt) -> Result<(), ReceiptChainError> {
+    pub fn append(
+        &mut self,
+        receipt: TranslationValidationReceipt,
+    ) -> Result<(), ReceiptChainError> {
         // Verify parent hash linkage
         let expected_parent = self.receipts.last().map(|r| r.content_hash.clone());
         if receipt.parent_hash != expected_parent {
@@ -649,7 +669,10 @@ impl ReceiptChain {
 
     /// Number of successful receipts.
     pub fn success_count(&self) -> usize {
-        self.receipts.iter().filter(|r| r.permits_activation()).count()
+        self.receipts
+            .iter()
+            .filter(|r| r.permits_activation())
+            .count()
     }
 
     /// Number of failed/inconclusive receipts (in the main chain).
@@ -940,8 +963,8 @@ impl EmitResult {
 impl ValidationReceiptEmitter {
     /// Create a new emitter.
     pub fn new(config: EmitterConfig, epoch: SecurityEpoch) -> Self {
-        let chain = ReceiptChain::new(&config.chain_id, epoch)
-            .with_max_length(config.max_chain_length);
+        let chain =
+            ReceiptChain::new(&config.chain_id, epoch).with_max_length(config.max_chain_length);
         Self {
             config,
             chain,
@@ -994,7 +1017,8 @@ impl ValidationReceiptEmitter {
             };
         }
 
-        let cost_model_id = input.cost_model_id
+        let cost_model_id = input
+            .cost_model_id
             .unwrap_or_else(|| self.config.default_cost_model_id.clone());
 
         let parent_hash = self.chain.last_receipt().map(|r| r.content_hash.clone());
@@ -1021,8 +1045,7 @@ impl ValidationReceiptEmitter {
         match &input.verdict {
             ReceiptVerdict::Proven { .. } => {
                 self.stats.total_proven += 1;
-                self.stats.total_cost_improvement_millionths +=
-                    receipt.total_cost_delta_millionths;
+                self.stats.total_cost_improvement_millionths += receipt.total_cost_delta_millionths;
 
                 // Append to chain (ignore pruning errors from sequence mismatch
                 // after pruning — the chain handles that internally)
@@ -1030,19 +1053,32 @@ impl ValidationReceiptEmitter {
 
                 EmitResult::Approved { receipt }
             }
-            ReceiptVerdict::Disproven { counterexample_hash, divergence } => {
+            ReceiptVerdict::Disproven {
+                counterexample_hash,
+                divergence,
+            } => {
                 self.stats.total_disproven += 1;
 
                 let failure = FailureReceipt::new(
                     &input.optimization_id,
-                    &input.applied_rules.first()
+                    &input
+                        .applied_rules
+                        .first()
                         .map(|r| r.pack_id.clone())
                         .unwrap_or_default(),
-                    input.applied_rules.first()
+                    input
+                        .applied_rules
+                        .first()
                         .map(|r| r.pack_version)
                         .unwrap_or(PackVersion::CURRENT),
-                    input.applied_rules.iter().map(|r| r.rule_id.clone()).collect(),
-                    FailureKind::CounterexampleFound { divergence: divergence.clone() },
+                    input
+                        .applied_rules
+                        .iter()
+                        .map(|r| r.rule_id.clone())
+                        .collect(),
+                    FailureKind::CounterexampleFound {
+                        divergence: divergence.clone(),
+                    },
                     Some(counterexample_hash.clone()),
                     self.config.quarantine_on_first_failure,
                     self.current_epoch,
@@ -1058,18 +1094,30 @@ impl ValidationReceiptEmitter {
 
                 EmitResult::Rejected { receipt, failure }
             }
-            ReceiptVerdict::Inconclusive { reason: _, budget_consumed_ticks, budget_limit_ticks } => {
+            ReceiptVerdict::Inconclusive {
+                reason: _,
+                budget_consumed_ticks,
+                budget_limit_ticks,
+            } => {
                 self.stats.total_inconclusive += 1;
 
                 let failure = FailureReceipt::new(
                     &input.optimization_id,
-                    &input.applied_rules.first()
+                    &input
+                        .applied_rules
+                        .first()
                         .map(|r| r.pack_id.clone())
                         .unwrap_or_default(),
-                    input.applied_rules.first()
+                    input
+                        .applied_rules
+                        .first()
                         .map(|r| r.pack_version)
                         .unwrap_or(PackVersion::CURRENT),
-                    input.applied_rules.iter().map(|r| r.rule_id.clone()).collect(),
+                    input
+                        .applied_rules
+                        .iter()
+                        .map(|r| r.rule_id.clone())
+                        .collect(),
                     FailureKind::BudgetExceeded {
                         consumed_ticks: *budget_consumed_ticks,
                         limit_ticks: *budget_limit_ticks,
@@ -1102,8 +1150,7 @@ impl ValidationReceiptEmitter {
     pub fn summary(&self) -> ReceiptSummary {
         let chain_integrity = self.chain.verify_integrity();
         let proven_rate_millionths = if self.stats.total_receipts > 0 {
-            (self.stats.total_proven as i64 * 1_000_000)
-                / self.stats.total_receipts as i64
+            (self.stats.total_proven as i64 * 1_000_000) / self.stats.total_receipts as i64
         } else {
             0
         };
@@ -1177,12 +1224,7 @@ mod tests {
     }
 
     fn test_evidence() -> ProofEvidence {
-        ProofEvidence::new(
-            ProofMode::Symbolic,
-            test_hash(b"proof-artifact"),
-            100,
-            5000,
-        )
+        ProofEvidence::new(ProofMode::Symbolic, test_hash(b"proof-artifact"), 100, 5000)
     }
 
     fn test_rule(rule_id: &str, cost_delta: i64) -> AppliedRuleRecord {
@@ -1240,14 +1282,23 @@ mod tests {
     fn test_proof_mode_display() {
         assert_eq!(ProofMode::Symbolic.to_string(), "symbolic");
         assert_eq!(ProofMode::GoldenCorpus.to_string(), "golden_corpus");
-        assert_eq!(ProofMode::DifferentialTrace.to_string(), "differential_trace");
+        assert_eq!(
+            ProofMode::DifferentialTrace.to_string(),
+            "differential_trace"
+        );
         assert_eq!(ProofMode::Axiomatic.to_string(), "axiomatic");
         assert_eq!(ProofMode::Composite.to_string(), "composite");
     }
 
     #[test]
     fn test_proof_mode_serde() {
-        for mode in [ProofMode::Symbolic, ProofMode::GoldenCorpus, ProofMode::DifferentialTrace, ProofMode::Axiomatic, ProofMode::Composite] {
+        for mode in [
+            ProofMode::Symbolic,
+            ProofMode::GoldenCorpus,
+            ProofMode::DifferentialTrace,
+            ProofMode::Axiomatic,
+            ProofMode::Composite,
+        ] {
             let json = serde_json::to_string(&mode).unwrap();
             let restored: ProofMode = serde_json::from_str(&json).unwrap();
             assert_eq!(mode, restored);
@@ -1486,16 +1537,28 @@ mod tests {
     #[test]
     fn test_receipt_content_hash_deterministic() {
         let r1 = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
             vec![test_rule("r1", -100)],
-            proven_verdict(), "cm",
+            proven_verdict(),
+            "cm",
         );
         let r2 = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
             vec![test_rule("r1", -100)],
-            proven_verdict(), "cm",
+            proven_verdict(),
+            "cm",
         );
         assert_eq!(r1.content_hash, r2.content_hash);
     }
@@ -1503,14 +1566,28 @@ mod tests {
     #[test]
     fn test_receipt_content_hash_differs_on_sequence() {
         let r1 = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         let r2 = TranslationValidationReceipt::new(
-            2, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            2,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         assert_ne!(r1.content_hash, r2.content_hash);
     }
@@ -1518,11 +1595,18 @@ mod tests {
     #[test]
     fn test_receipt_serde_roundtrip() {
         let receipt = TranslationValidationReceipt::new(
-            1, "opt-serde", None, test_epoch(), 500,
-            test_hash(b"b"), test_hash(b"o"),
+            1,
+            "opt-serde",
+            None,
+            test_epoch(),
+            500,
+            test_hash(b"b"),
+            test_hash(b"o"),
             vec![test_rule("r1", -200_000)],
-            proven_verdict(), "cm",
-        ).sign(b"key123");
+            proven_verdict(),
+            "cm",
+        )
+        .sign(b"key123");
         let json = serde_json::to_string(&receipt).unwrap();
         let restored: TranslationValidationReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, restored);
@@ -1537,7 +1621,9 @@ mod tests {
             "pack-1",
             PackVersion::CURRENT,
             vec!["r1".into(), "r2".into()],
-            FailureKind::CounterexampleFound { divergence: "output mismatch".into() },
+            FailureKind::CounterexampleFound {
+                divergence: "output mismatch".into(),
+            },
             Some(test_hash(b"counter")),
             true,
             test_epoch(),
@@ -1555,7 +1641,10 @@ mod tests {
             "pack-1",
             PackVersion::CURRENT,
             vec!["r1".into()],
-            FailureKind::BudgetExceeded { consumed_ticks: 10_000, limit_ticks: 10_000 },
+            FailureKind::BudgetExceeded {
+                consumed_ticks: 10_000,
+                limit_ticks: 10_000,
+            },
             None,
             false,
             test_epoch(),
@@ -1568,10 +1657,17 @@ mod tests {
     #[test]
     fn test_failure_receipt_serde() {
         let fr = FailureReceipt::new(
-            "opt-f", "p1", PackVersion::CURRENT,
+            "opt-f",
+            "p1",
+            PackVersion::CURRENT,
             vec!["r1".into()],
-            FailureKind::InterferenceDetected { conflicting_rules: vec!["r1".into(), "r2".into()] },
-            None, true, test_epoch(), 500,
+            FailureKind::InterferenceDetected {
+                conflicting_rules: vec!["r1".into(), "r2".into()],
+            },
+            None,
+            true,
+            test_epoch(),
+            500,
         );
         let json = serde_json::to_string(&fr).unwrap();
         let restored: FailureReceipt = serde_json::from_str(&json).unwrap();
@@ -1580,29 +1676,53 @@ mod tests {
 
     #[test]
     fn test_failure_kind_display() {
-        let k1 = FailureKind::CounterexampleFound { divergence: "bad".into() };
+        let k1 = FailureKind::CounterexampleFound {
+            divergence: "bad".into(),
+        };
         assert!(k1.to_string().contains("counterexample"));
 
-        let k2 = FailureKind::BudgetExceeded { consumed_ticks: 100, limit_ticks: 100 };
+        let k2 = FailureKind::BudgetExceeded {
+            consumed_ticks: 100,
+            limit_ticks: 100,
+        };
         assert!(k2.to_string().contains("budget exceeded"));
 
-        let k3 = FailureKind::InterferenceDetected { conflicting_rules: vec!["a".into()] };
+        let k3 = FailureKind::InterferenceDetected {
+            conflicting_rules: vec!["a".into()],
+        };
         assert!(k3.to_string().contains("interference"));
 
-        let k4 = FailureKind::ComplexityExceeded { metric: "nodes".into(), value: 1000, limit: 500 };
+        let k4 = FailureKind::ComplexityExceeded {
+            metric: "nodes".into(),
+            value: 1000,
+            limit: 500,
+        };
         assert!(k4.to_string().contains("complexity"));
 
-        let k5 = FailureKind::MalformedOutput { detail: "invalid cfg".into() };
+        let k5 = FailureKind::MalformedOutput {
+            detail: "invalid cfg".into(),
+        };
         assert!(k5.to_string().contains("malformed"));
     }
 
     #[test]
     fn test_failure_kind_serde() {
         let kinds = vec![
-            FailureKind::CounterexampleFound { divergence: "x".into() },
-            FailureKind::BudgetExceeded { consumed_ticks: 1, limit_ticks: 2 },
-            FailureKind::InterferenceDetected { conflicting_rules: vec!["a".into()] },
-            FailureKind::ComplexityExceeded { metric: "n".into(), value: 1, limit: 2 },
+            FailureKind::CounterexampleFound {
+                divergence: "x".into(),
+            },
+            FailureKind::BudgetExceeded {
+                consumed_ticks: 1,
+                limit_ticks: 2,
+            },
+            FailureKind::InterferenceDetected {
+                conflicting_rules: vec!["a".into()],
+            },
+            FailureKind::ComplexityExceeded {
+                metric: "n".into(),
+                value: 1,
+                limit: 2,
+            },
             FailureKind::MalformedOutput { detail: "d".into() },
         ];
         for k in kinds {
@@ -1626,10 +1746,16 @@ mod tests {
     fn test_chain_append() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
             vec![test_rule("r1", -100)],
-            proven_verdict(), "cm",
+            proven_verdict(),
+            "cm",
         );
         chain.append(r).unwrap();
         assert_eq!(chain.receipts.len(), 1);
@@ -1640,18 +1766,31 @@ mod tests {
     fn test_chain_append_linked() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r1 = TranslationValidationReceipt::new(
-            1, "opt-1", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            1,
+            "opt-1",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         chain.append(r1).unwrap();
 
         let parent = chain.last_receipt().unwrap().content_hash.clone();
         let r2 = TranslationValidationReceipt::new(
-            2, "opt-2", Some(parent), test_epoch(), 100,
-            test_hash(b"b2"), test_hash(b"o2"),
+            2,
+            "opt-2",
+            Some(parent),
+            test_epoch(),
+            100,
+            test_hash(b"b2"),
+            test_hash(b"o2"),
             vec![test_rule("r1", -50)],
-            proven_verdict(), "cm",
+            proven_verdict(),
+            "cm",
         );
         chain.append(r2).unwrap();
         assert_eq!(chain.receipts.len(), 2);
@@ -1661,16 +1800,30 @@ mod tests {
     fn test_chain_parent_hash_mismatch() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r1 = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         chain.append(r1).unwrap();
 
         let r2 = TranslationValidationReceipt::new(
-            2, "opt-2", Some(test_hash(b"wrong-parent")), test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            2,
+            "opt-2",
+            Some(test_hash(b"wrong-parent")),
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         assert!(chain.append(r2).is_err());
     }
@@ -1679,28 +1832,45 @@ mod tests {
     fn test_chain_sequence_gap() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r = TranslationValidationReceipt::new(
-            5, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            5,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         let err = chain.append(r).unwrap_err();
-        assert!(matches!(err, ReceiptChainError::SequenceGap { expected: 1, actual: 5 }));
+        assert!(matches!(
+            err,
+            ReceiptChainError::SequenceGap {
+                expected: 1,
+                actual: 5
+            }
+        ));
     }
 
     #[test]
     fn test_chain_pruning() {
-        let mut chain = ReceiptChain::new("c1", test_epoch())
-            .with_max_length(3);
+        let mut chain = ReceiptChain::new("c1", test_epoch()).with_max_length(3);
 
         // Build a chain of 5 receipts
         let mut parent: Option<ContentHash> = None;
         for i in 1..=5u64 {
             let r = TranslationValidationReceipt::new(
-                i, &format!("opt-{i}"), parent.clone(), test_epoch(), i * 100,
+                i,
+                &format!("opt-{i}"),
+                parent.clone(),
+                test_epoch(),
+                i * 100,
                 test_hash(format!("b{i}").as_bytes()),
                 test_hash(format!("o{i}").as_bytes()),
                 vec![test_rule("r1", -(i as i64) * 1000)],
-                proven_verdict(), "cm",
+                proven_verdict(),
+                "cm",
             );
             parent = Some(r.content_hash.clone());
             chain.append(r).unwrap();
@@ -1716,17 +1886,31 @@ mod tests {
     fn test_chain_success_count() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r1 = TranslationValidationReceipt::new(
-            1, "opt-1", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            1,
+            "opt-1",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         chain.append(r1).unwrap();
 
         let parent = chain.last_receipt().unwrap().content_hash.clone();
         let r2 = TranslationValidationReceipt::new(
-            2, "opt-2", Some(parent), test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], disproven_verdict(), "cm",
+            2,
+            "opt-2",
+            Some(parent),
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            disproven_verdict(),
+            "cm",
         );
         chain.append(r2).unwrap();
 
@@ -1738,10 +1922,16 @@ mod tests {
     fn test_chain_total_cost_improvement() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
             vec![test_rule("r1", -500_000)],
-            proven_verdict(), "cm",
+            proven_verdict(),
+            "cm",
         );
         chain.append(r).unwrap();
         assert_eq!(chain.total_cost_improvement(), -500_000);
@@ -1751,9 +1941,16 @@ mod tests {
     fn test_chain_integrity_valid() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         chain.append(r).unwrap();
         let result = chain.verify_integrity();
@@ -1765,10 +1962,17 @@ mod tests {
     fn test_chain_record_failure() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let f = FailureReceipt::new(
-            "opt-f", "p1", PackVersion::CURRENT,
+            "opt-f",
+            "p1",
+            PackVersion::CURRENT,
             vec!["r1".into()],
-            FailureKind::CounterexampleFound { divergence: "bad".into() },
-            None, false, test_epoch(), 0,
+            FailureKind::CounterexampleFound {
+                divergence: "bad".into(),
+            },
+            None,
+            false,
+            test_epoch(),
+            0,
         );
         chain.record_failure(f);
         assert_eq!(chain.failure_count(), 1);
@@ -1778,9 +1982,16 @@ mod tests {
     fn test_chain_receipts_for_optimization() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r = TranslationValidationReceipt::new(
-            1, "target-opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            vec![], proven_verdict(), "cm",
+            1,
+            "target-opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
         );
         chain.append(r).unwrap();
         let found = chain.receipts_for_optimization("target-opt");
@@ -1792,10 +2003,16 @@ mod tests {
     fn test_chain_serde_roundtrip() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
             vec![test_rule("r1", -100)],
-            proven_verdict(), "cm",
+            proven_verdict(),
+            "cm",
         );
         chain.append(r).unwrap();
         let json = serde_json::to_string(&chain).unwrap();
@@ -1913,10 +2130,7 @@ mod tests {
     fn test_emitter_cost_tracking() {
         let mut em = default_emitter();
         let mut input = make_input("opt-1", proven_verdict());
-        input.applied_rules = vec![
-            test_rule("r1", -200_000),
-            test_rule("r2", -300_000),
-        ];
+        input.applied_rules = vec![test_rule("r1", -200_000), test_rule("r2", -300_000)];
         em.emit(input);
         assert_eq!(em.stats.total_cost_improvement_millionths, -500_000);
         assert_eq!(em.stats.total_rules_applied, 2);
@@ -1983,28 +2197,43 @@ mod tests {
         };
         assert!(e1.to_string().contains("parent hash mismatch"));
 
-        let e2 = ReceiptChainError::SequenceGap { expected: 1, actual: 5 };
+        let e2 = ReceiptChainError::SequenceGap {
+            expected: 1,
+            actual: 5,
+        };
         assert!(e2.to_string().contains("sequence gap"));
     }
 
     #[test]
     fn test_receipt_rewrite_categories() {
-        let rules = vec![
-            test_rule("r1", -100),
-            {
-                let mut r = test_rule("r2", -200);
-                r.category = RewriteCategory::DeadCodeElimination;
-                r
-            },
-        ];
+        let rules = vec![test_rule("r1", -100), {
+            let mut r = test_rule("r2", -200);
+            r.category = RewriteCategory::DeadCodeElimination;
+            r
+        }];
         let receipt = TranslationValidationReceipt::new(
-            1, "opt", None, test_epoch(), 0,
-            test_hash(b"b"), test_hash(b"o"),
-            rules, proven_verdict(), "cm",
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            rules,
+            proven_verdict(),
+            "cm",
         );
         assert_eq!(receipt.rewrite_categories.len(), 2);
-        assert!(receipt.rewrite_categories.contains(&RewriteCategory::AlgebraicSimplification));
-        assert!(receipt.rewrite_categories.contains(&RewriteCategory::DeadCodeElimination));
+        assert!(
+            receipt
+                .rewrite_categories
+                .contains(&RewriteCategory::AlgebraicSimplification)
+        );
+        assert!(
+            receipt
+                .rewrite_categories
+                .contains(&RewriteCategory::DeadCodeElimination)
+        );
     }
 
     #[test]
@@ -2044,16 +2273,31 @@ mod tests {
     fn test_chain_failures_for_pack() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let f1 = FailureReceipt::new(
-            "opt-1", "pack-alpha", PackVersion::CURRENT,
+            "opt-1",
+            "pack-alpha",
+            PackVersion::CURRENT,
             vec!["r1".into()],
-            FailureKind::CounterexampleFound { divergence: "x".into() },
-            None, false, test_epoch(), 0,
+            FailureKind::CounterexampleFound {
+                divergence: "x".into(),
+            },
+            None,
+            false,
+            test_epoch(),
+            0,
         );
         let f2 = FailureReceipt::new(
-            "opt-2", "pack-beta", PackVersion::CURRENT,
+            "opt-2",
+            "pack-beta",
+            PackVersion::CURRENT,
             vec!["r2".into()],
-            FailureKind::BudgetExceeded { consumed_ticks: 1, limit_ticks: 2 },
-            None, false, test_epoch(), 0,
+            FailureKind::BudgetExceeded {
+                consumed_ticks: 1,
+                limit_ticks: 2,
+            },
+            None,
+            false,
+            test_epoch(),
+            0,
         );
         chain.record_failure(f1);
         chain.record_failure(f2);

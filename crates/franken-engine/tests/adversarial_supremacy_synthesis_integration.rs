@@ -14,7 +14,13 @@ fn make_workload(
     strategy: SynthesisStrategy,
     generation: u64,
 ) -> SyntheticWorkload {
-    generate_workload(archetype, strategy, generation, b"integration-seed", epoch())
+    generate_workload(
+        archetype,
+        strategy,
+        generation,
+        b"integration-seed",
+        epoch(),
+    )
 }
 
 fn small_config() -> MiningConfig {
@@ -133,9 +139,18 @@ fn test_synthesis_strategy_effectiveness_multiplier_range() {
 
 #[test]
 fn test_synthesis_strategy_display() {
-    assert_eq!(SynthesisStrategy::GradientGuided.to_string(), "gradient_guided");
-    assert_eq!(SynthesisStrategy::RandomMutation.to_string(), "random_mutation");
-    assert_eq!(SynthesisStrategy::ArchetypeInversion.to_string(), "archetype_inversion");
+    assert_eq!(
+        SynthesisStrategy::GradientGuided.to_string(),
+        "gradient_guided"
+    );
+    assert_eq!(
+        SynthesisStrategy::RandomMutation.to_string(),
+        "random_mutation"
+    );
+    assert_eq!(
+        SynthesisStrategy::ArchetypeInversion.to_string(),
+        "archetype_inversion"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +188,10 @@ fn test_severity_meets_threshold() {
 #[test]
 fn test_severity_display() {
     assert_eq!(CounterexampleSeverity::Critical.to_string(), "critical");
-    assert_eq!(CounterexampleSeverity::Informational.to_string(), "informational");
+    assert_eq!(
+        CounterexampleSeverity::Informational.to_string(),
+        "informational"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +273,11 @@ fn test_archetype_display() {
 
 #[test]
 fn test_generate_workload_basic() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     assert!(w.workload_id.starts_with("wl-"));
     assert_eq!(w.archetype, WorkloadArchetype::CpuBound);
     assert_eq!(w.strategy, SynthesisStrategy::GradientGuided);
@@ -265,8 +287,16 @@ fn test_generate_workload_basic() {
 
 #[test]
 fn test_generate_workload_deterministic() {
-    let a = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
-    let b = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let a = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
+    let b = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     assert_eq!(a.workload_id, b.workload_id);
     assert_eq!(a.program_hash, b.program_hash);
     assert_eq!(a.complexity_score, b.complexity_score);
@@ -274,29 +304,57 @@ fn test_generate_workload_deterministic() {
 
 #[test]
 fn test_generate_workload_different_archetypes_differ() {
-    let a = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
-    let b = make_workload(WorkloadArchetype::IoBound, SynthesisStrategy::GradientGuided, 0);
+    let a = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
+    let b = make_workload(
+        WorkloadArchetype::IoBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     assert_ne!(a.workload_id, b.workload_id);
     assert_ne!(a.program_hash, b.program_hash);
 }
 
 #[test]
 fn test_generate_workload_different_strategies_differ() {
-    let a = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
-    let b = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::RandomMutation, 0);
+    let a = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
+    let b = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::RandomMutation,
+        0,
+    );
     assert_ne!(a.workload_id, b.workload_id);
 }
 
 #[test]
 fn test_generate_workload_size_increases_with_generation() {
-    let a = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
-    let b = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 10);
+    let a = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
+    let b = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        10,
+    );
     assert!(b.size_bytes > a.size_bytes);
 }
 
 #[test]
 fn test_workload_display_contains_fields() {
-    let w = make_workload(WorkloadArchetype::MemoryBound, SynthesisStrategy::BoundaryProbe, 5);
+    let w = make_workload(
+        WorkloadArchetype::MemoryBound,
+        SynthesisStrategy::BoundaryProbe,
+        5,
+    );
     let s = w.to_string();
     assert!(s.contains("memory_bound"));
     assert!(s.contains("boundary_probe"));
@@ -305,7 +363,11 @@ fn test_workload_display_contains_fields() {
 
 #[test]
 fn test_workload_serde_roundtrip() {
-    let w = make_workload(WorkloadArchetype::BranchHeavy, SynthesisStrategy::CoverageDirected, 3);
+    let w = make_workload(
+        WorkloadArchetype::BranchHeavy,
+        SynthesisStrategy::CoverageDirected,
+        3,
+    );
     let json = serde_json::to_string(&w).unwrap();
     let back: SyntheticWorkload = serde_json::from_str(&json).unwrap();
     assert_eq!(w, back);
@@ -336,7 +398,10 @@ fn test_classify_severity_minor() {
 #[test]
 fn test_classify_severity_informational() {
     assert_eq!(classify_severity(0), CounterexampleSeverity::Informational);
-    assert_eq!(classify_severity(49_999), CounterexampleSeverity::Informational);
+    assert_eq!(
+        classify_severity(49_999),
+        CounterexampleSeverity::Informational
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -345,21 +410,33 @@ fn test_classify_severity_informational() {
 
 #[test]
 fn test_counterexample_when_observed_exceeds_expected() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     let result = evaluate_counterexample(&w, "claim-1", 100_000, 200_000);
     assert!(result.is_none());
 }
 
 #[test]
 fn test_counterexample_when_observed_equals_expected() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     let result = evaluate_counterexample(&w, "claim-1", 100_000, 100_000);
     assert!(result.is_none());
 }
 
 #[test]
 fn test_counterexample_when_observed_below_expected() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     let result = evaluate_counterexample(&w, "claim-1", 1_000_000, 400_000);
     assert!(result.is_some());
     let ce = result.unwrap();
@@ -371,7 +448,11 @@ fn test_counterexample_when_observed_below_expected() {
 
 #[test]
 fn test_counterexample_gap_fraction_computed() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     // gap = 1_000_000 - 800_000 = 200_000
     // gap_fraction = 200_000 * 1_000_000 / 1_000_000 = 200_000
     let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 800_000).unwrap();
@@ -381,7 +462,11 @@ fn test_counterexample_gap_fraction_computed() {
 
 #[test]
 fn test_counterexample_exceeds_threshold() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     let ce = evaluate_counterexample(&w, "c", 1_000_000, 300_000).unwrap();
     assert!(ce.exceeds_threshold(CounterexampleSeverity::Critical));
     assert!(ce.exceeds_threshold(CounterexampleSeverity::Minor));
@@ -389,7 +474,11 @@ fn test_counterexample_exceeds_threshold() {
 
 #[test]
 fn test_counterexample_display() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     let ce = evaluate_counterexample(&w, "claim-x", 1_000_000, 300_000).unwrap();
     let s = ce.to_string();
     assert!(s.contains("claim=claim-x"));
@@ -402,7 +491,11 @@ fn test_counterexample_display() {
 
 #[test]
 fn test_counterexample_serde_roundtrip() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 400_000).unwrap();
     let json = serde_json::to_string(&ce).unwrap();
     let back: Counterexample = serde_json::from_str(&json).unwrap();
@@ -432,7 +525,11 @@ fn test_falsification_result_no_counterexamples() {
 
 #[test]
 fn test_falsification_result_with_critical() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     let ce = evaluate_counterexample(&w, "c-1", 1_000_000, 300_000).unwrap();
     let result = FalsificationResult {
         claim_id: "c-1".into(),
@@ -445,7 +542,10 @@ fn test_falsification_result_with_critical() {
     };
     assert!(result.has_critical());
     assert!(result.has_major_or_worse());
-    assert_eq!(result.count_at_severity(CounterexampleSeverity::Critical), 1);
+    assert_eq!(
+        result.count_at_severity(CounterexampleSeverity::Critical),
+        1
+    );
     assert!(result.strongest_counterexample().is_some());
 }
 
@@ -489,7 +589,10 @@ fn test_falsification_result_serde_roundtrip() {
 fn test_mining_config_default() {
     let cfg = MiningConfig::default();
     assert_eq!(cfg.max_generations, DEFAULT_MAX_GENERATIONS);
-    assert_eq!(cfg.workloads_per_generation, DEFAULT_WORKLOADS_PER_GENERATION);
+    assert_eq!(
+        cfg.workloads_per_generation,
+        DEFAULT_WORKLOADS_PER_GENERATION
+    );
     assert_eq!(cfg.mutation_rate, DEFAULT_MUTATION_RATE);
     assert_eq!(cfg.min_coverage_fraction, DEFAULT_MIN_COVERAGE);
     assert_eq!(cfg.severity_threshold, DEFAULT_SEVERITY_THRESHOLD);
@@ -574,7 +677,10 @@ fn test_synthesize_batch_multiple_archetypes_strategies() {
     };
     let result = synthesize_batch(
         &[WorkloadArchetype::CpuBound, WorkloadArchetype::IoBound],
-        &[SynthesisStrategy::GradientGuided, SynthesisStrategy::RandomMutation],
+        &[
+            SynthesisStrategy::GradientGuided,
+            SynthesisStrategy::RandomMutation,
+        ],
         "claim-multi",
         &cfg,
         epoch(),
@@ -638,7 +744,11 @@ fn test_summarize_all_survived() {
 
 #[test]
 fn test_summarize_with_falsified() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     let ce = evaluate_counterexample(&w, "c", 1_000_000, 300_000).unwrap();
     let r = FalsificationResult {
         claim_id: "c".into(),
@@ -817,7 +927,11 @@ fn test_empty_seed_workload() {
 
 #[test]
 fn test_counterexample_zero_expected() {
-    let w = make_workload(WorkloadArchetype::CpuBound, SynthesisStrategy::GradientGuided, 0);
+    let w = make_workload(
+        WorkloadArchetype::CpuBound,
+        SynthesisStrategy::GradientGuided,
+        0,
+    );
     // expected=0, observed=0 => observed >= expected => None
     let result = evaluate_counterexample(&w, "c", 0, 0);
     assert!(result.is_none());

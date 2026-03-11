@@ -67,9 +67,7 @@ pub const DEFAULT_MAX_KNOWN_GAPS: usize = 3;
 // ---------------------------------------------------------------------------
 
 /// String API surface under governance.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StringSurface {
     /// String concatenation.
@@ -127,9 +125,7 @@ impl fmt::Display for StringSurface {
 // ---------------------------------------------------------------------------
 
 /// RegExp feature surface under governance.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegExpSurface {
     /// Literal character matching.
@@ -187,9 +183,7 @@ impl fmt::Display for RegExpSurface {
 // ---------------------------------------------------------------------------
 
 /// Verdict on parity between engine and reference implementation.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParityVerdict {
     /// Every test passed — full behavioral parity.
@@ -229,9 +223,7 @@ impl fmt::Display for ParityVerdict {
 // ---------------------------------------------------------------------------
 
 /// Level of Unicode compliance for a RegExp surface.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnicodeCompliance {
     /// Full Unicode support including supplementary planes.
@@ -281,9 +273,7 @@ impl fmt::Display for UnicodeCompliance {
 // ---------------------------------------------------------------------------
 
 /// Decision from the governance gate.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GateDecision {
     /// Evidence supports shipping this lane.
@@ -816,9 +806,7 @@ pub fn evaluate_string_parity(
     }
 
     // Full parity if fraction meets threshold and no gaps.
-    if evidence.parity_fraction >= config.min_parity_fraction
-        && evidence.known_gaps.is_empty()
-    {
+    if evidence.parity_fraction >= config.min_parity_fraction && evidence.known_gaps.is_empty() {
         return ParityVerdict::FullParity;
     }
 
@@ -851,7 +839,9 @@ pub fn evaluate_regexp_parity(
     }
 
     if evidence.parity_fraction >= config.min_parity_fraction
-        && evidence.unicode_coverage.meets_minimum(config.min_unicode_compliance)
+        && evidence
+            .unicode_coverage
+            .meets_minimum(config.min_unicode_compliance)
     {
         return ParityVerdict::FullParity;
     }
@@ -895,10 +885,7 @@ pub fn evaluate(
         }
         match verdict {
             ParityVerdict::KnownGap => {
-                blocking_reasons.push(format!(
-                    "string surface {} has known gaps",
-                    ev.surface
-                ));
+                blocking_reasons.push(format!("string surface {} has known gaps", ev.surface));
             }
             ParityVerdict::FailOpen => {
                 blocking_reasons.push(format!(
@@ -918,10 +905,7 @@ pub fn evaluate(
         }
         match verdict {
             ParityVerdict::KnownGap => {
-                blocking_reasons.push(format!(
-                    "regexp surface {} has parity gap",
-                    ev.surface
-                ));
+                blocking_reasons.push(format!("regexp surface {} has parity gap", ev.surface));
             }
             ParityVerdict::FailOpen => {
                 blocking_reasons.push(format!(
@@ -1113,7 +1097,10 @@ mod tests {
 
     #[test]
     fn unicode_compliance_display() {
-        assert_eq!(UnicodeCompliance::FullCompliant.to_string(), "full_compliant");
+        assert_eq!(
+            UnicodeCompliance::FullCompliant.to_string(),
+            "full_compliant"
+        );
         assert_eq!(UnicodeCompliance::Bmp.to_string(), "bmp");
     }
 
@@ -1137,25 +1124,13 @@ mod tests {
 
     #[test]
     fn string_parity_evidence_computes_fraction() {
-        let ev = StringParityEvidence::new(
-            StringSurface::Concat,
-            200,
-            190,
-            vec![],
-            epoch(1),
-        );
+        let ev = StringParityEvidence::new(StringSurface::Concat, 200, 190, vec![], epoch(1));
         assert_eq!(ev.parity_fraction, 950_000);
     }
 
     #[test]
     fn string_parity_evidence_zero_tests() {
-        let ev = StringParityEvidence::new(
-            StringSurface::Slice,
-            0,
-            0,
-            vec![],
-            epoch(1),
-        );
+        let ev = StringParityEvidence::new(StringSurface::Slice, 0, 0, vec![], epoch(1));
         assert_eq!(ev.parity_fraction, 0);
     }
 
@@ -1220,19 +1195,36 @@ mod tests {
 
     #[test]
     fn benchmark_evidence_claims_speedup() {
-        let ev = BenchmarkEvidence::new("concat", 2_000_000, 1_000_000, 100_000, 1_500_000, 1000, epoch(1));
+        let ev = BenchmarkEvidence::new(
+            "concat",
+            2_000_000,
+            1_000_000,
+            100_000,
+            1_500_000,
+            1000,
+            epoch(1),
+        );
         assert!(ev.claims_speedup());
     }
 
     #[test]
     fn benchmark_evidence_no_speedup() {
-        let ev = BenchmarkEvidence::new("concat", 1_000_000, 1_000_000, 0, 1_200_000, 500, epoch(1));
+        let ev =
+            BenchmarkEvidence::new("concat", 1_000_000, 1_000_000, 0, 1_200_000, 500, epoch(1));
         assert!(!ev.claims_speedup());
     }
 
     #[test]
     fn benchmark_evidence_display() {
-        let ev = BenchmarkEvidence::new("search", 1_500_000, 1_000_000, 500_000, 1_100_000, 100, epoch(1));
+        let ev = BenchmarkEvidence::new(
+            "search",
+            1_500_000,
+            1_000_000,
+            500_000,
+            1_100_000,
+            100,
+            epoch(1),
+        );
         let s = ev.to_string();
         assert!(s.contains("search"));
         assert!(s.contains("1500000"));
@@ -1310,13 +1302,7 @@ mod tests {
 
     #[test]
     fn string_parity_full_parity() {
-        let ev = StringParityEvidence::new(
-            StringSurface::Concat,
-            200,
-            200,
-            vec![],
-            epoch(1),
-        );
+        let ev = StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1));
         let v = evaluate_string_parity(&ev, &default_config());
         assert_eq!(v, ParityVerdict::FullParity);
     }
@@ -1349,26 +1335,14 @@ mod tests {
 
     #[test]
     fn string_parity_fail_open_low_tests() {
-        let ev = StringParityEvidence::new(
-            StringSurface::Template,
-            50,
-            50,
-            vec![],
-            epoch(1),
-        );
+        let ev = StringParityEvidence::new(StringSurface::Template, 50, 50, vec![], epoch(1));
         let v = evaluate_string_parity(&ev, &default_config());
         assert_eq!(v, ParityVerdict::FailOpen);
     }
 
     #[test]
     fn string_parity_below_threshold_no_gaps() {
-        let ev = StringParityEvidence::new(
-            StringSurface::Normalize,
-            200,
-            180,
-            vec![],
-            epoch(1),
-        );
+        let ev = StringParityEvidence::new(StringSurface::Normalize, 200, 180, vec![], epoch(1));
         let v = evaluate_string_parity(&ev, &default_config());
         // 180/200 = 900_000, threshold=950_000, close_threshold=900_000
         assert_eq!(v, ParityVerdict::PartialParity);
@@ -1376,13 +1350,7 @@ mod tests {
 
     #[test]
     fn string_parity_well_below_threshold() {
-        let ev = StringParityEvidence::new(
-            StringSurface::Compare,
-            200,
-            100,
-            vec![],
-            epoch(1),
-        );
+        let ev = StringParityEvidence::new(StringSurface::Compare, 200, 100, vec![], epoch(1));
         let v = evaluate_string_parity(&ev, &default_config());
         // 100/200 = 500_000, well below threshold
         assert_eq!(v, ParityVerdict::KnownGap);
@@ -1467,27 +1435,39 @@ mod tests {
 
     #[test]
     fn evaluate_all_good_ships() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
-        let regexp_ev = vec![
-            RegExpParityEvidence::new(
-                RegExpSurface::Literal,
-                200,
-                200,
-                100,
-                UnicodeCompliance::FullCompliant,
-                epoch(1),
-            ),
-        ];
-        let bench_ev = vec![
-            BenchmarkEvidence::new("concat", 2_000_000, 1_000_000, 100_000, 1_500_000, 500, epoch(1)),
-        ];
-        let tail_ev = vec![
-            TailRiskRecord::new("concat", 100, 150, 200),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
+        let regexp_ev = vec![RegExpParityEvidence::new(
+            RegExpSurface::Literal,
+            200,
+            200,
+            100,
+            UnicodeCompliance::FullCompliant,
+            epoch(1),
+        )];
+        let bench_ev = vec![BenchmarkEvidence::new(
+            "concat",
+            2_000_000,
+            1_000_000,
+            100_000,
+            1_500_000,
+            500,
+            epoch(1),
+        )];
+        let tail_ev = vec![TailRiskRecord::new("concat", 100, 150, 200)];
 
-        let result = evaluate(&string_ev, &regexp_ev, &bench_ev, &tail_ev, &default_config());
+        let result = evaluate(
+            &string_ev,
+            &regexp_ev,
+            &bench_ev,
+            &tail_ev,
+            &default_config(),
+        );
         assert_eq!(result.decision, GateDecision::Ship);
         assert!(result.blocking_reasons.is_empty());
         assert!(result.tail_risk_ok);
@@ -1501,15 +1481,13 @@ mod tests {
 
     #[test]
     fn evaluate_string_known_gap_blocks() {
-        let string_ev = vec![
-            StringParityEvidence::new(
-                StringSurface::Replace,
-                200,
-                100,
-                vec!["big-gap".into()],
-                epoch(1),
-            ),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Replace,
+            200,
+            100,
+            vec!["big-gap".into()],
+            epoch(1),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         assert_eq!(result.decision, GateDecision::Block);
         assert_eq!(result.parity_verdict, ParityVerdict::KnownGap);
@@ -1517,9 +1495,13 @@ mod tests {
 
     #[test]
     fn evaluate_tail_risk_blocks() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
         let tail_ev = vec![
             TailRiskRecord::new("concat", 100, 300, 500), // ratio = 3.0x, above 2.0x limit
         ];
@@ -1530,12 +1512,22 @@ mod tests {
 
     #[test]
     fn evaluate_benchmark_below_speedup_conditional() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
-        let bench_ev = vec![
-            BenchmarkEvidence::new("concat", 1_050_000, 1_000_000, 10_000, 1_200_000, 500, epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
+        let bench_ev = vec![BenchmarkEvidence::new(
+            "concat",
+            1_050_000,
+            1_000_000,
+            10_000,
+            1_200_000,
+            500,
+            epoch(1),
+        )];
         let result = evaluate(&string_ev, &[], &bench_ev, &[], &default_config());
         // speedup_fraction=10_000 < min_speedup_for_claim=50_000 => blocking reason
         // but parity is full so not Block, should be ConditionalShip
@@ -1544,9 +1536,13 @@ mod tests {
 
     #[test]
     fn evaluate_fail_open_requires_evidence() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 10, 10, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            10,
+            10,
+            vec![],
+            epoch(1),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         assert_eq!(result.decision, GateDecision::RequireEvidence);
         assert_eq!(result.parity_verdict, ParityVerdict::FailOpen);
@@ -1554,16 +1550,14 @@ mod tests {
 
     #[test]
     fn evaluate_regexp_low_unicode_blocking() {
-        let regexp_ev = vec![
-            RegExpParityEvidence::new(
-                RegExpSurface::UnicodeProperty,
-                200,
-                200,
-                100,
-                UnicodeCompliance::AsciiOnly,
-                epoch(1),
-            ),
-        ];
+        let regexp_ev = vec![RegExpParityEvidence::new(
+            RegExpSurface::UnicodeProperty,
+            200,
+            200,
+            100,
+            UnicodeCompliance::AsciiOnly,
+            epoch(1),
+        )];
         let config = GateConfig {
             min_unicode_compliance: UnicodeCompliance::FullCompliant,
             ..GateConfig::default()
@@ -1574,9 +1568,13 @@ mod tests {
 
     #[test]
     fn evaluate_receipt_hash_stable() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
         let r1 = evaluate(&string_ev, &[], &[], &[], &default_config());
         let r2 = evaluate(&string_ev, &[], &[], &[], &default_config());
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
@@ -1584,12 +1582,20 @@ mod tests {
 
     #[test]
     fn evaluate_receipt_hash_changes_with_input() {
-        let ev1 = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
-        let ev2 = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 190, vec![], epoch(1)),
-        ];
+        let ev1 = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
+        let ev2 = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            190,
+            vec![],
+            epoch(1),
+        )];
         let r1 = evaluate(&ev1, &[], &[], &[], &default_config());
         let r2 = evaluate(&ev2, &[], &[], &[], &default_config());
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
@@ -1599,18 +1605,26 @@ mod tests {
 
     #[test]
     fn gate_result_allows_proceed() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         assert!(result.allows_proceed());
     }
 
     #[test]
     fn gate_result_display() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         let s = result.to_string();
         assert!(s.contains("gate="));
@@ -1621,9 +1635,13 @@ mod tests {
 
     #[test]
     fn decision_receipt_from_result() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(5)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(5),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         let receipt = DecisionReceipt::from_result(&result, epoch(5));
         assert_eq!(receipt.component, COMPONENT);
@@ -1634,9 +1652,13 @@ mod tests {
 
     #[test]
     fn decision_receipt_display() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(3)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(3),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         let receipt = DecisionReceipt::from_result(&result, epoch(3));
         let s = receipt.to_string();
@@ -1655,9 +1677,13 @@ mod tests {
 
     #[test]
     fn gate_summary_all_ship() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
         let r1 = evaluate(&string_ev, &[], &[], &[], &default_config());
         let r2 = evaluate(&string_ev, &[], &[], &[], &default_config());
         let summary = GateSummary::from_results(&[r1, r2]);
@@ -1669,14 +1695,26 @@ mod tests {
     #[test]
     fn gate_summary_mixed() {
         let good = evaluate(
-            &[StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1))],
+            &[StringParityEvidence::new(
+                StringSurface::Concat,
+                200,
+                200,
+                vec![],
+                epoch(1),
+            )],
             &[],
             &[],
             &[],
             &default_config(),
         );
         let bad = evaluate(
-            &[StringParityEvidence::new(StringSurface::Replace, 200, 50, vec!["g".into()], epoch(1))],
+            &[StringParityEvidence::new(
+                StringSurface::Replace,
+                200,
+                50,
+                vec!["g".into()],
+                epoch(1),
+            )],
             &[],
             &[],
             &[],
@@ -1749,9 +1787,13 @@ mod tests {
 
     #[test]
     fn serde_gate_result_roundtrip() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         let json = serde_json::to_string(&result).unwrap();
         let back: GateResult = serde_json::from_str(&json).unwrap();
@@ -1760,9 +1802,13 @@ mod tests {
 
     #[test]
     fn serde_decision_receipt_roundtrip() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         let receipt = DecisionReceipt::from_result(&result, epoch(1));
         let json = serde_json::to_string(&receipt).unwrap();
@@ -1784,7 +1830,13 @@ mod tests {
     fn multiple_surfaces_worst_wins() {
         let string_ev = vec![
             StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-            StringParityEvidence::new(StringSurface::Replace, 200, 50, vec!["gap".into()], epoch(1)),
+            StringParityEvidence::new(
+                StringSurface::Replace,
+                200,
+                50,
+                vec!["gap".into()],
+                epoch(1),
+            ),
         ];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         assert_eq!(result.parity_verdict, ParityVerdict::KnownGap);
@@ -1795,12 +1847,20 @@ mod tests {
     fn multiple_regexp_surfaces() {
         let regexp_ev = vec![
             RegExpParityEvidence::new(
-                RegExpSurface::Literal, 200, 200, 100,
-                UnicodeCompliance::FullCompliant, epoch(1),
+                RegExpSurface::Literal,
+                200,
+                200,
+                100,
+                UnicodeCompliance::FullCompliant,
+                epoch(1),
             ),
             RegExpParityEvidence::new(
-                RegExpSurface::Backreference, 200, 200, 50,
-                UnicodeCompliance::AsciiOnly, epoch(1),
+                RegExpSurface::Backreference,
+                200,
+                200,
+                50,
+                UnicodeCompliance::AsciiOnly,
+                epoch(1),
             ),
         ];
         let result = evaluate(&[], &regexp_ev, &[], &[], &default_config());
@@ -1810,9 +1870,13 @@ mod tests {
 
     #[test]
     fn multiple_tail_risks_one_bad() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 200, 200, vec![], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            200,
+            200,
+            vec![],
+            epoch(1),
+        )];
         let tail_ev = vec![
             TailRiskRecord::new("concat", 100, 150, 200),  // ok
             TailRiskRecord::new("search", 100, 500, 1000), // bad: ratio=5.0x
@@ -1823,9 +1887,13 @@ mod tests {
 
     #[test]
     fn permissive_config_ships_everything() {
-        let string_ev = vec![
-            StringParityEvidence::new(StringSurface::Concat, 1, 0, vec!["gap".into()], epoch(1)),
-        ];
+        let string_ev = vec![StringParityEvidence::new(
+            StringSurface::Concat,
+            1,
+            0,
+            vec!["gap".into()],
+            epoch(1),
+        )];
         let result = evaluate(&string_ev, &[], &[], &[], &GateConfig::permissive());
         assert_eq!(result.decision, GateDecision::Ship);
     }

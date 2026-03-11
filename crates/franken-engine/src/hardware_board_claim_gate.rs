@@ -1075,9 +1075,11 @@ mod tests {
 
     #[test]
     fn test_threshold_ordering() {
-        assert!(DEFAULT_FULL_TRANSPORT_THRESHOLD > DEFAULT_PARTIAL_TRANSPORT_THRESHOLD);
-        assert!(DEFAULT_PARTIAL_TRANSPORT_THRESHOLD > DEFAULT_DEGRADED_THRESHOLD);
-        assert!(DEFAULT_DEGRADED_THRESHOLD > 0);
+        const {
+            assert!(DEFAULT_FULL_TRANSPORT_THRESHOLD > DEFAULT_PARTIAL_TRANSPORT_THRESHOLD);
+            assert!(DEFAULT_PARTIAL_TRANSPORT_THRESHOLD > DEFAULT_DEGRADED_THRESHOLD);
+            assert!(DEFAULT_DEGRADED_THRESHOLD > 0);
+        }
     }
 
     // --- HardwareClaimKind ---

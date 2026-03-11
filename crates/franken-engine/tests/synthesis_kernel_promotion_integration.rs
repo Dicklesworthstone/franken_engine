@@ -94,14 +94,14 @@ fn policy_id_format() {
 
 #[test]
 fn min_promotion_speedup_positive() {
-    assert!(MIN_PROMOTION_SPEEDUP > 0);
-    assert!(MIN_PROMOTION_SPEEDUP <= 1_000_000);
+    const { assert!(MIN_PROMOTION_SPEEDUP > 0) };
+    const { assert!(MIN_PROMOTION_SPEEDUP <= 1_000_000) };
 }
 
 #[test]
 fn min_proof_coverage_range() {
-    assert!(MIN_PROOF_COVERAGE > 0);
-    assert!(MIN_PROOF_COVERAGE <= 1_000_000);
+    const { assert!(MIN_PROOF_COVERAGE > 0) };
+    const { assert!(MIN_PROOF_COVERAGE <= 1_000_000) };
 }
 
 #[test]
@@ -116,8 +116,8 @@ fn max_counterexample_severity_zero() {
 
 #[test]
 fn min_regression_confidence_positive() {
-    assert!(MIN_REGRESSION_CONFIDENCE > 0);
-    assert!(MIN_REGRESSION_CONFIDENCE <= 1_000_000);
+    const { assert!(MIN_REGRESSION_CONFIDENCE > 0) };
+    const { assert!(MIN_REGRESSION_CONFIDENCE <= 1_000_000) };
 }
 
 // ---------------------------------------------------------------------------

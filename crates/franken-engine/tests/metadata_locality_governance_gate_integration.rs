@@ -2,8 +2,8 @@
 
 //! Integration tests for the metadata_locality_governance_gate module.
 
-use frankenengine_engine::metadata_locality_governance_gate::*;
 use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::metadata_locality_governance_gate::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 fn test_epoch() -> SecurityEpoch {
@@ -15,12 +15,28 @@ fn good_cache() -> CacheMissEvidence {
 }
 
 fn bad_cache() -> CacheMissEvidence {
-    CacheMissEvidence::new("cold_path", 200_000, 500_000, 800_000, 100_000, 100, test_epoch())
+    CacheMissEvidence::new(
+        "cold_path",
+        200_000,
+        500_000,
+        800_000,
+        100_000,
+        100,
+        test_epoch(),
+    )
 }
 
 fn marginal_cache() -> CacheMissEvidence {
     // L1 just above threshold (50_000) but below 1.5x (75_000)
-    CacheMissEvidence::new("marginal", 60_000, 50_000, 100_000, 10_000, 100, test_epoch())
+    CacheMissEvidence::new(
+        "marginal",
+        60_000,
+        50_000,
+        100_000,
+        10_000,
+        100,
+        test_epoch(),
+    )
 }
 
 fn good_numa() -> NumaEvidence {
@@ -46,7 +62,13 @@ fn degraded_portability() -> PortabilityEvidence {
 }
 
 fn bad_portability() -> PortabilityEvidence {
-    PortabilityEvidence::new("x86_64", "aarch64", 300_000, vec!["no AVX".into()], test_epoch())
+    PortabilityEvidence::new(
+        "x86_64",
+        "aarch64",
+        300_000,
+        vec!["no AVX".into()],
+        test_epoch(),
+    )
 }
 
 fn good_observability() -> ObservabilityImpact {
@@ -155,7 +177,10 @@ fn test_locality_domain_display() {
 
 #[test]
 fn test_locality_domain_latency_ordering() {
-    let weights: Vec<u64> = LocalityDomain::ALL.iter().map(|d| d.latency_weight()).collect();
+    let weights: Vec<u64> = LocalityDomain::ALL
+        .iter()
+        .map(|d| d.latency_weight())
+        .collect();
     for i in 1..weights.len() {
         assert!(weights[i] >= weights[i - 1]);
     }
@@ -190,7 +215,10 @@ fn test_portability_verdict_serde_roundtrip() {
 #[test]
 fn test_portability_verdict_display() {
     assert_eq!(PortabilityVerdict::Portable.to_string(), "portable");
-    assert_eq!(PortabilityVerdict::MachineSpecific.to_string(), "machine_specific");
+    assert_eq!(
+        PortabilityVerdict::MachineSpecific.to_string(),
+        "machine_specific"
+    );
     assert_eq!(PortabilityVerdict::Unknown.to_string(), "unknown");
 }
 
@@ -224,8 +252,14 @@ fn test_governance_decision_serde_roundtrip() {
 fn test_governance_decision_display() {
     assert_eq!(GovernanceDecision::Approve.to_string(), "approve");
     assert_eq!(GovernanceDecision::Reject.to_string(), "reject");
-    assert_eq!(GovernanceDecision::ConditionalApprove.to_string(), "conditional_approve");
-    assert_eq!(GovernanceDecision::RequireEvidence.to_string(), "require_evidence");
+    assert_eq!(
+        GovernanceDecision::ConditionalApprove.to_string(),
+        "conditional_approve"
+    );
+    assert_eq!(
+        GovernanceDecision::RequireEvidence.to_string(),
+        "require_evidence"
+    );
 }
 
 #[test]
@@ -489,9 +523,18 @@ fn test_gate_config_default() {
     assert_eq!(cfg.max_l2_miss_rate, DEFAULT_MAX_L2_MISS_RATE);
     assert_eq!(cfg.max_l3_miss_rate, DEFAULT_MAX_L3_MISS_RATE);
     assert_eq!(cfg.max_tlb_miss_rate, DEFAULT_MAX_TLB_MISS_RATE);
-    assert_eq!(cfg.min_local_access_fraction, DEFAULT_MIN_LOCAL_ACCESS_FRACTION);
-    assert_eq!(cfg.max_observability_overhead, DEFAULT_MAX_OBSERVABILITY_OVERHEAD);
-    assert_eq!(cfg.min_portability_fraction, DEFAULT_MIN_PORTABILITY_FRACTION);
+    assert_eq!(
+        cfg.min_local_access_fraction,
+        DEFAULT_MIN_LOCAL_ACCESS_FRACTION
+    );
+    assert_eq!(
+        cfg.max_observability_overhead,
+        DEFAULT_MAX_OBSERVABILITY_OVERHEAD
+    );
+    assert_eq!(
+        cfg.min_portability_fraction,
+        DEFAULT_MIN_PORTABILITY_FRACTION
+    );
 }
 
 #[test]
@@ -701,13 +744,7 @@ fn test_evaluate_receipt_hash_deterministic() {
 
 #[test]
 fn test_evaluate_cache_only() {
-    let result = evaluate(
-        Some(&good_cache()),
-        None,
-        None,
-        None,
-        &default_config(),
-    );
+    let result = evaluate(Some(&good_cache()), None, None, None, &default_config());
     // Approve for cache, but missing portability -> Unknown (recommendations but not blocking)
     assert!(result.decision.allows_deployment());
 }
@@ -750,7 +787,12 @@ fn test_gate_result_serde_roundtrip() {
 #[test]
 fn test_decision_receipt_new() {
     let ev_hash = ContentHash::compute(b"test");
-    let receipt = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, ev_hash.clone());
+    let receipt = DecisionReceipt::new(
+        COMPONENT,
+        test_epoch(),
+        GovernanceDecision::Approve,
+        ev_hash.clone(),
+    );
     assert_eq!(receipt.component, COMPONENT);
     assert_eq!(receipt.epoch, test_epoch());
     assert_eq!(receipt.decision, GovernanceDecision::Approve);
@@ -760,15 +802,30 @@ fn test_decision_receipt_new() {
 #[test]
 fn test_decision_receipt_hash_deterministic() {
     let ev_hash = ContentHash::compute(b"test");
-    let a = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, ev_hash.clone());
-    let b = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, ev_hash);
+    let a = DecisionReceipt::new(
+        COMPONENT,
+        test_epoch(),
+        GovernanceDecision::Approve,
+        ev_hash.clone(),
+    );
+    let b = DecisionReceipt::new(
+        COMPONENT,
+        test_epoch(),
+        GovernanceDecision::Approve,
+        ev_hash,
+    );
     assert_eq!(a.receipt_hash, b.receipt_hash);
 }
 
 #[test]
 fn test_decision_receipt_different_decisions_differ() {
     let ev_hash = ContentHash::compute(b"test");
-    let a = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, ev_hash.clone());
+    let a = DecisionReceipt::new(
+        COMPONENT,
+        test_epoch(),
+        GovernanceDecision::Approve,
+        ev_hash.clone(),
+    );
     let b = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Reject, ev_hash);
     assert_ne!(a.receipt_hash, b.receipt_hash);
 }
@@ -776,7 +833,8 @@ fn test_decision_receipt_different_decisions_differ() {
 #[test]
 fn test_decision_receipt_display() {
     let ev_hash = ContentHash::compute(b"test");
-    let receipt = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Reject, ev_hash);
+    let receipt =
+        DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Reject, ev_hash);
     let s = receipt.to_string();
     assert!(s.contains("Receipt"));
     assert!(s.contains("reject"));
@@ -786,7 +844,12 @@ fn test_decision_receipt_display() {
 #[test]
 fn test_decision_receipt_serde_roundtrip() {
     let ev_hash = ContentHash::compute(b"test");
-    let receipt = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, ev_hash);
+    let receipt = DecisionReceipt::new(
+        COMPONENT,
+        test_epoch(),
+        GovernanceDecision::Approve,
+        ev_hash,
+    );
     let json = serde_json::to_string(&receipt).unwrap();
     let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
     assert_eq!(receipt, back);

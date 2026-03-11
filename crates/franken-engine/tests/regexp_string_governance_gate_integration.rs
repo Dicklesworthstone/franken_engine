@@ -40,7 +40,10 @@ fn good_tail(name: &str) -> TailRiskRecord {
 
 #[test]
 fn test_schema_version_value() {
-    assert_eq!(SCHEMA_VERSION, "franken-engine.regexp-string-governance-gate.v1");
+    assert_eq!(
+        SCHEMA_VERSION,
+        "franken-engine.regexp-string-governance-gate.v1"
+    );
 }
 
 #[test]
@@ -259,7 +262,10 @@ fn test_gate_decision_serde_roundtrip() {
 fn test_gate_decision_display() {
     assert_eq!(GateDecision::Ship.to_string(), "ship");
     assert_eq!(GateDecision::Block.to_string(), "block");
-    assert_eq!(GateDecision::RequireEvidence.to_string(), "require_evidence");
+    assert_eq!(
+        GateDecision::RequireEvidence.to_string(),
+        "require_evidence"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -300,7 +306,12 @@ fn test_string_parity_evidence_serde_roundtrip() {
 #[test]
 fn test_regexp_parity_evidence_computes_fraction() {
     let ev = RegExpParityEvidence::new(
-        RegExpSurface::Literal, 200, 198, 300, UnicodeCompliance::FullCompliant, epoch(1),
+        RegExpSurface::Literal,
+        200,
+        198,
+        300,
+        UnicodeCompliance::FullCompliant,
+        epoch(1),
     );
     assert_eq!(ev.parity_fraction, 990_000);
 }
@@ -308,7 +319,12 @@ fn test_regexp_parity_evidence_computes_fraction() {
 #[test]
 fn test_regexp_parity_evidence_zero_tests_fraction_zero() {
     let ev = RegExpParityEvidence::new(
-        RegExpSurface::CharClass, 0, 0, 0, UnicodeCompliance::Bmp, epoch(1),
+        RegExpSurface::CharClass,
+        0,
+        0,
+        0,
+        UnicodeCompliance::Bmp,
+        epoch(1),
     );
     assert_eq!(ev.parity_fraction, 0);
 }
@@ -316,7 +332,12 @@ fn test_regexp_parity_evidence_zero_tests_fraction_zero() {
 #[test]
 fn test_regexp_parity_evidence_display_contains_surface() {
     let ev = RegExpParityEvidence::new(
-        RegExpSurface::Backreference, 100, 90, 200, UnicodeCompliance::AsciiOnly, epoch(1),
+        RegExpSurface::Backreference,
+        100,
+        90,
+        200,
+        UnicodeCompliance::AsciiOnly,
+        epoch(1),
     );
     let s = ev.to_string();
     assert!(s.contains("backreference"));
@@ -326,7 +347,12 @@ fn test_regexp_parity_evidence_display_contains_surface() {
 #[test]
 fn test_regexp_parity_evidence_serde_roundtrip() {
     let ev = RegExpParityEvidence::new(
-        RegExpSurface::Lookahead, 150, 140, 100, UnicodeCompliance::Bmp, epoch(3),
+        RegExpSurface::Lookahead,
+        150,
+        140,
+        100,
+        UnicodeCompliance::Bmp,
+        epoch(3),
     );
     let json = serde_json::to_string(&ev).unwrap();
     let back: RegExpParityEvidence = serde_json::from_str(&json).unwrap();
@@ -339,7 +365,15 @@ fn test_regexp_parity_evidence_serde_roundtrip() {
 
 #[test]
 fn test_benchmark_evidence_claims_speedup_true() {
-    let ev = BenchmarkEvidence::new("concat", 2_000_000, 1_500_000, 100_000, 500_000, 200, epoch(1));
+    let ev = BenchmarkEvidence::new(
+        "concat",
+        2_000_000,
+        1_500_000,
+        100_000,
+        500_000,
+        200,
+        epoch(1),
+    );
     assert!(ev.claims_speedup());
 }
 
@@ -483,12 +517,21 @@ fn test_evaluate_string_parity_too_many_gaps() {
 fn test_evaluate_string_parity_partial_with_gaps() {
     let ev = StringParityEvidence::new(StringSurface::Split, 200, 196, vec!["g".into()], epoch(1));
     let cfg = GateConfig::default();
-    assert_eq!(evaluate_string_parity(&ev, &cfg), ParityVerdict::PartialParity);
+    assert_eq!(
+        evaluate_string_parity(&ev, &cfg),
+        ParityVerdict::PartialParity
+    );
 }
 
 #[test]
 fn test_evaluate_string_parity_below_threshold_with_gaps() {
-    let ev = StringParityEvidence::new(StringSurface::Template, 200, 170, vec!["g".into()], epoch(1));
+    let ev = StringParityEvidence::new(
+        StringSurface::Template,
+        200,
+        170,
+        vec!["g".into()],
+        epoch(1),
+    );
     let cfg = GateConfig::default();
     assert_eq!(evaluate_string_parity(&ev, &cfg), ParityVerdict::KnownGap);
 }
@@ -498,7 +541,10 @@ fn test_evaluate_string_parity_close_threshold_no_gaps() {
     // 91% = 910_000, within 5% of 950_000 threshold
     let ev = StringParityEvidence::new(StringSurface::Compare, 200, 182, vec![], epoch(1));
     let cfg = GateConfig::default();
-    assert_eq!(evaluate_string_parity(&ev, &cfg), ParityVerdict::PartialParity);
+    assert_eq!(
+        evaluate_string_parity(&ev, &cfg),
+        ParityVerdict::PartialParity
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -508,7 +554,12 @@ fn test_evaluate_string_parity_close_threshold_no_gaps() {
 #[test]
 fn test_evaluate_regexp_parity_full_with_unicode() {
     let ev = RegExpParityEvidence::new(
-        RegExpSurface::Literal, 200, 196, 500, UnicodeCompliance::FullCompliant, epoch(1),
+        RegExpSurface::Literal,
+        200,
+        196,
+        500,
+        UnicodeCompliance::FullCompliant,
+        epoch(1),
     );
     let cfg = GateConfig::default();
     assert_eq!(evaluate_regexp_parity(&ev, &cfg), ParityVerdict::FullParity);
@@ -517,7 +568,12 @@ fn test_evaluate_regexp_parity_full_with_unicode() {
 #[test]
 fn test_evaluate_regexp_parity_insufficient_tests() {
     let ev = RegExpParityEvidence::new(
-        RegExpSurface::Literal, 50, 50, 100, UnicodeCompliance::Bmp, epoch(1),
+        RegExpSurface::Literal,
+        50,
+        50,
+        100,
+        UnicodeCompliance::Bmp,
+        epoch(1),
     );
     let cfg = GateConfig::default();
     assert_eq!(evaluate_regexp_parity(&ev, &cfg), ParityVerdict::FailOpen);
@@ -526,10 +582,18 @@ fn test_evaluate_regexp_parity_insufficient_tests() {
 #[test]
 fn test_evaluate_regexp_parity_partial_unicode_below() {
     let ev = RegExpParityEvidence::new(
-        RegExpSurface::UnicodeProperty, 200, 196, 300, UnicodeCompliance::AsciiOnly, epoch(1),
+        RegExpSurface::UnicodeProperty,
+        200,
+        196,
+        300,
+        UnicodeCompliance::AsciiOnly,
+        epoch(1),
     );
     let cfg = GateConfig::default();
-    assert_eq!(evaluate_regexp_parity(&ev, &cfg), ParityVerdict::PartialParity);
+    assert_eq!(
+        evaluate_regexp_parity(&ev, &cfg),
+        ParityVerdict::PartialParity
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +603,12 @@ fn test_evaluate_regexp_parity_partial_unicode_below() {
 #[test]
 fn test_evaluate_unicode_returns_evidence_level() {
     let ev = RegExpParityEvidence::new(
-        RegExpSurface::CharClass, 200, 196, 100, UnicodeCompliance::Bmp, epoch(1),
+        RegExpSurface::CharClass,
+        200,
+        196,
+        100,
+        UnicodeCompliance::Bmp,
+        epoch(1),
     );
     let cfg = GateConfig::default();
     let uc = evaluate_unicode(&ev, &cfg);
@@ -553,10 +622,12 @@ fn test_evaluate_unicode_returns_evidence_level() {
 #[test]
 fn test_evaluate_all_good_evidence_ships() {
     let cfg = GateConfig::default();
-    let string_ev: Vec<StringParityEvidence> = StringSurface::ALL.iter()
+    let string_ev: Vec<StringParityEvidence> = StringSurface::ALL
+        .iter()
         .map(|s| good_string_ev(*s))
         .collect();
-    let regexp_ev: Vec<RegExpParityEvidence> = RegExpSurface::ALL.iter()
+    let regexp_ev: Vec<RegExpParityEvidence> = RegExpSurface::ALL
+        .iter()
         .map(|s| good_regexp_ev(*s))
         .collect();
     let bench_ev = vec![good_bench("concat")];
@@ -591,9 +662,13 @@ fn test_evaluate_tail_risk_exceeds_blocks() {
 fn test_evaluate_known_gap_blocks() {
     let cfg = GateConfig::default();
     let gaps: Vec<String> = (0..5).map(|i| format!("gap_{i}")).collect();
-    let string_ev = vec![
-        StringParityEvidence::new(StringSurface::Concat, 200, 196, gaps, epoch(10)),
-    ];
+    let string_ev = vec![StringParityEvidence::new(
+        StringSurface::Concat,
+        200,
+        196,
+        gaps,
+        epoch(10),
+    )];
 
     let result = evaluate(&string_ev, &[], &[], &[], &cfg);
     assert_eq!(result.decision, GateDecision::Block);
@@ -602,9 +677,13 @@ fn test_evaluate_known_gap_blocks() {
 #[test]
 fn test_evaluate_fail_open_requires_evidence() {
     let cfg = GateConfig::default();
-    let string_ev = vec![
-        StringParityEvidence::new(StringSurface::Concat, 10, 10, vec![], epoch(10)),
-    ];
+    let string_ev = vec![StringParityEvidence::new(
+        StringSurface::Concat,
+        10,
+        10,
+        vec![],
+        epoch(10),
+    )];
 
     let result = evaluate(&string_ev, &[], &[], &[], &cfg);
     assert_eq!(result.decision, GateDecision::RequireEvidence);
@@ -614,7 +693,15 @@ fn test_evaluate_fail_open_requires_evidence() {
 fn test_evaluate_benchmark_speedup_below_min_conditional() {
     let cfg = GateConfig::default();
     let string_ev = vec![good_string_ev(StringSurface::Concat)];
-    let bench = vec![BenchmarkEvidence::new("concat", 1_100_000, 1_000_000, 10_000, 200_000, 200, epoch(10))];
+    let bench = vec![BenchmarkEvidence::new(
+        "concat",
+        1_100_000,
+        1_000_000,
+        10_000,
+        200_000,
+        200,
+        epoch(10),
+    )];
 
     let result = evaluate(&string_ev, &[], &bench, &[], &cfg);
     assert_eq!(result.decision, GateDecision::ConditionalShip);
@@ -735,7 +822,13 @@ fn test_gate_summary_from_empty() {
 #[test]
 fn test_gate_summary_mixed_results() {
     let cfg = GateConfig::default();
-    let good = evaluate(&[good_string_ev(StringSurface::Concat)], &[], &[], &[], &cfg);
+    let good = evaluate(
+        &[good_string_ev(StringSurface::Concat)],
+        &[],
+        &[],
+        &[],
+        &cfg,
+    );
     let bad = evaluate(&[], &[], &[], &[], &cfg);
     let summary = GateSummary::from_results(&[good, bad]);
     assert_eq!(summary.total, 2);
@@ -775,7 +868,11 @@ fn test_evaluate_permissive_config_ships_everything() {
 fn test_evaluate_strict_config_blocks_partial() {
     let cfg = GateConfig::strict();
     let ev = StringParityEvidence::new(
-        StringSurface::Concat, 200, 196, vec!["gap".into()], epoch(1),
+        StringSurface::Concat,
+        200,
+        196,
+        vec!["gap".into()],
+        epoch(1),
     );
     let result = evaluate(&[ev], &[], &[], &[], &cfg);
     assert_eq!(result.decision, GateDecision::Block);
@@ -794,10 +891,20 @@ fn test_evaluate_multiple_surfaces_worst_wins() {
 fn test_evaluate_unicode_below_min_adds_blocking_reason() {
     let cfg = GateConfig::default();
     let regexp_ev = vec![RegExpParityEvidence::new(
-        RegExpSurface::UnicodeProperty, 200, 196, 300, UnicodeCompliance::NonCompliant, epoch(10),
+        RegExpSurface::UnicodeProperty,
+        200,
+        196,
+        300,
+        UnicodeCompliance::NonCompliant,
+        epoch(10),
     )];
     let result = evaluate(&[], &regexp_ev, &[], &[], &cfg);
-    assert!(result.blocking_reasons.iter().any(|r| r.contains("unicode")));
+    assert!(
+        result
+            .blocking_reasons
+            .iter()
+            .any(|r| r.contains("unicode"))
+    );
 }
 
 #[test]

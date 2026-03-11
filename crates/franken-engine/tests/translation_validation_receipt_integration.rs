@@ -54,12 +54,7 @@ fn dce_rule(id: &str, cost_delta: i64) -> AppliedRuleRecord {
 
 fn proven() -> ReceiptVerdict {
     ReceiptVerdict::Proven {
-        evidence: ProofEvidence::new(
-            ProofMode::Symbolic,
-            hash(b"proof"),
-            50,
-            2000,
-        ),
+        evidence: ProofEvidence::new(ProofMode::Symbolic, hash(b"proof"), 50, 2000),
     }
 }
 
@@ -241,9 +236,15 @@ fn test_chain_parent_hash_linkage() {
     // First receipt has no parent
     assert!(receipts[0].parent_hash.is_none());
     // Second receipt links to first
-    assert_eq!(receipts[1].parent_hash.as_ref().unwrap(), &receipts[0].content_hash);
+    assert_eq!(
+        receipts[1].parent_hash.as_ref().unwrap(),
+        &receipts[0].content_hash
+    );
     // Third links to second
-    assert_eq!(receipts[2].parent_hash.as_ref().unwrap(), &receipts[1].content_hash);
+    assert_eq!(
+        receipts[2].parent_hash.as_ref().unwrap(),
+        &receipts[1].content_hash
+    );
 }
 
 #[test]
@@ -378,7 +379,10 @@ fn test_failure_receipt_on_disproven() {
     if let EmitResult::Rejected { failure, .. } = result {
         assert_eq!(failure.optimization_id, "opt-fail");
         assert!(failure.quarantined);
-        assert!(matches!(failure.failure_kind, FailureKind::CounterexampleFound { .. }));
+        assert!(matches!(
+            failure.failure_kind,
+            FailureKind::CounterexampleFound { .. }
+        ));
     } else {
         panic!("expected Rejected");
     }
@@ -391,7 +395,10 @@ fn test_failure_receipt_on_inconclusive() {
     if let EmitResult::Rejected { failure, .. } = result {
         assert_eq!(failure.optimization_id, "opt-inc");
         assert!(!failure.quarantined);
-        assert!(matches!(failure.failure_kind, FailureKind::BudgetExceeded { .. }));
+        assert!(matches!(
+            failure.failure_kind,
+            FailureKind::BudgetExceeded { .. }
+        ));
     } else {
         panic!("expected Rejected");
     }
@@ -500,12 +507,17 @@ fn test_serde_receipt_roundtrip() {
 #[test]
 fn test_serde_failure_receipt_roundtrip() {
     let fr = FailureReceipt::new(
-        "opt-f", "pack-1", PackVersion::CURRENT,
+        "opt-f",
+        "pack-1",
+        PackVersion::CURRENT,
         vec!["r1".into(), "r2".into()],
         FailureKind::InterferenceDetected {
             conflicting_rules: vec!["r1".into(), "r2".into()],
         },
-        None, true, epoch(5), 12345,
+        None,
+        true,
+        epoch(5),
+        12345,
     );
     let json = serde_json::to_string(&fr).unwrap();
     let restored: FailureReceipt = serde_json::from_str(&json).unwrap();
@@ -551,11 +563,24 @@ fn test_serde_verdict_all_variants() {
 #[test]
 fn test_serde_failure_kind_all_variants() {
     let kinds = vec![
-        FailureKind::CounterexampleFound { divergence: "x diverges".into() },
-        FailureKind::BudgetExceeded { consumed_ticks: 999, limit_ticks: 1000 },
-        FailureKind::InterferenceDetected { conflicting_rules: vec!["a".into(), "b".into()] },
-        FailureKind::ComplexityExceeded { metric: "ir_nodes".into(), value: 100000, limit: 50000 },
-        FailureKind::MalformedOutput { detail: "dangling phi node".into() },
+        FailureKind::CounterexampleFound {
+            divergence: "x diverges".into(),
+        },
+        FailureKind::BudgetExceeded {
+            consumed_ticks: 999,
+            limit_ticks: 1000,
+        },
+        FailureKind::InterferenceDetected {
+            conflicting_rules: vec!["a".into(), "b".into()],
+        },
+        FailureKind::ComplexityExceeded {
+            metric: "ir_nodes".into(),
+            value: 100000,
+            limit: 50000,
+        },
+        FailureKind::MalformedOutput {
+            detail: "dangling phi node".into(),
+        },
     ];
     for k in kinds {
         let json = serde_json::to_string(&k).unwrap();
@@ -588,14 +613,30 @@ fn test_serde_proof_mode_all_variants() {
 fn test_chain_rejects_wrong_parent() {
     let mut chain = ReceiptChain::new("c", epoch(1));
     let r1 = TranslationValidationReceipt::new(
-        1, "opt-1", None, epoch(1), 0,
-        hash(b"b"), hash(b"o"), vec![], proven(), "cm",
+        1,
+        "opt-1",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
+        vec![],
+        proven(),
+        "cm",
     );
     chain.append(r1).unwrap();
 
     let r2 = TranslationValidationReceipt::new(
-        2, "opt-2", Some(hash(b"wrong-parent")), epoch(1), 0,
-        hash(b"b"), hash(b"o"), vec![], proven(), "cm",
+        2,
+        "opt-2",
+        Some(hash(b"wrong-parent")),
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
+        vec![],
+        proven(),
+        "cm",
     );
     let err = chain.append(r2).unwrap_err();
     assert!(matches!(err, ReceiptChainError::ParentHashMismatch { .. }));
@@ -605,16 +646,33 @@ fn test_chain_rejects_wrong_parent() {
 fn test_chain_rejects_sequence_gap() {
     let mut chain = ReceiptChain::new("c", epoch(1));
     let r = TranslationValidationReceipt::new(
-        99, "opt-1", None, epoch(1), 0,
-        hash(b"b"), hash(b"o"), vec![], proven(), "cm",
+        99,
+        "opt-1",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
+        vec![],
+        proven(),
+        "cm",
     );
     let err = chain.append(r).unwrap_err();
-    assert!(matches!(err, ReceiptChainError::SequenceGap { expected: 1, actual: 99 }));
+    assert!(matches!(
+        err,
+        ReceiptChainError::SequenceGap {
+            expected: 1,
+            actual: 99
+        }
+    ));
 }
 
 #[test]
 fn test_chain_error_display() {
-    let e = ReceiptChainError::SequenceGap { expected: 5, actual: 10 };
+    let e = ReceiptChainError::SequenceGap {
+        expected: 5,
+        actual: 10,
+    };
     let s = e.to_string();
     assert!(s.contains("sequence gap"));
     assert!(s.contains("5"));
@@ -627,16 +685,28 @@ fn test_chain_error_display() {
 #[test]
 fn test_receipt_hash_deterministic() {
     let r1 = TranslationValidationReceipt::new(
-        1, "opt-det", None, epoch(1), 500,
-        hash(b"baseline"), hash(b"optimized"),
+        1,
+        "opt-det",
+        None,
+        epoch(1),
+        500,
+        hash(b"baseline"),
+        hash(b"optimized"),
         vec![rule("r1", -100), rule("r2", -200)],
-        proven(), "cm-v1",
+        proven(),
+        "cm-v1",
     );
     let r2 = TranslationValidationReceipt::new(
-        1, "opt-det", None, epoch(1), 500,
-        hash(b"baseline"), hash(b"optimized"),
+        1,
+        "opt-det",
+        None,
+        epoch(1),
+        500,
+        hash(b"baseline"),
+        hash(b"optimized"),
         vec![rule("r1", -100), rule("r2", -200)],
-        proven(), "cm-v1",
+        proven(),
+        "cm-v1",
     );
     assert_eq!(r1.content_hash, r2.content_hash);
 }
@@ -644,16 +714,28 @@ fn test_receipt_hash_deterministic() {
 #[test]
 fn test_receipt_hash_changes_with_rules() {
     let r1 = TranslationValidationReceipt::new(
-        1, "opt", None, epoch(1), 0,
-        hash(b"b"), hash(b"o"),
+        1,
+        "opt",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
         vec![rule("r1", -100)],
-        proven(), "cm",
+        proven(),
+        "cm",
     );
     let r2 = TranslationValidationReceipt::new(
-        1, "opt", None, epoch(1), 0,
-        hash(b"b"), hash(b"o"),
+        1,
+        "opt",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
         vec![rule("r2", -100)], // different rule ID
-        proven(), "cm",
+        proven(),
+        "cm",
     );
     assert_ne!(r1.content_hash, r2.content_hash);
 }
@@ -722,10 +804,16 @@ fn test_chain_query_failures_by_pack() {
 #[test]
 fn test_all_rules_proven_sound() {
     let receipt = TranslationValidationReceipt::new(
-        1, "opt", None, epoch(1), 0,
-        hash(b"b"), hash(b"o"),
+        1,
+        "opt",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
         vec![rule("r1", -100), rule("r2", -200)],
-        proven(), "cm",
+        proven(),
+        "cm",
     );
     assert!(receipt.all_rules_proven_sound());
     assert_eq!(receipt.proven_sound_rule_count(), 2);
@@ -736,10 +824,16 @@ fn test_mixed_proven_sound_rules() {
     let mut unproven = rule("r2", -200);
     unproven.rule_proven_sound = false;
     let receipt = TranslationValidationReceipt::new(
-        1, "opt", None, epoch(1), 0,
-        hash(b"b"), hash(b"o"),
+        1,
+        "opt",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
         vec![rule("r1", -100), unproven],
-        proven(), "cm",
+        proven(),
+        "cm",
     );
     assert!(!receipt.all_rules_proven_sound());
     assert_eq!(receipt.proven_sound_rule_count(), 1);
@@ -752,8 +846,16 @@ fn test_mixed_proven_sound_rules() {
 #[test]
 fn test_receipt_schema_version() {
     let receipt = TranslationValidationReceipt::new(
-        1, "opt", None, epoch(1), 0,
-        hash(b"b"), hash(b"o"), vec![], proven(), "cm",
+        1,
+        "opt",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
+        vec![],
+        proven(),
+        "cm",
     );
     assert_eq!(receipt.schema_version, RECEIPT_SCHEMA_VERSION);
 }
@@ -837,10 +939,14 @@ fn test_verdict_display_formatting() {
 
 #[test]
 fn test_failure_kind_display_formatting() {
-    let k = FailureKind::CounterexampleFound { divergence: "x!=y".into() };
+    let k = FailureKind::CounterexampleFound {
+        divergence: "x!=y".into(),
+    };
     assert!(k.to_string().contains("counterexample"));
 
-    let k2 = FailureKind::MalformedOutput { detail: "bad cfg".into() };
+    let k2 = FailureKind::MalformedOutput {
+        detail: "bad cfg".into(),
+    };
     assert!(k2.to_string().contains("malformed"));
 }
 
@@ -848,7 +954,10 @@ fn test_failure_kind_display_formatting() {
 fn test_proof_mode_display_formatting() {
     assert_eq!(ProofMode::Symbolic.to_string(), "symbolic");
     assert_eq!(ProofMode::GoldenCorpus.to_string(), "golden_corpus");
-    assert_eq!(ProofMode::DifferentialTrace.to_string(), "differential_trace");
+    assert_eq!(
+        ProofMode::DifferentialTrace.to_string(),
+        "differential_trace"
+    );
     assert_eq!(ProofMode::Axiomatic.to_string(), "axiomatic");
     assert_eq!(ProofMode::Composite.to_string(), "composite");
 }

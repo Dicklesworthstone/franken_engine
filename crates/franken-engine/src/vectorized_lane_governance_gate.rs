@@ -601,11 +601,7 @@ pub struct DecisionReceipt {
 
 impl DecisionReceipt {
     /// Create a new receipt from gate evaluation artifacts.
-    pub fn new(
-        epoch: SecurityEpoch,
-        verdict: LaneVerdict,
-        evidence_hash: ContentHash,
-    ) -> Self {
+    pub fn new(epoch: SecurityEpoch, verdict: LaneVerdict, evidence_hash: ContentHash) -> Self {
         let mut h = Sha256::new();
         h.update(COMPONENT.as_bytes());
         h.update(epoch.as_u64().to_le_bytes());
@@ -673,7 +669,12 @@ impl fmt::Display for GateSummary {
         write!(
             f,
             "Summary(total={} approved={} conditional={} rejected={} fallback={} rate={})",
-            self.total, self.approved, self.conditional, self.rejected, self.fallback, self.pass_rate
+            self.total,
+            self.approved,
+            self.conditional,
+            self.rejected,
+            self.fallback,
+            self.pass_rate
         )
     }
 }
@@ -775,7 +776,10 @@ pub fn evaluate(
     // 2. Skew check.
     let failing_skews = evaluate_skew(parity, skews, config);
     for s in &failing_skews {
-        blocking_reasons.push(format!("skew {} exceeds threshold: {}", s.kind, s.measured_skew));
+        blocking_reasons.push(format!(
+            "skew {} exceeds threshold: {}",
+            s.kind, s.measured_skew
+        ));
     }
 
     // 3. Cold-start check.
@@ -1343,7 +1347,13 @@ mod tests {
     #[test]
     fn evaluate_all_clean_approved() {
         let cfg = GateConfig::default();
-        let result = evaluate(&good_parity(), &[clean_skew()], Some(&mild_cold_start()), Some(&good_tail()), &cfg);
+        let result = evaluate(
+            &good_parity(),
+            &[clean_skew()],
+            Some(&mild_cold_start()),
+            Some(&good_tail()),
+            &cfg,
+        );
         assert_eq!(result.verdict, LaneVerdict::Approved);
         assert!(result.parity_ok);
         assert!(result.skew_records.is_empty());
@@ -1439,7 +1449,12 @@ mod tests {
     fn evaluate_batch_all_approved() {
         let cfg = GateConfig::default();
         let items = vec![
-            (good_parity(), vec![clean_skew()], Some(mild_cold_start()), Some(good_tail())),
+            (
+                good_parity(),
+                vec![clean_skew()],
+                Some(mild_cold_start()),
+                Some(good_tail()),
+            ),
             (marginal_parity(), vec![], None, None),
         ];
         let (results, summary) = evaluate_batch(&items, &cfg);
@@ -1482,7 +1497,12 @@ mod tests {
         let cfg = GateConfig::default();
         let items = vec![
             (good_parity(), vec![], None, None),
-            (slow_parity(), vec![bad_skew()], Some(severe_cold_start()), Some(bad_tail())),
+            (
+                slow_parity(),
+                vec![bad_skew()],
+                Some(severe_cold_start()),
+                Some(bad_tail()),
+            ),
         ];
         let (_, summary) = evaluate_batch(&items, &cfg);
         assert_eq!(summary.total, 2);

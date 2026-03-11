@@ -83,25 +83,27 @@ fn component_name() {
 
 #[test]
 fn max_dimensions_positive() {
-    assert!(MAX_DIMENSIONS > 0);
+    const { assert!(MAX_DIMENSIONS > 0) };
 }
 
 #[test]
 fn min_sample_size_positive() {
-    assert!(MIN_SAMPLE_SIZE > 0);
+    const { assert!(MIN_SAMPLE_SIZE > 0) };
 }
 
 #[test]
 fn thresholds_ordered() {
-    assert!(HIGH_NOVELTY_THRESHOLD > MODERATE_NOVELTY_THRESHOLD);
-    assert!(MODERATE_NOVELTY_THRESHOLD > 0);
-    assert!(HIGH_NOVELTY_THRESHOLD <= 1_000_000);
+    const {
+        assert!(HIGH_NOVELTY_THRESHOLD > MODERATE_NOVELTY_THRESHOLD);
+        assert!(MODERATE_NOVELTY_THRESHOLD > 0);
+        assert!(HIGH_NOVELTY_THRESHOLD <= 1_000_000);
+    }
 }
 
 #[test]
 fn abstention_threshold_in_range() {
-    assert!(DEFAULT_ABSTENTION_THRESHOLD > 0);
-    assert!(DEFAULT_ABSTENTION_THRESHOLD <= 1_000_000);
+    const { assert!(DEFAULT_ABSTENTION_THRESHOLD > 0) };
+    const { assert!(DEFAULT_ABSTENTION_THRESHOLD <= 1_000_000) };
 }
 
 // ---------------------------------------------------------------------------

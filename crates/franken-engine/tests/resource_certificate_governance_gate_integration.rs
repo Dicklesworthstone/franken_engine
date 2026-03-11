@@ -53,7 +53,10 @@ fn overrun_evidence(kind: ResourceKind) -> CertificateEvidence {
 
 #[test]
 fn test_schema_version_value() {
-    assert_eq!(SCHEMA_VERSION, "franken-engine.resource-certificate-governance-gate.v1");
+    assert_eq!(
+        SCHEMA_VERSION,
+        "franken-engine.resource-certificate-governance-gate.v1"
+    );
 }
 
 #[test]
@@ -328,7 +331,10 @@ fn test_evaluate_regression_allocation_burst_for_allocation_budget() {
     let mut current = good_evidence(ResourceKind::AllocationBudget);
     current.consumed_millionths = 140_000;
     let regs = evaluate_regression(&current, &base, &cfg);
-    assert!(regs.iter().any(|r| r.kind == RegressionKind::AllocationBurst));
+    assert!(
+        regs.iter()
+            .any(|r| r.kind == RegressionKind::AllocationBurst)
+    );
 }
 
 #[test]
@@ -339,7 +345,10 @@ fn test_evaluate_regression_latency_regression_for_latency_budget() {
     let mut current = good_evidence(ResourceKind::LatencyBudget);
     current.consumed_millionths = 140_000;
     let regs = evaluate_regression(&current, &base, &cfg);
-    assert!(regs.iter().any(|r| r.kind == RegressionKind::LatencyRegression));
+    assert!(
+        regs.iter()
+            .any(|r| r.kind == RegressionKind::LatencyRegression)
+    );
 }
 
 #[test]
@@ -535,7 +544,10 @@ fn test_publication_constraint_no_regressions_full_claim() {
     let result = evaluate(&ev, None, &cfg);
     let pc = &result.publication_constraints[0];
     assert!(!pc.must_disclose);
-    assert_eq!(pc.max_claimable_improvement, DEFAULT_MAX_CLAIMABLE_IMPROVEMENT);
+    assert_eq!(
+        pc.max_claimable_improvement,
+        DEFAULT_MAX_CLAIMABLE_IMPROVEMENT
+    );
 }
 
 #[test]

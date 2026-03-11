@@ -21,23 +21,56 @@ fn make_claim(
     residual: u64,
     samples: u64,
 ) -> HardwareClaim {
-    HardwareClaim::new(kind, source, target, 2_000_000, 1_200_000, residual, samples, epoch())
+    HardwareClaim::new(
+        kind,
+        source,
+        target,
+        2_000_000,
+        1_200_000,
+        residual,
+        samples,
+        epoch(),
+    )
 }
 
 fn confirmed_claim() -> HardwareClaim {
-    make_claim(HardwareClaimKind::Throughput, "src-x86", "dst-x86", 960_000, 100)
+    make_claim(
+        HardwareClaimKind::Throughput,
+        "src-x86",
+        "dst-x86",
+        960_000,
+        100,
+    )
 }
 
 fn downgraded_claim() -> HardwareClaim {
-    make_claim(HardwareClaimKind::Latency, "src-x86", "dst-arm", 800_000, 50)
+    make_claim(
+        HardwareClaimKind::Latency,
+        "src-x86",
+        "dst-arm",
+        800_000,
+        50,
+    )
 }
 
 fn requires_local_claim() -> HardwareClaim {
-    make_claim(HardwareClaimKind::MemoryEfficiency, "src-a", "dst-b", 400_000, 30)
+    make_claim(
+        HardwareClaimKind::MemoryEfficiency,
+        "src-a",
+        "dst-b",
+        400_000,
+        30,
+    )
 }
 
 fn unsupported_claim() -> HardwareClaim {
-    make_claim(HardwareClaimKind::StartupTime, "src-a", "dst-c", 100_000, 25)
+    make_claim(
+        HardwareClaimKind::StartupTime,
+        "src-a",
+        "dst-c",
+        100_000,
+        25,
+    )
 }
 
 fn insufficient_claim() -> HardwareClaim {
@@ -171,7 +204,10 @@ fn test_claim_verdict_is_usable() {
 fn test_claim_verdict_specific_names() {
     assert_eq!(ClaimVerdict::Confirmed.as_str(), "confirmed");
     assert_eq!(ClaimVerdict::RequiresLocal.as_str(), "requires_local");
-    assert_eq!(ClaimVerdict::InsufficientEvidence.as_str(), "insufficient_evidence");
+    assert_eq!(
+        ClaimVerdict::InsufficientEvidence.as_str(),
+        "insufficient_evidence"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +247,10 @@ fn test_promotion_decision_specific_names() {
     assert_eq!(PromotionDecision::Promote.as_str(), "promote");
     assert_eq!(PromotionDecision::Hold.as_str(), "hold");
     assert_eq!(PromotionDecision::Rollback.as_str(), "rollback");
-    assert_eq!(PromotionDecision::RequireFreshMeasurement.as_str(), "require_fresh_measurement");
+    assert_eq!(
+        PromotionDecision::RequireFreshMeasurement.as_str(),
+        "require_fresh_measurement"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +304,13 @@ fn test_hardware_claim_construction() {
 
 #[test]
 fn test_hardware_claim_is_same_cell_true() {
-    let c = make_claim(HardwareClaimKind::Throughput, "cell-x", "cell-x", 900_000, 20);
+    let c = make_claim(
+        HardwareClaimKind::Throughput,
+        "cell-x",
+        "cell-x",
+        900_000,
+        20,
+    );
     assert!(c.is_same_cell());
 }
 
@@ -444,7 +489,10 @@ fn test_evaluate_downgraded_at_boundary() {
 fn test_evaluate_downgraded_has_microarch_variance_reason() {
     let cfg = GateConfig::default();
     let ev = evaluate(&downgraded_claim(), &cfg);
-    assert!(ev.degradation_reasons.contains(&DegradationReason::MicroarchVariance));
+    assert!(
+        ev.degradation_reasons
+            .contains(&DegradationReason::MicroarchVariance)
+    );
 }
 
 #[test]
@@ -479,7 +527,10 @@ fn test_evaluate_requires_local_at_boundary() {
 fn test_evaluate_requires_local_has_arch_mismatch_reason() {
     let cfg = GateConfig::default();
     let ev = evaluate(&requires_local_claim(), &cfg);
-    assert!(ev.degradation_reasons.contains(&DegradationReason::ArchMismatch));
+    assert!(
+        ev.degradation_reasons
+            .contains(&DegradationReason::ArchMismatch)
+    );
 }
 
 #[test]
@@ -508,21 +559,30 @@ fn test_evaluate_unsupported_zero_residual() {
     let c = make_claim(HardwareClaimKind::StartupTime, "a", "b", 0, 50);
     let ev = evaluate(&c, &cfg);
     assert_eq!(ev.verdict, ClaimVerdict::Unsupported);
-    assert!(ev.degradation_reasons.contains(&DegradationReason::ResidualTooLow));
+    assert!(
+        ev.degradation_reasons
+            .contains(&DegradationReason::ResidualTooLow)
+    );
 }
 
 #[test]
 fn test_evaluate_unsupported_has_vector_width_loss() {
     let cfg = GateConfig::default();
     let ev = evaluate(&unsupported_claim(), &cfg);
-    assert!(ev.degradation_reasons.contains(&DegradationReason::VectorWidthLoss));
+    assert!(
+        ev.degradation_reasons
+            .contains(&DegradationReason::VectorWidthLoss)
+    );
 }
 
 #[test]
 fn test_evaluate_unsupported_has_cache_size_difference() {
     let cfg = GateConfig::default();
     let ev = evaluate(&unsupported_claim(), &cfg);
-    assert!(ev.degradation_reasons.contains(&DegradationReason::CacheSizeDifference));
+    assert!(
+        ev.degradation_reasons
+            .contains(&DegradationReason::CacheSizeDifference)
+    );
 }
 
 #[test]
@@ -548,7 +608,10 @@ fn test_evaluate_insufficient_evidence() {
 fn test_evaluate_insufficient_has_insufficient_samples_reason() {
     let cfg = GateConfig::default();
     let ev = evaluate(&insufficient_claim(), &cfg);
-    assert!(ev.degradation_reasons.contains(&DegradationReason::InsufficientSamples));
+    assert!(
+        ev.degradation_reasons
+            .contains(&DegradationReason::InsufficientSamples)
+    );
 }
 
 #[test]
@@ -961,7 +1024,11 @@ fn test_decision_receipt_hash_differs_by_verdict() {
 #[test]
 fn test_decision_receipt_hash_differs_by_epoch() {
     let ch = ContentHash::compute(b"test-claim");
-    let r1 = DecisionReceipt::new(SecurityEpoch::from_raw(1), ClaimVerdict::Confirmed, ch.clone());
+    let r1 = DecisionReceipt::new(
+        SecurityEpoch::from_raw(1),
+        ClaimVerdict::Confirmed,
+        ch.clone(),
+    );
     let r2 = DecisionReceipt::new(SecurityEpoch::from_raw(2), ClaimVerdict::Confirmed, ch);
     assert_ne!(r1.receipt_hash, r2.receipt_hash);
 }
@@ -1006,15 +1073,39 @@ fn test_rollback_record_construction() {
 
 #[test]
 fn test_rollback_record_receipt_hash_deterministic() {
-    let r1 = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::Unsupported, "t", epoch());
-    let r2 = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::Unsupported, "t", epoch());
+    let r1 = RollbackRecord::new(
+        "c1",
+        ClaimVerdict::Confirmed,
+        ClaimVerdict::Unsupported,
+        "t",
+        epoch(),
+    );
+    let r2 = RollbackRecord::new(
+        "c1",
+        ClaimVerdict::Confirmed,
+        ClaimVerdict::Unsupported,
+        "t",
+        epoch(),
+    );
     assert_eq!(r1.receipt_hash, r2.receipt_hash);
 }
 
 #[test]
 fn test_rollback_record_receipt_hash_differs_by_trigger() {
-    let r1 = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::Unsupported, "t1", epoch());
-    let r2 = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::Unsupported, "t2", epoch());
+    let r1 = RollbackRecord::new(
+        "c1",
+        ClaimVerdict::Confirmed,
+        ClaimVerdict::Unsupported,
+        "t1",
+        epoch(),
+    );
+    let r2 = RollbackRecord::new(
+        "c1",
+        ClaimVerdict::Confirmed,
+        ClaimVerdict::Unsupported,
+        "t2",
+        epoch(),
+    );
     assert_ne!(r1.receipt_hash, r2.receipt_hash);
 }
 
@@ -1036,7 +1127,13 @@ fn test_rollback_record_display() {
 
 #[test]
 fn test_rollback_record_serde_roundtrip() {
-    let r = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::Unsupported, "t", epoch());
+    let r = RollbackRecord::new(
+        "c1",
+        ClaimVerdict::Confirmed,
+        ClaimVerdict::Unsupported,
+        "t",
+        epoch(),
+    );
     let json = serde_json::to_string(&r).unwrap();
     let back: RollbackRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
@@ -1074,8 +1171,14 @@ fn test_evaluate_batch_many_claims() {
     let (evidence, summary) = evaluate_batch(&claims, &cfg);
     assert_eq!(evidence.len(), 20);
     assert_eq!(summary.total_claims, 20);
-    assert_eq!(summary.confirmed + summary.downgraded + summary.requires_local
-               + summary.unsupported + summary.insufficient, 20);
+    assert_eq!(
+        summary.confirmed
+            + summary.downgraded
+            + summary.requires_local
+            + summary.unsupported
+            + summary.insufficient,
+        20
+    );
 }
 
 #[test]

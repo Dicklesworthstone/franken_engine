@@ -63,6 +63,22 @@ fn make_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell
         .expect("delegate created")
 }
 
+fn make_low_penalty_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell {
+    let mut factory = DelegateCellFactory::default();
+    factory.policy.initial_posterior_micros = 0;
+    factory.policy.capability_escalation_penalty_micros = 10_000;
+    factory
+        .create_delegate_cell(
+            delegate_id,
+            delegate_manifest(capabilities, 2_000_000_000_000),
+            budget(),
+            BudgetExhaustionPolicy::Suspend,
+            100,
+            &lctx(),
+        )
+        .expect("delegate created")
+}
+
 fn assert_pending_challenge(result: &HostcallResult, expected_capability: Capability) {
     assert!(matches!(
         result,
@@ -287,7 +303,7 @@ fn grant_expiry_boundary_fails_closed_at_expiry_timestamp() {
 
 #[test]
 fn escrow_flood_campaign_triggers_contract_denials() {
-    let mut delegate = make_delegate("escrow-adv-flood", &[Capability::FsRead]);
+    let mut delegate = make_low_penalty_delegate("escrow-adv-flood", &[Capability::FsRead]);
 
     for idx in 0..48u64 {
         let result = delegate
@@ -321,7 +337,8 @@ fn escrow_flood_campaign_triggers_contract_denials() {
 
 #[test]
 fn escrow_flood_contract_holds_exact_configured_boundary() {
-    let mut delegate = make_delegate("escrow-adv-flood-boundary", &[Capability::FsRead]);
+    let mut delegate =
+        make_low_penalty_delegate("escrow-adv-flood-boundary", &[Capability::FsRead]);
     let max_open_requests =
         EscrowFloodProtectionContract::default().max_open_requests_per_extension;
 

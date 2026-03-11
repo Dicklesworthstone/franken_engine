@@ -1144,27 +1144,30 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
 // Runner
 // ---------------------------------------------------------------------------
 
-/// Compute evidence hash from components.
-fn compute_evidence_hash(
-    specimen_id: &str,
+/// Input for computing an evidence hash.
+struct EvidenceHashInput<'a> {
+    specimen_id: &'a str,
     actual_outcome: InteropActualOutcome,
     compatibility_disposition: InteropCompatibilityDisposition,
-    guidance_code: &str,
+    guidance_code: &'a str,
     binding_count: usize,
     async_count: usize,
     linked_count: u64,
     cycle_count: u64,
-) -> String {
+}
+
+/// Compute evidence hash from components.
+fn compute_evidence_hash(input: &EvidenceHashInput<'_>) -> String {
     let hash_input = format!(
         "{}:{}:{}:{}:{}:{}:{}:{}",
-        specimen_id,
-        actual_outcome as u8,
-        compatibility_disposition as u8,
-        guidance_code,
-        binding_count,
-        async_count,
-        linked_count,
-        cycle_count,
+        input.specimen_id,
+        input.actual_outcome as u8,
+        input.compatibility_disposition as u8,
+        input.guidance_code,
+        input.binding_count,
+        input.async_count,
+        input.linked_count,
+        input.cycle_count,
     );
     hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes())
 }
@@ -1194,7 +1197,7 @@ fn remediation_guidance(
 
 fn classify_compatibility(
     specimen: &InteropSpecimen,
-    actual_outcome: InteropActualOutcome,
+    _actual_outcome: InteropActualOutcome,
     verdict: InteropVerdict,
 ) -> (InteropCompatibilityDisposition, InteropRemediationGuidance) {
     if verdict == InteropVerdict::Fail {
@@ -1300,16 +1303,16 @@ fn early_return_evidence(
         binding_verdicts: vec![],
         async_phase_verdicts: vec![],
         error_detail,
-        evidence_hash: Some(compute_evidence_hash(
-            &specimen.specimen_id,
+        evidence_hash: Some(compute_evidence_hash(&EvidenceHashInput {
+            specimen_id: &specimen.specimen_id,
             actual_outcome,
             compatibility_disposition,
-            &remediation_guidance.guidance_code,
-            0,
-            0,
+            guidance_code: &remediation_guidance.guidance_code,
+            binding_count: 0,
+            async_count: 0,
             linked_count,
             cycle_count,
-        )),
+        })),
     }
 }
 
@@ -1546,16 +1549,16 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         binding_verdicts,
         async_phase_verdicts,
         error_detail: None,
-        evidence_hash: Some(compute_evidence_hash(
-            &specimen.specimen_id,
+        evidence_hash: Some(compute_evidence_hash(&EvidenceHashInput {
+            specimen_id: &specimen.specimen_id,
             actual_outcome,
             compatibility_disposition,
-            &remediation_guidance.guidance_code,
+            guidance_code: &remediation_guidance.guidance_code,
             binding_count,
             async_count,
             linked_count,
             cycle_count,
-        )),
+        })),
     }
 }
 

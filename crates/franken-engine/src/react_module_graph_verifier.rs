@@ -24,8 +24,7 @@ use crate::security_epoch::SecurityEpoch;
 // ---------------------------------------------------------------------------
 
 /// Schema version for the react module graph verifier.
-pub const REACT_MODULE_GRAPH_SCHEMA_VERSION: &str =
-    "franken-engine.react-module-graph-verifier.v1";
+pub const REACT_MODULE_GRAPH_SCHEMA_VERSION: &str = "franken-engine.react-module-graph-verifier.v1";
 
 /// Bead identifier originating this module.
 pub const REACT_MODULE_GRAPH_BEAD_ID: &str = "bd-1lsy.5.7.2";
@@ -213,7 +212,11 @@ impl ModuleGraphNode {
 
 impl fmt::Display for ModuleGraphNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GraphNode({}, {}, {}, {})", self.node_id, self.package, self.role, self.surface)
+        write!(
+            f,
+            "GraphNode({}, {}, {}, {})",
+            self.node_id, self.package, self.role, self.surface
+        )
     }
 }
 
@@ -251,7 +254,11 @@ impl ModuleGraphEdge {
 
 impl fmt::Display for ModuleGraphEdge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Edge({} -[{}]-> {})", self.from_node, self.edge_kind, self.to_node)
+        write!(
+            f,
+            "Edge({} -[{}]-> {})",
+            self.from_node, self.edge_kind, self.to_node
+        )
     }
 }
 
@@ -303,15 +310,26 @@ impl ModuleGraph {
     }
 
     /// Number of nodes.
-    pub fn node_count(&self) -> usize { self.nodes.len() }
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
 
     /// Number of edges.
-    pub fn edge_count(&self) -> usize { self.edges.len() }
+    pub fn edge_count(&self) -> usize {
+        self.edges.len()
+    }
 }
 
 impl fmt::Display for ModuleGraph {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ModuleGraph({}, {}, {} nodes, {} edges)", self.graph_id, self.surface, self.nodes.len(), self.edges.len())
+        write!(
+            f,
+            "ModuleGraph({}, {}, {} nodes, {} edges)",
+            self.graph_id,
+            self.surface,
+            self.nodes.len(),
+            self.edges.len()
+        )
     }
 }
 
@@ -417,7 +435,11 @@ impl GraphVerificationReceipt {
 
 impl fmt::Display for GraphVerificationReceipt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Receipt({}, {}, {})", self.receipt_id, self.surface, self.verdict)
+        write!(
+            f,
+            "Receipt({}, {}, {})",
+            self.receipt_id, self.surface, self.verdict
+        )
     }
 }
 
@@ -449,9 +471,13 @@ pub struct SurfaceCoverageReport {
 impl SurfaceCoverageReport {
     /// Compute a deterministic content hash over the report.
     pub fn compute_content_hash(
-        report_id: &str, epoch: SecurityEpoch, receipts: &[GraphVerificationReceipt],
-        surfaces_covered: &[RenderSurface], coverage_millionths: u64,
-        total_nodes: u64, total_edges: u64,
+        report_id: &str,
+        epoch: SecurityEpoch,
+        receipts: &[GraphVerificationReceipt],
+        surfaces_covered: &[RenderSurface],
+        coverage_millionths: u64,
+        total_nodes: u64,
+        total_edges: u64,
     ) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(b"SurfaceCoverageReport:");
@@ -464,8 +490,12 @@ impl SurfaceCoverageReport {
         hasher.update(total_nodes.to_le_bytes());
         hasher.update(b":");
         hasher.update(total_edges.to_le_bytes());
-        for receipt in receipts { hasher.update(receipt.content_hash.as_bytes()); }
-        for surface in surfaces_covered { hasher.update(surface.as_str().as_bytes()); }
+        for receipt in receipts {
+            hasher.update(receipt.content_hash.as_bytes());
+        }
+        for surface in surfaces_covered {
+            hasher.update(surface.as_str().as_bytes());
+        }
         let result: [u8; 32] = hasher.finalize().into();
         ContentHash(result)
     }
@@ -473,7 +503,13 @@ impl SurfaceCoverageReport {
 
 impl fmt::Display for SurfaceCoverageReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SurfaceCoverageReport({}, {} surfaces, coverage={})", self.report_id, self.surfaces_covered.len(), self.coverage_millionths)
+        write!(
+            f,
+            "SurfaceCoverageReport({}, {} surfaces, coverage={})",
+            self.report_id,
+            self.surfaces_covered.len(),
+            self.coverage_millionths
+        )
     }
 }
 
@@ -482,21 +518,58 @@ impl fmt::Display for SurfaceCoverageReport {
 // ---------------------------------------------------------------------------
 
 /// Build a module graph node with computed content hash.
-pub fn build_module_node(id: &str, package: ReactPackage, subpath: &str, condition: ExportCondition, format: ModuleFormat, role: ModuleRole, surface: RenderSurface) -> ModuleGraphNode {
-    let content_hash = ModuleGraphNode::compute_content_hash(id, package, subpath, condition, format, role, surface);
-    ModuleGraphNode { node_id: GraphNodeId::new(id), package, subpath: subpath.to_owned(), condition, format, role, surface, content_hash }
+pub fn build_module_node(
+    id: &str,
+    package: ReactPackage,
+    subpath: &str,
+    condition: ExportCondition,
+    format: ModuleFormat,
+    role: ModuleRole,
+    surface: RenderSurface,
+) -> ModuleGraphNode {
+    let content_hash = ModuleGraphNode::compute_content_hash(
+        id, package, subpath, condition, format, role, surface,
+    );
+    ModuleGraphNode {
+        node_id: GraphNodeId::new(id),
+        package,
+        subpath: subpath.to_owned(),
+        condition,
+        format,
+        role,
+        surface,
+        content_hash,
+    }
 }
 
 /// Build a module graph edge with computed content hash.
 pub fn build_module_edge(from: &str, to: &str, kind: &str) -> ModuleGraphEdge {
     let content_hash = ModuleGraphEdge::compute_content_hash(from, to, kind);
-    ModuleGraphEdge { from_node: GraphNodeId::new(from), to_node: GraphNodeId::new(to), edge_kind: kind.to_owned(), content_hash }
+    ModuleGraphEdge {
+        from_node: GraphNodeId::new(from),
+        to_node: GraphNodeId::new(to),
+        edge_kind: kind.to_owned(),
+        content_hash,
+    }
 }
 
 /// Build a module graph with computed content hash.
-pub fn build_module_graph(graph_id: &str, surface: RenderSurface, nodes: Vec<ModuleGraphNode>, edges: Vec<ModuleGraphEdge>, epoch: SecurityEpoch) -> ModuleGraph {
+pub fn build_module_graph(
+    graph_id: &str,
+    surface: RenderSurface,
+    nodes: Vec<ModuleGraphNode>,
+    edges: Vec<ModuleGraphEdge>,
+    epoch: SecurityEpoch,
+) -> ModuleGraph {
     let content_hash = ModuleGraph::compute_content_hash(graph_id, surface, &nodes, &edges, epoch);
-    ModuleGraph { graph_id: graph_id.to_owned(), surface, nodes, edges, epoch, content_hash }
+    ModuleGraph {
+        graph_id: graph_id.to_owned(),
+        surface,
+        nodes,
+        edges,
+        epoch,
+        content_hash,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -506,15 +579,28 @@ pub fn build_module_graph(graph_id: &str, surface: RenderSurface, nodes: Vec<Mod
 /// Detect all cycles in the module graph using DFS.
 pub fn detect_cycles(graph: &ModuleGraph) -> Vec<Vec<GraphNodeId>> {
     let mut adj: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for node in &graph.nodes { adj.entry(node.node_id.as_str()).or_default(); }
-    for edge in &graph.edges { adj.entry(edge.from_node.as_str()).or_default().push(edge.to_node.as_str()); }
+    for node in &graph.nodes {
+        adj.entry(node.node_id.as_str()).or_default();
+    }
+    for edge in &graph.edges {
+        adj.entry(edge.from_node.as_str())
+            .or_default()
+            .push(edge.to_node.as_str());
+    }
 
     let mut visited: BTreeSet<&str> = BTreeSet::new();
     let mut on_stack: BTreeSet<&str> = BTreeSet::new();
     let mut stack: Vec<&str> = Vec::new();
     let mut cycles: Vec<Vec<GraphNodeId>> = Vec::new();
 
-    fn dfs<'a>(node: &'a str, adj: &BTreeMap<&'a str, Vec<&'a str>>, visited: &mut BTreeSet<&'a str>, on_stack: &mut BTreeSet<&'a str>, stack: &mut Vec<&'a str>, cycles: &mut Vec<Vec<GraphNodeId>>) {
+    fn dfs<'a>(
+        node: &'a str,
+        adj: &BTreeMap<&'a str, Vec<&'a str>>,
+        visited: &mut BTreeSet<&'a str>,
+        on_stack: &mut BTreeSet<&'a str>,
+        stack: &mut Vec<&'a str>,
+        cycles: &mut Vec<Vec<GraphNodeId>>,
+    ) {
         visited.insert(node);
         on_stack.insert(node);
         stack.push(node);
@@ -526,8 +612,12 @@ pub fn detect_cycles(graph: &ModuleGraph) -> Vec<Vec<GraphNodeId>> {
                     let mut cycle = Vec::new();
                     let mut found = false;
                     for &s in stack.iter() {
-                        if s == neighbor { found = true; }
-                        if found { cycle.push(GraphNodeId::new(s)); }
+                        if s == neighbor {
+                            found = true;
+                        }
+                        if found {
+                            cycle.push(GraphNodeId::new(s));
+                        }
                     }
                     cycle.push(GraphNodeId::new(neighbor));
                     cycles.push(cycle);
@@ -541,7 +631,14 @@ pub fn detect_cycles(graph: &ModuleGraph) -> Vec<Vec<GraphNodeId>> {
     let node_ids: Vec<&str> = adj.keys().copied().collect();
     for node_id in node_ids {
         if !visited.contains(node_id) {
-            dfs(node_id, &adj, &mut visited, &mut on_stack, &mut stack, &mut cycles);
+            dfs(
+                node_id,
+                &adj,
+                &mut visited,
+                &mut on_stack,
+                &mut stack,
+                &mut cycles,
+            );
         }
     }
     cycles
@@ -558,7 +655,12 @@ pub fn detect_orphans(graph: &ModuleGraph) -> Vec<GraphNodeId> {
         connected.insert(edge.from_node.as_str());
         connected.insert(edge.to_node.as_str());
     }
-    graph.nodes.iter().filter(|n| !connected.contains(n.node_id.as_str())).map(|n| n.node_id.clone()).collect()
+    graph
+        .nodes
+        .iter()
+        .filter(|n| !connected.contains(n.node_id.as_str()))
+        .map(|n| n.node_id.clone())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -567,7 +669,11 @@ pub fn detect_orphans(graph: &ModuleGraph) -> Vec<GraphNodeId> {
 
 /// Detect edges where CJS imports ESM (incompatible).
 pub fn detect_format_mismatches(graph: &ModuleGraph) -> Vec<(GraphNodeId, GraphNodeId)> {
-    let node_map: BTreeMap<&str, &ModuleGraphNode> = graph.nodes.iter().map(|n| (n.node_id.as_str(), n)).collect();
+    let node_map: BTreeMap<&str, &ModuleGraphNode> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.node_id.as_str(), n))
+        .collect();
     let mut mismatches = Vec::new();
     for edge in &graph.edges {
         if let Some(from_node) = node_map.get(edge.from_node.as_str()) {
@@ -591,10 +697,19 @@ pub fn verify_module_graph(graph: &ModuleGraph) -> GraphVerificationReceipt {
     let mut verdict = GraphVerificationVerdict::Valid;
 
     // 1. Unsupported surface roles.
-    let unsupported: Vec<&ModuleGraphNode> = graph.nodes.iter().filter(|n| n.role == ModuleRole::UnsupportedSurface).collect();
+    let unsupported: Vec<&ModuleGraphNode> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.role == ModuleRole::UnsupportedSurface)
+        .collect();
     if !unsupported.is_empty() {
         verdict = GraphVerificationVerdict::UnsupportedSurface;
-        for node in &unsupported { diagnostics.push(format!("node {} has unsupported surface role", node.node_id)); }
+        for node in &unsupported {
+            diagnostics.push(format!(
+                "node {} has unsupported surface role",
+                node.node_id
+            ));
+        }
     }
 
     // 2. Cycles.
@@ -614,7 +729,9 @@ pub fn verify_module_graph(graph: &ModuleGraph) -> GraphVerificationReceipt {
         let mismatches = detect_format_mismatches(graph);
         if !mismatches.is_empty() {
             verdict = GraphVerificationVerdict::FormatMismatch;
-            for (from, to) in &mismatches { diagnostics.push(format!("format mismatch: {} -> {}", from, to)); }
+            for (from, to) in &mismatches {
+                diagnostics.push(format!("format mismatch: {} -> {}", from, to));
+            }
         }
     }
 
@@ -623,13 +740,18 @@ pub fn verify_module_graph(graph: &ModuleGraph) -> GraphVerificationReceipt {
         let orphans = detect_orphans(graph);
         if !orphans.is_empty() {
             verdict = GraphVerificationVerdict::OrphanNode;
-            for orphan in &orphans { diagnostics.push(format!("orphan node: {}", orphan)); }
+            for orphan in &orphans {
+                diagnostics.push(format!("orphan node: {}", orphan));
+            }
         }
     }
 
     // 5. Missing entry point.
     if verdict == GraphVerificationVerdict::Valid {
-        let has_entry = graph.nodes.iter().any(|n| n.role == ModuleRole::EntryPoint && n.surface == graph.surface);
+        let has_entry = graph
+            .nodes
+            .iter()
+            .any(|n| n.role == ModuleRole::EntryPoint && n.surface == graph.surface);
         if !has_entry {
             verdict = GraphVerificationVerdict::MissingSurface;
             diagnostics.push(format!("no entry-point node for surface {}", graph.surface));
@@ -639,9 +761,26 @@ pub fn verify_module_graph(graph: &ModuleGraph) -> GraphVerificationReceipt {
     let receipt_id = format!("receipt-{}-{}", graph.graph_id, graph.surface.as_str());
     let node_count = graph.nodes.len() as u64;
     let edge_count = graph.edges.len() as u64;
-    let content_hash = GraphVerificationReceipt::compute_content_hash(&receipt_id, &graph.graph_id, graph.surface, verdict, node_count, edge_count, &diagnostics);
+    let content_hash = GraphVerificationReceipt::compute_content_hash(
+        &receipt_id,
+        &graph.graph_id,
+        graph.surface,
+        verdict,
+        node_count,
+        edge_count,
+        &diagnostics,
+    );
 
-    GraphVerificationReceipt { receipt_id, graph_id: graph.graph_id.clone(), surface: graph.surface, verdict, node_count, edge_count, diagnostics, content_hash }
+    GraphVerificationReceipt {
+        receipt_id,
+        graph_id: graph.graph_id.clone(),
+        surface: graph.surface,
+        verdict,
+        node_count,
+        edge_count,
+        diagnostics,
+        content_hash,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -652,10 +791,42 @@ pub fn verify_module_graph(graph: &ModuleGraph) -> GraphVerificationReceipt {
 pub fn build_ssr_graph(epoch: SecurityEpoch) -> ModuleGraph {
     let surface = RenderSurface::ServerSideRender;
     let nodes = vec![
-        build_module_node("ssr-entry", ReactPackage::ReactDomServer, "./server", ExportCondition::Node, ModuleFormat::Esm, ModuleRole::EntryPoint, surface),
-        build_module_node("ssr-react", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, surface),
-        build_module_node("ssr-jsx-runtime", ReactPackage::ReactJsxRuntime, "./jsx-runtime", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::InternalShared, surface),
-        build_module_node("ssr-scheduler", ReactPackage::Scheduler, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::SchedulerHook, surface),
+        build_module_node(
+            "ssr-entry",
+            ReactPackage::ReactDomServer,
+            "./server",
+            ExportCondition::Node,
+            ModuleFormat::Esm,
+            ModuleRole::EntryPoint,
+            surface,
+        ),
+        build_module_node(
+            "ssr-react",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            surface,
+        ),
+        build_module_node(
+            "ssr-jsx-runtime",
+            ReactPackage::ReactJsxRuntime,
+            "./jsx-runtime",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::InternalShared,
+            surface,
+        ),
+        build_module_node(
+            "ssr-scheduler",
+            ReactPackage::Scheduler,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::SchedulerHook,
+            surface,
+        ),
     ];
     let edges = vec![
         build_module_edge("ssr-entry", "ssr-react", "imports"),
@@ -670,10 +841,42 @@ pub fn build_ssr_graph(epoch: SecurityEpoch) -> ModuleGraph {
 pub fn build_client_entry_graph(epoch: SecurityEpoch) -> ModuleGraph {
     let surface = RenderSurface::ClientEntry;
     let nodes = vec![
-        build_module_node("client-entry", ReactPackage::ReactDom, ".", ExportCondition::Browser, ModuleFormat::Esm, ModuleRole::EntryPoint, surface),
-        build_module_node("client-react", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, surface),
-        build_module_node("client-jsx-runtime", ReactPackage::ReactJsxRuntime, "./jsx-runtime", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::InternalShared, surface),
-        build_module_node("client-scheduler", ReactPackage::Scheduler, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::SchedulerHook, surface),
+        build_module_node(
+            "client-entry",
+            ReactPackage::ReactDom,
+            ".",
+            ExportCondition::Browser,
+            ModuleFormat::Esm,
+            ModuleRole::EntryPoint,
+            surface,
+        ),
+        build_module_node(
+            "client-react",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            surface,
+        ),
+        build_module_node(
+            "client-jsx-runtime",
+            ReactPackage::ReactJsxRuntime,
+            "./jsx-runtime",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::InternalShared,
+            surface,
+        ),
+        build_module_node(
+            "client-scheduler",
+            ReactPackage::Scheduler,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::SchedulerHook,
+            surface,
+        ),
     ];
     let edges = vec![
         build_module_edge("client-entry", "client-react", "imports"),
@@ -691,14 +894,20 @@ pub fn build_client_entry_graph(epoch: SecurityEpoch) -> ModuleGraph {
 /// Compute the fraction of ALL_SURFACES covered, in millionths.
 pub fn surface_coverage_millionths(surfaces: &[RenderSurface]) -> u64 {
     let total = ALL_SURFACES.len() as u64;
-    if total == 0 { return 0; }
+    if total == 0 {
+        return 0;
+    }
     let unique: BTreeSet<RenderSurface> = surfaces.iter().copied().collect();
     let covered = unique.len() as u64;
     covered.saturating_mul(MILLIONTHS) / total
 }
 
 /// Build a surface-coverage report from verification receipts.
-pub fn build_coverage_report(report_id: &str, epoch: SecurityEpoch, receipts: Vec<GraphVerificationReceipt>) -> SurfaceCoverageReport {
+pub fn build_coverage_report(
+    report_id: &str,
+    epoch: SecurityEpoch,
+    receipts: Vec<GraphVerificationReceipt>,
+) -> SurfaceCoverageReport {
     let mut surfaces_set: BTreeSet<RenderSurface> = BTreeSet::new();
     let mut total_nodes: u64 = 0;
     let mut total_edges: u64 = 0;
@@ -709,8 +918,25 @@ pub fn build_coverage_report(report_id: &str, epoch: SecurityEpoch, receipts: Ve
     }
     let surfaces_covered: Vec<RenderSurface> = surfaces_set.into_iter().collect();
     let coverage = surface_coverage_millionths(&surfaces_covered);
-    let content_hash = SurfaceCoverageReport::compute_content_hash(report_id, epoch, &receipts, &surfaces_covered, coverage, total_nodes, total_edges);
-    SurfaceCoverageReport { report_id: report_id.to_owned(), epoch, receipts, surfaces_covered, coverage_millionths: coverage, total_nodes, total_edges, content_hash }
+    let content_hash = SurfaceCoverageReport::compute_content_hash(
+        report_id,
+        epoch,
+        &receipts,
+        &surfaces_covered,
+        coverage,
+        total_nodes,
+        total_edges,
+    );
+    SurfaceCoverageReport {
+        report_id: report_id.to_owned(),
+        epoch,
+        receipts,
+        surfaces_covered,
+        coverage_millionths: coverage,
+        total_nodes,
+        total_edges,
+        content_hash,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -724,7 +950,11 @@ pub fn franken_engine_react_module_graph_manifest() -> SurfaceCoverageReport {
     let client_graph = build_client_entry_graph(epoch);
     let ssr_receipt = verify_module_graph(&ssr_graph);
     let client_receipt = verify_module_graph(&client_graph);
-    build_coverage_report("canonical-react-module-graph-manifest", epoch, vec![ssr_receipt, client_receipt])
+    build_coverage_report(
+        "canonical-react-module-graph-manifest",
+        epoch,
+        vec![ssr_receipt, client_receipt],
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +967,10 @@ mod tests {
 
     #[test]
     fn render_surface_display_server_side_render() {
-        assert_eq!(RenderSurface::ServerSideRender.to_string(), "server_side_render");
+        assert_eq!(
+            RenderSurface::ServerSideRender.to_string(),
+            "server_side_render"
+        );
     }
 
     #[test]
@@ -747,12 +980,18 @@ mod tests {
 
     #[test]
     fn render_surface_display_hydration_bridge() {
-        assert_eq!(RenderSurface::HydrationBridge.to_string(), "hydration_bridge");
+        assert_eq!(
+            RenderSurface::HydrationBridge.to_string(),
+            "hydration_bridge"
+        );
     }
 
     #[test]
     fn render_surface_display_static_generation() {
-        assert_eq!(RenderSurface::StaticGeneration.to_string(), "static_generation");
+        assert_eq!(
+            RenderSurface::StaticGeneration.to_string(),
+            "static_generation"
+        );
     }
 
     #[test]
@@ -787,7 +1026,10 @@ mod tests {
 
     #[test]
     fn module_role_display_unsupported_surface() {
-        assert_eq!(ModuleRole::UnsupportedSurface.to_string(), "unsupported_surface");
+        assert_eq!(
+            ModuleRole::UnsupportedSurface.to_string(),
+            "unsupported_surface"
+        );
     }
 
     #[test]
@@ -814,7 +1056,15 @@ mod tests {
 
     #[test]
     fn module_graph_node_creation() {
-        let node = build_module_node("n1", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, RenderSurface::ClientEntry);
+        let node = build_module_node(
+            "n1",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            RenderSurface::ClientEntry,
+        );
         assert_eq!(node.node_id.as_str(), "n1");
         assert_eq!(node.package, ReactPackage::React);
         assert_eq!(node.subpath, ".");
@@ -822,21 +1072,61 @@ mod tests {
 
     #[test]
     fn module_graph_node_hash_determinism() {
-        let a = build_module_node("n1", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, RenderSurface::ClientEntry);
-        let b = build_module_node("n1", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, RenderSurface::ClientEntry);
+        let a = build_module_node(
+            "n1",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            RenderSurface::ClientEntry,
+        );
+        let b = build_module_node(
+            "n1",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            RenderSurface::ClientEntry,
+        );
         assert_eq!(a.content_hash, b.content_hash);
     }
 
     #[test]
     fn module_graph_node_hash_differs_with_different_id() {
-        let a = build_module_node("n1", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, RenderSurface::ClientEntry);
-        let b = build_module_node("n2", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, RenderSurface::ClientEntry);
+        let a = build_module_node(
+            "n1",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            RenderSurface::ClientEntry,
+        );
+        let b = build_module_node(
+            "n2",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            RenderSurface::ClientEntry,
+        );
         assert_ne!(a.content_hash, b.content_hash);
     }
 
     #[test]
     fn module_graph_node_display() {
-        let node = build_module_node("x", ReactPackage::ReactDom, ".", ExportCondition::Browser, ModuleFormat::Esm, ModuleRole::RendererBinding, RenderSurface::ClientEntry);
+        let node = build_module_node(
+            "x",
+            ReactPackage::ReactDom,
+            ".",
+            ExportCondition::Browser,
+            ModuleFormat::Esm,
+            ModuleRole::RendererBinding,
+            RenderSurface::ClientEntry,
+        );
         let s = node.to_string();
         assert!(s.contains("x"));
         assert!(s.contains("react_dom"));
@@ -873,8 +1163,22 @@ mod tests {
 
     #[test]
     fn module_graph_building() {
-        let nodes = vec![build_module_node("entry", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, RenderSurface::ClientEntry)];
-        let graph = build_module_graph("test-graph", RenderSurface::ClientEntry, nodes, vec![], SecurityEpoch::GENESIS);
+        let nodes = vec![build_module_node(
+            "entry",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::EntryPoint,
+            RenderSurface::ClientEntry,
+        )];
+        let graph = build_module_graph(
+            "test-graph",
+            RenderSurface::ClientEntry,
+            nodes,
+            vec![],
+            SecurityEpoch::GENESIS,
+        );
         assert_eq!(graph.graph_id, "test-graph");
         assert_eq!(graph.node_count(), 1);
         assert_eq!(graph.edge_count(), 0);
@@ -883,15 +1187,35 @@ mod tests {
     #[test]
     fn module_graph_hash_determinism() {
         let mk = || {
-            let nodes = vec![build_module_node("e", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, RenderSurface::ClientEntry)];
-            build_module_graph("g", RenderSurface::ClientEntry, nodes, vec![], SecurityEpoch::GENESIS)
+            let nodes = vec![build_module_node(
+                "e",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                RenderSurface::ClientEntry,
+            )];
+            build_module_graph(
+                "g",
+                RenderSurface::ClientEntry,
+                nodes,
+                vec![],
+                SecurityEpoch::GENESIS,
+            )
         };
         assert_eq!(mk().content_hash, mk().content_hash);
     }
 
     #[test]
     fn module_graph_display() {
-        let graph = build_module_graph("display-graph", RenderSurface::StreamingSSR, vec![], vec![], SecurityEpoch::GENESIS);
+        let graph = build_module_graph(
+            "display-graph",
+            RenderSurface::StreamingSSR,
+            vec![],
+            vec![],
+            SecurityEpoch::GENESIS,
+        );
         let s = graph.to_string();
         assert!(s.contains("display-graph") && s.contains("streaming_ssr"));
     }
@@ -900,8 +1224,24 @@ mod tests {
     fn detect_cycles_no_cycle() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("a", "b", "imports")];
         let graph = build_module_graph("g", s, nodes, edges, SecurityEpoch::GENESIS);
@@ -912,10 +1252,29 @@ mod tests {
     fn detect_cycles_simple_cycle() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
-        let edges = vec![build_module_edge("a", "b", "imports"), build_module_edge("b", "a", "imports")];
+        let edges = vec![
+            build_module_edge("a", "b", "imports"),
+            build_module_edge("b", "a", "imports"),
+        ];
         let graph = build_module_graph("g", s, nodes, edges, SecurityEpoch::GENESIS);
         assert!(!detect_cycles(&graph).is_empty());
     }
@@ -924,11 +1283,39 @@ mod tests {
     fn detect_cycles_three_node_cycle() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
-            build_module_node("c", ReactPackage::Scheduler, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::SchedulerHook, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
+            build_module_node(
+                "c",
+                ReactPackage::Scheduler,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::SchedulerHook,
+                s,
+            ),
         ];
-        let edges = vec![build_module_edge("a", "b", "imports"), build_module_edge("b", "c", "imports"), build_module_edge("c", "a", "imports")];
+        let edges = vec![
+            build_module_edge("a", "b", "imports"),
+            build_module_edge("b", "c", "imports"),
+            build_module_edge("c", "a", "imports"),
+        ];
         let graph = build_module_graph("g", s, nodes, edges, SecurityEpoch::GENESIS);
         assert!(!detect_cycles(&graph).is_empty());
     }
@@ -937,8 +1324,24 @@ mod tests {
     fn detect_orphans_no_orphans() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("a", "b", "imports")];
         let graph = build_module_graph("g", s, nodes, edges, SecurityEpoch::GENESIS);
@@ -949,9 +1352,33 @@ mod tests {
     fn detect_orphans_with_orphan() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
-            build_module_node("orphan", ReactPackage::Scheduler, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::SchedulerHook, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
+            build_module_node(
+                "orphan",
+                ReactPackage::Scheduler,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::SchedulerHook,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("a", "b", "imports")];
         let graph = build_module_graph("g", s, nodes, edges, SecurityEpoch::GENESIS);
@@ -964,8 +1391,24 @@ mod tests {
     fn detect_format_mismatches_compatible() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("a", "b", "imports")];
         let graph = build_module_graph("g", s, nodes, edges, SecurityEpoch::GENESIS);
@@ -976,8 +1419,24 @@ mod tests {
     fn detect_format_mismatches_incompatible() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Require, ModuleFormat::Cjs, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Require,
+                ModuleFormat::Cjs,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("a", "b", "imports")];
         let graph = build_module_graph("g", s, nodes, edges, SecurityEpoch::GENESIS);
@@ -991,8 +1450,24 @@ mod tests {
     fn detect_format_mismatches_esm_to_cjs_ok() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Require, ModuleFormat::Cjs, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Require,
+                ModuleFormat::Cjs,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("a", "b", "imports")];
         let graph = build_module_graph("g", s, nodes, edges, SecurityEpoch::GENESIS);
@@ -1003,8 +1478,24 @@ mod tests {
     fn verify_module_graph_valid() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("entry", ReactPackage::ReactDom, ".", ExportCondition::Browser, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("rt", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, s),
+            build_module_node(
+                "entry",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Browser,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "rt",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RuntimeProvider,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("entry", "rt", "imports")];
         let graph = build_module_graph("valid-g", s, nodes, edges, SecurityEpoch::GENESIS);
@@ -1017,10 +1508,29 @@ mod tests {
     fn verify_module_graph_cycle() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
-        let edges = vec![build_module_edge("a", "b", "imports"), build_module_edge("b", "a", "imports")];
+        let edges = vec![
+            build_module_edge("a", "b", "imports"),
+            build_module_edge("b", "a", "imports"),
+        ];
         let graph = build_module_graph("cycle-g", s, nodes, edges, SecurityEpoch::GENESIS);
         let receipt = verify_module_graph(&graph);
         assert_eq!(receipt.verdict, GraphVerificationVerdict::CyclicDependency);
@@ -1031,45 +1541,121 @@ mod tests {
     fn verify_module_graph_format_mismatch() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Require, ModuleFormat::Cjs, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Require,
+                ModuleFormat::Cjs,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("a", "b", "imports")];
         let graph = build_module_graph("fmt-g", s, nodes, edges, SecurityEpoch::GENESIS);
-        assert_eq!(verify_module_graph(&graph).verdict, GraphVerificationVerdict::FormatMismatch);
+        assert_eq!(
+            verify_module_graph(&graph).verdict,
+            GraphVerificationVerdict::FormatMismatch
+        );
     }
 
     #[test]
     fn verify_module_graph_orphan() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("entry", ReactPackage::ReactDom, ".", ExportCondition::Browser, ModuleFormat::Esm, ModuleRole::EntryPoint, s),
-            build_module_node("rt", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, s),
-            build_module_node("orphan", ReactPackage::Scheduler, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::SchedulerHook, s),
+            build_module_node(
+                "entry",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Browser,
+                ModuleFormat::Esm,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "rt",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RuntimeProvider,
+                s,
+            ),
+            build_module_node(
+                "orphan",
+                ReactPackage::Scheduler,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::SchedulerHook,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("entry", "rt", "imports")];
         let graph = build_module_graph("orphan-g", s, nodes, edges, SecurityEpoch::GENESIS);
-        assert_eq!(verify_module_graph(&graph).verdict, GraphVerificationVerdict::OrphanNode);
+        assert_eq!(
+            verify_module_graph(&graph).verdict,
+            GraphVerificationVerdict::OrphanNode
+        );
     }
 
     #[test]
     fn verify_module_graph_unsupported_surface() {
         let s = RenderSurface::ClientEntry;
-        let nodes = vec![build_module_node("bad", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::UnsupportedSurface, s)];
+        let nodes = vec![build_module_node(
+            "bad",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::UnsupportedSurface,
+            s,
+        )];
         let graph = build_module_graph("unsup-g", s, nodes, vec![], SecurityEpoch::GENESIS);
-        assert_eq!(verify_module_graph(&graph).verdict, GraphVerificationVerdict::UnsupportedSurface);
+        assert_eq!(
+            verify_module_graph(&graph).verdict,
+            GraphVerificationVerdict::UnsupportedSurface
+        );
     }
 
     #[test]
     fn verify_module_graph_missing_surface() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("rt", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, s),
-            build_module_node("sched", ReactPackage::Scheduler, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::SchedulerHook, s),
+            build_module_node(
+                "rt",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RuntimeProvider,
+                s,
+            ),
+            build_module_node(
+                "sched",
+                ReactPackage::Scheduler,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::SchedulerHook,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("rt", "sched", "imports")];
         let graph = build_module_graph("miss-g", s, nodes, edges, SecurityEpoch::GENESIS);
-        assert_eq!(verify_module_graph(&graph).verdict, GraphVerificationVerdict::MissingSurface);
+        assert_eq!(
+            verify_module_graph(&graph).verdict,
+            GraphVerificationVerdict::MissingSurface
+        );
     }
 
     #[test]
@@ -1082,7 +1668,10 @@ mod tests {
 
     #[test]
     fn build_ssr_graph_verifies_valid() {
-        assert_eq!(verify_module_graph(&build_ssr_graph(SecurityEpoch::from_raw(1))).verdict, GraphVerificationVerdict::Valid);
+        assert_eq!(
+            verify_module_graph(&build_ssr_graph(SecurityEpoch::from_raw(1))).verdict,
+            GraphVerificationVerdict::Valid
+        );
     }
 
     #[test]
@@ -1095,17 +1684,26 @@ mod tests {
 
     #[test]
     fn build_client_entry_graph_verifies_valid() {
-        assert_eq!(verify_module_graph(&build_client_entry_graph(SecurityEpoch::from_raw(1))).verdict, GraphVerificationVerdict::Valid);
+        assert_eq!(
+            verify_module_graph(&build_client_entry_graph(SecurityEpoch::from_raw(1))).verdict,
+            GraphVerificationVerdict::Valid
+        );
     }
 
     #[test]
     fn ssr_graph_hash_determinism() {
-        assert_eq!(build_ssr_graph(SecurityEpoch::from_raw(1)).content_hash, build_ssr_graph(SecurityEpoch::from_raw(1)).content_hash);
+        assert_eq!(
+            build_ssr_graph(SecurityEpoch::from_raw(1)).content_hash,
+            build_ssr_graph(SecurityEpoch::from_raw(1)).content_hash
+        );
     }
 
     #[test]
     fn client_graph_hash_determinism() {
-        assert_eq!(build_client_entry_graph(SecurityEpoch::from_raw(1)).content_hash, build_client_entry_graph(SecurityEpoch::from_raw(1)).content_hash);
+        assert_eq!(
+            build_client_entry_graph(SecurityEpoch::from_raw(1)).content_hash,
+            build_client_entry_graph(SecurityEpoch::from_raw(1)).content_hash
+        );
     }
 
     #[test]
@@ -1129,19 +1727,36 @@ mod tests {
     }
 
     #[test]
-    fn surface_coverage_all() { assert_eq!(surface_coverage_millionths(ALL_SURFACES), MILLIONTHS); }
-
-    #[test]
-    fn surface_coverage_partial() {
-        assert_eq!(surface_coverage_millionths(&[RenderSurface::ServerSideRender, RenderSurface::ClientEntry]), 400_000);
+    fn surface_coverage_all() {
+        assert_eq!(surface_coverage_millionths(ALL_SURFACES), MILLIONTHS);
     }
 
     #[test]
-    fn surface_coverage_none() { assert_eq!(surface_coverage_millionths(&[]), 0); }
+    fn surface_coverage_partial() {
+        assert_eq!(
+            surface_coverage_millionths(&[
+                RenderSurface::ServerSideRender,
+                RenderSurface::ClientEntry
+            ]),
+            400_000
+        );
+    }
+
+    #[test]
+    fn surface_coverage_none() {
+        assert_eq!(surface_coverage_millionths(&[]), 0);
+    }
 
     #[test]
     fn surface_coverage_deduplicates() {
-        assert_eq!(surface_coverage_millionths(&[RenderSurface::ClientEntry, RenderSurface::ClientEntry, RenderSurface::ClientEntry]), 200_000);
+        assert_eq!(
+            surface_coverage_millionths(&[
+                RenderSurface::ClientEntry,
+                RenderSurface::ClientEntry,
+                RenderSurface::ClientEntry
+            ]),
+            200_000
+        );
     }
 
     #[test]
@@ -1155,26 +1770,58 @@ mod tests {
     #[test]
     fn canonical_manifest_all_valid() {
         let report = franken_engine_react_module_graph_manifest();
-        for receipt in &report.receipts { assert_eq!(receipt.verdict, GraphVerificationVerdict::Valid); }
+        for receipt in &report.receipts {
+            assert_eq!(receipt.verdict, GraphVerificationVerdict::Valid);
+        }
     }
 
     #[test]
     fn canonical_manifest_deterministic() {
-        assert_eq!(franken_engine_react_module_graph_manifest().content_hash, franken_engine_react_module_graph_manifest().content_hash);
+        assert_eq!(
+            franken_engine_react_module_graph_manifest().content_hash,
+            franken_engine_react_module_graph_manifest().content_hash
+        );
     }
 
     #[test]
-    fn verdict_display_valid() { assert_eq!(GraphVerificationVerdict::Valid.to_string(), "valid"); }
+    fn verdict_display_valid() {
+        assert_eq!(GraphVerificationVerdict::Valid.to_string(), "valid");
+    }
     #[test]
-    fn verdict_display_missing_surface() { assert_eq!(GraphVerificationVerdict::MissingSurface.to_string(), "missing_surface"); }
+    fn verdict_display_missing_surface() {
+        assert_eq!(
+            GraphVerificationVerdict::MissingSurface.to_string(),
+            "missing_surface"
+        );
+    }
     #[test]
-    fn verdict_display_cyclic_dependency() { assert_eq!(GraphVerificationVerdict::CyclicDependency.to_string(), "cyclic_dependency"); }
+    fn verdict_display_cyclic_dependency() {
+        assert_eq!(
+            GraphVerificationVerdict::CyclicDependency.to_string(),
+            "cyclic_dependency"
+        );
+    }
     #[test]
-    fn verdict_display_format_mismatch() { assert_eq!(GraphVerificationVerdict::FormatMismatch.to_string(), "format_mismatch"); }
+    fn verdict_display_format_mismatch() {
+        assert_eq!(
+            GraphVerificationVerdict::FormatMismatch.to_string(),
+            "format_mismatch"
+        );
+    }
     #[test]
-    fn verdict_display_unsupported_surface() { assert_eq!(GraphVerificationVerdict::UnsupportedSurface.to_string(), "unsupported_surface"); }
+    fn verdict_display_unsupported_surface() {
+        assert_eq!(
+            GraphVerificationVerdict::UnsupportedSurface.to_string(),
+            "unsupported_surface"
+        );
+    }
     #[test]
-    fn verdict_display_orphan_node() { assert_eq!(GraphVerificationVerdict::OrphanNode.to_string(), "orphan_node"); }
+    fn verdict_display_orphan_node() {
+        assert_eq!(
+            GraphVerificationVerdict::OrphanNode.to_string(),
+            "orphan_node"
+        );
+    }
 
     #[test]
     fn serde_roundtrip_render_surface() {
@@ -1201,12 +1848,23 @@ mod tests {
     fn serde_roundtrip_verdict() {
         let val = GraphVerificationVerdict::CyclicDependency;
         let json = serde_json::to_string(&val).unwrap();
-        assert_eq!(val, serde_json::from_str::<GraphVerificationVerdict>(&json).unwrap());
+        assert_eq!(
+            val,
+            serde_json::from_str::<GraphVerificationVerdict>(&json).unwrap()
+        );
     }
 
     #[test]
     fn serde_roundtrip_module_graph_node() {
-        let node = build_module_node("serde-n", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, RenderSurface::ClientEntry);
+        let node = build_module_node(
+            "serde-n",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            RenderSurface::ClientEntry,
+        );
         let json = serde_json::to_string(&node).unwrap();
         let back: ModuleGraphNode = serde_json::from_str(&json).unwrap();
         assert_eq!(node.node_id, back.node_id);
@@ -1241,15 +1899,25 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_not_empty() { assert!(!REACT_MODULE_GRAPH_SCHEMA_VERSION.is_empty()); }
+    fn schema_version_not_empty() {
+        assert!(!REACT_MODULE_GRAPH_SCHEMA_VERSION.is_empty());
+    }
     #[test]
-    fn bead_id_correct() { assert_eq!(REACT_MODULE_GRAPH_BEAD_ID, "bd-1lsy.5.7.2"); }
+    fn bead_id_correct() {
+        assert_eq!(REACT_MODULE_GRAPH_BEAD_ID, "bd-1lsy.5.7.2");
+    }
     #[test]
-    fn policy_id_correct() { assert_eq!(REACT_MODULE_GRAPH_POLICY_ID, "RGC-405B"); }
+    fn policy_id_correct() {
+        assert_eq!(REACT_MODULE_GRAPH_POLICY_ID, "RGC-405B");
+    }
     #[test]
-    fn component_correct() { assert_eq!(COMPONENT, "react_module_graph_verifier"); }
+    fn component_correct() {
+        assert_eq!(COMPONENT, "react_module_graph_verifier");
+    }
     #[test]
-    fn all_surfaces_has_five() { assert_eq!(ALL_SURFACES.len(), 5); }
+    fn all_surfaces_has_five() {
+        assert_eq!(ALL_SURFACES.len(), 5);
+    }
 
     #[test]
     fn receipt_has_correct_node_edge_counts() {
@@ -1267,16 +1935,41 @@ mod tests {
 
     #[test]
     fn empty_graph_missing_surface() {
-        let graph = build_module_graph("empty", RenderSurface::HydrationBridge, vec![], vec![], SecurityEpoch::GENESIS);
-        assert_eq!(verify_module_graph(&graph).verdict, GraphVerificationVerdict::MissingSurface);
+        let graph = build_module_graph(
+            "empty",
+            RenderSurface::HydrationBridge,
+            vec![],
+            vec![],
+            SecurityEpoch::GENESIS,
+        );
+        assert_eq!(
+            verify_module_graph(&graph).verdict,
+            GraphVerificationVerdict::MissingSurface
+        );
     }
 
     #[test]
     fn dual_format_not_flagged_as_mismatch() {
         let s = RenderSurface::ClientEntry;
         let nodes = vec![
-            build_module_node("a", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Dual, ModuleRole::EntryPoint, s),
-            build_module_node("b", ReactPackage::ReactDom, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RendererBinding, s),
+            build_module_node(
+                "a",
+                ReactPackage::React,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Dual,
+                ModuleRole::EntryPoint,
+                s,
+            ),
+            build_module_node(
+                "b",
+                ReactPackage::ReactDom,
+                ".",
+                ExportCondition::Import,
+                ModuleFormat::Esm,
+                ModuleRole::RendererBinding,
+                s,
+            ),
         ];
         let edges = vec![build_module_edge("a", "b", "imports")];
         let graph = build_module_graph("dual-g", s, nodes, edges, SecurityEpoch::GENESIS);
@@ -1295,14 +1988,33 @@ mod tests {
     fn serde_roundtrip_all_render_surfaces() {
         for surface in ALL_SURFACES {
             let json = serde_json::to_string(surface).unwrap();
-            assert_eq!(*surface, serde_json::from_str::<RenderSurface>(&json).unwrap());
+            assert_eq!(
+                *surface,
+                serde_json::from_str::<RenderSurface>(&json).unwrap()
+            );
         }
     }
 
     #[test]
     fn module_graph_node_hash_differs_with_surface() {
-        let a = build_module_node("n", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, RenderSurface::ClientEntry);
-        let b = build_module_node("n", ReactPackage::React, ".", ExportCondition::Import, ModuleFormat::Esm, ModuleRole::RuntimeProvider, RenderSurface::ServerSideRender);
+        let a = build_module_node(
+            "n",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            RenderSurface::ClientEntry,
+        );
+        let b = build_module_node(
+            "n",
+            ReactPackage::React,
+            ".",
+            ExportCondition::Import,
+            ModuleFormat::Esm,
+            ModuleRole::RuntimeProvider,
+            RenderSurface::ServerSideRender,
+        );
         assert_ne!(a.content_hash, b.content_hash);
     }
 

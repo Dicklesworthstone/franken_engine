@@ -161,7 +161,11 @@ pub struct InstabilitySignal {
 
 impl fmt::Display for InstabilitySignal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}: {}", self.severity, self.signal_id, self.description)
+        write!(
+            f,
+            "[{}] {}: {}",
+            self.severity, self.signal_id, self.description
+        )
     }
 }
 
@@ -255,7 +259,11 @@ pub struct StabilityClaim {
 
 impl fmt::Display for StabilityClaim {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {}: {}", self.category, self.claim_id, self.description)
+        write!(
+            f,
+            "[{}] {}: {}",
+            self.category, self.claim_id, self.description
+        )
     }
 }
 
@@ -280,28 +288,18 @@ pub enum RejectionReason {
         max_allowed: usize,
     },
     /// Critical instability signals are active.
-    CriticalSignalsActive {
-        count: usize,
-        max_allowed: usize,
-    },
+    CriticalSignalsActive { count: usize, max_allowed: usize },
     /// Too many warning signals.
-    TooManyWarnings {
-        count: usize,
-        max_allowed: usize,
-    },
+    TooManyWarnings { count: usize, max_allowed: usize },
     /// Stability assessment too severe.
-    AssessmentTooSevere {
-        assessment: StabilityAssessment,
-    },
+    AssessmentTooSevere { assessment: StabilityAssessment },
     /// Composition confidence too low.
     InsufficientConfidence {
         confidence_millionths: u64,
         minimum_millionths: u64,
     },
     /// Claim category is not allowed in strict mode.
-    CategoryNotAllowed {
-        category: ClaimCategory,
-    },
+    CategoryNotAllowed { category: ClaimCategory },
 }
 
 impl fmt::Display for RejectionReason {
@@ -574,10 +572,11 @@ impl CompositionStabilityGate {
 
         // Check stability assessment.
         if let Some(assessment) = &evidence.stability_assessment {
-            if assessment_severity(assessment) > assessment_severity(&self.config.max_assessment_severity)
+            if assessment_severity(assessment)
+                > assessment_severity(&self.config.max_assessment_severity)
             {
                 reasons.push(RejectionReason::AssessmentTooSevere {
-                    assessment: assessment.clone(),
+                    assessment: *assessment,
                 });
             }
         }
@@ -872,7 +871,7 @@ mod tests {
         assert!(!COMPONENT.is_empty());
         assert!(!BEAD_ID.is_empty());
         assert!(!POLICY_ID.is_empty());
-        assert!(DEFAULT_MIN_CONFIDENCE_MILLIONTHS <= MILLION);
+        const { assert!(DEFAULT_MIN_CONFIDENCE_MILLIONTHS <= MILLION) };
     }
 
     // --- ClaimCategory ---
@@ -1233,9 +1232,11 @@ mod tests {
         let gate = CompositionStabilityGate::with_defaults();
         let claim = make_claim("c1", ClaimCategory::Supremacy, "comp1");
         let mut evidence = make_evidence("comp1");
-        evidence.separation_bundle = Some(make_bundle(vec![
-            make_cert("a", "b", SeparationVerdict::Insufficient),
-        ]));
+        evidence.separation_bundle = Some(make_bundle(vec![make_cert(
+            "a",
+            "b",
+            SeparationVerdict::Insufficient,
+        )]));
         let verdict = gate.evaluate(&claim, Some(&evidence));
         assert!(verdict.is_rejected());
     }
@@ -1245,9 +1246,11 @@ mod tests {
         let gate = CompositionStabilityGate::with_defaults();
         let claim = make_claim("c1", ClaimCategory::Supremacy, "comp1");
         let mut evidence = make_evidence("comp1");
-        evidence.separation_bundle = Some(make_bundle(vec![
-            make_cert("a", "b", SeparationVerdict::Sufficient),
-        ]));
+        evidence.separation_bundle = Some(make_bundle(vec![make_cert(
+            "a",
+            "b",
+            SeparationVerdict::Sufficient,
+        )]));
         let verdict = gate.evaluate(&claim, Some(&evidence));
         assert!(verdict.is_admitted());
     }
@@ -1299,9 +1302,11 @@ mod tests {
         evidence.confidence_millionths = 0;
         evidence.stability_assessment = Some(StabilityAssessment::ImmediateActionRequired);
         evidence.signals = vec![make_signal("s1", SignalSeverity::Critical)];
-        evidence.separation_bundle = Some(make_bundle(vec![
-            make_cert("a", "b", SeparationVerdict::Insufficient),
-        ]));
+        evidence.separation_bundle = Some(make_bundle(vec![make_cert(
+            "a",
+            "b",
+            SeparationVerdict::Insufficient,
+        )]));
         let verdict = gate.evaluate(&claim, Some(&evidence));
         assert!(verdict.is_admitted());
     }

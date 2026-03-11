@@ -850,7 +850,7 @@ mod tests {
         assert_eq!(COMPONENT, "transfer_governance_gate");
         assert_eq!(BEAD_ID, "bd-1lsy.7.12.3");
         assert_eq!(POLICY_ID, "RGC-612C");
-        assert!(DEFAULT_HIGH_FIDELITY_THRESHOLD > DEFAULT_MODERATE_FIDELITY_THRESHOLD);
+        const { assert!(DEFAULT_HIGH_FIDELITY_THRESHOLD > DEFAULT_MODERATE_FIDELITY_THRESHOLD) };
     }
 
     #[test]

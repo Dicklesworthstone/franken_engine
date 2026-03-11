@@ -1109,11 +1109,7 @@ fn merge_decisions(a: GovernanceDecision, b: GovernanceDecision) -> GovernanceDe
             GovernanceDecision::Reject => 3,
         }
     };
-    if rank(b) > rank(a) {
-        b
-    } else {
-        a
-    }
+    if rank(b) > rank(a) { b } else { a }
 }
 
 /// Build a `DecisionReceipt` from a `GateResult`.
@@ -1626,10 +1622,12 @@ mod tests {
         let obs = ObservabilityImpact::new(500_000, 10_000, false);
         let result = evaluate(Some(&cache), None, None, Some(&obs), &default_config());
         assert_eq!(result.decision, GovernanceDecision::Reject);
-        assert!(result
-            .blocking_reasons
-            .iter()
-            .any(|r| r.contains("observability")));
+        assert!(
+            result
+                .blocking_reasons
+                .iter()
+                .any(|r| r.contains("observability"))
+        );
     }
 
     #[test]

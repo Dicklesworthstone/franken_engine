@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 use frankenengine_engine::controller_composition_stability_gate::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::timescale_separation_certificate::{
-    CertificateBundle, ControllerPairId, ControllerTimescaleProfile, RatioBasis,
-    SeparationVerdict, StabilityAssessment, TimescaleRatio, TimescaleSeparationCertificate,
+    CertificateBundle, ControllerPairId, ControllerTimescaleProfile, RatioBasis, SeparationVerdict,
+    StabilityAssessment, TimescaleRatio, TimescaleSeparationCertificate,
 };
 
 // ---------------------------------------------------------------------------
@@ -51,11 +51,7 @@ fn make_profile(id: &str) -> ControllerTimescaleProfile {
     }
 }
 
-fn make_cert(
-    fast: &str,
-    slow: &str,
-    verdict: SeparationVerdict,
-) -> TimescaleSeparationCertificate {
+fn make_cert(fast: &str, slow: &str, verdict: SeparationVerdict) -> TimescaleSeparationCertificate {
     TimescaleSeparationCertificate {
         schema_version: "test-v1".to_string(),
         bead_id: "test-bead".to_string(),
@@ -180,13 +176,15 @@ fn constants_policy_id_non_empty() {
 
 #[test]
 fn constants_default_thresholds_valid() {
-    assert!(DEFAULT_MIN_CONFIDENCE_MILLIONTHS > 0);
-    assert!(DEFAULT_MIN_CONFIDENCE_MILLIONTHS <= 1_000_000);
+    const {
+        assert!(DEFAULT_MIN_CONFIDENCE_MILLIONTHS > 0);
+        assert!(DEFAULT_MIN_CONFIDENCE_MILLIONTHS <= 1_000_000);
+    }
     assert_eq!(DEFAULT_MAX_CRITICAL_SIGNALS, 0);
-    assert!(DEFAULT_MAX_WARNING_SIGNALS > 0);
-    assert!(DEFAULT_MAX_MARGINAL_PAIRS >= 1);
+    const { assert!(DEFAULT_MAX_WARNING_SIGNALS > 0) };
+    const { assert!(DEFAULT_MAX_MARGINAL_PAIRS >= 1) };
     assert_eq!(DEFAULT_MAX_INSUFFICIENT_PAIRS, 0);
-    assert!(DEFAULT_MIN_SEPARATION_RATIO_MILLIONTHS > 0);
+    const { assert!(DEFAULT_MIN_SEPARATION_RATIO_MILLIONTHS > 0) };
 }
 
 // ===========================================================================
@@ -272,7 +270,10 @@ fn instability_signal_display_contains_severity_and_id() {
     let d = format!("{s}");
     assert!(d.contains("warning"), "display should contain severity");
     assert!(d.contains("sig-42"), "display should contain signal_id");
-    assert!(d.contains("test signal sig-42"), "display should contain description");
+    assert!(
+        d.contains("test signal sig-42"),
+        "display should contain description"
+    );
 }
 
 #[test]
@@ -616,7 +617,10 @@ fn verdict_serde_roundtrip_all_variants() {
 #[test]
 fn gate_config_default_values() {
     let c = GateConfig::default();
-    assert_eq!(c.min_confidence_millionths, DEFAULT_MIN_CONFIDENCE_MILLIONTHS);
+    assert_eq!(
+        c.min_confidence_millionths,
+        DEFAULT_MIN_CONFIDENCE_MILLIONTHS
+    );
     assert_eq!(c.max_critical_signals, DEFAULT_MAX_CRITICAL_SIGNALS);
     assert_eq!(c.max_warning_signals, DEFAULT_MAX_WARNING_SIGNALS);
     assert_eq!(c.max_marginal_pairs, DEFAULT_MAX_MARGINAL_PAIRS);
@@ -718,9 +722,9 @@ fn gate_rejects_low_confidence() {
     let verdict = gate.evaluate(&claim, Some(&evidence));
     assert!(verdict.is_rejected());
     if let GateVerdict::Rejected { reasons, .. } = &verdict {
-        let has_confidence = reasons.iter().any(|r| {
-            matches!(r, RejectionReason::InsufficientConfidence { .. })
-        });
+        let has_confidence = reasons
+            .iter()
+            .any(|r| matches!(r, RejectionReason::InsufficientConfidence { .. }));
         assert!(has_confidence);
     } else {
         panic!("expected Rejected");
@@ -736,9 +740,9 @@ fn gate_rejects_critical_signals() {
     let verdict = gate.evaluate(&claim, Some(&evidence));
     assert!(verdict.is_rejected());
     if let GateVerdict::Rejected { reasons, .. } = &verdict {
-        let has_critical = reasons.iter().any(|r| {
-            matches!(r, RejectionReason::CriticalSignalsActive { .. })
-        });
+        let has_critical = reasons
+            .iter()
+            .any(|r| matches!(r, RejectionReason::CriticalSignalsActive { .. }));
         assert!(has_critical);
     } else {
         panic!("expected Rejected");
@@ -851,15 +855,17 @@ fn gate_rejects_insufficient_separation() {
     let gate = CompositionStabilityGate::with_defaults();
     let claim = make_claim("cl-1", ClaimCategory::Supremacy, "comp-1");
     let mut evidence = make_evidence("comp-1");
-    evidence.separation_bundle = Some(make_bundle(vec![
-        make_cert("a", "b", SeparationVerdict::Insufficient),
-    ]));
+    evidence.separation_bundle = Some(make_bundle(vec![make_cert(
+        "a",
+        "b",
+        SeparationVerdict::Insufficient,
+    )]));
     let verdict = gate.evaluate(&claim, Some(&evidence));
     assert!(verdict.is_rejected());
     if let GateVerdict::Rejected { reasons, .. } = &verdict {
-        let has_insuf = reasons.iter().any(|r| {
-            matches!(r, RejectionReason::InsufficientSeparation { .. })
-        });
+        let has_insuf = reasons
+            .iter()
+            .any(|r| matches!(r, RejectionReason::InsufficientSeparation { .. }));
         assert!(has_insuf);
     } else {
         panic!("expected Rejected");
@@ -919,9 +925,9 @@ fn gate_strict_category_rejects_unlisted() {
     let verdict = gate.evaluate(&claim, Some(&evidence));
     assert!(verdict.is_rejected());
     if let GateVerdict::Rejected { reasons, .. } = &verdict {
-        let has_cat = reasons.iter().any(|r| {
-            matches!(r, RejectionReason::CategoryNotAllowed { .. })
-        });
+        let has_cat = reasons
+            .iter()
+            .any(|r| matches!(r, RejectionReason::CategoryNotAllowed { .. }));
         assert!(has_cat);
     } else {
         panic!("expected Rejected");
@@ -969,14 +975,20 @@ fn gate_multiple_rejection_reasons_accumulated() {
     evidence.confidence_millionths = 100_000;
     evidence.stability_assessment = Some(StabilityAssessment::ImmediateActionRequired);
     evidence.signals = vec![make_signal("c1", SignalSeverity::Critical)];
-    evidence.separation_bundle = Some(make_bundle(vec![
-        make_cert("a", "b", SeparationVerdict::Insufficient),
-    ]));
+    evidence.separation_bundle = Some(make_bundle(vec![make_cert(
+        "a",
+        "b",
+        SeparationVerdict::Insufficient,
+    )]));
     let verdict = gate.evaluate(&claim, Some(&evidence));
     if let GateVerdict::Rejected { reasons, .. } = &verdict {
         // Should have at least: InsufficientConfidence, AssessmentTooSevere,
         // CriticalSignalsActive, InsufficientSeparation
-        assert!(reasons.len() >= 4, "expected >= 4 reasons, got {}", reasons.len());
+        assert!(
+            reasons.len() >= 4,
+            "expected >= 4 reasons, got {}",
+            reasons.len()
+        );
     } else {
         panic!("expected Rejected");
     }
@@ -1014,7 +1026,10 @@ fn batch_evaluation_maps_claims_to_evidence() {
     let verdicts = gate.evaluate_batch(&claims, &evidence_map);
     assert_eq!(verdicts.len(), 3);
     assert!(verdicts[0].is_admitted(), "comp-1 should be admitted");
-    assert!(verdicts[1].is_rejected(), "comp-2 should be rejected (no evidence)");
+    assert!(
+        verdicts[1].is_rejected(),
+        "comp-2 should be rejected (no evidence)"
+    );
     assert!(verdicts[2].is_admitted(), "comp-3 should be admitted");
 }
 
@@ -1229,9 +1244,11 @@ fn e2e_mixed_batch_with_report() {
     let gate = CompositionStabilityGate::with_defaults();
 
     let mut good_evidence = make_evidence("comp-good");
-    good_evidence.separation_bundle = Some(make_bundle(vec![
-        make_cert("a", "b", SeparationVerdict::Sufficient),
-    ]));
+    good_evidence.separation_bundle = Some(make_bundle(vec![make_cert(
+        "a",
+        "b",
+        SeparationVerdict::Sufficient,
+    )]));
 
     let mut bad_evidence = make_evidence("comp-bad");
     bad_evidence.confidence_millionths = 100_000;
@@ -1261,10 +1278,7 @@ fn e2e_mixed_batch_with_report() {
 fn e2e_strict_category_with_full_evidence() {
     let config = GateConfig {
         strict_category_mode: true,
-        allowed_categories: vec![
-            ClaimCategory::AdaptivePerformance,
-            ClaimCategory::Supremacy,
-        ],
+        allowed_categories: vec![ClaimCategory::AdaptivePerformance, ClaimCategory::Supremacy],
         ..GateConfig::default()
     };
     let gate = CompositionStabilityGate::with_config(config);

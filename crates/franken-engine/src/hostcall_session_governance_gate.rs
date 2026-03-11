@@ -77,7 +77,12 @@ pub enum ConformanceLevel {
 }
 
 impl ConformanceLevel {
-    pub const ALL: &[Self] = &[Self::Full, Self::Partial, Self::Degraded, Self::NonConformant];
+    pub const ALL: &[Self] = &[
+        Self::Full,
+        Self::Partial,
+        Self::Degraded,
+        Self::NonConformant,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -170,7 +175,12 @@ pub enum GateVerdict {
 }
 
 impl GateVerdict {
-    pub const ALL: &[Self] = &[Self::Pass, Self::ConditionalPass, Self::Fail, Self::DegradedMode];
+    pub const ALL: &[Self] = &[
+        Self::Pass,
+        Self::ConditionalPass,
+        Self::Fail,
+        Self::DegradedMode,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -183,7 +193,10 @@ impl GateVerdict {
 
     /// Whether this verdict allows the session to proceed.
     pub fn allows_session(self) -> bool {
-        matches!(self, Self::Pass | Self::ConditionalPass | Self::DegradedMode)
+        matches!(
+            self,
+            Self::Pass | Self::ConditionalPass | Self::DegradedMode
+        )
     }
 
     /// Whether this verdict represents a clean pass.
@@ -614,11 +627,7 @@ pub struct DecisionReceipt {
 
 impl DecisionReceipt {
     /// Create a new receipt with computed hash.
-    pub fn new(
-        epoch: SecurityEpoch,
-        verdict: GateVerdict,
-        evidence_hash: ContentHash,
-    ) -> Self {
+    pub fn new(epoch: SecurityEpoch, verdict: GateVerdict, evidence_hash: ContentHash) -> Self {
         let mut h = Sha256::new();
         h.update(COMPONENT.as_bytes());
         h.update(epoch.as_u64().to_le_bytes());
@@ -843,15 +852,9 @@ pub fn evaluate(
     let degraded_reasons = evaluate_degraded_mode(degraded, config);
     for reason in &degraded_reasons {
         if reason.is_security_critical() {
-            blocking_reasons.push(format!(
-                "security-critical degradation: {}",
-                reason,
-            ));
+            blocking_reasons.push(format!("security-critical degradation: {}", reason,));
         } else {
-            recommendations.push(format!(
-                "degraded-mode active: {}",
-                reason,
-            ));
+            recommendations.push(format!("degraded-mode active: {}", reason,));
         }
     }
 
@@ -1018,11 +1021,18 @@ mod tests {
 
     #[test]
     fn default_thresholds_valid() {
-        assert!(DEFAULT_MIN_CONFORMANCE > 0 && DEFAULT_MIN_CONFORMANCE <= 1_000_000);
-        assert!(DEFAULT_MAX_REPLAY_DROP_RATE > 0 && DEFAULT_MAX_REPLAY_DROP_RATE <= 1_000_000);
-        assert!(DEFAULT_MAX_DEGRADED_SEVERITY > 0 && DEFAULT_MAX_DEGRADED_SEVERITY <= 1_000_000);
-        assert!(DEFAULT_MAX_OBSERVABILITY_OVERHEAD > 0 && DEFAULT_MAX_OBSERVABILITY_OVERHEAD <= 1_000_000);
-        assert!(DEFAULT_MIN_OPERATIONS_TESTED > 0);
+        const { assert!(DEFAULT_MIN_CONFORMANCE > 0 && DEFAULT_MIN_CONFORMANCE <= 1_000_000) };
+        const { assert!(DEFAULT_MAX_REPLAY_DROP_RATE > 0 && DEFAULT_MAX_REPLAY_DROP_RATE <= 1_000_000) };
+        const {
+            assert!(DEFAULT_MAX_DEGRADED_SEVERITY > 0 && DEFAULT_MAX_DEGRADED_SEVERITY <= 1_000_000)
+        };
+        const {
+            assert!(
+                DEFAULT_MAX_OBSERVABILITY_OVERHEAD > 0
+                    && DEFAULT_MAX_OBSERVABILITY_OVERHEAD <= 1_000_000
+            )
+        };
+        const { assert!(DEFAULT_MIN_OPERATIONS_TESTED > 0) };
     }
 
     // --- ConformanceLevel ---
@@ -1358,12 +1368,18 @@ mod tests {
 
     #[test]
     fn eval_drops_acceptable() {
-        assert!(evaluate_replay_drops(&[good_drop_record()], &default_config()));
+        assert!(evaluate_replay_drops(
+            &[good_drop_record()],
+            &default_config()
+        ));
     }
 
     #[test]
     fn eval_drops_unacceptable() {
-        assert!(!evaluate_replay_drops(&[bad_drop_record()], &default_config()));
+        assert!(!evaluate_replay_drops(
+            &[bad_drop_record()],
+            &default_config()
+        ));
     }
 
     // --- evaluate_degraded_mode ---
@@ -1608,9 +1624,13 @@ mod tests {
 
     #[test]
     fn gate_summary_serde() {
-        let results = vec![
-            evaluate(&good_conformance(), &[], &[], None, &default_config()),
-        ];
+        let results = vec![evaluate(
+            &good_conformance(),
+            &[],
+            &[],
+            None,
+            &default_config(),
+        )];
         let s = GateSummary::from_results(&results);
         let json = serde_json::to_string(&s).unwrap();
         let back: GateSummary = serde_json::from_str(&json).unwrap();

@@ -70,15 +70,15 @@ fn component_name() {
 
 #[test]
 fn window_size_constraints() {
-    assert!(DEFAULT_WINDOW_SIZE >= MIN_WINDOW_SIZE);
-    assert!(MIN_WINDOW_SIZE > 0);
+    const { assert!(DEFAULT_WINDOW_SIZE >= MIN_WINDOW_SIZE) };
+    const { assert!(MIN_WINDOW_SIZE > 0) };
 }
 
 #[test]
 fn threshold_constraints() {
-    assert!(DEFAULT_MMD_THRESHOLD > 0);
-    assert!(DEFAULT_MMD_THRESHOLD <= 1_000_000);
-    assert!(DEFAULT_FALSE_ALARM_BUDGET > 0);
+    const { assert!(DEFAULT_MMD_THRESHOLD > 0) };
+    const { assert!(DEFAULT_MMD_THRESHOLD <= 1_000_000) };
+    const { assert!(DEFAULT_FALSE_ALARM_BUDGET > 0) };
 }
 
 // ---------------------------------------------------------------------------

@@ -120,11 +120,13 @@ fn policy_id_format() {
 
 #[test]
 fn thresholds_positive() {
-    assert!(MAX_SYNTHESIZABLE_BRANCH_DEPTH > 0);
-    assert!(MAX_SYNTHESIZABLE_OPS > 0);
-    assert!(HOT_SCHEMA_THRESHOLD > 0);
-    assert!(MAX_SIDE_EFFECTS > 0);
-    assert!(MIN_SHAPE_STABILITY > 0);
+    const {
+        assert!(MAX_SYNTHESIZABLE_BRANCH_DEPTH > 0);
+        assert!(MAX_SYNTHESIZABLE_OPS > 0);
+        assert!(HOT_SCHEMA_THRESHOLD > 0);
+        assert!(MAX_SIDE_EFFECTS > 0);
+        assert!(MIN_SHAPE_STABILITY > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

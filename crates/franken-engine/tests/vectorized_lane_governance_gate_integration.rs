@@ -100,7 +100,10 @@ fn bad_tail() -> TailRiskRecord {
 
 #[test]
 fn test_schema_version_value() {
-    assert_eq!(SCHEMA_VERSION, "franken-engine.vectorized-lane-governance-gate.v1");
+    assert_eq!(
+        SCHEMA_VERSION,
+        "franken-engine.vectorized-lane-governance-gate.v1"
+    );
 }
 
 #[test]
@@ -364,7 +367,11 @@ fn test_tail_risk_record_computed_tail_ratio() {
 #[test]
 fn test_tail_risk_record_computed_ratio_zero_p50() {
     let t = TailRiskRecord {
-        p50: 0, p99: 100, p999: 200, max: 300, tail_ratio: 0,
+        p50: 0,
+        p99: 100,
+        p999: 200,
+        max: 300,
+        tail_ratio: 0,
     };
     assert_eq!(t.computed_tail_ratio(), 0);
 }
@@ -537,7 +544,13 @@ fn test_evaluate_cold_start_prohibitive() {
 fn test_evaluate_all_good_approved() {
     let cfg = GateConfig::default();
     let p = good_parity(BuiltinFamily::ArrayMap);
-    let result = evaluate(&p, &[clean_skew()], Some(&mild_cold_start(BuiltinFamily::ArrayMap)), Some(&good_tail()), &cfg);
+    let result = evaluate(
+        &p,
+        &[clean_skew()],
+        Some(&mild_cold_start(BuiltinFamily::ArrayMap)),
+        Some(&good_tail()),
+        &cfg,
+    );
     assert_eq!(result.verdict, LaneVerdict::Approved);
     assert!(result.is_approved());
     assert!(!result.has_blockers());
@@ -582,7 +595,12 @@ fn test_evaluate_severe_cold_start_adds_blocker() {
     let cs = severe_cold_start(BuiltinFamily::ArrayMap);
     let result = evaluate(&p, &[], Some(&cs), None, &cfg);
     assert!(result.has_blockers());
-    assert!(result.blocking_reasons.iter().any(|r| r.contains("cold-start")));
+    assert!(
+        result
+            .blocking_reasons
+            .iter()
+            .any(|r| r.contains("cold-start"))
+    );
 }
 
 #[test]
@@ -619,7 +637,13 @@ fn test_gate_result_display_contains_verdict() {
 fn test_gate_result_serde_roundtrip() {
     let cfg = GateConfig::default();
     let p = good_parity(BuiltinFamily::ArrayMap);
-    let result = evaluate(&p, &[clean_skew()], Some(&mild_cold_start(BuiltinFamily::ArrayMap)), Some(&good_tail()), &cfg);
+    let result = evaluate(
+        &p,
+        &[clean_skew()],
+        Some(&mild_cold_start(BuiltinFamily::ArrayMap)),
+        Some(&good_tail()),
+        &cfg,
+    );
     let json = serde_json::to_string(&result).unwrap();
     let back: GateResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, back);
@@ -702,9 +726,10 @@ fn test_decision_receipt_serde_roundtrip() {
 #[test]
 fn test_evaluate_batch_all_approved() {
     let cfg = GateConfig::default();
-    let items: Vec<_> = BuiltinFamily::ALL.iter().map(|f| {
-        (good_parity(*f), vec![], None, None)
-    }).collect();
+    let items: Vec<_> = BuiltinFamily::ALL
+        .iter()
+        .map(|f| (good_parity(*f), vec![], None, None))
+        .collect();
     let (results, summary) = evaluate_batch(&items, &cfg);
     assert_eq!(results.len(), 9);
     assert_eq!(summary.total, 9);
@@ -787,7 +812,13 @@ fn test_gate_summary_serde_roundtrip() {
 fn test_evaluate_permissive_approves_bad_evidence() {
     let cfg = GateConfig::permissive();
     let p = slow_parity(BuiltinFamily::JsonParse);
-    let result = evaluate(&p, &[bad_skew()], Some(&severe_cold_start(BuiltinFamily::JsonParse)), Some(&bad_tail()), &cfg);
+    let result = evaluate(
+        &p,
+        &[bad_skew()],
+        Some(&severe_cold_start(BuiltinFamily::JsonParse)),
+        Some(&bad_tail()),
+        &cfg,
+    );
     assert_eq!(result.verdict, LaneVerdict::Approved);
 }
 
@@ -805,6 +836,12 @@ fn test_evaluate_all_builtin_families_good_parity() {
 fn test_evaluate_two_blockers_conditional_with_good_parity() {
     let cfg = GateConfig::default();
     let p = good_parity(BuiltinFamily::ArrayMap);
-    let result = evaluate(&p, &[bad_skew()], Some(&severe_cold_start(BuiltinFamily::ArrayMap)), None, &cfg);
+    let result = evaluate(
+        &p,
+        &[bad_skew()],
+        Some(&severe_cold_start(BuiltinFamily::ArrayMap)),
+        None,
+        &cfg,
+    );
     assert_eq!(result.verdict, LaneVerdict::ConditionalApproval);
 }

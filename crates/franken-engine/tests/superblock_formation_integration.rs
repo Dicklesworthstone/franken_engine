@@ -62,6 +62,23 @@ fn make_hot_profile(function_id: &str, offsets_and_opcodes: &[(u32, &str)]) -> Q
     profile
 }
 
+fn make_hot_profile_without_guards(
+    function_id: &str,
+    offsets_and_opcodes: &[(u32, &str)],
+) -> QuickeningProfile {
+    let q_policy = aggressive_quickening_policy();
+    let mut profile = QuickeningProfile::new(function_id);
+    for &(offset, opcode) in offsets_and_opcodes {
+        for _ in 0..100 {
+            profile.record_execution(offset, opcode);
+        }
+    }
+    for _ in 0..4 {
+        profile.evaluate_all(&q_policy);
+    }
+    profile
+}
+
 fn make_simple_superblock(function_id: &str, entry_offset: u32) -> Superblock {
     let entries = vec![
         SuperblockEntry {
@@ -511,6 +528,189 @@ fn optimized_tier_plan_reports_superblock_rejection_deterministically() {
         plan.rejected_candidates[0]
             .detail
             .contains("superblock formation")
+    );
+}
+
+#[test]
+fn optimized_tier_plan_rejects_candidate_profile_opcode_mismatch() {
+    let program = Program {
+        constants: vec![Value::Int(42), Value::Int(50), Value::Int(1)],
+        property_pool: vec!["answer".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(4),
+                const_index: 2,
+            },
+            Instruction::Sub {
+                dst: r(3),
+                lhs: r(3),
+                rhs: r(4),
+            },
+            Instruction::JumpIfFalse {
+                condition: r(3),
+                target: 9,
+            },
+            Instruction::Jump { target: 4 },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-opt-mismatch", 8, 1024);
+    let report = vm.execute(&program).unwrap();
+    let decision = evaluate_tier_up_eligibility(
+        &report,
+        &TierUpPolicy {
+            min_total_steps: 10,
+            min_invocations_per_path: 5,
+            min_cache_hit_rate_millionths: 500_000,
+            max_candidates: 4,
+            profile_top_k: 16,
+            require_cache_signal: true,
+            ..TierUpPolicy::default()
+        },
+    );
+    assert!(decision.eligible);
+
+    let candidate = decision
+        .selected_candidates
+        .iter()
+        .find(|c| c.opcode == "load_prop_cached")
+        .unwrap();
+    let profile = make_hot_profile(
+        "fn_opt_mismatch",
+        &[
+            (candidate.ip, "different_opcode"),
+            (candidate.ip + 4, "sub"),
+            (candidate.ip + 8, "jump_if_false"),
+        ],
+    );
+
+    let plan =
+        OptimizedTierCompilationPlan::build(&decision, &profile, &SuperblockPolicy::default(), 8);
+
+    assert!(plan.units.is_empty());
+    assert_eq!(plan.rejected_candidates.len(), 1);
+    assert_eq!(
+        plan.rejected_candidates[0].reason,
+        CompilationRejectReason::CandidateProfileMismatch
+    );
+    assert!(plan.rejected_candidates[0].formation_outcome.is_none());
+    assert!(
+        plan.rejected_candidates[0]
+            .detail
+            .contains("opcode mismatch")
+    );
+}
+
+#[test]
+fn optimized_tier_plan_rejects_guardless_superblock_without_deopt_continuations() {
+    let program = Program {
+        constants: vec![Value::Int(42), Value::Int(50), Value::Int(1)],
+        property_pool: vec!["answer".to_string()],
+        instructions: vec![
+            Instruction::NewObject { dst: r(0) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(4),
+                const_index: 2,
+            },
+            Instruction::Sub {
+                dst: r(3),
+                lhs: r(3),
+                rhs: r(4),
+            },
+            Instruction::JumpIfFalse {
+                condition: r(3),
+                target: 9,
+            },
+            Instruction::Jump { target: 4 },
+            Instruction::Return { src: r(2) },
+        ],
+    };
+
+    let mut vm = BytecodeVm::new("trace-opt-guardless", 8, 1024);
+    let report = vm.execute(&program).unwrap();
+    let decision = evaluate_tier_up_eligibility(
+        &report,
+        &TierUpPolicy {
+            min_total_steps: 10,
+            min_invocations_per_path: 5,
+            min_cache_hit_rate_millionths: 500_000,
+            max_candidates: 4,
+            profile_top_k: 16,
+            require_cache_signal: true,
+            ..TierUpPolicy::default()
+        },
+    );
+    assert!(decision.eligible);
+
+    let candidate = decision
+        .selected_candidates
+        .iter()
+        .find(|c| c.opcode == "load_prop_cached")
+        .unwrap();
+    let profile = make_hot_profile_without_guards(
+        "fn_opt_guardless",
+        &[
+            (candidate.ip, "load_prop_cached"),
+            (candidate.ip + 4, "sub"),
+            (candidate.ip + 8, "jump_if_false"),
+        ],
+    );
+
+    let plan =
+        OptimizedTierCompilationPlan::build(&decision, &profile, &SuperblockPolicy::default(), 9);
+
+    assert!(plan.units.is_empty());
+    assert_eq!(plan.rejected_candidates.len(), 1);
+    assert_eq!(
+        plan.rejected_candidates[0].reason,
+        CompilationRejectReason::MissingDeoptContinuations
+    );
+    assert_eq!(
+        plan.rejected_candidates[0].formation_outcome,
+        Some(FormationOutcome::Formed)
+    );
+    assert!(
+        plan.rejected_candidates[0]
+            .detail
+            .contains("no deopt continuations")
     );
 }
 

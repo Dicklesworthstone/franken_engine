@@ -1372,25 +1372,56 @@ fn normalize_external_specifier_path(path: &str) -> String {
 
 fn external_referrer_directory(referrer: &str) -> String {
     let normalized = normalize_external_specifier_path(referrer);
-    if is_package_root_specifier(&normalized) {
-        return normalized;
-    }
-
-    parent_directory(&format!("/{normalized}"))
-        .trim_start_matches('/')
-        .to_string()
-}
-
-fn is_package_root_specifier(specifier: &str) -> bool {
-    let segments: Vec<&str> = specifier
+    let segments: Vec<&str> = normalized
         .split('/')
         .filter(|segment| !segment.is_empty())
         .collect();
-    match segments.len() {
-        0 | 1 => true,
-        2 if segments[0].starts_with('@') => true,
-        _ => false,
+    if segments.is_empty() {
+        return normalized;
     }
+
+    let package_root_len = if segments[0].starts_with('@') {
+        segments.len().min(2)
+    } else {
+        1
+    };
+    let mut package_root = segments[..package_root_len]
+        .iter()
+        .map(|segment| (*segment).to_string())
+        .collect::<Vec<_>>();
+    let subpath = &segments[package_root_len..];
+
+    if subpath.is_empty() {
+        if let Some(last) = package_root.last_mut() {
+            if is_module_file_name(last) {
+                *last = strip_module_file_extension(last);
+            }
+        }
+        return package_root.join("/");
+    }
+
+    if subpath.len() == 1 {
+        return package_root.join("/");
+    }
+
+    package_root.extend(
+        subpath[..subpath.len() - 1]
+            .iter()
+            .map(|segment| (*segment).to_string()),
+    );
+    package_root.join("/")
+}
+
+fn is_module_file_name(name: &str) -> bool {
+    name.ends_with(".mjs") || name.ends_with(".cjs") || name.ends_with(".js")
+}
+
+fn strip_module_file_extension(name: &str) -> String {
+    name.strip_suffix(".mjs")
+        .or_else(|| name.strip_suffix(".cjs"))
+        .or_else(|| name.strip_suffix(".js"))
+        .unwrap_or(name)
+        .to_string()
 }
 
 fn parent_directory(path: &str) -> String {
@@ -2922,6 +2953,40 @@ mod tests {
             .expect("relative dependency should resolve within external package");
         assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
         assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
+    }
+
+    #[test]
+    fn external_extension_probe_entry_uses_package_root_for_relative_dependencies() {
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_external_module(
+                "pkg.js",
+                ModuleDefinition::new(
+                    ModuleSyntax::CommonJs,
+                    "const sub = require('./sub'); module.exports = sub;",
+                )
+                .with_dependency(ModuleDependency::new("./sub", ImportStyle::Require)),
+            )
+            .unwrap();
+        resolver
+            .register_external_module(
+                "pkg/sub.cjs",
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
+            )
+            .unwrap();
+
+        let outcomes = resolver
+            .resolve_chain(
+                &ModuleRequest::new("pkg", ImportStyle::Require),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("relative dependency should resolve from bare package entry file");
+        let ids = outcomes
+            .iter()
+            .map(|outcome| outcome.module.record.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["external:pkg.js", "external:pkg/sub.cjs"]);
     }
 
     #[test]

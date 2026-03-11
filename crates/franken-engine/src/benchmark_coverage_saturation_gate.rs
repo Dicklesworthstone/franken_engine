@@ -589,7 +589,12 @@ fn compute_gini(shares: &[u64]) -> u64 {
         return 0;
     }
 
-    let mean = shares.iter().copied().sum::<u64>().checked_div(n).unwrap_or(0);
+    let mean = shares
+        .iter()
+        .copied()
+        .sum::<u64>()
+        .checked_div(n)
+        .unwrap_or(0);
     if mean == 0 {
         return 0;
     }
@@ -998,10 +1003,7 @@ mod tests {
             "near_saturated"
         );
         assert_eq!(SaturationVerdict::Sparse.to_string(), "sparse");
-        assert_eq!(
-            SaturationVerdict::CherryPicked.to_string(),
-            "cherry_picked"
-        );
+        assert_eq!(SaturationVerdict::CherryPicked.to_string(), "cherry_picked");
         assert_eq!(
             SaturationVerdict::InsufficientData.to_string(),
             "insufficient_data"
@@ -1067,7 +1069,10 @@ mod tests {
     #[test]
     fn test_gate_decision_display() {
         assert_eq!(GateDecision::Pass.to_string(), "pass");
-        assert_eq!(GateDecision::ConditionalPass.to_string(), "conditional_pass");
+        assert_eq!(
+            GateDecision::ConditionalPass.to_string(),
+            "conditional_pass"
+        );
         assert_eq!(GateDecision::Fail.to_string(), "fail");
         assert_eq!(
             GateDecision::InsufficientEvidence.to_string(),
@@ -1507,8 +1512,7 @@ mod tests {
     fn test_build_evidence() {
         let families = equal_families();
         let profile = compute_coverage(&families);
-        let evidence =
-            build_evidence(&profile, SaturationVerdict::Saturated, epoch());
+        let evidence = build_evidence(&profile, SaturationVerdict::Saturated, epoch());
         assert_eq!(evidence.verdict, SaturationVerdict::Saturated);
         assert_eq!(evidence.total_workloads, 90); // 9 families * 10
         assert_eq!(evidence.covered_families, 9);

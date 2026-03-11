@@ -4801,6 +4801,13 @@ impl DelegateCell {
         timestamp_ns: u64,
         flow_context: &FlowEnforcementContext<'_>,
     ) -> Result<CapabilityEscrowDecisionReceipt, DelegateCellError> {
+        let lifecycle_context = LifecycleContext::new(
+            flow_context.trace_id,
+            flow_context.decision_id,
+            flow_context.policy_id,
+        );
+        self.check_lifetime(timestamp_ns, &lifecycle_context)?;
+        self.ensure_running_for_authority("approve_capability_escrow_request")?;
         let receipt = self.capability_escrow_gateway.approve_request(
             request_id,
             timestamp_ns,
@@ -4840,6 +4847,13 @@ impl DelegateCell {
         timestamp_ns: u64,
         flow_context: &FlowEnforcementContext<'_>,
     ) -> Result<EmergencyGrantArtifact, DelegateCellError> {
+        let lifecycle_context = LifecycleContext::new(
+            flow_context.trace_id,
+            flow_context.decision_id,
+            flow_context.policy_id,
+        );
+        self.check_lifetime(timestamp_ns, &lifecycle_context)?;
+        self.ensure_running_for_authority("issue_emergency_capability_grant")?;
         let artifact = self.capability_escrow_gateway.issue_emergency_grant(
             request_id,
             authorized_actor,
@@ -5099,7 +5113,7 @@ impl DelegateCell {
         escrow_justification: Option<&str>,
     ) -> Result<HostcallDispatchOutcome<T>, DelegateCellError> {
         self.check_lifetime(timestamp_ns, lifecycle_context)?;
-        self.ensure_running_for("dispatch_hostcall")?;
+        self.ensure_operational_for("dispatch_hostcall")?;
         self.lifecycle_manager
             .consume_hostcall(timestamp_ns, lifecycle_context)?;
 
@@ -5345,7 +5359,7 @@ impl DelegateCell {
         lifecycle_context: &LifecycleContext<'_>,
     ) -> Result<DeclassificationOutcome, DelegateCellError> {
         self.check_lifetime(request.timestamp_ns, lifecycle_context)?;
-        self.ensure_running_for("request_declassification")?;
+        self.ensure_operational_for("request_declassification")?;
         let timestamp_ns = request.timestamp_ns;
         let outcome = self.declassification_gateway.evaluate_request(
             request,
@@ -5427,7 +5441,23 @@ impl DelegateCell {
             .min(GUARDPLANE_MAX_POSTERIOR_MICROS);
     }
 
-    fn ensure_running_for(&self, action: &'static str) -> Result<(), DelegateCellError> {
+    fn ensure_operational_for(&self, action: &'static str) -> Result<(), DelegateCellError> {
+        let state = self.lifecycle_manager.state();
+        if matches!(
+            state,
+            ExtensionState::Running | ExtensionState::Suspending | ExtensionState::Terminating
+        ) {
+            Ok(())
+        } else {
+            Err(DelegateCellError::InactiveState {
+                delegate_id: self.delegate_id.clone(),
+                state,
+                action,
+            })
+        }
+    }
+
+    fn ensure_running_for_authority(&self, action: &'static str) -> Result<(), DelegateCellError> {
         let state = self.lifecycle_manager.state();
         if state == ExtensionState::Running {
             Ok(())
@@ -7187,7 +7217,9 @@ mod delegate_cell_tests {
 
     #[test]
     fn escrow_flood_denial_reports_hard_denial_to_callers() {
-        let factory = DelegateCellFactory::default();
+        let mut factory = DelegateCellFactory::default();
+        factory.policy.initial_posterior_micros = 0;
+        factory.policy.capability_escalation_penalty_micros = 10_000;
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-flood",
@@ -7337,15 +7369,18 @@ mod delegate_cell_tests {
             .expect("delegate created");
 
         delegate
-            .apply_transition(LifecycleTransition::Terminate, 700, &lifecycle_context())
-            .expect("terminate");
+            .apply_transition(LifecycleTransition::Suspend, 700, &lifecycle_context())
+            .expect("suspend");
+        delegate
+            .apply_transition(LifecycleTransition::Freeze, 701, &lifecycle_context())
+            .expect("freeze");
 
         let err = delegate
             .dispatch_hostcall(
                 HostcallType::FsRead,
                 Capability::FsRead,
                 Labeled::system_generated("probe".to_string()),
-                701,
+                702,
                 &flow_context(),
                 &lifecycle_context(),
             )
@@ -7353,7 +7388,7 @@ mod delegate_cell_tests {
         assert!(matches!(
             err,
             DelegateCellError::InactiveState {
-                state: ExtensionState::Terminating,
+                state: ExtensionState::Suspended,
                 action: "dispatch_hostcall",
                 ..
             }

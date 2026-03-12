@@ -957,8 +957,12 @@ fn enrichment_budget_sampling_rate_zero() {
 
 #[test]
 fn enrichment_budget_sampling_rate_exactly_millionths() {
-    let budget =
-        TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(
+        100,
+        DEFAULT_WINDOW_NS,
+        MILLIONTHS,
+        CaptureMode::ExactCounting,
+    );
     assert!(budget.is_full_capture());
     assert_eq!(budget.sampling_rate_millionths, MILLIONTHS);
 }
@@ -976,8 +980,7 @@ fn enrichment_budget_display_contains_all_fields() {
 #[test]
 fn enrichment_budget_effective_eps_large_window() {
     // window = 10 seconds
-    let budget =
-        TelemetryBudget::new(100, 10_000_000_000, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(100, 10_000_000_000, MILLIONTHS, CaptureMode::ExactCounting);
     // 1_000_000_000 / 10_000_000_000 = 0 (integer division) => 0
     assert_eq!(budget.effective_events_per_second(), 0);
 }
@@ -985,8 +988,7 @@ fn enrichment_budget_effective_eps_large_window() {
 #[test]
 fn enrichment_budget_effective_eps_sub_second_window() {
     // window = 100ms = 100_000_000 ns
-    let budget =
-        TelemetryBudget::new(50, 100_000_000, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(50, 100_000_000, MILLIONTHS, CaptureMode::ExactCounting);
     // 1_000_000_000 / 100_000_000 = 10 windows/sec => 50 * 10 = 500
     assert_eq!(budget.effective_events_per_second(), 500);
 }
@@ -1395,7 +1397,12 @@ fn enrichment_event_window_remaining_capacity_at_boundary() {
 
 #[test]
 fn enrichment_event_window_domains_seen_updated() {
-    let budget = TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(
+        100,
+        DEFAULT_WINDOW_NS,
+        MILLIONTHS,
+        CaptureMode::ExactCounting,
+    );
     let mut w = EventWindow::new(0, budget);
     w.record(TelemetryEvent::exact("e1", "alpha", 0, b"p"));
     w.record(TelemetryEvent::exact("e2", "beta", 1, b"p"));
@@ -1417,7 +1424,12 @@ fn enrichment_event_window_content_hash_different_with_different_events() {
 
 #[test]
 fn enrichment_event_window_thinning_no_op_on_empty() {
-    let budget = TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(
+        100,
+        DEFAULT_WINDOW_NS,
+        MILLIONTHS,
+        CaptureMode::ExactCounting,
+    );
     let mut w = EventWindow::new(0, budget);
     let config = ThinningConfig::new(ThinningPolicy::Uniform, 5, 0);
     let removed = w.apply_thinning(&config);
@@ -1427,10 +1439,20 @@ fn enrichment_event_window_thinning_no_op_on_empty() {
 
 #[test]
 fn enrichment_event_window_thinning_stratified_single_domain() {
-    let budget = TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(
+        100,
+        DEFAULT_WINDOW_NS,
+        MILLIONTHS,
+        CaptureMode::ExactCounting,
+    );
     let mut w = EventWindow::new(0, budget);
     for i in 0..20 {
-        w.record(TelemetryEvent::exact(&format!("e{}", i), "single", i * 10, b"p"));
+        w.record(TelemetryEvent::exact(
+            &format!("e{}", i),
+            "single",
+            i * 10,
+            b"p",
+        ));
     }
     let config = ThinningConfig::new(ThinningPolicy::Stratified, 10, 0);
     let removed = w.apply_thinning(&config);
@@ -1440,7 +1462,12 @@ fn enrichment_event_window_thinning_stratified_single_domain() {
 
 #[test]
 fn enrichment_event_window_thinning_sets_flag_and_count() {
-    let budget = TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(
+        100,
+        DEFAULT_WINDOW_NS,
+        MILLIONTHS,
+        CaptureMode::ExactCounting,
+    );
     let mut w = EventWindow::new(0, budget);
     for i in 0..10 {
         w.record(TelemetryEvent::exact(&format!("e{}", i), "d", i * 10, b"p"));
@@ -1456,7 +1483,12 @@ fn enrichment_event_window_thinning_sets_flag_and_count() {
 
 #[test]
 fn enrichment_event_window_thinning_weight_rescaling_reservoir() {
-    let budget = TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(
+        100,
+        DEFAULT_WINDOW_NS,
+        MILLIONTHS,
+        CaptureMode::ExactCounting,
+    );
     let mut w = EventWindow::new(0, budget);
     for i in 0..10 {
         w.record(TelemetryEvent::exact(&format!("e{}", i), "d", i * 10, b"p"));
@@ -1471,7 +1503,12 @@ fn enrichment_event_window_thinning_weight_rescaling_reservoir() {
 
 #[test]
 fn enrichment_event_window_provenance_after_thinning() {
-    let budget = TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(
+        100,
+        DEFAULT_WINDOW_NS,
+        MILLIONTHS,
+        CaptureMode::ExactCounting,
+    );
     let mut w = EventWindow::new(0, budget);
     for i in 0..10 {
         w.record(TelemetryEvent::exact(&format!("e{}", i), "d", i * 10, b"p"));
@@ -1498,7 +1535,12 @@ fn enrichment_mode_breakdown_debug() {
 
 #[test]
 fn enrichment_mode_breakdown_clone_eq() {
-    let a = ModeBreakdown::new(CaptureMode::BudgetedSampling, 3, 9, ProvenanceTag::budgeted(100_000));
+    let a = ModeBreakdown::new(
+        CaptureMode::BudgetedSampling,
+        3,
+        9,
+        ProvenanceTag::budgeted(100_000),
+    );
     let b = a.clone();
     assert_eq!(a, b);
 }
@@ -1565,7 +1607,12 @@ fn enrichment_report_clone_eq() {
 fn enrichment_report_serde_roundtrip() {
     let mut plane = TelemetryPlane::with_default_budget(
         epoch(),
-        TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
+        TelemetryBudget::new(
+            100,
+            DEFAULT_WINDOW_NS,
+            MILLIONTHS,
+            CaptureMode::ExactCounting,
+        ),
     );
     plane.record_exact("e0", "d", 0, b"data");
     let report = plane.generate_report();
@@ -1593,7 +1640,12 @@ fn enrichment_report_serde_json_field_stability() {
 fn enrichment_report_display() {
     let mut plane = TelemetryPlane::with_default_budget(
         epoch(),
-        TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
+        TelemetryBudget::new(
+            100,
+            DEFAULT_WINDOW_NS,
+            MILLIONTHS,
+            CaptureMode::ExactCounting,
+        ),
     );
     for i in 0..3 {
         plane.record_exact(&format!("e{}", i), "d", i * 10, b"p");
@@ -1608,7 +1660,12 @@ fn enrichment_report_display() {
 fn enrichment_report_survival_rate_after_thinning() {
     let mut plane = TelemetryPlane::with_default_budget(
         epoch(),
-        TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
+        TelemetryBudget::new(
+            100,
+            DEFAULT_WINDOW_NS,
+            MILLIONTHS,
+            CaptureMode::ExactCounting,
+        ),
     );
     for i in 0..40 {
         plane.record_exact(&format!("e{}", i), "d", i * 10, b"p");
@@ -1636,11 +1693,21 @@ fn enrichment_report_is_all_exact_with_shadow() {
 fn enrichment_report_content_hash_changes_with_different_data() {
     let mut p1 = TelemetryPlane::with_default_budget(
         epoch(),
-        TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
+        TelemetryBudget::new(
+            100,
+            DEFAULT_WINDOW_NS,
+            MILLIONTHS,
+            CaptureMode::ExactCounting,
+        ),
     );
     let mut p2 = TelemetryPlane::with_default_budget(
         epoch(),
-        TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
+        TelemetryBudget::new(
+            100,
+            DEFAULT_WINDOW_NS,
+            MILLIONTHS,
+            CaptureMode::ExactCounting,
+        ),
     );
     p1.record_exact("e0", "d", 0, b"payload_a");
     p2.record_exact("e0", "d", 0, b"payload_b");
@@ -1803,7 +1870,12 @@ fn enrichment_plane_report_multiple_mode_breakdowns() {
     let mut plane = TelemetryPlane::new(epoch());
     plane.add_budget(
         "exact",
-        TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
+        TelemetryBudget::new(
+            100,
+            DEFAULT_WINDOW_NS,
+            MILLIONTHS,
+            CaptureMode::ExactCounting,
+        ),
     );
     for i in 0..4 {
         plane.record_exact(&format!("e{}", i), "exact", i * 10, b"p");
@@ -1853,6 +1925,8 @@ fn enrichment_plane_report_budget_utilization_full() {
 
 #[test]
 fn enrichment_plane_report_rejected_events_counted() {
+    // When at capacity, plane creates new windows rather than rejecting.
+    // All 5 events get recorded across multiple windows.
     let mut plane = TelemetryPlane::with_default_budget(
         epoch(),
         TelemetryBudget::new(2, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
@@ -1861,8 +1935,10 @@ fn enrichment_plane_report_rejected_events_counted() {
         plane.record_exact(&format!("e{}", i), "d", i * 10, b"p");
     }
     let report = plane.generate_report();
-    assert_eq!(report.total_events_captured, 2);
-    assert_eq!(report.total_events_rejected, 3);
+    assert_eq!(report.total_events_captured, 5);
+    assert_eq!(report.total_events_rejected, 0);
+    // With budget of 2 per window, 5 events need 3 windows
+    assert_eq!(report.window_count, 3);
 }
 
 #[test]
@@ -1891,7 +1967,12 @@ fn enrichment_determinism_same_plane_same_report_hash() {
     let build_plane = || {
         let mut p = TelemetryPlane::with_default_budget(
             epoch(),
-            TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
+            TelemetryBudget::new(
+                100,
+                DEFAULT_WINDOW_NS,
+                MILLIONTHS,
+                CaptureMode::ExactCounting,
+            ),
         );
         for i in 0..10 {
             p.record_exact(&format!("ev_{}", i), "domain_x", i * 100, b"stable_payload");
@@ -1909,7 +1990,12 @@ fn enrichment_determinism_same_plane_same_report_hash() {
 fn enrichment_e2e_thin_all_multiple_domains() {
     let mut plane = TelemetryPlane::with_default_budget(
         epoch(),
-        TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting),
+        TelemetryBudget::new(
+            100,
+            DEFAULT_WINDOW_NS,
+            MILLIONTHS,
+            CaptureMode::ExactCounting,
+        ),
     );
     for i in 0..25 {
         plane.record_exact(&format!("a{}", i), "alpha", i * 10, b"p");
@@ -1936,7 +2022,12 @@ fn enrichment_e2e_report_epoch_matches_plane() {
 
 #[test]
 fn enrichment_e2e_multiple_thinning_passes() {
-    let budget = TelemetryBudget::new(100, DEFAULT_WINDOW_NS, MILLIONTHS, CaptureMode::ExactCounting);
+    let budget = TelemetryBudget::new(
+        100,
+        DEFAULT_WINDOW_NS,
+        MILLIONTHS,
+        CaptureMode::ExactCounting,
+    );
     let mut w = EventWindow::new(0, budget);
     for i in 0..50 {
         w.record(TelemetryEvent::exact(&format!("e{}", i), "d", i * 10, b"p"));

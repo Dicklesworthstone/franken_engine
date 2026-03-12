@@ -24,12 +24,12 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::workload_embedding::{
-    AbstentionReason, CertificateVerdict, DistanceMetric, EmbeddingBuilder, EmbeddingCatalog,
-    EmbeddingSpecimenFamily, EmbeddingValidity, FeatureComponent, FeatureExtractionConfig,
-    FeatureFamily, NeighborhoodCertificate, NeighborhoodCertificateConfig, TransferRecommendation,
-    WorkloadEmbedding, assess_transfer_safety, build_evidence_corpus, compute_distance,
-    issue_neighborhood_certificate, run_embedding_corpus, EMBEDDING_SCHEMA_VERSION,
-    MAX_EMBEDDING_DIM, MIN_OBSERVATIONS_FOR_EMBEDDING,
+    AbstentionReason, CertificateVerdict, DistanceMetric, EMBEDDING_SCHEMA_VERSION,
+    EmbeddingBuilder, EmbeddingCatalog, EmbeddingSpecimenFamily, EmbeddingValidity,
+    FeatureComponent, FeatureExtractionConfig, FeatureFamily, MAX_EMBEDDING_DIM,
+    MIN_OBSERVATIONS_FOR_EMBEDDING, NeighborhoodCertificate, NeighborhoodCertificateConfig,
+    TransferRecommendation, WorkloadEmbedding, assess_transfer_safety, build_evidence_corpus,
+    compute_distance, issue_neighborhood_certificate, run_embedding_corpus,
 };
 
 // ---------------------------------------------------------------------------
@@ -416,7 +416,12 @@ fn enrichment_builder_filters_disabled_families() {
     config.enabled_families.insert(FeatureFamily::ControlFlow);
     let features = vec![
         make_feature("cf.branch", FeatureFamily::ControlFlow, 100_000, 20),
-        make_feature("inst.add", FeatureFamily::InstructionDistribution, 200_000, 20),
+        make_feature(
+            "inst.add",
+            FeatureFamily::InstructionDistribution,
+            200_000,
+            20,
+        ),
     ];
     let emb = build_embedding("trace-1", features, config);
     // Only ControlFlow should remain
@@ -743,8 +748,11 @@ fn enrichment_certificate_abstained_epoch_mismatch() {
         c
     });
     // Build b at different epoch - use builder directly
-    let mut builder =
-        EmbeddingBuilder::new(default_config(), "b".to_string(), SecurityEpoch::from_raw(100));
+    let mut builder = EmbeddingBuilder::new(
+        default_config(),
+        "b".to_string(),
+        SecurityEpoch::from_raw(100),
+    );
     for f in simple_features(5, 100_000) {
         builder.add_component(f);
     }
@@ -766,12 +774,22 @@ fn enrichment_certificate_abstained_no_shared_dims() {
     config_ex.normalize = false;
     let a = build_embedding(
         "a",
-        vec![make_feature("only_a", FeatureFamily::ControlFlow, 100_000, 20)],
+        vec![make_feature(
+            "only_a",
+            FeatureFamily::ControlFlow,
+            100_000,
+            20,
+        )],
         config_ex.clone(),
     );
     let b = build_embedding(
         "b",
-        vec![make_feature("only_b", FeatureFamily::ControlFlow, 200_000, 20)],
+        vec![make_feature(
+            "only_b",
+            FeatureFamily::ControlFlow,
+            200_000,
+            20,
+        )],
         config_ex,
     );
     let config = NeighborhoodCertificateConfig::default();
@@ -838,7 +856,10 @@ fn enrichment_transfer_safety_near_is_transfer_all() {
     let b = simple_embedding("b", 5, 100_001);
     let config = NeighborhoodCertificateConfig::default();
     let assessment = assess_transfer_safety(&a, &b, &config, epoch());
-    assert_eq!(assessment.recommendation, TransferRecommendation::TransferAll);
+    assert_eq!(
+        assessment.recommendation,
+        TransferRecommendation::TransferAll
+    );
 }
 
 #[test]
@@ -951,11 +972,7 @@ fn enrichment_catalog_k_nearest_returns_k_or_fewer() {
 #[test]
 fn enrichment_catalog_k_nearest_zero_returns_empty() {
     let mut catalog = EmbeddingCatalog::new(epoch());
-    catalog.insert(
-        simple_embedding("e1", 5, 100_000),
-        None,
-        BTreeSet::new(),
-    );
+    catalog.insert(simple_embedding("e1", 5, 100_000), None, BTreeSet::new());
     let query = simple_embedding("q", 5, 100_000);
     let results = catalog.k_nearest(&query, 0, DistanceMetric::Chebyshev);
     assert!(results.is_empty());
@@ -964,11 +981,7 @@ fn enrichment_catalog_k_nearest_zero_returns_empty() {
 #[test]
 fn enrichment_catalog_summary_counts() {
     let mut catalog = EmbeddingCatalog::new(epoch());
-    catalog.insert(
-        simple_embedding("e1", 5, 100_000),
-        None,
-        BTreeSet::new(),
-    );
+    catalog.insert(simple_embedding("e1", 5, 100_000), None, BTreeSet::new());
     // Insert invalid embedding
     catalog.insert(
         EmbeddingBuilder::new(default_config(), "inv".to_string(), epoch()).build(),
@@ -993,11 +1006,7 @@ fn enrichment_catalog_summary_empty() {
 #[test]
 fn enrichment_catalog_summary_serde_roundtrip() {
     let mut catalog = EmbeddingCatalog::new(epoch());
-    catalog.insert(
-        simple_embedding("e1", 5, 100_000),
-        None,
-        BTreeSet::new(),
-    );
+    catalog.insert(simple_embedding("e1", 5, 100_000), None, BTreeSet::new());
     let summary = catalog.summary();
     let json = serde_json::to_string(&summary).unwrap();
     let back = serde_json::from_str::<serde_json::Value>(&json).unwrap();

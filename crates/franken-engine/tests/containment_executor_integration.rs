@@ -706,8 +706,8 @@ fn full_lifecycle_suspend_resume_quarantine() {
 // Enrichment tests — PearlTower 2026-03-12
 // ===========================================================================
 
-use std::collections::BTreeSet;
 use frankenengine_engine::hash_tiers::ContentHash;
+use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
 // ContainmentState — trait coverage
@@ -776,7 +776,10 @@ fn enrichment_containment_state_alive_and_dead_mutually_exclusive() {
     ];
     for s in &all {
         // No state is both alive and dead.
-        assert!(!(s.is_alive() && s.is_dead()), "state {s} is both alive and dead");
+        assert!(
+            !(s.is_alive() && s.is_dead()),
+            "state {s} is both alive and dead"
+        );
     }
 }
 
@@ -799,7 +802,11 @@ fn enrichment_containment_state_display_lowercase() {
     ];
     for s in &all {
         let display = s.to_string();
-        assert_eq!(display, display.to_lowercase(), "Display for {s:?} should be lowercase");
+        assert_eq!(
+            display,
+            display.to_lowercase(),
+            "Display for {s:?} should be lowercase"
+        );
     }
 }
 
@@ -840,7 +847,10 @@ fn enrichment_error_already_contained_all_states() {
             current_state: *s,
         };
         let msg = e.to_string();
-        assert!(msg.contains(&s.to_string()), "Display should contain state name");
+        assert!(
+            msg.contains(&s.to_string()),
+            "Display should contain state name"
+        );
         assert!(msg.contains("ext"), "Display should contain extension_id");
     }
 }
@@ -1225,7 +1235,9 @@ fn enrichment_receipt_tampered_metadata_fails_integrity() {
     let mut receipt = executor
         .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
         .unwrap();
-    receipt.metadata.insert("injected_key".to_string(), "injected_val".to_string());
+    receipt
+        .metadata
+        .insert("injected_key".to_string(), "injected_val".to_string());
     assert!(!receipt.verify_integrity());
 }
 
@@ -1261,7 +1273,11 @@ fn enrichment_receipt_json_field_count() {
     let json = serde_json::to_string(&receipt).unwrap();
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
     let obj = v.as_object().unwrap();
-    assert_eq!(obj.len(), 13, "ContainmentReceipt should have 13 JSON fields");
+    assert_eq!(
+        obj.len(),
+        13,
+        "ContainmentReceipt should have 13 JSON fields"
+    );
 }
 
 #[test]
@@ -1344,7 +1360,10 @@ fn enrichment_from_running_all_actions_succeed() {
         executor.register("ext");
         let ctx = test_context();
         let result = executor.execute(action, "ext", &ctx);
-        assert!(result.is_ok(), "Action {action} from Running should succeed");
+        assert!(
+            result.is_ok(),
+            "Action {action} from Running should succeed"
+        );
     }
 }
 
@@ -1353,8 +1372,12 @@ fn enrichment_from_challenged_allow_succeeds() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-    let receipt = executor.execute(ContainmentAction::Allow, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Allow, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.new_state, ContainmentState::Running);
 }
 
@@ -1363,9 +1386,13 @@ fn enrichment_from_challenged_challenge_rejected() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
     // Challenged -> Challenge again: already in target state => idempotent.
-    let receipt = executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.new_state, ContainmentState::Challenged);
 }
 
@@ -1374,8 +1401,12 @@ fn enrichment_from_challenged_suspend_succeeds() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-    let receipt = executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.new_state, ContainmentState::Suspended);
 }
 
@@ -1384,8 +1415,12 @@ fn enrichment_from_challenged_terminate_succeeds() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-    let receipt = executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.new_state, ContainmentState::Terminated);
 }
 
@@ -1394,9 +1429,14 @@ fn enrichment_from_sandboxed_allow_rejected() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     let result = executor.execute(ContainmentAction::Allow, "ext", &ctx);
-    assert!(matches!(result, Err(ContainmentError::InvalidTransition { .. })));
+    assert!(matches!(
+        result,
+        Err(ContainmentError::InvalidTransition { .. })
+    ));
 }
 
 #[test]
@@ -1404,9 +1444,14 @@ fn enrichment_from_sandboxed_challenge_rejected() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     let result = executor.execute(ContainmentAction::Challenge, "ext", &ctx);
-    assert!(matches!(result, Err(ContainmentError::InvalidTransition { .. })));
+    assert!(matches!(
+        result,
+        Err(ContainmentError::InvalidTransition { .. })
+    ));
 }
 
 #[test]
@@ -1414,8 +1459,12 @@ fn enrichment_from_sandboxed_quarantine_succeeds() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
-    let receipt = executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.new_state, ContainmentState::Quarantined);
     assert!(executor.forensic_snapshot("ext").is_some());
 }
@@ -1425,9 +1474,14 @@ fn enrichment_from_suspended_allow_rejected() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     let result = executor.execute(ContainmentAction::Allow, "ext", &ctx);
-    assert!(matches!(result, Err(ContainmentError::InvalidTransition { .. })));
+    assert!(matches!(
+        result,
+        Err(ContainmentError::InvalidTransition { .. })
+    ));
 }
 
 #[test]
@@ -1435,9 +1489,14 @@ fn enrichment_from_suspended_challenge_rejected() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     let result = executor.execute(ContainmentAction::Challenge, "ext", &ctx);
-    assert!(matches!(result, Err(ContainmentError::InvalidTransition { .. })));
+    assert!(matches!(
+        result,
+        Err(ContainmentError::InvalidTransition { .. })
+    ));
 }
 
 #[test]
@@ -1445,9 +1504,14 @@ fn enrichment_from_suspended_sandbox_rejected() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     let result = executor.execute(ContainmentAction::Sandbox, "ext", &ctx);
-    assert!(matches!(result, Err(ContainmentError::InvalidTransition { .. })));
+    assert!(matches!(
+        result,
+        Err(ContainmentError::InvalidTransition { .. })
+    ));
 }
 
 #[test]
@@ -1455,7 +1519,9 @@ fn enrichment_from_terminated_all_actions_fail_except_idempotent() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
     for action in ContainmentAction::ALL {
         let result = executor.execute(action, "ext", &ctx);
         if action == ContainmentAction::Terminate {
@@ -1479,8 +1545,12 @@ fn enrichment_idempotent_quarantine_returns_same_receipt() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let r1 = executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
-    let r2 = executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
+    let r1 = executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
+    let r2 = executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
     assert_eq!(r1.receipt_id, r2.receipt_id);
     assert_eq!(r1.content_hash, r2.content_hash);
 }
@@ -1490,8 +1560,12 @@ fn enrichment_idempotent_challenge_returns_same_receipt() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let r1 = executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-    let r2 = executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
+    let r1 = executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
+    let r2 = executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
     assert_eq!(r1.receipt_id, r2.receipt_id);
 }
 
@@ -1500,9 +1574,13 @@ fn enrichment_idempotent_suspend_returns_same_receipt() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     let r1_id = executor.receipts("ext").last().unwrap().receipt_id.clone();
-    let r2 = executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    let r2 = executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     assert_eq!(r1_id, r2.receipt_id);
 }
 
@@ -1511,11 +1589,19 @@ fn enrichment_idempotent_does_not_add_extra_receipts() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     assert_eq!(executor.receipts("ext").len(), 1);
     // Idempotent call.
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
-    assert_eq!(executor.receipts("ext").len(), 1, "idempotent call should not add receipt");
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
+    assert_eq!(
+        executor.receipts("ext").len(),
+        1,
+        "idempotent call should not add receipt"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1527,7 +1613,9 @@ fn enrichment_cooperative_allow_action() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Allow, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Allow, "ext", &ctx)
+        .unwrap();
     assert!(receipt.cooperative, "Allow should be cooperative");
 }
 
@@ -1536,7 +1624,9 @@ fn enrichment_cooperative_suspend_action() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     assert!(receipt.cooperative, "Suspend should be cooperative");
 }
 
@@ -1545,7 +1635,9 @@ fn enrichment_not_cooperative_terminate() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
     assert!(!receipt.cooperative, "Terminate should not be cooperative");
 }
 
@@ -1554,7 +1646,9 @@ fn enrichment_not_cooperative_quarantine() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
     assert!(!receipt.cooperative, "Quarantine should not be cooperative");
 }
 
@@ -1567,7 +1661,9 @@ fn enrichment_resume_receipt_metadata_has_resume_key() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     let receipt = executor.resume("ext", &ctx).unwrap();
     assert_eq!(receipt.metadata.get("resume"), Some(&"true".to_string()));
 }
@@ -1577,7 +1673,9 @@ fn enrichment_resume_receipt_has_allow_action() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     let receipt = executor.resume("ext", &ctx).unwrap();
     assert_eq!(receipt.action, ContainmentAction::Allow);
 }
@@ -1587,7 +1685,9 @@ fn enrichment_resume_receipt_verify_integrity() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     let receipt = executor.resume("ext", &ctx).unwrap();
     assert!(receipt.verify_integrity());
 }
@@ -1597,7 +1697,9 @@ fn enrichment_resume_from_challenged_fails() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
     let result = executor.resume("ext", &ctx);
     assert!(result.is_err());
 }
@@ -1607,7 +1709,9 @@ fn enrichment_resume_from_sandboxed_fails() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     let result = executor.resume("ext", &ctx);
     assert!(result.is_err());
 }
@@ -1617,7 +1721,9 @@ fn enrichment_resume_from_terminated_fails() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
     let result = executor.resume("ext", &ctx);
     assert!(result.is_err());
 }
@@ -1627,7 +1733,9 @@ fn enrichment_resume_from_quarantined_fails() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
     let result = executor.resume("ext", &ctx);
     assert!(result.is_err());
 }
@@ -1658,8 +1766,12 @@ fn enrichment_by_state_multiple_in_same_state() {
     executor.register("a");
     executor.register("b");
     executor.register("c");
-    executor.execute(ContainmentAction::Sandbox, "a", &ctx).unwrap();
-    executor.execute(ContainmentAction::Sandbox, "b", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "a", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "b", &ctx)
+        .unwrap();
     let sandboxed = executor.by_state(ContainmentState::Sandboxed);
     assert_eq!(sandboxed.len(), 2);
     assert!(sandboxed.contains(&"a"));
@@ -1678,9 +1790,15 @@ fn enrichment_receipts_ordered_by_action_time() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
-    executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
     let receipts = executor.receipts("ext");
     assert_eq!(receipts.len(), 3);
     assert_eq!(receipts[0].action, ContainmentAction::Challenge);
@@ -1694,9 +1812,15 @@ fn enrichment_receipts_per_extension_isolation() {
     executor.register("a");
     executor.register("b");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "a", &ctx).unwrap();
-    executor.execute(ContainmentAction::Sandbox, "a", &ctx).unwrap();
-    executor.execute(ContainmentAction::Terminate, "b", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "a", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "a", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Terminate, "b", &ctx)
+        .unwrap();
     assert_eq!(executor.receipts("a").len(), 2);
     assert_eq!(executor.receipts("b").len(), 1);
 }
@@ -1710,7 +1834,9 @@ fn enrichment_forensic_snapshot_not_created_for_terminate() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
     assert!(executor.forensic_snapshot("ext").is_none());
 }
 
@@ -1720,12 +1846,23 @@ fn enrichment_forensic_snapshot_hostcall_count_from_receipts() {
     executor.register("ext");
     let ctx = test_context();
     // Do 3 actions before quarantine so hostcall_count = 3.
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
-    executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
     let snap = executor.forensic_snapshot("ext").unwrap();
-    assert_eq!(snap.hostcall_count, 3, "hostcall_count should equal prior receipt count");
+    assert_eq!(
+        snap.hostcall_count, 3,
+        "hostcall_count should equal prior receipt count"
+    );
 }
 
 #[test]
@@ -1736,7 +1873,9 @@ fn enrichment_forensic_snapshot_snapshot_ns_matches_context() {
         timestamp_ns: 42_000_000,
         ..test_context()
     };
-    executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
     let snap = executor.forensic_snapshot("ext").unwrap();
     assert_eq!(snap.snapshot_ns, 42_000_000);
 }
@@ -1748,7 +1887,9 @@ fn enrichment_forensic_snapshot_memory_hash_deterministic() {
         let mut executor = ContainmentExecutor::new();
         executor.register("ext-det");
         let ctx = test_context();
-        executor.execute(ContainmentAction::Quarantine, "ext-det", &ctx).unwrap();
+        executor
+            .execute(ContainmentAction::Quarantine, "ext-det", &ctx)
+            .unwrap();
         executor.forensic_snapshot("ext-det").unwrap().clone()
     };
     let s1 = make();
@@ -1778,10 +1919,14 @@ fn enrichment_sandbox_policy_after_terminate_still_present() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     assert!(executor.sandbox_policy("ext").is_some());
     // Terminate does not clear sandbox_policy.
-    executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
     assert!(executor.sandbox_policy("ext").is_some());
 }
 
@@ -1794,8 +1939,12 @@ fn enrichment_executor_serde_roundtrip_preserves_receipts() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     let json = serde_json::to_string(&executor).unwrap();
     let restored: ContainmentExecutor = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.receipts("ext").len(), 2);
@@ -1807,12 +1956,19 @@ fn enrichment_executor_serde_roundtrip_next_receipt_id_preserved() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     let json = serde_json::to_string(&executor).unwrap();
     let mut restored: ContainmentExecutor = serde_json::from_str(&json).unwrap();
     // Should be able to execute another action with a new receipt ID.
-    let receipt = restored.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
-    assert_ne!(receipt.receipt_id, "cr-00000000", "should have incremented past first ID");
+    let receipt = restored
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
+    assert_ne!(
+        receipt.receipt_id, "cr-00000000",
+        "should have incremented past first ID"
+    );
 }
 
 #[test]
@@ -1820,7 +1976,9 @@ fn enrichment_executor_serde_forensic_snapshot_preserved() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
     let original_snap = executor.forensic_snapshot("ext").unwrap().clone();
     let json = serde_json::to_string(&executor).unwrap();
     let restored: ContainmentExecutor = serde_json::from_str(&json).unwrap();
@@ -1838,7 +1996,9 @@ fn enrichment_determinism_challenge_receipt_hash() {
         let mut executor = ContainmentExecutor::new();
         executor.register("ext-d");
         let ctx = test_context();
-        executor.execute(ContainmentAction::Challenge, "ext-d", &ctx).unwrap()
+        executor
+            .execute(ContainmentAction::Challenge, "ext-d", &ctx)
+            .unwrap()
     };
     let r1 = make();
     let r2 = make();
@@ -1852,7 +2012,9 @@ fn enrichment_determinism_terminate_receipt_hash() {
         let mut executor = ContainmentExecutor::new();
         executor.register("ext-d");
         let ctx = test_context();
-        executor.execute(ContainmentAction::Terminate, "ext-d", &ctx).unwrap()
+        executor
+            .execute(ContainmentAction::Terminate, "ext-d", &ctx)
+            .unwrap()
     };
     let r1 = make();
     let r2 = make();
@@ -1865,7 +2027,9 @@ fn enrichment_determinism_quarantine_receipt_hash() {
         let mut executor = ContainmentExecutor::new();
         executor.register("ext-d");
         let ctx = test_context();
-        executor.execute(ContainmentAction::Quarantine, "ext-d", &ctx).unwrap()
+        executor
+            .execute(ContainmentAction::Quarantine, "ext-d", &ctx)
+            .unwrap()
     };
     let r1 = make();
     let r2 = make();
@@ -1878,9 +2042,15 @@ fn enrichment_determinism_multi_step_receipt_hashes() {
         let mut executor = ContainmentExecutor::new();
         executor.register("ext");
         let ctx = test_context();
-        let r1 = executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-        let r2 = executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
-        let r3 = executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+        let r1 = executor
+            .execute(ContainmentAction::Challenge, "ext", &ctx)
+            .unwrap();
+        let r2 = executor
+            .execute(ContainmentAction::Sandbox, "ext", &ctx)
+            .unwrap();
+        let r3 = executor
+            .execute(ContainmentAction::Terminate, "ext", &ctx)
+            .unwrap();
         (r1.content_hash, r2.content_hash, r3.content_hash)
     };
     let (h1a, h1b, h1c) = make();
@@ -1900,19 +2070,29 @@ fn enrichment_lifecycle_challenge_allow_challenge_sandbox_terminate() {
     executor.register("ext");
     let ctx = test_context();
 
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
     assert_eq!(executor.state("ext"), Some(ContainmentState::Challenged));
 
-    executor.execute(ContainmentAction::Allow, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Allow, "ext", &ctx)
+        .unwrap();
     assert_eq!(executor.state("ext"), Some(ContainmentState::Running));
 
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
     assert_eq!(executor.state("ext"), Some(ContainmentState::Challenged));
 
-    executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     assert_eq!(executor.state("ext"), Some(ContainmentState::Sandboxed));
 
-    executor.execute(ContainmentAction::Terminate, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Terminate, "ext", &ctx)
+        .unwrap();
     assert_eq!(executor.state("ext"), Some(ContainmentState::Terminated));
 
     assert_eq!(executor.receipts("ext").len(), 5);
@@ -1924,12 +2104,18 @@ fn enrichment_lifecycle_suspend_resume_suspend_quarantine() {
     executor.register("ext");
     let ctx = test_context();
 
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
     executor.resume("ext", &ctx).unwrap();
     assert_eq!(executor.state("ext"), Some(ContainmentState::Running));
 
-    executor.execute(ContainmentAction::Suspend, "ext", &ctx).unwrap();
-    executor.execute(ContainmentAction::Quarantine, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Suspend, "ext", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Quarantine, "ext", &ctx)
+        .unwrap();
     assert!(executor.state("ext").unwrap().is_dead());
     assert!(executor.forensic_snapshot("ext").is_some());
     assert_eq!(executor.receipts("ext").len(), 4);
@@ -1943,9 +2129,15 @@ fn enrichment_lifecycle_multiple_extensions_parallel() {
     executor.register("c");
     let ctx = test_context();
 
-    executor.execute(ContainmentAction::Sandbox, "a", &ctx).unwrap();
-    executor.execute(ContainmentAction::Terminate, "b", &ctx).unwrap();
-    executor.execute(ContainmentAction::Quarantine, "c", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "a", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Terminate, "b", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Quarantine, "c", &ctx)
+        .unwrap();
 
     assert_eq!(executor.state("a"), Some(ContainmentState::Sandboxed));
     assert_eq!(executor.state("b"), Some(ContainmentState::Terminated));
@@ -1965,7 +2157,9 @@ fn enrichment_receipt_id_hex_format() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     // Format is "cr-XXXXXXXX" where X is hex digit.
     assert!(receipt.receipt_id.starts_with("cr-"));
     let hex_part = &receipt.receipt_id[3..];
@@ -1978,7 +2172,9 @@ fn enrichment_receipt_id_first_is_zero() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Allow, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Allow, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.receipt_id, "cr-00000000");
 }
 
@@ -1987,8 +2183,12 @@ fn enrichment_receipt_id_second_is_one() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
-    let receipt = executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.receipt_id, "cr-00000001");
 }
 
@@ -2004,7 +2204,9 @@ fn enrichment_receipt_timestamp_matches_context() {
         timestamp_ns: 7_777_777,
         ..test_context()
     };
-    let receipt = executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.timestamp_ns, 7_777_777);
 }
 
@@ -2013,7 +2215,9 @@ fn enrichment_receipt_duration_is_zero_simulated() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
     assert_eq!(receipt.duration_ns, 0);
 }
 
@@ -2026,7 +2230,10 @@ fn enrichment_receipt_success_always_true() {
         let mut fresh = ContainmentExecutor::new();
         fresh.register("ext");
         let receipt = fresh.execute(action, "ext", &ctx).unwrap();
-        assert!(receipt.success, "action {action} should produce success=true");
+        assert!(
+            receipt.success,
+            "action {action} should produce success=true"
+        );
     }
 }
 
@@ -2038,7 +2245,9 @@ fn enrichment_receipt_success_always_true() {
 fn enrichment_execute_unknown_extension_error_contains_id() {
     let mut executor = ContainmentExecutor::new();
     let ctx = test_context();
-    let err = executor.execute(ContainmentAction::Sandbox, "unknown-ext", &ctx).unwrap_err();
+    let err = executor
+        .execute(ContainmentAction::Sandbox, "unknown-ext", &ctx)
+        .unwrap_err();
     if let ContainmentError::ExtensionNotFound { extension_id } = err {
         assert_eq!(extension_id, "unknown-ext");
     } else {
@@ -2067,7 +2276,9 @@ fn enrichment_receipt_metadata_is_btreemap_sorted() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Challenge, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Challenge, "ext", &ctx)
+        .unwrap();
     // BTreeMap keys are always sorted.
     let keys: Vec<&String> = receipt.metadata.keys().collect();
     let mut sorted = keys.clone();
@@ -2098,7 +2309,9 @@ fn enrichment_receipt_serde_value_roundtrip() {
     let mut executor = ContainmentExecutor::new();
     executor.register("ext");
     let ctx = test_context();
-    let receipt = executor.execute(ContainmentAction::Sandbox, "ext", &ctx).unwrap();
+    let receipt = executor
+        .execute(ContainmentAction::Sandbox, "ext", &ctx)
+        .unwrap();
     let value: serde_json::Value = serde_json::to_value(&receipt).unwrap();
     let back: ContainmentReceipt = serde_json::from_value(value).unwrap();
     assert_eq!(receipt, back);
@@ -2111,8 +2324,12 @@ fn enrichment_executor_serde_value_roundtrip() {
     executor.register("a");
     executor.register("b");
     let ctx = test_context();
-    executor.execute(ContainmentAction::Sandbox, "a", &ctx).unwrap();
-    executor.execute(ContainmentAction::Quarantine, "b", &ctx).unwrap();
+    executor
+        .execute(ContainmentAction::Sandbox, "a", &ctx)
+        .unwrap();
+    executor
+        .execute(ContainmentAction::Quarantine, "b", &ctx)
+        .unwrap();
     let value: serde_json::Value = serde_json::to_value(&executor).unwrap();
     let back: ContainmentExecutor = serde_json::from_value(value).unwrap();
     assert_eq!(back.extension_count(), 2);

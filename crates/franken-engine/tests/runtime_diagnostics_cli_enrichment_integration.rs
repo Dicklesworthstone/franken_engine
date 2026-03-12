@@ -26,10 +26,10 @@ use frankenengine_engine::evidence_ledger::DecisionType;
 use frankenengine_engine::runtime_diagnostics_cli::{
     CompatibilityUserImpactClass, EvidenceExportFilter, EvidenceRecordKind, EvidenceSeverity,
     GaEvidenceArtifactCategory, GcPressureSample, OnboardingReadinessClass,
-    OnboardingRemediationEffort, PreflightVerdict, RolloutRecommendation,
-    RuntimeDiagnosticsOutput, RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample,
-    StructuredLogEvent, SupportBundleRedactionPolicy, collect_runtime_diagnostics,
-    parse_decision_type, parse_evidence_severity, render_diagnostics_summary,
+    OnboardingRemediationEffort, PreflightVerdict, RolloutRecommendation, RuntimeDiagnosticsOutput,
+    RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample, StructuredLogEvent,
+    SupportBundleRedactionPolicy, collect_runtime_diagnostics, parse_decision_type,
+    parse_evidence_severity, render_diagnostics_summary,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -490,9 +490,8 @@ fn enrichment_redaction_policy_extend_filters_empty() {
 
 #[test]
 fn enrichment_redaction_policy_serde_roundtrip() {
-    let policy = SupportBundleRedactionPolicy::with_additional_fragments(vec![
-        "custom_key".to_string(),
-    ]);
+    let policy =
+        SupportBundleRedactionPolicy::with_additional_fragments(vec!["custom_key".to_string()]);
     let json = serde_json::to_string(&policy).unwrap();
     let back: SupportBundleRedactionPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(policy, back);
@@ -610,11 +609,7 @@ fn enrichment_diagnostics_dedup_policies() {
 #[test]
 fn enrichment_diagnostics_filters_empty_policies() {
     let mut input = make_state_input(vec![], vec![]);
-    input.active_policies = vec![
-        "policy-a".to_string(),
-        "".to_string(),
-        "   ".to_string(),
-    ];
+    input.active_policies = vec!["policy-a".to_string(), "".to_string(), "   ".to_string()];
     let output = collect_runtime_diagnostics(&input, "t", "d", "p");
     assert_eq!(output.active_policies.len(), 1);
     assert_eq!(output.active_policies[0], "policy-a");
@@ -787,7 +782,11 @@ fn enrichment_gc_pressure_sorted_by_extension_id() {
         vec![],
     );
     let output = collect_runtime_diagnostics(&input, "t", "d", "p");
-    let ids: Vec<&str> = output.gc_pressure.iter().map(|g| g.extension_id.as_str()).collect();
+    let ids: Vec<&str> = output
+        .gc_pressure
+        .iter()
+        .map(|g| g.extension_id.as_str())
+        .collect();
     assert_eq!(ids, vec!["ext-a", "ext-m", "ext-z"]);
 }
 
@@ -802,6 +801,10 @@ fn enrichment_scheduler_lanes_sorted_by_name() {
         ],
     );
     let output = collect_runtime_diagnostics(&input, "t", "d", "p");
-    let names: Vec<&str> = output.scheduler_lanes.iter().map(|l| l.lane.as_str()).collect();
+    let names: Vec<&str> = output
+        .scheduler_lanes
+        .iter()
+        .map(|l| l.lane.as_str())
+        .collect();
     assert_eq!(names, vec!["async-io", "compute", "priority"]);
 }

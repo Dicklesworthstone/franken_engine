@@ -1,5 +1,15 @@
 //! Integration tests for `native_addon_parity_gate` (RGC-407C, bd-1lsy.5.9.3).
 
+#![forbid(unsafe_code)]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::clone_on_copy,
+    clippy::len_zero,
+    clippy::identity_op
+)]
+
+use std::collections::BTreeSet;
+
 use frankenengine_engine::native_addon_parity_gate::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 

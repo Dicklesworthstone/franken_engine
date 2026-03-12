@@ -1,4 +1,9 @@
-#![allow(clippy::too_many_arguments, clippy::clone_on_copy, clippy::len_zero, clippy::identity_op)]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::clone_on_copy,
+    clippy::len_zero,
+    clippy::identity_op
+)]
 
 use frankenengine_engine::capability_token::PrincipalId;
 use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain};
@@ -705,9 +710,18 @@ fn enrichment_enforcement_point_clone_eq() {
 
 #[test]
 fn enrichment_enforcement_point_ne_variants() {
-    assert_ne!(EnforcementPoint::TokenAcceptance, EnforcementPoint::HighRiskOperation);
-    assert_ne!(EnforcementPoint::HighRiskOperation, EnforcementPoint::ExtensionActivation);
-    assert_ne!(EnforcementPoint::TokenAcceptance, EnforcementPoint::ExtensionActivation);
+    assert_ne!(
+        EnforcementPoint::TokenAcceptance,
+        EnforcementPoint::HighRiskOperation
+    );
+    assert_ne!(
+        EnforcementPoint::HighRiskOperation,
+        EnforcementPoint::ExtensionActivation
+    );
+    assert_ne!(
+        EnforcementPoint::TokenAcceptance,
+        EnforcementPoint::ExtensionActivation
+    );
 }
 
 #[test]
@@ -738,10 +752,19 @@ fn enrichment_enforcement_point_ord_total() {
 
 #[test]
 fn enrichment_high_risk_category_debug_all() {
-    assert_eq!(format!("{:?}", HighRiskCategory::PolicyChange), "PolicyChange");
-    assert_eq!(format!("{:?}", HighRiskCategory::KeyOperation), "KeyOperation");
+    assert_eq!(
+        format!("{:?}", HighRiskCategory::PolicyChange),
+        "PolicyChange"
+    );
+    assert_eq!(
+        format!("{:?}", HighRiskCategory::KeyOperation),
+        "KeyOperation"
+    );
     assert_eq!(format!("{:?}", HighRiskCategory::DataExport), "DataExport");
-    assert_eq!(format!("{:?}", HighRiskCategory::CrossZoneAction), "CrossZoneAction");
+    assert_eq!(
+        format!("{:?}", HighRiskCategory::CrossZoneAction),
+        "CrossZoneAction"
+    );
     assert_eq!(
         format!("{:?}", HighRiskCategory::ExtensionLifecycleChange),
         "ExtensionLifecycleChange"
@@ -1373,7 +1396,10 @@ fn enrichment_token_acceptance_cleared_checks_performed_is_two() {
     let jti = EngineObjectId([50; 32]);
     let vk = VerificationKey::from_bytes([51; 32]);
     match enforcer.check_token_acceptance(&jti, &vk, "t-cp") {
-        EnforcementResult::Cleared { checks_performed, enforcement_point } => {
+        EnforcementResult::Cleared {
+            checks_performed,
+            enforcement_point,
+        } => {
             assert_eq!(checks_performed, 2);
             assert_eq!(enforcement_point, EnforcementPoint::TokenAcceptance);
         }
@@ -1424,8 +1450,16 @@ fn enrichment_high_risk_cleared_checks_performed_is_two() {
     let mut enforcer = make_enforcer();
     let att_id = EngineObjectId([70; 32]);
     let pk = VerificationKey::from_bytes([71; 32]);
-    match enforcer.check_high_risk_operation(&att_id, &pk, HighRiskCategory::PolicyChange, "t-hr-cp") {
-        EnforcementResult::Cleared { checks_performed, enforcement_point } => {
+    match enforcer.check_high_risk_operation(
+        &att_id,
+        &pk,
+        HighRiskCategory::PolicyChange,
+        "t-hr-cp",
+    ) {
+        EnforcementResult::Cleared {
+            checks_performed,
+            enforcement_point,
+        } => {
             assert_eq!(checks_performed, 2);
             assert_eq!(enforcement_point, EnforcementPoint::HighRiskOperation);
         }
@@ -1442,7 +1476,12 @@ fn enrichment_high_risk_both_attestation_and_key_revoked_prefers_direct() {
     revoke_target(&mut enforcer, RevocationTargetType::Attestation, [72; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     enforcer.drain_audit_log();
-    match enforcer.check_high_risk_operation(&att_id, &pk, HighRiskCategory::DataExport, "t-hr-both") {
+    match enforcer.check_high_risk_operation(
+        &att_id,
+        &pk,
+        HighRiskCategory::DataExport,
+        "t-hr-both",
+    ) {
         EnforcementResult::Denied(d) => {
             assert!(!d.transitive);
             assert_eq!(d.target_type, RevocationTargetType::Attestation);
@@ -1520,7 +1559,10 @@ fn enrichment_extension_activation_cleared_checks_performed_is_two() {
     let ext_id = EngineObjectId([90; 32]);
     let sk = VerificationKey::from_bytes([91; 32]);
     match enforcer.check_extension_activation(&ext_id, &sk, "t-ext-cp") {
-        EnforcementResult::Cleared { checks_performed, enforcement_point } => {
+        EnforcementResult::Cleared {
+            checks_performed,
+            enforcement_point,
+        } => {
             assert_eq!(checks_performed, 2);
             assert_eq!(enforcement_point, EnforcementPoint::ExtensionActivation);
         }
@@ -1580,10 +1622,16 @@ fn enrichment_extension_transitive_emits_two_audit_events() {
 #[test]
 fn enrichment_batch_single_token_cleared() {
     let mut enforcer = make_enforcer();
-    let tokens = vec![(EngineObjectId([1; 32]), VerificationKey::from_bytes([2; 32]))];
+    let tokens = vec![(
+        EngineObjectId([1; 32]),
+        VerificationKey::from_bytes([2; 32]),
+    )];
     let result = enforcer.check_token_batch(&tokens, "t-batch-single");
     assert!(result.is_cleared());
-    if let EnforcementResult::Cleared { checks_performed, .. } = result {
+    if let EnforcementResult::Cleared {
+        checks_performed, ..
+    } = result
+    {
         assert_eq!(checks_performed, 2);
     }
 }
@@ -1593,8 +1641,14 @@ fn enrichment_batch_first_token_revoked() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Token, [1; 32]);
     let tokens = vec![
-        (EngineObjectId([1; 32]), VerificationKey::from_bytes([2; 32])),
-        (EngineObjectId([3; 32]), VerificationKey::from_bytes([4; 32])),
+        (
+            EngineObjectId([1; 32]),
+            VerificationKey::from_bytes([2; 32]),
+        ),
+        (
+            EngineObjectId([3; 32]),
+            VerificationKey::from_bytes([4; 32]),
+        ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-first");
     match result {
@@ -1610,9 +1664,18 @@ fn enrichment_batch_last_token_revoked() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Token, [5; 32]);
     let tokens = vec![
-        (EngineObjectId([1; 32]), VerificationKey::from_bytes([2; 32])),
-        (EngineObjectId([3; 32]), VerificationKey::from_bytes([4; 32])),
-        (EngineObjectId([5; 32]), VerificationKey::from_bytes([6; 32])),
+        (
+            EngineObjectId([1; 32]),
+            VerificationKey::from_bytes([2; 32]),
+        ),
+        (
+            EngineObjectId([3; 32]),
+            VerificationKey::from_bytes([4; 32]),
+        ),
+        (
+            EngineObjectId([5; 32]),
+            VerificationKey::from_bytes([6; 32]),
+        ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-last");
     match result {
@@ -1631,7 +1694,10 @@ fn enrichment_batch_transitive_denial_via_issuer_key() {
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     let tokens = vec![
         (EngineObjectId([1; 32]), shared_key.clone()),
-        (EngineObjectId([2; 32]), VerificationKey::from_bytes([99; 32])),
+        (
+            EngineObjectId([2; 32]),
+            VerificationKey::from_bytes([99; 32]),
+        ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-trans");
     match result {
@@ -1649,8 +1715,14 @@ fn enrichment_batch_multiple_revoked_returns_first() {
     revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Token, [20; 32]);
     let tokens = vec![
-        (EngineObjectId([10; 32]), VerificationKey::from_bytes([11; 32])),
-        (EngineObjectId([20; 32]), VerificationKey::from_bytes([21; 32])),
+        (
+            EngineObjectId([10; 32]),
+            VerificationKey::from_bytes([11; 32]),
+        ),
+        (
+            EngineObjectId([20; 32]),
+            VerificationKey::from_bytes([21; 32]),
+        ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-multi");
     match result {
@@ -1665,10 +1737,17 @@ fn enrichment_batch_multiple_revoked_returns_first() {
 fn enrichment_batch_checks_performed_count() {
     let mut enforcer = make_enforcer();
     let tokens: Vec<_> = (0..5u8)
-        .map(|i| (EngineObjectId([i; 32]), VerificationKey::from_bytes([i + 100; 32])))
+        .map(|i| {
+            (
+                EngineObjectId([i; 32]),
+                VerificationKey::from_bytes([i + 100; 32]),
+            )
+        })
         .collect();
     match enforcer.check_token_batch(&tokens, "t-batch-count") {
-        EnforcementResult::Cleared { checks_performed, .. } => {
+        EnforcementResult::Cleared {
+            checks_performed, ..
+        } => {
             assert_eq!(checks_performed, 10); // 5 * 2
         }
         _ => panic!("expected cleared"),
@@ -1834,8 +1913,14 @@ fn enrichment_determinism_batch_check() {
         revoke_target(&mut enforcer, RevocationTargetType::Token, [3; 32]);
         enforcer.drain_audit_log();
         let tokens = vec![
-            (EngineObjectId([1; 32]), VerificationKey::from_bytes([2; 32])),
-            (EngineObjectId([3; 32]), VerificationKey::from_bytes([4; 32])),
+            (
+                EngineObjectId([1; 32]),
+                VerificationKey::from_bytes([2; 32]),
+            ),
+            (
+                EngineObjectId([3; 32]),
+                VerificationKey::from_bytes([4; 32]),
+            ),
         ];
         let r = enforcer.check_token_batch(&tokens, "t-det-batch");
         let events = enforcer.drain_audit_log();
@@ -1850,34 +1935,38 @@ fn enrichment_determinism_batch_check() {
 // ── Cross-enforcement isolation ──────────────────────────────────────────
 
 #[test]
-fn enrichment_token_revocation_does_not_affect_extension_check() {
+fn enrichment_revocation_by_id_is_type_agnostic() {
+    // RevocationChain.is_revoked checks by EngineObjectId alone,
+    // so revoking a Token ID also blocks Extension checks with the same ID.
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
-    // Token with same bytes is revoked, but extension with same bytes is not
+    // Extension with the same ID bytes is also treated as revoked
     let ext_id = EngineObjectId([10; 32]);
     let sk = VerificationKey::from_bytes([11; 32]);
-    let result = enforcer.check_extension_activation(&ext_id, &sk, "t-iso-ext");
-    assert!(result.is_cleared());
+    let result = enforcer.check_extension_activation(&ext_id, &sk, "t-agnostic");
+    assert!(!result.is_cleared());
 }
 
 #[test]
-fn enrichment_extension_revocation_does_not_affect_token_check() {
+fn enrichment_extension_revocation_blocks_same_id_token_check() {
+    // Revoking an extension ID also blocks a token with the same ID bytes.
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Extension, [20; 32]);
     let jti = EngineObjectId([20; 32]);
     let vk = VerificationKey::from_bytes([21; 32]);
-    let result = enforcer.check_token_acceptance(&jti, &vk, "t-iso-tok");
-    assert!(result.is_cleared());
+    let result = enforcer.check_token_acceptance(&jti, &vk, "t-cross-ext");
+    assert!(!result.is_cleared());
 }
 
 #[test]
-fn enrichment_attestation_revocation_does_not_affect_token_check() {
+fn enrichment_attestation_revocation_blocks_same_id_token_check() {
+    // Revoking an attestation ID also blocks a token with the same ID bytes.
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Attestation, [30; 32]);
     let jti = EngineObjectId([30; 32]);
     let vk = VerificationKey::from_bytes([31; 32]);
-    let result = enforcer.check_token_acceptance(&jti, &vk, "t-iso-att");
-    assert!(result.is_cleared());
+    let result = enforcer.check_token_acceptance(&jti, &vk, "t-cross-att");
+    assert!(!result.is_cleared());
 }
 
 // ── Chain mutations via chain_mut ────────────────────────────────────────
@@ -1888,11 +1977,19 @@ fn enrichment_chain_mut_revocation_reflected_in_checks() {
     // Initially cleared
     let jti = EngineObjectId([40; 32]);
     let vk = VerificationKey::from_bytes([41; 32]);
-    assert!(enforcer.check_token_acceptance(&jti, &vk, "t-pre").is_cleared());
+    assert!(
+        enforcer
+            .check_token_acceptance(&jti, &vk, "t-pre")
+            .is_cleared()
+    );
     // Revoke via chain_mut
     revoke_target(&mut enforcer, RevocationTargetType::Token, [40; 32]);
     // Now denied
-    assert!(!enforcer.check_token_acceptance(&jti, &vk, "t-post").is_cleared());
+    assert!(
+        !enforcer
+            .check_token_acceptance(&jti, &vk, "t-post")
+            .is_cleared()
+    );
 }
 
 #[test]

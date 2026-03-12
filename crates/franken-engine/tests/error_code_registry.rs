@@ -356,24 +356,30 @@ fn serde_roundtrip_preserves_equality() {
 
 #[test]
 fn raw_json_has_exactly_three_top_level_keys() {
-    let raw: serde_json::Value =
-        serde_json::from_str(REGISTRY_JSON).expect("raw JSON must parse");
+    let raw: serde_json::Value = serde_json::from_str(REGISTRY_JSON).expect("raw JSON must parse");
     let obj = raw.as_object().expect("top-level must be an object");
     let keys: BTreeSet<&str> = obj.keys().map(|k| k.as_str()).collect();
     let expected: BTreeSet<&str> = ["version", "compatibility_policy", "entries"]
         .into_iter()
         .collect();
-    assert_eq!(keys, expected, "top-level keys must be exactly version, compatibility_policy, entries");
+    assert_eq!(
+        keys, expected,
+        "top-level keys must be exactly version, compatibility_policy, entries"
+    );
 }
 
 #[test]
 fn each_entry_raw_json_has_exactly_seven_fields() {
-    let raw: serde_json::Value =
-        serde_json::from_str(REGISTRY_JSON).expect("raw JSON must parse");
+    let raw: serde_json::Value = serde_json::from_str(REGISTRY_JSON).expect("raw JSON must parse");
     let entries = raw["entries"].as_array().expect("entries must be an array");
     let expected_keys: BTreeSet<&str> = [
-        "code", "numeric", "subsystem", "severity",
-        "description", "operator_action", "deprecated",
+        "code",
+        "numeric",
+        "subsystem",
+        "severity",
+        "description",
+        "operator_action",
+        "deprecated",
     ]
     .into_iter()
     .collect();
@@ -450,10 +456,7 @@ fn subsystem_names_are_snake_case() {
         .map(|e| e.subsystem.as_str())
         .collect();
     for name in &subsystems {
-        assert!(
-            !name.is_empty(),
-            "subsystem name must not be empty"
-        );
+        assert!(!name.is_empty(), "subsystem name must not be empty");
         assert!(
             name.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
             "subsystem '{}' must be snake_case (lowercase ascii + underscores only)",
@@ -534,7 +537,9 @@ fn descriptions_have_minimum_meaningful_length() {
 #[test]
 fn operator_actions_contain_actionable_reference() {
     let registry = parse_registry();
-    let action_indicators = ["See ", "Check ", "Verify ", "Review ", "Inspect ", "Consult "];
+    let action_indicators = [
+        "See ", "Check ", "Verify ", "Review ", "Inspect ", "Consult ",
+    ];
     for entry in &registry.entries {
         let has_action = action_indicators
             .iter()
@@ -542,8 +547,7 @@ fn operator_actions_contain_actionable_reference() {
         assert!(
             has_action,
             "operator_action for {} should contain an action-oriented verb reference, got: '{}'",
-            entry.code,
-            entry.operator_action
+            entry.code, entry.operator_action
         );
     }
 }

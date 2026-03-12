@@ -175,18 +175,12 @@ fn enrichment_gate_domain_ordering_stable() {
 #[test]
 fn enrichment_gate_domain_default_margin_lookup() {
     let config = GateConfig::default();
-    assert_eq!(
-        config.min_margin_by_domain.get("autotuning"),
-        Some(&50_000)
-    );
+    assert_eq!(config.min_margin_by_domain.get("autotuning"), Some(&50_000));
     assert_eq!(
         config.min_margin_by_domain.get("aot_compilation"),
         Some(&100_000)
     );
-    assert_eq!(
-        config.min_margin_by_domain.get("supremacy"),
-        Some(&150_000)
-    );
+    assert_eq!(config.min_margin_by_domain.get("supremacy"), Some(&150_000));
     assert_eq!(
         config.min_margin_by_domain.get("shipped_path"),
         Some(&100_000)
@@ -283,7 +277,11 @@ fn enrichment_blocking_reason_display_all_unique() {
         },
     ];
     let set: BTreeSet<String> = reasons.iter().map(|r| r.to_string()).collect();
-    assert_eq!(set.len(), 10, "all 10 BlockingReason Display strings must be unique");
+    assert_eq!(
+        set.len(),
+        10,
+        "all 10 BlockingReason Display strings must be unique"
+    );
 }
 
 #[test]
@@ -374,7 +372,11 @@ fn enrichment_escape_plan_status_debug_all_unique() {
         EscapePlanStatus::NotRequired,
     ];
     let set: BTreeSet<String> = statuses.iter().map(|s| format!("{s:?}")).collect();
-    assert_eq!(set.len(), 5, "all 5 EscapePlanStatus Debug strings must be unique");
+    assert_eq!(
+        set.len(),
+        5,
+        "all 5 EscapePlanStatus Debug strings must be unique"
+    );
 }
 
 #[test]
@@ -455,25 +457,49 @@ fn enrichment_metric_claim_serde_roundtrip() {
 
 #[test]
 fn enrichment_cliff_proximity_is_brittle_true_for_brittle_win() {
-    let prox = make_proximity(100_000, BoundaryKind::Fold, PhaseRegion::BrittleWin, 10, 900_000);
+    let prox = make_proximity(
+        100_000,
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        10,
+        900_000,
+    );
     assert!(prox.is_brittle());
 }
 
 #[test]
 fn enrichment_cliff_proximity_is_brittle_false_for_robust_win() {
-    let prox = make_proximity(100_000, BoundaryKind::Fold, PhaseRegion::RobustWin, 10, 900_000);
+    let prox = make_proximity(
+        100_000,
+        BoundaryKind::Fold,
+        PhaseRegion::RobustWin,
+        10,
+        900_000,
+    );
     assert!(!prox.is_brittle());
 }
 
 #[test]
 fn enrichment_cliff_proximity_well_probed_true_at_5() {
-    let prox = make_proximity(100_000, BoundaryKind::Fold, PhaseRegion::RobustWin, 5, 900_000);
+    let prox = make_proximity(
+        100_000,
+        BoundaryKind::Fold,
+        PhaseRegion::RobustWin,
+        5,
+        900_000,
+    );
     assert!(prox.is_well_probed());
 }
 
 #[test]
 fn enrichment_cliff_proximity_well_probed_false_below_5() {
-    let prox = make_proximity(100_000, BoundaryKind::Fold, PhaseRegion::RobustWin, 4, 900_000);
+    let prox = make_proximity(
+        100_000,
+        BoundaryKind::Fold,
+        PhaseRegion::RobustWin,
+        4,
+        900_000,
+    );
     assert!(!prox.is_well_probed());
 }
 
@@ -618,13 +644,23 @@ fn enrichment_escape_plan_exactly_max_actions_is_executable() {
 #[test]
 fn enrichment_certificate_headroom_calculation() {
     // distance=300_000, required=100_000 -> headroom=200_000
-    let cert = make_cert(GateDomain::Autotuning, 300_000, PhaseRegion::RobustWin, None);
+    let cert = make_cert(
+        GateDomain::Autotuning,
+        300_000,
+        PhaseRegion::RobustWin,
+        None,
+    );
     assert_eq!(cert.headroom_millionths(), 200_000);
 }
 
 #[test]
 fn enrichment_certificate_has_sufficient_margin_true() {
-    let cert = make_cert(GateDomain::Autotuning, 100_000, PhaseRegion::RobustWin, None);
+    let cert = make_cert(
+        GateDomain::Autotuning,
+        100_000,
+        PhaseRegion::RobustWin,
+        None,
+    );
     // headroom = 100_000 - 100_000 = 0 => sufficient (>= 0)
     assert_eq!(cert.headroom_millionths(), 0);
     assert!(cert.has_sufficient_margin());

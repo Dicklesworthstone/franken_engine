@@ -900,7 +900,11 @@ fn enrichment_artifact_kind_serde_snake_case_naming() {
     ];
     for (kind, expected_json) in &pairs {
         let json = serde_json::to_string(kind).unwrap();
-        assert_eq!(&json, expected_json, "ArtifactKind::{:?} serialization", kind);
+        assert_eq!(
+            &json, expected_json,
+            "ArtifactKind::{:?} serialization",
+            kind
+        );
     }
 }
 
@@ -918,7 +922,12 @@ fn enrichment_artifact_kind_full_ordering_chain() {
         ArtifactKind::Legal,
     ];
     for window in sorted.windows(2) {
-        assert!(window[0] < window[1], "{:?} should be less than {:?}", window[0], window[1]);
+        assert!(
+            window[0] < window[1],
+            "{:?} should be less than {:?}",
+            window[0],
+            window[1]
+        );
     }
 }
 
@@ -1149,7 +1158,12 @@ fn enrichment_dep_snapshot_clone_equality() {
 fn enrichment_dep_snapshot_json_field_names() {
     let snap = DependencySnapshot::from_entries(vec![sample_dep("test", "1.0")]);
     let json = serde_json::to_string(&snap).unwrap();
-    for field in &["schema_version", "dependencies", "total_count", "snapshot_hash"] {
+    for field in &[
+        "schema_version",
+        "dependencies",
+        "total_count",
+        "snapshot_hash",
+    ] {
         assert!(json.contains(field), "Missing field: {field}");
     }
 }
@@ -1158,7 +1172,12 @@ fn enrichment_dep_snapshot_json_field_names() {
 
 #[test]
 fn enrichment_license_risk_debug_all_variants() {
-    for risk in [LicenseRisk::None, LicenseRisk::Low, LicenseRisk::Medium, LicenseRisk::High] {
+    for risk in [
+        LicenseRisk::None,
+        LicenseRisk::Low,
+        LicenseRisk::Medium,
+        LicenseRisk::High,
+    ] {
         let dbg = format!("{:?}", risk);
         assert!(!dbg.is_empty());
     }
@@ -1166,7 +1185,12 @@ fn enrichment_license_risk_debug_all_variants() {
 
 #[test]
 fn enrichment_license_risk_clone_eq() {
-    for risk in [LicenseRisk::None, LicenseRisk::Low, LicenseRisk::Medium, LicenseRisk::High] {
+    for risk in [
+        LicenseRisk::None,
+        LicenseRisk::Low,
+        LicenseRisk::Medium,
+        LicenseRisk::High,
+    ] {
         assert_eq!(risk, risk.clone());
     }
 }
@@ -1321,21 +1345,25 @@ fn enrichment_legal_assessment_multiple_high_risk_counts() {
 fn enrichment_legal_assessment_json_field_names() {
     let assessment = LegalAssessment::from_findings(vec![]);
     let json = serde_json::to_string(&assessment).unwrap();
-    for field in &["has_high_risk", "review_required", "findings", "max_risk", "summary"] {
+    for field in &[
+        "has_high_risk",
+        "review_required",
+        "findings",
+        "max_risk",
+        "summary",
+    ] {
         assert!(json.contains(field), "Missing field: {field}");
     }
 }
 
 #[test]
 fn enrichment_legal_assessment_medium_only_no_high() {
-    let findings = vec![
-        LicenseFinding {
-            dependency: "lgpl1".to_string(),
-            license_spdx: "LGPL-2.1".to_string(),
-            risk: LicenseRisk::Medium,
-            notes: "".to_string(),
-        },
-    ];
+    let findings = vec![LicenseFinding {
+        dependency: "lgpl1".to_string(),
+        license_spdx: "LGPL-2.1".to_string(),
+        risk: LicenseRisk::Medium,
+        notes: "".to_string(),
+    }];
     let assessment = LegalAssessment::from_findings(findings);
     assert!(!assessment.has_high_risk);
     assert!(assessment.review_required);
@@ -1711,9 +1739,7 @@ fn enrichment_determinism_manifest_hash_stable() {
         sample_artifact("b.rs", ArtifactKind::Binary),
     ];
     let hashes: Vec<String> = (0..5)
-        .map(|_| {
-            ArtifactManifest::from_artifacts("pid".to_string(), arts.clone()).manifest_hash
-        })
+        .map(|_| ArtifactManifest::from_artifacts("pid".to_string(), arts.clone()).manifest_hash)
         .collect();
     for h in &hashes {
         assert_eq!(h, &hashes[0]);
@@ -1776,14 +1802,22 @@ fn enrichment_property_tampered_hash_always_fails() {
             .unwrap();
         pack.pack_hash = format!("{:032x}", i);
         let result = pack.verify_integrity();
-        assert!(!result.pack_hash_valid, "Tampered pack {i} should fail hash check");
+        assert!(
+            !result.pack_hash_valid,
+            "Tampered pack {i} should fail hash check"
+        );
         assert!(!result.all_valid);
     }
 }
 
 #[test]
 fn enrichment_property_high_risk_implies_review_required() {
-    let risks = [LicenseRisk::None, LicenseRisk::Low, LicenseRisk::Medium, LicenseRisk::High];
+    let risks = [
+        LicenseRisk::None,
+        LicenseRisk::Low,
+        LicenseRisk::Medium,
+        LicenseRisk::High,
+    ];
     for risk in &risks {
         let assessment = LegalAssessment::from_findings(vec![LicenseFinding {
             dependency: "test".to_string(),
@@ -1799,7 +1833,11 @@ fn enrichment_property_high_risk_implies_review_required() {
             assert!(assessment.review_required, "{:?} must require review", risk);
         }
         if *risk < LicenseRisk::Medium {
-            assert!(!assessment.review_required, "{:?} must not require review", risk);
+            assert!(
+                !assessment.review_required,
+                "{:?} must not require review",
+                risk
+            );
         }
     }
 }
@@ -2044,8 +2082,7 @@ fn enrichment_full_lifecycle_with_all_risk_levels() {
 
 #[test]
 fn enrichment_full_lifecycle_large_pack() {
-    let mut builder = PackBuilder::new("frx-large".to_string(), epoch())
-        .environment(sample_env());
+    let mut builder = PackBuilder::new("frx-large".to_string(), epoch()).environment(sample_env());
 
     for i in 0..50 {
         builder = builder.artifact(ArtifactEntry {

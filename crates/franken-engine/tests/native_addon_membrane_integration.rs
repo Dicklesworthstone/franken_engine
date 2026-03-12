@@ -1227,7 +1227,7 @@ fn scenario_crash_escalation() {
 #[test]
 fn scenario_multi_addon_isolation() {
     let mut s = make_state_with_addons(&["stable", "crashing", "blocked"]);
-    let p = default_policy();
+    let _p = default_policy();
     let mut config = default_routing();
     config.deny_unregistered = true;
 

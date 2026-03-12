@@ -675,6 +675,10 @@ PARSER_CROSS_ARCH_ARM64_PARALLEL_INTERFERENCE_MANIFEST=artifacts/.../arm64_paral
 ./scripts/e2e/parser_cross_arch_repro_matrix_replay.sh
 ```
 
+The replay wrapper now chooses the latest complete artifact directory and
+ignores scratch-only partial directories from interrupted/fallback-detected
+matrix runs.
+
 Contract and vectors:
 
 - [`docs/PARSER_CROSS_ARCH_REPRO_MATRIX.md`](./docs/PARSER_CROSS_ARCH_REPRO_MATRIX.md)

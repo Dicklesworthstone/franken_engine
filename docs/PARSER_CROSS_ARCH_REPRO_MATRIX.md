@@ -124,6 +124,10 @@ One-command replay wrapper:
 ./scripts/e2e/parser_cross_arch_repro_matrix_replay.sh
 ```
 
+The replay wrapper selects the latest complete run directory and ignores
+scratch-only partial directories from interrupted or fallback-detected runs
+(for example `rch-pid.*` / `rch-fallback.*` breadcrumbs with no manifest).
+
 All heavy Rust checks/tests are executed through `rch`.
 If `rch` reports a local fallback, the gate must terminate that local path
 immediately and fail closed; local continuation does not count as a valid heavy
@@ -156,3 +160,6 @@ Each run emits:
 ```bash
 ./scripts/e2e/parser_cross_arch_repro_matrix_replay.sh
 ```
+
+   - It should print artifacts from the latest complete run directory rather
+     than a scratch-only partial directory.

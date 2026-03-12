@@ -43,6 +43,49 @@ replay_command="./scripts/e2e/parser_cross_arch_repro_matrix_replay.sh ${mode}"
 mkdir -p "$run_dir"
 touch "$matrix_deltas_path"
 
+declare -a registered_temp_paths=()
+
+register_temp_path() {
+  local path="${1:-}"
+  if [[ -n "$path" ]]; then
+    registered_temp_paths+=("$path")
+  fi
+}
+
+unregister_temp_path() {
+  local path_to_remove="${1:-}"
+  local kept=()
+  local path=""
+
+  for path in "${registered_temp_paths[@]}"; do
+    if [[ "$path" != "$path_to_remove" ]]; then
+      kept+=("$path")
+    fi
+  done
+
+  registered_temp_paths=("${kept[@]}")
+}
+
+cleanup_temp_path() {
+  local path="${1:-}"
+  if [[ -z "$path" ]]; then
+    return
+  fi
+
+  rm -f "$path" 2>/dev/null || true
+  unregister_temp_path "$path"
+}
+
+cleanup_registered_temp_paths() {
+  local path=""
+  for path in "${registered_temp_paths[@]}"; do
+    rm -f "$path" 2>/dev/null || true
+  done
+  registered_temp_paths=()
+}
+
+trap cleanup_registered_temp_paths EXIT
+
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for parser cross-arch reproducibility matrix heavy commands" >&2
   exit 2
@@ -67,6 +110,9 @@ run_rch_strict_logged() {
   fifo_path="$(mktemp -u "${run_dir}/rch-stream.XXXXXX")"
   fallback_flag_path="$(mktemp "${run_dir}/rch-fallback.XXXXXX")"
   rch_pid_path="$(mktemp "${run_dir}/rch-pid.XXXXXX")"
+  register_temp_path "$fifo_path"
+  register_temp_path "$fallback_flag_path"
+  register_temp_path "$rch_pid_path"
   rm -f "$fallback_flag_path"
   mkfifo "$fifo_path"
   : >"$log_path"
@@ -99,18 +145,18 @@ run_rch_strict_logged() {
   printf '%s\n' "$rch_pid" >"$rch_pid_path"
   wait "$rch_pid" || rch_status=$?
   wait "$reader_pid" || true
-  rm -f "$fifo_path"
+  cleanup_temp_path "$fifo_path"
 
   if [[ -f "$fallback_flag_path" ]]; then
-    rm -f "$fallback_flag_path"
+    cleanup_temp_path "$fallback_flag_path"
     pkill -f "CARGO_TARGET_DIR=${target_dir}" 2>/dev/null || true
     pkill -f "${target_dir}" 2>/dev/null || true
-    rm -f "$rch_pid_path"
+    cleanup_temp_path "$rch_pid_path"
     return 125
   fi
 
-  rm -f "$fallback_flag_path"
-  rm -f "$rch_pid_path"
+  cleanup_temp_path "$fallback_flag_path"
+  cleanup_temp_path "$rch_pid_path"
   return "$rch_status"
 }
 

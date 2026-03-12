@@ -13,11 +13,22 @@ main_exit=0
 
 ./scripts/run_parser_cross_arch_repro_matrix.sh "${mode}" || main_exit=$?
 
-latest_run_dir="$(
-  find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1
-)"
+latest_complete_run_dir() {
+  if [[ ! -d "${artifact_root}" ]]; then
+    return 0
+  fi
+
+  find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
+    [[ -f "${candidate}/run_manifest.json" ]] || continue
+    [[ -f "${candidate}/matrix_summary.json" ]] || continue
+    [[ -f "${candidate}/events.jsonl" ]] || continue
+    printf '%s\n' "${candidate}"
+  done | tail -n 1
+}
+
+latest_run_dir="$(latest_complete_run_dir)"
 if [[ -z "${latest_run_dir}" ]]; then
-  echo "parser cross-arch repro replay could not locate a run directory" >&2
+  echo "parser cross-arch repro replay could not locate a complete run directory under ${artifact_root}" >&2
   exit "${main_exit:-1}"
 fi
 

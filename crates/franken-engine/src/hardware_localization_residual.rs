@@ -1973,9 +1973,9 @@ mod tests {
     #[test]
     fn board_seal_updates_hash() {
         let mut board = LocalizationBoard::new("opt-25", epoch(), PromotionPolicy::relaxed());
-        let h1 = board.content_hash;
+        let h1 = board.content_hash.clone();
         board.add_entry(algo_dominant_entry(MicroarchFamily::Zen4));
-        let h2 = board.content_hash;
+        let h2 = board.content_hash.clone();
         assert_ne!(h1, h2);
     }
 

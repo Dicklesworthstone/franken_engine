@@ -622,7 +622,7 @@ fn test_e2e_finding_with_repro_hash() {
     let repro = MinimizedRepro::new(
         "i1".into(), MinimizationStrategy::DeltaDebugging, 15, 400, true, 1_000_000,
     );
-    let hash = repro.repro_hash;
+    let hash = repro.repro_hash.clone();
     engine.add_repro(repro);
     engine.add_finding(TriageFinding {
         category: FailureCategory::JsxTransform,

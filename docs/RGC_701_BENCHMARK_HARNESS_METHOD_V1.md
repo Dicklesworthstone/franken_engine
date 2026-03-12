@@ -66,6 +66,6 @@ FRANKEN_BENCH_E2E_OUTPUT_DIR=<artifact_dir> \
 
 1. Run `./scripts/run_benchmark_e2e_suite.sh ci`.
 2. Open the latest `artifacts/benchmark_e2e_suite/<timestamp>/suite_run_manifest.json`.
-3. Verify the benchmark artifact pointers in `artifacts` exist.
+3. Verify the benchmark artifact pointers in `artifacts` exist, including `benchmark_evidence.jsonl` and `benchmark_summary.json`.
 4. Inspect `benchmark_env_manifest.json` for runtime pins and fairness policy.
 5. Re-run the command transcript in `commands.txt` if independent verification is required.

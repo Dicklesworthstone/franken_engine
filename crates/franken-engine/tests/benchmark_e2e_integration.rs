@@ -401,16 +401,20 @@ fn benchmark_e2e_script_emits_artifacts_to_env_dir() {
         .expect("script report run should emit benchmark artifacts");
 
     assert!(artifacts.run_manifest_path.exists());
+    assert!(artifacts.evidence_path.exists());
     assert!(artifacts.events_path.exists());
     assert!(artifacts.commands_path.exists());
     assert!(artifacts.benchmark_env_manifest_path.exists());
     assert!(artifacts.raw_results_archive_path.exists());
+    assert!(artifacts.summary_path.exists());
 
     maybe_emit_artifact_bridge(&artifacts.run_manifest_path);
+    maybe_emit_artifact_bridge(&artifacts.evidence_path);
     maybe_emit_artifact_bridge(&artifacts.events_path);
     maybe_emit_artifact_bridge(&artifacts.commands_path);
     maybe_emit_artifact_bridge(&artifacts.benchmark_env_manifest_path);
     maybe_emit_artifact_bridge(&artifacts.raw_results_archive_path);
+    maybe_emit_artifact_bridge(&artifacts.summary_path);
 }
 
 #[test]

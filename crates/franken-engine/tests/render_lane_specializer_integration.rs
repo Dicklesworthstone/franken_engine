@@ -700,7 +700,7 @@ fn receipt_chaining_produces_different_hashes() {
     let result = specialize_lane(&req, &cfg).unwrap();
     let g = DecisionReceipt::genesis_hash();
     let r1 = DecisionReceipt::new(epoch(), &req, &result, g);
-    let r2 = DecisionReceipt::new(epoch(), &req, &result, r1.content_hash.clone());
+    let r2 = DecisionReceipt::new(epoch(), &req, &result, r1.content_hash);
     assert_ne!(r1.content_hash, r2.content_hash);
 }
 

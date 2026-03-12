@@ -262,13 +262,7 @@ fn test_stall_budget_display() {
 #[test]
 fn test_layout_policy_entry_constructor() {
     let hw = hw_set(&["skylake", "zen3"]);
-    let p = LayoutPolicyEntry::new(
-        LayoutStrategy::HotColdSplit,
-        hw.clone(),
-        true,
-        true,
-        10_000,
-    );
+    let p = LayoutPolicyEntry::new(LayoutStrategy::HotColdSplit, hw.clone(), true, true, 10_000);
     assert_eq!(p.strategy, LayoutStrategy::HotColdSplit);
     assert_eq!(p.hardware_count(), 2);
     assert!(p.covers_hardware("skylake"));
@@ -288,8 +282,7 @@ fn test_layout_policy_entry_content_hash_deterministic() {
         false,
         0,
     );
-    let b =
-        LayoutPolicyEntry::new(LayoutStrategy::FunctionReordering, hw, false, false, 0);
+    let b = LayoutPolicyEntry::new(LayoutStrategy::FunctionReordering, hw, false, false, 0);
     assert_eq!(a.content_hash, b.content_hash);
 }
 
@@ -316,7 +309,10 @@ fn test_governance_config_default() {
         c.min_improvement_millionths,
         DEFAULT_MIN_IMPROVEMENT_MILLIONTHS
     );
-    assert_eq!(c.max_alignment_waste_bytes, DEFAULT_MAX_ALIGNMENT_WASTE_BYTES);
+    assert_eq!(
+        c.max_alignment_waste_bytes,
+        DEFAULT_MAX_ALIGNMENT_WASTE_BYTES
+    );
     assert_eq!(c.min_hardware_coverage, DEFAULT_MIN_HARDWARE_COVERAGE);
     assert!(c.known_hardware.is_empty());
     assert!(c.required_strategies.is_empty());
@@ -325,8 +321,7 @@ fn test_governance_config_default() {
 
 #[test]
 fn test_governance_config_builders() {
-    let strats: BTreeSet<LayoutStrategy> =
-        [LayoutStrategy::HotColdSplit].iter().copied().collect();
+    let strats: BTreeSet<LayoutStrategy> = [LayoutStrategy::HotColdSplit].iter().copied().collect();
     let hw = hw_set(&["zen4", "raptor_lake"]);
     let c = GovernanceConfig::default()
         .with_max_stall_budget(300_000)
@@ -398,9 +393,7 @@ fn test_verdict_non_approved() {
     assert!(!GovernanceVerdict::AlignmentWasteExceeded.allows_publication());
     assert!(!GovernanceVerdict::HardwareCoverageGap.allows_publication());
     assert!(!GovernanceVerdict::PolicyConflict.allows_publication());
-    assert!(
-        !GovernanceVerdict::MultipleViolations { count: 2 }.allows_publication()
-    );
+    assert!(!GovernanceVerdict::MultipleViolations { count: 2 }.allows_publication());
 }
 
 #[test]
@@ -549,11 +542,7 @@ fn test_evaluator_stall_budget_exceeded() {
         100,
         0,
     ));
-    ev.add_stall_budget(StallBudget::new(
-        StallCategory::BranchMispredict,
-        100,
-        1000,
-    ));
+    ev.add_stall_budget(StallBudget::new(StallCategory::BranchMispredict, 100, 1000));
     let receipt = ev.evaluate();
     assert!(!receipt.is_clean());
 }
@@ -965,8 +954,7 @@ fn test_missing_strategies_fn() {
 
 #[test]
 fn test_e2e_full_passing_evaluation() {
-    let strats: BTreeSet<LayoutStrategy> =
-        [LayoutStrategy::HotColdSplit].iter().copied().collect();
+    let strats: BTreeSet<LayoutStrategy> = [LayoutStrategy::HotColdSplit].iter().copied().collect();
     let known = hw_set(&["skylake", "zen4"]);
     let cfg = GovernanceConfig::default()
         .with_required_strategies(strats)

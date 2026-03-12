@@ -75,6 +75,16 @@ fn load_doc() -> String {
     fs::read_to_string(path).expect("read parser cross-arch reproducibility contract doc")
 }
 
+fn load_runner_script() -> String {
+    let path = Path::new("../../scripts/run_parser_cross_arch_repro_matrix.sh");
+    fs::read_to_string(path).expect("read parser cross-arch reproducibility runner script")
+}
+
+fn load_replay_wrapper() -> String {
+    let path = Path::new("../../scripts/e2e/parser_cross_arch_repro_matrix_replay.sh");
+    fs::read_to_string(path).expect("read parser cross-arch reproducibility replay wrapper")
+}
+
 fn explain_delta(
     x86_run: &LaneRunSummary,
     arm64_run: &LaneRunSummary,
@@ -210,6 +220,19 @@ fn parser_cross_arch_repro_matrix_contract_doc_has_required_sections() {
         assert!(
             doc.contains(section),
             "cross-arch reproducibility contract doc missing section: {section}"
+        );
+    }
+
+    for marker in [
+        "PARSER_CROSS_ARCH_AUTO_DISCOVER_MANIFESTS",
+        "artifacts/parser_event_ast_equivalence",
+        "artifacts/parser_parallel_interference",
+        "matrix_inputs",
+        "incomplete_matrix",
+    ] {
+        assert!(
+            doc.contains(marker),
+            "cross-arch reproducibility contract doc missing auto-discovery marker: {marker}"
         );
     }
 }
@@ -423,6 +446,43 @@ fn load_doc_returns_nonempty_string() {
     let doc = load_doc();
     assert!(!doc.is_empty());
     assert!(doc.contains("Reproducibility"));
+}
+
+#[test]
+fn runner_script_contains_manifest_auto_discovery_contract() {
+    let script = load_runner_script();
+    for marker in [
+        "PARSER_CROSS_ARCH_AUTO_DISCOVER_MANIFESTS",
+        "PARSER_CROSS_ARCH_EVENT_AST_ARTIFACT_ROOT",
+        "PARSER_CROSS_ARCH_PARALLEL_INTERFERENCE_ARTIFACT_ROOT",
+        "find_latest_manifest_for_arch",
+        "resolve_manifest_input",
+        "\"matrix_inputs\": {",
+        "auto_discovered",
+    ] {
+        assert!(
+            script.contains(marker),
+            "runner script missing manifest auto-discovery marker: {marker}"
+        );
+    }
+}
+
+#[test]
+fn replay_wrapper_surfaces_latest_artifacts_after_run() {
+    let wrapper = load_replay_wrapper();
+    for marker in [
+        "mode=\"${1:-matrix}\"",
+        "main_exit=0",
+        "latest manifest:",
+        "latest matrix summary:",
+        "latest events:",
+        "find \"${artifact_root}\" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1",
+    ] {
+        assert!(
+            wrapper.contains(marker),
+            "replay wrapper missing latest-artifact marker: {marker}"
+        );
+    }
 }
 
 // ---------- explain_delta ----------

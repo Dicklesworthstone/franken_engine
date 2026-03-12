@@ -73,7 +73,12 @@ fn test_locality_dimension_ordering_first_last() {
 fn test_locality_dimension_ordering_adjacent() {
     let all = LocalityDimension::all();
     for i in 0..all.len() - 1 {
-        assert!(all[i] < all[i + 1], "{:?} should be < {:?}", all[i], all[i + 1]);
+        assert!(
+            all[i] < all[i + 1],
+            "{:?} should be < {:?}",
+            all[i],
+            all[i + 1]
+        );
     }
 }
 
@@ -94,7 +99,10 @@ fn test_locality_dimension_display_tlb() {
 
 #[test]
 fn test_locality_dimension_display_prefetch_efficiency() {
-    assert_eq!(LocalityDimension::PrefetchEfficiency.to_string(), "prefetch_efficiency");
+    assert_eq!(
+        LocalityDimension::PrefetchEfficiency.to_string(),
+        "prefetch_efficiency"
+    );
 }
 
 #[test]
@@ -143,8 +151,11 @@ fn test_portability_target_display_x64_linux() {
 #[test]
 fn test_cache_miss_within_budget() {
     let c = CacheMissEntry::new(
-        LocalityDimension::L1Data, "lookup".into(),
-        10000, 200, 50,
+        LocalityDimension::L1Data,
+        "lookup".into(),
+        10000,
+        200,
+        50,
         DEFAULT_MAX_CACHE_MISS_RATE,
     );
     assert!(c.within_budget);
@@ -154,8 +165,11 @@ fn test_cache_miss_within_budget() {
 #[test]
 fn test_cache_miss_exceeds_budget() {
     let c = CacheMissEntry::new(
-        LocalityDimension::L1Data, "lookup".into(),
-        10000, 1000, 50,
+        LocalityDimension::L1Data,
+        "lookup".into(),
+        10000,
+        1000,
+        50,
         DEFAULT_MAX_CACHE_MISS_RATE,
     );
     assert!(!c.within_budget);
@@ -164,8 +178,11 @@ fn test_cache_miss_exceeds_budget() {
 #[test]
 fn test_cache_miss_zero_accesses() {
     let c = CacheMissEntry::new(
-        LocalityDimension::L1Data, "lookup".into(),
-        0, 0, 50,
+        LocalityDimension::L1Data,
+        "lookup".into(),
+        0,
+        0,
+        50,
         DEFAULT_MAX_CACHE_MISS_RATE,
     );
     assert_eq!(c.miss_rate_millionths, 0);
@@ -175,13 +192,19 @@ fn test_cache_miss_zero_accesses() {
 #[test]
 fn test_cache_miss_hash_determinism() {
     let a = CacheMissEntry::new(
-        LocalityDimension::L2Unified, "op1".into(),
-        5000, 100, 30,
+        LocalityDimension::L2Unified,
+        "op1".into(),
+        5000,
+        100,
+        30,
         DEFAULT_MAX_CACHE_MISS_RATE,
     );
     let b = CacheMissEntry::new(
-        LocalityDimension::L2Unified, "op1".into(),
-        5000, 100, 30,
+        LocalityDimension::L2Unified,
+        "op1".into(),
+        5000,
+        100,
+        30,
         DEFAULT_MAX_CACHE_MISS_RATE,
     );
     assert_eq!(a.entry_hash, b.entry_hash);
@@ -190,13 +213,19 @@ fn test_cache_miss_hash_determinism() {
 #[test]
 fn test_cache_miss_hash_differs_on_dimension() {
     let a = CacheMissEntry::new(
-        LocalityDimension::L1Data, "op1".into(),
-        5000, 100, 30,
+        LocalityDimension::L1Data,
+        "op1".into(),
+        5000,
+        100,
+        30,
         DEFAULT_MAX_CACHE_MISS_RATE,
     );
     let b = CacheMissEntry::new(
-        LocalityDimension::L3LastLevel, "op1".into(),
-        5000, 100, 30,
+        LocalityDimension::L3LastLevel,
+        "op1".into(),
+        5000,
+        100,
+        30,
         DEFAULT_MAX_CACHE_MISS_RATE,
     );
     assert_ne!(a.entry_hash, b.entry_hash);
@@ -336,12 +365,18 @@ fn test_verdict_display_approved() {
 
 #[test]
 fn test_verdict_display_cache_miss_exceeded() {
-    assert_eq!(GovernanceVerdict::CacheMissExceeded.to_string(), "cache_miss_exceeded");
+    assert_eq!(
+        GovernanceVerdict::CacheMissExceeded.to_string(),
+        "cache_miss_exceeded"
+    );
 }
 
 #[test]
 fn test_verdict_display_targets_missing() {
-    assert_eq!(GovernanceVerdict::TargetsMissing.to_string(), "targets_missing");
+    assert_eq!(
+        GovernanceVerdict::TargetsMissing.to_string(),
+        "targets_missing"
+    );
 }
 
 #[test]
@@ -453,8 +488,16 @@ fn test_evaluator_targets_covered_tracking() {
     eval.add_portability("op1".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
     eval.add_portability("op1".into(), PortabilityTarget::Arm64Macos, true, 950_000);
     let receipt = eval.evaluate(epoch());
-    assert!(receipt.targets_covered.contains(&PortabilityTarget::X64Linux));
-    assert!(receipt.targets_covered.contains(&PortabilityTarget::Arm64Macos));
+    assert!(
+        receipt
+            .targets_covered
+            .contains(&PortabilityTarget::X64Linux)
+    );
+    assert!(
+        receipt
+            .targets_covered
+            .contains(&PortabilityTarget::Arm64Macos)
+    );
     assert_eq!(receipt.targets_covered.len(), 2);
 }
 

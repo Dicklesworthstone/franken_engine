@@ -922,7 +922,7 @@ fn merkle_proof_for_bundle_artifacts() {
         .manifest
         .artifacts
         .values()
-        .map(|a| a.content_hash.clone())
+        .map(|a| a.content_hash)
         .collect();
 
     let root = compute_merkle_root(&leaf_hashes);
@@ -966,7 +966,7 @@ fn merkle_proof_for_seven_artifact_bundle() {
         .manifest
         .artifacts
         .values()
-        .map(|a| a.content_hash.clone())
+        .map(|a| a.content_hash)
         .collect();
     assert_eq!(leaf_hashes.len(), 7);
 

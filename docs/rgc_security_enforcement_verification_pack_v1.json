@@ -24,6 +24,7 @@
     "run_manifest.json",
     "events.jsonl",
     "commands.txt",
+    "step_logs/step_*.log",
     "security_verification_report.json"
   ],
   "test_vectors_source": "docs/rgc_security_enforcement_verification_vectors_v1.json",

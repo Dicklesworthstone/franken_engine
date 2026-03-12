@@ -389,7 +389,7 @@ fn test_evaluate_novelty_duplicate() {
     )
     .unwrap();
     let mut existing = BTreeSet::new();
-    existing.insert(c.content_hash.clone());
+    existing.insert(c.content_hash);
     let novelty = novelty_synthesis_engine::evaluate_candidate_novelty(&c, &existing);
     assert_eq!(novelty, 0);
 }

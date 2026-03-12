@@ -182,6 +182,7 @@ fn rgc_059_contract_is_versioned_and_replay_bound() {
         "run_manifest.json",
         "events.jsonl",
         "commands.txt",
+        "step_logs/step_*.log",
         "security_verification_report.json",
     ] {
         assert!(
@@ -344,6 +345,34 @@ fn rgc_059_gate_script_uses_repo_local_target_dir() {
     assert!(
         !script.contains("/tmp/rch_target_rgc_security_enforcement_verification_pack"),
         "gate script must not route heavy remote builds through /tmp"
+    );
+    assert!(
+        !script.contains("rch exec -q -- env"),
+        "gate script should preserve full rch output for fail-closed parsing"
+    );
+    assert!(
+        script.contains("step_logs_dir="),
+        "gate script should emit per-step logs under a dedicated step_logs directory"
+    );
+    assert!(
+        script.contains("rch_strip_ansi()"),
+        "gate script should strip ANSI escape sequences before parsing rch output"
+    );
+    assert!(
+        script.contains("rch_remote_exit_code()"),
+        "gate script should parse remote exit markers explicitly"
+    );
+    assert!(
+        script.contains("rch_reject_artifact_retrieval_failure()"),
+        "gate script should reject artifact retrieval failures"
+    );
+    assert!(
+        script.contains("missing-remote-exit-marker"),
+        "gate script should fail closed when rch omits the remote exit marker"
+    );
+    assert!(
+        script.contains("rch-artifact-retrieval-failed"),
+        "gate script should surface artifact retrieval failures in failed_command"
     );
 }
 

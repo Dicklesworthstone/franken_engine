@@ -68,6 +68,12 @@ Vector contract checks are also fail-closed and include:
 - unique scenario ids and deterministic seeds,
 - replay-required and non-empty command templates.
 
+Runner execution is additionally fail-closed when:
+
+- `rch` falls back to local execution,
+- artifact retrieval fails after remote execution,
+- the remote exit marker is missing from the captured step log.
+
 ## Required Artifacts
 
 Each run emits:
@@ -75,6 +81,7 @@ Each run emits:
 - `run_manifest.json`
 - `events.jsonl`
 - `commands.txt`
+- `step_logs/step_*.log`
 - `security_verification_report.json`
 
 under `artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/`.

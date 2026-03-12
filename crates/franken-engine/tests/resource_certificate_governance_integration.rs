@@ -73,7 +73,12 @@ fn test_resource_dimension_ordering_first_last() {
 fn test_resource_dimension_ordering_adjacent() {
     let all = ResourceDimension::all();
     for i in 0..all.len() - 1 {
-        assert!(all[i] < all[i + 1], "{:?} should be < {:?}", all[i], all[i + 1]);
+        assert!(
+            all[i] < all[i + 1],
+            "{:?} should be < {:?}",
+            all[i],
+            all[i + 1]
+        );
     }
 }
 
@@ -109,7 +114,11 @@ fn test_resource_dimension_all_unique() {
 #[test]
 fn test_certificate_within_budget() {
     let c = CertificateEvidence::new(
-        ResourceDimension::CpuTime, "w1".into(), 1000, 800, 50,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        1000,
+        800,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     assert!(c.within_budget);
@@ -119,7 +128,11 @@ fn test_certificate_within_budget() {
 #[test]
 fn test_certificate_over_budget() {
     let c = CertificateEvidence::new(
-        ResourceDimension::CpuTime, "w1".into(), 1000, 950, 50,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        1000,
+        950,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     assert!(!c.within_budget);
@@ -128,7 +141,11 @@ fn test_certificate_over_budget() {
 #[test]
 fn test_certificate_zero_budget_nonzero_usage() {
     let c = CertificateEvidence::new(
-        ResourceDimension::CpuTime, "w1".into(), 0, 100, 50,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        0,
+        100,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     assert_eq!(c.utilisation_millionths, FIXED_ONE);
@@ -137,7 +154,11 @@ fn test_certificate_zero_budget_nonzero_usage() {
 #[test]
 fn test_certificate_zero_budget_zero_usage() {
     let c = CertificateEvidence::new(
-        ResourceDimension::CpuTime, "w1".into(), 0, 0, 50,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        0,
+        0,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     assert_eq!(c.utilisation_millionths, 0);
@@ -146,7 +167,11 @@ fn test_certificate_zero_budget_zero_usage() {
 #[test]
 fn test_certificate_exact_budget() {
     let c = CertificateEvidence::new(
-        ResourceDimension::HeapMemory, "w1".into(), 1000, 900, 50,
+        ResourceDimension::HeapMemory,
+        "w1".into(),
+        1000,
+        900,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     assert_eq!(c.utilisation_millionths, 900_000);
@@ -156,11 +181,19 @@ fn test_certificate_exact_budget() {
 #[test]
 fn test_certificate_hash_determinism() {
     let a = CertificateEvidence::new(
-        ResourceDimension::HeapMemory, "w1".into(), 1000, 500, 50,
+        ResourceDimension::HeapMemory,
+        "w1".into(),
+        1000,
+        500,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     let b = CertificateEvidence::new(
-        ResourceDimension::HeapMemory, "w1".into(), 1000, 500, 50,
+        ResourceDimension::HeapMemory,
+        "w1".into(),
+        1000,
+        500,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     assert_eq!(a.evidence_hash, b.evidence_hash);
@@ -169,11 +202,19 @@ fn test_certificate_hash_determinism() {
 #[test]
 fn test_certificate_hash_differs_on_dimension() {
     let a = CertificateEvidence::new(
-        ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        1000,
+        500,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     let b = CertificateEvidence::new(
-        ResourceDimension::HeapMemory, "w1".into(), 1000, 500, 50,
+        ResourceDimension::HeapMemory,
+        "w1".into(),
+        1000,
+        500,
+        50,
         DEFAULT_MAX_UTILISATION_MILLIONTHS,
     );
     assert_ne!(a.evidence_hash, b.evidence_hash);
@@ -186,7 +227,10 @@ fn test_certificate_hash_differs_on_dimension() {
 #[test]
 fn test_regression_within_budget() {
     let r = RegressionEntry::new(
-        ResourceDimension::CpuTime, "w1".into(), 1000, 1020,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        1000,
+        1020,
         DEFAULT_MAX_REGRESSION_MILLIONTHS,
     );
     assert!(r.within_budget);
@@ -196,7 +240,10 @@ fn test_regression_within_budget() {
 #[test]
 fn test_regression_exceeds_budget() {
     let r = RegressionEntry::new(
-        ResourceDimension::CpuTime, "w1".into(), 1000, 1100,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        1000,
+        1100,
         DEFAULT_MAX_REGRESSION_MILLIONTHS,
     );
     assert!(!r.within_budget);
@@ -205,7 +252,10 @@ fn test_regression_exceeds_budget() {
 #[test]
 fn test_regression_improvement_is_zero() {
     let r = RegressionEntry::new(
-        ResourceDimension::CpuTime, "w1".into(), 1000, 900,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        1000,
+        900,
         DEFAULT_MAX_REGRESSION_MILLIONTHS,
     );
     assert_eq!(r.regression_millionths, 0);
@@ -215,7 +265,10 @@ fn test_regression_improvement_is_zero() {
 #[test]
 fn test_regression_zero_previous() {
     let r = RegressionEntry::new(
-        ResourceDimension::CpuTime, "w1".into(), 0, 100,
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        0,
+        100,
         DEFAULT_MAX_REGRESSION_MILLIONTHS,
     );
     assert_eq!(r.regression_millionths, FIXED_ONE);
@@ -224,11 +277,17 @@ fn test_regression_zero_previous() {
 #[test]
 fn test_regression_hash_determinism() {
     let a = RegressionEntry::new(
-        ResourceDimension::WallTime, "w1".into(), 500, 520,
+        ResourceDimension::WallTime,
+        "w1".into(),
+        500,
+        520,
         DEFAULT_MAX_REGRESSION_MILLIONTHS,
     );
     let b = RegressionEntry::new(
-        ResourceDimension::WallTime, "w1".into(), 500, 520,
+        ResourceDimension::WallTime,
+        "w1".into(),
+        500,
+        520,
         DEFAULT_MAX_REGRESSION_MILLIONTHS,
     );
     assert_eq!(a.entry_hash, b.entry_hash);
@@ -241,8 +300,10 @@ fn test_regression_hash_determinism() {
 #[test]
 fn test_tail_risk_within_budget() {
     let t = TailRiskEntry::new(
-        ResourceDimension::HeapMemory, "w1".into(),
-        2_100_000, 2_050_000,
+        ResourceDimension::HeapMemory,
+        "w1".into(),
+        2_100_000,
+        2_050_000,
         DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
     );
     assert!(t.within_budget);
@@ -252,8 +313,10 @@ fn test_tail_risk_within_budget() {
 #[test]
 fn test_tail_risk_exceeds_budget() {
     let t = TailRiskEntry::new(
-        ResourceDimension::HeapMemory, "w1".into(),
-        3_000_000, 2_000_000,
+        ResourceDimension::HeapMemory,
+        "w1".into(),
+        3_000_000,
+        2_000_000,
         DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
     );
     assert!(!t.within_budget);
@@ -262,8 +325,10 @@ fn test_tail_risk_exceeds_budget() {
 #[test]
 fn test_tail_risk_improvement_zero_drift() {
     let t = TailRiskEntry::new(
-        ResourceDimension::HeapMemory, "w1".into(),
-        1_500_000, 2_000_000,
+        ResourceDimension::HeapMemory,
+        "w1".into(),
+        1_500_000,
+        2_000_000,
         DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
     );
     assert_eq!(t.drift_millionths, 0);
@@ -336,7 +401,10 @@ fn test_verdict_display_approved() {
 
 #[test]
 fn test_verdict_display_regression_detected() {
-    assert_eq!(GovernanceVerdict::RegressionDetected.to_string(), "regression_detected");
+    assert_eq!(
+        GovernanceVerdict::RegressionDetected.to_string(),
+        "regression_detected"
+    );
 }
 
 #[test]
@@ -392,7 +460,12 @@ fn test_evaluator_regression_fail() {
 #[test]
 fn test_evaluator_tail_risk_fail() {
     let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
-    eval.add_tail_risk(ResourceDimension::CpuTime, "w1".into(), 5_000_000, 2_000_000);
+    eval.add_tail_risk(
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        5_000_000,
+        2_000_000,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::TailRiskExceeded);
 }
@@ -400,11 +473,17 @@ fn test_evaluator_tail_risk_fail() {
 #[test]
 fn test_evaluator_missing_required_dimension() {
     let mut policy = PublicationPolicy::relaxed();
-    policy.required_dimensions.insert(ResourceDimension::GcPause);
+    policy
+        .required_dimensions
+        .insert(ResourceDimension::GcPause);
     let eval = GovernanceEvaluator::new(policy);
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::InsufficientCoverage);
-    assert!(receipt.dimensions_missing.contains(&ResourceDimension::GcPause));
+    assert!(
+        receipt
+            .dimensions_missing
+            .contains(&ResourceDimension::GcPause)
+    );
 }
 
 #[test]
@@ -422,8 +501,16 @@ fn test_evaluator_dimensions_evaluated_tracked() {
     eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
     eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 1000, 1000);
     let receipt = eval.evaluate(epoch());
-    assert!(receipt.dimensions_evaluated.contains(&ResourceDimension::CpuTime));
-    assert!(receipt.dimensions_evaluated.contains(&ResourceDimension::HeapMemory));
+    assert!(
+        receipt
+            .dimensions_evaluated
+            .contains(&ResourceDimension::CpuTime)
+    );
+    assert!(
+        receipt
+            .dimensions_evaluated
+            .contains(&ResourceDimension::HeapMemory)
+    );
 }
 
 #[test]
@@ -473,7 +560,12 @@ fn test_e2e_full_pass_relaxed() {
     eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
     eval.add_certificate(ResourceDimension::HeapMemory, "w1".into(), 2000, 1000, 50);
     eval.add_regression(ResourceDimension::CpuTime, "w1".into(), 1000, 1000);
-    eval.add_tail_risk(ResourceDimension::CpuTime, "w1".into(), 2_100_000, 2_050_000);
+    eval.add_tail_risk(
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        2_100_000,
+        2_050_000,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
     assert!(receipt.violations.is_empty());
@@ -495,7 +587,12 @@ fn test_e2e_multiple_dimensions_mixed() {
     eval.add_certificate(ResourceDimension::StackDepth, "w1".into(), 500, 250, 50);
     eval.add_regression(ResourceDimension::CpuTime, "w1".into(), 1000, 1010);
     eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 2000, 2010);
-    eval.add_tail_risk(ResourceDimension::CpuTime, "w1".into(), 2_050_000, 2_050_000);
+    eval.add_tail_risk(
+        ResourceDimension::CpuTime,
+        "w1".into(),
+        2_050_000,
+        2_050_000,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
     assert!(receipt.dimensions_evaluated.len() >= 3);
@@ -504,7 +601,9 @@ fn test_e2e_multiple_dimensions_mixed() {
 #[test]
 fn test_e2e_three_violation_categories() {
     let mut policy = PublicationPolicy::relaxed();
-    policy.required_dimensions.insert(ResourceDimension::GcPause);
+    policy
+        .required_dimensions
+        .insert(ResourceDimension::GcPause);
     let mut eval = GovernanceEvaluator::new(policy);
     eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 950, 50);
     eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 1000, 1200);

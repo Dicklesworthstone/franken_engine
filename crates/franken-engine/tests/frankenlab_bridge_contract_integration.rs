@@ -429,7 +429,7 @@ fn integration_validator_multiple_replay_divergences() {
 #[test]
 fn integration_validator_fault_budget_cumulative() {
     let mut v = BridgeContractValidator::strict(epoch());
-    let budget_limit = 30_000u64;
+    let _budget_limit = 30_000u64;
 
     // Inject faults that stay within budget
     for i in 0..6 {

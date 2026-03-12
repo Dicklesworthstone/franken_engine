@@ -326,7 +326,7 @@ fn guard_failure_affects_hit_rate() {
 fn guard_failure_rehashes() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_gf_hash");
     profile.record_access(1);
-    let hash_before = profile.content_hash.clone();
+    let hash_before = profile.content_hash;
     // record_guard_failure doesn't change total_accesses/state so hash stays same
     // (hash depends on offset, kind, scope_id, state, accesses only)
     profile.record_guard_failure();

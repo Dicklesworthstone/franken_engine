@@ -54,7 +54,7 @@ fn revocation_invalidation_blocks_cached_execution_until_restore() {
             CacheInsertRequest::new(
                 module_id.clone(),
                 v1.clone(),
-                resolved.module.content_hash.clone(),
+                resolved.module.content_hash,
                 resolved.module.canonical_specifier.clone(),
             ),
             &cache_context(),

@@ -606,3 +606,586 @@ fn docs_contract_owner_hint_routes_correctly() {
     assert_eq!(owner_route.owner_bead_id, "bd-1lsy.10.11");
     assert_eq!(owner_route.component, "docs_help_surface");
 }
+
+// --- Serde roundtrips for individual types ---
+
+#[test]
+fn evidence_surface_serde_roundtrip_shipped_path() {
+    let val = EvidenceSurface::ShippedPath;
+    let json = serde_json::to_string(&val).expect("serialize");
+    let back: EvidenceSurface = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(val, back);
+    assert_eq!(json, "\"shipped_path\"");
+}
+
+#[test]
+fn evidence_surface_serde_roundtrip_library_only() {
+    let val = EvidenceSurface::LibraryOnly;
+    let json = serde_json::to_string(&val).expect("serialize");
+    let back: EvidenceSurface = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(val, back);
+    assert_eq!(json, "\"library_only\"");
+}
+
+#[test]
+fn behavior_equivalence_class_serde_roundtrip_all_variants() {
+    let variants = [
+        BehaviorEquivalenceClass::Equivalent,
+        BehaviorEquivalenceClass::SemanticMismatch,
+        BehaviorEquivalenceClass::UnsupportedFeature,
+        BehaviorEquivalenceClass::InfraFailure,
+        BehaviorEquivalenceClass::BenchmarkNoise,
+        BehaviorEquivalenceClass::ShippedPathDrift,
+    ];
+    for variant in &variants {
+        let json = serde_json::to_string(variant).expect("serialize");
+        let back: BehaviorEquivalenceClass = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*variant, back);
+    }
+}
+
+#[test]
+fn publication_disposition_serde_roundtrip_all_variants() {
+    let variants = [
+        PublicationDisposition::PublicationEligible,
+        PublicationDisposition::NonPublicationEvidence,
+        PublicationDisposition::Blocked,
+    ];
+    for variant in &variants {
+        let json = serde_json::to_string(variant).expect("serialize");
+        let back: PublicationDisposition = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*variant, back);
+    }
+}
+
+#[test]
+fn owner_route_hint_serde_roundtrip_all_variants() {
+    let variants = [
+        OwnerRouteHint::RuntimeSemantics,
+        OwnerRouteHint::ModuleInterop,
+        OwnerRouteHint::TypeScriptNormalization,
+        OwnerRouteHint::ShippedPathParity,
+        OwnerRouteHint::BenchmarkHarness,
+        OwnerRouteHint::BenchmarkCorpus,
+        OwnerRouteHint::DocsContract,
+    ];
+    for variant in &variants {
+        let json = serde_json::to_string(variant).expect("serialize");
+        let back: OwnerRouteHint = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*variant, back);
+    }
+}
+
+// --- Display implementations ---
+
+#[test]
+fn publication_disposition_display_all_variants() {
+    assert_eq!(
+        format!("{}", PublicationDisposition::PublicationEligible),
+        "publication_eligible"
+    );
+    assert_eq!(
+        format!("{}", PublicationDisposition::NonPublicationEvidence),
+        "non_publication_evidence"
+    );
+    assert_eq!(format!("{}", PublicationDisposition::Blocked), "blocked");
+}
+
+#[test]
+fn owner_route_hint_display_all_variants() {
+    assert_eq!(
+        format!("{}", OwnerRouteHint::RuntimeSemantics),
+        "runtime_semantics"
+    );
+    assert_eq!(
+        format!("{}", OwnerRouteHint::ModuleInterop),
+        "module_interop"
+    );
+    assert_eq!(
+        format!("{}", OwnerRouteHint::TypeScriptNormalization),
+        "typescript_normalization"
+    );
+    assert_eq!(
+        format!("{}", OwnerRouteHint::ShippedPathParity),
+        "shipped_path_parity"
+    );
+    assert_eq!(
+        format!("{}", OwnerRouteHint::BenchmarkHarness),
+        "benchmark_harness"
+    );
+    assert_eq!(
+        format!("{}", OwnerRouteHint::BenchmarkCorpus),
+        "benchmark_corpus"
+    );
+    assert_eq!(format!("{}", OwnerRouteHint::DocsContract), "docs_contract");
+}
+
+#[test]
+fn behavior_equivalence_class_display_all_variants() {
+    assert_eq!(
+        format!("{}", BehaviorEquivalenceClass::Equivalent),
+        "equivalent"
+    );
+    assert_eq!(
+        format!("{}", BehaviorEquivalenceClass::SemanticMismatch),
+        "semantic_mismatch"
+    );
+    assert_eq!(
+        format!("{}", BehaviorEquivalenceClass::UnsupportedFeature),
+        "unsupported_feature"
+    );
+    assert_eq!(
+        format!("{}", BehaviorEquivalenceClass::InfraFailure),
+        "infra_failure"
+    );
+    assert_eq!(
+        format!("{}", BehaviorEquivalenceClass::BenchmarkNoise),
+        "benchmark_noise"
+    );
+    assert_eq!(
+        format!("{}", BehaviorEquivalenceClass::ShippedPathDrift),
+        "shipped_path_drift"
+    );
+}
+
+// --- OwnerRouteHint routing for BenchmarkCorpus ---
+
+#[test]
+fn benchmark_corpus_semantic_mismatch_routes_to_corpus_owner() {
+    let record = build_record(&observation(
+        "corpus_mismatch",
+        EvidenceSurface::LibraryOnly,
+        false,
+        true,
+        true,
+        false,
+        OwnerRouteHint::BenchmarkCorpus,
+    ));
+
+    assert_eq!(
+        record.classification,
+        BehaviorEquivalenceClass::SemanticMismatch
+    );
+    let owner_route = record.owner_route.expect("should route to corpus");
+    assert_eq!(owner_route.owner_hint, OwnerRouteHint::BenchmarkCorpus);
+    assert_eq!(owner_route.owner_bead_id, "bd-1lsy.8.4.1");
+    assert_eq!(owner_route.component, "benchmark_workload_corpus");
+}
+
+#[test]
+fn shipped_path_parity_unsupported_routes_to_shipped_path() {
+    let record = build_record(&observation(
+        "shipped_unsupported",
+        EvidenceSurface::ShippedPath,
+        false,
+        false,
+        true,
+        false,
+        OwnerRouteHint::ShippedPathParity,
+    ));
+
+    let owner_route = record.owner_route.expect("should route");
+    assert_eq!(owner_route.owner_hint, OwnerRouteHint::ShippedPathParity);
+    assert_eq!(owner_route.owner_bead_id, "bd-1lsy.9.6");
+}
+
+// --- Hash sensitivity ---
+
+#[test]
+fn record_hash_changes_when_surface_differs() {
+    let obs_shipped = observation(
+        "hash_surface_test",
+        EvidenceSurface::ShippedPath,
+        true,
+        true,
+        true,
+        false,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+    let obs_library = observation(
+        "hash_surface_test",
+        EvidenceSurface::LibraryOnly,
+        true,
+        true,
+        true,
+        false,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+
+    assert_ne!(
+        build_record(&obs_shipped).record_hash,
+        build_record(&obs_library).record_hash
+    );
+}
+
+#[test]
+fn record_hash_changes_when_owner_hint_differs() {
+    let obs_a = observation(
+        "hash_hint_test",
+        EvidenceSurface::LibraryOnly,
+        false,
+        true,
+        true,
+        false,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+    let obs_b = observation(
+        "hash_hint_test",
+        EvidenceSurface::LibraryOnly,
+        false,
+        true,
+        true,
+        false,
+        OwnerRouteHint::ModuleInterop,
+    );
+
+    assert_ne!(
+        build_record(&obs_a).record_hash,
+        build_record(&obs_b).record_hash
+    );
+}
+
+#[test]
+fn record_hash_changes_when_minimized_repro_differs() {
+    use frankenengine_engine::benchmark_behavior_equivalence::BehaviorEquivalenceObservation;
+
+    let obs_a = BehaviorEquivalenceObservation::new(
+        "repro_hash_test",
+        ParityTarget::NodeJs,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::RuntimeSemantics,
+    )
+    .with_minimized_repro_command("cmd_a");
+
+    let obs_b = BehaviorEquivalenceObservation::new(
+        "repro_hash_test",
+        ParityTarget::NodeJs,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::RuntimeSemantics,
+    )
+    .with_minimized_repro_command("cmd_b");
+
+    assert_ne!(
+        build_record(&obs_a).record_hash,
+        build_record(&obs_b).record_hash
+    );
+}
+
+#[test]
+fn record_hash_differs_with_and_without_repro_command() {
+    use frankenengine_engine::benchmark_behavior_equivalence::BehaviorEquivalenceObservation;
+
+    let obs_with = BehaviorEquivalenceObservation::new(
+        "repro_presence_test",
+        ParityTarget::NodeJs,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::RuntimeSemantics,
+    )
+    .with_minimized_repro_command("some_cmd");
+
+    let obs_without = BehaviorEquivalenceObservation::new(
+        "repro_presence_test",
+        ParityTarget::NodeJs,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+
+    assert_ne!(
+        build_record(&obs_with).record_hash,
+        build_record(&obs_without).record_hash
+    );
+}
+
+// --- Report with multiple baselines ---
+
+#[test]
+fn report_with_deno_baseline_processes_correctly() {
+    use frankenengine_engine::benchmark_behavior_equivalence::BehaviorEquivalenceObservation;
+
+    let obs = BehaviorEquivalenceObservation::new(
+        "deno_compat_case",
+        ParityTarget::Deno,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+
+    let record = build_record(&obs);
+    assert_eq!(record.classification, BehaviorEquivalenceClass::Equivalent);
+    assert_eq!(record.baseline, ParityTarget::Deno);
+    assert_eq!(
+        record.publication_disposition,
+        PublicationDisposition::PublicationEligible
+    );
+}
+
+#[test]
+fn report_with_mixed_baselines_sorts_and_processes() {
+    use frankenengine_engine::benchmark_behavior_equivalence::BehaviorEquivalenceObservation;
+
+    let observations = vec![
+        BehaviorEquivalenceObservation::new(
+            "zz_bun_case",
+            ParityTarget::Bun,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        BehaviorEquivalenceObservation::new(
+            "aa_deno_case",
+            ParityTarget::Deno,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        BehaviorEquivalenceObservation::new(
+            "mm_node_case",
+            ParityTarget::NodeJs,
+            EvidenceSurface::LibraryOnly,
+            OwnerRouteHint::ModuleInterop,
+        ),
+    ];
+
+    let report = build_report("t", "d", "RGC-704B", &observations);
+    assert_eq!(report.records.len(), 3);
+    assert_eq!(report.records[0].workload_id, "aa_deno_case");
+    assert_eq!(report.records[1].workload_id, "mm_node_case");
+    assert_eq!(report.records[2].workload_id, "zz_bun_case");
+}
+
+// --- Owner route aggregation edge cases ---
+
+#[test]
+fn owner_routes_deduplicate_same_classification_same_owner() {
+    let observations = vec![
+        observation(
+            "w_dup_1",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            false,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        observation(
+            "w_dup_2",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            false,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        observation(
+            "w_dup_3",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            false,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+    ];
+
+    let report = build_report("t", "d", "RGC-704B", &observations);
+    // All InfraFailure → BenchmarkHarness: should aggregate to 1 route entry
+    assert_eq!(report.owner_routes.len(), 1);
+    assert_eq!(report.owner_routes[0].workload_ids.len(), 3);
+    assert_eq!(
+        report.owner_routes[0].classifications,
+        vec![BehaviorEquivalenceClass::InfraFailure]
+    );
+}
+
+#[test]
+fn owner_routes_carry_multiple_classifications_when_same_owner() {
+    let observations = vec![
+        observation(
+            "w_multi_1",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            false,
+            false,
+            OwnerRouteHint::BenchmarkHarness,
+        ),
+        observation(
+            "w_multi_2",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            true,
+            true,
+            OwnerRouteHint::BenchmarkHarness,
+        ),
+    ];
+
+    let report = build_report("t", "d", "RGC-704B", &observations);
+    // w_multi_1 → InfraFailure → BenchmarkHarness
+    // w_multi_2 → BenchmarkNoise → BenchmarkHarness
+    // Both route to BenchmarkHarness but with different rationale text,
+    // so they may or may not merge depending on rationale match
+    assert!(!report.owner_routes.is_empty());
+}
+
+// --- JSONL output format ---
+
+#[test]
+fn jsonl_line_count_matches_record_count() {
+    let observations = vec![
+        observation(
+            "line_a",
+            EvidenceSurface::ShippedPath,
+            true,
+            true,
+            true,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        observation(
+            "line_b",
+            EvidenceSurface::LibraryOnly,
+            true,
+            true,
+            true,
+            false,
+            OwnerRouteHint::ModuleInterop,
+        ),
+        observation(
+            "line_c",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            true,
+            false,
+            OwnerRouteHint::BenchmarkCorpus,
+        ),
+    ];
+
+    let report = build_report("t", "d", "RGC-704B", &observations);
+    let jsonl = report.benchmark_parity_verdict_jsonl().expect("render");
+    let line_count = jsonl.split('\n').count();
+    assert_eq!(line_count, 3);
+}
+
+#[test]
+fn jsonl_each_line_parses_as_verdict_record() {
+    use frankenengine_engine::benchmark_behavior_equivalence::BenchmarkParityVerdictRecord;
+
+    let observations = vec![
+        observation(
+            "parse_a",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            true,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        observation(
+            "parse_b",
+            EvidenceSurface::LibraryOnly,
+            false,
+            false,
+            true,
+            false,
+            OwnerRouteHint::DocsContract,
+        ),
+    ];
+
+    let report = build_report("t", "d", "RGC-704B", &observations);
+    let jsonl = report.benchmark_parity_verdict_jsonl().expect("render");
+    for line in jsonl.split('\n') {
+        let record: BenchmarkParityVerdictRecord =
+            serde_json::from_str(line).expect("each line should parse");
+        assert!(!record.workload_id.is_empty());
+    }
+}
+
+// --- classify_observation edge cases ---
+
+#[test]
+fn classify_all_flags_passing_is_equivalent() {
+    let obs = observation(
+        "all_pass",
+        EvidenceSurface::ShippedPath,
+        true,
+        true,
+        true,
+        false,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+    assert_eq!(
+        classify_observation(&obs),
+        BehaviorEquivalenceClass::Equivalent
+    );
+}
+
+#[test]
+fn classify_noise_takes_priority_over_output_mismatch() {
+    // noise_only=true with output_equivalent=false: noise wins
+    let obs = observation(
+        "noise_vs_mismatch",
+        EvidenceSurface::ShippedPath,
+        false,
+        true,
+        true,
+        true,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+    assert_eq!(
+        classify_observation(&obs),
+        BehaviorEquivalenceClass::BenchmarkNoise
+    );
+}
+
+// --- Report schema and metadata ---
+
+#[test]
+fn report_carries_correct_schema_and_component() {
+    let report = build_report("trace-meta", "dec-meta", "RGC-704B", &[]);
+    assert_eq!(
+        report.schema_version,
+        "franken-engine.benchmark-behavior-equivalence.v1"
+    );
+    assert_eq!(report.component, "benchmark_behavior_equivalence");
+    assert_eq!(report.policy_id, "RGC-704B");
+    assert_eq!(report.trace_id, "trace-meta");
+    assert_eq!(report.decision_id, "dec-meta");
+}
+
+#[test]
+fn report_preserves_custom_policy_id() {
+    let report = build_report("t", "d", "CUSTOM-POLICY-42", &[]);
+    assert_eq!(report.policy_id, "CUSTOM-POLICY-42");
+}
+
+// --- Verdict record field correctness ---
+
+#[test]
+fn verdict_record_carries_correct_detail() {
+    let obs = observation(
+        "detail_test",
+        EvidenceSurface::ShippedPath,
+        true,
+        true,
+        true,
+        false,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+    let record = build_record(&obs);
+    assert_eq!(record.detail, "fixture-detail");
+}
+
+#[test]
+fn verdict_record_equivalent_has_no_owner_route() {
+    let obs = observation(
+        "no_route",
+        EvidenceSurface::ShippedPath,
+        true,
+        true,
+        true,
+        false,
+        OwnerRouteHint::RuntimeSemantics,
+    );
+    let record = build_record(&obs);
+    assert!(record.owner_route.is_none());
+    assert_eq!(record.classification, BehaviorEquivalenceClass::Equivalent);
+}

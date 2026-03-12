@@ -305,7 +305,7 @@ fn tier_profile_record_deopt_transitions_to_deoptimized() {
 #[test]
 fn tier_profile_add_probe_appends_and_rehashes() {
     let mut profile = TierProfile::new("prof-ap", "fn_probed");
-    let hash_before = profile.content_hash.clone();
+    let hash_before = profile.content_hash;
 
     add_probe(
         &mut profile,
@@ -340,7 +340,7 @@ fn tier_profile_rehash_deterministic() {
 #[test]
 fn tier_profile_content_hash_changes_on_mutation() {
     let mut profile = TierProfile::new("mut-1", "fn_mut");
-    let h1 = profile.content_hash.clone();
+    let h1 = profile.content_hash;
     profile.invocation_count = 999;
     profile.rehash();
     assert_ne!(profile.content_hash, h1);

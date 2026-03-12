@@ -99,7 +99,7 @@ fn unsupported_entry(sub: Subsystem) -> PlaceholderEntry {
 fn make_waiver(entry: &PlaceholderEntry, sub: Subsystem) -> Waiver {
     Waiver {
         waiver_id: format!("waiver-{}-{}", sub.as_str(), entry.location_line),
-        placeholder_hash: entry.content_hash.clone(),
+        placeholder_hash: entry.content_hash,
         subsystem: sub,
         justification: "deferred to next sprint".to_string(),
         owner: "team-alpha".to_string(),

@@ -25,6 +25,8 @@ benchmark_events_path="${run_dir}/events.jsonl"
 benchmark_commands_path="${run_dir}/commands.txt"
 benchmark_env_manifest_path="${run_dir}/benchmark_env_manifest.json"
 raw_results_archive_path="${run_dir}/raw_results_archive.json"
+benchmark_evidence_path="${run_dir}/benchmark_evidence.jsonl"
+benchmark_summary_path="${run_dir}/benchmark_summary.json"
 
 suite_manifest_path="${run_dir}/suite_run_manifest.json"
 suite_events_path="${run_dir}/suite_events.jsonl"
@@ -48,7 +50,9 @@ benchmark_artifacts_complete() {
     "$benchmark_events_path" \
     "$benchmark_commands_path" \
     "$benchmark_env_manifest_path" \
-    "$raw_results_archive_path"; do
+    "$raw_results_archive_path" \
+    "$benchmark_evidence_path" \
+    "$benchmark_summary_path"; do
     if [[ ! -f "$required" ]]; then
       return 1
     fi
@@ -348,6 +352,8 @@ write_manifest() {
     operator_verification_commands+=("cat ${benchmark_commands_path}")
     operator_verification_commands+=("cat ${benchmark_env_manifest_path}")
     operator_verification_commands+=("cat ${raw_results_archive_path}")
+    operator_verification_commands+=("cat ${benchmark_evidence_path}")
+    operator_verification_commands+=("cat ${benchmark_summary_path}")
   fi
   operator_verification_commands+=("${0} ci")
 
@@ -389,7 +395,9 @@ write_manifest() {
     echo "    \"benchmark_events\": $(json_path_or_null "$benchmark_events_path")," 
     echo "    \"benchmark_commands\": $(json_path_or_null "$benchmark_commands_path")," 
     echo "    \"benchmark_env_manifest\": $(json_path_or_null "$benchmark_env_manifest_path")," 
-    echo "    \"raw_results_archive\": $(json_path_or_null "$raw_results_archive_path")" 
+    echo "    \"raw_results_archive\": $(json_path_or_null "$raw_results_archive_path")," 
+    echo "    \"benchmark_evidence\": $(json_path_or_null "$benchmark_evidence_path")," 
+    echo "    \"benchmark_summary\": $(json_path_or_null "$benchmark_summary_path")" 
     echo '  },'
     echo '  "operator_verification": ['
     for op_idx in "${!operator_verification_commands[@]}"; do

@@ -75,7 +75,10 @@ fn workload_family_as_str_vectorizable() {
 
 #[test]
 fn workload_family_as_str_proof_specialized() {
-    assert_eq!(WorkloadFamily::ProofSpecialized.as_str(), "proof_specialized");
+    assert_eq!(
+        WorkloadFamily::ProofSpecialized.as_str(),
+        "proof_specialized"
+    );
 }
 
 #[test]
@@ -85,7 +88,10 @@ fn workload_family_as_str_native_addon() {
 
 #[test]
 fn workload_family_as_str_hostcall_boundary() {
-    assert_eq!(WorkloadFamily::HostcallBoundary.as_str(), "hostcall_boundary");
+    assert_eq!(
+        WorkloadFamily::HostcallBoundary.as_str(),
+        "hostcall_boundary"
+    );
 }
 
 #[test]
@@ -95,7 +101,10 @@ fn workload_family_as_str_startup_image() {
 
 #[test]
 fn workload_family_as_str_metadata_locality() {
-    assert_eq!(WorkloadFamily::MetadataLocality.as_str(), "metadata_locality");
+    assert_eq!(
+        WorkloadFamily::MetadataLocality.as_str(),
+        "metadata_locality"
+    );
 }
 
 #[test]
@@ -521,7 +530,12 @@ fn benchmark_entry_hash_varies_with_tags() {
 
 #[test]
 fn benchmark_entry_display_contains_name_and_family() {
-    let entry = make_entry("display_test", WorkloadFamily::HostcallBoundary, 42, &["tag"]);
+    let entry = make_entry(
+        "display_test",
+        WorkloadFamily::HostcallBoundary,
+        42,
+        &["tag"],
+    );
     let display = format!("{entry}");
     assert!(display.contains("display_test"));
     assert!(display.contains("hostcall_boundary"));
@@ -621,7 +635,10 @@ fn family_coverage_saturated_when_score_exceeds_threshold() {
 #[test]
 fn saturation_config_default_config_values() {
     let config = SaturationConfig::default_config();
-    assert_eq!(config.min_entries_per_family, DEFAULT_MIN_ENTRIES_PER_FAMILY);
+    assert_eq!(
+        config.min_entries_per_family,
+        DEFAULT_MIN_ENTRIES_PER_FAMILY
+    );
     assert_eq!(config.min_families_covered, DEFAULT_MIN_FAMILIES_COVERED);
     assert_eq!(
         config.min_saturation_score_millionths,
@@ -636,9 +653,7 @@ fn saturation_config_strict_higher_thresholds() {
     let strict = SaturationConfig::strict();
     let default = SaturationConfig::default_config();
     assert!(strict.min_entries_per_family > default.min_entries_per_family);
-    assert!(
-        strict.min_saturation_score_millionths > default.min_saturation_score_millionths
-    );
+    assert!(strict.min_saturation_score_millionths > default.min_saturation_score_millionths);
     assert!(strict.min_feature_diversity > default.min_feature_diversity);
     assert_eq!(strict.min_families_covered, WorkloadFamily::COUNT as u64);
 }
@@ -649,9 +664,7 @@ fn saturation_config_relaxed_lower_thresholds() {
     let default = SaturationConfig::default_config();
     assert!(relaxed.min_entries_per_family < default.min_entries_per_family);
     assert!(relaxed.min_families_covered < default.min_families_covered);
-    assert!(
-        relaxed.min_saturation_score_millionths < default.min_saturation_score_millionths
-    );
+    assert!(relaxed.min_saturation_score_millionths < default.min_saturation_score_millionths);
 }
 
 #[test]
@@ -714,7 +727,12 @@ fn saturation_board_add_entry_increments_count() {
 fn saturation_board_add_multiple_entries() {
     let mut board = SaturationBoard::new();
     for i in 0..10 {
-        let entry = make_entry(&format!("e_{i}"), WorkloadFamily::Vectorizable, i * 10, &["tag"]);
+        let entry = make_entry(
+            &format!("e_{i}"),
+            WorkloadFamily::Vectorizable,
+            i * 10,
+            &["tag"],
+        );
         board.add_entry(entry).unwrap();
     }
     assert_eq!(board.entry_count(), 10);
@@ -971,7 +989,12 @@ fn decision_receipt_new_verify_succeeds() {
 fn decision_receipt_verify_fails_after_tampering() {
     let mut board = SaturationBoard::new();
     board
-        .add_entry(make_entry("dr2", WorkloadFamily::Vectorizable, 20, &["tag"]))
+        .add_entry(make_entry(
+            "dr2",
+            WorkloadFamily::Vectorizable,
+            20,
+            &["tag"],
+        ))
         .unwrap();
     let config = SaturationConfig::default_config();
     let report = board.evaluate(&config);
@@ -985,7 +1008,12 @@ fn decision_receipt_verify_fails_after_tampering() {
 fn decision_receipt_chain_two_receipts() {
     let mut board = SaturationBoard::new();
     board
-        .add_entry(make_entry("chain1", WorkloadFamily::BranchHeavy, 10, &["tag"]))
+        .add_entry(make_entry(
+            "chain1",
+            WorkloadFamily::BranchHeavy,
+            10,
+            &["tag"],
+        ))
         .unwrap();
     let config = SaturationConfig::default_config();
     let report1 = board.evaluate(&config);
@@ -993,7 +1021,12 @@ fn decision_receipt_chain_two_receipts() {
     let receipt1 = DecisionReceipt::new("r1", &report1, genesis);
 
     board
-        .add_entry(make_entry("chain2", WorkloadFamily::Vectorizable, 20, &["tag"]))
+        .add_entry(make_entry(
+            "chain2",
+            WorkloadFamily::Vectorizable,
+            20,
+            &["tag"],
+        ))
         .unwrap();
     let report2 = board.evaluate(&config);
     let receipt2 = DecisionReceipt::new("r2", &report2, receipt1.receipt_hash.clone());
@@ -1033,11 +1066,8 @@ fn representativeness_score_new_sets_fields() {
 
 #[test]
 fn representativeness_score_display_contains_metric_and_score() {
-    let score = RepresentativenessScore::new(
-        RepresentativenessMetric::FeatureEntropy,
-        500_000,
-        "detail",
-    );
+    let score =
+        RepresentativenessScore::new(RepresentativenessMetric::FeatureEntropy, 500_000, "detail");
     let display = format!("{score}");
     assert!(display.contains("feature_entropy"));
     assert!(display.contains("500000"));
@@ -1129,7 +1159,11 @@ fn saturation_report_uncovered_families_populated() {
         .unwrap();
     let report = board.evaluate(&config);
     assert_eq!(report.uncovered_families.len(), 11);
-    assert!(!report.uncovered_families.contains(&WorkloadFamily::BranchHeavy));
+    assert!(
+        !report
+            .uncovered_families
+            .contains(&WorkloadFamily::BranchHeavy)
+    );
 }
 
 #[test]
@@ -1179,13 +1213,28 @@ fn e2e_sparse_board_fails_gate() {
     let config = SaturationConfig::strict();
 
     board
-        .add_entry(make_entry("sp1", WorkloadFamily::BranchHeavy, 100, &["tag"]))
+        .add_entry(make_entry(
+            "sp1",
+            WorkloadFamily::BranchHeavy,
+            100,
+            &["tag"],
+        ))
         .unwrap();
     board
-        .add_entry(make_entry("sp2", WorkloadFamily::Vectorizable, 200, &["tag"]))
+        .add_entry(make_entry(
+            "sp2",
+            WorkloadFamily::Vectorizable,
+            200,
+            &["tag"],
+        ))
         .unwrap();
     board
-        .add_entry(make_entry("sp3", WorkloadFamily::NativeAddon, 300, &["tag"]))
+        .add_entry(make_entry(
+            "sp3",
+            WorkloadFamily::NativeAddon,
+            300,
+            &["tag"],
+        ))
         .unwrap();
 
     let gate = SaturationGate::new("e2e-sparse", config);
@@ -1240,22 +1289,42 @@ fn e2e_progression_from_empty_to_saturated() {
     assert_eq!(r1.verdict, SaturationVerdict::ConfigViolation);
 
     board
-        .add_entry(make_entry("prog1", WorkloadFamily::BranchHeavy, 100, &["tag"]))
+        .add_entry(make_entry(
+            "prog1",
+            WorkloadFamily::BranchHeavy,
+            100,
+            &["tag"],
+        ))
         .unwrap();
     let r2 = board.evaluate(&config);
     assert_eq!(r2.verdict, SaturationVerdict::Insufficient);
 
     board
-        .add_entry(make_entry("prog2", WorkloadFamily::Vectorizable, 200, &["tag"]))
+        .add_entry(make_entry(
+            "prog2",
+            WorkloadFamily::Vectorizable,
+            200,
+            &["tag"],
+        ))
         .unwrap();
     let r3 = board.evaluate(&config);
     assert_eq!(r3.verdict, SaturationVerdict::Sparse);
 
     board
-        .add_entry(make_entry("prog3", WorkloadFamily::BranchHeavy, 300, &["tag_extra"]))
+        .add_entry(make_entry(
+            "prog3",
+            WorkloadFamily::BranchHeavy,
+            300,
+            &["tag_extra"],
+        ))
         .unwrap();
     board
-        .add_entry(make_entry("prog4", WorkloadFamily::Vectorizable, 400, &["tag_extra"]))
+        .add_entry(make_entry(
+            "prog4",
+            WorkloadFamily::Vectorizable,
+            400,
+            &["tag_extra"],
+        ))
         .unwrap();
     let r4 = board.evaluate(&config);
     assert!(r4.verdict.allows_publication());
@@ -1265,7 +1334,12 @@ fn e2e_progression_from_empty_to_saturated() {
 fn e2e_report_content_hash_determinism() {
     let mut board = SaturationBoard::new();
     board
-        .add_entry(make_entry("det1", WorkloadFamily::BranchHeavy, 10, &["tag"]))
+        .add_entry(make_entry(
+            "det1",
+            WorkloadFamily::BranchHeavy,
+            10,
+            &["tag"],
+        ))
         .unwrap();
     let config = SaturationConfig::default_config();
     let report1 = board.evaluate(&config);
@@ -1354,7 +1428,12 @@ fn e2e_complexity_histogram_kl_varied_complexity() {
     for (i, family) in WorkloadFamily::ALL.iter().enumerate() {
         let complexity = (i as u64 + 1) * 100;
         board
-            .add_entry(make_entry(&format!("var_{i}"), *family, complexity, &["tag"]))
+            .add_entry(make_entry(
+                &format!("var_{i}"),
+                *family,
+                complexity,
+                &["tag"],
+            ))
             .unwrap();
     }
     let report = board.evaluate(&config);
@@ -1375,10 +1454,20 @@ fn e2e_adequate_when_not_all_saturated() {
     config.min_saturation_score_millionths = 999_999;
 
     board
-        .add_entry(make_entry("adeq1", WorkloadFamily::BranchHeavy, 10, &["tag"]))
+        .add_entry(make_entry(
+            "adeq1",
+            WorkloadFamily::BranchHeavy,
+            10,
+            &["tag"],
+        ))
         .unwrap();
     board
-        .add_entry(make_entry("adeq2", WorkloadFamily::Vectorizable, 20, &["tag"]))
+        .add_entry(make_entry(
+            "adeq2",
+            WorkloadFamily::Vectorizable,
+            20,
+            &["tag"],
+        ))
         .unwrap();
 
     let report = board.evaluate(&config);
@@ -1397,7 +1486,12 @@ fn edge_case_zero_complexity_entries() {
     config.min_families_covered = 1;
     config.min_entries_per_family = 1;
     board
-        .add_entry(make_entry("zero_comp", WorkloadFamily::BranchHeavy, 0, &["tag"]))
+        .add_entry(make_entry(
+            "zero_comp",
+            WorkloadFamily::BranchHeavy,
+            0,
+            &["tag"],
+        ))
         .unwrap();
     let report = board.evaluate(&config);
     assert!(report.total_entries > 0);
@@ -1411,12 +1505,7 @@ fn edge_case_very_high_complexity() {
 
 #[test]
 fn edge_case_empty_feature_tags() {
-    let entry = BenchmarkEntry::new(
-        "no_tags",
-        WorkloadFamily::BranchHeavy,
-        10,
-        BTreeSet::new(),
-    );
+    let entry = BenchmarkEntry::new("no_tags", WorkloadFamily::BranchHeavy, 10, BTreeSet::new());
     assert!(entry.verify_hash());
     assert_eq!(entry.feature_tags.len(), 0);
 }
@@ -1473,10 +1562,20 @@ fn edge_case_custom_target_families_subset() {
 
     let mut board = SaturationBoard::new();
     board
-        .add_entry(make_entry("custom1", WorkloadFamily::BranchHeavy, 100, &["tag"]))
+        .add_entry(make_entry(
+            "custom1",
+            WorkloadFamily::BranchHeavy,
+            100,
+            &["tag"],
+        ))
         .unwrap();
     board
-        .add_entry(make_entry("custom2", WorkloadFamily::Vectorizable, 200, &["tag"]))
+        .add_entry(make_entry(
+            "custom2",
+            WorkloadFamily::Vectorizable,
+            200,
+            &["tag"],
+        ))
         .unwrap();
 
     let report = board.evaluate(&config);
@@ -1496,7 +1595,12 @@ fn edge_case_overall_saturation_is_mean_of_family_scores() {
     config.min_entries_per_family = 1;
 
     board
-        .add_entry(make_entry("mean1", WorkloadFamily::BranchHeavy, 100, &["tag"]))
+        .add_entry(make_entry(
+            "mean1",
+            WorkloadFamily::BranchHeavy,
+            100,
+            &["tag"],
+        ))
         .unwrap();
 
     let report = board.evaluate(&config);
@@ -1513,7 +1617,12 @@ fn edge_case_overall_saturation_is_mean_of_family_scores() {
 
 #[test]
 fn edge_case_entry_name_with_special_characters() {
-    let entry = make_entry("bench/test-case_v2.0", WorkloadFamily::BranchHeavy, 10, &["tag"]);
+    let entry = make_entry(
+        "bench/test-case_v2.0",
+        WorkloadFamily::BranchHeavy,
+        10,
+        &["tag"],
+    );
     assert!(entry.verify_hash());
     let mut board = SaturationBoard::new();
     board.add_entry(entry).unwrap();
@@ -1543,12 +1652,7 @@ fn edge_case_config_min_entries_zero() {
 fn edge_case_config_min_feature_diversity_zero() {
     let mut config = SaturationConfig::relaxed();
     config.min_feature_diversity = 0;
-    let e1 = BenchmarkEntry::new(
-        "div0",
-        WorkloadFamily::BranchHeavy,
-        10,
-        BTreeSet::new(),
-    );
+    let e1 = BenchmarkEntry::new("div0", WorkloadFamily::BranchHeavy, 10, BTreeSet::new());
     let coverage = FamilyCoverage::compute(WorkloadFamily::BranchHeavy, &[&e1], &config);
     // Should not panic with division by zero
     let _ = coverage.saturation_score_millionths;

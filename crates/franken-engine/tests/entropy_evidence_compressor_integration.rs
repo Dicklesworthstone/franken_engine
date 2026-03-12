@@ -841,7 +841,7 @@ fn lifecycle_uniform_binary() {
         &est,
         est.total_count as i64 * 1000,
         est.total_count as i64 * 2000,
-        compressed.content_hash.clone(),
+        compressed.content_hash,
     );
     assert!(ss.is_consistent());
     assert!(ss.is_fisher_sufficient);

@@ -172,7 +172,10 @@ fn budget_exact() {
 #[test]
 fn budget_budgeted_default() {
     let budget = TelemetryBudget::budgeted_default();
-    assert_eq!(budget.sampling_rate_millionths, DEFAULT_SAMPLING_RATE_MILLIONTHS);
+    assert_eq!(
+        budget.sampling_rate_millionths,
+        DEFAULT_SAMPLING_RATE_MILLIONTHS
+    );
     assert!(!budget.is_full_capture());
     assert_eq!(budget.mode, CaptureMode::BudgetedSampling);
 }

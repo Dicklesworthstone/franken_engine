@@ -3,8 +3,6 @@
 //! Tests catalog construction, gate evaluation, advisory generation,
 //! serde roundtrips, and cross-concern interactions.
 
-use std::collections::BTreeSet;
-
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::react_mismatch_catalog::{
     ALL_DOMAINS, COMPONENT, CatalogConfig, CatalogError, CatalogReport, ComparisonTarget,

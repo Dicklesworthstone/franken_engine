@@ -176,7 +176,7 @@ fn e2e_publish_revoke_verify_and_query_keeps_stable_event_fields() {
     let witness_id = witness.witness_id.clone();
     let extension_id = witness.extension_id.clone();
     let witness_epoch = witness.epoch;
-    let witness_content_hash = witness.content_hash.clone();
+    let witness_content_hash = witness.content_hash;
 
     let publication_id = pipeline
         .publish_witness(witness, 90_000)
@@ -652,7 +652,7 @@ fn query_by_content_hash_filters_correctly() {
     let mut pipeline = build_pipeline();
     let witness_a = build_promoted_witness(1_100, &synthesizer_key);
     let witness_b = build_promoted_witness(1_101, &synthesizer_key);
-    let target_hash = witness_a.content_hash.clone();
+    let target_hash = witness_a.content_hash;
 
     pipeline
         .publish_witness(witness_a, 10_000_000)
@@ -665,7 +665,7 @@ fn query_by_content_hash_filters_correctly() {
         extension_id: None,
         policy_id: None,
         epoch: None,
-        content_hash: Some(target_hash.clone()),
+        content_hash: Some(target_hash),
         include_revoked: true,
     });
     assert_eq!(filtered.len(), 1);

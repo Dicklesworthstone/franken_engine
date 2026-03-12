@@ -87,7 +87,8 @@ Primary gate script:
 ```
 
 Matrix execution mode (requires explicit manifest inputs for both
-architectures):
+architectures, or auto-discovery of the latest local manifests when
+`PARSER_CROSS_ARCH_AUTO_DISCOVER_MANIFESTS=1`):
 
 ```bash
 PARSER_CROSS_ARCH_X86_EVENT_AST_MANIFEST=artifacts/.../x86_event_ast_run_manifest.json \
@@ -96,6 +97,19 @@ PARSER_CROSS_ARCH_X86_PARALLEL_INTERFERENCE_MANIFEST=artifacts/.../x86_parallel_
 PARSER_CROSS_ARCH_ARM64_PARALLEL_INTERFERENCE_MANIFEST=artifacts/.../arm64_parallel_run_manifest.json \
 ./scripts/run_parser_cross_arch_repro_matrix.sh matrix
 ```
+
+If explicit manifest paths are omitted, the gate auto-discovers the newest local
+`run_manifest.json` for each required lane/architecture from:
+
+- `artifacts/parser_event_ast_equivalence`
+- `artifacts/parser_parallel_interference`
+
+The auto-discovered input set is recorded in both `run_manifest.json` and
+`matrix_summary.json` under `matrix_inputs`. When local `aarch64` inputs are
+absent, strict `matrix` mode fails closed with `matrix_input_status ==
+incomplete_matrix`, which is the expected state until upstream arm64 evidence is
+available. Set `PARSER_CROSS_ARCH_AUTO_DISCOVER_MANIFESTS=0` to disable
+auto-discovery and require fully explicit input paths.
 
 One-command replay wrapper:
 
@@ -123,6 +137,8 @@ Each run emits:
    `x86_64` and `aarch64` lane-manifest inputs.
 3. Confirm:
    - `run_manifest.json` shows `matrix_complete=true`.
+   - `run_manifest.json` / `matrix_summary.json` list the exact `matrix_inputs`
+     used for the run.
    - `matrix_summary.json` has expected architecture/lane coverage.
    - no critical unresolved deltas are present.
 4. Run replay wrapper:

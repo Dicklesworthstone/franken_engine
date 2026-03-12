@@ -995,7 +995,7 @@ fn catalog_cross_interference_unknown_pair() {
 #[test]
 fn catalog_hash_changes_on_register() {
     let mut cat = PackCatalog::new("hash-change");
-    let hash_before = cat.content_hash.clone();
+    let hash_before = cat.content_hash;
     cat.register(make_pack("new-pack", vec![]));
     assert_ne!(cat.content_hash, hash_before);
 }
@@ -1005,7 +1005,7 @@ fn catalog_hash_changes_on_cross_interference() {
     let mut cat = PackCatalog::new("hash-cross");
     cat.register(make_pack("a", vec![]));
     cat.register(make_pack("b", vec![]));
-    let hash_before = cat.content_hash.clone();
+    let hash_before = cat.content_hash;
     cat.add_cross_interference("a", "b", empty_interference());
     assert_ne!(cat.content_hash, hash_before);
 }

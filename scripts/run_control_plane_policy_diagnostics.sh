@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root_dir"
+
+source "${root_dir}/scripts/e2e/parser_deterministic_env.sh"
+parser_frontier_bootstrap_env
+
+mode="${1:-ci}"
+toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-300}}"
+rch_exec_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-1800}"
+artifact_root="${CONTROL_PLANE_POLICY_DIAGNOSTICS_ARTIFACT_ROOT:-artifacts/control_plane_policy_diagnostics}"
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+default_target_dir="/var/tmp/rch_target_franken_engine_control_plane_policy_diagnostics"
+target_dir="${CARGO_TARGET_DIR:-${default_target_dir}}"
+cargo_build_jobs="${CARGO_BUILD_JOBS:-4}"
+run_dir="${artifact_root}/${timestamp}"
+rch_step_logs_dir="${run_dir}/rch_step_logs"
+
+mkdir -p "$run_dir" "$rch_step_logs_dir"
+
+if ! command -v rch >/dev/null 2>&1; then
+  echo "rch is required for control plane policy diagnostics heavy commands" >&2
+  exit 2
+fi
+
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "timeout is required to fail closed on control plane policy diagnostics rch steps" >&2
+  exit 2
+fi
+
+run_rch() {
+  RCH_EXEC_TIMEOUT_SECONDS="${rch_exec_timeout_seconds}" \
+  RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
+    RCH_BUILD_TIMEOUT_SECONDS="${rch_build_timeout_sec}" \
+    timeout --kill-after=30 "${rch_exec_timeout_seconds}" \
+    rch exec -- env \
+    "RUSTUP_TOOLCHAIN=${toolchain}" \
+    "CARGO_TARGET_DIR=${target_dir}" \
+    "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+    "$@"
+}
+
+rch_strip_ansi() {
+  sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' "$1"
+}
+
+rch_remote_exit_code() {
+  local log_path="$1"
+  local exit_line
+  exit_line="$(rch_strip_ansi "$log_path" | grep -Eo 'Remote command finished: exit=[0-9]+' | tail -n 1 || true)"
+  if [[ -z "$exit_line" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${exit_line##*=}"
+}
+
+rch_reported_timeout_seconds() {
+  local log_path="$1"
+  rch_strip_ansi "$log_path" | sed -nE 's/.*timeout_secs: ([0-9]+).*/\1/p' | tail -n 1
+}
+
+rch_reject_local_fallback() {
+  local log_path="$1"
+  if rch_strip_ansi "$log_path" | grep -Eiq 'Remote execution failed: .*running locally|Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|running locally|\[RCH\] local \(|Failed to query daemon:.*running locally|Dependency preflight blocked remote execution|RCH-E326'; then
+    echo "rch reported local fallback; refusing local execution for heavy command" >&2
+    return 1
+  fi
+}
+
+remote_code_allowed() {
+  local code="$1"
+  shift
+  local allowed
+  for allowed in "$@"; do
+    if [[ "$code" == "$allowed" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+declare -a commands_run=()
+step_index=0
+bundle_emitted=0
+
+run_step() {
+  local command_text="$1"
+  shift
+  local allowed_codes=()
+  while [[ "$#" -gt 0 && "$1" != "--" ]]; do
+    allowed_codes+=("$1")
+    shift
+  done
+  shift
+
+  local log_path="${rch_step_logs_dir}/step_$(printf '%03d' "${step_index}").log"
+  step_index=$((step_index + 1))
+  commands_run+=("${command_text}")
+
+  echo "==> ${command_text}"
+
+  local status=0
+  set +e
+  run_rch "$@" > >(tee "$log_path") 2>&1
+  status=$?
+  set -e
+
+  if ! rch_reject_local_fallback "$log_path"; then
+    return 1
+  fi
+
+  if [[ "$status" -eq 124 ]]; then
+    echo "rch command timed out after ${rch_exec_timeout_seconds}s" >&2
+    return 1
+  fi
+
+  local reported_timeout
+  reported_timeout="$(rch_reported_timeout_seconds "$log_path" || true)"
+  if [[ "$rch_build_timeout_sec" =~ ^[0-9]+$ && "$reported_timeout" =~ ^[0-9]+$ ]] &&
+    (( reported_timeout < rch_build_timeout_sec )); then
+    echo "rch reported timeout_secs=${reported_timeout} but requested build timeout is ${rch_build_timeout_sec}" >&2
+    return 1
+  fi
+
+  local remote_exit_code
+  remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
+  if [[ -z "$remote_exit_code" ]]; then
+    if [[ "$status" -eq 0 ]]; then
+      remote_exit_code="0"
+    else
+      echo "rch output missing remote exit marker" >&2
+      return 1
+    fi
+  fi
+  if ! remote_code_allowed "$remote_exit_code" "${allowed_codes[@]}"; then
+    echo "unexpected remote exit code ${remote_exit_code} for: ${command_text}" >&2
+    return 1
+  fi
+}
+
+run_check() {
+  run_step \
+    "cargo check -p frankenengine-engine --lib --bin franken_control_plane_policy_diagnostics" \
+    0 -- \
+    cargo check -p frankenengine-engine --lib --bin franken_control_plane_policy_diagnostics
+}
+
+run_tests() {
+  run_step \
+    "cargo test -p frankenengine-engine --test operator_diagnostic_contract_integration" \
+    0 -- \
+    cargo test -p frankenengine-engine --test operator_diagnostic_contract_integration
+  run_step \
+    "cargo test -p frankenengine-engine --test control_plane_policy_diagnostics_integration" \
+    0 -- \
+    cargo test -p frankenengine-engine --test control_plane_policy_diagnostics_integration
+  run_step \
+    "cargo test -p frankenengine-engine --test control_plane_policy_diagnostics_cli" \
+    0 -- \
+    cargo test -p frankenengine-engine --test control_plane_policy_diagnostics_cli
+}
+
+run_clippy() {
+  run_step \
+    "cargo clippy -p frankenengine-engine --bin franken_control_plane_policy_diagnostics --test operator_diagnostic_contract_integration --test control_plane_policy_diagnostics_integration --test control_plane_policy_diagnostics_cli -- -D warnings" \
+    0 -- \
+    cargo clippy -p frankenengine-engine --bin franken_control_plane_policy_diagnostics --test operator_diagnostic_contract_integration --test control_plane_policy_diagnostics_integration --test control_plane_policy_diagnostics_cli -- -D warnings
+}
+
+run_fmt() {
+  run_step \
+    "cargo fmt --all --check" \
+    0 -- \
+    cargo fmt --all --check
+}
+
+run_bundle() {
+  bundle_emitted=1
+  run_step \
+    "cargo run -p frankenengine-engine --bin franken_control_plane_policy_diagnostics -- --out-dir ${run_dir}" \
+    0 -- \
+    cargo run -p frankenengine-engine --bin franken_control_plane_policy_diagnostics -- --out-dir "${run_dir}"
+}
+
+case "$mode" in
+  check)
+    run_check
+    run_bundle
+    ;;
+  test)
+    run_tests
+    run_bundle
+    ;;
+  clippy)
+    run_clippy
+    ;;
+  fmt)
+    run_fmt
+    ;;
+  ci)
+    run_check
+    run_tests
+    run_bundle
+    run_clippy
+    run_fmt
+    ;;
+  *)
+    echo "usage: $0 [check|test|clippy|fmt|ci]" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "${bundle_emitted}" -eq 1 ]]; then
+  for artifact in \
+    boundary_policy_mapping_contract.json \
+    operator_diagnostic_contract.json \
+    user_error_translation_matrix.json \
+    remediation_linkage_index.json \
+    control_plane_policy_diagnostics_report.json \
+    trace_ids.json \
+    run_manifest.json \
+    events.jsonl \
+    commands.txt \
+    env.json \
+    repro.lock \
+    summary.md; do
+    [[ -f "${run_dir}/${artifact}" ]] || {
+      echo "missing required artifact: ${run_dir}/${artifact}" >&2
+      exit 1
+    }
+  done
+
+  [[ -d "${run_dir}/step_logs" ]] || {
+    echo "missing required artifact directory: ${run_dir}/step_logs" >&2
+    exit 1
+  }
+
+  printf '%s\n' "${commands_run[@]}" > "${run_dir}/suite_commands.txt"
+  printf '%s\n' "${mode}" > "${run_dir}/suite_mode.txt"
+  printf '%s\n' "${rch_step_logs_dir}" > "${run_dir}/rch_step_logs_dir.txt"
+
+  echo "control plane policy diagnostics artifacts: ${run_dir}"
+fi

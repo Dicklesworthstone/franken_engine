@@ -128,8 +128,14 @@ fn falsification_strategy_ordering() {
 
 #[test]
 fn falsification_strategy_as_str() {
-    assert_eq!(FalsificationStrategy::GuidedGradient.as_str(), "guided_gradient");
-    assert_eq!(FalsificationStrategy::SymbolicExecution.as_str(), "symbolic_execution");
+    assert_eq!(
+        FalsificationStrategy::GuidedGradient.as_str(),
+        "guided_gradient"
+    );
+    assert_eq!(
+        FalsificationStrategy::SymbolicExecution.as_str(),
+        "symbolic_execution"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -195,8 +201,20 @@ fn counterexample_exceeds_threshold() {
 #[test]
 fn counterexample_hash_determinism() {
     let seed = ContentHash::compute(b"seed");
-    let a = Counterexample::new(50_000, WorkloadDomain::Vectorizable, FalsificationStrategy::GuidedGradient, seed.clone(), 999);
-    let b = Counterexample::new(50_000, WorkloadDomain::Vectorizable, FalsificationStrategy::GuidedGradient, seed, 999);
+    let a = Counterexample::new(
+        50_000,
+        WorkloadDomain::Vectorizable,
+        FalsificationStrategy::GuidedGradient,
+        seed.clone(),
+        999,
+    );
+    let b = Counterexample::new(
+        50_000,
+        WorkloadDomain::Vectorizable,
+        FalsificationStrategy::GuidedGradient,
+        seed,
+        999,
+    );
     assert_eq!(a.counterexample_hash, b.counterexample_hash);
 }
 
@@ -258,7 +276,13 @@ fn domain_coverage_record_iteration_no_cx() {
 fn domain_coverage_record_iteration_with_cx() {
     let mut dc = DomainCoverage::new(WorkloadDomain::NativeAddon);
     let seed = ContentHash::compute(b"s");
-    let cx = Counterexample::new(80_000, WorkloadDomain::NativeAddon, FalsificationStrategy::RandomMutation, seed, 1);
+    let cx = Counterexample::new(
+        80_000,
+        WorkloadDomain::NativeAddon,
+        FalsificationStrategy::RandomMutation,
+        seed,
+        1,
+    );
     dc.record_iteration(Some(&cx));
     assert_eq!(dc.iterations, 1);
     assert_eq!(dc.counterexamples_found, 1);
@@ -372,7 +396,10 @@ fn verdict_claim_blocked() {
 
 #[test]
 fn verdict_display() {
-    assert_eq!(format!("{}", SynthesisVerdict::InfrastructureFailure), "infrastructure_failure");
+    assert_eq!(
+        format!("{}", SynthesisVerdict::InfrastructureFailure),
+        "infrastructure_failure"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -390,8 +417,12 @@ fn engine_add_input() {
 #[test]
 fn engine_covered_input_domains() {
     let mut engine = SynthesisEngine::new(epoch());
-    engine.add_input(make_input("a", WorkloadDomain::BranchHeavy, 1)).unwrap();
-    engine.add_input(make_input("b", WorkloadDomain::Vectorizable, 2)).unwrap();
+    engine
+        .add_input(make_input("a", WorkloadDomain::BranchHeavy, 1))
+        .unwrap();
+    engine
+        .add_input(make_input("b", WorkloadDomain::Vectorizable, 2))
+        .unwrap();
     let covered = engine.covered_input_domains();
     assert!(covered.contains(&WorkloadDomain::BranchHeavy));
     assert!(covered.contains(&WorkloadDomain::Vectorizable));
@@ -408,7 +439,9 @@ fn engine_validate_config_no_inputs() {
 #[test]
 fn engine_validate_config_missing_domain() {
     let mut engine = SynthesisEngine::new(epoch());
-    engine.add_input(make_input("a", WorkloadDomain::Vectorizable, 1)).unwrap();
+    engine
+        .add_input(make_input("a", WorkloadDomain::Vectorizable, 1))
+        .unwrap();
     let cfg = SynthesisConfig::minimal(epoch()); // requires BranchHeavy
     assert!(engine.validate_config(&cfg).is_err());
 }
@@ -417,7 +450,9 @@ fn engine_validate_config_missing_domain() {
 fn engine_run_campaign_no_counterexamples() {
     let mut engine = seed_engine_all_domains();
     let cfg = SynthesisConfig::default_config(epoch());
-    let campaign = engine.run_campaign("camp_fort", cfg, |_, _, _| None).unwrap();
+    let campaign = engine
+        .run_campaign("camp_fort", cfg, |_, _, _| None)
+        .unwrap();
     let v = campaign.verdict();
     // With 12 domains x 6 strategies x 1 seed = 72 iters; need 100/domain -> Incomplete
     assert!(v == SynthesisVerdict::Incomplete || v == SynthesisVerdict::Fortified);
@@ -426,9 +461,13 @@ fn engine_run_campaign_no_counterexamples() {
 #[test]
 fn engine_run_campaign_falsified() {
     let mut engine = SynthesisEngine::new(epoch());
-    engine.add_input(make_input("s", WorkloadDomain::BranchHeavy, 10)).unwrap();
+    engine
+        .add_input(make_input("s", WorkloadDomain::BranchHeavy, 10))
+        .unwrap();
     let cfg = SynthesisConfig::minimal(epoch());
-    let campaign = engine.run_campaign("camp_f", cfg, |_, _, _| Some(100_000)).unwrap();
+    let campaign = engine
+        .run_campaign("camp_f", cfg, |_, _, _| Some(100_000))
+        .unwrap();
     assert_eq!(campaign.verdict(), SynthesisVerdict::Falsified);
     assert!(campaign.counterexample_count() > 0);
 }
@@ -436,9 +475,13 @@ fn engine_run_campaign_falsified() {
 #[test]
 fn engine_duplicate_campaign_id_error() {
     let mut engine = SynthesisEngine::new(epoch());
-    engine.add_input(make_input("s", WorkloadDomain::BranchHeavy, 10)).unwrap();
+    engine
+        .add_input(make_input("s", WorkloadDomain::BranchHeavy, 10))
+        .unwrap();
     let cfg = SynthesisConfig::minimal(epoch());
-    engine.run_campaign("dup", cfg.clone(), |_, _, _| None).unwrap();
+    engine
+        .run_campaign("dup", cfg.clone(), |_, _, _| None)
+        .unwrap();
     let result = engine.run_campaign("dup", cfg, |_, _, _| None);
     assert!(result.is_err());
 }
@@ -467,13 +510,15 @@ fn e2e_report_no_counterexamples() {
 fn e2e_report_with_counterexamples() {
     let mut engine = seed_engine_all_domains();
     let cfg = SynthesisConfig::default_config(epoch());
-    engine.run_campaign("e2e_2", cfg, |_, d, _| {
-        if d == WorkloadDomain::ReactLifecycle {
-            Some(200_000)
-        } else {
-            None
-        }
-    }).unwrap();
+    engine
+        .run_campaign("e2e_2", cfg, |_, d, _| {
+            if d == WorkloadDomain::ReactLifecycle {
+                Some(200_000)
+            } else {
+                None
+            }
+        })
+        .unwrap();
     let report = engine.evaluate("report_e2e_2").unwrap();
     assert!(report.has_counterexamples());
     assert_eq!(report.verdict, SynthesisVerdict::Falsified);
@@ -485,7 +530,9 @@ fn e2e_report_content_hash_determinism() {
     let mut engine_a = seed_engine_all_domains();
     let mut engine_b = seed_engine_all_domains();
     let cfg = SynthesisConfig::default_config(epoch());
-    engine_a.run_campaign("det", cfg.clone(), |_, _, _| None).unwrap();
+    engine_a
+        .run_campaign("det", cfg.clone(), |_, _, _| None)
+        .unwrap();
     engine_b.run_campaign("det", cfg, |_, _, _| None).unwrap();
     let ra = engine_a.evaluate("rep_det").unwrap();
     let rb = engine_b.evaluate("rep_det").unwrap();
@@ -535,7 +582,9 @@ fn error_empty_domains_tag() {
 
 #[test]
 fn error_missing_domain_inputs() {
-    let e = SynthesisError::MissingDomainInputs { domain: "foo".into() };
+    let e = SynthesisError::MissingDomainInputs {
+        domain: "foo".into(),
+    };
     assert_eq!(e.tag(), "missing_domain_inputs");
     let s = format!("{}", e);
     assert!(s.contains("foo"));

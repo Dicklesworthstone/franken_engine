@@ -28,7 +28,12 @@ fn features(fs: &[HardwareFeature]) -> BTreeSet<HardwareFeature> {
     fs.iter().copied().collect()
 }
 
-fn make_residual(algo: u64, hw: u64, noise: u64, unexplained: u64) -> BTreeMap<ResidualCategory, u64> {
+fn make_residual(
+    algo: u64,
+    hw: u64,
+    noise: u64,
+    unexplained: u64,
+) -> BTreeMap<ResidualCategory, u64> {
     let mut m = BTreeMap::new();
     m.insert(ResidualCategory::AlgorithmicGain, algo);
     m.insert(ResidualCategory::HardwareAttributable, hw);
@@ -63,14 +68,22 @@ fn make_promotable_board() -> LocalizationBoard {
     board.add_entry(make_entry(
         MicroarchFamily::Zen4,
         &[HardwareFeature::Avx2],
-        1000, 600,
-        700_000, 200_000, 50_000, 50_000,
+        1000,
+        600,
+        700_000,
+        200_000,
+        50_000,
+        50_000,
     ));
     board.add_entry(make_entry(
         MicroarchFamily::GravitonArm,
         &[HardwareFeature::Neon],
-        1000, 650,
-        650_000, 200_000, 80_000, 70_000,
+        1000,
+        650,
+        650_000,
+        200_000,
+        80_000,
+        70_000,
     ));
     board
 }
@@ -225,8 +238,14 @@ fn residual_category_ordering() {
 
 #[test]
 fn residual_category_as_str() {
-    assert_eq!(ResidualCategory::AlgorithmicGain.as_str(), "algorithmic_gain");
-    assert_eq!(ResidualCategory::MeasurementNoise.as_str(), "measurement_noise");
+    assert_eq!(
+        ResidualCategory::AlgorithmicGain.as_str(),
+        "algorithmic_gain"
+    );
+    assert_eq!(
+        ResidualCategory::MeasurementNoise.as_str(),
+        "measurement_noise"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -235,21 +254,57 @@ fn residual_category_as_str() {
 
 #[test]
 fn localization_entry_hash_determinism() {
-    let a = make_entry(MicroarchFamily::Zen4, &[HardwareFeature::Avx2], 1000, 600, 700_000, 200_000, 50_000, 50_000);
-    let b = make_entry(MicroarchFamily::Zen4, &[HardwareFeature::Avx2], 1000, 600, 700_000, 200_000, 50_000, 50_000);
+    let a = make_entry(
+        MicroarchFamily::Zen4,
+        &[HardwareFeature::Avx2],
+        1000,
+        600,
+        700_000,
+        200_000,
+        50_000,
+        50_000,
+    );
+    let b = make_entry(
+        MicroarchFamily::Zen4,
+        &[HardwareFeature::Avx2],
+        1000,
+        600,
+        700_000,
+        200_000,
+        50_000,
+        50_000,
+    );
     assert_eq!(a.entry_hash, b.entry_hash);
 }
 
 #[test]
 fn localization_entry_speedup_positive() {
-    let entry = make_entry(MicroarchFamily::Zen4, &[], 1000, 600, 500_000, 300_000, 100_000, 100_000);
+    let entry = make_entry(
+        MicroarchFamily::Zen4,
+        &[],
+        1000,
+        600,
+        500_000,
+        300_000,
+        100_000,
+        100_000,
+    );
     let speedup = entry.speedup_millionths();
     assert_eq!(speedup, 400_000); // (1000-600)/1000 * 1M
 }
 
 #[test]
 fn localization_entry_speedup_no_improvement() {
-    let entry = make_entry(MicroarchFamily::Zen4, &[], 1000, 1200, 0, 0, 500_000, 500_000);
+    let entry = make_entry(
+        MicroarchFamily::Zen4,
+        &[],
+        1000,
+        1200,
+        0,
+        0,
+        500_000,
+        500_000,
+    );
     assert_eq!(entry.speedup_millionths(), 0);
 }
 
@@ -261,25 +316,61 @@ fn localization_entry_speedup_zero_baseline() {
 
 #[test]
 fn localization_entry_algorithmic_fraction() {
-    let entry = make_entry(MicroarchFamily::AlderLake, &[], 1000, 500, 650_000, 200_000, 50_000, 100_000);
+    let entry = make_entry(
+        MicroarchFamily::AlderLake,
+        &[],
+        1000,
+        500,
+        650_000,
+        200_000,
+        50_000,
+        100_000,
+    );
     assert_eq!(entry.algorithmic_fraction(), 650_000);
 }
 
 #[test]
 fn localization_entry_hardware_fraction() {
-    let entry = make_entry(MicroarchFamily::AlderLake, &[], 1000, 500, 650_000, 200_000, 50_000, 100_000);
+    let entry = make_entry(
+        MicroarchFamily::AlderLake,
+        &[],
+        1000,
+        500,
+        650_000,
+        200_000,
+        50_000,
+        100_000,
+    );
     assert_eq!(entry.hardware_fraction(), 200_000);
 }
 
 #[test]
 fn localization_entry_residual_sum() {
-    let entry = make_entry(MicroarchFamily::Zen5, &[], 100, 50, 400_000, 300_000, 200_000, 100_000);
+    let entry = make_entry(
+        MicroarchFamily::Zen5,
+        &[],
+        100,
+        50,
+        400_000,
+        300_000,
+        200_000,
+        100_000,
+    );
     assert_eq!(entry.residual_sum(), 1_000_000);
 }
 
 #[test]
 fn localization_entry_features_available_on() {
-    let entry = make_entry(MicroarchFamily::Zen4, &[HardwareFeature::Avx2], 1000, 600, 600_000, 200_000, 100_000, 100_000);
+    let entry = make_entry(
+        MicroarchFamily::Zen4,
+        &[HardwareFeature::Avx2],
+        1000,
+        600,
+        600_000,
+        200_000,
+        100_000,
+        100_000,
+    );
     assert!(entry.features_available_on(MicroarchFamily::Zen4));
     assert!(entry.features_available_on(MicroarchFamily::Zen5));
     assert!(!entry.features_available_on(MicroarchFamily::GravitonArm));
@@ -319,8 +410,14 @@ fn promotion_policy_default_is_strict() {
 #[test]
 fn promotion_verdict_as_str() {
     assert_eq!(PromotionVerdict::Promotable.as_str(), "promotable");
-    assert_eq!(PromotionVerdict::HardwareDependent.as_str(), "hardware_dependent");
-    assert_eq!(PromotionVerdict::InsufficientEvidence.as_str(), "insufficient_evidence");
+    assert_eq!(
+        PromotionVerdict::HardwareDependent.as_str(),
+        "hardware_dependent"
+    );
+    assert_eq!(
+        PromotionVerdict::InsufficientEvidence.as_str(),
+        "insufficient_evidence"
+    );
     assert_eq!(PromotionVerdict::Rejected.as_str(), "rejected");
 }
 
@@ -346,7 +443,16 @@ fn board_new_empty() {
 #[test]
 fn board_add_entry() {
     let mut board = LocalizationBoard::new("opt_2", epoch(), PromotionPolicy::relaxed());
-    let entry = make_entry(MicroarchFamily::Zen4, &[], 1000, 600, 700_000, 200_000, 50_000, 50_000);
+    let entry = make_entry(
+        MicroarchFamily::Zen4,
+        &[],
+        1000,
+        600,
+        700_000,
+        200_000,
+        50_000,
+        50_000,
+    );
     assert!(board.add_entry(entry));
     assert_eq!(board.entry_count(), 1);
 }
@@ -354,8 +460,26 @@ fn board_add_entry() {
 #[test]
 fn board_distinct_families() {
     let mut board = LocalizationBoard::new("opt_3", epoch(), PromotionPolicy::relaxed());
-    board.add_entry(make_entry(MicroarchFamily::Zen4, &[], 1000, 600, 700_000, 200_000, 50_000, 50_000));
-    board.add_entry(make_entry(MicroarchFamily::GravitonArm, &[], 1000, 650, 650_000, 200_000, 80_000, 70_000));
+    board.add_entry(make_entry(
+        MicroarchFamily::Zen4,
+        &[],
+        1000,
+        600,
+        700_000,
+        200_000,
+        50_000,
+        50_000,
+    ));
+    board.add_entry(make_entry(
+        MicroarchFamily::GravitonArm,
+        &[],
+        1000,
+        650,
+        650_000,
+        200_000,
+        80_000,
+        70_000,
+    ));
     let families = board.distinct_families();
     assert_eq!(families.len(), 2);
     assert!(families.contains(&MicroarchFamily::Zen4));
@@ -371,8 +495,26 @@ fn board_has_arm_and_x64() {
 #[test]
 fn board_no_arm_and_x64_x86_only() {
     let mut board = LocalizationBoard::new("x86_only", epoch(), PromotionPolicy::relaxed());
-    board.add_entry(make_entry(MicroarchFamily::Zen4, &[], 1000, 600, 700_000, 200_000, 50_000, 50_000));
-    board.add_entry(make_entry(MicroarchFamily::AlderLake, &[], 1000, 600, 700_000, 200_000, 50_000, 50_000));
+    board.add_entry(make_entry(
+        MicroarchFamily::Zen4,
+        &[],
+        1000,
+        600,
+        700_000,
+        200_000,
+        50_000,
+        50_000,
+    ));
+    board.add_entry(make_entry(
+        MicroarchFamily::AlderLake,
+        &[],
+        1000,
+        600,
+        700_000,
+        200_000,
+        50_000,
+        50_000,
+    ));
     assert!(!board.has_arm_and_x64());
 }
 
@@ -422,8 +564,26 @@ fn evaluate_promotion_empty_board() {
 #[test]
 fn evaluate_promotion_no_speedup() {
     let mut board = LocalizationBoard::new("no_speed", epoch(), PromotionPolicy::relaxed());
-    board.add_entry(make_entry(MicroarchFamily::Zen4, &[], 1000, 1000, 0, 0, 500_000, 500_000));
-    board.add_entry(make_entry(MicroarchFamily::GravitonArm, &[], 1000, 1100, 0, 0, 500_000, 500_000));
+    board.add_entry(make_entry(
+        MicroarchFamily::Zen4,
+        &[],
+        1000,
+        1000,
+        0,
+        0,
+        500_000,
+        500_000,
+    ));
+    board.add_entry(make_entry(
+        MicroarchFamily::GravitonArm,
+        &[],
+        1000,
+        1100,
+        0,
+        0,
+        500_000,
+        500_000,
+    ));
     let (verdict, _) = board.evaluate_promotion();
     assert_eq!(verdict, PromotionVerdict::Rejected);
 }
@@ -440,8 +600,26 @@ fn evaluate_promotion_promotable() {
 fn evaluate_promotion_hardware_dependent() {
     let mut board = LocalizationBoard::new("hw_dep", epoch(), PromotionPolicy::relaxed());
     // Low algo, high hw
-    board.add_entry(make_entry(MicroarchFamily::Zen4, &[], 1000, 500, 200_000, 600_000, 100_000, 100_000));
-    board.add_entry(make_entry(MicroarchFamily::GravitonArm, &[], 1000, 500, 200_000, 600_000, 100_000, 100_000));
+    board.add_entry(make_entry(
+        MicroarchFamily::Zen4,
+        &[],
+        1000,
+        500,
+        200_000,
+        600_000,
+        100_000,
+        100_000,
+    ));
+    board.add_entry(make_entry(
+        MicroarchFamily::GravitonArm,
+        &[],
+        1000,
+        500,
+        200_000,
+        600_000,
+        100_000,
+        100_000,
+    ));
     let (verdict, _) = board.evaluate_promotion();
     assert_eq!(verdict, PromotionVerdict::HardwareDependent);
 }
@@ -450,7 +628,16 @@ fn evaluate_promotion_hardware_dependent() {
 fn evaluate_promotion_insufficient_evidence_too_few_families() {
     let mut board = LocalizationBoard::new("few_fam", epoch(), PromotionPolicy::strict());
     // Only 1 family, strict requires 3
-    board.add_entry(make_entry(MicroarchFamily::Zen4, &[], 1000, 500, 700_000, 100_000, 100_000, 100_000));
+    board.add_entry(make_entry(
+        MicroarchFamily::Zen4,
+        &[],
+        1000,
+        500,
+        700_000,
+        100_000,
+        100_000,
+        100_000,
+    ));
     let (verdict, _) = board.evaluate_promotion();
     assert_eq!(verdict, PromotionVerdict::InsufficientEvidence);
 }
@@ -465,8 +652,12 @@ fn identify_unsupported_hardware_with_x86_features() {
     board.add_entry(make_entry(
         MicroarchFamily::Zen4,
         &[HardwareFeature::Avx512],
-        1000, 500,
-        700_000, 200_000, 50_000, 50_000,
+        1000,
+        500,
+        700_000,
+        200_000,
+        50_000,
+        50_000,
     ));
     let unsupported = board.identify_unsupported_hardware();
     // ARM families should be unsupported since they lack AVX-512
@@ -512,7 +703,12 @@ fn generate_report_content_hash_determinism() {
 fn unsupported_entry_hash_determinism() {
     let mut missing = BTreeSet::new();
     missing.insert(HardwareFeature::Avx512);
-    let a = UnsupportedHardwareEntry::new(MicroarchFamily::GravitonArm, missing.clone(), 100_000, false);
+    let a = UnsupportedHardwareEntry::new(
+        MicroarchFamily::GravitonArm,
+        missing.clone(),
+        100_000,
+        false,
+    );
     let b = UnsupportedHardwareEntry::new(MicroarchFamily::GravitonArm, missing, 100_000, false);
     assert_eq!(a.content_hash, b.content_hash);
 }
@@ -538,14 +734,22 @@ fn e2e_full_promotion_flow() {
     board.add_entry(make_entry(
         MicroarchFamily::Zen4,
         &[HardwareFeature::Avx2, HardwareFeature::PopcntHw],
-        2000, 1000,
-        650_000, 200_000, 80_000, 70_000,
+        2000,
+        1000,
+        650_000,
+        200_000,
+        80_000,
+        70_000,
     ));
     board.add_entry(make_entry(
         MicroarchFamily::GravitonArm,
         &[HardwareFeature::Neon, HardwareFeature::PopcntHw],
-        2000, 1100,
-        600_000, 200_000, 100_000, 100_000,
+        2000,
+        1100,
+        600_000,
+        200_000,
+        100_000,
+        100_000,
     ));
 
     let report = board.generate_report();
@@ -562,25 +766,39 @@ fn e2e_rejection_with_excessive_noise() {
     board.add_entry(make_entry(
         MicroarchFamily::Zen4,
         &[],
-        1000, 500,
-        600_000, 100_000, 200_000, 100_000, // noise = 200_000 > 100_000 threshold
+        1000,
+        500,
+        600_000,
+        100_000,
+        200_000,
+        100_000, // noise = 200_000 > 100_000 threshold
     ));
     board.add_entry(make_entry(
         MicroarchFamily::GravitonArm,
         &[],
-        1000, 500,
-        600_000, 100_000, 200_000, 100_000,
+        1000,
+        500,
+        600_000,
+        100_000,
+        200_000,
+        100_000,
     ));
     board.add_entry(make_entry(
         MicroarchFamily::AlderLake,
         &[],
-        1000, 500,
-        600_000, 100_000, 200_000, 100_000,
+        1000,
+        500,
+        600_000,
+        100_000,
+        200_000,
+        100_000,
     ));
 
     let (verdict, details) = board.evaluate_promotion();
     assert_ne!(verdict, PromotionVerdict::Promotable);
-    let has_noise_rejection = details.iter().any(|d| matches!(d, RejectionDetail::ExcessiveNoise { .. }));
+    let has_noise_rejection = details
+        .iter()
+        .any(|d| matches!(d, RejectionDetail::ExcessiveNoise { .. }));
     assert!(has_noise_rejection);
 }
 

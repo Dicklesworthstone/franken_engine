@@ -377,12 +377,12 @@ fn scenario_result_seal_produces_nonempty_hash() {
         details: String::new(),
         content_hash: ContentHash::compute(b""),
     };
-    let before = r.content_hash.clone();
+    let before = r.content_hash;
     r.seal();
     // seal should compute a different hash from the empty placeholder.
     assert_ne!(r.content_hash, before);
     // Sealing twice produces the same hash.
-    let hash1 = r.content_hash.clone();
+    let hash1 = r.content_hash;
     r.seal();
     assert_eq!(r.content_hash, hash1);
 }
@@ -842,7 +842,7 @@ fn report_rehash_produces_deterministic_hash() {
         make_failing_result("rh:b", WorkloadOutcome::Mismatch),
     ];
     let mut report = build_verification_report("rh-test", &test_epoch(), &results);
-    let hash1 = report.content_hash.clone();
+    let hash1 = report.content_hash;
     report.rehash();
     assert_eq!(report.content_hash, hash1);
 }

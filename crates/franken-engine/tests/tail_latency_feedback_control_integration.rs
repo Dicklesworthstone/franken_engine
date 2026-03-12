@@ -708,7 +708,7 @@ fn apply_override_forces_action_within_epoch() {
 #[test]
 fn apply_override_ignores_expired_override() {
     let mut state = ControllerState::new("ov-expired", epoch(15));
-    let original_hash = state.content_hash.clone();
+    let original_hash = state.content_hash;
 
     let over = PolicyOverride::new(
         "ov-old",
@@ -774,7 +774,7 @@ fn reset_controller_rehashes_state() {
     let cfg = ControllerConfig::default_config();
     let mut state = ControllerState::new("reset-hash", epoch(1));
     pid_step(&cfg, &mut state, 500_000);
-    let hash_before = state.content_hash.clone();
+    let hash_before = state.content_hash;
 
     reset_controller(&mut state);
     // Hash should change because integral and previous_error changed

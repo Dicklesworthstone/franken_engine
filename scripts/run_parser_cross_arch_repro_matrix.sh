@@ -14,6 +14,9 @@ artifact_root="${PARSER_CROSS_ARCH_REPRO_ARTIFACT_ROOT:-artifacts/parser_cross_a
 scenario_id="${PARSER_CROSS_ARCH_REPRO_SCENARIO:-psrp-07-2}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 require_matrix="${PARSER_CROSS_ARCH_REQUIRE_MATRIX:-0}"
+auto_discover_manifests="${PARSER_CROSS_ARCH_AUTO_DISCOVER_MANIFESTS:-1}"
+event_ast_artifact_root="${PARSER_CROSS_ARCH_EVENT_AST_ARTIFACT_ROOT:-artifacts/parser_event_ast_equivalence}"
+parallel_artifact_root="${PARSER_CROSS_ARCH_PARALLEL_INTERFERENCE_ARTIFACT_ROOT:-artifacts/parser_parallel_interference}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
@@ -26,6 +29,10 @@ x86_event_ast_manifest="${PARSER_CROSS_ARCH_X86_EVENT_AST_MANIFEST:-}"
 arm64_event_ast_manifest="${PARSER_CROSS_ARCH_ARM64_EVENT_AST_MANIFEST:-}"
 x86_parallel_manifest="${PARSER_CROSS_ARCH_X86_PARALLEL_INTERFERENCE_MANIFEST:-}"
 arm64_parallel_manifest="${PARSER_CROSS_ARCH_ARM64_PARALLEL_INTERFERENCE_MANIFEST:-}"
+x86_event_ast_manifest_source="missing"
+arm64_event_ast_manifest_source="missing"
+x86_parallel_manifest_source="missing"
+arm64_parallel_manifest_source="missing"
 
 trace_id="trace-parser-cross-arch-repro-matrix-${timestamp}"
 decision_id="decision-parser-cross-arch-repro-matrix-${timestamp}"
@@ -82,6 +89,69 @@ rch_reject_artifact_retrieval_failure() {
   fi
 }
 
+manifest_matches_arch() {
+  local manifest="$1"
+  local expected_arch="$2"
+  jq -er --arg expected_arch "$expected_arch" \
+    '(.arch_profile // .deterministic_environment.rust_host // "") == $expected_arch' \
+    "$manifest" >/dev/null 2>&1
+}
+
+find_latest_manifest_for_arch() {
+  local artifact_root="$1"
+  local expected_arch="$2"
+
+  if [[ ! -d "$artifact_root" ]]; then
+    return 0
+  fi
+
+  find "$artifact_root" -type f -name run_manifest.json 2>/dev/null \
+    | sort \
+    | while IFS= read -r candidate; do
+        if manifest_matches_arch "$candidate" "$expected_arch"; then
+          printf '%s\n' "$candidate"
+        fi
+      done \
+    | tail -n 1
+}
+
+resolve_manifest_input() {
+  local manifest_var_name="$1"
+  local source_var_name="$2"
+  local artifact_root="$3"
+  local expected_arch="$4"
+  local current_value="${!manifest_var_name:-}"
+  local discovered_manifest=""
+
+  if [[ -n "$current_value" ]]; then
+    printf -v "$source_var_name" '%s' "env"
+    return
+  fi
+
+  if [[ "$auto_discover_manifests" != "1" ]]; then
+    printf -v "$source_var_name" '%s' "missing"
+    return
+  fi
+
+  discovered_manifest="$(find_latest_manifest_for_arch "$artifact_root" "$expected_arch")"
+  if [[ -n "$discovered_manifest" ]]; then
+    printf -v "$manifest_var_name" '%s' "$discovered_manifest"
+    printf -v "$source_var_name" '%s' "auto_discovered"
+    return
+  fi
+
+  printf -v "$source_var_name" '%s' "missing"
+}
+
+json_string_or_null() {
+  local value="${1:-}"
+  if [[ -z "$value" ]]; then
+    printf 'null'
+  else
+    printf '"%s"' "$(parser_frontier_json_escape "$value")"
+  fi
+}
+
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
@@ -94,6 +164,27 @@ matrix_mode_strict=false
 if [[ "$mode" == "matrix" || "$require_matrix" == "1" ]]; then
   matrix_mode_strict=true
 fi
+
+resolve_manifest_input \
+  x86_event_ast_manifest \
+  x86_event_ast_manifest_source \
+  "$event_ast_artifact_root" \
+  "x86_64-unknown-linux-gnu"
+resolve_manifest_input \
+  arm64_event_ast_manifest \
+  arm64_event_ast_manifest_source \
+  "$event_ast_artifact_root" \
+  "aarch64-unknown-linux-gnu"
+resolve_manifest_input \
+  x86_parallel_manifest \
+  x86_parallel_manifest_source \
+  "$parallel_artifact_root" \
+  "x86_64-unknown-linux-gnu"
+resolve_manifest_input \
+  arm64_parallel_manifest \
+  arm64_parallel_manifest_source \
+  "$parallel_artifact_root" \
+  "aarch64-unknown-linux-gnu"
 
 run_step() {
   local command_text="$1"
@@ -433,6 +524,15 @@ write_matrix_summary() {
     --arg toolchain_fingerprint "$PARSER_FRONTIER_TOOLCHAIN_FINGERPRINT" \
     --arg replay_command "$replay_command" \
     --arg matrix_eval_error "$matrix_eval_error" \
+    --arg auto_discover_manifests "$auto_discover_manifests" \
+    --arg x86_event_ast_manifest "$x86_event_ast_manifest" \
+    --arg arm64_event_ast_manifest "$arm64_event_ast_manifest" \
+    --arg x86_parallel_manifest "$x86_parallel_manifest" \
+    --arg arm64_parallel_manifest "$arm64_parallel_manifest" \
+    --arg x86_event_ast_manifest_source "$x86_event_ast_manifest_source" \
+    --arg arm64_event_ast_manifest_source "$arm64_event_ast_manifest_source" \
+    --arg x86_parallel_manifest_source "$x86_parallel_manifest_source" \
+    --arg arm64_parallel_manifest_source "$arm64_parallel_manifest_source" \
     --argjson matrix_complete "$matrix_complete" \
     --argjson critical_delta_count "$critical_delta_count" \
     --argjson lane_deltas "$lane_deltas_json" \
@@ -450,6 +550,21 @@ write_matrix_summary() {
       host_arch_profile: $host_arch,
       host_toolchain_fingerprint: $toolchain_fingerprint,
       replay_command: $replay_command,
+      matrix_inputs: {
+        auto_discovery_enabled: ($auto_discover_manifests == "1"),
+        parser_event_ast_equivalence: {
+          x86_64_manifest: (if $x86_event_ast_manifest == "" then null else $x86_event_ast_manifest end),
+          x86_64_source: $x86_event_ast_manifest_source,
+          aarch64_manifest: (if $arm64_event_ast_manifest == "" then null else $arm64_event_ast_manifest end),
+          aarch64_source: $arm64_event_ast_manifest_source
+        },
+        parser_parallel_interference: {
+          x86_64_manifest: (if $x86_parallel_manifest == "" then null else $x86_parallel_manifest end),
+          x86_64_source: $x86_parallel_manifest_source,
+          aarch64_manifest: (if $arm64_parallel_manifest == "" then null else $arm64_parallel_manifest end),
+          aarch64_source: $arm64_parallel_manifest_source
+        }
+      },
       matrix_eval_error: (if $matrix_eval_error == "" then null else $matrix_eval_error end),
       lane_deltas: $lane_deltas
     }' >"$matrix_summary_path"
@@ -531,6 +646,21 @@ write_manifest() {
     echo '  "matrix_dimensions": {'
     echo '    "architectures": ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],'
     echo '    "required_lanes": ["parser_event_ast_equivalence", "parser_parallel_interference"]'
+    echo '  },'
+    echo '  "matrix_inputs": {'
+    echo "    \"auto_discovery_enabled\": $([[ "$auto_discover_manifests" == "1" ]] && echo true || echo false),"
+    echo '    "parser_event_ast_equivalence": {'
+    echo "      \"x86_64_manifest\": $(json_string_or_null "$x86_event_ast_manifest"),"
+    echo "      \"x86_64_source\": \"${x86_event_ast_manifest_source}\","
+    echo "      \"aarch64_manifest\": $(json_string_or_null "$arm64_event_ast_manifest"),"
+    echo "      \"aarch64_source\": \"${arm64_event_ast_manifest_source}\""
+    echo '    },'
+    echo '    "parser_parallel_interference": {'
+    echo "      \"x86_64_manifest\": $(json_string_or_null "$x86_parallel_manifest"),"
+    echo "      \"x86_64_source\": \"${x86_parallel_manifest_source}\","
+    echo "      \"aarch64_manifest\": $(json_string_or_null "$arm64_parallel_manifest"),"
+    echo "      \"aarch64_source\": \"${arm64_parallel_manifest_source}\""
+    echo '    }'
     echo '  },'
     echo '  "deterministic_environment": {'
     parser_frontier_emit_manifest_environment_fields "    " "null"

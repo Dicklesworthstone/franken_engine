@@ -9,8 +9,8 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-300}}"
 rch_exec_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-1800}"
+rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-300}}"
 artifact_root="${ORCHESTRATOR_CONTEXT_REFACTOR_ARTIFACT_ROOT:-artifacts/orchestrator_context_refactor}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 default_target_dir="/var/tmp/rch_target_franken_engine_orchestrator_context_refactor"
@@ -18,6 +18,9 @@ target_dir="${CARGO_TARGET_DIR:-${default_target_dir}}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-4}"
 run_dir="${artifact_root}/${timestamp}"
 rch_step_logs_dir="${run_dir}/rch_step_logs"
+local_binary_path="${target_dir}/debug/franken_orchestrator_context_refactor"
+rch_ready_attempts="${RCH_READY_ATTEMPTS:-12}"
+rch_ready_sleep_seconds="${RCH_READY_SLEEP_SECONDS:-2}"
 
 mkdir -p "$run_dir" "$rch_step_logs_dir"
 
@@ -41,6 +44,68 @@ run_rch() {
     "CARGO_TARGET_DIR=${target_dir}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
     "$@"
+}
+
+run_rch_strict_logged() {
+  local log_path="$1"
+  shift
+
+  local fifo_path fallback_flag_path reader_pid rch_pid rch_status=0
+  local local_command_pattern="$*"
+  local line
+
+  fifo_path="$(mktemp -u "${TMPDIR:-/tmp}/rch-orchestrator-context-refactor-stream.XXXXXX")"
+  fallback_flag_path="$(mktemp "${run_dir}/rch-fallback.XXXXXX")"
+  rm -f "$fallback_flag_path"
+  mkfifo "$fifo_path"
+  : >"$log_path"
+
+  {
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      printf '%s\n' "$line" | tee -a "$log_path"
+      if [[ "$line" == *"Remote execution failed: "*"running locally"* ||
+        "$line" == *"Remote toolchain failure, falling back to local"* ||
+        "$line" == *"falling back to local"* ||
+        "$line" == *"fallback to local"* ||
+        "$line" == *"local fallback"* ||
+        "$line" == *"running locally"* ||
+        "$line" == *"[RCH] local ("* ||
+        "$line" == *"Failed to query daemon:"*"running locally"* ||
+        "$line" == *"Dependency preflight blocked remote execution"* ||
+        "$line" == *"RCH-E326"* ]]; then
+        : >"$fallback_flag_path"
+        if [[ -n "${rch_pid:-}" ]]; then
+          kill "$rch_pid" 2>/dev/null || true
+          pkill -P "$rch_pid" 2>/dev/null || true
+        fi
+        if [[ -n "$local_command_pattern" ]]; then
+          pkill -f "$local_command_pattern" 2>/dev/null || true
+        fi
+        pkill -f "CARGO_TARGET_DIR=${target_dir}" 2>/dev/null || true
+        pkill -f "${target_dir}" 2>/dev/null || true
+      fi
+    done <"$fifo_path"
+  } &
+  reader_pid=$!
+
+  run_rch "$@" >"$fifo_path" 2>&1 &
+  rch_pid=$!
+  wait "$rch_pid" || rch_status=$?
+  wait "$reader_pid" || true
+  rm -f "$fifo_path"
+
+  if [[ -f "$fallback_flag_path" ]]; then
+    rm -f "$fallback_flag_path"
+    if [[ -n "$local_command_pattern" ]]; then
+      pkill -f "$local_command_pattern" 2>/dev/null || true
+    fi
+    pkill -f "CARGO_TARGET_DIR=${target_dir}" 2>/dev/null || true
+    pkill -f "${target_dir}" 2>/dev/null || true
+    return 125
+  fi
+
+  rm -f "$fallback_flag_path"
+  return "$rch_status"
 }
 
 rch_strip_ansi() {
@@ -82,6 +147,21 @@ remote_code_allowed() {
   return 1
 }
 
+ensure_rch_ready() {
+  local attempts="${1:-5}"
+  local sleep_seconds="${2:-2}"
+  local attempt
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if rch check >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "${sleep_seconds}"
+  done
+
+  return 1
+}
+
 declare -a commands_run=()
 step_index=0
 
@@ -102,10 +182,26 @@ run_step() {
   echo "==> ${command_text}"
 
   local status=0
+  local fallback_detected=false
+
+  if ! ensure_rch_ready "${rch_ready_attempts}" "${rch_ready_sleep_seconds}"; then
+    echo "rch check not ready after ${rch_ready_attempts} attempts; refusing to risk local fallback" >&2
+    return 1
+  fi
+
   set +e
-  run_rch "$@" > >(tee "$log_path") 2>&1
+  run_rch_strict_logged "$log_path" "$@"
   status=$?
   set -e
+
+  if [[ "$status" -eq 125 ]]; then
+    fallback_detected=true
+  fi
+
+  if "$fallback_detected"; then
+    echo "rch reported local fallback; refusing local execution for heavy command" >&2
+    return 1
+  fi
 
   if ! rch_reject_local_fallback "$log_path"; then
     return 1
@@ -136,6 +232,18 @@ run_step() {
   fi
   if ! remote_code_allowed "$remote_exit_code" "${allowed_codes[@]}"; then
     echo "unexpected remote exit code ${remote_exit_code} for: ${command_text}" >&2
+    return 1
+  fi
+}
+
+run_local_step() {
+  local command_text="$1"
+  shift
+  commands_run+=("${command_text}")
+
+  echo "==> ${command_text}"
+
+  if ! "$@"; then
     return 1
   fi
 }
@@ -175,9 +283,18 @@ run_clippy() {
 
 run_bundle() {
   run_step \
-    "cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir ${run_dir}" \
+    "cargo build -p frankenengine-engine --bin franken_orchestrator_context_refactor" \
     0 -- \
-    cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir "${run_dir}"
+    cargo build -p frankenengine-engine --bin franken_orchestrator_context_refactor
+
+  [[ -x "${local_binary_path}" ]] || {
+    echo "missing local binary: ${local_binary_path}" >&2
+    return 1
+  }
+
+  run_local_step \
+    "${local_binary_path} --out-dir ${run_dir} --workspace-root ${root_dir}" \
+    "${local_binary_path}" --out-dir "${run_dir}" --workspace-root "${root_dir}"
 }
 
 case "$mode" in

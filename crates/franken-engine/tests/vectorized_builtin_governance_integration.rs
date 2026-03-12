@@ -74,13 +74,21 @@ fn test_vectorized_lane_ordering_first_last() {
 fn test_vectorized_lane_ordering_adjacent() {
     let all = VectorizedLane::all();
     for i in 0..all.len() - 1 {
-        assert!(all[i] < all[i + 1], "lane {:?} should be < {:?}", all[i], all[i + 1]);
+        assert!(
+            all[i] < all[i + 1],
+            "lane {:?} should be < {:?}",
+            all[i],
+            all[i + 1]
+        );
     }
 }
 
 #[test]
 fn test_vectorized_lane_display_array_higher_order() {
-    assert_eq!(VectorizedLane::ArrayHigherOrder.to_string(), "array_higher_order");
+    assert_eq!(
+        VectorizedLane::ArrayHigherOrder.to_string(),
+        "array_higher_order"
+    );
 }
 
 #[test]
@@ -216,7 +224,11 @@ fn test_skew_entry_within_budget() {
     let s = SkewEntry::new(
         VectorizedLane::TypedArrayBulk,
         50_000,
-        1000, 900, 3000, 2800, 100,
+        1000,
+        900,
+        3000,
+        2800,
+        100,
         DEFAULT_MAX_SKEW_MILLIONTHS,
     );
     assert!(s.within_budget);
@@ -227,7 +239,11 @@ fn test_skew_entry_exceeds_budget() {
     let s = SkewEntry::new(
         VectorizedLane::TypedArrayBulk,
         DEFAULT_MAX_SKEW_MILLIONTHS + 1,
-        1000, 900, 3000, 2800, 100,
+        1000,
+        900,
+        3000,
+        2800,
+        100,
         DEFAULT_MAX_SKEW_MILLIONTHS,
     );
     assert!(!s.within_budget);
@@ -237,12 +253,22 @@ fn test_skew_entry_exceeds_budget() {
 fn test_skew_entry_hash_determinism() {
     let a = SkewEntry::new(
         VectorizedLane::BufferOps,
-        10_000, 500, 450, 1500, 1400, 60,
+        10_000,
+        500,
+        450,
+        1500,
+        1400,
+        60,
         DEFAULT_MAX_SKEW_MILLIONTHS,
     );
     let b = SkewEntry::new(
         VectorizedLane::BufferOps,
-        10_000, 500, 450, 1500, 1400, 60,
+        10_000,
+        500,
+        450,
+        1500,
+        1400,
+        60,
         DEFAULT_MAX_SKEW_MILLIONTHS,
     );
     assert_eq!(a.entry_hash, b.entry_hash);
@@ -254,33 +280,58 @@ fn test_skew_entry_hash_determinism() {
 
 #[test]
 fn test_cold_start_overhead_computation() {
-    let c = ColdStartEntry::new(VectorizedLane::ArrayHigherOrder, 1200, 1000, DEFAULT_MAX_COLD_START_OVERHEAD);
+    let c = ColdStartEntry::new(
+        VectorizedLane::ArrayHigherOrder,
+        1200,
+        1000,
+        DEFAULT_MAX_COLD_START_OVERHEAD,
+    );
     assert_eq!(c.overhead_millionths, 200_000);
     assert!(c.within_budget);
 }
 
 #[test]
 fn test_cold_start_exceeds_budget() {
-    let c = ColdStartEntry::new(VectorizedLane::ArrayHigherOrder, 5000, 1000, DEFAULT_MAX_COLD_START_OVERHEAD);
+    let c = ColdStartEntry::new(
+        VectorizedLane::ArrayHigherOrder,
+        5000,
+        1000,
+        DEFAULT_MAX_COLD_START_OVERHEAD,
+    );
     assert!(!c.within_budget);
 }
 
 #[test]
 fn test_cold_start_zero_warm_ns() {
-    let c = ColdStartEntry::new(VectorizedLane::ArrayHigherOrder, 100, 0, DEFAULT_MAX_COLD_START_OVERHEAD);
+    let c = ColdStartEntry::new(
+        VectorizedLane::ArrayHigherOrder,
+        100,
+        0,
+        DEFAULT_MAX_COLD_START_OVERHEAD,
+    );
     assert_eq!(c.overhead_millionths, FIXED_ONE);
 }
 
 #[test]
 fn test_cold_start_both_zero() {
-    let c = ColdStartEntry::new(VectorizedLane::ArrayHigherOrder, 0, 0, DEFAULT_MAX_COLD_START_OVERHEAD);
+    let c = ColdStartEntry::new(
+        VectorizedLane::ArrayHigherOrder,
+        0,
+        0,
+        DEFAULT_MAX_COLD_START_OVERHEAD,
+    );
     assert_eq!(c.overhead_millionths, 0);
     assert!(c.within_budget);
 }
 
 #[test]
 fn test_cold_start_no_overhead() {
-    let c = ColdStartEntry::new(VectorizedLane::MathBatch, 1000, 1000, DEFAULT_MAX_COLD_START_OVERHEAD);
+    let c = ColdStartEntry::new(
+        VectorizedLane::MathBatch,
+        1000,
+        1000,
+        DEFAULT_MAX_COLD_START_OVERHEAD,
+    );
     assert_eq!(c.overhead_millionths, 0);
     assert!(c.within_budget);
 }
@@ -293,7 +344,9 @@ fn test_cold_start_no_overhead() {
 fn test_tail_risk_within_budget() {
     let t = TailRiskEntry::new(
         VectorizedLane::RegexpMatch,
-        2_050_000, 2_000_000, 100,
+        2_050_000,
+        2_000_000,
+        100,
         DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
     );
     assert!(t.within_budget);
@@ -304,7 +357,9 @@ fn test_tail_risk_within_budget() {
 fn test_tail_risk_exceeds_budget() {
     let t = TailRiskEntry::new(
         VectorizedLane::RegexpMatch,
-        3_000_000, 2_000_000, 100,
+        3_000_000,
+        2_000_000,
+        100,
         DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
     );
     assert!(!t.within_budget);
@@ -314,7 +369,9 @@ fn test_tail_risk_exceeds_budget() {
 fn test_tail_risk_improvement_zero_regression() {
     let t = TailRiskEntry::new(
         VectorizedLane::RegexpMatch,
-        1_500_000, 2_000_000, 100,
+        1_500_000,
+        2_000_000,
+        100,
         DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
     );
     assert_eq!(t.regression_millionths, 0);
@@ -329,7 +386,8 @@ fn test_tail_risk_improvement_zero_regression() {
 fn test_observability_adequate_coverage() {
     let o = ObservabilityCoverage::new(
         VectorizedLane::PromiseCombinator,
-        100, 90,
+        100,
+        90,
         DEFAULT_MIN_OBSERVABILITY_COVERAGE,
     );
     assert!(o.adequate);
@@ -340,7 +398,8 @@ fn test_observability_adequate_coverage() {
 fn test_observability_inadequate_coverage() {
     let o = ObservabilityCoverage::new(
         VectorizedLane::PromiseCombinator,
-        100, 50,
+        100,
+        50,
         DEFAULT_MIN_OBSERVABILITY_COVERAGE,
     );
     assert!(!o.adequate);
@@ -350,7 +409,8 @@ fn test_observability_inadequate_coverage() {
 fn test_observability_zero_hooks_treated_as_full() {
     let o = ObservabilityCoverage::new(
         VectorizedLane::PromiseCombinator,
-        0, 0,
+        0,
+        0,
         DEFAULT_MIN_OBSERVABILITY_COVERAGE,
     );
     assert!(o.adequate);
@@ -421,12 +481,18 @@ fn test_verdict_all_non_approved_block() {
 
 #[test]
 fn test_verdict_display_parity_violation() {
-    assert_eq!(GovernanceVerdict::ParityViolation.to_string(), "parity_violation");
+    assert_eq!(
+        GovernanceVerdict::ParityViolation.to_string(),
+        "parity_violation"
+    );
 }
 
 #[test]
 fn test_verdict_display_cold_start_exceeded() {
-    assert_eq!(GovernanceVerdict::ColdStartExceeded.to_string(), "cold_start_exceeded");
+    assert_eq!(
+        GovernanceVerdict::ColdStartExceeded.to_string(),
+        "cold_start_exceeded"
+    );
 }
 
 #[test]
@@ -450,7 +516,12 @@ fn test_evaluator_empty_relaxed_approved() {
 #[test]
 fn test_evaluator_parity_pass() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_parity(VectorizedLane::ArrayHigherOrder, ParityAxis::Semantic, 980_000, 50);
+    eval.add_parity(
+        VectorizedLane::ArrayHigherOrder,
+        ParityAxis::Semantic,
+        980_000,
+        50,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
     assert_eq!(receipt.parity_results.len(), 1);
@@ -459,7 +530,12 @@ fn test_evaluator_parity_pass() {
 #[test]
 fn test_evaluator_parity_fail() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_parity(VectorizedLane::StringSearch, ParityAxis::Semantic, 800_000, 50);
+    eval.add_parity(
+        VectorizedLane::StringSearch,
+        ParityAxis::Semantic,
+        800_000,
+        50,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::ParityViolation);
     assert_eq!(receipt.violations.len(), 1);
@@ -468,7 +544,15 @@ fn test_evaluator_parity_fail() {
 #[test]
 fn test_evaluator_skew_fail() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_skew(VectorizedLane::JsonCodec, 200_000, 1000, 900, 3000, 2800, 50);
+    eval.add_skew(
+        VectorizedLane::JsonCodec,
+        200_000,
+        1000,
+        900,
+        3000,
+        2800,
+        50,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::SkewExceeded);
 }
@@ -484,7 +568,12 @@ fn test_evaluator_cold_start_fail() {
 #[test]
 fn test_evaluator_tail_risk_fail() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_tail_risk(VectorizedLane::CollectionIteration, 3_000_000, 2_000_000, 50);
+    eval.add_tail_risk(
+        VectorizedLane::CollectionIteration,
+        3_000_000,
+        2_000_000,
+        50,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::TailRiskExceeded);
 }
@@ -494,7 +583,10 @@ fn test_evaluator_observability_fail() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
     eval.add_observability(VectorizedLane::PromiseCombinator, 100, 20);
     let receipt = eval.evaluate(epoch());
-    assert_eq!(receipt.verdict, GovernanceVerdict::ObservabilityInsufficient);
+    assert_eq!(
+        receipt.verdict,
+        GovernanceVerdict::ObservabilityInsufficient
+    );
 }
 
 #[test]
@@ -510,8 +602,21 @@ fn test_evaluator_missing_required_lane() {
 #[test]
 fn test_evaluator_multiple_violations_parity_and_skew() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_parity(VectorizedLane::StringSearch, ParityAxis::Semantic, 800_000, 50);
-    eval.add_skew(VectorizedLane::JsonCodec, 200_000, 1000, 900, 3000, 2800, 50);
+    eval.add_parity(
+        VectorizedLane::StringSearch,
+        ParityAxis::Semantic,
+        800_000,
+        50,
+    );
+    eval.add_skew(
+        VectorizedLane::JsonCodec,
+        200_000,
+        1000,
+        900,
+        3000,
+        2800,
+        50,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
     assert!(receipt.violations.len() >= 2);
@@ -529,10 +634,19 @@ fn test_evaluator_multiple_violations_cold_start_and_tail_risk() {
 #[test]
 fn test_evaluator_lanes_evaluated_tracks_coverage() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_parity(VectorizedLane::ArrayHigherOrder, ParityAxis::Semantic, FIXED_ONE, 50);
+    eval.add_parity(
+        VectorizedLane::ArrayHigherOrder,
+        ParityAxis::Semantic,
+        FIXED_ONE,
+        50,
+    );
     eval.add_cold_start(VectorizedLane::JsonCodec, 1100, 1000);
     let receipt = eval.evaluate(epoch());
-    assert!(receipt.lanes_evaluated.contains(&VectorizedLane::ArrayHigherOrder));
+    assert!(
+        receipt
+            .lanes_evaluated
+            .contains(&VectorizedLane::ArrayHigherOrder)
+    );
     assert!(receipt.lanes_evaluated.contains(&VectorizedLane::JsonCodec));
     assert_eq!(receipt.lanes_evaluated.len(), 2);
 }
@@ -551,8 +665,21 @@ fn test_evaluator_epoch_recorded() {
 #[test]
 fn test_receipt_hash_deterministic_two_evaluations() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_parity(VectorizedLane::ArrayHigherOrder, ParityAxis::Semantic, FIXED_ONE, 50);
-    eval.add_skew(VectorizedLane::ArrayHigherOrder, 10_000, 500, 450, 1500, 1400, 50);
+    eval.add_parity(
+        VectorizedLane::ArrayHigherOrder,
+        ParityAxis::Semantic,
+        FIXED_ONE,
+        50,
+    );
+    eval.add_skew(
+        VectorizedLane::ArrayHigherOrder,
+        10_000,
+        500,
+        450,
+        1500,
+        1400,
+        50,
+    );
     let r1 = eval.evaluate(epoch());
     let r2 = eval.evaluate(epoch());
     assert_eq!(r1.content_hash, r2.content_hash);
@@ -562,7 +689,12 @@ fn test_receipt_hash_deterministic_two_evaluations() {
 fn test_receipt_hash_changes_when_data_added() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
     let r1 = eval.evaluate(epoch());
-    eval.add_parity(VectorizedLane::ArrayHigherOrder, ParityAxis::Semantic, FIXED_ONE, 50);
+    eval.add_parity(
+        VectorizedLane::ArrayHigherOrder,
+        ParityAxis::Semantic,
+        FIXED_ONE,
+        50,
+    );
     let r2 = eval.evaluate(epoch());
     assert_ne!(r1.content_hash, r2.content_hash);
 }
@@ -600,8 +732,18 @@ fn test_e2e_full_pass_all_lanes_relaxed() {
 #[test]
 fn test_e2e_mixed_pass_fail_single_category() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_parity(VectorizedLane::ArrayHigherOrder, ParityAxis::Semantic, FIXED_ONE, 100);
-    eval.add_parity(VectorizedLane::StringSearch, ParityAxis::Semantic, 500_000, 100);
+    eval.add_parity(
+        VectorizedLane::ArrayHigherOrder,
+        ParityAxis::Semantic,
+        FIXED_ONE,
+        100,
+    );
+    eval.add_parity(
+        VectorizedLane::StringSearch,
+        ParityAxis::Semantic,
+        500_000,
+        100,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::ParityViolation);
     assert_eq!(receipt.violations.len(), 1);
@@ -619,7 +761,15 @@ fn test_e2e_strict_empty_fails_coverage() {
 #[test]
 fn test_e2e_violation_detail_contents() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_skew(VectorizedLane::MathBatch, 150_000, 1000, 900, 3000, 2800, 50);
+    eval.add_skew(
+        VectorizedLane::MathBatch,
+        150_000,
+        1000,
+        900,
+        3000,
+        2800,
+        50,
+    );
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.violations.len(), 1);
     let v = &receipt.violations[0];
@@ -632,7 +782,12 @@ fn test_e2e_violation_detail_contents() {
 #[test]
 fn test_e2e_three_different_violation_categories() {
     let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-    eval.add_parity(VectorizedLane::ArrayHigherOrder, ParityAxis::Semantic, 500_000, 50);
+    eval.add_parity(
+        VectorizedLane::ArrayHigherOrder,
+        ParityAxis::Semantic,
+        500_000,
+        50,
+    );
     eval.add_cold_start(VectorizedLane::TypedArrayBulk, 5000, 1000);
     eval.add_observability(VectorizedLane::BufferOps, 100, 10);
     let receipt = eval.evaluate(epoch());

@@ -71,7 +71,12 @@ fn test_failure_category_ordering_first_last() {
 fn test_failure_category_ordering_adjacent() {
     let all = FailureCategory::all();
     for i in 0..all.len() - 1 {
-        assert!(all[i] < all[i + 1], "{:?} should be < {:?}", all[i], all[i + 1]);
+        assert!(
+            all[i] < all[i + 1],
+            "{:?} should be < {:?}",
+            all[i],
+            all[i + 1]
+        );
     }
 }
 
@@ -82,7 +87,10 @@ fn test_failure_category_display_render_crash() {
 
 #[test]
 fn test_failure_category_display_hydration_mismatch() {
-    assert_eq!(FailureCategory::HydrationMismatch.to_string(), "hydration_mismatch");
+    assert_eq!(
+        FailureCategory::HydrationMismatch.to_string(),
+        "hydration_mismatch"
+    );
 }
 
 #[test]
@@ -92,7 +100,10 @@ fn test_failure_category_display_hook_ordering() {
 
 #[test]
 fn test_failure_category_display_build_tool_integration() {
-    assert_eq!(FailureCategory::BuildToolIntegration.to_string(), "build_tool_integration");
+    assert_eq!(
+        FailureCategory::BuildToolIntegration.to_string(),
+        "build_tool_integration"
+    );
 }
 
 #[test]
@@ -111,7 +122,10 @@ fn test_failure_category_all_unique() {
 
 #[test]
 fn test_minimization_strategy_display_delta_debugging() {
-    assert_eq!(MinimizationStrategy::DeltaDebugging.to_string(), "delta_debugging");
+    assert_eq!(
+        MinimizationStrategy::DeltaDebugging.to_string(),
+        "delta_debugging"
+    );
 }
 
 #[test]
@@ -132,12 +146,18 @@ fn test_minimization_strategy_display_dependency_stripping() {
 
 #[test]
 fn test_minimization_strategy_display_state_slicing() {
-    assert_eq!(MinimizationStrategy::StateSlicing.to_string(), "state_slicing");
+    assert_eq!(
+        MinimizationStrategy::StateSlicing.to_string(),
+        "state_slicing"
+    );
 }
 
 #[test]
 fn test_minimization_strategy_display_prop_elimination() {
-    assert_eq!(MinimizationStrategy::PropElimination.to_string(), "prop_elimination");
+    assert_eq!(
+        MinimizationStrategy::PropElimination.to_string(),
+        "prop_elimination"
+    );
 }
 
 #[test]
@@ -187,8 +207,12 @@ fn test_repro_input_hash_differs_on_id() {
 #[test]
 fn test_minimized_repro_ratio_75_percent() {
     let r = MinimizedRepro::new(
-        "inp1".into(), MinimizationStrategy::DeltaDebugging,
-        25, 100, true, 1_000_000,
+        "inp1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        25,
+        100,
+        true,
+        1_000_000,
     );
     assert_eq!(r.reduction_ratio_millionths, 750_000);
     assert!(r.reproduces);
@@ -197,8 +221,12 @@ fn test_minimized_repro_ratio_75_percent() {
 #[test]
 fn test_minimized_repro_ratio_no_reduction() {
     let r = MinimizedRepro::new(
-        "inp1".into(), MinimizationStrategy::DeltaDebugging,
-        100, 100, true, 1_000_000,
+        "inp1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        100,
+        100,
+        true,
+        1_000_000,
     );
     assert_eq!(r.reduction_ratio_millionths, 0);
 }
@@ -206,8 +234,12 @@ fn test_minimized_repro_ratio_no_reduction() {
 #[test]
 fn test_minimized_repro_ratio_zero_original() {
     let r = MinimizedRepro::new(
-        "inp1".into(), MinimizationStrategy::DeltaDebugging,
-        0, 0, false, 0,
+        "inp1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        0,
+        0,
+        false,
+        0,
     );
     assert_eq!(r.reduction_ratio_millionths, 0);
 }
@@ -215,8 +247,12 @@ fn test_minimized_repro_ratio_zero_original() {
 #[test]
 fn test_minimized_repro_ratio_90_percent() {
     let r = MinimizedRepro::new(
-        "inp1".into(), MinimizationStrategy::HierarchicalReduction,
-        10, 100, true, 500_000,
+        "inp1".into(),
+        MinimizationStrategy::HierarchicalReduction,
+        10,
+        100,
+        true,
+        500_000,
     );
     assert_eq!(r.reduction_ratio_millionths, 900_000);
 }
@@ -224,12 +260,20 @@ fn test_minimized_repro_ratio_90_percent() {
 #[test]
 fn test_minimized_repro_hash_determinism() {
     let a = MinimizedRepro::new(
-        "inp1".into(), MinimizationStrategy::DeltaDebugging,
-        25, 100, true, 1_000_000,
+        "inp1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        25,
+        100,
+        true,
+        1_000_000,
     );
     let b = MinimizedRepro::new(
-        "inp1".into(), MinimizationStrategy::DeltaDebugging,
-        25, 100, true, 1_000_000,
+        "inp1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        25,
+        100,
+        true,
+        1_000_000,
     );
     assert_eq!(a.repro_hash, b.repro_hash);
 }
@@ -237,12 +281,20 @@ fn test_minimized_repro_hash_determinism() {
 #[test]
 fn test_minimized_repro_hash_differs_on_strategy() {
     let a = MinimizedRepro::new(
-        "inp1".into(), MinimizationStrategy::DeltaDebugging,
-        25, 100, true, 1_000_000,
+        "inp1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        25,
+        100,
+        true,
+        1_000_000,
     );
     let b = MinimizedRepro::new(
-        "inp1".into(), MinimizationStrategy::StateSlicing,
-        25, 100, true, 1_000_000,
+        "inp1".into(),
+        MinimizationStrategy::StateSlicing,
+        25,
+        100,
+        true,
+        1_000_000,
     );
     assert_ne!(a.repro_hash, b.repro_hash);
 }
@@ -390,7 +442,10 @@ fn test_verdict_display_complete() {
 
 #[test]
 fn test_verdict_display_partial_reduction() {
-    assert_eq!(ExtractionVerdict::PartialReduction.to_string(), "partial_reduction");
+    assert_eq!(
+        ExtractionVerdict::PartialReduction.to_string(),
+        "partial_reduction"
+    );
 }
 
 #[test]
@@ -417,9 +472,20 @@ fn test_engine_empty_no_inputs() {
 #[test]
 fn test_engine_with_good_repro_complete() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     engine.add_repro(MinimizedRepro::new(
-        "i1".into(), MinimizationStrategy::DeltaDebugging, 20, 200, true, 1_000_000,
+        "i1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        20,
+        200,
+        true,
+        1_000_000,
     ));
     let report = engine.evaluate(epoch());
     assert_eq!(report.verdict, ExtractionVerdict::Complete);
@@ -428,9 +494,20 @@ fn test_engine_with_good_repro_complete() {
 #[test]
 fn test_engine_partial_reduction_low_ratio() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     engine.add_repro(MinimizedRepro::new(
-        "i1".into(), MinimizationStrategy::DeltaDebugging, 150, 200, true, 1_000_000,
+        "i1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        150,
+        200,
+        true,
+        1_000_000,
     ));
     let report = engine.evaluate(epoch());
     assert_eq!(report.verdict, ExtractionVerdict::PartialReduction);
@@ -439,9 +516,20 @@ fn test_engine_partial_reduction_low_ratio() {
 #[test]
 fn test_engine_partial_reduction_too_large() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 1000, 50, 20));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        1000,
+        50,
+        20,
+    ));
     engine.add_repro(MinimizedRepro::new(
-        "i1".into(), MinimizationStrategy::DeltaDebugging, 60, 1000, true, 1_000_000,
+        "i1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        60,
+        1000,
+        true,
+        1_000_000,
     ));
     let report = engine.evaluate(epoch());
     assert_eq!(report.verdict, ExtractionVerdict::PartialReduction);
@@ -450,9 +538,19 @@ fn test_engine_partial_reduction_too_large() {
 #[test]
 fn test_engine_triage_latency_exceeded() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     engine.add_repro(MinimizedRepro::new(
-        "i1".into(), MinimizationStrategy::DeltaDebugging, 20, 200, true,
+        "i1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        20,
+        200,
+        true,
         100_000_000_000, // 100 seconds
     ));
     let report = engine.evaluate(epoch());
@@ -462,22 +560,47 @@ fn test_engine_triage_latency_exceeded() {
 #[test]
 fn test_engine_incomplete_coverage() {
     let mut config = ExtractionConfig::relaxed();
-    config.required_categories.insert(FailureCategory::HydrationMismatch);
+    config
+        .required_categories
+        .insert(FailureCategory::HydrationMismatch);
     let mut engine = ExtractionEngine::new(config);
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     let report = engine.evaluate(epoch());
     assert_eq!(report.verdict, ExtractionVerdict::IncompleteCoverage);
-    assert!(report.categories_missing.contains(&FailureCategory::HydrationMismatch));
+    assert!(
+        report
+            .categories_missing
+            .contains(&FailureCategory::HydrationMismatch)
+    );
 }
 
 #[test]
 fn test_engine_multiple_issues() {
     let mut config = ExtractionConfig::relaxed();
-    config.required_categories.insert(FailureCategory::HydrationMismatch);
+    config
+        .required_categories
+        .insert(FailureCategory::HydrationMismatch);
     let mut engine = ExtractionEngine::new(config);
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     engine.add_repro(MinimizedRepro::new(
-        "i1".into(), MinimizationStrategy::DeltaDebugging, 150, 200, true, 1_000_000,
+        "i1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        150,
+        200,
+        true,
+        1_000_000,
     ));
     let report = engine.evaluate(epoch());
     assert_eq!(report.verdict, ExtractionVerdict::MultipleIssues);
@@ -486,12 +609,28 @@ fn test_engine_multiple_issues() {
 #[test]
 fn test_engine_avg_reduction_ratio_computed() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
-    engine.add_repro(MinimizedRepro::new(
-        "i1".into(), MinimizationStrategy::DeltaDebugging, 20, 200, true, 1_000_000,
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
     ));
     engine.add_repro(MinimizedRepro::new(
-        "i2".into(), MinimizationStrategy::HierarchicalReduction, 50, 200, true, 1_000_000,
+        "i1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        20,
+        200,
+        true,
+        1_000_000,
+    ));
+    engine.add_repro(MinimizedRepro::new(
+        "i2".into(),
+        MinimizationStrategy::HierarchicalReduction,
+        50,
+        200,
+        true,
+        1_000_000,
     ));
     let report = engine.evaluate(epoch());
     // 900_000 + 750_000 = 1_650_000 / 2 = 825_000
@@ -501,18 +640,44 @@ fn test_engine_avg_reduction_ratio_computed() {
 #[test]
 fn test_engine_categories_covered_tracking() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
-    engine.add_input(ReproInput::new("i2".into(), FailureCategory::HookOrdering, 300, 8, 4));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
+    engine.add_input(ReproInput::new(
+        "i2".into(),
+        FailureCategory::HookOrdering,
+        300,
+        8,
+        4,
+    ));
     let report = engine.evaluate(epoch());
-    assert!(report.categories_covered.contains(&FailureCategory::RenderCrash));
-    assert!(report.categories_covered.contains(&FailureCategory::HookOrdering));
+    assert!(
+        report
+            .categories_covered
+            .contains(&FailureCategory::RenderCrash)
+    );
+    assert!(
+        report
+            .categories_covered
+            .contains(&FailureCategory::HookOrdering)
+    );
     assert_eq!(report.categories_covered.len(), 2);
 }
 
 #[test]
 fn test_engine_finding_stored() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     engine.add_finding(TriageFinding {
         category: FailureCategory::RenderCrash,
         owner: TriageOwner::EngineRuntime,
@@ -540,7 +705,13 @@ fn test_engine_epoch_recorded() {
 #[test]
 fn test_report_hash_deterministic_two_evaluations() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     let r1 = engine.evaluate(epoch());
     let r2 = engine.evaluate(epoch());
     assert_eq!(r1.content_hash, r2.content_hash);
@@ -549,9 +720,21 @@ fn test_report_hash_deterministic_two_evaluations() {
 #[test]
 fn test_report_hash_changes_when_input_added() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     let r1 = engine.evaluate(epoch());
-    engine.add_input(ReproInput::new("i2".into(), FailureCategory::HookOrdering, 300, 8, 4));
+    engine.add_input(ReproInput::new(
+        "i2".into(),
+        FailureCategory::HookOrdering,
+        300,
+        8,
+        4,
+    ));
     let r2 = engine.evaluate(epoch());
     assert_ne!(r1.content_hash, r2.content_hash);
 }
@@ -559,7 +742,13 @@ fn test_report_hash_changes_when_input_added() {
 #[test]
 fn test_report_hash_changes_with_epoch() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     let r1 = engine.evaluate(SecurityEpoch::from_raw(1));
     let r2 = engine.evaluate(SecurityEpoch::from_raw(2));
     assert_ne!(r1.content_hash, r2.content_hash);
@@ -572,13 +761,35 @@ fn test_report_hash_changes_with_epoch() {
 #[test]
 fn test_e2e_full_pass_multiple_categories() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
-    engine.add_input(ReproInput::new("i2".into(), FailureCategory::HydrationMismatch, 300, 8, 4));
-    engine.add_repro(MinimizedRepro::new(
-        "i1".into(), MinimizationStrategy::DeltaDebugging, 20, 200, true, 1_000_000,
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
+    engine.add_input(ReproInput::new(
+        "i2".into(),
+        FailureCategory::HydrationMismatch,
+        300,
+        8,
+        4,
     ));
     engine.add_repro(MinimizedRepro::new(
-        "i2".into(), MinimizationStrategy::HierarchicalReduction, 30, 300, true, 2_000_000,
+        "i1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        20,
+        200,
+        true,
+        1_000_000,
+    ));
+    engine.add_repro(MinimizedRepro::new(
+        "i2".into(),
+        MinimizationStrategy::HierarchicalReduction,
+        30,
+        300,
+        true,
+        2_000_000,
     ));
     let report = engine.evaluate(epoch());
     assert_eq!(report.verdict, ExtractionVerdict::Complete);
@@ -596,7 +807,13 @@ fn test_e2e_strict_empty_is_multiple_issues() {
 #[test]
 fn test_e2e_all_strategies_pass() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::relaxed());
-    engine.add_input(ReproInput::new("i1".into(), FailureCategory::RenderCrash, 200, 5, 3));
+    engine.add_input(ReproInput::new(
+        "i1".into(),
+        FailureCategory::RenderCrash,
+        200,
+        5,
+        3,
+    ));
     let strategies = [
         MinimizationStrategy::DeltaDebugging,
         MinimizationStrategy::HierarchicalReduction,
@@ -606,7 +823,12 @@ fn test_e2e_all_strategies_pass() {
     ];
     for (i, strat) in strategies.iter().enumerate() {
         engine.add_repro(MinimizedRepro::new(
-            format!("i{}", i + 1), *strat, 10, 200, true, 500_000,
+            format!("i{}", i + 1),
+            *strat,
+            10,
+            200,
+            true,
+            500_000,
         ));
     }
     let report = engine.evaluate(epoch());
@@ -620,7 +842,12 @@ fn test_e2e_finding_with_repro_hash() {
     let inp = ReproInput::new("i1".into(), FailureCategory::JsxTransform, 400, 12, 6);
     engine.add_input(inp);
     let repro = MinimizedRepro::new(
-        "i1".into(), MinimizationStrategy::DeltaDebugging, 15, 400, true, 1_000_000,
+        "i1".into(),
+        MinimizationStrategy::DeltaDebugging,
+        15,
+        400,
+        true,
+        1_000_000,
     );
     let hash = repro.repro_hash.clone();
     engine.add_repro(repro);
@@ -644,6 +871,10 @@ fn test_e2e_triage_routing_all_categories() {
         let owner = ExtractionEngine::default_owner(*cat);
         // Every category must route to some owner.
         let owner_str = owner.to_string();
-        assert!(!owner_str.is_empty(), "owner for {:?} should be non-empty", cat);
+        assert!(
+            !owner_str.is_empty(),
+            "owner for {:?} should be non-empty",
+            cat
+        );
     }
 }

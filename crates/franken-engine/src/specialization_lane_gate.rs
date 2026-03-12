@@ -54,7 +54,7 @@ pub const REQUIRED_COVERAGE_MILLIONTHS: u64 = 1_000_000;
 
 /// Significance threshold for performance delta (fixed-point millionths).
 /// 50_000 = 5% — specialized lane must be at least this much faster.
-pub const DEFAULT_SIGNIFICANCE_THRESHOLD_MILLIONTHS: u64 = 0;
+pub const DEFAULT_SIGNIFICANCE_THRESHOLD_MILLIONTHS: u64 = 50_000;
 
 // ---------------------------------------------------------------------------
 // LaneType

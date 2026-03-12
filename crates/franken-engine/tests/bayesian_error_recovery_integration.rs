@@ -1259,7 +1259,7 @@ fn repair_diff_hash_differs_for_different_edits() {
 }
 
 #[test]
-fn repair_candidate_filtered_by_max_skips() {
+fn repair_candidate_filtered_by_max_skips_fails_closed() {
     let site = ErrorSite {
         error_position: 10,
         tokens_before_error: 20,
@@ -1279,15 +1279,8 @@ fn repair_candidate_filtered_by_max_skips() {
         ..RecoveryConfig::default()
     };
     let mut ctrl = RecoveryController::new(cfg, 1);
-    let result = ctrl
+    let err = ctrl
         .evaluate(test_hash(), &[site], "trace-skip-filter")
-        .unwrap();
-    // The candidate is filtered out because skips > max_skips,
-    // so no repair is selected even though action might not be FailStrict.
-    for attempt in &result.attempts {
-        assert!(
-            attempt.selected_repair.is_none(),
-            "repair with excessive skips should be filtered out"
-        );
-    }
+        .unwrap_err();
+    assert_eq!(err, RecoveryError::NoCandidates { error_position: 10 });
 }

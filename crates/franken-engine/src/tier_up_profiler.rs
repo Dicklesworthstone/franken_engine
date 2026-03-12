@@ -392,7 +392,7 @@ fn make_event(trace_id: &str, event: &str, outcome: &str, reason: &str) -> TierU
 }
 
 fn normalize_limit(value: usize) -> usize {
-    value.max(1)
+    value
 }
 
 fn sha256_hex<T: Serialize>(value: &T) -> String {
@@ -821,8 +821,8 @@ mod tests {
     // -- normalize_limit tests -----------------------------------------------
 
     #[test]
-    fn normalize_limit_zero_becomes_one() {
-        assert_eq!(normalize_limit(0), 1);
+    fn normalize_limit_zero_stays_zero() {
+        assert_eq!(normalize_limit(0), 0);
     }
 
     #[test]
@@ -917,11 +917,11 @@ mod tests {
     }
 
     #[test]
-    fn profile_top_k_zero_becomes_one() {
+    fn profile_top_k_zero_returns_empty_profile() {
         let events = vec![make_vm_event(0, "a", None), make_vm_event(1, "b", None)];
         let report = make_report(100, events);
         let profile = build_hot_path_profile(&report, 0);
-        assert_eq!(profile.top_paths.len(), 1);
+        assert!(profile.top_paths.is_empty());
     }
 
     #[test]
@@ -1207,7 +1207,7 @@ mod tests {
     }
 
     #[test]
-    fn eligibility_max_candidates_truncates_to_one_when_zero() {
+    fn eligibility_zero_max_candidates_selects_none() {
         let policy = TierUpPolicy {
             min_total_steps: 1,
             min_invocations_per_path: 1,
@@ -1222,8 +1222,8 @@ mod tests {
         ];
         let report = make_report(100, events);
         let decision = evaluate_tier_up_eligibility(&report, &policy);
-        // normalize_limit(0) = 1
-        assert_eq!(decision.selected_candidates.len(), 1);
+        assert!(!decision.eligible);
+        assert!(decision.selected_candidates.is_empty());
     }
 
     #[test]

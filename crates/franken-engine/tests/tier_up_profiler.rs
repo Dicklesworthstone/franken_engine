@@ -517,16 +517,12 @@ fn tier_up_policy_serde_roundtrip_with_non_default_values() {
 }
 
 #[test]
-fn hot_path_profile_with_zero_top_k_returns_at_least_one() {
-    // top_k=0 is normalized to 1 via normalize_limit
+fn hot_path_profile_with_zero_top_k_returns_empty_profile() {
     let program = cached_hot_loop_program();
     let mut vm = BytecodeVm::new("trace-zero-topk", 12, 256);
     let report = vm.execute(&program).expect("execute");
     let profile = build_hot_path_profile(&report, 0);
-    // normalize_limit(0) == 1, so we get exactly 1 top path
-    assert_eq!(profile.top_paths.len(), 1);
-    // The single path should be the most invoked one
-    assert!(profile.top_paths[0].invocations > 0);
+    assert!(profile.top_paths.is_empty());
 }
 
 #[test]

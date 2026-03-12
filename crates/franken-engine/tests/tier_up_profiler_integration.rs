@@ -1084,7 +1084,7 @@ fn policy_hash_differs_for_different_max_candidates() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn profile_top_k_zero_normalized_to_one() {
+fn profile_top_k_zero_returns_empty_profile() {
     let program = Program {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
@@ -1099,9 +1099,8 @@ fn profile_top_k_zero_normalized_to_one() {
 
     let mut vm = BytecodeVm::new("trace-topk0", 4, 32);
     let report = vm.execute(&program).unwrap();
-    // top_k=0 is normalized to 1 by normalize_limit
     let profile = build_hot_path_profile(&report, 0);
-    assert!(profile.top_paths.len() <= 1);
+    assert!(profile.top_paths.is_empty());
 }
 
 #[test]

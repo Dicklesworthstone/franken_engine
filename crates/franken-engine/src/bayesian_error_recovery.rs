@@ -984,9 +984,15 @@ impl RecoveryController {
             }
         }
 
-        // Select best repair candidate.
+        // Fail closed when recovery was selected but every candidate exceeds budget.
         let selected_repair = if selected_action != RecoveryAction::FailStrict {
-            self.select_repair(site)
+            let repair = self.select_repair(site);
+            if repair.is_none() {
+                return Err(RecoveryError::NoCandidates {
+                    error_position: site.error_position,
+                });
+            }
+            repair
         } else {
             None
         };
@@ -1929,6 +1935,27 @@ mod tests {
         };
         let controller = RecoveryController::new(cfg, 42);
         assert!(controller.select_repair(&site).is_none());
+    }
+
+    #[test]
+    fn evaluate_fails_when_budget_filters_all_candidates() {
+        let mut cfg = execution_config();
+        cfg.max_skips = 0;
+        let site = ErrorSite {
+            error_position: 10,
+            tokens_before_error: 20,
+            at_statement_boundary: true,
+            candidates: vec![RepairCandidate {
+                description: "skip 3".to_string(),
+                skips: 3,
+                insertions: 0,
+                cost: 1,
+                is_typo_fix: true,
+            }],
+            context_hash: test_hash(),
+        };
+        let err = evaluate(test_hash(), &[site], &cfg, 42, "t").unwrap_err();
+        assert_eq!(err, RecoveryError::NoCandidates { error_position: 10 });
     }
 
     #[test]

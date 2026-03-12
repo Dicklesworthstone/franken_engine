@@ -184,6 +184,11 @@ fn gate_passes_all_criteria() {
 }
 
 #[test]
+fn default_significance_threshold_matches_documented_five_percent() {
+    assert_eq!(DEFAULT_SIGNIFICANCE_THRESHOLD_MILLIONTHS, 50_000);
+}
+
+#[test]
 fn gate_deterministic_evidence_hash() {
     let s = spec_metrics(12);
     let a = amb_metrics(12);

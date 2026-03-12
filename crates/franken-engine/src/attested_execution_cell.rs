@@ -226,6 +226,18 @@ pub struct AttestationQuote {
 }
 
 impl AttestationQuote {
+    /// Canonical bytes that must be integrity-bound by the trust-root signature.
+    fn signature_payload(&self) -> Vec<u8> {
+        let mut buf = self.measurement.canonical_bytes();
+        buf.extend_from_slice(&self.nonce);
+        buf.extend_from_slice(&self.issued_at_ns.to_be_bytes());
+        buf.extend_from_slice(&self.validity_window_ns.to_be_bytes());
+        buf.push(self.trust_level as u8);
+        buf.push(self.platform as u8);
+        buf.extend_from_slice(self.signer_key_id.as_bytes());
+        buf
+    }
+
     /// Whether this quote is still fresh at the given timestamp.
     pub fn is_fresh_at(&self, current_ns: u64) -> bool {
         current_ns <= self.issued_at_ns.saturating_add(self.validity_window_ns)
@@ -318,6 +330,7 @@ pub trait TrustRootBackend: fmt::Debug {
         measurement: &MeasurementDigest,
         nonce: [u8; 32],
         validity_window_ns: u64,
+        issued_at_ns: u64,
     ) -> AttestationQuote;
 
     /// Verify an attestation quote against expected measurement and nonce.
@@ -416,22 +429,20 @@ impl TrustRootBackend for SoftwareTrustRoot {
         measurement: &MeasurementDigest,
         nonce: [u8; 32],
         validity_window_ns: u64,
+        issued_at_ns: u64,
     ) -> AttestationQuote {
-        let mut to_sign = measurement.canonical_bytes();
-        to_sign.extend_from_slice(&nonce);
-        to_sign.extend_from_slice(&validity_window_ns.to_be_bytes());
-        let signature = self.sign(&to_sign);
-
-        AttestationQuote {
+        let mut quote = AttestationQuote {
             measurement: measurement.clone(),
             nonce,
-            issued_at_ns: 0, // Caller sets timestamp externally.
+            issued_at_ns,
             validity_window_ns,
             trust_level: TrustLevel::SoftwareOnly,
             platform: PlatformKind::Software,
-            signature_bytes: signature,
+            signature_bytes: Vec::new(),
             signer_key_id: self.key_id.clone(),
-        }
+        };
+        quote.signature_bytes = self.sign(&quote.signature_payload());
+        quote
     }
 
     fn verify(
@@ -441,11 +452,20 @@ impl TrustRootBackend for SoftwareTrustRoot {
         expected_nonce: &[u8; 32],
         current_ns: u64,
     ) -> VerificationResult {
+        if quote.signer_key_id != self.key_id {
+            return VerificationResult::SignatureInvalid;
+        }
+
         // Check revocation.
         if self.revoked_keys.contains(&quote.signer_key_id) {
             return VerificationResult::SignerRevoked {
                 key_id: quote.signer_key_id.clone(),
             };
+        }
+
+        // Check signature before trusting mutable quote metadata.
+        if !self.verify_signature(&quote.signature_payload(), &quote.signature_bytes) {
+            return VerificationResult::SignatureInvalid;
         }
 
         // Check freshness.
@@ -470,14 +490,6 @@ impl TrustRootBackend for SoftwareTrustRoot {
                 expected: expected_composite,
                 actual: actual_composite,
             };
-        }
-
-        // Check signature.
-        let mut to_sign = quote.measurement.canonical_bytes();
-        to_sign.extend_from_slice(&quote.nonce);
-        to_sign.extend_from_slice(&quote.validity_window_ns.to_be_bytes());
-        if !self.verify_signature(&to_sign, &quote.signature_bytes) {
-            return VerificationResult::SignatureInvalid;
         }
 
         VerificationResult::Valid
@@ -1174,6 +1186,16 @@ mod tests {
         )
     }
 
+    fn test_quote(
+        root: &SoftwareTrustRoot,
+        measurement: &MeasurementDigest,
+        nonce: [u8; 32],
+        issued_at_ns: u64,
+        validity_window_ns: u64,
+    ) -> AttestationQuote {
+        root.attest(measurement, nonce, validity_window_ns, issued_at_ns)
+    }
+
     // --- CellLifecycle ---
 
     #[test]
@@ -1283,8 +1305,7 @@ mod tests {
     fn quote_freshness() {
         let root = test_trust_root();
         let m = test_measurement(&root);
-        let mut quote = root.attest(&m, [1u8; 32], 1_000_000_000);
-        quote.issued_at_ns = 100;
+        let quote = test_quote(&root, &m, [1u8; 32], 100, 1_000_000_000);
 
         assert!(quote.is_fresh_at(100));
         assert!(quote.is_fresh_at(1_000_000_100));
@@ -1295,7 +1316,7 @@ mod tests {
     fn quote_serde_roundtrip() {
         let root = test_trust_root();
         let m = test_measurement(&root);
-        let quote = root.attest(&m, [2u8; 32], 5_000_000);
+        let quote = test_quote(&root, &m, [2u8; 32], 200, 5_000_000);
         let json = serde_json::to_string(&quote).unwrap();
         let restored: AttestationQuote = serde_json::from_str(&json).unwrap();
         assert_eq!(quote, restored);
@@ -1336,8 +1357,7 @@ mod tests {
         let root = test_trust_root();
         let m = test_measurement(&root);
         let nonce = [42u8; 32];
-        let mut quote = root.attest(&m, nonce, 10_000_000);
-        quote.issued_at_ns = 1000;
+        let quote = test_quote(&root, &m, nonce, 1000, 10_000_000);
 
         let result = root.verify(&quote, &m, &nonce, 5000);
         assert_eq!(result, VerificationResult::Valid);
@@ -1348,8 +1368,7 @@ mod tests {
         let root = test_trust_root();
         let m = test_measurement(&root);
         let nonce = [1u8; 32];
-        let mut quote = root.attest(&m, nonce, 100);
-        quote.issued_at_ns = 1000;
+        let quote = test_quote(&root, &m, nonce, 1000, 100);
 
         let result = root.verify(&quote, &m, &nonce, 2000);
         assert!(matches!(result, VerificationResult::Expired { .. }));
@@ -1361,8 +1380,7 @@ mod tests {
         let m = test_measurement(&root);
         let nonce = [1u8; 32];
         let wrong_nonce = [2u8; 32];
-        let mut quote = root.attest(&m, nonce, 10_000);
-        quote.issued_at_ns = 1000;
+        let quote = test_quote(&root, &m, nonce, 1000, 10_000);
 
         let result = root.verify(&quote, &m, &wrong_nonce, 1500);
         assert_eq!(result, VerificationResult::NonceMismatch);
@@ -1373,8 +1391,7 @@ mod tests {
         let root = test_trust_root();
         let m = test_measurement(&root);
         let nonce = [1u8; 32];
-        let mut quote = root.attest(&m, nonce, 10_000);
-        quote.issued_at_ns = 1000;
+        let quote = test_quote(&root, &m, nonce, 1000, 10_000);
 
         let different_m = root.measure(b"other-code", b"config", b"policy", b"schema", "2.0");
         let result = root.verify(&quote, &different_m, &nonce, 1500);
@@ -1389,8 +1406,7 @@ mod tests {
         let mut root = test_trust_root();
         let m = test_measurement(&root);
         let nonce = [1u8; 32];
-        let mut quote = root.attest(&m, nonce, 10_000);
-        quote.issued_at_ns = 1000;
+        let quote = test_quote(&root, &m, nonce, 1000, 10_000);
 
         root.revoke_key("test-key-1");
         let result = root.verify(&quote, &m, &nonce, 1500);
@@ -1402,14 +1418,66 @@ mod tests {
         let root = test_trust_root();
         let m = test_measurement(&root);
         let nonce = [1u8; 32];
-        let mut quote = root.attest(&m, nonce, 10_000);
-        quote.issued_at_ns = 1000;
+        let mut quote = test_quote(&root, &m, nonce, 1000, 10_000);
         // Tamper with signature.
         if let Some(byte) = quote.signature_bytes.first_mut() {
             *byte ^= 0xFF;
         }
 
         let result = root.verify(&quote, &m, &nonce, 1500);
+        assert_eq!(result, VerificationResult::SignatureInvalid);
+    }
+
+    #[test]
+    fn software_root_verify_tampered_issued_at_rejected() {
+        let root = test_trust_root();
+        let m = test_measurement(&root);
+        let nonce = [3u8; 32];
+        let mut quote = test_quote(&root, &m, nonce, 1000, 10_000);
+        quote.issued_at_ns = 2500;
+
+        let result = root.verify(&quote, &m, &nonce, 2600);
+        assert_eq!(result, VerificationResult::SignatureInvalid);
+    }
+
+    #[test]
+    fn software_root_verify_tampered_quote_metadata_rejected() {
+        let root = test_trust_root();
+        let m = test_measurement(&root);
+        let nonce = [4u8; 32];
+        let quote = test_quote(&root, &m, nonce, 1000, 10_000);
+
+        let mut tampered_trust = quote.clone();
+        tampered_trust.trust_level = TrustLevel::Hardware;
+        assert_eq!(
+            root.verify(&tampered_trust, &m, &nonce, 1500),
+            VerificationResult::SignatureInvalid
+        );
+
+        let mut tampered_platform = quote.clone();
+        tampered_platform.platform = PlatformKind::IntelSgx;
+        assert_eq!(
+            root.verify(&tampered_platform, &m, &nonce, 1500),
+            VerificationResult::SignatureInvalid
+        );
+
+        let mut tampered_signer = quote;
+        tampered_signer.signer_key_id = "other-key".to_string();
+        assert_eq!(
+            root.verify(&tampered_signer, &m, &nonce, 1500),
+            VerificationResult::SignatureInvalid
+        );
+    }
+
+    #[test]
+    fn software_root_verify_wrong_root_key_rejected_even_with_same_secret() {
+        let root = SoftwareTrustRoot::new("key-a", 77);
+        let mismatched_root = SoftwareTrustRoot::new("key-b", 77);
+        let m = test_measurement(&root);
+        let nonce = [5u8; 32];
+        let quote = root.attest(&m, nonce, 10_000, 1000);
+
+        let result = mismatched_root.verify(&quote, &m, &nonce, 1500);
         assert_eq!(result, VerificationResult::SignatureInvalid);
     }
 
@@ -1556,8 +1624,7 @@ mod tests {
 
         // Attest.
         let nonce = [7u8; 32];
-        let mut quote = root.attest(&measurement, nonce, 10_000_000);
-        quote.issued_at_ns = 2_000;
+        let quote = root.attest(&measurement, nonce, 10_000_000, 2_000);
         reg.attest_cell(&cid, quote, 3_000, epoch).unwrap();
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Attested);
 
@@ -1587,8 +1654,7 @@ mod tests {
         // Go to Active.
         let m = test_measurement(&root);
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
-        let mut q = root.attest(&m, [1u8; 32], 10_000_000);
-        q.issued_at_ns = 2_000;
+        let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
@@ -1598,8 +1664,7 @@ mod tests {
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Suspended);
 
         // Re-attest from Suspended.
-        let mut q2 = root.attest(&m, [2u8; 32], 10_000_000);
-        q2.issued_at_ns = 5_000;
+        let q2 = root.attest(&m, [2u8; 32], 10_000_000, 5_000);
         reg.attest_cell(&cid, q2, 6_000, epoch).unwrap();
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Attested);
 
@@ -1654,8 +1719,7 @@ mod tests {
 
         let m = test_measurement(&root);
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
-        let mut q = root.attest(&m, [1u8; 32], 10_000_000);
-        q.issued_at_ns = 2_000;
+        let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
         reg.suspend_cell(&cid, "test", 5_000, epoch).unwrap();
@@ -1694,8 +1758,7 @@ mod tests {
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
-        let mut q = root.attest(&m, [1u8; 32], 10_000_000);
-        q.issued_at_ns = 2_000;
+        let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
@@ -1715,8 +1778,7 @@ mod tests {
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
-        let mut q = root.attest(&m, [1u8; 32], 10_000_000);
-        q.issued_at_ns = 2_000;
+        let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
@@ -1778,8 +1840,7 @@ mod tests {
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
-        let mut q = root.attest(&m, [1u8; 32], 10_000_000);
-        q.issued_at_ns = 2_000;
+        let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
@@ -1803,8 +1864,7 @@ mod tests {
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
-        let mut q = root.attest(&m, [1u8; 32], 10_000_000);
-        q.issued_at_ns = 2_000;
+        let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
@@ -1834,15 +1894,13 @@ mod tests {
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
-        let mut q = root.attest(&m, [1u8; 32], 10_000_000);
-        q.issued_at_ns = 2_000;
+        let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
         reg.suspend_cell(&cid, "test", 5_000, epoch).unwrap();
 
         // Re-attest from suspended.
-        let mut q2 = root.attest(&m, [2u8; 32], 10_000_000);
-        q2.issued_at_ns = 5_000;
+        let q2 = root.attest(&m, [2u8; 32], 10_000_000, 5_000);
         reg.attest_cell(&cid, q2, 6_000, epoch).unwrap();
 
         let events = reg.events();

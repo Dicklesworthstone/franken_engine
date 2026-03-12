@@ -835,8 +835,12 @@ impl CellHandshakeClient {
         timestamp_ns: u64,
     ) -> AttestationResponse {
         // Generate attestation quote with the challenge nonce.
-        let mut quote = trust_root.attest(measurement, challenge.nonce, validity_window_ns);
-        quote.issued_at_ns = timestamp_ns;
+        let quote = trust_root.attest(
+            measurement,
+            challenge.nonce,
+            validity_window_ns,
+            timestamp_ns,
+        );
 
         // Compute key binding proof.
         let key_binding = compute_key_binding(&self.public_key, measurement);
@@ -1182,11 +1186,9 @@ mod tests {
         let client = test_client();
         do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
-        assert!(
-            verifier
-                .check_authorization("cell-001", "sign_receipts", 2000)
-                .is_ok()
-        );
+        assert!(verifier
+            .check_authorization("cell-001", "sign_receipts", 2000)
+            .is_ok());
     }
 
     #[test]

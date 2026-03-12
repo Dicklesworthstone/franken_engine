@@ -19,10 +19,10 @@ use crate::attested_execution_cell::{
 };
 use crate::engine_object_id::EngineObjectId;
 use crate::hash_tiers::ContentHash;
-use crate::mmr_proof::{MmrProof, verify_consistency, verify_inclusion};
+use crate::mmr_proof::{verify_consistency, verify_inclusion, MmrProof};
 use crate::proof_schema::OptReceipt;
 use crate::security_epoch::SecurityEpoch;
-use crate::signature_preimage::{Signature, VerificationKey, verify_signature};
+use crate::signature_preimage::{verify_signature, Signature, VerificationKey};
 use crate::tee_attestation_policy::{
     AttestationQuote as PolicyAttestationQuote, DecisionImpact, MeasurementAlgorithm,
     TeeAttestationPolicy, TeePlatform,
@@ -895,10 +895,10 @@ mod tests {
     use crate::hash_tiers::AuthenticityHash;
     use crate::mmr_proof::MerkleMountainRange;
     use crate::proof_schema::{
-        AttestationValidityWindow, OptimizationClass, ReceiptAttestationBindings,
-        proof_schema_version_current,
+        proof_schema_version_current, AttestationValidityWindow, OptimizationClass,
+        ReceiptAttestationBindings,
     };
-    use crate::signature_preimage::{SigningKey, sign_preimage};
+    use crate::signature_preimage::{sign_preimage, SigningKey};
     use crate::tee_attestation_policy::{
         AttestationFreshnessWindow, MeasurementDigest, PlatformTrustRoot, RevocationFallback,
         RevocationProbeStatus, RevocationSource, RevocationSourceType, TrustRootPinning,
@@ -1025,8 +1025,8 @@ mod tests {
             "runtime-v1",
         );
         let nonce = [7u8; 32];
-        let mut attestation_quote = software_root.attest(&measurement, nonce, 30_000_000_000);
-        attestation_quote.issued_at_ns = 10_000_000_000;
+        let mut attestation_quote =
+            software_root.attest(&measurement, nonce, 30_000_000_000, 10_000_000_000);
         attestation_quote.trust_level = TrustLevel::SoftwareOnly;
 
         let measurement_zone = "measurement-zone-test".to_string();
@@ -1188,15 +1188,13 @@ mod tests {
         assert!(verdict.attestation.passed);
         assert!(verdict.warnings.is_empty());
         assert_eq!(verdict.logs.len(), 4);
-        assert!(
-            verdict
-                .logs
-                .iter()
-                .all(|entry| entry.trace_id == request.trace_id
-                    && entry.decision_id == request.decision_id
-                    && entry.policy_id == request.policy_id
-                    && entry.component == COMPONENT)
-        );
+        assert!(verdict
+            .logs
+            .iter()
+            .all(|entry| entry.trace_id == request.trace_id
+                && entry.decision_id == request.decision_id
+                && entry.policy_id == request.policy_id
+                && entry.component == COMPONENT));
     }
 
     #[test]
@@ -1496,13 +1494,11 @@ mod tests {
             verdict.failure_class,
             Some(VerificationFailureClass::Signature)
         );
-        assert!(
-            verdict
-                .signature
-                .checks
-                .iter()
-                .any(|c| c.check == "signer_not_revoked" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .signature
+            .checks
+            .iter()
+            .any(|c| c.check == "signer_not_revoked" && c.outcome == "fail"));
     }
 
     #[test]
@@ -1511,13 +1507,11 @@ mod tests {
         request.signature.signer_revocation.source = "".to_string();
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .signature
-                .checks
-                .iter()
-                .any(|c| c.check == "revocation_source_present" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .signature
+            .checks
+            .iter()
+            .any(|c| c.check == "revocation_source_present" && c.outcome == "fail"));
     }
 
     #[test]
@@ -1526,13 +1520,11 @@ mod tests {
         request.signature.signer_revocation.signer_key_id = EngineObjectId([0xAA; 32]);
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .signature
-                .checks
-                .iter()
-                .any(|c| c.check == "signer_key_id_matches_receipt" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .signature
+            .checks
+            .iter()
+            .any(|c| c.check == "signer_key_id_matches_receipt" && c.outcome == "fail"));
     }
 
     #[test]
@@ -1541,13 +1533,11 @@ mod tests {
         request.signature.expected_preimage_hash = ContentHash::compute(b"wrong");
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .signature
-                .checks
-                .iter()
-                .any(|c| c.check == "canonical_preimage_hash_matches" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .signature
+            .checks
+            .iter()
+            .any(|c| c.check == "canonical_preimage_hash_matches" && c.outcome == "fail"));
     }
 
     // --- Transparency layer failure modes ---
@@ -1558,13 +1548,11 @@ mod tests {
         request.transparency.operator_keys[0].revoked = true;
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .transparency
-                .checks
-                .iter()
-                .any(|c| c.check == "checkpoint_operator_key_not_revoked" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .transparency
+            .checks
+            .iter()
+            .any(|c| c.check == "checkpoint_operator_key_not_revoked" && c.outcome == "fail"));
     }
 
     #[test]
@@ -1573,13 +1561,11 @@ mod tests {
         request.transparency.operator_keys.clear();
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .transparency
-                .checks
-                .iter()
-                .any(|c| c.check == "checkpoint_operator_key_found" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .transparency
+            .checks
+            .iter()
+            .any(|c| c.check == "checkpoint_operator_key_found" && c.outcome == "fail"));
     }
 
     #[test]
@@ -1618,13 +1604,11 @@ mod tests {
         request.receipt = signed;
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .attestation
-                .checks
-                .iter()
-                .any(|c| c.check == "receipt_has_attestation_bindings" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .attestation
+            .checks
+            .iter()
+            .any(|c| c.check == "receipt_has_attestation_bindings" && c.outcome == "fail"));
     }
 
     #[test]
@@ -1650,13 +1634,11 @@ mod tests {
         }
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .attestation
-                .checks
-                .iter()
-                .any(|c| c.check == "quote_nonce_matches_binding" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .attestation
+            .checks
+            .iter()
+            .any(|c| c.check == "quote_nonce_matches_binding" && c.outcome == "fail"));
     }
 
     #[test]
@@ -1665,13 +1647,11 @@ mod tests {
         request.attestation.trust_roots.clear();
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .attestation
-                .checks
-                .iter()
-                .any(|c| c.check == "quote_trust_root_available" && c.outcome == "fail")
-        );
+        assert!(verdict
+            .attestation
+            .checks
+            .iter()
+            .any(|c| c.check == "quote_trust_root_available" && c.outcome == "fail"));
     }
 
     #[test]
@@ -1708,11 +1688,9 @@ mod tests {
             verdict.failure_class,
             Some(VerificationFailureClass::StaleData)
         );
-        assert!(
-            verdict
-                .warnings
-                .contains(&"signature_revocation_cache_stale".to_string())
-        );
+        assert!(verdict
+            .warnings
+            .contains(&"signature_revocation_cache_stale".to_string()));
     }
 
     #[test]
@@ -1721,11 +1699,9 @@ mod tests {
         request.transparency.cache_stale = true;
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .warnings
-                .contains(&"transparency_cache_stale".to_string())
-        );
+        assert!(verdict
+            .warnings
+            .contains(&"transparency_cache_stale".to_string()));
     }
 
     #[test]
@@ -1734,11 +1710,9 @@ mod tests {
         request.attestation.revocation_cache_stale = true;
         let verdict = verify_receipt_request(&receipt_id, &request);
         assert!(!verdict.passed);
-        assert!(
-            verdict
-                .warnings
-                .contains(&"attestation_revocation_cache_stale".to_string())
-        );
+        assert!(verdict
+            .warnings
+            .contains(&"attestation_revocation_cache_stale".to_string()));
     }
 
     #[test]
@@ -1809,12 +1783,10 @@ mod tests {
     fn verdict_logs_include_completion_event() {
         let (receipt_id, request) = build_valid_fixture();
         let verdict = verify_receipt_request(&receipt_id, &request);
-        assert!(
-            verdict
-                .logs
-                .iter()
-                .any(|log| log.event == "receipt_verification_complete")
-        );
+        assert!(verdict
+            .logs
+            .iter()
+            .any(|log| log.event == "receipt_verification_complete"));
     }
 
     #[test]
@@ -1926,7 +1898,7 @@ mod tests {
     fn attestation_quote_digest_deterministic() {
         let software_root = SoftwareTrustRoot::new("root-1", 7);
         let measurement = software_root.measure(b"a", b"b", b"c", b"d", "e");
-        let quote = software_root.attest(&measurement, [0u8; 32], 1000);
+        let quote = software_root.attest(&measurement, [0u8; 32], 1000, 0);
         let a = attestation_quote_digest(&quote).unwrap();
         let b = attestation_quote_digest(&quote).unwrap();
         assert_eq!(a, b);

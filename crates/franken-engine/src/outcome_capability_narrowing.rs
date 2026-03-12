@@ -79,6 +79,12 @@ impl BoundaryOutcome {
     }
 }
 
+impl std::fmt::Display for BoundaryOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // OutcomePropagationRule
 // ---------------------------------------------------------------------------
@@ -166,6 +172,8 @@ pub enum CapabilityToken {
     ModuleLoad,
     /// Access cryptographic primitives.
     CryptoAccess,
+    /// Pure computation capability.
+    Compute,
 }
 
 impl CapabilityToken {
@@ -184,6 +192,7 @@ impl CapabilityToken {
             Self::CellSpawn => "cell_spawn",
             Self::ModuleLoad => "module_load",
             Self::CryptoAccess => "crypto",
+            Self::Compute => "compute",
         }
     }
 
@@ -202,6 +211,7 @@ impl CapabilityToken {
             Self::CellSpawn,
             Self::ModuleLoad,
             Self::CryptoAccess,
+            Self::Compute,
         ]
     }
 }
@@ -239,6 +249,7 @@ impl CapabilityGrant {
     /// Minimal compute-only set (telemetry + timer).
     pub fn compute_only() -> Self {
         let mut tokens = BTreeSet::new();
+        tokens.insert(CapabilityToken::Compute);
         tokens.insert(CapabilityToken::TelemetryEmit);
         tokens.insert(CapabilityToken::TimerAccess);
         Self {
@@ -250,6 +261,7 @@ impl CapabilityGrant {
     /// Standard sandbox set.
     pub fn sandbox() -> Self {
         let mut tokens = BTreeSet::new();
+        tokens.insert(CapabilityToken::Compute);
         tokens.insert(CapabilityToken::TelemetryEmit);
         tokens.insert(CapabilityToken::TimerAccess);
         tokens.insert(CapabilityToken::HostcallInvoke);
@@ -309,6 +321,17 @@ pub enum NarrowingDirection {
     Preserved,
     /// Capabilities were widened (violation!).
     Widened,
+}
+
+impl std::fmt::Display for NarrowingDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Narrowed => "narrowed",
+            Self::Preserved => "preserved",
+            Self::Widened => "widened",
+        };
+        f.write_str(s)
+    }
 }
 
 // ---------------------------------------------------------------------------

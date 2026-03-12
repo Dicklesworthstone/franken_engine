@@ -398,11 +398,12 @@ pub fn run_lockstep_oracle(
             react_trace_path: Some(react_path),
             franken_trace_path: Some(franken_path),
         };
+        let invalid_case_context = FrxInvalidCaseContext::from_input(&case_input);
 
         match evaluate_case(case_input) {
             Ok(result) => case_results.push(result),
             Err(err) => {
-                case_results.push(invalid_case_result(err));
+                case_results.push(invalid_case_result(invalid_case_context, err));
             }
         }
     }
@@ -501,24 +502,61 @@ fn fixture_ref_from_trace_filename(path: &Path) -> Result<String, FrxLockstepOra
 
 fn build_replay_command(input: &FrxLockstepCaseInput) -> String {
     match (&input.react_trace_path, &input.franken_trace_path) {
-        (Some(react_path), Some(franken_path)) => format!(
-            "cargo run -p frankenengine-engine --bin frx_lockstep_oracle -- --react-traces-dir {} --franken-traces-dir {} --fixture-ref {} --fail-on-divergence",
-            shell_escape_path(react_path.parent().unwrap_or_else(|| Path::new("."))),
-            shell_escape_path(franken_path.parent().unwrap_or_else(|| Path::new("."))),
-            input.fixture_ref
+        (Some(react_path), Some(franken_path)) => build_replay_run_command(
+            react_path.parent().unwrap_or_else(|| Path::new(".")),
+            franken_path.parent().unwrap_or_else(|| Path::new(".")),
+            input.fixture_ref.as_str(),
         ),
-        _ => "cargo test -p frankenengine-engine --test frx_lockstep_oracle -- --nocapture"
-            .to_string(),
+        _ => default_replay_test_command(),
     }
 }
 
+fn build_replay_run_command(
+    react_traces_dir: &Path,
+    franken_traces_dir: &Path,
+    fixture_ref: &str,
+) -> String {
+    format!(
+        "rch cargo run -p frankenengine-engine --bin frx_lockstep_oracle -- --react-traces-dir {} --franken-traces-dir {} --fixture-ref {} --fail-on-divergence",
+        shell_escape_path(react_traces_dir),
+        shell_escape_path(franken_traces_dir),
+        shell_escape_argument(fixture_ref),
+    )
+}
+
+fn default_replay_test_command() -> String {
+    "rch cargo test -p frankenengine-engine --test frx_lockstep_oracle -- --nocapture".to_string()
+}
+
 fn shell_escape_path(path: &Path) -> String {
-    let value = path.display().to_string();
-    if value.contains(' ') {
-        format!("\"{value}\"")
-    } else {
-        value
+    shell_escape_argument(path.display().to_string().as_str())
+}
+
+fn shell_escape_argument(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
     }
+    if value.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'@'
+                | b'%'
+                | b'_'
+                | b'+'
+                | b'='
+                | b':'
+                | b','
+                | b'.'
+                | b'/'
+                | b'-'
+        )
+    }) {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn missing_trace_result(
@@ -527,6 +565,11 @@ fn missing_trace_result(
     react_path: PathBuf,
     franken_path: PathBuf,
 ) -> FrxLockstepCaseResult {
+    let replay_command = build_replay_run_command(
+        react_path.parent().unwrap_or_else(|| Path::new(".")),
+        franken_path.parent().unwrap_or_else(|| Path::new(".")),
+        fixture_ref.as_str(),
+    );
     FrxLockstepCaseResult {
         fixture_ref,
         scenario_id: react_trace.scenario_id,
@@ -544,25 +587,64 @@ fn missing_trace_result(
             react_signature: None,
             franken_signature: None,
         }),
-        replay_command: format!(
-            "cargo run -p frankenengine-engine --bin frx_lockstep_oracle -- --react-traces-dir {} --franken-traces-dir {} --fixture-ref {} --fail-on-divergence",
-            shell_escape_path(react_path.parent().unwrap_or_else(|| Path::new("."))),
-            shell_escape_path(franken_path.parent().unwrap_or_else(|| Path::new("."))),
-            franken_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("unknown")
-                .trim_end_matches(".trace.json")
-        ),
+        replay_command,
     }
 }
 
-fn invalid_case_result(err: FrxLockstepOracleError) -> FrxLockstepCaseResult {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrxInvalidCaseContext {
+    fixture_ref: String,
+    scenario_id: String,
+    react_trace_id: String,
+    franken_trace_id: String,
+    replay_command: String,
+}
+
+impl FrxInvalidCaseContext {
+    fn from_input(input: &FrxLockstepCaseInput) -> Self {
+        let fixture_ref = invalid_case_identity(input.fixture_ref.as_str(), "invalid-fixture-ref");
+        let replay_command = match (&input.react_trace_path, &input.franken_trace_path) {
+            (Some(react_path), Some(franken_path)) => build_replay_run_command(
+                react_path.parent().unwrap_or_else(|| Path::new(".")),
+                franken_path.parent().unwrap_or_else(|| Path::new(".")),
+                fixture_ref.as_str(),
+            ),
+            _ => default_replay_test_command(),
+        };
+        Self {
+            fixture_ref,
+            scenario_id: invalid_case_identity(input.scenario_id.as_str(), "invalid-scenario-id"),
+            react_trace_id: invalid_case_identity(
+                input.react_trace.trace_id.as_str(),
+                "invalid-react-trace",
+            ),
+            franken_trace_id: invalid_case_identity(
+                input.franken_trace.trace_id.as_str(),
+                "invalid-franken-trace",
+            ),
+            replay_command,
+        }
+    }
+}
+
+fn invalid_case_identity(value: &str, fallback: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn invalid_case_result(
+    context: FrxInvalidCaseContext,
+    err: FrxLockstepOracleError,
+) -> FrxLockstepCaseResult {
     FrxLockstepCaseResult {
-        fixture_ref: "invalid-case".to_string(),
-        scenario_id: "invalid-case".to_string(),
-        react_trace_id: "invalid-case".to_string(),
-        franken_trace_id: "invalid-case".to_string(),
+        fixture_ref: context.fixture_ref,
+        scenario_id: context.scenario_id,
+        react_trace_id: context.react_trace_id,
+        franken_trace_id: context.franken_trace_id,
         pass: false,
         divergence: Some(FrxDivergenceDetail {
             class: FrxDivergenceClass::SchemaViolation,
@@ -571,9 +653,7 @@ fn invalid_case_result(err: FrxLockstepOracleError) -> FrxLockstepCaseResult {
             react_signature: None,
             franken_signature: None,
         }),
-        replay_command:
-            "cargo test -p frankenengine-engine --test frx_lockstep_oracle -- --nocapture"
-                .to_string(),
+        replay_command: context.replay_command,
     }
 }
 
@@ -1460,7 +1540,10 @@ mod tests {
     fn build_replay_command_without_paths() {
         let input = mk_case_input();
         let cmd = build_replay_command(&input);
-        assert!(cmd.contains("cargo test"));
+        assert_eq!(
+            cmd,
+            "rch cargo test -p frankenengine-engine --test frx_lockstep_oracle -- --nocapture"
+        );
     }
 
     #[test]
@@ -1469,6 +1552,7 @@ mod tests {
         input.react_trace_path = Some(PathBuf::from("/traces/react/test.trace.json"));
         input.franken_trace_path = Some(PathBuf::from("/traces/franken/test.trace.json"));
         let cmd = build_replay_command(&input);
+        assert!(cmd.starts_with("rch cargo run -p frankenengine-engine --bin frx_lockstep_oracle"));
         assert!(cmd.contains("--react-traces-dir"));
         assert!(cmd.contains("/traces/react"));
         assert!(cmd.contains("--franken-traces-dir"));
@@ -1476,8 +1560,22 @@ mod tests {
         assert!(cmd.contains("--fixture-ref fixture-a"));
     }
 
+    #[test]
+    fn build_replay_command_shell_escapes_fixture_ref() {
+        let mut input = mk_case_input();
+        input.fixture_ref = "fixture with 'quote'".to_string();
+        input.react_trace.fixture_ref = "fixture with 'quote'".to_string();
+        input.franken_trace.fixture_ref = "fixture with 'quote'".to_string();
+        input.react_trace_path = Some(PathBuf::from("/tmp/react traces/test.trace.json"));
+        input.franken_trace_path = Some(PathBuf::from("/tmp/franken traces/test.trace.json"));
+        let cmd = build_replay_command(&input);
+        assert!(cmd.contains("--react-traces-dir '/tmp/react traces'"));
+        assert!(cmd.contains("--franken-traces-dir '/tmp/franken traces'"));
+        assert!(cmd.contains("--fixture-ref 'fixture with '\"'\"'quote'\"'\"''"));
+    }
+
     // ====================================================================
-    // shell_escape_path
+    // shell_escape_argument / shell_escape_path
     // ====================================================================
 
     #[test]
@@ -1488,7 +1586,13 @@ mod tests {
     #[test]
     fn shell_escape_path_with_spaces() {
         let escaped = shell_escape_path(Path::new("/foo bar/baz"));
-        assert_eq!(escaped, "\"/foo bar/baz\"");
+        assert_eq!(escaped, "'/foo bar/baz'");
+    }
+
+    #[test]
+    fn shell_escape_argument_with_single_quote() {
+        let escaped = shell_escape_argument("a'b");
+        assert_eq!(escaped, "'a'\"'\"'b'");
     }
 
     // ====================================================================
@@ -1497,10 +1601,21 @@ mod tests {
 
     #[test]
     fn invalid_case_result_sets_schema_violation() {
+        let context = FrxInvalidCaseContext {
+            fixture_ref: "fixture-a".into(),
+            scenario_id: "scenario-a".into(),
+            react_trace_id: "react-trace".into(),
+            franken_trace_id: "franken-trace".into(),
+            replay_command: "rch cargo run -p frankenengine-engine --bin frx_lockstep_oracle -- --fixture-ref fixture-a".into(),
+        };
         let err = FrxLockstepOracleError::InvalidInput("bad".into());
-        let result = invalid_case_result(err);
+        let result = invalid_case_result(context, err);
         assert!(!result.pass);
-        assert_eq!(result.fixture_ref, "invalid-case");
+        assert_eq!(result.fixture_ref, "fixture-a");
+        assert_eq!(result.scenario_id, "scenario-a");
+        assert_eq!(result.react_trace_id, "react-trace");
+        assert_eq!(result.franken_trace_id, "franken-trace");
+        assert!(result.replay_command.contains("rch cargo run"));
         let div = result.divergence.unwrap();
         assert_eq!(div.class, FrxDivergenceClass::SchemaViolation);
         assert!(div.message.contains("bad"));
@@ -1524,6 +1639,37 @@ mod tests {
         let div = result.divergence.unwrap();
         assert_eq!(div.class, FrxDivergenceClass::SchemaViolation);
         assert!(div.message.contains("missing FrankenReact trace file"));
+    }
+
+    #[test]
+    fn missing_trace_result_replay_command_preserves_fixture_ref_and_shell_escapes_paths() {
+        let trace = mk_trace(vec![mk_event(1, 0)]);
+        let result = missing_trace_result(
+            "fixture with 'quote'".into(),
+            trace,
+            PathBuf::from("/react traces/fix-a.trace.json"),
+            PathBuf::from("/franken traces/fix-a.trace.json"),
+        );
+        assert!(
+            result
+                .replay_command
+                .starts_with("rch cargo run -p frankenengine-engine --bin frx_lockstep_oracle")
+        );
+        assert!(
+            result
+                .replay_command
+                .contains("--react-traces-dir '/react traces'")
+        );
+        assert!(
+            result
+                .replay_command
+                .contains("--franken-traces-dir '/franken traces'")
+        );
+        assert!(
+            result
+                .replay_command
+                .contains("--fixture-ref 'fixture with '\"'\"'quote'\"'\"''")
+        );
     }
 
     // ====================================================================

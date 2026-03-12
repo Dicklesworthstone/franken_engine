@@ -522,6 +522,50 @@ fn parser_performance_gate_script_contains_fail_closed_rch_markers() {
     }
 }
 
+#[test]
+fn parser_performance_gate_script_uses_repo_local_target_dir_and_step_logs() {
+    let script = load_script();
+
+    assert!(
+        script.contains("${root_dir}/target_rch_parser_performance_promotion_gate_"),
+        "gate script should use a repo-local, namespaced remote target dir"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_franken_engine_parser_performance_promotion_gate"),
+        "gate script must not route heavy remote builds through /tmp"
+    );
+    assert!(
+        script.contains("step_logs_dir=\"${run_dir}/step_logs\""),
+        "gate script should retain per-step rch logs for operator triage"
+    );
+    assert!(
+        script.contains("\"step_logs\":"),
+        "run manifest should publish the step log bundle path"
+    );
+    assert!(
+        script.contains("cat ${step_logs_dir}/step_000.log"),
+        "operator verification should include a retained step log"
+    );
+}
+
+#[test]
+fn parser_performance_doc_uses_repo_local_target_dir_example_and_step_logs() {
+    let doc = load_doc();
+
+    assert!(
+        doc.contains("$PWD/target_rch_parser_performance_promotion_gate_verify"),
+        "doc must show the hardened repo-local target dir example"
+    );
+    assert!(
+        !doc.contains("/tmp/rch_target_franken_engine_parser_performance_promotion_gate"),
+        "doc must not reference stale /tmp target dirs"
+    );
+    assert!(
+        doc.contains("step_logs/step_*.log"),
+        "doc must advertise the step log artifact bundle"
+    );
+}
+
 // ---------- pair_key ----------
 
 #[test]

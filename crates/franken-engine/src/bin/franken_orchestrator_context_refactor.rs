@@ -6,8 +6,7 @@ use std::path::PathBuf;
 
 use frankenengine_engine::control_plane_mock_inventory::{
     OrchestratorContextRefactorReport, orchestrator_context_refactor_exit_code,
-    write_orchestrator_context_refactor_bundle,
-    write_orchestrator_context_refactor_bundle_in_root,
+    write_orchestrator_context_refactor_bundle, write_orchestrator_context_refactor_bundle_in_root,
 };
 use serde::Serialize;
 

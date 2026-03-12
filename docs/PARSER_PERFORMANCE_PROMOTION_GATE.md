@@ -106,6 +106,10 @@ One-command replay wrapper:
 
 All heavy Rust checks/tests for this lane run through `rch`.
 
+The gate defaults remote builds into a repo-local, namespaced target directory
+(`target_rch_parser_performance_promotion_gate_<mode>_<pid>`) so remote workers
+do not depend on fragile `/tmp`-backed incremental state.
+
 Fail-closed `rch` policy:
 
 - local fallback signatures (`running locally`, `falling back to local`,
@@ -119,6 +123,13 @@ Canonical command:
 
 ```bash
 ./scripts/run_parser_performance_promotion_gate.sh ci
+```
+
+Pinned operator verify target example:
+
+```bash
+CARGO_TARGET_DIR=$PWD/target_rch_parser_performance_promotion_gate_verify \
+  ./scripts/run_parser_performance_promotion_gate.sh ci
 ```
 
 Modes:
@@ -135,6 +146,7 @@ Each run emits:
 - `artifacts/parser_performance_promotion_gate/<timestamp>/run_manifest.json`
 - `artifacts/parser_performance_promotion_gate/<timestamp>/events.jsonl`
 - `artifacts/parser_performance_promotion_gate/<timestamp>/commands.txt`
+- `artifacts/parser_performance_promotion_gate/<timestamp>/step_logs/step_*.log`
 
 Manifest includes gate mode, deterministic replay command, benchmark protocol
 hash, blocked pair inventory, deterministic environment fingerprint fields,
@@ -143,9 +155,11 @@ and pass/fail outcome.
 ## Operator Verification
 
 ```bash
-./scripts/run_parser_performance_promotion_gate.sh ci
+CARGO_TARGET_DIR=$PWD/target_rch_parser_performance_promotion_gate_verify \
+  ./scripts/run_parser_performance_promotion_gate.sh ci
 cat artifacts/parser_performance_promotion_gate/<timestamp>/run_manifest.json
 cat artifacts/parser_performance_promotion_gate/<timestamp>/events.jsonl
 cat artifacts/parser_performance_promotion_gate/<timestamp>/commands.txt
+cat artifacts/parser_performance_promotion_gate/<timestamp>/step_logs/step_000.log
 ./scripts/e2e/parser_performance_promotion_gate_replay.sh
 ```

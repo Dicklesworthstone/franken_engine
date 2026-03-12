@@ -22,11 +22,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::bayesian_posterior::RiskState;
 use frankenengine_engine::control_plane_mock_inventory::{
     OrchestratorContextRefactorOutcome, OrchestratorContextRefactorRunManifest,
     write_orchestrator_context_refactor_bundle_in_root,
 };
-use frankenengine_engine::bayesian_posterior::RiskState;
 use frankenengine_engine::execution_cell::CellError;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
@@ -199,12 +199,9 @@ fn orchestrator_context_refactor_bundle_emits_expected_artifacts() {
             .to_string(),
     ];
 
-    let artifacts = write_orchestrator_context_refactor_bundle_in_root(
-        &workspace_root,
-        &out_dir,
-        &commands,
-    )
-    .expect("bundle should be written");
+    let artifacts =
+        write_orchestrator_context_refactor_bundle_in_root(&workspace_root, &out_dir, &commands)
+            .expect("bundle should be written");
 
     assert_eq!(artifacts.outcome, OrchestratorContextRefactorOutcome::Pass);
     assert!(artifacts.contract_path.exists());

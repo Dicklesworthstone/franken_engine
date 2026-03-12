@@ -759,7 +759,9 @@ Artifacts are written under:
 
 `bd-2mds.1.8.3` enforces fail-closed promotion policy for parser performance
 wins against required peers/quantiles with confidence-bounded and reproducible
-evidence.
+evidence. The runner defaults `rch` builds into a repo-local
+`target_rch_parser_performance_promotion_gate_<mode>_<pid>` path so remote
+workers are not forced through `/tmp`-backed incremental state.
 
 ```bash
 # parser performance promotion gate (rch-backed check + test + clippy)
@@ -780,6 +782,7 @@ Artifacts are written under:
 - `artifacts/parser_performance_promotion_gate/<timestamp>/run_manifest.json`
 - `artifacts/parser_performance_promotion_gate/<timestamp>/events.jsonl`
 - `artifacts/parser_performance_promotion_gate/<timestamp>/commands.txt`
+- `artifacts/parser_performance_promotion_gate/<timestamp>/step_logs/step_*.log`
 
 ## Parser API Compatibility Gate
 

@@ -109,24 +109,38 @@ run_step() {
 run_mode() {
   case "$mode" in
   check)
-    run_step "cargo check -p frankenengine-engine --test rgc_statistical_validation_pipeline" \
-      cargo check -p frankenengine-engine --test rgc_statistical_validation_pipeline
+    run_step "cargo check -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration" \
+      cargo check -p frankenengine-engine \
+      --test rgc_statistical_validation_pipeline \
+      --test performance_statistical_validation_integration
     ;;
   test)
-    run_step "cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline" \
-      cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline
+    run_step "cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration" \
+      cargo test -p frankenengine-engine \
+      --test rgc_statistical_validation_pipeline \
+      --test performance_statistical_validation_integration
     ;;
   clippy)
-    run_step "cargo clippy -p frankenengine-engine --test rgc_statistical_validation_pipeline -- -D warnings" \
-      cargo clippy -p frankenengine-engine --test rgc_statistical_validation_pipeline -- -D warnings
+    run_step "cargo clippy -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration -- -D warnings" \
+      cargo clippy -p frankenengine-engine \
+      --test rgc_statistical_validation_pipeline \
+      --test performance_statistical_validation_integration \
+      -- -D warnings
     ;;
   ci)
-    run_step "cargo check -p frankenengine-engine --test rgc_statistical_validation_pipeline" \
-      cargo check -p frankenengine-engine --test rgc_statistical_validation_pipeline
-    run_step "cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline" \
-      cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline
-    run_step "cargo clippy -p frankenengine-engine --test rgc_statistical_validation_pipeline -- -D warnings" \
-      cargo clippy -p frankenengine-engine --test rgc_statistical_validation_pipeline -- -D warnings
+    run_step "cargo check -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration" \
+      cargo check -p frankenengine-engine \
+      --test rgc_statistical_validation_pipeline \
+      --test performance_statistical_validation_integration
+    run_step "cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration" \
+      cargo test -p frankenengine-engine \
+      --test rgc_statistical_validation_pipeline \
+      --test performance_statistical_validation_integration
+    run_step "cargo clippy -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration -- -D warnings" \
+      cargo clippy -p frankenengine-engine \
+      --test rgc_statistical_validation_pipeline \
+      --test performance_statistical_validation_integration \
+      -- -D warnings
     ;;
   *)
     echo "usage: $0 [check|test|clippy|ci]" >&2
@@ -283,7 +297,10 @@ write_manifest() {
     echo "    \"stats_verdict_report\": \"${stats_report_path}\"," 
     echo '    "contract_doc": "docs/RGC_STATISTICAL_VALIDATION_PIPELINE_V1.md",'
     echo '    "contract_json": "docs/rgc_statistical_validation_pipeline_v1.json",'
-    echo '    "gate_tests": "crates/franken-engine/tests/rgc_statistical_validation_pipeline.rs"'
+    echo '    "gate_tests": ['
+    echo '      "crates/franken-engine/tests/rgc_statistical_validation_pipeline.rs",'
+    echo '      "crates/franken-engine/tests/performance_statistical_validation_integration.rs"'
+    echo '    ]'
     echo '  },'
     echo '  "operator_verification": ['
     echo "    \"cat ${manifest_path}\"," 

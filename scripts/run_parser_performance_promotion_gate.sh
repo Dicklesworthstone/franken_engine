@@ -9,15 +9,18 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_parser_performance_promotion_gate}"
+cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
 artifact_root="${PARSER_PERFORMANCE_PROMOTION_GATE_ARTIFACT_ROOT:-artifacts/parser_performance_promotion_gate}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 fixture_path="crates/franken-engine/tests/fixtures/parser_performance_promotion_gate_v1.json"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+target_namespace="${mode}_$$"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_parser_performance_promotion_gate_${target_namespace}}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
+step_logs_dir="${run_dir}/step_logs"
 
 trace_id="trace-parser-performance-promotion-gate-${timestamp}"
 decision_id="decision-parser-performance-promotion-gate-${timestamp}"
@@ -25,7 +28,7 @@ policy_id="policy-parser-performance-promotion-gate-v1"
 component="parser_performance_promotion_gate"
 replay_command="./scripts/e2e/parser_performance_promotion_gate_replay.sh ${mode}"
 
-mkdir -p "$run_dir"
+mkdir -p "$run_dir" "$step_logs_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for parser performance promotion gate heavy commands" >&2
@@ -43,6 +46,7 @@ run_rch() {
     rch exec -- env \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
+    "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
     "$@"
 }
 
@@ -81,6 +85,7 @@ rch_reject_artifact_retrieval_failure() {
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
+step_log_index=0
 
 run_step() {
   local command_text="$1"
@@ -89,7 +94,8 @@ run_step() {
 
   commands_run+=("$command_text")
   echo "==> $command_text"
-  log_path="$(mktemp)"
+  log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
+  step_log_index=$((step_log_index + 1))
 
   if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
     local remote_exit_code
@@ -97,25 +103,20 @@ run_step() {
     if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
     else
-      rm -f "$log_path"
       failed_command="$command_text"
       return 1
     fi
   fi
 
   if ! rch_reject_local_fallback "$log_path"; then
-    rm -f "$log_path"
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
   fi
 
   if ! rch_reject_artifact_retrieval_failure "$log_path"; then
-    rm -f "$log_path"
     failed_command="${command_text} (rch-artifact-retrieval-failed)"
     return 1
   fi
-
-  rm -f "$log_path"
 }
 
 run_mode() {
@@ -256,6 +257,7 @@ write_manifest() {
     echo "    \"manifest\": \"${manifest_path}\","
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
+    echo "    \"step_logs\": \"${step_logs_dir}\","
     echo '    "contract_doc": "docs/PARSER_PERFORMANCE_PROMOTION_GATE.md",'
     echo '    "gate_fixture": "crates/franken-engine/tests/fixtures/parser_performance_promotion_gate_v1.json",'
     echo '    "gate_tests": "crates/franken-engine/tests/parser_performance_promotion_gate.rs",'
@@ -265,6 +267,7 @@ write_manifest() {
     echo "    \"cat ${manifest_path}\","
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
+    echo "    \"cat ${step_logs_dir}/step_000.log\","
     echo "    \"${replay_command}\""
     echo "  ]"
     echo "}"

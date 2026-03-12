@@ -34,6 +34,7 @@ struct Rgc702Contract {
     policy_id: String,
     required_log_keys: Vec<String>,
     required_artifacts: Vec<String>,
+    required_test_targets: Vec<String>,
     thresholds: Rgc702Thresholds,
     failure_scenarios: Vec<Rgc702FailureScenario>,
     gate_runner: Rgc702GateRunner,
@@ -157,6 +158,18 @@ fn rgc_702_contract_schema_and_thresholds_are_valid() {
     assert!(
         (500_000..=999_999).contains(&contract.thresholds.confidence_level_millionths),
         "confidence must be in (0.5, 1.0)"
+    );
+    assert!(
+        contract
+            .required_test_targets
+            .contains(&"rgc_statistical_validation_pipeline".to_string()),
+        "contract must require the contract/doc test target"
+    );
+    assert!(
+        contract
+            .required_test_targets
+            .contains(&"performance_statistical_validation_integration".to_string()),
+        "contract must require the behavioral integration target"
     );
 }
 
@@ -415,6 +428,13 @@ fn operator_verification_uses_data_tmp_target_dir() {
         "operator verification should pin the hardened repo-local verify target dir"
     );
     assert!(
+        contract.operator_verification.iter().any(|entry| {
+            entry.contains("--test rgc_statistical_validation_pipeline")
+                && entry.contains("--test performance_statistical_validation_integration")
+        }),
+        "operator verification should cover both statistical validation test targets"
+    );
+    assert!(
         contract
             .operator_verification
             .iter()
@@ -470,6 +490,12 @@ fn contract_doc_uses_hardened_target_dir_and_bundle() {
         "doc must use the hardened repo-local target dir example"
     );
     assert!(
+        doc.contains(
+            "crates/franken-engine/tests/performance_statistical_validation_integration.rs"
+        ),
+        "doc must list the behavioral integration target"
+    );
+    assert!(
         !doc.contains("/tmp/rch_target_rgc_statistical_validation_pipeline"),
         "doc must not reference stale /tmp target dirs"
     );
@@ -495,12 +521,16 @@ fn gate_script_emits_extended_artifact_bundle() {
 
     for needle in [
         "target_dir=\"${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_statistical_validation_pipeline}\"",
+        "cargo check -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration",
+        "cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration",
+        "cargo clippy -p frankenengine-engine --test rgc_statistical_validation_pipeline --test performance_statistical_validation_integration -- -D warnings",
         "trace_ids_path=\"${run_dir}/trace_ids.json\"",
         "summary_path=\"${run_dir}/summary.md\"",
         "env_path=\"${run_dir}/env.json\"",
         "repro_lock_path=\"${run_dir}/repro.lock\"",
         "step_logs_dir=\"${run_dir}/step_logs\"",
         "\"step_logs\": \"${step_logs_dir}\"",
+        "crates/franken-engine/tests/performance_statistical_validation_integration.rs",
     ] {
         assert!(script.contains(needle), "gate script missing {needle}");
     }

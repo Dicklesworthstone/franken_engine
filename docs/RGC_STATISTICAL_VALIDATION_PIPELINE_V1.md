@@ -68,6 +68,11 @@ Modes:
 Strict mode is fail-closed and requires remote execution for heavy cargo
 operations (`rch` only, no local fallback).
 
+Validation targets:
+
+- `crates/franken-engine/tests/rgc_statistical_validation_pipeline.rs`
+- `crates/franken-engine/tests/performance_statistical_validation_integration.rs`
+
 ## Required Artifacts
 
 Each run emits:
@@ -90,7 +95,9 @@ under `artifacts/rgc_statistical_validation_pipeline/<UTC_TIMESTAMP>/`.
 jq empty docs/rgc_statistical_validation_pipeline_v1.json
 
 rch exec -- env CARGO_TARGET_DIR="$PWD/target_rch_rgc_statistical_validation_pipeline_verify" \
-  cargo test -p frankenengine-engine --test rgc_statistical_validation_pipeline
+  cargo test -p frankenengine-engine \
+  --test rgc_statistical_validation_pipeline \
+  --test performance_statistical_validation_integration
 
 ./scripts/run_rgc_statistical_validation_pipeline.sh ci
 ./scripts/e2e/rgc_statistical_validation_pipeline_replay.sh ci

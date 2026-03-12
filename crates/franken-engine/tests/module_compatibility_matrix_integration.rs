@@ -17,6 +17,8 @@
 )]
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use frankenengine_engine::module_compatibility_matrix::{
     COMPATIBILITY_SCENARIO_REPORT_SCHEMA_VERSION, CompatibilityContext, CompatibilityMatrixEntry,
@@ -31,6 +33,20 @@ use frankenengine_engine::module_compatibility_matrix::{
 
 fn ctx() -> CompatibilityContext {
     CompatibilityContext::new("trace-integ", "decision-integ", "policy-integ")
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn read_to_string(path: &Path) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn read_interop_gate_script() -> String {
+    let path = repo_root().join("scripts/run_rgc_module_interop_verification_matrix.sh");
+    read_to_string(&path)
 }
 
 fn base_entry(case_id: &str) -> CompatibilityMatrixEntry {
@@ -72,6 +88,24 @@ fn divergence_for(runtimes: Vec<ReferenceRuntime>, waiver: &str) -> DivergencePo
 
 fn matrix_with(entries: Vec<CompatibilityMatrixEntry>) -> ModuleCompatibilityMatrix {
     ModuleCompatibilityMatrix::from_entries("1.0.0", entries).unwrap()
+}
+
+#[test]
+fn interop_gate_script_uses_repo_local_target_dir_and_rejects_tmp_fallback() {
+    let script = read_interop_gate_script();
+
+    assert!(
+        script.contains("${root_dir}/target_rch_rgc_module_interop_verification_matrix_"),
+        "interop gate should use a repo-local namespaced rch target dir"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_franken_engine_rgc_module_interop_matrix_"),
+        "interop gate must not default heavy remote builds to /tmp"
+    );
+    assert!(
+        script.contains("rch reported local fallback; refusing local execution for heavy command"),
+        "interop gate must fail closed if rch falls back to local execution"
+    );
 }
 
 // ===========================================================================

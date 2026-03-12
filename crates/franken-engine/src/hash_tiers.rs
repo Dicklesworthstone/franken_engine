@@ -65,6 +65,11 @@ impl fmt::Display for IntegrityHash {
 pub struct ContentHash(pub [u8; 32]);
 
 impl ContentHash {
+    /// Construct a content hash from precomputed bytes.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     /// Compute a content hash over the given bytes.
     ///
     /// Uses a SipHash-inspired Merkle-Damgard construction (same as
@@ -482,6 +487,13 @@ mod tests {
     fn content_hash_is_32_bytes() {
         let h = ContentHash::compute(b"any data");
         assert_eq!(h.as_bytes().len(), 32);
+    }
+
+    #[test]
+    fn content_hash_from_bytes_preserves_input_bytes() {
+        let bytes = [0x5au8; 32];
+        let h = ContentHash::from_bytes(bytes);
+        assert_eq!(h.as_bytes(), &bytes);
     }
 
     #[test]

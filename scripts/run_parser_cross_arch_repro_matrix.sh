@@ -57,6 +57,63 @@ run_rch() {
     "$@"
 }
 
+run_rch_strict_logged() {
+  local log_path="$1"
+  shift
+
+  local fifo_path fallback_flag_path rch_pid_path reader_pid rch_pid rch_status=0
+  local line current_rch_pid
+
+  fifo_path="$(mktemp -u "${run_dir}/rch-stream.XXXXXX")"
+  fallback_flag_path="$(mktemp "${run_dir}/rch-fallback.XXXXXX")"
+  rch_pid_path="$(mktemp "${run_dir}/rch-pid.XXXXXX")"
+  rm -f "$fallback_flag_path"
+  mkfifo "$fifo_path"
+  : >"$log_path"
+
+  {
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      printf '%s\n' "$line" | tee -a "$log_path"
+      if [[ "$line" == *"Remote toolchain failure, falling back to local"* ||
+        "$line" == *"falling back to local"* ||
+        "$line" == *"fallback to local"* ||
+        "$line" == *"local fallback"* ||
+        "$line" == *"running locally"* ||
+        "$line" == *"[RCH] local ("* ]]; then
+        : >"$fallback_flag_path"
+        current_rch_pid="$(tr -d '[:space:]' <"$rch_pid_path" 2>/dev/null || true)"
+        if [[ -n "$current_rch_pid" ]]; then
+          kill "$current_rch_pid" 2>/dev/null || true
+          pkill -P "$current_rch_pid" 2>/dev/null || true
+        fi
+        pkill -f 'frankenengine-engine --test parser_cross_arch_repro_matrix' 2>/dev/null || true
+        pkill -f "CARGO_TARGET_DIR=${target_dir}" 2>/dev/null || true
+        pkill -f "${target_dir}" 2>/dev/null || true
+      fi
+    done <"$fifo_path"
+  } &
+  reader_pid=$!
+
+  run_rch "$@" >"$fifo_path" 2>&1 &
+  rch_pid=$!
+  printf '%s\n' "$rch_pid" >"$rch_pid_path"
+  wait "$rch_pid" || rch_status=$?
+  wait "$reader_pid" || true
+  rm -f "$fifo_path"
+
+  if [[ -f "$fallback_flag_path" ]]; then
+    rm -f "$fallback_flag_path"
+    pkill -f "CARGO_TARGET_DIR=${target_dir}" 2>/dev/null || true
+    pkill -f "${target_dir}" 2>/dev/null || true
+    rm -f "$rch_pid_path"
+    return 125
+  fi
+
+  rm -f "$fallback_flag_path"
+  rm -f "$rch_pid_path"
+  return "$rch_status"
+}
+
 rch_reject_local_fallback() {
   local log_path="$1"
   if grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|\[RCH\] local \(|Remote execution failed.*running locally|running locally|Dependency preflight blocked remote execution|RCH-E326' "$log_path"; then
@@ -188,34 +245,59 @@ resolve_manifest_input \
 
 run_step() {
   local command_text="$1"
-  local log_path
+  local log_path run_rc remote_exit_code
+  local fallback_detected=false
   shift
 
   commands_run+=("$command_text")
   echo "==> $command_text"
   log_path="$(mktemp)"
 
-  if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
-    local remote_exit_code
-    remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
-    if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
-      echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
-    else
-      rm -f "$log_path"
-      failed_command="$command_text"
-      return 1
-    fi
+  if run_rch_strict_logged "$log_path" "$@"; then
+    run_rc=0
+  else
+    run_rc=$?
+  fi
+
+  if [[ "$run_rc" -eq 125 ]]; then
+    fallback_detected=true
   fi
 
   if ! rch_reject_local_fallback "$log_path"; then
+    fallback_detected=true
+  fi
+
+  if [[ "$fallback_detected" == true ]]; then
     rm -f "$log_path"
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
   fi
 
+  if [[ "$run_rc" -ne 0 ]]; then
+    remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
+    if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
+      echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
+    else
+      rm -f "$log_path"
+      if [[ -n "$remote_exit_code" ]]; then
+        failed_command="${command_text} (remote-exit-${remote_exit_code})"
+      else
+        failed_command="$command_text"
+      fi
+      return 1
+    fi
+  fi
+
   if ! rch_reject_artifact_retrieval_failure "$log_path"; then
     rm -f "$log_path"
     failed_command="${command_text} (rch-artifact-retrieval-failed)"
+    return 1
+  fi
+
+  remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
+  if [[ -n "$remote_exit_code" && "$remote_exit_code" != "0" ]]; then
+    rm -f "$log_path"
+    failed_command="${command_text} (remote-exit-${remote_exit_code})"
     return 1
   fi
 
@@ -507,6 +589,54 @@ classify_matrix_input_status() {
   matrix_input_status="ready_for_external_rerun"
 }
 
+delta_class_error_code() {
+  local delta_class="${1:-}"
+  case "$delta_class" in
+    digest_delta_unexplained)
+      echo "FE-PARSER-CROSS-ARCH-MATRIX-0001"
+      ;;
+    upstream_lane_regression)
+      echo "FE-PARSER-CROSS-ARCH-MATRIX-0002"
+      ;;
+    missing_input)
+      echo "FE-PARSER-CROSS-ARCH-MATRIX-0003"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+gate_error_code() {
+  local exit_code="${1:-0}"
+  local first_critical_delta=""
+  local specific_code=""
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    echo ""
+    return
+  fi
+
+  if [[ -n "$failed_command" && "$failed_command" != "evaluate_matrix" ]]; then
+    echo "FE-PARSER-CROSS-ARCH-REPRO-MATRIX-0001"
+    return
+  fi
+
+  if [[ -s "$matrix_deltas_path" ]]; then
+    first_critical_delta="$(
+      jq -rs '[.[] | select(.severity == "critical")] | .[0].delta_class // ""' \
+        "$matrix_deltas_path" 2>/dev/null
+    )"
+    specific_code="$(delta_class_error_code "$first_critical_delta")"
+    if [[ -n "$specific_code" ]]; then
+      echo "$specific_code"
+      return
+    fi
+  fi
+
+  echo "FE-PARSER-CROSS-ARCH-REPRO-MATRIX-0001"
+}
+
 write_matrix_summary() {
   local lane_deltas_json
   lane_deltas_json="$(jq -s '.' "$matrix_deltas_path")"
@@ -572,7 +702,7 @@ write_matrix_summary() {
 
 write_manifest() {
   local exit_code="${1:-0}"
-  local outcome error_code_json git_commit dirty_worktree idx comma
+  local outcome error_code git_commit dirty_worktree idx comma
 
   if [[ "$manifest_written" == true ]]; then
     return
@@ -581,11 +711,10 @@ write_manifest() {
 
   if [[ "$exit_code" -eq 0 ]]; then
     outcome="pass"
-    error_code_json="null"
   else
     outcome="fail"
-    error_code_json='"FE-PARSER-CROSS-ARCH-REPRO-MATRIX-0001"'
   fi
+  error_code="$(gate_error_code "$exit_code")"
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
   if git diff --quiet --ignore-submodules HEAD -- >/dev/null 2>&1; then
@@ -597,7 +726,7 @@ write_manifest() {
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
   {
-    echo "{\"schema_version\":\"franken-engine.parser-cross-arch-repro-matrix.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"gate_completed\",\"scenario_id\":\"${scenario_id}\",\"matrix_input_status\":\"${matrix_input_status}\",\"replay_command\":\"${replay_command}\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json}}"
+    echo "{\"schema_version\":\"franken-engine.parser-cross-arch-repro-matrix.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"gate_completed\",\"scenario_id\":\"${scenario_id}\",\"matrix_input_status\":\"${matrix_input_status}\",\"replay_command\":\"${replay_command}\",\"outcome\":\"${outcome}\",\"error_code\":$(json_string_or_null "${error_code}")}"
 
     while IFS= read -r row || [[ -n "$row" ]]; do
       [[ -z "${row// }" ]] && continue
@@ -606,12 +735,12 @@ write_manifest() {
       severity="$(jq -r '.severity' <<<"$row")"
       reason="$(jq -r '.reason' <<<"$row")"
       lane_outcome="pass"
-      lane_error_code_json="null"
+      lane_error_code=""
       if [[ "$severity" == "critical" ]]; then
         lane_outcome="fail"
-        lane_error_code_json='"FE-PARSER-CROSS-ARCH-REPRO-MATRIX-DELTA-0001"'
+        lane_error_code="$(delta_class_error_code "$delta_class")"
       fi
-      echo "{\"schema_version\":\"franken-engine.parser-cross-arch-repro-matrix.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"lane_delta_evaluated\",\"scenario_id\":\"$(parser_frontier_json_escape "${lane_id}")\",\"delta_class\":\"$(parser_frontier_json_escape "${delta_class}")\",\"delta_reason\":\"$(parser_frontier_json_escape "${reason}")\",\"replay_command\":\"${replay_command}\",\"outcome\":\"${lane_outcome}\",\"error_code\":${lane_error_code_json}}"
+      echo "{\"schema_version\":\"franken-engine.parser-cross-arch-repro-matrix.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"lane_delta_evaluated\",\"scenario_id\":\"$(parser_frontier_json_escape "${lane_id}")\",\"delta_class\":\"$(parser_frontier_json_escape "${delta_class}")\",\"delta_reason\":\"$(parser_frontier_json_escape "${reason}")\",\"replay_command\":\"${replay_command}\",\"outcome\":\"${lane_outcome}\",\"error_code\":$(json_string_or_null "${lane_error_code}")}"
     done <"$matrix_deltas_path"
   } >"$events_path"
 
@@ -633,7 +762,7 @@ write_manifest() {
     echo "  \"git_commit\": \"${git_commit}\","
     echo "  \"dirty_worktree\": ${dirty_worktree},"
     echo "  \"outcome\": \"${outcome}\","
-    echo "  \"error_code\": ${error_code_json},"
+    echo "  \"error_code\": $(json_string_or_null "${error_code}"),"
     if [[ -n "$failed_command" ]]; then
       echo "  \"failed_command\": \"$(parser_frontier_json_escape "${failed_command}")\","
     fi

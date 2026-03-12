@@ -61,10 +61,15 @@ parity gates (`bd-1lsy.9.7*`) are green, rows stay in `unsupported` or
 | `jsx-automatic-runtime-compile` | `deferred` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
 | `tsx-automatic-runtime-compile` | `deferred` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.1` |
 | `jsx-dev-runtime-diagnostics` | `unsupported` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.2` |
+| `tsx-dev-runtime-diagnostics` | `unsupported` | `bd-1lsy.3.6.2` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.2` |
 | `react-ssr-entrypoint` | `unsupported` | `bd-1lsy.5.7.2` | `bd-1lsy.9.7.2` | `bd-1lsy.10.12.3` |
 | `react-client-entry-preparation` | `unsupported` | `bd-1lsy.5.7.1` | `bd-1lsy.9.7.2` | `bd-1lsy.10.12.3` |
 | `react-hydration-handoff-artifacts` | `unsupported` | `bd-1lsy.5.7.2` | `bd-1lsy.9.7.2` | `bd-1lsy.10.12.3` |
 | `react-diagnostics-source-maps` | `deferred` | `bd-1lsy.10.5` | `bd-1lsy.9.7.1` | `bd-1lsy.10.12.2` |
+
+`jsx-dev` diagnostics and `tsx-dev` diagnostics remain separate rows on purpose:
+the diagnostics surface must be explicit for both source forms so TSX support is
+never implied by a JSX-only dev-runtime contract.
 
 ## Unsupported-Surface Governance
 

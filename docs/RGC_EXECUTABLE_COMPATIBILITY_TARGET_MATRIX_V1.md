@@ -50,6 +50,7 @@ That extension carries explicit rows for:
 - classic runtime
 - automatic runtime
 - `jsx-dev` runtime diagnostics
+- `tsx-dev` runtime diagnostics
 - SSR entrypoints
 - client-entry preparation
 - hydration handoff artifacts

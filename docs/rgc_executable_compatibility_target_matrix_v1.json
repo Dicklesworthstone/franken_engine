@@ -180,6 +180,7 @@
       "jsx-automatic-runtime-compile",
       "tsx-automatic-runtime-compile",
       "jsx-dev-runtime-diagnostics",
+      "tsx-dev-runtime-diagnostics",
       "react-ssr-entrypoint",
       "react-client-entry-preparation",
       "react-hydration-handoff-artifacts",

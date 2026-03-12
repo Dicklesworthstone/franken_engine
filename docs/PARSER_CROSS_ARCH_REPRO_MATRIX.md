@@ -78,6 +78,13 @@ Event streams for this lane must include:
 `gate_completed` events must additionally include `matrix_input_status`.
 Each lane-delta row must include a deterministic replay pointer.
 
+Error-code mapping is deterministic:
+
+- `FE-PARSER-CROSS-ARCH-MATRIX-0001`: `digest_delta_unexplained`
+- `FE-PARSER-CROSS-ARCH-MATRIX-0002`: `upstream_lane_regression`
+- `FE-PARSER-CROSS-ARCH-MATRIX-0003`: `missing_input` or strict-matrix incompleteness
+- `FE-PARSER-CROSS-ARCH-REPRO-MATRIX-0001`: runner-level heavy-command failure that is not attributable to a classified lane delta
+
 ## Replay and Execution
 
 Primary gate script:
@@ -118,6 +125,9 @@ One-command replay wrapper:
 ```
 
 All heavy Rust checks/tests are executed through `rch`.
+If `rch` reports a local fallback, the gate must terminate that local path
+immediately and fail closed; local continuation does not count as a valid heavy
+verification run for this lane.
 
 ## Required Artifacts
 

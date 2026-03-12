@@ -604,6 +604,16 @@ impl Ir2FlowLattice {
             });
         }
 
+        let declassified_label = LabelClass::from_label(&receipt.sink_clearance);
+        if !declassified_label.can_flow_to(&obligation.target_clearance) {
+            return Err(FlowLatticeError::FlowBlocked {
+                detail: format!(
+                    "receipt {} declassified label {} cannot flow to obligation target clearance {} for obligation {obligation_id}",
+                    receipt.receipt_id, declassified_label, obligation.target_clearance
+                ),
+            });
+        }
+
         if receipt.replay_linkage != trace_id {
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
@@ -681,7 +691,7 @@ impl Ir2FlowLattice {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+    use crate::signature_preimage::{Signature, SigningKey, SIGNATURE_SENTINEL};
 
     // -----------------------------------------------------------------------
     // LabelClass lattice operations
@@ -1329,7 +1339,7 @@ mod tests {
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-2".to_string(),
             source_label: Label::Secret,
-            sink_clearance: Label::Internal,
+            sink_clearance: Label::Public,
             declassification_route_ref: "declass-2".to_string(),
             policy_evaluation_summary: "approved".to_string(),
             loss_assessment_milli: 42,
@@ -1377,7 +1387,7 @@ mod tests {
         let mut denied_receipt = DeclassificationReceipt {
             receipt_id: "rcpt-deny".to_string(),
             source_label: Label::Secret,
-            sink_clearance: Label::Internal,
+            sink_clearance: Label::Public,
             declassification_route_ref: "declass-3".to_string(),
             policy_evaluation_summary: "denied".to_string(),
             loss_assessment_milli: 9_999,
@@ -1421,7 +1431,7 @@ mod tests {
         let mut tampered_receipt = DeclassificationReceipt {
             receipt_id: "rcpt-tampered".to_string(),
             source_label: Label::Secret,
-            sink_clearance: Label::Internal,
+            sink_clearance: Label::Public,
             declassification_route_ref: "declass-4".to_string(),
             policy_evaluation_summary: "approved".to_string(),
             loss_assessment_milli: 7,
@@ -1474,7 +1484,7 @@ mod tests {
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-untrusted".to_string(),
             source_label: Label::Secret,
-            sink_clearance: Label::Internal,
+            sink_clearance: Label::Public,
             declassification_route_ref: "declass-5".to_string(),
             policy_evaluation_summary: "approved".to_string(),
             loss_assessment_milli: 1,
@@ -1519,7 +1529,7 @@ mod tests {
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-cross-trace".to_string(),
             source_label: Label::Secret,
-            sink_clearance: Label::Internal,
+            sink_clearance: Label::Public,
             declassification_route_ref: "declass-6".to_string(),
             policy_evaluation_summary: "approved".to_string(),
             loss_assessment_milli: 2,
@@ -2246,7 +2256,7 @@ mod tests {
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-m".into(),
             source_label: Label::Public,
-            sink_clearance: Label::Internal,
+            sink_clearance: Label::Public,
             declassification_route_ref: "route-m".into(),
             policy_evaluation_summary: "approved".into(),
             loss_assessment_milli: 0,
@@ -2268,6 +2278,48 @@ mod tests {
         assert!(msg.contains("source label does not match"));
         // Obligation use_count should not be advanced
         assert_eq!(lattice.obligation("obl-m").unwrap().use_count, 0);
+    }
+
+    #[test]
+    fn enrichment_receipt_with_incompatible_sink_label_rejected() {
+        let mut lattice = Ir2FlowLattice::new("policy-sink-mismatch");
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "obl-sink".into(),
+                source_label: LabelClass::Secret,
+                target_clearance: Clearance::NeverSink,
+                decision_contract_id: "dc-sink".into(),
+                requires_operator_approval: false,
+                max_uses: 0,
+                use_count: 0,
+            })
+            .unwrap();
+
+        let signing_key = SigningKey::from_bytes([8u8; 32]);
+        let mut receipt = DeclassificationReceipt {
+            receipt_id: "rcpt-sink".into(),
+            source_label: Label::Secret,
+            sink_clearance: Label::Internal,
+            declassification_route_ref: "route-sink".into(),
+            policy_evaluation_summary: "approved".into(),
+            loss_assessment_milli: 0,
+            decision: DeclassificationDecision::Allow,
+            authorized_by: signing_key.verification_key(),
+            replay_linkage: "trace-sink".into(),
+            timestamp_ms: 1_700_000_000_000,
+            schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        receipt.sign(&signing_key).unwrap();
+        lattice.trust_receipt_authorizer(signing_key.verification_key());
+
+        let err = lattice
+            .use_declassification_with_receipt("obl-sink", &receipt, "trace-sink")
+            .unwrap_err();
+        assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
+        let msg = format!("{err}");
+        assert!(msg.contains("declassified label internal cannot flow"));
+        assert_eq!(lattice.obligation("obl-sink").unwrap().use_count, 0);
     }
 
     #[test]

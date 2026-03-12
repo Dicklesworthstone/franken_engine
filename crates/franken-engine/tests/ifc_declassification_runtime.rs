@@ -23,7 +23,9 @@ use frankenengine_engine::flow_lattice::{
 use frankenengine_engine::ifc_artifacts::{
     DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
 };
-use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+use frankenengine_engine::signature_preimage::{Signature, SigningKey, SIGNATURE_SENTINEL};
+
+const RUNTIME_ROUTE_ID: &str = "declass-secret-public";
 
 fn make_policy() -> FlowPolicy {
     FlowPolicy {
@@ -48,9 +50,9 @@ fn make_policy() -> FlowPolicy {
         allowed_flows: vec![],
         prohibited_flows: vec![],
         declassification_routes: vec![DeclassificationRoute {
-            route_id: "declass-secret-internal".to_string(),
+            route_id: RUNTIME_ROUTE_ID.to_string(),
             source_label: Label::Secret,
-            target_clearance: Label::Internal,
+            target_clearance: Label::Public,
             conditions: vec!["audit_approval".to_string()],
         }],
         epoch_id: 7,
@@ -59,15 +61,15 @@ fn make_policy() -> FlowPolicy {
     }
 }
 
-fn make_request(route_id: &str) -> DeclassificationRequest {
+fn make_request() -> DeclassificationRequest {
     DeclassificationRequest {
-        request_id: format!("req-{route_id}"),
+        request_id: format!("req-{RUNTIME_ROUTE_ID}"),
         source_label: Label::Secret,
-        sink_clearance: Label::Internal,
+        sink_clearance: Label::Public,
         extension_id: "ext-ifc-runtime".to_string(),
         code_location: "runtime::egress".to_string(),
         trace_id: "trace-ifc-runtime".to_string(),
-        requested_route_id: route_id.to_string(),
+        requested_route_id: RUNTIME_ROUTE_ID.to_string(),
         is_emergency: false,
         timestamp_ms: 1_700_000_010_000,
     }
@@ -123,12 +125,7 @@ fn runtime_lattice_emits_receipt_linkage_for_authorized_declassification() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([5u8; 32]);
     let receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
     lattice.trust_receipt_authorizer(signing_key.verification_key());
 
@@ -191,12 +188,7 @@ fn runtime_lattice_rejects_denied_receipt_and_keeps_obligation_unused() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([6u8; 32]);
     let denied_receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &high_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &high_loss(), &signing_key)
         .expect("pipeline returns deny receipt");
     assert_eq!(denied_receipt.decision.to_string(), "deny");
     lattice.trust_receipt_authorizer(signing_key.verification_key());
@@ -237,12 +229,7 @@ fn runtime_lattice_rejects_tampered_allow_receipt_signature() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([7u8; 32]);
     let mut tampered_receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
     lattice.trust_receipt_authorizer(signing_key.verification_key());
     tampered_receipt.policy_evaluation_summary = "tampered summary".to_string();
@@ -280,12 +267,7 @@ fn pipeline_allows_declassification_when_loss_below_threshold() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([8u8; 32]);
     let receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("should allow");
     assert_eq!(receipt.decision.to_string(), "allow");
     assert!(!receipt.receipt_id.is_empty());
@@ -296,12 +278,7 @@ fn pipeline_denies_declassification_when_loss_above_threshold() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([9u8; 32]);
     let receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &high_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &high_loss(), &signing_key)
         .expect("should deny");
     assert_eq!(receipt.decision.to_string(), "deny");
 }
@@ -312,20 +289,10 @@ fn pipeline_tracks_stats_across_decisions() {
     let signing_key = SigningKey::from_bytes([10u8; 32]);
 
     let _allow = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow");
     let _deny = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &high_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &high_loss(), &signing_key)
         .expect("deny");
 
     let stats = pipeline.stats();
@@ -340,12 +307,7 @@ fn pipeline_emits_events_for_allow_decision() {
     let signing_key = SigningKey::from_bytes([11u8; 32]);
 
     let _receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow");
 
     let events = pipeline.events();
@@ -365,12 +327,7 @@ fn pipeline_receipts_accumulate() {
 
     for _ in 0..3 {
         let _receipt = pipeline
-            .process(
-                &make_request("declass-secret-internal"),
-                &make_policy(),
-                &low_loss(),
-                &signing_key,
-            )
+            .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
             .expect("allow");
     }
 
@@ -423,12 +380,7 @@ fn obligation_max_uses_enforced_after_exhaustion() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([13u8; 32]);
     let receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
     lattice.trust_receipt_authorizer(signing_key.verification_key());
 
@@ -442,12 +394,7 @@ fn obligation_max_uses_enforced_after_exhaustion() {
     );
 
     let receipt2 = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("second allow");
     let err = lattice
         .use_declassification_with_receipt("obl-limited", &receipt2, "trace-use-2")
@@ -477,12 +424,7 @@ fn runtime_lattice_rejects_untrusted_receipt_authorizer() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([21u8; 32]);
     let receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
 
     let err = lattice
@@ -522,7 +464,7 @@ fn runtime_lattice_rejects_cross_trace_receipt_replay() {
 
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([22u8; 32]);
-    let request = make_request("declass-secret-internal");
+    let request = make_request();
     let receipt = pipeline
         .process(&request, &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -539,6 +481,56 @@ fn runtime_lattice_rejects_cross_trace_receipt_replay() {
             );
         }
         other => panic!("expected FlowBlocked for cross-trace replay, got {other:?}"),
+    }
+    assert_eq!(
+        lattice
+            .obligation("obl-secret-egress")
+            .map(|ob| ob.use_count),
+        Some(0)
+    );
+}
+
+#[test]
+fn runtime_lattice_rejects_receipt_with_sink_clearance_mismatch() {
+    let mut lattice = Ir2FlowLattice::new("policy-ifc-runtime");
+    lattice
+        .register_obligation(DeclassificationObligation {
+            obligation_id: "obl-secret-egress".to_string(),
+            source_label: LabelClass::Secret,
+            target_clearance: Clearance::NeverSink,
+            decision_contract_id: "decision-contract-ifc".to_string(),
+            requires_operator_approval: true,
+            max_uses: 1,
+            use_count: 0,
+        })
+        .expect("register obligation");
+
+    let mut mismatch_policy = make_policy();
+    mismatch_policy.declassification_routes[0].route_id = "declass-secret-internal".to_string();
+    mismatch_policy.declassification_routes[0].target_clearance = Label::Internal;
+
+    let mut request = make_request();
+    request.requested_route_id = "declass-secret-internal".to_string();
+    request.sink_clearance = Label::Internal;
+
+    let mut pipeline = DeclassificationPipeline::default();
+    let signing_key = SigningKey::from_bytes([23u8; 32]);
+    let receipt = pipeline
+        .process(&request, &mismatch_policy, &low_loss(), &signing_key)
+        .expect("allow receipt");
+    lattice.trust_receipt_authorizer(signing_key.verification_key());
+
+    let err = lattice
+        .use_declassification_with_receipt("obl-secret-egress", &receipt, "trace-ifc-runtime")
+        .expect_err("sink-clearance mismatch must fail closed");
+    match err {
+        FlowLatticeError::FlowBlocked { detail } => {
+            assert!(
+                detail.contains("declassified label internal cannot flow"),
+                "unexpected error detail: {detail}"
+            );
+        }
+        other => panic!("expected FlowBlocked for sink mismatch, got {other:?}"),
     }
     assert_eq!(
         lattice
@@ -577,12 +569,7 @@ fn pipeline_with_custom_threshold_allows_high_loss() {
     let signing_key = SigningKey::from_bytes([14u8; 32]);
 
     let receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &high_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &high_loss(), &signing_key)
         .expect("receipt");
     assert_eq!(receipt.decision.to_string(), "allow");
 }
@@ -594,12 +581,7 @@ fn receipt_contains_replay_command() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([15u8; 32]);
     let receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
 
     let cmd = receipt.replay_command();
@@ -611,12 +593,7 @@ fn receipt_policy_evaluation_summary_is_nonempty() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([16u8; 32]);
     let receipt = pipeline
-        .process(
-            &make_request("declass-secret-internal"),
-            &make_policy(),
-            &low_loss(),
-            &signing_key,
-        )
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
     assert!(!receipt.policy_evaluation_summary.is_empty());
 }
@@ -648,7 +625,7 @@ fn lattice_records_check_flow_event() {
 
 #[test]
 fn declassification_request_serde_roundtrip() {
-    let req = make_request("declass-secret-internal");
+    let req = make_request();
     let json = serde_json::to_string(&req).expect("serialize");
     let recovered: DeclassificationRequest = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(recovered.request_id, req.request_id);
@@ -913,7 +890,7 @@ fn duplicate_obligation_registration_rejected() {
 fn pipeline_emergency_request_creates_grant() {
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([20u8; 32]);
-    let mut req = make_request("declass-secret-internal");
+    let mut req = make_request();
     req.is_emergency = true;
 
     let receipt = pipeline

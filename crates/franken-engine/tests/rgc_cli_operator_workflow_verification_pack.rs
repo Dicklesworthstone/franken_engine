@@ -188,6 +188,15 @@ fn rgc_061_doc_contains_required_sections() {
             path.display()
         );
     }
+
+    assert!(
+        doc.contains("$PWD/target_rch_rgc_cli_operator_workflow_verification_pack_verify"),
+        "operator verification doc should use the repo-local target dir example"
+    );
+    assert!(
+        !doc.contains("/tmp/rch_target_rgc_cli_operator_workflow_verification_pack"),
+        "operator verification doc must not point back to /tmp-backed target dirs"
+    );
 }
 
 #[test]
@@ -289,6 +298,24 @@ fn rgc_061_contract_is_versioned_and_actionable() {
             && scenario.expected_error_code == "FE-RGC-061-SIGNALS-0002"
     }));
 
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|entry| {
+                entry.contains("$PWD/target_rch_rgc_cli_operator_workflow_verification_pack_verify")
+            }),
+        "operator verification should document the repo-local target dir example"
+    );
+    assert!(
+        !contract
+            .operator_verification
+            .iter()
+            .any(|entry| {
+                entry.contains("/tmp/rch_target_rgc_cli_operator_workflow_verification_pack")
+            }),
+        "operator verification must not point back to /tmp-backed target dirs"
+    );
     assert!(
         contract
             .operator_verification

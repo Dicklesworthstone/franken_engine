@@ -256,10 +256,14 @@ fn frankenctl_react_compile_fails_closed_with_contract_guidance() {
     let _ = fs::remove_file(report_path);
 }
 
-#[test]
-fn frankenctl_react_build_fails_closed_with_contract_guidance() {
-    let entry_path = temp_path("frankenctl_react_build_entry", "jsx");
-    let report_path = temp_path("frankenctl_react_build_report", "json");
+fn assert_react_build_fails_closed(target: &str, capability_id: &str, error_code: &str) {
+    let entry_name = format!("frankenctl_react_build_entry_{target}");
+    let report_name = format!("frankenctl_react_build_report_{target}");
+    let trace_id = format!("trace-react-build-{target}");
+    let decision_id = format!("decision-react-build-{target}");
+    let policy_id = format!("policy-react-build-{target}");
+    let entry_path = temp_path(&entry_name, "jsx");
+    let report_path = temp_path(&report_name, "json");
     write_source(
         &entry_path,
         "export default function App() { return <main />; }\n",
@@ -272,13 +276,13 @@ fn frankenctl_react_build_fails_closed_with_contract_guidance() {
             "--entry",
             entry_path.to_str().expect("path should be utf8"),
             "--target",
-            "ssr",
+            target,
             "--trace-id",
-            "trace-react-build",
+            &trace_id,
             "--decision-id",
-            "decision-react-build",
+            &decision_id,
             "--policy-id",
-            "policy-react-build",
+            &policy_id,
             "--out",
             report_path.to_str().expect("path should be utf8"),
         ])
@@ -287,16 +291,16 @@ fn frankenctl_react_build_fails_closed_with_contract_guidance() {
 
     assert_eq!(output.status.code(), Some(25));
     let stdout_json = parse_stdout_json(&output);
-    assert_eq!(
-        stdout_json["capability_id"].as_str(),
-        Some("react-ssr-entrypoint")
-    );
+    assert_eq!(stdout_json["capability_id"].as_str(), Some(capability_id));
     assert_eq!(stdout_json["support_status"].as_str(), Some("unsupported"));
     assert_eq!(
         stdout_json["diagnostic"]["error_code"].as_str(),
-        Some("FE-RGC-016A-CAP-0007")
+        Some(error_code)
     );
-    assert_eq!(stdout_json["request"]["build_target"].as_str(), Some("ssr"));
+    assert_eq!(
+        stdout_json["request"]["build_target"].as_str(),
+        Some(target)
+    );
     let output_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&report_path).expect("react build report should exist"))
             .expect("react build report should parse");
@@ -304,6 +308,29 @@ fn frankenctl_react_build_fails_closed_with_contract_guidance() {
 
     let _ = fs::remove_file(entry_path);
     let _ = fs::remove_file(report_path);
+}
+
+#[test]
+fn frankenctl_react_build_fails_closed_with_contract_guidance() {
+    assert_react_build_fails_closed("ssr", "react-ssr-entrypoint", "FE-RGC-016A-CAP-0007");
+}
+
+#[test]
+fn frankenctl_react_example_app_client_build_fails_closed_with_contract_guidance() {
+    assert_react_build_fails_closed(
+        "client",
+        "react-client-entry-preparation",
+        "FE-RGC-016A-CAP-0008",
+    );
+}
+
+#[test]
+fn frankenctl_react_example_app_hydration_build_fails_closed_with_contract_guidance() {
+    assert_react_build_fails_closed(
+        "hydration",
+        "react-hydration-handoff-artifacts",
+        "FE-RGC-016A-CAP-0009",
+    );
 }
 
 #[test]
@@ -339,7 +366,54 @@ fn frankenctl_react_cli_workflow_script_emits_expected_artifacts_and_routes() {
         script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react build")
     );
     assert!(script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- doctor"));
-    assert!(script.contains("frankenctl react --help"));
+    assert!(
+        script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react --help")
+    );
+    assert!(script.contains("rch exec"));
+    assert!(script.contains("falling back to local"));
+    assert!(script.contains("usage: $0 [artifacts|check|test|clippy|ci]"));
+}
+
+#[test]
+fn frankenctl_react_example_app_workflow_script_emits_expected_artifacts_and_routes() {
+    let script = fs::read_to_string(
+        repo_root().join("scripts/e2e/frankenctl_react_example_app_workflow.sh"),
+    )
+    .expect("react example-app workflow script should exist");
+
+    assert!(script.contains("source \"${root_dir}/scripts/e2e/parser_deterministic_env.sh\""));
+    assert!(script.contains("parser_frontier_bootstrap_env"));
+    assert!(script.contains(
+        "artifact_root=\"${FRANKENCTL_REACT_EXAMPLE_APP_ARTIFACT_ROOT:-artifacts/frankenctl_react_example_app_workflow}\""
+    ));
+    assert!(script.contains("scenario_id=\"bd-1lsy.10.12.3\""));
+    assert!(script.contains("react_example_app_e2e_report.json"));
+    assert!(script.contains("react_build_ssr_report.json"));
+    assert!(script.contains("react_build_client_report.json"));
+    assert!(script.contains("react_build_hydration_report.json"));
+    assert!(script.contains("support_bundle/preflight_report.json"));
+    assert!(script.contains("support_bundle/onboarding_scorecard.json"));
+    assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
+    assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
+    assert!(
+        script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react contract")
+    );
+    assert!(
+        script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react compile")
+    );
+    assert!(script.contains(
+        "cargo run -q -p frankenengine-engine --bin frankenctl -- react build --entry ${build_entry_path} --target ssr"
+    ));
+    assert!(script.contains(
+        "cargo run -q -p frankenengine-engine --bin frankenctl -- react build --entry ${build_entry_path} --target client"
+    ));
+    assert!(script.contains(
+        "cargo run -q -p frankenengine-engine --bin frankenctl -- react build --entry ${build_entry_path} --target hydration"
+    ));
+    assert!(script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- doctor"));
+    assert!(
+        script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react --help")
+    );
     assert!(script.contains("rch exec"));
     assert!(script.contains("falling back to local"));
     assert!(script.contains("usage: $0 [artifacts|check|test|clippy|ci]"));

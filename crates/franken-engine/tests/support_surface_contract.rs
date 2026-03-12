@@ -832,4 +832,18 @@ fn rgc_911b_operator_verification_commands_reference_correct_contract() {
             "operator verification command must reference support_surface or jq: {cmd}"
         );
     }
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("$PWD/target_rch_rgc_support_surface_contract_verify")),
+        "operator verification should document the repo-local target dir example"
+    );
+    assert!(
+        !contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("/tmp/rch_target_rgc_support_surface_contract")),
+        "operator verification must not point back to /tmp-backed target dirs"
+    );
 }

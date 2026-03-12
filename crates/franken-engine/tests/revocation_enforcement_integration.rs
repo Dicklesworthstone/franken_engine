@@ -737,7 +737,7 @@ fn enrichment_enforcement_point_json_field_stability() {
 
 #[test]
 fn enrichment_enforcement_point_ord_total() {
-    let mut variants = vec![
+    let mut variants = [
         EnforcementPoint::ExtensionActivation,
         EnforcementPoint::TokenAcceptance,
         EnforcementPoint::HighRiskOperation,
@@ -796,7 +796,7 @@ fn enrichment_high_risk_category_ne_all_pairs() {
 
 #[test]
 fn enrichment_high_risk_category_ord_total() {
-    let mut variants = vec![
+    let mut variants = [
         HighRiskCategory::ExtensionLifecycleChange,
         HighRiskCategory::PolicyChange,
         HighRiskCategory::CrossZoneAction,

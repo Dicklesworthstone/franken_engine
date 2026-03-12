@@ -232,6 +232,42 @@ fn rgc_406a_contract_schema_and_required_fields_are_present() {
         );
     }
 
+    let required_artifacts = json_string_array(&contract, "required_artifacts");
+    assert_eq!(
+        required_artifacts, required_paths,
+        "top-level required_artifacts should mirror artifact_contract.required_paths"
+    );
+
+    let gate_runner = contract.get("gate_runner").expect("gate_runner should exist");
+    assert_eq!(
+        gate_runner
+            .get("script")
+            .and_then(Value::as_str)
+            .expect("gate_runner.script should exist"),
+        "scripts/run_rgc_module_resolution_index_suite.sh"
+    );
+    assert_eq!(
+        gate_runner
+            .get("replay_wrapper")
+            .and_then(Value::as_str)
+            .expect("gate_runner.replay_wrapper should exist"),
+        "scripts/e2e/rgc_module_resolution_index_replay.sh"
+    );
+    assert_eq!(
+        gate_runner
+            .get("strict_mode")
+            .and_then(Value::as_str)
+            .expect("gate_runner.strict_mode should exist"),
+        "ci"
+    );
+    assert_eq!(
+        gate_runner
+            .get("manifest_schema_version")
+            .and_then(Value::as_str)
+            .expect("gate_runner.manifest_schema_version should exist"),
+        "rgc.ts-module-resolution.index.manifest.v1"
+    );
+
     let fallback_reasons = json_string_array(&contract, "fallback_reasons");
     for required in [
         "artifact_age_exceeded",
@@ -257,6 +293,14 @@ fn rgc_406a_contract_schema_and_required_fields_are_present() {
     assert!(
         operator_verification
             .contains("cargo test -p frankenengine-engine --test module_resolution_index")
+    );
+    assert!(
+        operator_verification.contains("$PWD/target_rch_module_resolution_index_verify"),
+        "operator verification should use a portable repo-local rch target dir"
+    );
+    assert!(
+        !operator_verification.contains("/data/projects/franken_engine/target_rch_module_resolution_index"),
+        "operator verification should not hard-code a repo-specific absolute target dir"
     );
 }
 

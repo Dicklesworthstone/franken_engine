@@ -364,7 +364,7 @@ fn cache_basic_operations() {
 
     let ast = RegExpAstNode::Literal('a');
     let compiled = compile_regexp("a", &flags, &ast, &config, epoch).unwrap();
-    let hash = compiled.content_hash;
+    let hash = compiled.content_hash.clone();
 
     cache.insert(compiled);
     assert_eq!(cache.len(), 1);
@@ -390,7 +390,7 @@ fn cache_eviction_fifo() {
         let ch = (b'a' + i) as char;
         let ast = RegExpAstNode::Literal(ch);
         let compiled = compile_regexp(&format!("{ch}"), &flags, &ast, &config, epoch).unwrap();
-        hashes.push(compiled.content_hash);
+        hashes.push(compiled.content_hash.clone());
         cache.insert(compiled);
     }
 

@@ -15,7 +15,8 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::law_mining::{CandidateKind, LawCandidate};
 use frankenengine_engine::law_proof_refutation::{
     CounterexampleArchive, ProofCampaignConfig, ProofRefutationError, ProofRefutationPipeline,
-    ProofStrategy, ProofVerdict, RefutationReason, RefutationWitness,
+    ProofRefutationSummary, ProofStrategy, ProofVerdict, RefutationReason, RefutationWitness,
+    COMPONENT, LAW_PROOF_BEAD_ID, LAW_PROOF_SCHEMA_VERSION,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -559,4 +560,209 @@ fn summary_witnesses_matches_archive() {
         summary.total_witnesses,
         pipeline.counterexample_archive.witnesses.len()
     );
+}
+
+// ===========================================================================
+// Additional serde and accessor coverage
+// ===========================================================================
+
+#[test]
+fn proof_verdict_serde_roundtrip_all() {
+    for v in ProofVerdict::ALL {
+        let json = serde_json::to_string(v).unwrap();
+        let back: ProofVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+#[test]
+fn proof_verdict_display() {
+    for v in ProofVerdict::ALL {
+        let s = v.to_string();
+        assert!(!s.is_empty(), "empty Display for {v:?}");
+    }
+    assert_eq!(ProofVerdict::Proved.to_string(), "proved");
+    assert_eq!(ProofVerdict::Refuted.to_string(), "refuted");
+    assert_eq!(ProofVerdict::Inconclusive.to_string(), "inconclusive");
+}
+
+#[test]
+fn proof_verdict_inconclusive_is_not_terminal() {
+    assert!(!ProofVerdict::Inconclusive.is_terminal());
+}
+
+#[test]
+fn strategy_confidence_weights_individual_values() {
+    assert_eq!(ProofStrategy::DifferentialReplay.confidence_weight_millionths(), 350_000);
+    assert_eq!(ProofStrategy::SolverCheck.confidence_weight_millionths(), 450_000);
+    assert_eq!(ProofStrategy::CounterexampleSearch.confidence_weight_millionths(), 200_000);
+}
+
+#[test]
+fn refutation_witness_serde_roundtrip() {
+    let w = RefutationWitness {
+        witness_id: "w-serde".to_string(),
+        candidate_id: "c-serde".to_string(),
+        reason: RefutationReason::SolverCountermodel,
+        description: "serde test witness".to_string(),
+        input_digest: ContentHash::compute(b"serde-input"),
+        expected_summary: "expected".to_string(),
+        actual_summary: "actual".to_string(),
+        discovered_epoch: epoch(7),
+        witness_hash: ContentHash::compute(b"serde-w"),
+    };
+    let json = serde_json::to_string(&w).unwrap();
+    let back: RefutationWitness = serde_json::from_str(&json).unwrap();
+    assert_eq!(w.witness_id, back.witness_id);
+    assert_eq!(w.reason, back.reason);
+    assert_eq!(w.candidate_id, back.candidate_id);
+}
+
+#[test]
+fn counterexample_archive_serde_roundtrip() {
+    let mut archive = CounterexampleArchive::new(epoch(3));
+    let w = RefutationWitness {
+        witness_id: "arch-w".to_string(),
+        candidate_id: "arch-c".to_string(),
+        reason: RefutationReason::SearchHit,
+        description: "archive serde test".to_string(),
+        input_digest: ContentHash::compute(b"arch-input"),
+        expected_summary: "exp".to_string(),
+        actual_summary: "act".to_string(),
+        discovered_epoch: epoch(3),
+        witness_hash: ContentHash::compute(b"arch-w"),
+    };
+    archive.add_witness(w);
+
+    let json = serde_json::to_string(&archive).unwrap();
+    let back: CounterexampleArchive = serde_json::from_str(&json).unwrap();
+    assert_eq!(archive.witnesses.len(), back.witnesses.len());
+    assert_eq!(archive.archive_hash, back.archive_hash);
+    assert!(back.is_refuted("arch-c"));
+}
+
+#[test]
+fn summary_serde_roundtrip() {
+    let mut pipeline = ProofRefutationPipeline::new(ProofCampaignConfig::default(), epoch(5));
+    for i in 0..3 {
+        pipeline.run_campaign(&candidate(
+            &format!("sum-serde-{i}"),
+            CandidateKind::Invariant,
+            800_000,
+        ));
+    }
+    let summary = pipeline.summary_report();
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: ProofRefutationSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+}
+
+#[test]
+fn summary_hash_deterministic() {
+    let make_summary = || {
+        let mut p = ProofRefutationPipeline::new(ProofCampaignConfig::default(), epoch(99));
+        for i in 0..4 {
+            p.run_campaign(&candidate(
+                &format!("hash-det-{i}"),
+                CandidateKind::Invariant,
+                700_000,
+            ));
+        }
+        p.summary_report()
+    };
+    let s1 = make_summary();
+    let s2 = make_summary();
+    assert_eq!(s1.summary_hash, s2.summary_hash);
+}
+
+#[test]
+fn pipeline_accepted_candidates_accessor() {
+    let mut pipeline = ProofRefutationPipeline::new(ProofCampaignConfig::default(), epoch(10));
+    for i in 0..10 {
+        pipeline.run_campaign(&candidate(
+            &format!("acc-test-{i}"),
+            CandidateKind::Invariant,
+            900_000,
+        ));
+    }
+    let accepted = pipeline.accepted_candidates();
+    // All accepted candidates should have Proved verdict
+    for id in &accepted {
+        let result = pipeline.result_for(id).unwrap();
+        assert_eq!(result.final_verdict, ProofVerdict::Proved);
+        assert!(result.accepted);
+    }
+}
+
+#[test]
+fn pipeline_inconclusive_candidates_accessor() {
+    let mut pipeline = ProofRefutationPipeline::new(ProofCampaignConfig::default(), epoch(10));
+    for i in 0..15 {
+        pipeline.run_campaign(&candidate(
+            &format!("inc-test-{i}"),
+            CandidateKind::NormalForm,
+            400_000 + i * 30_000,
+        ));
+    }
+    let inconclusive = pipeline.inconclusive_candidates();
+    for id in &inconclusive {
+        let result = pipeline.result_for(id).unwrap();
+        assert_eq!(result.final_verdict, ProofVerdict::Inconclusive);
+        assert!(!result.accepted);
+    }
+}
+
+#[test]
+fn pipeline_campaign_result_hash_deterministic() {
+    let make_result = || {
+        let mut p = ProofRefutationPipeline::new(ProofCampaignConfig::default(), epoch(42));
+        p.run_campaign(&candidate("det-hash", CandidateKind::Invariant, 800_000));
+        p.campaign_results[0].result_hash
+    };
+    assert_eq!(make_result(), make_result());
+}
+
+#[test]
+fn module_constants_non_empty() {
+    assert!(!LAW_PROOF_SCHEMA_VERSION.is_empty());
+    assert!(!LAW_PROOF_BEAD_ID.is_empty());
+    assert!(!COMPONENT.is_empty());
+    assert!(LAW_PROOF_SCHEMA_VERSION.contains("law-proof"));
+    assert!(LAW_PROOF_BEAD_ID.starts_with("bd-"));
+}
+
+#[test]
+fn archive_add_witness_recomputes_hash() {
+    let mut archive = CounterexampleArchive::new(epoch(1));
+    let hash_before = archive.archive_hash;
+    let w = RefutationWitness {
+        witness_id: "recomp-w".to_string(),
+        candidate_id: "recomp-c".to_string(),
+        reason: RefutationReason::ReplayDivergence,
+        description: "hash recompute test".to_string(),
+        input_digest: ContentHash::compute(b"recomp"),
+        expected_summary: "exp".to_string(),
+        actual_summary: "act".to_string(),
+        discovered_epoch: epoch(1),
+        witness_hash: ContentHash::compute(b"recomp-w"),
+    };
+    archive.add_witness(w);
+    assert_ne!(hash_before, archive.archive_hash);
+}
+
+#[test]
+fn pipeline_hash_changes_after_campaign() {
+    let mut pipeline = ProofRefutationPipeline::new(ProofCampaignConfig::default(), epoch(10));
+    let hash_before = pipeline.pipeline_hash;
+    pipeline.run_campaign(&candidate("hash-change", CandidateKind::Invariant, 800_000));
+    assert_ne!(hash_before, pipeline.pipeline_hash);
+}
+
+#[test]
+fn refutation_reason_scope_invalidation_serde() {
+    let reason = RefutationReason::ScopeInvalidation;
+    let json = serde_json::to_string(&reason).unwrap();
+    let back: RefutationReason = serde_json::from_str(&json).unwrap();
+    assert_eq!(reason, back);
+    assert_eq!(reason.to_string(), "scope_invalidation");
 }

@@ -479,3 +479,337 @@ fn error_serde_round_trip() {
     let back: GuardrailError = serde_json::from_str(&json).unwrap();
     assert_eq!(e, back);
 }
+
+// ---------------------------------------------------------------------------
+// Additional enrichment tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn register_pattern_rejects_empty_needle() {
+    let mut reg = build_default_registry();
+    let err = register_pattern(
+        &mut reg,
+        String::new(),
+        PatternCategory::MockContextType,
+        "should fail".to_string(),
+    );
+    assert!(matches!(err, Err(GuardrailError::EmptyPattern)));
+}
+
+#[test]
+fn register_pattern_rejects_duplicate_needle() {
+    let mut reg = build_default_registry();
+    // "MockCx" already exists in the default registry.
+    let err = register_pattern(
+        &mut reg,
+        "MockCx".to_string(),
+        PatternCategory::MockContextType,
+        "dupe".to_string(),
+    );
+    assert!(matches!(err, Err(GuardrailError::DuplicatePattern { .. })));
+}
+
+#[test]
+fn add_waiver_rejects_empty_id() {
+    let mut policy = empty_waiver_policy();
+    let err = add_waiver(
+        &mut policy,
+        String::new(),
+        "src/foo.rs".to_string(),
+        None,
+        "reason".to_string(),
+        epoch(1),
+        None,
+    );
+    assert!(matches!(err, Err(GuardrailError::EmptyWaiverId)));
+}
+
+#[test]
+fn add_waiver_rejects_duplicate_id() {
+    let mut policy = empty_waiver_policy();
+    add_waiver(
+        &mut policy,
+        "w-1".to_string(),
+        "src/foo.rs".to_string(),
+        None,
+        "reason".to_string(),
+        epoch(1),
+        None,
+    )
+    .unwrap();
+
+    let err = add_waiver(
+        &mut policy,
+        "w-1".to_string(),
+        "src/bar.rs".to_string(),
+        None,
+        "other".to_string(),
+        epoch(2),
+        None,
+    );
+    assert!(matches!(err, Err(GuardrailError::DuplicateWaiver { .. })));
+}
+
+#[test]
+fn is_waived_direct_usage() {
+    let mut policy = empty_waiver_policy();
+    add_waiver(
+        &mut policy,
+        "w-test".to_string(),
+        "src/target.rs".to_string(),
+        Some("MockCx".to_string()),
+        "test waiver".to_string(),
+        epoch(1),
+        None,
+    )
+    .unwrap();
+
+    assert!(is_waived(&policy, "src/target.rs", "MockCx", epoch(5)));
+    assert!(!is_waived(&policy, "src/target.rs", "MockBudget", epoch(5)));
+    assert!(!is_waived(&policy, "src/other.rs", "MockCx", epoch(5)));
+}
+
+#[test]
+fn is_waived_wildcard_pattern_matches_any_needle() {
+    let mut policy = empty_waiver_policy();
+    add_waiver(
+        &mut policy,
+        "w-all".to_string(),
+        "src/legacy.rs".to_string(),
+        None,
+        "full waiver".to_string(),
+        epoch(1),
+        None,
+    )
+    .unwrap();
+
+    assert!(is_waived(&policy, "src/legacy.rs", "MockCx", epoch(5)));
+    assert!(is_waived(&policy, "src/legacy.rs", "MockBudget", epoch(5)));
+    assert!(is_waived(
+        &policy,
+        "src/legacy.rs",
+        "trace_id_from_seed",
+        epoch(5)
+    ));
+}
+
+#[test]
+fn is_waived_respects_expiry() {
+    let mut policy = empty_waiver_policy();
+    add_waiver(
+        &mut policy,
+        "w-temp".to_string(),
+        "src/temp.rs".to_string(),
+        None,
+        "temporary".to_string(),
+        epoch(1),
+        Some(epoch(10)),
+    )
+    .unwrap();
+
+    assert!(is_waived(&policy, "src/temp.rs", "MockCx", epoch(9)));
+    assert!(is_waived(&policy, "src/temp.rs", "MockCx", epoch(10)));
+    assert!(!is_waived(&policy, "src/temp.rs", "MockCx", epoch(11)));
+}
+
+#[test]
+fn pattern_category_all_returns_six_variants() {
+    let all = PatternCategory::all();
+    assert_eq!(all.len(), 6);
+}
+
+#[test]
+fn pattern_category_display_all_variants() {
+    for cat in PatternCategory::all() {
+        let display = format!("{cat}");
+        assert!(!display.is_empty());
+        assert_eq!(display, cat.label());
+    }
+}
+
+#[test]
+fn pattern_category_serde_roundtrip() {
+    for cat in PatternCategory::all() {
+        let json = serde_json::to_string(cat).unwrap();
+        let back: PatternCategory = serde_json::from_str(&json).unwrap();
+        assert_eq!(*cat, back);
+    }
+}
+
+#[test]
+fn scope_classification_display() {
+    assert_eq!(format!("{}", ScopeClassification::TestOnly), "test_only");
+    assert_eq!(
+        format!("{}", ScopeClassification::Production),
+        "production"
+    );
+    assert_eq!(format!("{}", ScopeClassification::Unknown), "unknown");
+}
+
+#[test]
+fn file_verdict_display() {
+    assert_eq!(format!("{}", FileVerdict::Clean), "clean");
+    assert_eq!(
+        format!("{}", FileVerdict::TestOnlyUsage),
+        "test_only_usage"
+    );
+    assert_eq!(
+        format!("{}", FileVerdict::ProductionViolation),
+        "production_violation"
+    );
+}
+
+#[test]
+fn gate_decision_display() {
+    assert_eq!(format!("{}", GateDecision::Pass), "pass");
+    assert_eq!(format!("{}", GateDecision::Fail), "fail");
+    assert_eq!(
+        format!("{}", GateDecision::AbortedExcessViolations),
+        "aborted_excess_violations"
+    );
+}
+
+#[test]
+fn registry_hash_changes_on_pattern_add() {
+    let reg1 = build_default_registry();
+    let mut reg2 = build_default_registry();
+    register_pattern(
+        &mut reg2,
+        "NewCustomMock".to_string(),
+        PatternCategory::MockContextType,
+        "test".to_string(),
+    )
+    .unwrap();
+
+    assert_ne!(reg1.registry_hash, reg2.registry_hash);
+}
+
+#[test]
+fn waiver_policy_hash_changes_on_add() {
+    let policy1 = empty_waiver_policy();
+    let mut policy2 = empty_waiver_policy();
+    add_waiver(
+        &mut policy2,
+        "w-test".to_string(),
+        "src/foo.rs".to_string(),
+        None,
+        "test".to_string(),
+        epoch(1),
+        None,
+    )
+    .unwrap();
+
+    assert_ne!(policy1.policy_hash, policy2.policy_hash);
+}
+
+#[test]
+fn scan_cfg_test_block_tracking() {
+    let reg = build_default_registry();
+    let waiver = empty_waiver_policy();
+    let content = "\
+fn production_code() {}
+#[cfg(test)]
+mod tests {
+    fn test_helper() {
+        let cx = MockCx::new();
+    }
+}
+";
+    let result = scan_file_content("src/engine.rs", content, &reg, &waiver, epoch(1));
+    // MockCx inside #[cfg(test)] block should be test-only, not a violation.
+    assert_eq!(result.verdict, FileVerdict::TestOnlyUsage);
+    assert_eq!(result.production_violation_count, 0);
+    assert!(result.test_only_count > 0);
+}
+
+#[test]
+fn scan_multiple_patterns_on_one_line() {
+    let reg = build_default_registry();
+    let waiver = empty_waiver_policy();
+    let content = "let cx = MockCx::new(); let b = MockBudget::new(10);\n";
+    let result = scan_file_content("src/multi.rs", content, &reg, &waiver, epoch(1));
+    assert_eq!(result.verdict, FileVerdict::ProductionViolation);
+    assert!(result.matches.len() >= 2);
+}
+
+#[test]
+fn report_only_includes_non_clean_files() {
+    let reg = build_default_registry();
+    let waiver = empty_waiver_policy();
+    let files: Vec<(&str, &str)> = vec![
+        ("src/clean1.rs", "fn a() {}"),
+        ("src/clean2.rs", "fn b() {}"),
+        ("src/bad.rs", "MockCx::new();"),
+        ("tests/ok.rs", "use MockCx;"),
+    ];
+    let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+    // Clean files should NOT appear in file_results.
+    assert_eq!(report.files_scanned, 4);
+    assert_eq!(report.clean_files, 2);
+    // file_results should only have non-clean files.
+    assert_eq!(report.file_results.len(), 2);
+    for r in &report.file_results {
+        assert_ne!(r.verdict, FileVerdict::Clean);
+    }
+}
+
+#[test]
+fn scan_file_hash_deterministic() {
+    let reg = build_default_registry();
+    let waiver = empty_waiver_policy();
+    let content = "let cx = MockCx::new();\n";
+    let r1 = scan_file_content("src/x.rs", content, &reg, &waiver, epoch(1));
+    let r2 = scan_file_content("src/x.rs", content, &reg, &waiver, epoch(1));
+    assert_eq!(r1.file_hash, r2.file_hash);
+}
+
+#[test]
+fn scan_file_hash_changes_with_content() {
+    let reg = build_default_registry();
+    let waiver = empty_waiver_policy();
+    let r1 = scan_file_content("src/x.rs", "MockCx::new();\n", &reg, &waiver, epoch(1));
+    let r2 = scan_file_content("src/x.rs", "fn clean() {}\n", &reg, &waiver, epoch(1));
+    assert_ne!(r1.file_hash, r2.file_hash);
+}
+
+#[test]
+fn report_schema_and_component() {
+    let reg = build_default_registry();
+    let waiver = empty_waiver_policy();
+    let files: Vec<(&str, &str)> = vec![("src/a.rs", "fn a() {}")];
+    let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+    assert_eq!(
+        report.schema_version,
+        "franken-engine.mock-seam-guardrail.v1"
+    );
+    assert_eq!(report.component, "mock_seam_guardrail");
+}
+
+#[test]
+fn all_error_variants_serde_roundtrip() {
+    let errors = vec![
+        GuardrailError::EmptyPattern,
+        GuardrailError::PatternLimitExceeded {
+            category: PatternCategory::MockModuleImport,
+            limit: 256,
+        },
+        GuardrailError::DuplicatePattern {
+            needle: "test".to_string(),
+        },
+        GuardrailError::FileLimitExceeded { limit: 8192 },
+        GuardrailError::EmptyWaiverId,
+        GuardrailError::DuplicateWaiver {
+            waiver_id: "w-1".to_string(),
+        },
+        GuardrailError::WaiverExpired {
+            waiver_id: "w-2".to_string(),
+            expired_at: 5,
+            current: 10,
+        },
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: GuardrailError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*e, back);
+    }
+}

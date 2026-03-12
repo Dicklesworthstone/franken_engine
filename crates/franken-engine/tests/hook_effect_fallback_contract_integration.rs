@@ -13,9 +13,10 @@
 )]
 
 use frankenengine_engine::hook_effect_contract::{
-    FallbackExecutionRoute, HookKind, HookManifest, HookRuleViolation, HookSlot, HookSlotIndex,
-    RenderPhase, UnsupportedSemanticsTrigger, build_unsupported_semantics_diagnostic,
-    classify_unsupported_semantics, validate_hook_consistency,
+    DepToken, EffectTiming, FallbackExecutionRoute, HookKind, HookManifest, HookManifestError,
+    HookRuleViolation, HookSlot, HookSlotIndex, RenderPhase, UnsupportedSemanticsTrigger,
+    build_unsupported_semantics_diagnostic, classify_unsupported_semantics,
+    validate_hook_consistency,
 };
 use serde::{Deserialize, Serialize};
 
@@ -575,4 +576,236 @@ fn dependency_shape_drift_routes_to_compatibility_lane() {
         diagnostic.fallback_route,
         FallbackExecutionRoute::CompatibilityRuntimeLane
     );
+}
+
+// ---------------------------------------------------------------------------
+// HookKind classification methods
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hook_kind_all_has_expected_count() {
+    assert_eq!(HookKind::ALL.len(), 15);
+    let mut seen = std::collections::BTreeSet::new();
+    for kind in HookKind::ALL {
+        assert!(seen.insert(format!("{kind:?}")), "duplicate in ALL: {kind:?}");
+    }
+}
+
+#[test]
+fn hook_kind_all_serde_roundtrip() {
+    for kind in HookKind::ALL {
+        let json = serde_json::to_string(kind).expect("serialize");
+        let recovered: HookKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*kind, recovered);
+    }
+}
+
+#[test]
+fn hook_kind_has_effect_phase_classification() {
+    let effect_hooks = [HookKind::Effect, HookKind::LayoutEffect, HookKind::InsertionEffect];
+    for kind in &effect_hooks {
+        assert!(kind.has_effect_phase(), "{kind:?} should have effect phase");
+    }
+    let non_effect = [
+        HookKind::State, HookKind::Reducer, HookKind::Memo, HookKind::Callback,
+        HookKind::Ref, HookKind::Context, HookKind::ImperativeHandle,
+        HookKind::DebugValue, HookKind::DeferredValue, HookKind::Transition,
+        HookKind::Id, HookKind::SyncExternalStore,
+    ];
+    for kind in &non_effect {
+        assert!(!kind.has_effect_phase(), "{kind:?} should NOT have effect phase");
+    }
+}
+
+#[test]
+fn hook_kind_can_trigger_rerender_classification() {
+    let rerender_hooks = [
+        HookKind::State, HookKind::Reducer, HookKind::Context,
+        HookKind::SyncExternalStore, HookKind::Transition, HookKind::DeferredValue,
+    ];
+    for kind in &rerender_hooks {
+        assert!(kind.can_trigger_rerender(), "{kind:?} should trigger rerender");
+    }
+    assert!(!HookKind::Memo.can_trigger_rerender());
+    assert!(!HookKind::Effect.can_trigger_rerender());
+    assert!(!HookKind::Ref.can_trigger_rerender());
+}
+
+#[test]
+fn hook_kind_has_dependency_array_classification() {
+    let dep_hooks = [
+        HookKind::Effect, HookKind::LayoutEffect, HookKind::InsertionEffect,
+        HookKind::Memo, HookKind::Callback, HookKind::ImperativeHandle,
+    ];
+    for kind in &dep_hooks {
+        assert!(kind.has_dependency_array(), "{kind:?} should have dep array");
+    }
+    assert!(!HookKind::State.has_dependency_array());
+    assert!(!HookKind::Ref.has_dependency_array());
+    assert!(!HookKind::Id.has_dependency_array());
+}
+
+// ---------------------------------------------------------------------------
+// HookManifest::validate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hook_manifest_validate_empty_returns_error() {
+    let m = HookManifest::new("Empty", vec![]);
+    let errs = m.validate();
+    assert_eq!(errs.len(), 1);
+    assert!(matches!(errs[0], HookManifestError::EmptyManifest));
+}
+
+#[test]
+fn hook_manifest_validate_consecutive_indices_passes() {
+    let m = HookManifest::new("Good", vec![
+        make_slot(0, HookKind::State),
+        make_slot(1, HookKind::Effect),
+        make_slot(2, HookKind::Memo),
+    ]);
+    let errs = m.validate();
+    assert!(errs.is_empty(), "valid manifest should pass: {:?}", errs);
+}
+
+#[test]
+fn hook_manifest_validate_non_consecutive_indices() {
+    let m = HookManifest::new("Bad", vec![
+        make_slot(0, HookKind::State),
+        make_slot(5, HookKind::Effect), // should be 1
+    ]);
+    let errs = m.validate();
+    assert!(errs.iter().any(|e| matches!(e, HookManifestError::NonConsecutiveIndices { expected: 1, found: 5 })));
+}
+
+#[test]
+fn hook_manifest_validate_deps_on_non_dep_hook() {
+    let m = HookManifest::new("DepErr", vec![
+        HookSlot {
+            index: HookSlotIndex(0),
+            kind: HookKind::State, // State does not support deps
+            deps: Some(vec![DepToken(1)]),
+        },
+    ]);
+    let errs = m.validate();
+    assert!(errs.iter().any(|e| matches!(e, HookManifestError::DepsOnNonDepHook { .. })));
+}
+
+#[test]
+fn hook_manifest_error_serde_roundtrip() {
+    let errors = vec![
+        HookManifestError::EmptyManifest,
+        HookManifestError::NonConsecutiveIndices { expected: 0, found: 3 },
+        HookManifestError::DepsOnNonDepHook { index: HookSlotIndex(2), kind: HookKind::Ref },
+        HookManifestError::DuplicateIndex(HookSlotIndex(1)),
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).expect("serialize");
+        let recovered: HookManifestError = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*err, recovered);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RenderPhase transitions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn render_phase_legal_successors_form_valid_lifecycle() {
+    // Full lifecycle: Rendering -> Insertion -> Layout -> Paint -> Passive -> Idle
+    let mut phase = RenderPhase::Rendering;
+    let lifecycle = [
+        RenderPhase::InsertionEffectsPending,
+        RenderPhase::LayoutEffectsPending,
+        RenderPhase::PaintPending,
+        RenderPhase::PassiveEffectsPending,
+        RenderPhase::Idle,
+    ];
+    for next in lifecycle {
+        assert!(phase.can_transition_to(next), "{phase:?} -> {next:?} should be legal");
+        phase = next;
+    }
+}
+
+#[test]
+fn render_phase_unmounting_has_no_successors() {
+    assert!(RenderPhase::Unmounting.legal_successors().is_empty());
+    assert!(!RenderPhase::Unmounting.can_transition_to(RenderPhase::Idle));
+}
+
+#[test]
+fn render_phase_idle_can_transition_to_rendering_or_unmounting() {
+    assert!(RenderPhase::Idle.can_transition_to(RenderPhase::Rendering));
+    assert!(RenderPhase::Idle.can_transition_to(RenderPhase::Unmounting));
+    assert!(!RenderPhase::Idle.can_transition_to(RenderPhase::PaintPending));
+}
+
+// ---------------------------------------------------------------------------
+// EffectTiming
+// ---------------------------------------------------------------------------
+
+#[test]
+fn effect_timing_serde_roundtrip() {
+    for timing in [EffectTiming::Insertion, EffectTiming::Layout, EffectTiming::Passive] {
+        let json = serde_json::to_string(&timing).expect("serialize");
+        let recovered: EffectTiming = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(timing, recovered);
+    }
+}
+
+#[test]
+fn effect_timing_scheduling_order_monotonic() {
+    assert!(EffectTiming::Insertion.scheduling_order() < EffectTiming::Layout.scheduling_order());
+    assert!(EffectTiming::Layout.scheduling_order() < EffectTiming::Passive.scheduling_order());
+}
+
+#[test]
+fn effect_timing_execution_phase_matches_lifecycle() {
+    assert_eq!(EffectTiming::Insertion.execution_phase(), RenderPhase::InsertionEffectsPending);
+    assert_eq!(EffectTiming::Layout.execution_phase(), RenderPhase::LayoutEffectsPending);
+    assert_eq!(EffectTiming::Passive.execution_phase(), RenderPhase::PassiveEffectsPending);
+}
+
+// ---------------------------------------------------------------------------
+// DepToken and HookSlot with deps
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dep_token_serde_roundtrip() {
+    let token = DepToken(42);
+    let json = serde_json::to_string(&token).expect("serialize");
+    let recovered: DepToken = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(token, recovered);
+}
+
+#[test]
+fn hook_slot_with_deps_serde_roundtrip() {
+    let slot = HookSlot {
+        index: HookSlotIndex(0),
+        kind: HookKind::Effect,
+        deps: Some(vec![DepToken(1), DepToken(2), DepToken(3)]),
+    };
+    let json = serde_json::to_string(&slot).expect("serialize");
+    let recovered: HookSlot = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(slot, recovered);
+}
+
+#[test]
+fn hook_manifest_derive_id_deterministic() {
+    let m1 = HookManifest::new("IdTest", vec![
+        make_slot(0, HookKind::State),
+        make_slot(1, HookKind::Effect),
+    ]);
+    let m2 = HookManifest::new("IdTest", vec![
+        make_slot(0, HookKind::State),
+        make_slot(1, HookKind::Effect),
+    ]);
+    assert_eq!(m1.derive_id(), m2.derive_id());
+}
+
+#[test]
+fn hook_manifest_different_components_different_ids() {
+    let m1 = HookManifest::new("Alpha", vec![make_slot(0, HookKind::State)]);
+    let m2 = HookManifest::new("Beta", vec![make_slot(0, HookKind::State)]);
+    assert_ne!(m1.derive_id(), m2.derive_id());
 }

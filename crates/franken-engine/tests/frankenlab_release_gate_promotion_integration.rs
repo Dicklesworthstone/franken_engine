@@ -507,3 +507,200 @@ fn integration_e2e_triage_identifies_issues() {
     let warnings = bundle.findings_at_severity(TriageSeverity::Warning);
     assert!(warnings.len() >= 1);
 }
+
+// ---------------------------------------------------------------------------
+// Additional enrichment tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_promotion_status_serde_roundtrip() {
+    for status in [
+        PromotionStatus::AssertionBased,
+        PromotionStatus::OracleWired,
+        PromotionStatus::OracleBacked,
+        PromotionStatus::FullyPromoted,
+    ] {
+        let json = serde_json::to_string(&status).unwrap();
+        let round: PromotionStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, round);
+    }
+}
+
+#[test]
+fn integration_gate_kind_serde_roundtrip() {
+    for gate in PromotedGateKind::ALL {
+        let json = serde_json::to_string(&gate).unwrap();
+        let round: PromotedGateKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(gate, round);
+    }
+}
+
+#[test]
+fn integration_gate_entry_blocks_release_zero_runs() {
+    let entry = GatePromotionEntry::assertion_based(PromotedGateKind::LifecycleScenarios);
+    assert_eq!(entry.evaluation_runs, 0);
+    // No data → fail-closed
+    assert!(entry.blocks_release());
+}
+
+#[test]
+fn integration_gate_entry_pass_rate_zero_runs() {
+    let entry = GatePromotionEntry::assertion_based(PromotedGateKind::LifecycleScenarios);
+    assert_eq!(entry.pass_rate_millionths(), 0);
+}
+
+#[test]
+fn integration_gate_entry_pass_rate_all_failing() {
+    let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::ReplayDeterminism);
+    entry.record_run(false);
+    entry.record_run(false);
+    entry.record_run(false);
+    assert_eq!(entry.pass_rate_millionths(), 0);
+    assert!(entry.blocks_release());
+}
+
+#[test]
+fn integration_threshold_would_block_with_failures() {
+    let t = BlockerThreshold::strict(PromotedGateKind::LifecycleScenarios);
+    // Perfect pass rate but with failures should still check max_failures
+    assert!(!t.would_block(1_000_000, 0));
+    // High failure count at threshold should block
+    assert!(t.would_block(1_000_000, t.max_failures + 1));
+}
+
+#[test]
+fn integration_triage_bundle_empty_is_clean() {
+    let bundle = TriageBundle::from_findings(vec![]);
+    assert!(bundle.is_clean());
+    assert!(!bundle.has_blockers());
+    assert_eq!(bundle.blocking_count, 0);
+    assert!(bundle.max_severity.is_none());
+    assert!(bundle.gates_involved.is_empty());
+}
+
+#[test]
+fn integration_triage_bundle_info_only_is_clean() {
+    let findings = vec![TriageFinding {
+        gate: PromotedGateKind::LifecycleScenarios,
+        severity: TriageSeverity::Info,
+        summary: "info note".to_owned(),
+        detail: String::new(),
+        remediation_steps: vec![],
+        scenario_id: None,
+        oracle_invariant: None,
+    }];
+    let bundle = TriageBundle::from_findings(findings);
+    assert!(!bundle.has_blockers());
+    assert_eq!(bundle.blocking_count, 0);
+    assert_eq!(bundle.max_severity, Some(TriageSeverity::Info));
+}
+
+#[test]
+fn integration_triage_severity_is_release_blocking() {
+    assert!(!TriageSeverity::Info.is_release_blocking());
+    assert!(!TriageSeverity::Warning.is_release_blocking());
+    assert!(TriageSeverity::Error.is_release_blocking());
+    assert!(TriageSeverity::Critical.is_release_blocking());
+}
+
+#[test]
+fn integration_triage_bundle_findings_for_gate() {
+    let findings = vec![
+        TriageFinding {
+            gate: PromotedGateKind::LifecycleScenarios,
+            severity: TriageSeverity::Info,
+            summary: "lifecycle note".to_owned(),
+            detail: String::new(),
+            remediation_steps: vec![],
+            scenario_id: None,
+            oracle_invariant: None,
+        },
+        TriageFinding {
+            gate: PromotedGateKind::BudgetPropagation,
+            severity: TriageSeverity::Error,
+            summary: "budget error".to_owned(),
+            detail: String::new(),
+            remediation_steps: vec![],
+            scenario_id: None,
+            oracle_invariant: None,
+        },
+    ];
+    let bundle = TriageBundle::from_findings(findings);
+
+    let lifecycle = bundle.findings_for_gate(PromotedGateKind::LifecycleScenarios);
+    assert_eq!(lifecycle.len(), 1);
+
+    let budget = bundle.findings_for_gate(PromotedGateKind::BudgetPropagation);
+    assert_eq!(budget.len(), 1);
+
+    let empty = bundle.findings_for_gate(PromotedGateKind::MockSeamAbsence);
+    assert!(empty.is_empty());
+}
+
+#[test]
+fn integration_registry_status_counts() {
+    let reg = ReleaseGatePromotionRegistry::with_defaults(epoch());
+    let counts = reg.status_counts();
+    let total: usize = counts.values().sum();
+    assert_eq!(total, 8);
+}
+
+#[test]
+fn integration_registry_new_has_no_gates() {
+    let reg = ReleaseGatePromotionRegistry::new(epoch());
+    assert_eq!(reg.oracle_backed_count(), 0);
+    assert_eq!(reg.promotion_progress_millionths(), 0);
+}
+
+#[test]
+fn integration_report_hash_changes_with_different_data() {
+    let r1 = {
+        let reg = ReleaseGatePromotionRegistry::with_defaults(epoch());
+        reg.build_report()
+    };
+    let r2 = {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(epoch());
+        reg.gate_mut(PromotedGateKind::LifecycleScenarios)
+            .unwrap()
+            .record_run(true);
+        reg.build_report()
+    };
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn integration_promotion_status_is_oracle_backed() {
+    assert!(!PromotionStatus::AssertionBased.is_oracle_backed());
+    assert!(!PromotionStatus::OracleWired.is_oracle_backed());
+    assert!(PromotionStatus::OracleBacked.is_oracle_backed());
+    assert!(PromotionStatus::FullyPromoted.is_oracle_backed());
+}
+
+#[test]
+fn integration_triage_bundle_serde_roundtrip() {
+    let findings = vec![TriageFinding {
+        gate: PromotedGateKind::MockSeamAbsence,
+        severity: TriageSeverity::Critical,
+        summary: "mock in prod".to_owned(),
+        detail: "details".to_owned(),
+        remediation_steps: vec!["fix it".to_owned()],
+        scenario_id: Some("scenario_1".to_owned()),
+        oracle_invariant: Some("invariant_1".to_owned()),
+    }];
+    let bundle = TriageBundle::from_findings(findings);
+    let json = serde_json::to_string(&bundle).unwrap();
+    let round: TriageBundle = serde_json::from_str(&json).unwrap();
+    assert_eq!(bundle.blocking_count, round.blocking_count);
+    assert_eq!(bundle.content_hash, round.content_hash);
+    assert_eq!(bundle.findings.len(), round.findings.len());
+}
+
+#[test]
+fn integration_gate_kind_as_str_all_unique() {
+    let mut labels = BTreeSet::new();
+    for gate in PromotedGateKind::ALL {
+        let s = gate.to_string();
+        assert!(labels.insert(s.clone()), "duplicate label: {s}");
+    }
+    assert_eq!(labels.len(), 8);
+}

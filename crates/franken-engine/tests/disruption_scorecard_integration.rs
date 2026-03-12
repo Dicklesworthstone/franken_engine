@@ -18,9 +18,10 @@
 )]
 
 use frankenengine_engine::disruption_scorecard::{
-    DimensionScore, DimensionThreshold, DisruptionDimension, EvidenceInput, SCORECARD_COMPONENT,
-    SCORECARD_SCHEMA_VERSION, ScorecardError, ScorecardHistory, ScorecardOutcome, ScorecardResult,
-    ScorecardSchema, compute_scorecard, generate_log_entries, passes_release_gate,
+    DimensionScore, DimensionThreshold, DisruptionDimension, EvidenceInput, HistoryEntry,
+    SCORECARD_COMPONENT, SCORECARD_SCHEMA_VERSION, ScorecardError, ScorecardHistory,
+    ScorecardLogEntry, ScorecardOutcome, ScorecardResult, ScorecardSchema, compute_scorecard,
+    generate_log_entries, passes_release_gate,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -641,4 +642,171 @@ fn evidence_order_does_not_affect_bundle_hash() {
     assert_eq!(r1.evidence_bundle_hash, r2.evidence_bundle_hash);
     assert_eq!(r1.result_hash, r2.result_hash);
     assert_eq!(r1.outcome, r2.outcome);
+}
+
+// ---------------------------------------------------------------------------
+// Additional serde roundtrips
+// ---------------------------------------------------------------------------
+
+#[test]
+fn disruption_dimension_serde_roundtrip() {
+    for dim in DisruptionDimension::all() {
+        let json = serde_json::to_string(dim).unwrap();
+        let restored: DisruptionDimension = serde_json::from_str(&json).unwrap();
+        assert_eq!(*dim, restored);
+    }
+}
+
+#[test]
+fn scorecard_outcome_serde_roundtrip() {
+    for outcome in [ScorecardOutcome::Pass, ScorecardOutcome::Fail] {
+        let json = serde_json::to_string(&outcome).unwrap();
+        let restored: ScorecardOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, restored);
+    }
+}
+
+#[test]
+fn scorecard_error_serde_roundtrip() {
+    let errors = vec![
+        ScorecardError::MissingDimension {
+            dimension: "security_delta".to_string(),
+        },
+        ScorecardError::InvalidThreshold {
+            dimension: "perf".to_string(),
+            detail: "floor > target".to_string(),
+        },
+        ScorecardError::MissingEvidence {
+            dimension: "autonomy_delta".to_string(),
+        },
+        ScorecardError::EmptyEvidenceBundle,
+        ScorecardError::SchemaValidationFailed {
+            detail: "bad".to_string(),
+        },
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).unwrap();
+        let restored: ScorecardError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*err, restored);
+    }
+}
+
+#[test]
+fn dimension_threshold_serde_roundtrip() {
+    let t = DimensionThreshold {
+        dimension: DisruptionDimension::SecurityDelta,
+        floor_millionths: 500_000,
+        target_millionths: 800_000,
+        description: "security threshold".to_string(),
+    };
+    let json = serde_json::to_string(&t).unwrap();
+    let restored: DimensionThreshold = serde_json::from_str(&json).unwrap();
+    assert_eq!(t, restored);
+}
+
+#[test]
+fn evidence_input_serde_roundtrip() {
+    let ev = evidence(DisruptionDimension::PerformanceDelta, 150_000, &["bd-1ze", "bd-2rx"]);
+    let json = serde_json::to_string(&ev).unwrap();
+    let restored: EvidenceInput = serde_json::from_str(&json).unwrap();
+    assert_eq!(ev, restored);
+}
+
+#[test]
+fn dimension_score_serde_roundtrip() {
+    let t = DimensionThreshold {
+        dimension: DisruptionDimension::AutonomyDelta,
+        floor_millionths: 600_000,
+        target_millionths: 900_000,
+        description: "test".to_string(),
+    };
+    let score = DimensionScore::compute(
+        DisruptionDimension::AutonomyDelta,
+        750_000,
+        &t,
+        vec!["bd-181".to_string()],
+    );
+    let json = serde_json::to_string(&score).unwrap();
+    let restored: DimensionScore = serde_json::from_str(&json).unwrap();
+    assert_eq!(score, restored);
+}
+
+#[test]
+fn scorecard_log_entry_serde_roundtrip() {
+    let s = schema();
+    let ev = all_passing_evidence();
+    let result = compute_scorecard(&s, &ev, epoch(), "env".to_string()).unwrap();
+    let logs = generate_log_entries("trace-serde", &result);
+    for log in &logs {
+        let json = serde_json::to_string(log).unwrap();
+        let restored: ScorecardLogEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(*log, restored);
+    }
+}
+
+#[test]
+fn history_entry_serde_roundtrip() {
+    let s = schema();
+    let ev = all_passing_evidence();
+    let result = compute_scorecard(&s, &ev, epoch(), "env".to_string()).unwrap();
+    let entry = HistoryEntry {
+        candidate_id: "rc-serde".to_string(),
+        timestamp: "2026-03-11T00:00:00Z".to_string(),
+        result,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: HistoryEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Additional edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn history_default_is_empty() {
+    let history = ScorecardHistory::default();
+    assert!(history.is_empty());
+    assert_eq!(history.len(), 0);
+}
+
+#[test]
+fn history_equal_scores_no_regression() {
+    let s = schema();
+    let mut history = ScorecardHistory::new();
+    let ev = all_passing_evidence();
+
+    let r1 = compute_scorecard(&s, &ev, epoch(), "env".to_string()).unwrap();
+    let r2 = compute_scorecard(&s, &ev, epoch(), "env".to_string()).unwrap();
+
+    history.append("rc-1".to_string(), "2026-03-11T00:00:00Z".to_string(), r1);
+    history.append("rc-2".to_string(), "2026-03-11T01:00:00Z".to_string(), r2);
+
+    assert!(!history.has_regression());
+}
+
+#[test]
+fn scorecard_result_compute_hash_consistency() {
+    let s = schema();
+    let ev = all_passing_evidence();
+    let result = compute_scorecard(&s, &ev, epoch(), "env".to_string()).unwrap();
+
+    // compute_hash should return same as stored result_hash
+    assert_eq!(result.compute_hash(), result.result_hash);
+    // Calling compute_hash multiple times is deterministic
+    assert_eq!(result.compute_hash(), result.compute_hash());
+}
+
+#[test]
+fn outcome_as_str() {
+    assert_eq!(ScorecardOutcome::Pass.as_str(), "pass");
+    assert_eq!(ScorecardOutcome::Fail.as_str(), "fail");
+}
+
+#[test]
+fn dimension_as_str_unique() {
+    let mut seen = std::collections::BTreeSet::new();
+    for dim in DisruptionDimension::all() {
+        assert!(seen.insert(dim.as_str()), "duplicate: {}", dim.as_str());
+    }
 }

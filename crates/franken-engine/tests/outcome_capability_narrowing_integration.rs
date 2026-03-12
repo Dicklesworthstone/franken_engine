@@ -563,3 +563,217 @@ fn integration_violation_display_messages() {
         assert!(!msg.is_empty(), "violation display should not be empty");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Additional enrichment tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_outcome_as_str_all_variants() {
+    assert_eq!(BoundaryOutcome::Success.as_str(), "success");
+    assert_eq!(BoundaryOutcome::Failure.as_str(), "failure");
+    assert_eq!(BoundaryOutcome::Timeout.as_str(), "timeout");
+    assert_eq!(BoundaryOutcome::Cancelled.as_str(), "cancelled");
+}
+
+#[test]
+fn integration_outcome_is_failure_class() {
+    assert!(!BoundaryOutcome::Success.is_failure_class());
+    assert!(BoundaryOutcome::Failure.is_failure_class());
+    assert!(BoundaryOutcome::Timeout.is_failure_class());
+    assert!(BoundaryOutcome::Cancelled.is_failure_class());
+}
+
+#[test]
+fn integration_outcome_serde_roundtrip() {
+    for outcome in [
+        BoundaryOutcome::Success,
+        BoundaryOutcome::Failure,
+        BoundaryOutcome::Timeout,
+        BoundaryOutcome::Cancelled,
+    ] {
+        let json = serde_json::to_string(&outcome).unwrap();
+        let round: BoundaryOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, round);
+    }
+}
+
+#[test]
+fn integration_outcome_display() {
+    for outcome in [
+        BoundaryOutcome::Success,
+        BoundaryOutcome::Failure,
+        BoundaryOutcome::Timeout,
+        BoundaryOutcome::Cancelled,
+    ] {
+        let display = format!("{outcome}");
+        assert!(!display.is_empty());
+    }
+}
+
+#[test]
+fn integration_propagation_rule_serde_roundtrip() {
+    let rules = [
+        OutcomePropagationRule::Preserve,
+        OutcomePropagationRule::CollapseToFailure,
+        OutcomePropagationRule::EscalateToMostSevere,
+        OutcomePropagationRule::SeverityThreshold { min_severity: 2 },
+    ];
+    for rule in &rules {
+        let json = serde_json::to_string(rule).unwrap();
+        let round: OutcomePropagationRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(*rule, round);
+    }
+}
+
+#[test]
+fn integration_capability_grant_is_empty() {
+    assert!(CapabilityGrant::none().is_empty());
+    assert!(!CapabilityGrant::compute_only().is_empty());
+    assert!(!CapabilityGrant::sandbox().is_empty());
+    assert!(!CapabilityGrant::full().is_empty());
+}
+
+#[test]
+fn integration_capability_grant_compute_has_compute_and_telemetry() {
+    let compute = CapabilityGrant::compute_only();
+    assert!(compute.has(CapabilityToken::Compute));
+    assert!(compute.has(CapabilityToken::TelemetryEmit));
+    assert!(!compute.has(CapabilityToken::FileSystemRead));
+    assert!(!compute.has(CapabilityToken::NetworkAccess));
+}
+
+#[test]
+fn integration_capability_grant_sandbox_contains_compute() {
+    let compute = CapabilityGrant::compute_only();
+    let sandbox = CapabilityGrant::sandbox();
+    assert!(compute.is_subset_of(&sandbox));
+}
+
+#[test]
+fn integration_capability_grant_intersect_commutative() {
+    let compute = CapabilityGrant::compute_only();
+    let sandbox = CapabilityGrant::sandbox();
+    let ab = compute.intersect(&sandbox);
+    let ba = sandbox.intersect(&compute);
+    assert_eq!(ab.tokens, ba.tokens);
+}
+
+#[test]
+fn integration_capability_grant_difference_is_empty_for_subset() {
+    let compute = CapabilityGrant::compute_only();
+    let full = CapabilityGrant::full();
+    let diff = compute.difference(&full);
+    assert!(diff.is_empty(), "subset.difference(superset) should be empty");
+}
+
+#[test]
+fn integration_narrowing_direction_display() {
+    for dir in [
+        NarrowingDirection::Narrowed,
+        NarrowingDirection::Preserved,
+        NarrowingDirection::Widened,
+    ] {
+        let s = format!("{dir}");
+        assert!(!s.is_empty());
+    }
+}
+
+#[test]
+fn integration_validator_preserved_direction() {
+    let mut validator = CapabilityNarrowingValidator::with_defaults();
+    let grant = CapabilityGrant::sandbox();
+    let dir = validator.validate_narrowing("p", "c", "b", &grant, &grant);
+    assert_eq!(dir, NarrowingDirection::Preserved);
+    assert!(!validator.has_violations());
+}
+
+#[test]
+fn integration_validator_widening_then_narrowing() {
+    let mut validator = CapabilityNarrowingValidator::with_defaults();
+
+    // First: widening (violation)
+    let dir1 = validator.validate_narrowing(
+        "p1",
+        "c1",
+        "b-widen",
+        &CapabilityGrant::compute_only(),
+        &CapabilityGrant::full(),
+    );
+    assert_eq!(dir1, NarrowingDirection::Widened);
+    assert!(validator.has_violations());
+
+    // Second: narrowing (ok)
+    let dir2 = validator.validate_narrowing(
+        "p2",
+        "c2",
+        "b-narrow",
+        &CapabilityGrant::full(),
+        &CapabilityGrant::sandbox(),
+    );
+    assert_eq!(dir2, NarrowingDirection::Narrowed);
+
+    let report = validator.build_report();
+    assert!(!report.is_clean());
+    assert_eq!(report.total_transitions, 2);
+}
+
+#[test]
+fn integration_report_hash_differs_for_different_inputs() {
+    let make_report = |label: &str| {
+        let mut v = CapabilityNarrowingValidator::with_defaults();
+        v.validate_narrowing(
+            label,
+            "c",
+            "b",
+            &CapabilityGrant::full(),
+            &CapabilityGrant::sandbox(),
+        );
+        v.build_report()
+    };
+
+    let r1 = make_report("parent_a");
+    let r2 = make_report("parent_b");
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn integration_severity_threshold_zero_propagates_all() {
+    let rule = OutcomePropagationRule::SeverityThreshold { min_severity: 0 };
+    for outcome in [
+        BoundaryOutcome::Success,
+        BoundaryOutcome::Failure,
+        BoundaryOutcome::Timeout,
+        BoundaryOutcome::Cancelled,
+    ] {
+        let result = rule.apply(outcome, BoundaryOutcome::Success);
+        assert_eq!(result, outcome, "threshold 0 should propagate {outcome:?}");
+    }
+}
+
+#[test]
+fn integration_capability_token_count() {
+    let all = CapabilityToken::all();
+    assert!(all.len() >= 12, "should have at least 12 capability tokens");
+}
+
+#[test]
+fn integration_escalate_success_stays_success() {
+    let rule = OutcomePropagationRule::EscalateToMostSevere;
+    let result = rule.apply(BoundaryOutcome::Success, BoundaryOutcome::Success);
+    assert_eq!(result, BoundaryOutcome::Success);
+}
+
+#[test]
+fn integration_collapse_timeout_to_failure() {
+    let rule = OutcomePropagationRule::CollapseToFailure;
+    let result = rule.apply(BoundaryOutcome::Timeout, BoundaryOutcome::Success);
+    assert_eq!(result, BoundaryOutcome::Failure);
+}
+
+#[test]
+fn integration_collapse_cancelled_to_failure() {
+    let rule = OutcomePropagationRule::CollapseToFailure;
+    let result = rule.apply(BoundaryOutcome::Cancelled, BoundaryOutcome::Success);
+    assert_eq!(result, BoundaryOutcome::Failure);
+}

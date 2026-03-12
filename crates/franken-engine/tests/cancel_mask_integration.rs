@@ -442,3 +442,215 @@ fn mask_bounds_serde_roundtrip() {
     let restored: MaskBounds = serde_json::from_str(&json).unwrap();
     assert_eq!(bounds, restored);
 }
+
+// ---------------------------------------------------------------------------
+// Additional coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn evidence_append_bounds_respected() {
+    let mut ctx = test_context();
+    ctx.create_mask(&MaskJustification {
+        operation_name: "evidence_append".to_string(),
+        expected_ops_hint: 10,
+        atomicity_reason: "append evidence atomically".to_string(),
+    })
+    .unwrap();
+    for _ in 0..15 {
+        assert!(ctx.tick());
+    }
+    // 16th tick hits bound (max_ops=16)
+    assert!(!ctx.tick());
+}
+
+#[test]
+fn two_phase_commit_bounds_respected() {
+    let mut ctx = test_context();
+    ctx.create_mask(&MaskJustification {
+        operation_name: "two_phase_commit".to_string(),
+        expected_ops_hint: 50,
+        atomicity_reason: "two phase commit".to_string(),
+    })
+    .unwrap();
+    for _ in 0..63 {
+        assert!(ctx.tick());
+    }
+    assert!(!ctx.tick()); // 64th hits max_ops=64
+}
+
+#[test]
+fn cancel_deferred_emits_correct_event() {
+    let mut ctx = test_context();
+    ctx.create_mask(&checkpoint_just()).unwrap();
+    for _ in 0..5 {
+        ctx.tick();
+    }
+    ctx.release_mask(true).unwrap();
+
+    let events = ctx.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].outcome, MaskOutcome::CancelDeferred);
+    assert_eq!(events[0].ops_executed, 5);
+}
+
+#[test]
+fn tick_after_bound_exceeded_stays_false() {
+    let mut ctx = test_context();
+    ctx.create_mask(&checkpoint_just()).unwrap();
+    for _ in 0..32 {
+        ctx.tick();
+    }
+    // Subsequent ticks also return false
+    assert!(!ctx.tick());
+    assert!(!ctx.tick());
+    assert!(!ctx.tick());
+}
+
+#[test]
+fn multiple_masks_accumulate_events() {
+    let mut ctx = test_context();
+
+    ctx.create_mask(&checkpoint_just()).unwrap();
+    ctx.tick();
+    ctx.release_mask(false).unwrap();
+
+    ctx.create_mask(&MaskJustification {
+        operation_name: "evidence_append".to_string(),
+        expected_ops_hint: 3,
+        atomicity_reason: "append".to_string(),
+    })
+    .unwrap();
+    ctx.tick();
+    ctx.release_mask(false).unwrap();
+
+    ctx.create_mask(&MaskJustification {
+        operation_name: "hash_link_finalize".to_string(),
+        expected_ops_hint: 2,
+        atomicity_reason: "finalize".to_string(),
+    })
+    .unwrap();
+    ctx.tick();
+    ctx.release_mask(true).unwrap();
+
+    assert_eq!(ctx.event_count(), 3);
+    let events = ctx.drain_events();
+    assert_eq!(events[0].operation_name, "checkpoint_write");
+    assert_eq!(events[1].operation_name, "evidence_append");
+    assert_eq!(events[2].operation_name, "hash_link_finalize");
+    assert_eq!(events[2].outcome, MaskOutcome::CancelDeferred);
+}
+
+#[test]
+fn custom_empty_policy_denies_all() {
+    let policy = MaskPolicy {
+        default_bounds: MaskBounds::default(),
+        operation_bounds: std::collections::BTreeMap::new(),
+        lab_mode: false,
+    };
+    let mut ctx = CancelMaskContext::new(policy, "t", "r");
+    let err = ctx.create_mask(&checkpoint_just()).unwrap_err();
+    assert!(matches!(err, MaskError::OperationNotAllowed { .. }));
+}
+
+#[test]
+fn custom_policy_with_single_op_max_ops_1() {
+    let mut bounds = std::collections::BTreeMap::new();
+    bounds.insert("tiny_op".to_string(), MaskBounds { max_ops: 1 });
+    let policy = MaskPolicy {
+        default_bounds: MaskBounds::default(),
+        operation_bounds: bounds,
+        lab_mode: false,
+    };
+    let mut ctx = CancelMaskContext::new(policy, "t", "r");
+    ctx.create_mask(&MaskJustification {
+        operation_name: "tiny_op".to_string(),
+        expected_ops_hint: 1,
+        atomicity_reason: "minimal".to_string(),
+    })
+    .unwrap();
+    // First tick hits the bound immediately
+    assert!(!ctx.tick());
+    assert!(!ctx.is_masked());
+}
+
+#[test]
+fn bound_exceeded_then_release_does_not_double_emit() {
+    let mut ctx = test_context();
+    ctx.create_mask(&checkpoint_just()).unwrap();
+    for _ in 0..32 {
+        ctx.tick();
+    }
+    // bound_exceeded event already emitted
+    assert_eq!(ctx.event_count(), 1);
+    ctx.release_mask(false).unwrap();
+    // release after bound_exceeded should NOT add another event
+    assert_eq!(ctx.event_count(), 1);
+}
+
+#[test]
+fn is_masked_false_when_no_mask_active() {
+    let ctx = test_context();
+    assert!(!ctx.is_masked());
+}
+
+#[test]
+fn mask_id_increments_across_mixed_outcomes() {
+    let mut ctx = test_context();
+    // Mask 1: clean release
+    let id1 = ctx.create_mask(&checkpoint_just()).unwrap();
+    ctx.release_mask(false).unwrap();
+    // Mask 2: bound exceeded
+    let id2 = ctx.create_mask(&checkpoint_just()).unwrap();
+    for _ in 0..32 {
+        ctx.tick();
+    }
+    ctx.release_mask(false).unwrap();
+    // Mask 3: cancel deferred
+    let id3 = ctx.create_mask(&checkpoint_just()).unwrap();
+    ctx.release_mask(true).unwrap();
+
+    assert_eq!(id1, 1);
+    assert_eq!(id2, 2);
+    assert_eq!(id3, 3);
+}
+
+#[test]
+fn mask_justification_fields_accessible() {
+    let just = MaskJustification {
+        operation_name: "test_op".to_string(),
+        expected_ops_hint: 42,
+        atomicity_reason: "testing fields".to_string(),
+    };
+    assert_eq!(just.operation_name, "test_op");
+    assert_eq!(just.expected_ops_hint, 42);
+    assert_eq!(just.atomicity_reason, "testing fields");
+}
+
+#[test]
+fn drain_events_clears_events() {
+    let mut ctx = test_context();
+    ctx.create_mask(&checkpoint_just()).unwrap();
+    ctx.tick();
+    ctx.release_mask(false).unwrap();
+    assert_eq!(ctx.event_count(), 1);
+
+    let events = ctx.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(ctx.event_count(), 0);
+
+    // Second drain returns empty
+    let events2 = ctx.drain_events();
+    assert!(events2.is_empty());
+}
+
+#[test]
+fn release_mask_zero_ticks_clean_release() {
+    let mut ctx = test_context();
+    ctx.create_mask(&checkpoint_just()).unwrap();
+    // Release immediately without any ticks
+    let outcome = ctx.release_mask(false).unwrap();
+    assert_eq!(outcome, MaskOutcome::CleanRelease);
+    let events = ctx.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].ops_executed, 0);
+}

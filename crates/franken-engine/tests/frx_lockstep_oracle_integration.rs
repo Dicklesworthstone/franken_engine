@@ -453,6 +453,44 @@ fn evaluate_case_replay_command_present() {
     let input = mk_matching_case();
     let result = evaluate_case(input).unwrap();
     assert!(!result.replay_command.is_empty());
+    assert!(result.replay_command.starts_with("rch cargo test"));
+}
+
+#[test]
+fn evaluate_case_replay_command_uses_rch_and_shell_escapes_fixture_ref() {
+    let events = vec![mk_event(1, 100), mk_event(2, 200)];
+    let fixture_ref = "fixture with spaces";
+    let scenario_id = "scenario-a";
+    let input = FrxLockstepCaseInput {
+        fixture_ref: fixture_ref.to_string(),
+        scenario_id: scenario_id.to_string(),
+        react_trace: mk_trace_with("react-1", fixture_ref, scenario_id, events.clone()),
+        franken_trace: mk_trace_with("franken-1", fixture_ref, scenario_id, events),
+        react_trace_path: Some("/tmp/react traces/case.trace.json".into()),
+        franken_trace_path: Some("/tmp/franken traces/case.trace.json".into()),
+    };
+
+    let result = evaluate_case(input).unwrap();
+    assert!(
+        result
+            .replay_command
+            .starts_with("rch cargo run -p frankenengine-engine --bin frx_lockstep_oracle")
+    );
+    assert!(
+        result
+            .replay_command
+            .contains("--react-traces-dir '/tmp/react traces'")
+    );
+    assert!(
+        result
+            .replay_command
+            .contains("--franken-traces-dir '/tmp/franken traces'")
+    );
+    assert!(
+        result
+            .replay_command
+            .contains("--fixture-ref 'fixture with spaces'")
+    );
 }
 
 // ── Full Lifecycle ──────────────────────────────────────────────────────

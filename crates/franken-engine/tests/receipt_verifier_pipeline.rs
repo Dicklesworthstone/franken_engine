@@ -24,20 +24,20 @@ use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::mmr_proof::MerkleMountainRange;
 use frankenengine_engine::proof_schema::{
-    AttestationValidityWindow, OptReceipt, OptimizationClass, ReceiptAttestationBindings,
-    proof_schema_version_current,
+    proof_schema_version_current, AttestationValidityWindow, OptReceipt, OptimizationClass,
+    ReceiptAttestationBindings,
 };
 use frankenengine_engine::receipt_verifier_pipeline::{
-    AttestationLayerInput, ConsistencyProofInput, EXIT_CODE_ATTESTATION_FAILURE,
+    render_verdict_summary, verify_receipt_by_id, verify_receipt_request, AttestationLayerInput,
+    ConsistencyProofInput, LayerCheck, LayerResult, LogOperatorKey, ReceiptVerifierCliInput,
+    ReceiptVerifierPipelineError, SignatureLayerInput, SignedLogCheckpoint, SignerRevocationCache,
+    TransparencyLayerInput, UnifiedReceiptVerificationRequest, UnifiedReceiptVerificationVerdict,
+    VerificationFailureClass, VerifierLogEvent, EXIT_CODE_ATTESTATION_FAILURE,
     EXIT_CODE_SIGNATURE_FAILURE, EXIT_CODE_STALE_DATA, EXIT_CODE_SUCCESS,
-    EXIT_CODE_TRANSPARENCY_FAILURE, LayerCheck, LayerResult, LogOperatorKey,
-    ReceiptVerifierCliInput, ReceiptVerifierPipelineError, SignatureLayerInput,
-    SignedLogCheckpoint, SignerRevocationCache, TransparencyLayerInput,
-    UnifiedReceiptVerificationRequest, UnifiedReceiptVerificationVerdict, VerificationFailureClass,
-    VerifierLogEvent, render_verdict_summary, verify_receipt_by_id, verify_receipt_request,
+    EXIT_CODE_TRANSPARENCY_FAILURE,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::{Signature, SigningKey, sign_preimage};
+use frankenengine_engine::signature_preimage::{sign_preimage, Signature, SigningKey};
 use frankenengine_engine::tee_attestation_policy::{
     AttestationFreshnessWindow, AttestationQuote as PolicyAttestationQuote, DecisionImpact,
     MeasurementAlgorithm, MeasurementDigest, PlatformTrustRoot, RevocationFallback,
@@ -165,8 +165,8 @@ fn build_cli_input(wrong_signature_key: bool) -> ReceiptVerifierCliInput {
         "runtime-v1",
     );
     let nonce = [7u8; 32];
-    let mut attestation_quote = software_root.attest(&measurement, nonce, 30_000_000_000);
-    attestation_quote.issued_at_ns = 10_000_000_000;
+    let mut attestation_quote =
+        software_root.attest(&measurement, nonce, 30_000_000_000, 10_000_000_000);
     attestation_quote.trust_level = TrustLevel::SoftwareOnly;
 
     let measurement_zone = "measurement-zone-test".to_string();
@@ -421,8 +421,8 @@ fn build_valid_request() -> (String, UnifiedReceiptVerificationRequest) {
         "runtime-v1",
     );
     let nonce = [7u8; 32];
-    let mut attestation_quote = software_root.attest(&measurement, nonce, 30_000_000_000);
-    attestation_quote.issued_at_ns = 10_000_000_000;
+    let mut attestation_quote =
+        software_root.attest(&measurement, nonce, 30_000_000_000, 10_000_000_000);
     attestation_quote.trust_level = TrustLevel::SoftwareOnly;
 
     let measurement_zone = "measurement-zone-test".to_string();
@@ -616,24 +616,20 @@ fn verdict_always_has_four_log_entries() {
 fn verdict_logs_have_correct_component() {
     let (receipt_id, request) = build_valid_request();
     let verdict = verify_receipt_request(&receipt_id, &request);
-    assert!(
-        verdict
-            .logs
-            .iter()
-            .all(|log| log.component == "receipt_verifier_pipeline")
-    );
+    assert!(verdict
+        .logs
+        .iter()
+        .all(|log| log.component == "receipt_verifier_pipeline"));
 }
 
 #[test]
 fn verdict_logs_include_completion_event() {
     let (receipt_id, request) = build_valid_request();
     let verdict = verify_receipt_request(&receipt_id, &request);
-    assert!(
-        verdict
-            .logs
-            .iter()
-            .any(|log| log.event == "receipt_verification_complete")
-    );
+    assert!(verdict
+        .logs
+        .iter()
+        .any(|log| log.event == "receipt_verification_complete"));
 }
 
 #[test]
@@ -933,13 +929,11 @@ fn signature_revoked_signer_fails() {
     request.signature.signer_revocation.is_revoked = true;
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .signature
-            .checks
-            .iter()
-            .any(|c| c.check == "signer_not_revoked" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .signature
+        .checks
+        .iter()
+        .any(|c| c.check == "signer_not_revoked" && c.outcome == "fail"));
 }
 
 #[test]
@@ -948,13 +942,11 @@ fn signature_empty_revocation_source_fails() {
     request.signature.signer_revocation.source = "".to_string();
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .signature
-            .checks
-            .iter()
-            .any(|c| c.check == "revocation_source_present" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .signature
+        .checks
+        .iter()
+        .any(|c| c.check == "revocation_source_present" && c.outcome == "fail"));
 }
 
 #[test]
@@ -963,13 +955,11 @@ fn signature_signer_key_id_mismatch_fails() {
     request.signature.signer_revocation.signer_key_id = EngineObjectId([0xAA; 32]);
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .signature
-            .checks
-            .iter()
-            .any(|c| c.check == "signer_key_id_matches_receipt" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .signature
+        .checks
+        .iter()
+        .any(|c| c.check == "signer_key_id_matches_receipt" && c.outcome == "fail"));
 }
 
 #[test]
@@ -978,13 +968,11 @@ fn signature_preimage_hash_mismatch_fails() {
     request.signature.expected_preimage_hash = ContentHash::compute(b"wrong");
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .signature
-            .checks
-            .iter()
-            .any(|c| c.check == "canonical_preimage_hash_matches" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .signature
+        .checks
+        .iter()
+        .any(|c| c.check == "canonical_preimage_hash_matches" && c.outcome == "fail"));
 }
 
 // -- Transparency failure modes --
@@ -1008,13 +996,11 @@ fn transparency_operator_key_revoked_fails() {
     request.transparency.operator_keys[0].revoked = true;
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .transparency
-            .checks
-            .iter()
-            .any(|c| c.check == "checkpoint_operator_key_not_revoked" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .transparency
+        .checks
+        .iter()
+        .any(|c| c.check == "checkpoint_operator_key_not_revoked" && c.outcome == "fail"));
 }
 
 #[test]
@@ -1023,13 +1009,11 @@ fn transparency_operator_key_missing_fails() {
     request.transparency.operator_keys.clear();
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .transparency
-            .checks
-            .iter()
-            .any(|c| c.check == "checkpoint_operator_key_found" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .transparency
+        .checks
+        .iter()
+        .any(|c| c.check == "checkpoint_operator_key_found" && c.outcome == "fail"));
 }
 
 #[test]
@@ -1038,13 +1022,11 @@ fn transparency_root_mismatch_fails() {
     request.transparency.inclusion_proof.root_hash = ContentHash::compute(b"wrong-root");
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .transparency
-            .checks
-            .iter()
-            .any(|c| c.check == "inclusion_root_matches_checkpoint_root" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .transparency
+        .checks
+        .iter()
+        .any(|c| c.check == "inclusion_root_matches_checkpoint_root" && c.outcome == "fail"));
 }
 
 #[test]
@@ -1081,13 +1063,11 @@ fn attestation_nonce_mismatch_fails() {
     }
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .attestation
-            .checks
-            .iter()
-            .any(|c| c.check == "quote_nonce_matches_binding" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .attestation
+        .checks
+        .iter()
+        .any(|c| c.check == "quote_nonce_matches_binding" && c.outcome == "fail"));
 }
 
 #[test]
@@ -1096,13 +1076,11 @@ fn attestation_trust_root_missing_fails() {
     request.attestation.trust_roots.clear();
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .attestation
-            .checks
-            .iter()
-            .any(|c| c.check == "quote_trust_root_available" && c.outcome == "fail")
-    );
+    assert!(verdict
+        .attestation
+        .checks
+        .iter()
+        .any(|c| c.check == "quote_trust_root_available" && c.outcome == "fail"));
 }
 
 #[test]
@@ -1139,11 +1117,9 @@ fn signature_revocation_cache_stale_warning() {
         verdict.failure_class,
         Some(VerificationFailureClass::StaleData)
     );
-    assert!(
-        verdict
-            .warnings
-            .contains(&"signature_revocation_cache_stale".to_string())
-    );
+    assert!(verdict
+        .warnings
+        .contains(&"signature_revocation_cache_stale".to_string()));
 }
 
 #[test]
@@ -1152,11 +1128,9 @@ fn transparency_cache_stale_warning() {
     request.transparency.cache_stale = true;
     let verdict = verify_receipt_request(&receipt_id, &request);
     assert!(!verdict.passed);
-    assert!(
-        verdict
-            .warnings
-            .contains(&"transparency_cache_stale".to_string())
-    );
+    assert!(verdict
+        .warnings
+        .contains(&"transparency_cache_stale".to_string()));
 }
 
 #[test]

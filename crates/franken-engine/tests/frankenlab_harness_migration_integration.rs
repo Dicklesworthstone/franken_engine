@@ -477,3 +477,177 @@ fn integration_e2e_containment_migration_with_oracles() {
     assert_eq!(report.oracle_covered_tests, 2);
     assert!(!report.is_complete()); // other tests still local
 }
+
+// ---------------------------------------------------------------------------
+// Additional enrichment tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_migration_status_serde_roundtrip() {
+    for status in [
+        MigrationStatus::LocalOnly,
+        MigrationStatus::InProgress,
+        MigrationStatus::Migrated,
+        MigrationStatus::Verified,
+        MigrationStatus::Deferred,
+    ] {
+        let json = serde_json::to_string(&status).unwrap();
+        let round: MigrationStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(status, round);
+    }
+}
+
+#[test]
+fn integration_migration_status_needs_work() {
+    assert!(MigrationStatus::LocalOnly.needs_work());
+    assert!(MigrationStatus::InProgress.needs_work());
+    assert!(!MigrationStatus::Migrated.needs_work());
+    assert!(!MigrationStatus::Verified.needs_work());
+    assert!(!MigrationStatus::Deferred.needs_work());
+}
+
+#[test]
+fn integration_migration_status_is_upstream_backed() {
+    assert!(!MigrationStatus::LocalOnly.is_upstream_backed());
+    assert!(!MigrationStatus::InProgress.is_upstream_backed());
+    assert!(MigrationStatus::Migrated.is_upstream_backed());
+    assert!(MigrationStatus::Verified.is_upstream_backed());
+    assert!(!MigrationStatus::Deferred.is_upstream_backed());
+}
+
+#[test]
+fn integration_lifecycle_scenario_all_has_ten() {
+    assert_eq!(LifecycleScenarioId::ALL.len(), 10);
+}
+
+#[test]
+fn integration_lifecycle_scenario_unique_labels() {
+    let mut labels = BTreeSet::new();
+    for id in LifecycleScenarioId::ALL {
+        let s = format!("{id}");
+        assert!(labels.insert(s.clone()), "duplicate: {s}");
+    }
+    assert_eq!(labels.len(), 10);
+}
+
+#[test]
+fn integration_lifecycle_scenario_serde_roundtrip() {
+    for id in LifecycleScenarioId::ALL {
+        let json = serde_json::to_string(&id).unwrap();
+        let round: LifecycleScenarioId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, round);
+    }
+}
+
+#[test]
+fn integration_containment_test_kind_all_has_eight() {
+    assert_eq!(ContainmentTestKind::ALL.len(), 8);
+}
+
+#[test]
+fn integration_containment_test_kind_serde_roundtrip() {
+    for kind in ContainmentTestKind::ALL {
+        let json = serde_json::to_string(&kind).unwrap();
+        let round: ContainmentTestKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(kind, round);
+    }
+}
+
+#[test]
+fn integration_containment_entry_migration_coverage_zero() {
+    let entry = ContainmentTestEntry::new(
+        ContainmentTestKind::BudgetEnforcement,
+        "tests/budget.rs",
+        10,
+    );
+    assert_eq!(entry.migration_coverage_millionths(), 0);
+    assert!(!entry.fully_migrated());
+}
+
+#[test]
+fn integration_containment_entry_fully_migrated() {
+    let mut entry = ContainmentTestEntry::new(
+        ContainmentTestKind::CapabilityNarrowing,
+        "tests/narrowing.rs",
+        10,
+    );
+    entry.upstream_test_count = 10;
+    entry.status = MigrationStatus::Verified;
+    entry.oracle_covered = true;
+    assert!(entry.fully_migrated());
+    assert_eq!(entry.migration_coverage_millionths(), 1_000_000);
+}
+
+#[test]
+fn integration_scenario_entry_mark_migrated_then_verified() {
+    let mut entry =
+        ScenarioMigrationEntry::local_only(LifecycleScenarioId::Startup, "tests/startup.rs");
+    assert_eq!(entry.status, MigrationStatus::LocalOnly);
+
+    entry.mark_migrated("upstream::runner");
+    assert_eq!(entry.status, MigrationStatus::Migrated);
+    assert_eq!(entry.upstream_harness, "upstream::runner");
+
+    entry.mark_verified();
+    assert_eq!(entry.status, MigrationStatus::Verified);
+    assert!(entry.cross_validated);
+}
+
+#[test]
+fn integration_oracle_migration_entry_local_only() {
+    let entry = OracleMigrationEntry::local_only("test_oracle");
+    assert_eq!(entry.name, "test_oracle");
+    assert!(!entry.bridged_to_upstream);
+    assert!(!entry.cross_validated);
+}
+
+#[test]
+fn integration_oracle_migration_entry_bridged() {
+    let entry = OracleMigrationEntry::bridged("bridge_oracle");
+    assert_eq!(entry.name, "bridge_oracle");
+    assert!(entry.bridged_to_upstream);
+    assert!(!entry.cross_validated);
+}
+
+#[test]
+fn integration_oracle_migration_entry_cross_validated() {
+    let mut entry = OracleMigrationEntry::bridged("val_oracle");
+    entry.mark_cross_validated();
+    assert!(entry.cross_validated);
+}
+
+#[test]
+fn integration_registry_scenario_status_counts() {
+    let reg = HarnessMigrationRegistry::with_default_scenarios(epoch());
+    let counts = reg.scenario_status_counts();
+    let total: usize = counts.values().sum();
+    assert_eq!(total, 10);
+}
+
+#[test]
+fn integration_registry_containment_status_counts() {
+    let reg = HarnessMigrationRegistry::with_default_scenarios(epoch());
+    let counts = reg.containment_status_counts();
+    let total: usize = counts.values().sum();
+    assert_eq!(total, 8);
+}
+
+#[test]
+fn integration_report_serde_roundtrip() {
+    let reg = HarnessMigrationRegistry::with_default_scenarios(epoch());
+    let report = reg.build_report();
+    let json = serde_json::to_string(&report).unwrap();
+    let round: HarnessMigrationReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, round);
+}
+
+#[test]
+fn integration_report_hash_deterministic() {
+    let make = || {
+        let reg = HarnessMigrationRegistry::with_default_scenarios(epoch());
+        reg.build_report()
+    };
+    let r1 = make();
+    let r2 = make();
+    assert_eq!(r1.content_hash, r2.content_hash);
+}

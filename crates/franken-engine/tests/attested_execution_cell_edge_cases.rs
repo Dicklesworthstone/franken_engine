@@ -62,6 +62,16 @@ fn measure(root: &SoftwareTrustRoot) -> MeasurementDigest {
     )
 }
 
+fn quote_at(
+    root: &SoftwareTrustRoot,
+    measurement: &MeasurementDigest,
+    nonce: [u8; 32],
+    issued_at_ns: u64,
+    validity_window_ns: u64,
+) -> AttestationQuote {
+    root.attest(measurement, nonce, validity_window_ns, issued_at_ns)
+}
+
 /// Drive a cell from Provisioning all the way to Active and return its string id.
 fn activate_cell(
     reg: &mut CellRegistry,
@@ -78,8 +88,7 @@ fn activate_cell(
     let cid = format!("{id}");
     let m = measure(root);
     reg.measure_cell(&cid, m.clone(), base_ts + 1, ep).unwrap();
-    let mut q = root.attest(&m, [7u8; 32], 10_000_000);
-    q.issued_at_ns = base_ts + 1;
+    let q = quote_at(root, &m, [7u8; 32], base_ts + 1, 10_000_000);
     reg.attest_cell(&cid, q, base_ts + 2, ep).unwrap();
     reg.activate_cell(&cid, base_ts + 3, ep).unwrap();
     cid
@@ -259,8 +268,7 @@ fn measurement_canonical_bytes_empty_runtime_version() {
 fn quote_freshness_at_exact_boundary() {
     let root = make_root("k1", 1);
     let m = measure(&root);
-    let mut q = root.attest(&m, [1u8; 32], 100);
-    q.issued_at_ns = 1000;
+    let q = quote_at(&root, &m, [1u8; 32], 1000, 100);
     // Boundary: issued_at + validity = 1100.
     assert!(q.is_fresh_at(1100));
     assert!(!q.is_fresh_at(1101));
@@ -270,8 +278,7 @@ fn quote_freshness_at_exact_boundary() {
 fn quote_freshness_u64_max_no_overflow_panic() {
     let root = make_root("k1", 1);
     let m = measure(&root);
-    let mut q = root.attest(&m, [1u8; 32], u64::MAX);
-    q.issued_at_ns = u64::MAX;
+    let q = quote_at(&root, &m, [1u8; 32], u64::MAX, u64::MAX);
     // saturating_add should prevent panic.
     assert!(q.is_fresh_at(u64::MAX));
     assert!(!q.is_expired_at(u64::MAX));
@@ -281,8 +288,7 @@ fn quote_freshness_u64_max_no_overflow_panic() {
 fn quote_freshness_zero_validity_window() {
     let root = make_root("k1", 1);
     let m = measure(&root);
-    let mut q = root.attest(&m, [1u8; 32], 0);
-    q.issued_at_ns = 100;
+    let q = quote_at(&root, &m, [1u8; 32], 100, 0);
     assert!(q.is_fresh_at(100)); // exactly at issued_at
     assert!(!q.is_fresh_at(101)); // one past
 }
@@ -291,8 +297,7 @@ fn quote_freshness_zero_validity_window() {
 fn quote_serde_preserves_all_fields() {
     let root = make_root("k1", 1);
     let m = measure(&root);
-    let mut q = root.attest(&m, [42u8; 32], 5_000_000);
-    q.issued_at_ns = 999;
+    let q = quote_at(&root, &m, [42u8; 32], 999, 5_000_000);
     let json = serde_json::to_string(&q).unwrap();
     let restored: AttestationQuote = serde_json::from_str(&json).unwrap();
     assert_eq!(q.nonce, restored.nonce);
@@ -380,27 +385,21 @@ fn verification_result_display_all() {
 fn verification_result_is_valid_false_for_all_non_valid() {
     assert!(!VerificationResult::SignatureInvalid.is_valid());
     assert!(!VerificationResult::NonceMismatch.is_valid());
-    assert!(
-        !VerificationResult::Expired {
-            issued_at_ns: 0,
-            validity_window_ns: 0,
-            checked_at_ns: 1,
-        }
-        .is_valid()
-    );
-    assert!(
-        !VerificationResult::SignerRevoked {
-            key_id: "k".to_string(),
-        }
-        .is_valid()
-    );
-    assert!(
-        !VerificationResult::MeasurementMismatch {
-            expected: ContentHash::compute(b"a"),
-            actual: ContentHash::compute(b"b"),
-        }
-        .is_valid()
-    );
+    assert!(!VerificationResult::Expired {
+        issued_at_ns: 0,
+        validity_window_ns: 0,
+        checked_at_ns: 1,
+    }
+    .is_valid());
+    assert!(!VerificationResult::SignerRevoked {
+        key_id: "k".to_string(),
+    }
+    .is_valid());
+    assert!(!VerificationResult::MeasurementMismatch {
+        expected: ContentHash::compute(b"a"),
+        actual: ContentHash::compute(b"b"),
+    }
+    .is_valid());
 }
 
 // ===========================================================================
@@ -427,8 +426,8 @@ fn software_trust_root_different_keys_different_signatures() {
     let r1 = make_root("k1", 1);
     let r2 = make_root("k2", 2);
     let m = r1.measure(b"code", b"cfg", b"pol", b"sch", "v1");
-    let q1 = r1.attest(&m, [1u8; 32], 1_000_000);
-    let q2 = r2.attest(&m, [1u8; 32], 1_000_000);
+    let q1 = r1.attest(&m, [1u8; 32], 1_000_000, 100);
+    let q2 = r2.attest(&m, [1u8; 32], 1_000_000, 100);
     assert_ne!(q1.signature_bytes, q2.signature_bytes);
 }
 
@@ -456,8 +455,7 @@ fn software_trust_root_verify_checks_revocation_before_other() {
     let mut root = make_root("k1", 1);
     let m = measure(&root);
     let nonce = [1u8; 32];
-    let mut q = root.attest(&m, nonce, 10_000_000);
-    q.issued_at_ns = 100;
+    let q = quote_at(&root, &m, nonce, 100, 10_000_000);
     root.revoke_key("k1");
     let result = root.verify(&q, &m, &nonce, 200);
     assert!(matches!(result, VerificationResult::SignerRevoked { .. }));
@@ -544,48 +542,36 @@ fn cell_error_serde_all_variants() {
 
 #[test]
 fn cell_error_display_content() {
-    assert!(
-        CellError::IdDerivation("bad".to_string())
-            .to_string()
-            .contains("bad")
-    );
-    assert!(
-        CellError::NotFound {
-            cell_id: "c1".to_string()
-        }
+    assert!(CellError::IdDerivation("bad".to_string())
         .to_string()
-        .contains("c1")
-    );
-    assert!(
-        CellError::InvalidTransition {
-            from: CellLifecycle::Active,
-            to: CellLifecycle::Provisioning,
-        }
-        .to_string()
-        .contains("active")
-    );
-    assert!(
-        CellError::NotOperational {
-            lifecycle: CellLifecycle::Suspended
-        }
-        .to_string()
-        .contains("suspended")
-    );
-    assert!(
-        CellError::AttestationFailed {
-            reason: "expired".to_string()
-        }
-        .to_string()
-        .contains("expired")
-    );
+        .contains("bad"));
+    assert!(CellError::NotFound {
+        cell_id: "c1".to_string()
+    }
+    .to_string()
+    .contains("c1"));
+    assert!(CellError::InvalidTransition {
+        from: CellLifecycle::Active,
+        to: CellLifecycle::Provisioning,
+    }
+    .to_string()
+    .contains("active"));
+    assert!(CellError::NotOperational {
+        lifecycle: CellLifecycle::Suspended
+    }
+    .to_string()
+    .contains("suspended"));
+    assert!(CellError::AttestationFailed {
+        reason: "expired".to_string()
+    }
+    .to_string()
+    .contains("expired"));
     assert!(CellError::NotMeasured.to_string().contains("measured"));
-    assert!(
-        CellError::TrustRootRevoked {
-            key_id: "k1".to_string()
-        }
-        .to_string()
-        .contains("k1")
-    );
+    assert!(CellError::TrustRootRevoked {
+        key_id: "k1".to_string()
+    }
+    .to_string()
+    .contains("k1"));
     assert!(CellError::EmptyLabel.to_string().contains("label"));
     assert!(CellError::EmptyZone.to_string().contains("zone"));
     assert!(CellError::EmptyAuthority.to_string().contains("authority"));
@@ -660,8 +646,7 @@ fn cell_event_serde_all_event_types() {
 fn execution_cell_serde_full() {
     let root = make_root("k1", 1);
     let m = measure(&root);
-    let mut q = root.attest(&m, [5u8; 32], 10_000_000);
-    q.issued_at_ns = 500;
+    let q = quote_at(&root, &m, [5u8; 32], 500, 10_000_000);
 
     let cell = ExecutionCell {
         cell_id: m.derive_id("zone-a").unwrap(),
@@ -882,8 +867,7 @@ fn registry_attest_from_provisioning_fails() {
         .unwrap();
     let cid = format!("{id}");
     let m = measure(&root);
-    let mut q = root.attest(&m, [1u8; 32], 10_000_000);
-    q.issued_at_ns = 1000;
+    let q = quote_at(&root, &m, [1u8; 32], 1000, 10_000_000);
     // Still in Provisioning — cannot attest.
     let result = reg.attest_cell(&cid, q, 2000, ep);
     assert!(matches!(result, Err(CellError::InvalidTransition { .. })));
@@ -1139,10 +1123,9 @@ fn registry_get_nonexistent_returns_none() {
 #[test]
 fn registry_cells_by_function_empty_for_unused() {
     let reg = CellRegistry::new();
-    assert!(
-        reg.cells_by_function(CellFunction::PolicyEvaluator)
-            .is_empty()
-    );
+    assert!(reg
+        .cells_by_function(CellFunction::PolicyEvaluator)
+        .is_empty());
 }
 
 // ===========================================================================
@@ -1226,7 +1209,7 @@ fn registry_attest_not_found() {
     let mut reg = CellRegistry::new();
     let root = make_root("k1", 1);
     let m = measure(&root);
-    let q = root.attest(&m, [1u8; 32], 1_000_000);
+    let q = root.attest(&m, [1u8; 32], 1_000_000, 0);
     let result = reg.attest_cell("ghost", q, 1000, epoch(1));
     assert!(matches!(result, Err(CellError::NotFound { .. })));
 }
@@ -1281,8 +1264,7 @@ fn integration_full_lifecycle_with_reattestation() {
 
     // Re-attest from Suspended.
     let m = measure(&root);
-    let mut q2 = root.attest(&m, [99u8; 32], 10_000_000);
-    q2.issued_at_ns = 5000;
+    let q2 = quote_at(&root, &m, [99u8; 32], 5000, 10_000_000);
     reg.attest_cell(&cid, q2, 6000, ep).unwrap();
     assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Attested);
 
@@ -1349,8 +1331,7 @@ fn integration_revoke_then_reattest_and_reactivate() {
 
     // Re-attest with new quote.
     let m = measure(&root);
-    let mut q = root.attest(&m, [50u8; 32], 10_000_000);
-    q.issued_at_ns = 5000;
+    let q = quote_at(&root, &m, [50u8; 32], 5000, 10_000_000);
     reg.attest_cell(&cid, q, 6000, ep).unwrap();
     reg.activate_cell(&cid, 7000, ep).unwrap();
     assert!(reg.get(&cid).unwrap().lifecycle.is_operational());

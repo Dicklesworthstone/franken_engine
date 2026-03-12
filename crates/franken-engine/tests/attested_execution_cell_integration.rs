@@ -69,9 +69,7 @@ fn meas(tr: &SoftwareTrustRoot) -> MeasurementDigest {
 }
 
 fn fresh_quote(tr: &SoftwareTrustRoot, m: &MeasurementDigest, nonce: [u8; 32]) -> AttestationQuote {
-    let mut q = tr.attest(m, nonce, 1_000_000_000);
-    q.issued_at_ns = 1_000;
-    q
+    tr.attest(m, nonce, 1_000_000_000, 1_000)
 }
 
 /// Drive a cell all the way to Active, returning its string ID.
@@ -277,8 +275,7 @@ fn measurement_canonical_bytes_non_empty() {
 fn quote_is_fresh_at_boundary() {
     let tr = root("k1", 42);
     let m = meas(&tr);
-    let mut q = tr.attest(&m, [0u8; 32], 100);
-    q.issued_at_ns = 1000;
+    let q = tr.attest(&m, [0u8; 32], 100, 1000);
     // Exactly at boundary: issued_at + validity = 1100
     assert!(q.is_fresh_at(1100));
     assert!(!q.is_fresh_at(1101));
@@ -288,8 +285,7 @@ fn quote_is_fresh_at_boundary() {
 fn quote_fresh_at_issuance_time() {
     let tr = root("k1", 42);
     let m = meas(&tr);
-    let mut q = tr.attest(&m, [0u8; 32], 500);
-    q.issued_at_ns = 200;
+    let q = tr.attest(&m, [0u8; 32], 500, 200);
     assert!(q.is_fresh_at(200));
 }
 
@@ -297,8 +293,7 @@ fn quote_fresh_at_issuance_time() {
 fn quote_expired_inverse_of_fresh() {
     let tr = root("k1", 42);
     let m = meas(&tr);
-    let mut q = tr.attest(&m, [0u8; 32], 100);
-    q.issued_at_ns = 1000;
+    let q = tr.attest(&m, [0u8; 32], 100, 1000);
     for ts in [999, 1000, 1050, 1100, 1101, 2000] {
         assert_eq!(q.is_expired_at(ts), !q.is_fresh_at(ts));
     }
@@ -308,8 +303,7 @@ fn quote_expired_inverse_of_fresh() {
 fn quote_zero_validity_window() {
     let tr = root("k1", 42);
     let m = meas(&tr);
-    let mut q = tr.attest(&m, [0u8; 32], 0);
-    q.issued_at_ns = 500;
+    let q = tr.attest(&m, [0u8; 32], 0, 500);
     assert!(q.is_fresh_at(500));
     assert!(!q.is_fresh_at(501));
 }
@@ -444,8 +438,7 @@ fn software_root_verify_expired_quote() {
     let tr = root("k1", 10);
     let m = meas(&tr);
     let nonce = [1u8; 32];
-    let mut q = tr.attest(&m, nonce, 100);
-    q.issued_at_ns = 1000;
+    let q = tr.attest(&m, nonce, 100, 1000);
     let result = tr.verify(&q, &m, &nonce, 1200);
     assert!(matches!(result, VerificationResult::Expired { .. }));
 }
@@ -524,8 +517,7 @@ fn software_root_verification_priority_revocation_over_expiry() {
     let mut tr = root("k1", 10);
     let m = meas(&tr);
     let nonce = [1u8; 32];
-    let mut q = tr.attest(&m, nonce, 10);
-    q.issued_at_ns = 100;
+    let q = tr.attest(&m, nonce, 10, 100);
     tr.revoke_key("k1");
     let result = tr.verify(&q, &m, &nonce, 200);
     assert!(matches!(result, VerificationResult::SignerRevoked { .. }));
@@ -764,8 +756,7 @@ fn suspend_and_reattest_then_reactivate() {
 
     // Suspended -> Attested (re-attest)
     let m = meas(&tr);
-    let mut q2 = tr.attest(&m, [9u8; 32], 1_000_000_000);
-    q2.issued_at_ns = 600;
+    let q2 = tr.attest(&m, [9u8; 32], 1_000_000_000, 600);
     reg.attest_cell(&cid_s, q2, 700, ep(2)).unwrap();
     assert_eq!(reg.get(&cid_s).unwrap().lifecycle, CellLifecycle::Attested);
 
@@ -1143,8 +1134,7 @@ fn reattestation_event_emitted_on_suspended_to_attested() {
     reg.suspend_cell(&cid_s, "rev", 500, ep(1)).unwrap();
 
     let m = meas(&tr);
-    let mut q2 = tr.attest(&m, [9u8; 32], 1_000_000_000);
-    q2.issued_at_ns = 600;
+    let q2 = tr.attest(&m, [9u8; 32], 1_000_000_000, 600);
     reg.attest_cell(&cid_s, q2, 700, ep(1)).unwrap();
 
     let last = reg.events().last().unwrap();
@@ -1435,8 +1425,7 @@ fn cannot_measure_twice_from_measured_state() {
 fn quote_saturating_add_handles_u64_max() {
     let tr = root("k1", 10);
     let m = meas(&tr);
-    let mut q = tr.attest(&m, [0u8; 32], u64::MAX);
-    q.issued_at_ns = u64::MAX;
+    let q = tr.attest(&m, [0u8; 32], u64::MAX, u64::MAX);
     // Should not panic due to overflow; saturating_add wraps at u64::MAX
     assert!(q.is_fresh_at(u64::MAX));
 }

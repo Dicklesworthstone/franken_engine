@@ -517,6 +517,303 @@ fn integration_derivation_result_serde_roundtrip() {
     assert_eq!(result, round);
 }
 
+// ---------------------------------------------------------------------------
+// Display integration
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_boundary_kind_display() {
+    let kinds = [
+        BudgetBoundaryKind::ParentToChildExtension,
+        BudgetBoundaryKind::ParentToChildSession,
+        BudgetBoundaryKind::ParentToChildDelegate,
+        BudgetBoundaryKind::ExecutionToCleanup,
+        BudgetBoundaryKind::CleanupToFinalize,
+        BudgetBoundaryKind::OrchestratorToCellClose,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for kind in kinds {
+        let s = format!("{:?}", kind);
+        assert!(!s.is_empty());
+        assert!(seen.insert(s), "duplicate display for {:?}", kind);
+    }
+}
+
+#[test]
+fn integration_boundary_kind_is_child_derivation() {
+    assert!(BudgetBoundaryKind::ParentToChildExtension.is_child_derivation());
+    assert!(BudgetBoundaryKind::ParentToChildSession.is_child_derivation());
+    assert!(BudgetBoundaryKind::ParentToChildDelegate.is_child_derivation());
+    assert!(!BudgetBoundaryKind::ExecutionToCleanup.is_child_derivation());
+    assert!(!BudgetBoundaryKind::CleanupToFinalize.is_child_derivation());
+    assert!(!BudgetBoundaryKind::OrchestratorToCellClose.is_child_derivation());
+}
+
+#[test]
+fn integration_error_display_all_variants() {
+    let errors: Vec<BudgetPropagationError> = vec![
+        BudgetPropagationError::InsufficientBudget {
+            boundary: BudgetBoundaryKind::ParentToChildExtension,
+            derived_ms: 5,
+            minimum_ms: 10,
+            parent_remaining_ms: 20,
+        },
+        BudgetPropagationError::NoRuleForBoundary {
+            boundary: BudgetBoundaryKind::OrchestratorToCellClose,
+        },
+        BudgetPropagationError::ParentExhausted {
+            boundary: BudgetBoundaryKind::ParentToChildSession,
+            parent_remaining_ms: 0,
+        },
+        BudgetPropagationError::CleanupExceedsParent {
+            cleanup_total_ms: 5000,
+            parent_remaining_ms: 1000,
+        },
+        BudgetPropagationError::ChildExceedsParent {
+            child_ms: 200,
+            parent_ms: 100,
+        },
+    ];
+    for err in &errors {
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "empty display for {:?}", err);
+    }
+    // Check specific content
+    assert!(errors[0].to_string().contains("insufficient"));
+    assert!(errors[1].to_string().contains("no propagation rule"));
+    assert!(errors[2].to_string().contains("exhausted"));
+    assert!(errors[3].to_string().contains("cleanup"));
+    assert!(errors[4].to_string().contains("exceeds parent"));
+}
+
+// ---------------------------------------------------------------------------
+// Strategy edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_all_remaining_strategy() {
+    let strat = BudgetDerivationStrategy::AllRemaining;
+    assert_eq!(strat.derive(0), 0);
+    assert_eq!(strat.derive(1), 1);
+    assert_eq!(strat.derive(100_000), 100_000);
+    assert_eq!(strat.derive(u64::MAX / 2), u64::MAX / 2);
+}
+
+#[test]
+fn integration_bounded_fraction_min_equals_max() {
+    let strat = BudgetDerivationStrategy::BoundedFraction {
+        fraction_millionths: 500_000, // 50%
+        min_ms: 100,
+        max_ms: 100,
+    };
+    // 50% of 1000 = 500, capped to max 100
+    assert_eq!(strat.derive(1_000), 100);
+    // 50% of 50 = 25, floored to min 100, capped by parent 50
+    assert_eq!(strat.derive(50), 50);
+    // 50% of 200 = 100, exactly at bounds
+    assert_eq!(strat.derive(200), 100);
+}
+
+#[test]
+fn integration_full_fraction_returns_entire_parent() {
+    let strat = BudgetDerivationStrategy::FractionOfRemaining {
+        fraction_millionths: 1_000_000, // 100%
+    };
+    assert_eq!(strat.derive(5_000), 5_000);
+    assert_eq!(strat.derive(1), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Serde integration (additional types)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_derivation_strategy_all_variants_serde() {
+    let strategies = vec![
+        BudgetDerivationStrategy::FractionOfRemaining {
+            fraction_millionths: 500_000,
+        },
+        BudgetDerivationStrategy::FixedAmount { amount_ms: 1_000 },
+        BudgetDerivationStrategy::BoundedFraction {
+            fraction_millionths: 100_000,
+            min_ms: 50,
+            max_ms: 500,
+        },
+        BudgetDerivationStrategy::AllRemaining,
+    ];
+    for strat in &strategies {
+        let json = serde_json::to_string(strat).unwrap();
+        let round: BudgetDerivationStrategy = serde_json::from_str(&json).unwrap();
+        assert_eq!(*strat, round, "serde mismatch for {:?}", strat);
+    }
+}
+
+#[test]
+fn integration_child_budget_rule_serde_roundtrip() {
+    let rules = vec![
+        ChildBudgetRule::default_extension(),
+        ChildBudgetRule::default_session(),
+        ChildBudgetRule::default_delegate(),
+    ];
+    for rule in &rules {
+        let json = serde_json::to_string(rule).unwrap();
+        let round: ChildBudgetRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(*rule, round, "serde mismatch for {:?}", rule.boundary_kind);
+    }
+}
+
+#[test]
+fn integration_cleanup_budget_policy_serde_roundtrip() {
+    let policy = CleanupBudgetPolicy::default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let round: CleanupBudgetPolicy = serde_json::from_str(&json).unwrap();
+    assert_eq!(policy, round);
+}
+
+#[test]
+fn integration_validator_serde_roundtrip() {
+    let mut v = BudgetPropagationValidator::with_defaults();
+    let _ = v.derive_child_budget("p", "c", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.validate_cleanup("p", 8_000);
+    let json = serde_json::to_string(&v).unwrap();
+    let round: BudgetPropagationValidator = serde_json::from_str(&json).unwrap();
+    assert_eq!(v.events().len(), round.events().len());
+    assert_eq!(v.violations().len(), round.violations().len());
+}
+
+// ---------------------------------------------------------------------------
+// Validator error paths
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_cleanup_zero_parent() {
+    let mut v = BudgetPropagationValidator::with_defaults();
+    let alloc = v.validate_cleanup("p", 0).unwrap();
+    assert_eq!(alloc.drain_budget_ms, 0);
+    assert_eq!(alloc.finalize_budget_ms, 0);
+    assert_eq!(alloc.total_cleanup_ms, 0);
+}
+
+#[test]
+fn integration_violations_accessor() {
+    let mut v = BudgetPropagationValidator::with_defaults();
+    assert!(!v.has_violations());
+    assert!(v.violations().is_empty());
+
+    // Trigger a violation
+    let _ = v.derive_child_budget("p", "c", 0, BudgetBoundaryKind::ParentToChildExtension);
+    assert!(v.has_violations());
+    assert_eq!(v.violations().len(), 1);
+    match &v.violations()[0] {
+        BudgetPropagationError::ParentExhausted { .. } => {}
+        other => panic!("expected ParentExhausted, got {:?}", other),
+    }
+}
+
+#[test]
+fn integration_event_sequence_monotonic() {
+    let mut v = BudgetPropagationValidator::with_defaults();
+    let _ = v.derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget("p", "c2", 8_000, BudgetBoundaryKind::ParentToChildSession);
+    let _ = v.derive_child_budget("p", "c3", 6_000, BudgetBoundaryKind::ParentToChildDelegate);
+    let _ = v.validate_cleanup("p", 4_000);
+
+    let events = v.events();
+    for window in events.windows(2) {
+        assert!(
+            window[1].sequence > window[0].sequence,
+            "non-monotonic sequence: {} then {}",
+            window[0].sequence,
+            window[1].sequence
+        );
+    }
+}
+
+#[test]
+fn integration_report_not_clean_with_violations() {
+    let mut v = BudgetPropagationValidator::with_defaults();
+    let _ = v.derive_child_budget("p", "c", 0, BudgetBoundaryKind::ParentToChildExtension);
+    let report = v.build_report();
+    assert!(!report.is_clean());
+    assert_eq!(report.failed_derivations, 1);
+    assert!(!report.violations.is_empty());
+}
+
+#[test]
+fn integration_report_hash_changes_with_different_inputs() {
+    let make_report = |parent_ms: u64| {
+        let mut v = BudgetPropagationValidator::with_defaults();
+        let _ = v.derive_child_budget(
+            "p",
+            "c",
+            parent_ms,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        v.build_report()
+    };
+
+    let r1 = make_report(10_000);
+    let r2 = make_report(20_000);
+    assert_ne!(
+        r1.content_hash, r2.content_hash,
+        "different inputs should produce different hashes"
+    );
+}
+
+#[test]
+fn integration_report_epoch_matches_policy() {
+    let epoch = SecurityEpoch::from_raw(42);
+    let mut policy = BudgetPropagationPolicy::default();
+    policy.epoch = epoch;
+    let mut v = BudgetPropagationValidator::new(policy);
+    let _ = v.derive_child_budget("p", "c", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let report = v.build_report();
+    assert_eq!(report.epoch, epoch);
+}
+
+// ---------------------------------------------------------------------------
+// Policy rule_for integration
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_policy_rule_for_missing_returns_none() {
+    let policy = BudgetPropagationPolicy::default();
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::ExecutionToCleanup)
+            .is_none()
+    );
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::CleanupToFinalize)
+            .is_none()
+    );
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::OrchestratorToCellClose)
+            .is_none()
+    );
+}
+
+#[test]
+fn integration_reserve_forces_bounded_by_reserve_path() {
+    let mut policy = BudgetPropagationPolicy::default();
+    policy.min_parent_reserve_ms = 9_000;
+    let mut v = BudgetPropagationValidator::new(policy);
+
+    // With 10k parent, 80% = 8k, but reserve is 9k → max child = 1k
+    let r = v
+        .derive_child_budget("p", "c", 10_000, BudgetBoundaryKind::ParentToChildExtension)
+        .unwrap();
+    assert!(r.derived_budget_ms <= 1_000);
+    assert!(r.parent_remaining_after_ms >= 9_000);
+
+    // Event should record bounded_by_reserve strategy
+    let events = v.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].strategy_used, "bounded_by_reserve");
+}
+
 use std::collections::BTreeMap;
 
 #[test]

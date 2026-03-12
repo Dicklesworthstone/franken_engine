@@ -709,6 +709,9 @@ PARSER_RERUN_KIT_MATRIX_DELTAS=artifacts/.../matrix_lane_deltas.jsonl \
 PARSER_RERUN_KIT_MATRIX_MANIFEST=artifacts/.../run_manifest.json \
 ./scripts/run_parser_third_party_rerun_kit.sh package
 
+# or let the gate auto-discover the latest local PSRP-07.2 matrix bundle
+./scripts/run_parser_third_party_rerun_kit.sh package
+
 # one-command replay wrapper
 ./scripts/e2e/parser_third_party_rerun_kit_replay.sh
 ```
@@ -727,6 +730,11 @@ Artifacts are written under:
 - `artifacts/parser_third_party_rerun_kit/<timestamp>/step_logs/step_*.log`
 - `artifacts/parser_third_party_rerun_kit/<timestamp>/rerun_kit_index.json`
 - `artifacts/parser_third_party_rerun_kit/<timestamp>/verifier_notes.md`
+
+The rerun-kit gate defaults `CARGO_TARGET_DIR` to a repo-local
+`target_rch_parser_third_party_rerun_kit_<timestamp>_<pid>` path and records
+matrix input provenance (`env`, `auto_discovered`, `missing`) in both
+`run_manifest.json` and `rerun_kit_index.json`.
 
 ## Parser Correctness Promotion Gate
 

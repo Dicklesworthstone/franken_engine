@@ -85,6 +85,12 @@ PARSER_RERUN_KIT_MATRIX_MANIFEST=artifacts/.../run_manifest.json \
 ./scripts/run_parser_third_party_rerun_kit.sh package
 ```
 
+Package-focused mode can also auto-discover the newest local `PSRP-07.2`
+matrix bundle when the `PARSER_RERUN_KIT_MATRIX_*` env vars are omitted. The
+resolved input paths and whether each one came from `env`, `auto_discovered`,
+or `missing` are recorded in both `run_manifest.json` and
+`rerun_kit_index.json` under `matrix_inputs`.
+
 One-command replay wrapper:
 
 ```bash
@@ -95,10 +101,13 @@ All heavy Rust build/test/lint commands must execute through `rch`.
 
 By default the gate script uses a run-scoped target directory under:
 
-- `/tmp/rch_target_franken_engine_parser_third_party_rerun_kit/<timestamp>`
+- `${root_dir}/target_rch_parser_third_party_rerun_kit_<timestamp>_<pid>`
 
-This avoids cross-run cargo lock contention when prior remote jobs are still
-draining. Set `CARGO_TARGET_DIR` explicitly if you need a fixed path.
+This avoids cross-run cargo lock contention without depending on worker `/tmp`
+capacity. Set `CARGO_TARGET_DIR` explicitly if you need a fixed path.
+
+Set `PARSER_RERUN_KIT_AUTO_DISCOVER_MATRIX=0` to disable matrix auto-discovery
+and require fully explicit `PARSER_RERUN_KIT_MATRIX_*` paths.
 
 If remote builds exceed the `rch` default build wrapper timeout, set
 `RCH_BUILD_TIMEOUT_SEC` (or `RCH_BUILD_TIMEOUT_SECONDS`) so the remote lane
@@ -135,6 +144,7 @@ Each run emits:
 3. Confirm:
    - `run_manifest.json` has deterministic env fields and replay command.
    - `rerun_kit_index.json` has expected `matrix_input_status`.
+   - `matrix_inputs` records exact paths plus `env`, `auto_discovered`, or `missing` source states for summary, delta, and manifest inputs.
    - `step_logs/` contains per-step `rch` logs for triage and remote-exit diagnostics.
    - `events.jsonl` validates with `scripts/validate_parser_log_schema.sh`.
 4. Replay through:

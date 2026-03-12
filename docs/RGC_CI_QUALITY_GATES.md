@@ -37,6 +37,13 @@ The gate supports deterministic lane modes:
 - `regression`: regression-verdict ingestion only via `./scripts/run_rgc_ci_quality_gates.sh regression`
 - `ci`: `fmt + check + clippy + unit + integration + e2e + replay + regression`
 
+Operator-facing replay entrypoints:
+
+- `./scripts/run_rgc_ci_quality_gates.sh ci`
+- `./scripts/run_rgc_ci_quality_gates.sh regression`
+- `./scripts/e2e/rgc_ci_quality_gates_replay.sh ci`
+- `./scripts/e2e/rgc_ci_quality_gates_replay.sh regression`
+
 ## rch Requirement
 
 All Cargo verification lanes in this gate run through `rch exec -- ...`.
@@ -69,6 +76,11 @@ regressions using deterministic policy:
 For strict CI enforcement, set:
 
 - `RGC_CI_QUALITY_REQUIRE_REGRESSION_VERDICT=true`
+
+The gate accepts either `RGC_PERF_REGRESSION_VERDICT_PATH` or
+`RGC_CI_QUALITY_REGRESSION_VERDICT_PATH` for the verdict file path. Published
+replay commands in `commands.txt` use the `RGC_CI_QUALITY_*` spelling so the
+artifact contract stays canonical even when the legacy alias was used.
 
 Fail-closed regression verdict error semantics:
 
@@ -117,21 +129,32 @@ Every run emits:
 - failing command/detail
 - replay command
 
+For `regression` mode, `commands.txt` must contain the exact operator-facing
+gate command used to replay verdict evaluation, including strict-mode and
+verdict-path environment when they were part of the run contract.
+
 ## Deterministic Replay Contract
 
 ```bash
 ./scripts/e2e/rgc_ci_quality_gates_replay.sh ci
+./scripts/e2e/rgc_ci_quality_gates_replay.sh regression
 ```
+
+The replay wrapper forwards the requested mode directly to
+`./scripts/run_rgc_ci_quality_gates.sh`, so `ci` and `regression` are both
+first-class replay surfaces.
 
 ## Operator Verification
 
 ```bash
 ./scripts/run_rgc_ci_quality_gates.sh ci
+./scripts/run_rgc_ci_quality_gates.sh regression
 cat artifacts/rgc_ci_quality_gates/<timestamp>/run_manifest.json
 cat artifacts/rgc_ci_quality_gates/<timestamp>/events.jsonl
 cat artifacts/rgc_ci_quality_gates/<timestamp>/commands.txt
 cat artifacts/rgc_ci_quality_gates/<timestamp>/failure_summary.json
 ./scripts/e2e/rgc_ci_quality_gates_replay.sh ci
+./scripts/e2e/rgc_ci_quality_gates_replay.sh regression
 ```
 
 ## Dependency Note

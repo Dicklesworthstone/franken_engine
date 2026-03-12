@@ -10,7 +10,8 @@ parser_frontier_bootstrap_env
 mode="${1:-ci}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_parser_third_party_rerun_kit/${timestamp}}"
+default_target_dir="${root_dir}/target_rch_parser_third_party_rerun_kit_${timestamp}_$$"
+target_dir="${CARGO_TARGET_DIR:-${default_target_dir}}"
 artifact_root="${PARSER_RERUN_KIT_ARTIFACT_ROOT:-artifacts/parser_third_party_rerun_kit}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
@@ -20,9 +21,14 @@ step_logs_dir="${run_dir}/step_logs"
 kit_index_path="${run_dir}/rerun_kit_index.json"
 verifier_notes_path="${run_dir}/verifier_notes.md"
 
+auto_discover_matrix="${PARSER_RERUN_KIT_AUTO_DISCOVER_MATRIX:-1}"
+matrix_artifact_root="${PARSER_RERUN_KIT_MATRIX_ARTIFACT_ROOT:-artifacts/parser_cross_arch_repro_matrix}"
 matrix_summary_path="${PARSER_RERUN_KIT_MATRIX_SUMMARY:-}"
 matrix_deltas_path="${PARSER_RERUN_KIT_MATRIX_DELTAS:-}"
 matrix_manifest_path="${PARSER_RERUN_KIT_MATRIX_MANIFEST:-}"
+matrix_summary_source="missing"
+matrix_deltas_source="missing"
+matrix_manifest_source="missing"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-${rch_timeout_seconds}}}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-2}"
@@ -112,6 +118,69 @@ matrix_complete=false
 critical_delta_count=-1
 matrix_eval_error=""
 
+find_latest_matrix_summary() {
+  if [[ ! -d "$matrix_artifact_root" ]]; then
+    return 0
+  fi
+
+  find "$matrix_artifact_root" -type f -name matrix_summary.json 2>/dev/null | sort | tail -n 1
+}
+
+resolve_matrix_input_from_run_dir() {
+  local path_var_name="$1"
+  local source_var_name="$2"
+  local run_dir_path="$3"
+  local filename="$4"
+  local current_value="${!path_var_name:-}"
+  local candidate_path=""
+
+  if [[ -n "$current_value" ]]; then
+    printf -v "$source_var_name" '%s' "env"
+    return
+  fi
+
+  if [[ "$auto_discover_matrix" != "1" || -z "$run_dir_path" ]]; then
+    printf -v "$source_var_name" '%s' "missing"
+    return
+  fi
+
+  candidate_path="${run_dir_path}/${filename}"
+  if [[ -f "$candidate_path" ]]; then
+    printf -v "$path_var_name" '%s' "$candidate_path"
+    printf -v "$source_var_name" '%s' "auto_discovered"
+    return
+  fi
+
+  printf -v "$source_var_name" '%s' "missing"
+}
+
+auto_discover_matrix_inputs() {
+  local discovered_summary="" matrix_run_dir=""
+
+  if [[ -n "$matrix_summary_path" ]]; then
+    matrix_summary_source="env"
+    matrix_run_dir="$(dirname "$matrix_summary_path")"
+  elif [[ "$auto_discover_matrix" == "1" ]]; then
+    discovered_summary="$(find_latest_matrix_summary)"
+    if [[ -n "$discovered_summary" ]]; then
+      matrix_summary_path="$discovered_summary"
+      matrix_summary_source="auto_discovered"
+      matrix_run_dir="$(dirname "$discovered_summary")"
+    fi
+  fi
+
+  resolve_matrix_input_from_run_dir \
+    matrix_deltas_path \
+    matrix_deltas_source \
+    "$matrix_run_dir" \
+    "matrix_lane_deltas.jsonl"
+  resolve_matrix_input_from_run_dir \
+    matrix_manifest_path \
+    matrix_manifest_source \
+    "$matrix_run_dir" \
+    "run_manifest.json"
+}
+
 run_step() {
   local command_text="$1"
   local log_path run_rc remote_exit_code reported_timeout
@@ -184,6 +253,8 @@ run_step() {
     return 1
   fi
 }
+
+auto_discover_matrix_inputs
 
 run_mode() {
   case "$mode" in
@@ -283,6 +354,10 @@ write_kit_index() {
     --arg matrix_summary_path "$matrix_summary_path" \
     --arg matrix_deltas_path "$matrix_deltas_path" \
     --arg matrix_manifest_path "$matrix_manifest_path" \
+    --arg matrix_summary_source "$matrix_summary_source" \
+    --arg matrix_deltas_source "$matrix_deltas_source" \
+    --arg matrix_manifest_source "$matrix_manifest_source" \
+    --arg auto_discover_matrix "$auto_discover_matrix" \
     --arg replay_command "$replay_command" \
     --arg cross_arch_replay "./scripts/e2e/parser_cross_arch_repro_matrix_replay.sh" \
     --arg matrix_eval_error "$matrix_eval_error" \
@@ -300,12 +375,13 @@ write_kit_index() {
       decision_id: $decision_id,
       component: $component,
       matrix_input_status: $matrix_input_status,
+      matrix_input_auto_discovery_enabled: ($auto_discover_matrix == "1"),
       matrix_complete: $matrix_complete,
       critical_delta_count: $critical_delta_count,
       matrix_inputs: {
-        summary: { path: $matrix_summary_path, exists: $matrix_summary_exists },
-        deltas: { path: $matrix_deltas_path, exists: $matrix_deltas_exists },
-        run_manifest: { path: $matrix_manifest_path, exists: $matrix_manifest_exists }
+        summary: { path: $matrix_summary_path, exists: $matrix_summary_exists, source: $matrix_summary_source },
+        deltas: { path: $matrix_deltas_path, exists: $matrix_deltas_exists, source: $matrix_deltas_source },
+        run_manifest: { path: $matrix_manifest_path, exists: $matrix_manifest_exists, source: $matrix_manifest_source }
       },
       replay_commands: {
         rerun_kit: $replay_command,
@@ -327,9 +403,10 @@ Matrix input status: ${matrix_input_status}
 
 ## Inputs
 
-- Matrix summary: ${matrix_summary_path:-<not provided>}
-- Matrix deltas: ${matrix_deltas_path:-<not provided>}
-- Matrix run manifest: ${matrix_manifest_path:-<not provided>}
+- Matrix auto-discovery enabled: ${auto_discover_matrix}
+- Matrix summary: ${matrix_summary_path:-<not provided>} (${matrix_summary_source})
+- Matrix deltas: ${matrix_deltas_path:-<not provided>} (${matrix_deltas_source})
+- Matrix run manifest: ${matrix_manifest_path:-<not provided>} (${matrix_manifest_source})
 
 ## Replay Commands
 
@@ -409,9 +486,22 @@ write_manifest() {
     parser_frontier_emit_manifest_environment_fields "    " "null"
     echo "  },"
     echo '  "matrix_inputs": {'
-    echo "    \"summary\": \"$(parser_frontier_json_escape "${matrix_summary_path}")\","
-    echo "    \"deltas\": \"$(parser_frontier_json_escape "${matrix_deltas_path}")\","
-    echo "    \"run_manifest\": \"$(parser_frontier_json_escape "${matrix_manifest_path}")\""
+    echo "    \"auto_discovery_enabled\": $([[ "$auto_discover_matrix" == "1" ]] && echo true || echo false),"
+    echo '    "summary": {'
+    echo "      \"path\": \"$(parser_frontier_json_escape "${matrix_summary_path}")\","
+    echo "      \"source\": \"${matrix_summary_source}\","
+    echo "      \"exists\": $([[ -n "$matrix_summary_path" && -f "$matrix_summary_path" ]] && echo true || echo false)"
+    echo '    },'
+    echo '    "deltas": {'
+    echo "      \"path\": \"$(parser_frontier_json_escape "${matrix_deltas_path}")\","
+    echo "      \"source\": \"${matrix_deltas_source}\","
+    echo "      \"exists\": $([[ -n "$matrix_deltas_path" && -f "$matrix_deltas_path" ]] && echo true || echo false)"
+    echo '    },'
+    echo '    "run_manifest": {'
+    echo "      \"path\": \"$(parser_frontier_json_escape "${matrix_manifest_path}")\","
+    echo "      \"source\": \"${matrix_manifest_source}\","
+    echo "      \"exists\": $([[ -n "$matrix_manifest_path" && -f "$matrix_manifest_path" ]] && echo true || echo false)"
+    echo '    }'
     echo "  },"
     echo "  \"replay_command\": \"$(parser_frontier_json_escape "${replay_command}")\","
     echo '  "commands": ['

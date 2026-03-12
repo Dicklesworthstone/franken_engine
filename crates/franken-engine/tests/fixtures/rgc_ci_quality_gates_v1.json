@@ -80,6 +80,24 @@
       "requires_rch": false
     }
   ],
+  "operator_entrypoints": [
+    {
+      "mode": "ci",
+      "command": "./scripts/run_rgc_ci_quality_gates.sh ci"
+    },
+    {
+      "mode": "regression",
+      "command": "./scripts/run_rgc_ci_quality_gates.sh regression"
+    },
+    {
+      "mode": "ci",
+      "command": "./scripts/e2e/rgc_ci_quality_gates_replay.sh ci"
+    },
+    {
+      "mode": "regression",
+      "command": "./scripts/e2e/rgc_ci_quality_gates_replay.sh regression"
+    }
+  ],
   "regression_verdict_samples": [
     {
       "sample_id": "clear-low-only",

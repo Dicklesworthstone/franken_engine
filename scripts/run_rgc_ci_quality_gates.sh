@@ -70,7 +70,7 @@ rch_remote_exit_code() {
   local log_path="$1"
   local remote_exit_line remote_exit_code
 
-  remote_exit_line="$(rch_strip_ansi "$log_path" | rg -o 'Remote command finished: exit=[0-9]+' | tail -n 1 || true)"
+  remote_exit_line="$(rg -o 'Remote command finished: exit=[0-9]+' < <(rch_strip_ansi "$log_path") | tail -n 1 || true)"
   if [[ -z "$remote_exit_line" ]]; then
     return 1
   fi
@@ -85,7 +85,7 @@ rch_remote_exit_code() {
 
 rch_reject_local_fallback() {
   local log_path="$1"
-  if rch_strip_ansi "$log_path" | grep -Eiq 'Remote execution failed: .*running locally|Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|running locally|\[RCH\] local \(|Failed to query daemon:.*running locally|Dependency preflight blocked remote execution|RCH-E326'; then
+  if grep -Eiq 'Remote execution failed: .*running locally|Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|running locally|\[RCH\] local \(|Failed to query daemon:.*running locally|Dependency preflight blocked remote execution|RCH-E326' < <(rch_strip_ansi "$log_path"); then
     echo "rch reported local fallback; refusing local execution for heavy command" >&2
     return 1
   fi
@@ -100,12 +100,12 @@ rch_missing_remote_exit_reason() {
     return
   fi
 
-  if rch_strip_ansi "$log_path" | grep -Eiq 'timed out|timeout protection|deadline exceeded|signal: 9|killed'; then
+  if grep -Eiq 'timed out|timeout protection|deadline exceeded|signal: 9|killed' < <(rch_strip_ansi "$log_path"); then
     printf 'timeout-before-remote-exit-marker'
     return
   fi
 
-  if rch_strip_ansi "$log_path" | grep -Fq 'Executing command remotely:'; then
+  if grep -Fq 'Executing command remotely:' < <(rch_strip_ansi "$log_path"); then
     printf 'remote-exit-marker-lost-after-remote-start'
     return
   fi
@@ -155,6 +155,33 @@ default_owner_for_lane() {
   esac
 }
 
+shell_join() {
+  local quoted joined=""
+  for quoted in "$@"; do
+    printf -v quoted '%q' "$quoted"
+    if [[ -n "$joined" ]]; then
+      joined+=" "
+    fi
+    joined+="$quoted"
+  done
+
+  printf '%s\n' "$joined"
+}
+
+regression_verdict_command_text() {
+  local -a parts=()
+
+  if [[ "$require_regression_verdict" == "true" ]]; then
+    parts+=("RGC_CI_QUALITY_REQUIRE_REGRESSION_VERDICT=true")
+  fi
+  if [[ -n "$regression_verdict_path" ]]; then
+    parts+=("RGC_CI_QUALITY_REGRESSION_VERDICT_PATH=${regression_verdict_path}")
+  fi
+  parts+=("./scripts/run_rgc_ci_quality_gates.sh" "regression")
+
+  shell_join "${parts[@]}"
+}
+
 record_event() {
   local event_name="$1"
   local outcome="$2"
@@ -179,7 +206,8 @@ record_event() {
 run_step_rch() {
   local lane="$1"
   local command_text="$2"
-  local log_path remote_exit_code run_rch_exit command_slug missing_marker_reason missing_marker_error_code non_compilation_marker
+  local log_path remote_exit_code run_rch_exit tee_exit command_slug missing_marker_reason missing_marker_error_code non_compilation_marker
+  local -a rch_pipeline_status=()
   local attempt=0
   local max_retries="$rch_missing_marker_retry_count"
   shift 2
@@ -199,13 +227,26 @@ run_step_rch() {
       log_path="${log_path}.log"
     fi
 
+    # Use a real pipeline so the step log is fully flushed before we inspect
+    # it for non-compilation warnings and remote-exit markers.
     set +e
-    run_rch "$@" > >(tee "$log_path") 2>&1
-    run_rch_exit=$?
+    run_rch "$@" 2>&1 | tee "$log_path"
+    rch_pipeline_status=("${PIPESTATUS[@]}")
     set -e
+    run_rch_exit="${rch_pipeline_status[0]:-1}"
+    tee_exit="${rch_pipeline_status[1]:-1}"
+
+    if [[ "$tee_exit" -ne 0 ]]; then
+      failed_command="${command_text} (tee-exit=${tee_exit}; log=${log_path})"
+      failure_lane="$lane"
+      failure_owner="$(default_owner_for_lane "$lane")"
+      failed_lanes+=("$lane")
+      record_event "lane_failed" "fail" "FE-RGC-CI-QUALITY-GATE-0004" "$lane" "$failed_command"
+      return 1
+    fi
 
     non_compilation_marker=false
-    if rch_strip_ansi "$log_path" | grep -Fq 'exec called with non-compilation command'; then
+    if grep -Fq 'exec called with non-compilation command' < <(rch_strip_ansi "$log_path"); then
       non_compilation_marker=true
     fi
 
@@ -318,9 +359,11 @@ evaluate_regression_verdict() {
   local lane="regression"
   local highest_severity is_blocking open_high_count detail
 
+  commands_run+=("$(regression_verdict_command_text)")
+
   if [[ -z "$regression_verdict_path" ]]; then
     if [[ "$require_regression_verdict" == "true" ]]; then
-      failed_command="missing regression verdict path (set RGC_PERF_REGRESSION_VERDICT_PATH)"
+      failed_command="missing regression verdict path (set RGC_PERF_REGRESSION_VERDICT_PATH or RGC_CI_QUALITY_REGRESSION_VERDICT_PATH)"
       failure_lane="$lane"
       failure_owner="$(default_owner_for_lane "$lane")"
       failed_lanes+=("$lane")

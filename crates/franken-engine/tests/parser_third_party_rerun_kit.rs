@@ -49,6 +49,11 @@ fn load_script() -> String {
     fs::read_to_string(path).expect("read parser third-party rerun kit script")
 }
 
+fn load_replay_wrapper() -> String {
+    let path = Path::new("../../scripts/e2e/parser_third_party_rerun_kit_replay.sh");
+    fs::read_to_string(path).expect("read parser third-party rerun kit replay wrapper")
+}
+
 fn classify_matrix_input_status(
     matrix_summary_provided: bool,
     matrix_complete: bool,
@@ -214,6 +219,12 @@ fn parser_third_party_rerun_kit_script_contains_required_markers() {
         "failed_step_log_path",
         "step_logs_dir",
         "PARSER_RERUN_KIT_MATRIX_SUMMARY",
+        "PARSER_RERUN_KIT_AUTO_DISCOVER_MATRIX",
+        "find_latest_matrix_summary",
+        "auto_discover_matrix_inputs",
+        "matrix_input_auto_discovery_enabled",
+        "auto_discovered",
+        "target_rch_parser_third_party_rerun_kit_",
         "parser_frontier_emit_manifest_environment_fields",
         "./scripts/e2e/parser_third_party_rerun_kit_replay.sh",
     ];
@@ -224,6 +235,19 @@ fn parser_third_party_rerun_kit_script_contains_required_markers() {
             "rerun kit script missing marker: {marker}"
         );
     }
+}
+
+#[test]
+fn parser_third_party_rerun_kit_script_uses_repo_local_target_dir() {
+    let script = load_script();
+    assert!(
+        script.contains("${root_dir}/target_rch_parser_third_party_rerun_kit_"),
+        "rerun kit script must default to a repo-local rch target dir"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_franken_engine_parser_third_party_rerun_kit"),
+        "rerun kit script must not default to /tmp for CARGO_TARGET_DIR"
+    );
 }
 
 #[test]
@@ -265,6 +289,25 @@ fn parser_third_party_rerun_kit_fixture_manifest_and_log_key_sets_are_exact() {
     .collect();
     let actual_logs: BTreeSet<_> = fixture.required_log_keys.iter().cloned().collect();
     assert_eq!(actual_logs, expected_logs);
+}
+
+#[test]
+fn parser_third_party_rerun_kit_replay_wrapper_surfaces_latest_artifacts() {
+    let replay_wrapper = load_replay_wrapper();
+    for marker in [
+        "artifact_root=\"${PARSER_RERUN_KIT_ARTIFACT_ROOT:-artifacts/parser_third_party_rerun_kit}\"",
+        "latest manifest:",
+        "latest rerun kit index:",
+        "latest events:",
+        "run_manifest.json",
+        "rerun_kit_index.json",
+        "events.jsonl",
+    ] {
+        assert!(
+            replay_wrapper.contains(marker),
+            "rerun kit replay wrapper missing marker: {marker}"
+        );
+    }
 }
 
 #[test]
@@ -499,6 +542,26 @@ fn parser_third_party_rerun_kit_doc_mentions_rch_timeout() {
     assert!(
         doc.contains("RCH_BUILD_TIMEOUT"),
         "rerun kit doc must mention RCH_BUILD_TIMEOUT env variable"
+    );
+}
+
+#[test]
+fn parser_third_party_rerun_kit_doc_mentions_auto_discovery_and_repo_local_target_dir() {
+    let doc = load_doc();
+    for marker in [
+        "auto-discover",
+        "PARSER_RERUN_KIT_AUTO_DISCOVER_MATRIX=0",
+        "target_rch_parser_third_party_rerun_kit_<timestamp>_<pid>",
+        "`env`, `auto_discovered`, or `missing`",
+    ] {
+        assert!(
+            doc.contains(marker),
+            "rerun kit doc missing auto-discovery/target-dir marker: {marker}"
+        );
+    }
+    assert!(
+        !doc.contains("/tmp/rch_target_franken_engine_parser_third_party_rerun_kit"),
+        "rerun kit doc must not prescribe /tmp rch target dirs"
     );
 }
 

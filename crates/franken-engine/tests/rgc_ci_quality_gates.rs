@@ -26,6 +26,12 @@ struct LaneCommandContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct OperatorEntrypointContract {
+    mode: String,
+    command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RegressionVerdictSample {
     sample_id: String,
     verdict: Value,
@@ -40,6 +46,7 @@ struct RgcCiQualityGatesFixture {
     required_structured_log_fields: Vec<String>,
     required_error_codes: Vec<String>,
     lane_command_contract: Vec<LaneCommandContract>,
+    operator_entrypoints: Vec<OperatorEntrypointContract>,
     regression_verdict_samples: Vec<RegressionVerdictSample>,
     required_artifacts: Vec<String>,
 }
@@ -224,6 +231,34 @@ fn rgc_ci_quality_script_contract_references_rch_for_heavy_lanes() {
         ),
         "script must use the rch process exit for non-compilation commands without a remote marker"
     );
+    assert!(
+        script.contains("PIPESTATUS"),
+        "script must capture pipeline status after tee before classifying fmt lane output"
+    );
+    assert!(
+        script.contains("< <(rch_strip_ansi \"$log_path\")"),
+        "script must inspect stripped logs via process substitution so grep -q stays correct under pipefail"
+    );
+    assert!(
+        script.contains("commands_run+=(\"$(regression_verdict_command_text)\")"),
+        "script must record a replayable regression command in commands.txt and the manifest"
+    );
+    assert!(
+        script.contains("record_event \"regression_verdict_missing\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0005\""),
+        "script must emit FE-RGC-CI-QUALITY-GATE-0005 when strict regression mode lacks a verdict path"
+    );
+    assert!(
+        script.contains("record_event \"regression_verdict_missing\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0006\""),
+        "script must emit FE-RGC-CI-QUALITY-GATE-0006 when the configured verdict file is missing"
+    );
+    assert!(
+        script.contains("record_event \"regression_verdict_blocked\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0007\""),
+        "script must emit FE-RGC-CI-QUALITY-GATE-0007 when the verdict blocks promotion"
+    );
+    assert!(
+        script.contains("RGC_CI_QUALITY_REGRESSION_VERDICT_PATH="),
+        "script must publish canonical regression replay commands with the RGC_CI_QUALITY_* env spelling"
+    );
 
     for contract in fixture.lane_command_contract {
         assert!(
@@ -253,6 +288,7 @@ fn rgc_ci_quality_script_contract_references_rch_for_heavy_lanes() {
 
 #[test]
 fn rgc_ci_quality_doc_and_replay_wrapper_exist_and_reference_contract() {
+    let fixture = load_fixture();
     let doc = load_doc();
     let replay = fs::read_to_string("../../scripts/e2e/rgc_ci_quality_gates_replay.sh")
         .expect("read rgc ci quality replay wrapper");
@@ -276,10 +312,26 @@ fn rgc_ci_quality_doc_and_replay_wrapper_exist_and_reference_contract() {
     assert!(doc.contains("FE-RGC-CI-QUALITY-GATE-0005"));
     assert!(doc.contains("FE-RGC-CI-QUALITY-GATE-0006"));
     assert!(doc.contains("FE-RGC-CI-QUALITY-GATE-0007"));
+    for entrypoint in fixture.operator_entrypoints {
+        assert!(
+            doc.contains(&entrypoint.command),
+            "doc missing operator entrypoint {} for mode {}",
+            entrypoint.command,
+            entrypoint.mode
+        );
+    }
 
     assert!(
         replay.contains("run_rgc_ci_quality_gates.sh"),
         "replay wrapper must call main gate script"
+    );
+    assert!(
+        replay.contains("mode=\"${1:-ci}\""),
+        "replay wrapper must default to ci mode"
+    );
+    assert!(
+        replay.contains("\"${root_dir}/scripts/run_rgc_ci_quality_gates.sh\" \"${mode}\""),
+        "replay wrapper must forward the requested mode to the main gate script"
     );
     assert!(
         replay.contains("parser_frontier_bootstrap_env"),
@@ -537,6 +589,40 @@ fn fixture_lane_command_contract_covers_dual_e2e_and_replay_commands() {
         assert!(
             commands.contains(command),
             "fixture missing lane command {command}"
+        );
+    }
+}
+
+#[test]
+fn fixture_operator_entrypoints_cover_gate_and_replay_regression_modes() {
+    let fixture = load_fixture();
+    let commands: BTreeSet<_> = fixture
+        .operator_entrypoints
+        .into_iter()
+        .map(|entry| entry.command)
+        .collect();
+
+    for command in [
+        "./scripts/run_rgc_ci_quality_gates.sh ci",
+        "./scripts/run_rgc_ci_quality_gates.sh regression",
+        "./scripts/e2e/rgc_ci_quality_gates_replay.sh ci",
+        "./scripts/e2e/rgc_ci_quality_gates_replay.sh regression",
+    ] {
+        assert!(
+            commands.contains(command),
+            "fixture missing operator entrypoint {command}"
+        );
+    }
+}
+
+#[test]
+fn fixture_operator_entrypoint_modes_are_valid() {
+    let fixture = load_fixture();
+    for entrypoint in &fixture.operator_entrypoints {
+        assert!(
+            matches!(entrypoint.mode.as_str(), "ci" | "regression"),
+            "unexpected operator entrypoint mode {}",
+            entrypoint.mode
         );
     }
 }

@@ -756,8 +756,8 @@ impl EpochInvalidationEngine {
                 id: spec_id.clone(),
             })?;
         let epoch_before_invalidation = spec.activated_epoch;
-        let rollback_hash = spec.rollback_token_hash.clone();
-        let baseline_hash = spec.baseline_ir_hash.clone();
+        let rollback_hash = spec.rollback_token_hash;
+        let baseline_hash = spec.baseline_ir_hash;
 
         // Transition state.
         let spec_mut = self
@@ -1503,8 +1503,8 @@ mod tests {
     fn receipt_contains_rollback_and_baseline_hashes() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        let expected_rollback = spec.rollback_token_hash.clone();
-        let expected_baseline = spec.baseline_ir_hash.clone();
+        let expected_rollback = spec.rollback_token_hash;
+        let expected_baseline = spec.baseline_ir_hash;
         engine.register_specialization(spec, 1000).unwrap();
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);

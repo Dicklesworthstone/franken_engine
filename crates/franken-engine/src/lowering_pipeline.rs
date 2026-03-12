@@ -455,7 +455,7 @@ pub fn lower_ir0_to_ir1(
     }
 
     let ir0_hash = ir0.content_hash();
-    let mut ir1 = Ir1Module::new(ir0_hash.clone(), ir0.header.source_label.clone());
+    let mut ir1 = Ir1Module::new(ir0_hash, ir0.header.source_label.clone());
     let mut binding_index = 0u32;
     let root_scope_id = ScopeId { depth: 0, index: 0 };
     let root_scope_kind = match ir0.tree.goal {
@@ -1453,7 +1453,7 @@ pub fn lower_ir1_to_ir2(
     ir1: &Ir1Module,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
     let ir1_hash = ir1.content_hash();
-    let mut ir2 = Ir2Module::new(ir1_hash.clone(), ir1.header.source_label.clone());
+    let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
     ir2.scopes = ir1.scopes.clone();
 
     let mut required_capabilities = BTreeSet::<String>::new();
@@ -1562,7 +1562,7 @@ pub fn lower_ir2_to_ir3(
     }
 
     let ir2_hash = ir2.content_hash();
-    let mut ir3 = Ir3Module::new(ir2_hash.clone(), ir2.header.source_label.clone());
+    let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
     let mut register_cursor: Reg = 0;
     let mut binding_registers = BTreeMap::<BindingId, Reg>::new();
     let mut required_capabilities = BTreeSet::<String>::new();

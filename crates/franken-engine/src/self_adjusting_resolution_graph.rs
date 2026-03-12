@@ -691,7 +691,7 @@ pub fn invalidate_module(
         scope,
         affected_modules: affected.into_iter().collect(),
         trigger_module: module_id.to_string(),
-        old_hash: old_hash.clone(),
+        old_hash,
         new_hash: old_hash, // graph not mutated
         recomputed_count: recomputed,
         skipped_count: skipped,

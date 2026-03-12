@@ -314,7 +314,7 @@ impl MerkleMountainRange {
         let positions = peak_positions(self.nodes.len() as u64);
         positions
             .iter()
-            .map(|&pos| self.nodes[pos as usize].clone())
+            .map(|&pos| self.nodes[pos as usize])
             .collect()
     }
 
@@ -341,7 +341,7 @@ impl MerkleMountainRange {
             // Try right sibling first (we are left child).
             let right_sibling = pos + sibling_offset;
             if right_sibling < size && pos_height(right_sibling) == height {
-                proof_hashes.push(self.nodes[right_sibling as usize].clone());
+                proof_hashes.push(self.nodes[right_sibling as usize]);
                 // Parent is at right_sibling + 1.
                 pos = right_sibling + 1;
                 height += 1;
@@ -352,7 +352,7 @@ impl MerkleMountainRange {
             if pos >= sibling_offset {
                 let left_sibling = pos - sibling_offset;
                 if pos_height(left_sibling) == height {
-                    proof_hashes.push(self.nodes[left_sibling as usize].clone());
+                    proof_hashes.push(self.nodes[left_sibling as usize]);
                     // Parent is at pos + 1.
                     pos += 1;
                     height += 1;
@@ -369,7 +369,7 @@ impl MerkleMountainRange {
         let peaks = peak_positions(size);
         for &peak_pos in &peaks {
             if peak_pos != pos {
-                proof_hashes.push(self.nodes[peak_pos as usize].clone());
+                proof_hashes.push(self.nodes[peak_pos as usize]);
             }
         }
 
@@ -410,13 +410,13 @@ impl MerkleMountainRange {
 
         // Include old peaks.
         for &pos in &old_peak_positions {
-            proof_hashes.push(self.nodes[pos as usize].clone());
+            proof_hashes.push(self.nodes[pos as usize]);
         }
 
         // Include new peaks that aren't in the old set.
         for &pos in &new_peak_positions {
             if !old_peak_positions.contains(&pos) {
-                proof_hashes.push(self.nodes[pos as usize].clone());
+                proof_hashes.push(self.nodes[pos as usize]);
             }
         }
 
@@ -461,7 +461,7 @@ pub fn verify_inclusion(
 
     // Walk up the tree using the proof hashes.
     let mut pos = leaf_to_pos(leaf_index);
-    let mut current_hash = marker_hash.clone();
+    let mut current_hash = *marker_hash;
     let mut proof_idx = 0;
     let mut height = 0u32;
 
@@ -510,14 +510,14 @@ pub fn verify_inclusion(
     let mut peak_hashes: Vec<ContentHash> = Vec::new();
     for &peak_pos in &peaks {
         if peak_pos == pos {
-            peak_hashes.push(current_hash.clone());
+            peak_hashes.push(current_hash);
         } else {
             if proof_idx >= proof.proof_hashes.len() {
                 return Err(ProofError::InvalidProof {
                     reason: "not enough proof hashes for peaks".to_string(),
                 });
             }
-            peak_hashes.push(proof.proof_hashes[proof_idx].clone());
+            peak_hashes.push(proof.proof_hashes[proof_idx]);
             proof_idx += 1;
         }
     }
@@ -526,7 +526,7 @@ pub fn verify_inclusion(
 
     if computed_root != proof.root_hash {
         return Err(ProofError::RootMismatch {
-            expected: proof.root_hash.clone(),
+            expected: proof.root_hash,
             computed: computed_root,
         });
     }
@@ -589,14 +589,14 @@ pub fn verify_consistency(old_root: &ContentHash, proof: &MmrProof) -> Result<()
                 .iter()
                 .position(|&p| p == new_peak_pos)
                 .expect("position exists");
-            new_peaks.push(old_peaks[old_idx].clone());
+            new_peaks.push(old_peaks[old_idx]);
         } else {
             if remaining_idx >= remaining.len() {
                 return Err(ProofError::InvalidProof {
                     reason: "not enough proof hashes for new peaks".to_string(),
                 });
             }
-            new_peaks.push(remaining[remaining_idx].clone());
+            new_peaks.push(remaining[remaining_idx]);
             remaining_idx += 1;
         }
     }
@@ -605,7 +605,7 @@ pub fn verify_consistency(old_root: &ContentHash, proof: &MmrProof) -> Result<()
 
     if computed_new_root != proof.root_hash {
         return Err(ProofError::RootMismatch {
-            expected: proof.root_hash.clone(),
+            expected: proof.root_hash,
             computed: computed_new_root,
         });
     }
@@ -632,9 +632,9 @@ fn hash_pair(left: &ContentHash, right: &ContentHash) -> ContentHash {
 fn bag_peaks(peaks: &[ContentHash]) -> ContentHash {
     match peaks.len() {
         0 => ContentHash([0u8; 32]),
-        1 => peaks[0].clone(),
+        1 => peaks[0],
         _ => {
-            let mut root = peaks[peaks.len() - 1].clone();
+            let mut root = peaks[peaks.len() - 1];
             for peak in peaks[..peaks.len() - 1].iter().rev() {
                 root = hash_pair(peak, &root);
             }
@@ -1338,9 +1338,9 @@ mod tests {
     fn bag_peaks_two_gives_merged_hash() {
         let h1 = ContentHash::compute(b"peak1");
         let h2 = ContentHash::compute(b"peak2");
-        let h1c = h1.clone();
-        let h2c = h2.clone();
-        let merged = bag_peaks(&[h1.clone(), h2.clone()]);
+        let h1c = h1;
+        let h2c = h2;
+        let merged = bag_peaks(&[h1, h2]);
         // Should not equal either individual hash
         assert_ne!(merged, h1c);
         assert_ne!(merged, h2c);
@@ -1905,7 +1905,7 @@ mod tests {
         let h1 = ContentHash::compute(b"p1");
         let h2 = ContentHash::compute(b"p2");
         let h3 = ContentHash::compute(b"p3");
-        let r1 = bag_peaks(&[h1.clone(), h2.clone(), h3.clone()]);
+        let r1 = bag_peaks(&[h1, h2, h3]);
         let r2 = bag_peaks(&[h1, h2, h3]);
         assert_eq!(r1, r2);
     }

@@ -400,7 +400,7 @@ impl DecisionMarkerStream {
         let prev_marker_hash = self
             .markers
             .last()
-            .map(|m| m.marker_hash.clone())
+            .map(|m| m.marker_hash)
             .unwrap_or(ContentHash([0u8; 32]));
 
         let decision_type_str = input.decision_type.to_string();
@@ -502,8 +502,8 @@ impl DecisionMarkerStream {
             if marker.prev_marker_hash != *expected_prev {
                 return Err(ChainIntegrityError::ChainLinkBroken {
                     marker_id: marker.marker_id,
-                    expected_prev: expected_prev.clone(),
-                    actual_prev: marker.prev_marker_hash.clone(),
+                    expected_prev: *expected_prev,
+                    actual_prev: marker.prev_marker_hash,
                 });
             }
 
@@ -513,7 +513,7 @@ impl DecisionMarkerStream {
             if marker.marker_hash != computed {
                 return Err(ChainIntegrityError::MarkerHashMismatch {
                     marker_id: marker.marker_id,
-                    expected: marker.marker_hash.clone(),
+                    expected: marker.marker_hash,
                     computed,
                 });
             }
@@ -540,8 +540,8 @@ impl DecisionMarkerStream {
                 if marker.prev_marker_hash != prev.marker_hash {
                     return Err(ChainIntegrityError::ChainLinkBroken {
                         marker_id: marker.marker_id,
-                        expected_prev: prev.marker_hash.clone(),
-                        actual_prev: marker.prev_marker_hash.clone(),
+                        expected_prev: prev.marker_hash,
+                        actual_prev: marker.prev_marker_hash,
                     });
                 }
             }
@@ -551,7 +551,7 @@ impl DecisionMarkerStream {
             if marker.marker_hash != computed {
                 return Err(ChainIntegrityError::MarkerHashMismatch {
                     marker_id: marker.marker_id,
-                    expected: marker.marker_hash.clone(),
+                    expected: marker.marker_hash,
                     computed,
                 });
             }
@@ -655,7 +655,7 @@ impl DecisionMarkerStream {
     /// Emit a signed integrity checkpoint.
     fn emit_checkpoint(&mut self, marker_id: u64) {
         if let Some(marker) = self.get(marker_id) {
-            let marker_hash = marker.marker_hash.clone();
+            let marker_hash = marker.marker_hash;
             let chain_length = self.markers.len() as u64;
 
             // Build checkpoint preimage for signing.
@@ -695,8 +695,8 @@ impl DecisionMarkerStream {
         );
         self.chain_head = Some(AuditChainHead {
             head_marker_id: latest.marker_id,
-            latest_marker_hash: latest.marker_hash.clone(),
-            rolling_chain_hash: self.rolling_chain_hash.clone(),
+            latest_marker_hash: latest.marker_hash,
+            rolling_chain_hash: self.rolling_chain_hash,
             signed_head_hash: signed_head,
         });
     }
@@ -952,7 +952,7 @@ mod tests {
             stream
                 .markers()
                 .iter()
-                .map(|m| m.marker_hash.clone())
+                .map(|m| m.marker_hash)
                 .collect::<Vec<_>>()
         };
 
@@ -1790,7 +1790,7 @@ mod tests {
             stream
                 .markers()
                 .iter()
-                .map(|m| m.marker_hash.clone())
+                .map(|m| m.marker_hash)
                 .collect::<Vec<_>>()
         };
         assert_eq!(run(), run());
@@ -1996,13 +1996,13 @@ mod tests {
         let variants = [
             ChainIntegrityError::MarkerHashMismatch {
                 marker_id: 1,
-                expected: zero.clone(),
-                computed: one.clone(),
+                expected: zero,
+                computed: one,
             },
             ChainIntegrityError::ChainLinkBroken {
                 marker_id: 2,
-                expected_prev: zero.clone(),
-                actual_prev: one.clone(),
+                expected_prev: zero,
+                actual_prev: one,
             },
             ChainIntegrityError::EmptyStream,
             ChainIntegrityError::NonMonotonicId {

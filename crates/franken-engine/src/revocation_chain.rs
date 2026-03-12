@@ -587,7 +587,7 @@ impl RevocationChain {
             head_id,
             latest_event: event_id,
             head_seq: event_seq,
-            chain_hash: self.chain_hash.clone(),
+            chain_hash: self.chain_hash,
             zone: self.zone.clone(),
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
@@ -1763,7 +1763,7 @@ mod tests {
                 );
                 chain.append(rev, &sk, &format!("t-det-{i}")).unwrap();
             }
-            chain.chain_hash().clone()
+            *chain.chain_hash()
         };
 
         let hash1 = build_chain();
@@ -2084,7 +2084,7 @@ mod tests {
             &test_revocation_key(),
         );
         chain.append(rev1, &sk, "trace-1").unwrap();
-        let hash_after_first = chain.head().unwrap().chain_hash.clone();
+        let hash_after_first = chain.head().unwrap().chain_hash;
 
         let rev2 = make_revocation(
             RevocationTargetType::Token,
@@ -2093,7 +2093,7 @@ mod tests {
             &test_revocation_key(),
         );
         chain.append(rev2, &sk, "trace-2").unwrap();
-        let hash_after_second = chain.head().unwrap().chain_hash.clone();
+        let hash_after_second = chain.head().unwrap().chain_hash;
 
         assert_ne!(
             hash_after_first, hash_after_second,

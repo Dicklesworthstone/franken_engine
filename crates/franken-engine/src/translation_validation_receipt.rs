@@ -633,7 +633,7 @@ impl ReceiptChain {
         if receipt.parent_hash != expected_parent {
             return Err(ReceiptChainError::ParentHashMismatch {
                 expected: expected_parent,
-                actual: receipt.parent_hash.clone(),
+                actual: receipt.parent_hash,
             });
         }
 
@@ -713,7 +713,7 @@ impl ReceiptChain {
                     issues.push(ChainIntegrityIssue::ParentHashBroken {
                         sequence: receipt.sequence,
                         expected_parent: Some(prev.content_hash),
-                        actual_parent: receipt.parent_hash.clone(),
+                        actual_parent: receipt.parent_hash,
                     });
                 }
             }
@@ -1069,7 +1069,7 @@ impl ValidationReceiptEmitter {
                     FailureKind::CounterexampleFound {
                         divergence: divergence.clone(),
                     },
-                    Some(counterexample_hash.clone()),
+                    Some(*counterexample_hash),
                     self.config.quarantine_on_first_failure,
                     self.current_epoch,
                     self.current_ticks,
@@ -1853,7 +1853,7 @@ mod tests {
             let r = TranslationValidationReceipt::new(
                 i,
                 &format!("opt-{i}"),
-                parent.clone(),
+                parent,
                 test_epoch(),
                 i * 100,
                 test_hash(format!("b{i}").as_bytes()),

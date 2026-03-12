@@ -1014,7 +1014,7 @@ mod tests {
             TriggerSeverity::Warning,
         );
         t1.recompute_hash();
-        let h1 = t1.trigger_hash.clone();
+        let h1 = t1.trigger_hash;
         t1.recompute_hash();
         assert_eq!(h1, t1.trigger_hash);
     }
@@ -1064,7 +1064,7 @@ mod tests {
             bundle_hash: ContentHash::compute(b"placeholder"),
         };
         b.recompute_hash();
-        let h1 = b.bundle_hash.clone();
+        let h1 = b.bundle_hash;
         b.recompute_hash();
         assert_eq!(h1, b.bundle_hash);
     }
@@ -1125,7 +1125,7 @@ mod tests {
             receipt_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let h1 = r.receipt_hash.clone();
+        let h1 = r.receipt_hash;
         r.recompute_hash();
         assert_eq!(h1, r.receipt_hash);
     }
@@ -1386,7 +1386,7 @@ mod tests {
     #[test]
     fn pipeline_hash_changes() {
         let mut pipeline = EscalationPipeline::new(EscalationPolicy::default(), test_epoch());
-        let h1 = pipeline.pipeline_hash.clone();
+        let h1 = pipeline.pipeline_hash;
         pipeline.process_trigger(test_trigger(
             "t-hc",
             EscalationTriggerKind::AnomalyDetected,

@@ -604,7 +604,7 @@ pub fn build_repro(
         divergence_class: class.clone(),
         native_output: native.clone(),
         delegate_output: delegate.clone(),
-        semantic_contract_hash: semantic_contract_hash.clone(),
+        semantic_contract_hash: *semantic_contract_hash,
         minimized_input: workload.input.clone(),
         capability_diff,
         memory_diff_bytes: memory_diff,

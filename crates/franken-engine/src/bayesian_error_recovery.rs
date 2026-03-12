@@ -747,7 +747,7 @@ impl ErrorSite {
             min_skip_tokens: min_skip,
             min_insert_tokens: min_insert,
             matches_typo_pattern: has_typo,
-            context_hash: self.context_hash.clone(),
+            context_hash: self.context_hash,
         }
     }
 }
@@ -886,7 +886,7 @@ impl RecoveryController {
         let recovered = recovered && self.config.mode == RecoveryMode::ExecutionRecovery;
 
         let repair_diff = if !edits.is_empty() {
-            Some(RepairDiff::build(input_hash.clone(), edits))
+            Some(RepairDiff::build(input_hash, edits))
         } else {
             None
         };
@@ -1029,7 +1029,7 @@ impl RecoveryController {
             posterior: posterior.clone(),
             confidence_millionths: confidence,
             attempts: self.attempt_count,
-            evidence_hash: evidence_hash.clone(),
+            evidence_hash,
             explanation,
             replay_command: format!(
                 "franken-engine parse --trace-id {trace_id} --recovery-site {site_idx}"

@@ -1555,7 +1555,7 @@ mod tests {
     #[test]
     fn decision_receipt_hash_deterministic() {
         let eh = ContentHash::compute(b"test");
-        let r1 = DecisionReceipt::new(epoch(), GateVerdict::Pass, eh.clone());
+        let r1 = DecisionReceipt::new(epoch(), GateVerdict::Pass, eh);
         let r2 = DecisionReceipt::new(epoch(), GateVerdict::Pass, eh);
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }

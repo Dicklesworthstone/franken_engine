@@ -1008,13 +1008,8 @@ pub fn verify_batch(
 
         if pair.mismatches.is_empty() {
             let verdict = PathVerdict::Verified;
-            let receipt = compute_receipt(
-                input_hash,
-                &verdict,
-                epoch,
-                previous_hash.clone(),
-                timestamp_micros,
-            );
+            let receipt =
+                compute_receipt(input_hash, &verdict, epoch, previous_hash, timestamp_micros);
             previous_hash = Some(receipt.content_hash());
             verified_count += 1;
             results.push(PathVerificationResult {
@@ -1060,13 +1055,7 @@ pub fn verify_batch(
             PathVerdict::Inconclusive => inconclusive_count += 1,
         }
 
-        let receipt = compute_receipt(
-            input_hash,
-            &verdict,
-            epoch,
-            previous_hash.clone(),
-            timestamp_micros,
-        );
+        let receipt = compute_receipt(input_hash, &verdict, epoch, previous_hash, timestamp_micros);
         previous_hash = Some(receipt.content_hash());
 
         results.push(PathVerificationResult {
@@ -1895,13 +1884,7 @@ mod tests {
     #[test]
     fn receipt_content_hash_deterministic() {
         let input_hash = ContentHash::compute(b"input");
-        let r1 = compute_receipt(
-            input_hash.clone(),
-            &PathVerdict::Verified,
-            &epoch(),
-            None,
-            1000,
-        );
+        let r1 = compute_receipt(input_hash, &PathVerdict::Verified, &epoch(), None, 1000);
         let r2 = compute_receipt(input_hash, &PathVerdict::Verified, &epoch(), None, 1000);
         assert_eq!(r1.content_hash(), r2.content_hash());
     }
@@ -1909,13 +1892,7 @@ mod tests {
     #[test]
     fn receipt_different_verdicts_different_hash() {
         let input_hash = ContentHash::compute(b"input");
-        let r1 = compute_receipt(
-            input_hash.clone(),
-            &PathVerdict::Verified,
-            &epoch(),
-            None,
-            1000,
-        );
+        let r1 = compute_receipt(input_hash, &PathVerdict::Verified, &epoch(), None, 1000);
         let r2 = compute_receipt(input_hash, &PathVerdict::Divergent, &epoch(), None, 1000);
         assert_ne!(r1.content_hash(), r2.content_hash());
     }
@@ -1924,13 +1901,7 @@ mod tests {
     fn receipt_with_previous_hash_differs() {
         let input_hash = ContentHash::compute(b"input");
         let prev = ContentHash::compute(b"prev");
-        let r1 = compute_receipt(
-            input_hash.clone(),
-            &PathVerdict::Verified,
-            &epoch(),
-            None,
-            1000,
-        );
+        let r1 = compute_receipt(input_hash, &PathVerdict::Verified, &epoch(), None, 1000);
         let r2 = compute_receipt(
             input_hash,
             &PathVerdict::Verified,

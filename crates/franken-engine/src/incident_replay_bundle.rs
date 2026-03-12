@@ -341,7 +341,7 @@ pub fn compute_merkle_root(leaves: &[ContentHash]) -> ContentHash {
         return ContentHash::compute(b"");
     }
     if leaves.len() == 1 {
-        return leaves[0].clone();
+        return leaves[0];
     }
 
     let mut current_level: Vec<ContentHash> = leaves.to_vec();
@@ -356,7 +356,7 @@ pub fn compute_merkle_root(leaves: &[ContentHash]) -> ContentHash {
                 next_level.push(ContentHash::compute(&combined));
             } else {
                 // Odd leaf: promote unchanged.
-                next_level.push(current_level[i].clone());
+                next_level.push(current_level[i]);
             }
             i += 2;
         }
@@ -383,7 +383,7 @@ pub fn build_merkle_proof(leaves: &[ContentHash], index: usize) -> Vec<(ContentH
         };
         if sibling_idx < current_level.len() {
             // true = sibling is on the right
-            proof.push((current_level[sibling_idx].clone(), idx.is_multiple_of(2)));
+            proof.push((current_level[sibling_idx], idx.is_multiple_of(2)));
         }
 
         let mut next_level = Vec::with_capacity(current_level.len().div_ceil(2));
@@ -395,7 +395,7 @@ pub fn build_merkle_proof(leaves: &[ContentHash], index: usize) -> Vec<(ContentH
                 combined.extend_from_slice(current_level[i + 1].as_bytes());
                 next_level.push(ContentHash::compute(&combined));
             } else {
-                next_level.push(current_level[i].clone());
+                next_level.push(current_level[i]);
             }
             i += 2;
         }
@@ -411,7 +411,7 @@ pub fn verify_merkle_proof(
     proof: &[(ContentHash, bool)],
     expected_root: &ContentHash,
 ) -> bool {
-    let mut current = leaf.clone();
+    let mut current = *leaf;
     for (sibling, sibling_is_right) in proof {
         let mut combined = Vec::with_capacity(64);
         if *sibling_is_right {
@@ -1657,7 +1657,7 @@ mod tests {
     fn merkle_root_two_leaves() {
         let a = ContentHash::compute(b"a");
         let b = ContentHash::compute(b"b");
-        let root = compute_merkle_root(&[a.clone(), b.clone()]);
+        let root = compute_merkle_root(&[a, b]);
 
         let mut combined = Vec::new();
         combined.extend_from_slice(a.as_bytes());

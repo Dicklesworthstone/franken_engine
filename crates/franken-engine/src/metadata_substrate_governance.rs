@@ -228,11 +228,10 @@ impl CacheMissEntry {
         sample_count: u64,
         max_miss_rate: u64,
     ) -> Self {
-        let miss_rate_millionths = if total_accesses == 0 {
-            0
-        } else {
-            cache_misses.saturating_mul(FIXED_ONE) / total_accesses
-        };
+        let miss_rate_millionths = cache_misses
+            .saturating_mul(FIXED_ONE)
+            .checked_div(total_accesses)
+            .unwrap_or(0);
         let within_budget = miss_rate_millionths <= max_miss_rate;
         let mut buf = Vec::with_capacity(64);
         append_str(&mut buf, &dimension.to_string());
@@ -286,11 +285,10 @@ impl NumaEntry {
         node_count: u32,
         max_remote_ratio: u64,
     ) -> Self {
-        let remote_ratio_millionths = if total_accesses == 0 {
-            0
-        } else {
-            remote_accesses.saturating_mul(FIXED_ONE) / total_accesses
-        };
+        let remote_ratio_millionths = remote_accesses
+            .saturating_mul(FIXED_ONE)
+            .checked_div(total_accesses)
+            .unwrap_or(0);
         let within_budget = remote_ratio_millionths <= max_remote_ratio;
         let mut buf = Vec::with_capacity(48);
         append_str(&mut buf, &operation_id);

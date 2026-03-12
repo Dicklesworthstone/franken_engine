@@ -1093,7 +1093,7 @@ mod tests {
             witness_hash: ContentHash::compute(b"placeholder"),
         };
         w1.recompute_hash();
-        let hash1 = w1.witness_hash.clone();
+        let hash1 = w1.witness_hash;
         w1.recompute_hash();
         assert_eq!(hash1, w1.witness_hash);
     }
@@ -1157,7 +1157,7 @@ mod tests {
             attempt_hash: ContentHash::compute(b"placeholder"),
         };
         a.recompute_hash();
-        let h1 = a.attempt_hash.clone();
+        let h1 = a.attempt_hash;
         a.recompute_hash();
         assert_eq!(h1, a.attempt_hash);
     }
@@ -1293,7 +1293,7 @@ mod tests {
     #[test]
     fn archive_hash_changes_on_add() {
         let mut archive = CounterexampleArchive::new(test_epoch());
-        let h1 = archive.archive_hash.clone();
+        let h1 = archive.archive_hash;
         archive.add_witness(build_refutation_witness(
             "w-1",
             "c-1",
@@ -1336,7 +1336,7 @@ mod tests {
             result_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let h1 = r.result_hash.clone();
+        let h1 = r.result_hash;
         r.recompute_hash();
         assert_eq!(h1, r.result_hash);
     }
@@ -1454,7 +1454,7 @@ mod tests {
     fn pipeline_hash_changes_on_campaign() {
         let mut pipeline =
             ProofRefutationPipeline::new(ProofCampaignConfig::default(), test_epoch());
-        let h1 = pipeline.pipeline_hash.clone();
+        let h1 = pipeline.pipeline_hash;
         let candidate = test_candidate("law-hash", CandidateKind::NormalForm, 500_000);
         pipeline.run_campaign(&candidate);
         assert_ne!(h1, pipeline.pipeline_hash);

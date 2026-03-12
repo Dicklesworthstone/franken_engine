@@ -423,8 +423,8 @@ fn evaluate_default_artifacts(
     let key_v1 = PersistentCacheKeyMaterial::from_fingerprint(
         module_id,
         &version_v1,
-        config_hash.clone(),
-        dependency_hash.clone(),
+        config_hash,
+        dependency_hash,
         "lower_ir3",
         "baseline_deterministic_profile",
         "engine-0.1.0",

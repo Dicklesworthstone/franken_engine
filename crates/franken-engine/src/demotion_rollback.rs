@@ -886,7 +886,7 @@ impl AutoDemotionMonitor {
         self.state.divergence_count += 1;
         if self.state.first_divergence_artifact.is_none() {
             // Use input hash as the artifact reference
-            self.state.first_divergence_artifact = Some(input_hash.clone());
+            self.state.first_divergence_artifact = Some(*input_hash);
         }
 
         let artifact_hash = {
@@ -903,7 +903,6 @@ impl AutoDemotionMonitor {
             let first_artifact = self
                 .state
                 .first_divergence_artifact
-                .clone()
                 .unwrap_or_else(|| ContentHash::compute(b"unknown"));
 
             TriggerEvaluation {
@@ -1114,7 +1113,7 @@ impl AutoDemotionMonitor {
             fired: true,
             reason: Some(DemotionReason::CapabilityViolation {
                 attempted_capability: capability.to_string(),
-                envelope_digest: envelope_digest.clone(),
+                envelope_digest: *envelope_digest,
             }),
             severity: self.policy.capability_violation_severity,
             evidence: vec![DemotionEvidenceItem {
@@ -1516,7 +1515,7 @@ mod tests {
         let obs = MonitoringObservation::OutputComparison {
             matched: true,
             input_hash: ContentHash::compute(b"input"),
-            native_output_hash: hash.clone(),
+            native_output_hash: hash,
             reference_output_hash: hash,
             waiver_covered: false,
             timestamp_ns: 2_000_000_000,
@@ -2765,7 +2764,7 @@ mod tests {
         let input1_hash = ContentHash::compute(b"first-input");
         let obs1 = MonitoringObservation::OutputComparison {
             matched: false,
-            input_hash: input1_hash.clone(),
+            input_hash: input1_hash,
             native_output_hash: ContentHash::compute(b"n1"),
             reference_output_hash: ContentHash::compute(b"r1"),
             waiver_covered: false,

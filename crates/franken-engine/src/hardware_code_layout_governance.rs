@@ -1136,12 +1136,12 @@ impl GovernanceEvaluator {
         let entry_hashes: Vec<ContentHash> = self
             .alignment_entries
             .iter()
-            .map(|e| e.content_hash.clone())
+            .map(|e| e.content_hash)
             .collect();
         let budget_hashes: Vec<ContentHash> =
-            self.stall_budgets.iter().map(|b| b.content_hash.clone()).collect();
+            self.stall_budgets.iter().map(|b| b.content_hash).collect();
         let policy_hashes: Vec<ContentHash> =
-            self.policies.iter().map(|p| p.content_hash.clone()).collect();
+            self.policies.iter().map(|p| p.content_hash).collect();
 
         let mut buf = Vec::with_capacity(256);
         append_str(&mut buf, SCHEMA_VERSION);

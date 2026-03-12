@@ -903,14 +903,14 @@ mod tests {
     #[test]
     fn content_hash_clone_equality() {
         let h = ContentHash::compute(b"clone-test-content");
-        let cloned = h.clone();
+        let cloned = h;
         assert_eq!(h, cloned);
     }
 
     #[test]
     fn authenticity_hash_clone_equality() {
         let h = AuthenticityHash::compute_keyed(b"key", b"clone-test-auth");
-        let cloned = h.clone();
+        let cloned = h;
         assert_eq!(h, cloned);
     }
 

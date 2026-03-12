@@ -722,7 +722,7 @@ pub fn build_schedule_transcript(chunk_plan: &ChunkPlan, seed: u64) -> ScheduleT
     ScheduleTranscript {
         seed,
         worker_count: chunk_plan.worker_count,
-        plan_hash: chunk_plan.plan_hash.clone(),
+        plan_hash: chunk_plan.plan_hash,
         execution_order,
         dispatches,
         transcript_hash,
@@ -854,8 +854,8 @@ pub fn replay_schedule_transcript(
 ) -> Result<Vec<u32>, TranscriptReplayError> {
     if transcript.plan_hash != chunk_plan.plan_hash {
         return Err(TranscriptReplayError::PlanHashMismatch {
-            expected: chunk_plan.plan_hash.clone(),
-            actual: transcript.plan_hash.clone(),
+            expected: chunk_plan.plan_hash,
+            actual: transcript.plan_hash,
         });
     }
     if transcript.worker_count != chunk_plan.worker_count {
@@ -934,7 +934,7 @@ pub fn replay_schedule_transcript(
     if transcript.transcript_hash != expected_hash {
         return Err(TranscriptReplayError::TranscriptHashMismatch {
             expected: expected_hash,
-            actual: transcript.transcript_hash.clone(),
+            actual: transcript.transcript_hash,
         });
     }
 
@@ -1314,7 +1314,7 @@ pub fn build_replay_envelope(
         routing_digest: routing_digest.clone(),
         cancellation: output.cancellation.clone(),
         failover_decision: output.failover_decision.clone(),
-        output_hash: output.output_hash.clone(),
+        output_hash: output.output_hash,
         replay_command: format!(
             "franken-engine parallel-parse --trace-id {} --run-id {} --seed {} --workers {} --transcript-hash {}",
             input.trace_id,
@@ -1875,7 +1875,7 @@ pub fn parse(input: &ParseInput<'_>) -> Result<ParseOutput, ParseError> {
         merged_tokens.len() as u64,
     );
     let merge_witness = MergeWitness {
-        merged_hash: merged_hash.clone(),
+        merged_hash,
         witness_hash,
         chunk_count: chunk_plan.chunks.len() as u32,
         boundary_repairs,
@@ -2736,7 +2736,7 @@ mod tests {
         let transcript = ScheduleTranscript {
             seed: 42,
             worker_count: 4,
-            plan_hash: plan_hash.clone(),
+            plan_hash,
             execution_order: execution_order.clone(),
             dispatches: dispatches.clone(),
             transcript_hash: compute_schedule_transcript_hash(
@@ -4003,8 +4003,8 @@ mod tests {
         let hash_b = ContentHash::compute(b"b");
         let variants: Vec<TranscriptReplayError> = vec![
             TranscriptReplayError::PlanHashMismatch {
-                expected: hash_a.clone(),
-                actual: hash_b.clone(),
+                expected: hash_a,
+                actual: hash_b,
             },
             TranscriptReplayError::WorkerCountMismatch {
                 expected: 4,
@@ -4056,8 +4056,8 @@ mod tests {
         let hash = ContentHash::compute(b"test");
         let variants = vec![
             TranscriptReplayError::PlanHashMismatch {
-                expected: hash.clone(),
-                actual: hash.clone(),
+                expected: hash,
+                actual: hash,
             },
             TranscriptReplayError::WorkerCountMismatch {
                 expected: 4,

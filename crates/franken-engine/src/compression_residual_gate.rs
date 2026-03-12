@@ -1663,7 +1663,7 @@ mod tests {
         let hash = ContentHash::compute(id.as_bytes());
         ReversibilityCheck {
             artifact_id: id.to_string(),
-            original_hash: hash.clone(),
+            original_hash: hash,
             restored_hash: if exact {
                 hash
             } else {

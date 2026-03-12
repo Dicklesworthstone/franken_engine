@@ -407,7 +407,7 @@ impl CompressionPipeline {
                         let entry = DedupEntry {
                             artifact_id: descriptor.artifact_id.clone(),
                             representative_id: rep_id.clone(),
-                            canonical_id: canonical.clone(),
+                            canonical_id: *canonical,
                             domain: descriptor.domain,
                             size_saved_bytes: descriptor.size_bytes,
                         };
@@ -451,7 +451,7 @@ impl CompressionPipeline {
             original_size_bytes: descriptor.size_bytes,
             compressed_size_bytes: compressed_size,
             ratio_millionths: ratio,
-            compressed_hash: compressed_hash.clone(),
+            compressed_hash,
             dedup_representative_id: dedup_rep,
             result_hash: ContentHash::compute(b"placeholder"),
         };
@@ -464,7 +464,7 @@ impl CompressionPipeline {
             artifact_id: descriptor.artifact_id.clone(),
             original_hash: descriptor.content_hash,
             compressed_hash,
-            canonical_id: descriptor.canonical_id.clone(),
+            canonical_id: descriptor.canonical_id,
             strategy,
             domain: descriptor.domain,
             restoration_verified: true,
@@ -893,7 +893,7 @@ mod tests {
             result_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let h1 = r.result_hash.clone();
+        let h1 = r.result_hash;
         r.recompute_hash();
         assert_eq!(h1, r.result_hash);
     }
@@ -933,7 +933,7 @@ mod tests {
             receipt_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let h1 = r.receipt_hash.clone();
+        let h1 = r.receipt_hash;
         r.recompute_hash();
         assert_eq!(h1, r.receipt_hash);
     }
@@ -1083,7 +1083,7 @@ mod tests {
     #[test]
     fn pipeline_hash_changes() {
         let mut pipeline = CompressionPipeline::new(epoch(10));
-        let h1 = pipeline.pipeline_hash.clone();
+        let h1 = pipeline.pipeline_hash;
         let d = descriptor(
             "a-hc",
             ArtifactDomain::Cache,

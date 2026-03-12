@@ -1519,7 +1519,7 @@ mod tests {
     fn test_atlas_entry_validate() {
         let law = test_law();
         let mut entry = SupportAtlasEntry::from_law("ae-001", &law, "string.length", 750_000);
-        let hash_before = entry.entry_hash.clone();
+        let hash_before = entry.entry_hash;
         entry.validate();
         assert!(entry.workload_validated);
         assert_ne!(entry.entry_hash, hash_before);
@@ -1942,7 +1942,7 @@ mod tests {
     #[test]
     fn test_pipeline_hash_changes_on_promotion() {
         let mut pipeline = PromotionPipeline::new("hash-test", test_epoch());
-        let hash_before = pipeline.pipeline_hash.clone();
+        let hash_before = pipeline.pipeline_hash;
         let law = test_law();
         pipeline.promote_to_rewrite(&law, "p", "r", "g", MILLION);
         assert_ne!(pipeline.pipeline_hash, hash_before);

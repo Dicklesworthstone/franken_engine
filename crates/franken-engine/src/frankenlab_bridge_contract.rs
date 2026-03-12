@@ -1416,7 +1416,7 @@ mod tests {
         let h2 = test_content_hash(b"schedule-1");
         let h3 = test_content_hash(b"fingerprint-1");
 
-        let a = TraceCertificate::new(h1.clone(), h2.clone(), 100, h3.clone(), 42);
+        let a = TraceCertificate::new(h1, h2, 100, h3, 42);
         let b = TraceCertificate::new(h1, h2, 100, h3, 42);
         assert!(a.is_equivalent(&b));
     }
@@ -1428,7 +1428,7 @@ mod tests {
         let h3 = test_content_hash(b"fingerprint-1");
         let h4 = test_content_hash(b"fingerprint-2");
 
-        let a = TraceCertificate::new(h1.clone(), h2.clone(), 100, h3, 42);
+        let a = TraceCertificate::new(h1, h2, 100, h3, 42);
         let b = TraceCertificate::new(h1, h2, 100, h4, 42);
         assert!(!a.is_equivalent(&b));
     }
@@ -1890,7 +1890,7 @@ mod tests {
 
         // Record passing replay
         let h = test_content_hash(b"data");
-        let cert = TraceCertificate::new(h.clone(), h.clone(), 50, h.clone(), 42);
+        let cert = TraceCertificate::new(h, h, 50, h, 42);
         v.record_replay_verdict("lifecycle-startup", 42, &cert, &cert);
 
         // Record passing oracle
@@ -1925,11 +1925,11 @@ mod tests {
 
         // s1: deterministic replay
         let h = test_content_hash(b"data");
-        let cert = TraceCertificate::new(h.clone(), h.clone(), 50, h.clone(), 42);
+        let cert = TraceCertificate::new(h, h, 50, h, 42);
         v.record_replay_verdict("s1", 42, &cert, &cert);
 
         // s2: divergent replay
-        let cert_b = TraceCertificate::new(test_content_hash(b"different"), h.clone(), 50, h, 42);
+        let cert_b = TraceCertificate::new(test_content_hash(b"different"), h, 50, h, 42);
         v.record_replay_verdict("s2", 42, &cert, &cert_b);
 
         let report = v.build_report();

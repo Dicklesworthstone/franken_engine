@@ -2602,7 +2602,7 @@ mod tests {
     fn parity_checker_equivalent() {
         let mut pc = ParityChecker::default();
         let h = compute_content_hash(b"test");
-        let verdict = pc.check("r1", h.clone(), h);
+        let verdict = pc.check("r1", h, h);
         assert_eq!(verdict, ParityVerdict::Equivalent);
         assert!(pc.all_passed());
     }
@@ -2622,7 +2622,7 @@ mod tests {
     fn parity_checker_record_explicit() {
         let mut pc = ParityChecker::default();
         let h = compute_content_hash(b"data");
-        pc.record("r1", ParityVerdict::WithinTolerance, h.clone(), h);
+        pc.record("r1", ParityVerdict::WithinTolerance, h, h);
         assert!(pc.all_passed());
         assert_eq!(pc.check_count(), 1);
     }
@@ -2631,7 +2631,7 @@ mod tests {
     fn parity_checker_reset() {
         let mut pc = ParityChecker::default();
         let h = compute_content_hash(b"x");
-        pc.check("r1", h.clone(), h);
+        pc.check("r1", h, h);
         pc.reset();
         assert_eq!(pc.check_count(), 0);
     }
@@ -2858,7 +2858,7 @@ mod tests {
     fn evaluator_check_parity_equivalent() {
         let mut e = LayoutEvaluator::new(make_test_policy());
         let h = compute_content_hash(b"output");
-        let v = e.check_parity("r1", h.clone(), h);
+        let v = e.check_parity("r1", h, h);
         assert_eq!(v, ParityVerdict::Equivalent);
         assert!(!e.rollback_gate.fired);
     }
@@ -3003,7 +3003,7 @@ mod tests {
     #[test]
     fn parity_check_result_with_notes() {
         let h = compute_content_hash(b"x");
-        let r = ParityCheckResult::new("r1", ParityVerdict::Equivalent, h.clone(), h, 10_000)
+        let r = ParityCheckResult::new("r1", ParityVerdict::Equivalent, h, h, 10_000)
             .with_notes("Timing within 0.5%");
         assert_eq!(r.notes, "Timing within 0.5%");
     }

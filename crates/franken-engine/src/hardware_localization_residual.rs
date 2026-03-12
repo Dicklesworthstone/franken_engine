@@ -1155,6 +1155,7 @@ mod tests {
     }
 
     /// Build an entry with the standard residual breakdown.
+    #[allow(clippy::too_many_arguments)]
     fn make_entry(
         family: MicroarchFamily,
         baseline_ns: u64,
@@ -1221,11 +1222,13 @@ mod tests {
 
     #[test]
     fn constant_invariants() {
-        assert!(DEFAULT_MIN_ALGORITHMIC_GAIN > 0);
-        assert!(DEFAULT_MAX_HARDWARE_ATTRIBUTABLE > 0);
-        assert!(DEFAULT_MIN_FAMILIES_TESTED >= 2);
-        assert!(MAX_BOARD_ENTRIES > 0);
-        assert!(MAX_UNSUPPORTED_ENTRIES > 0);
+        const {
+            assert!(DEFAULT_MIN_ALGORITHMIC_GAIN > 0);
+            assert!(DEFAULT_MAX_HARDWARE_ATTRIBUTABLE > 0);
+            assert!(DEFAULT_MIN_FAMILIES_TESTED >= 2);
+            assert!(MAX_BOARD_ENTRIES > 0);
+            assert!(MAX_UNSUPPORTED_ENTRIES > 0);
+        }
         assert_eq!(MILLIONTHS, 1_000_000);
     }
 
@@ -1973,9 +1976,9 @@ mod tests {
     #[test]
     fn board_seal_updates_hash() {
         let mut board = LocalizationBoard::new("opt-25", epoch(), PromotionPolicy::relaxed());
-        let h1 = board.content_hash.clone();
+        let h1 = board.content_hash;
         board.add_entry(algo_dominant_entry(MicroarchFamily::Zen4));
-        let h2 = board.content_hash.clone();
+        let h2 = board.content_hash;
         assert_ne!(h1, h2);
     }
 

@@ -1114,12 +1114,7 @@ fn merge_decisions(a: GovernanceDecision, b: GovernanceDecision) -> GovernanceDe
 
 /// Build a `DecisionReceipt` from a `GateResult`.
 pub fn build_receipt(result: &GateResult, epoch: SecurityEpoch) -> DecisionReceipt {
-    DecisionReceipt::new(
-        COMPONENT,
-        epoch,
-        result.decision,
-        result.receipt_hash.clone(),
-    )
+    DecisionReceipt::new(COMPONENT, epoch, result.decision, result.receipt_hash)
 }
 
 /// Build a default set of realistic cache-miss evidence profiles for testing
@@ -1695,12 +1690,7 @@ mod tests {
     #[test]
     fn decision_receipt_deterministic() {
         let hash = ContentHash::compute(b"test");
-        let a = DecisionReceipt::new(
-            COMPONENT,
-            test_epoch(),
-            GovernanceDecision::Approve,
-            hash.clone(),
-        );
+        let a = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         let b = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Approve, hash);
         assert_eq!(a.receipt_hash, b.receipt_hash);
     }

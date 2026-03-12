@@ -999,40 +999,40 @@ pub fn emit_law_mining_bundle(
         &fixture.counterexamples,
         &fixture.evidence_entries,
     );
-    let catalog_hash = catalog.catalog_hash.clone();
+    let catalog_hash = catalog.catalog_hash;
     let candidate_catalog = CandidateLawCatalogArtifact {
         schema_version: CANDIDATE_LAW_CATALOG_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog_hash.clone(),
+        catalog_hash,
         candidates: catalog.candidates.clone(),
     };
     let invariant_seed_ledger = InvariantSeedLedgerArtifact {
         schema_version: INVARIANT_SEED_LEDGER_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog_hash.clone(),
+        catalog_hash,
         invariant_seed_ledger: catalog.invariant_seed_ledger.clone(),
     };
     let normal_form_hypotheses = NormalFormHypothesesArtifact {
         schema_version: NORMAL_FORM_HYPOTHESES_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog_hash.clone(),
+        catalog_hash,
         normal_form_hypotheses: catalog.normal_form_hypotheses.clone(),
     };
     let provenance_index = LawProvenanceIndexArtifact {
         schema_version: LAW_PROVENANCE_INDEX_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog_hash.clone(),
+        catalog_hash,
         provenance_index: catalog.provenance_index.clone(),
     };
     let scope_hypotheses = CandidateScopeHypothesesArtifact {
         schema_version: CANDIDATE_SCOPE_HYPOTHESES_SCHEMA_VERSION.to_string(),
         bead_id: LAW_MINING_BEAD_ID.to_string(),
         generated_epoch: fixture.generated_epoch,
-        catalog_hash: catalog_hash.clone(),
+        catalog_hash,
         scope_hypotheses: catalog.scope_hypotheses.clone(),
     };
     let trace_ids = TraceIdsArtifact {

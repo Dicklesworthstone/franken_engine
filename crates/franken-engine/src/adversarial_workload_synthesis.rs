@@ -586,10 +586,10 @@ impl SynthesisCampaign {
             cov.record_iteration(counterexample.as_ref());
         }
 
-        if let Some(cx) = counterexample {
-            if self.counterexamples.len() < MAX_COUNTEREXAMPLES_PER_CAMPAIGN {
-                self.counterexamples.push(cx);
-            }
+        if let Some(cx) = counterexample
+            && self.counterexamples.len() < MAX_COUNTEREXAMPLES_PER_CAMPAIGN
+        {
+            self.counterexamples.push(cx);
         }
     }
 
@@ -1059,7 +1059,7 @@ impl SynthesisEngine {
                                 r,
                                 *domain,
                                 *strategy,
-                                seed.input_hash.clone(),
+                                seed.input_hash,
                                 timestamp_ns,
                             )
                         });
@@ -1195,14 +1195,6 @@ mod tests {
         )
     }
 
-    fn make_all_domain_inputs(engine: &mut SynthesisEngine) {
-        for domain in WorkloadDomain::ALL {
-            engine
-                .add_input(make_input(&format!("seed_{}", domain.as_str()), *domain))
-                .unwrap();
-        }
-    }
-
     fn make_counterexample(domain: WorkloadDomain, regression: u64) -> Counterexample {
         Counterexample::new(
             regression,
@@ -1243,9 +1235,11 @@ mod tests {
         assert_eq!(DEFAULT_MIN_ITERATIONS_PER_DOMAIN, 100);
         assert_eq!(DEFAULT_MIN_REGRESSION_THRESHOLD, 50_000);
         assert_eq!(DEFAULT_BUDGET_NS, 10_000_000_000);
-        assert!(MAX_COUNTEREXAMPLES_PER_CAMPAIGN > 0);
-        assert!(MAX_CAMPAIGNS_PER_ENGINE > 0);
-        assert!(MAX_INPUTS_PER_ENGINE > 0);
+        const {
+            assert!(MAX_COUNTEREXAMPLES_PER_CAMPAIGN > 0);
+            assert!(MAX_CAMPAIGNS_PER_ENGINE > 0);
+            assert!(MAX_INPUTS_PER_ENGINE > 0);
+        }
     }
 
     // --- WorkloadDomain ---

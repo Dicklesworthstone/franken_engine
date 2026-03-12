@@ -995,7 +995,7 @@ impl CapabilityWitness {
                     "{}: promotion theorem report passed",
                     WITNESS_THEOREM_COMPONENT
                 ),
-                artifact_hash: report.report_artifact_hash.clone(),
+                artifact_hash: report.report_artifact_hash,
             });
         }
     }
@@ -3116,7 +3116,7 @@ impl WitnessPublicationPipeline {
         let predecessor_leaf_hash = self
             .log_entries
             .last()
-            .map(|e| e.leaf_hash.clone())
+            .map(|e| e.leaf_hash)
             .unwrap_or(ContentHash([0u8; 32]));
         let leaf_hash = PublicationLogEntry::compute_leaf_hash(&PublicationLeafInput {
             sequence,
@@ -3141,7 +3141,7 @@ impl WitnessPublicationPipeline {
             timestamp_ns,
             revocation_reason,
             predecessor_leaf_hash,
-            leaf_hash: leaf_hash.clone(),
+            leaf_hash,
         };
         self.log_entries.push(entry.clone());
         self.mmr.append(leaf_hash);

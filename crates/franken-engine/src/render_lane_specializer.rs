@@ -1467,7 +1467,7 @@ mod tests {
         let cfg = SpecializationConfig::default_config();
         let result = specialize_lane(&req, &cfg).unwrap();
         let genesis = DecisionReceipt::genesis_hash();
-        let r1 = DecisionReceipt::new(epoch(), &req, &result, genesis.clone());
+        let r1 = DecisionReceipt::new(epoch(), &req, &result, genesis);
         let r2 = DecisionReceipt::new(epoch(), &req, &result, genesis);
         assert_eq!(r1.content_hash, r2.content_hash);
     }
@@ -1489,7 +1489,7 @@ mod tests {
         let cfg = SpecializationConfig::default_config();
         let result = specialize_lane(&req, &cfg).unwrap();
         let genesis = DecisionReceipt::genesis_hash();
-        let r = DecisionReceipt::new(epoch(), &req, &result, genesis.clone());
+        let r = DecisionReceipt::new(epoch(), &req, &result, genesis);
         assert_eq!(r.lane_kind, LaneKind::ServerSideRender);
         assert_eq!(r.component_shape, ComponentShape::PureFunction);
         assert_eq!(r.verdict, SpecializationVerdict::Applied);

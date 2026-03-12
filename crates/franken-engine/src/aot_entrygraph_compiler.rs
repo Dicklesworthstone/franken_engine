@@ -641,12 +641,12 @@ fn build_provenance(
     let mut prov = Vec::new();
     prov.push(ProvenanceRecord {
         kind: ProvenanceKind::SourceHash,
-        value_hash: module.source_hash.clone(),
+        value_hash: module.source_hash,
         label: module.specifier.clone(),
     });
     prov.push(ProvenanceRecord {
         kind: ProvenanceKind::DependencyGraphHash,
-        value_hash: graph.graph_hash.clone(),
+        value_hash: graph.graph_hash,
         label: graph.graph_id.clone(),
     });
     let config_bytes = format!(
@@ -943,9 +943,9 @@ pub fn build_receipt(
     let receipt_hash = compute_receipt_hash(
         &report.graph_id,
         report.verdict,
-        config_hash.clone(),
-        graph_hash.clone(),
-        results_hash.clone(),
+        config_hash,
+        graph_hash,
+        results_hash,
         report.compile_epoch,
     );
 
@@ -1436,7 +1436,7 @@ mod tests {
         ];
         let graph = make_graph("gd", EntryKind::PackageMain, modules);
         let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
-        let r1 = build_receipt(&report, graph.graph_hash.clone(), &default_config());
+        let r1 = build_receipt(&report, graph.graph_hash, &default_config());
         let r2 = build_receipt(&report, graph.graph_hash, &default_config());
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }

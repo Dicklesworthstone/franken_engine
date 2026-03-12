@@ -553,7 +553,7 @@ impl PolicyPlaneVerifier {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::MeasurementRejected,
-                Some(measurement_hash.clone()),
+                Some(measurement_hash),
                 "measurement not approved",
                 current_ns,
             );
@@ -566,7 +566,7 @@ impl PolicyPlaneVerifier {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::KeyBindingFailed,
-                Some(measurement_hash.clone()),
+                Some(measurement_hash),
                 "key binding invalid",
                 current_ns,
             );
@@ -580,7 +580,7 @@ impl PolicyPlaneVerifier {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::SignatureFailed,
-                Some(measurement_hash.clone()),
+                Some(measurement_hash),
                 "response signature invalid",
                 current_ns,
             );
@@ -591,7 +591,7 @@ impl PolicyPlaneVerifier {
         let auth = self.issue_authorization(
             &response.cell_id,
             &response.claimed_capabilities,
-            measurement_hash.clone(),
+            measurement_hash,
             current_ns,
         )?;
 
@@ -1186,9 +1186,11 @@ mod tests {
         let client = test_client();
         do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
-        assert!(verifier
-            .check_authorization("cell-001", "sign_receipts", 2000)
-            .is_ok());
+        assert!(
+            verifier
+                .check_authorization("cell-001", "sign_receipts", 2000)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -2189,8 +2191,8 @@ mod tests {
         let mut verifier = test_verifier();
         let m1 = ContentHash::compute(b"measurement-1");
         let m2 = ContentHash::compute(b"measurement-2");
-        verifier.approve_measurement(m1.clone());
-        verifier.approve_measurement(m2.clone());
+        verifier.approve_measurement(m1);
+        verifier.approve_measurement(m2);
         // Both should appear in challenges.
         let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
         assert!(challenge.approved_measurements.contains(&m1));

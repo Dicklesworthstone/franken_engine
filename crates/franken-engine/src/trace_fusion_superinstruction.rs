@@ -501,7 +501,7 @@ pub fn build_proof(candidate: &FusionCandidate) -> FusionProof {
     let proof_hash = ContentHash::compute(&proof_data);
 
     FusionProof {
-        candidate_hash: candidate.fusion_hash.clone(),
+        candidate_hash: candidate.fusion_hash,
         policy_check_passed: policy_ok,
         determinism_verified: determinism_ok,
         side_exit_coverage,
@@ -542,7 +542,7 @@ pub fn build_superinstruction(
         id: si_id,
         fused_segments,
         side_exits,
-        proof_hash: proof.proof_hash.clone(),
+        proof_hash: proof.proof_hash,
         disable_token,
         total_speedup_millionths: candidate.estimated_speedup_millionths,
     }

@@ -828,7 +828,7 @@ impl MismatchCatalog {
             targets_covered: self.covered_targets().len(),
             domain_summaries: self.domain_summary(),
             target_summaries: self.target_summary(),
-            catalog_hash: self.catalog_hash.clone(),
+            catalog_hash: self.catalog_hash,
         }
     }
 
@@ -1730,7 +1730,7 @@ mod tests {
     #[test]
     fn test_catalog_hash_changes_on_add() {
         let mut cat = MismatchCatalog::new(test_epoch(1));
-        let h1 = cat.catalog_hash.clone();
+        let h1 = cat.catalog_hash;
         cat.add_entry(test_entry(
             "m1",
             MismatchDomain::CompileOutput,
@@ -1749,7 +1749,7 @@ mod tests {
             MismatchSeverity::Error,
         ))
         .unwrap();
-        let h1 = cat.catalog_hash.clone();
+        let h1 = cat.catalog_hash;
         cat.remove_entry("m1").unwrap();
         assert_ne!(cat.catalog_hash, h1);
     }

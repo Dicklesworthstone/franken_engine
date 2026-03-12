@@ -1566,7 +1566,7 @@ mod tests {
     #[test]
     fn test_decision_receipt_creation() {
         let claim_hash = ContentHash::compute(b"test-claim");
-        let receipt = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, claim_hash.clone());
+        let receipt = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, claim_hash);
         assert_eq!(receipt.component, COMPONENT);
         assert_eq!(receipt.verdict, ClaimVerdict::Confirmed);
         assert_eq!(receipt.claim_hash, claim_hash);
@@ -1575,7 +1575,7 @@ mod tests {
     #[test]
     fn test_decision_receipt_hash_deterministic() {
         let claim_hash = ContentHash::compute(b"claim-x");
-        let r1 = DecisionReceipt::new(epoch(), ClaimVerdict::Downgraded, claim_hash.clone());
+        let r1 = DecisionReceipt::new(epoch(), ClaimVerdict::Downgraded, claim_hash);
         let r2 = DecisionReceipt::new(epoch(), ClaimVerdict::Downgraded, claim_hash);
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
@@ -1583,7 +1583,7 @@ mod tests {
     #[test]
     fn test_decision_receipt_different_verdicts_different_hashes() {
         let claim_hash = ContentHash::compute(b"claim-y");
-        let r1 = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, claim_hash.clone());
+        let r1 = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, claim_hash);
         let r2 = DecisionReceipt::new(epoch(), ClaimVerdict::Unsupported, claim_hash);
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }

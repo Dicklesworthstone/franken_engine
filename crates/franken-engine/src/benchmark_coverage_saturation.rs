@@ -1153,7 +1153,7 @@ impl SaturationBoard {
                 let variance_sum: u64 = complexities
                     .iter()
                     .map(|&c| {
-                        let diff = if c > mean { c - mean } else { mean - c };
+                        let diff = c.abs_diff(mean);
                         diff.saturating_mul(diff)
                     })
                     .sum();
@@ -1216,7 +1216,7 @@ fn isqrt(n: u64) -> u64 {
         return 0;
     }
     let mut x = n;
-    let mut y = (x + 1) / 2;
+    let mut y = x.div_ceil(2);
     while y < x {
         x = y;
         y = (x + n / x) / 2;
@@ -1361,8 +1361,10 @@ mod tests {
     fn constants_defaults_valid() {
         assert_eq!(DEFAULT_MIN_ENTRIES_PER_FAMILY, 3);
         assert_eq!(DEFAULT_MIN_FAMILIES_COVERED, 8);
-        assert!(DEFAULT_MIN_SATURATION_SCORE_MILLIONTHS <= MILLIONTHS);
-        assert!(DEFAULT_MIN_FEATURE_DIVERSITY >= 1);
+        const {
+            assert!(DEFAULT_MIN_SATURATION_SCORE_MILLIONTHS <= MILLIONTHS);
+            assert!(DEFAULT_MIN_FEATURE_DIVERSITY >= 1);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -2029,7 +2031,7 @@ mod tests {
         let config = default_config();
         let report = board.evaluate(&config);
         let zero_hash = ContentHash::compute(b"genesis");
-        let r1 = DecisionReceipt::new("receipt_1", &report, zero_hash.clone());
+        let r1 = DecisionReceipt::new("receipt_1", &report, zero_hash);
         let r2 = DecisionReceipt::new("receipt_1", &report, zero_hash);
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
@@ -2054,7 +2056,7 @@ mod tests {
         let r1 = DecisionReceipt::new("receipt_chain_1", &report, genesis);
         assert!(r1.verify());
 
-        let r2 = DecisionReceipt::new("receipt_chain_2", &report, r1.receipt_hash.clone());
+        let r2 = DecisionReceipt::new("receipt_chain_2", &report, r1.receipt_hash);
         assert!(r2.verify());
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }

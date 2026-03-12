@@ -467,13 +467,13 @@ pub fn evaluate_gate(source: &str, config: &GateConfig) -> GateResult {
                     Ok(output) => {
                         let parity_ok = output.parity_result.as_ref().map(|p| p.parity_ok);
                         let merge_witness_hash =
-                            output.merge_witness.as_ref().map(|w| w.merged_hash.clone());
+                            output.merge_witness.as_ref().map(|w| w.merged_hash);
 
                         let record = RunRecord {
                             seed,
                             worker_count: *worker_count,
                             run_index: repeat,
-                            output_hash: output.output_hash.clone(),
+                            output_hash: output.output_hash,
                             token_count: output.token_count,
                             mode: output.mode,
                             parity_ok,
@@ -497,8 +497,8 @@ pub fn evaluate_gate(source: &str, config: &GateConfig) -> GateResult {
                                     seed,
                                     worker_count: *worker_count,
                                     run_index: repeat,
-                                    expected_hash: ref_hash.clone(),
-                                    actual_hash: output.output_hash.clone(),
+                                    expected_hash: *ref_hash,
+                                    actual_hash: output.output_hash,
                                     mismatch_token_index: output
                                         .parity_result
                                         .as_ref()
@@ -518,7 +518,7 @@ pub fn evaluate_gate(source: &str, config: &GateConfig) -> GateResult {
                                 });
                             }
                         } else {
-                            reference_hash = Some(output.output_hash.clone());
+                            reference_hash = Some(output.output_hash);
                         }
 
                         runs.push(record);
@@ -770,13 +770,13 @@ pub fn build_replay_bundle(result: &GateResult) -> Option<ReplayBundle> {
 
     Some(ReplayBundle {
         schema_version: SCHEMA_VERSION.to_string(),
-        input_hash: result.input_hash.clone(),
+        input_hash: result.input_hash,
         input_bytes: result.input_bytes,
         incidents: result.incidents.clone(),
         failing_seeds: failing_seeds.into_iter().collect(),
         failing_workers: failing_workers.into_iter().collect(),
         replay_commands,
-        reference_hash: result.reference_hash.clone(),
+        reference_hash: result.reference_hash,
     })
 }
 

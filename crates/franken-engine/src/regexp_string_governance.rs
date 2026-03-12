@@ -421,11 +421,10 @@ impl BenchmarkEntry {
     ) -> Self {
         let workload_id = workload_id.into();
         // speedup = baseline / optimized, in millionths
-        let speedup_millionths = if optimized_ns == 0 {
-            MILLIONTHS * 10 // cap at 10x for zero-latency optimized path
-        } else {
-            baseline_ns.saturating_mul(MILLIONTHS) / optimized_ns
-        };
+        let speedup_millionths = baseline_ns
+            .saturating_mul(MILLIONTHS)
+            .checked_div(optimized_ns)
+            .unwrap_or(MILLIONTHS * 10); // cap at 10x for zero-latency optimized path
         let mut buf = Vec::new();
         append_str(&mut buf, category.as_str());
         append_str(&mut buf, &workload_id);
@@ -473,11 +472,10 @@ pub struct TailRiskEntry {
 impl TailRiskEntry {
     /// Create a tail-risk entry.
     pub fn new(subject: ParitySubject, p99_ns: u64, p50_ns: u64) -> Self {
-        let tail_ratio_millionths = if p50_ns == 0 {
-            MILLIONTHS * 100 // cap for zero-median
-        } else {
-            p99_ns.saturating_mul(MILLIONTHS) / p50_ns
-        };
+        let tail_ratio_millionths = p99_ns
+            .saturating_mul(MILLIONTHS)
+            .checked_div(p50_ns)
+            .unwrap_or(MILLIONTHS * 100); // cap for zero-median
         let mut buf = Vec::new();
         append_str(&mut buf, &subject.to_string());
         append_u64(&mut buf, p99_ns);

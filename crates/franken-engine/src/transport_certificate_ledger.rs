@@ -925,7 +925,7 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
     // Same-cell transport (full transport).
     if let Ok(c) = evaluate_transport(
         ArtifactKind::RewriteRule,
-        hash_a.clone(),
+        hash_a,
         &cell_x86_zen4,
         &cell_x86_zen4,
         MILLIONTHS,
@@ -937,7 +937,7 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
     // Same arch, different microarch (partial transport).
     if let Ok(c) = evaluate_transport(
         ArtifactKind::SynthesizedKernel,
-        hash_b.clone(),
+        hash_b,
         &cell_x86_zen4,
         &cell_x86_alder,
         MILLIONTHS,
@@ -949,7 +949,7 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
     // Vector width reduction (degraded).
     if let Ok(c) = evaluate_transport(
         ArtifactKind::CacheEntry,
-        hash_c.clone(),
+        hash_c,
         &cell_x86_avx512,
         &cell_x86_zen4,
         MILLIONTHS,
@@ -961,7 +961,7 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
     // Cross-arch transport of non-arch-sensitive artifact (profile data).
     if let Ok(c) = evaluate_transport(
         ArtifactKind::ProfileData,
-        hash_f.clone(),
+        hash_f,
         &cell_x86_zen4,
         &cell_arm_nv2,
         MILLIONTHS,
@@ -973,7 +973,7 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
     // Cross-arch transport of arch-sensitive artifact (incompatible).
     if let Ok(c) = evaluate_transport(
         ArtifactKind::AotModule,
-        hash_d.clone(),
+        hash_d,
         &cell_x86_zen4,
         &cell_arm_nv2,
         MILLIONTHS,
@@ -985,7 +985,7 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
     // ARM to ARM same microarch (full transport).
     if let Ok(c) = evaluate_transport(
         ArtifactKind::CodeLayout,
-        hash_e.clone(),
+        hash_e,
         &cell_arm_nv2,
         &cell_arm_nv2,
         MILLIONTHS,
@@ -997,7 +997,7 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
     // ARM different microarch.
     if let Ok(c) = evaluate_transport(
         ArtifactKind::SpeculationGuard,
-        hash_g.clone(),
+        hash_g,
         &cell_arm_nv2,
         &cell_arm_a78,
         MILLIONTHS,
@@ -1824,7 +1824,7 @@ mod tests {
         let h = test_hash("det");
         let c1 = evaluate_transport(
             ArtifactKind::RewriteRule,
-            h.clone(),
+            h,
             &cell_x86_zen4(),
             &cell_arm_nv2(),
             MILLIONTHS,

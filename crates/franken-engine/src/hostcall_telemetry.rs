@@ -404,7 +404,7 @@ impl TelemetryRecorder {
                 None
             },
             record_count: self.records.len() as u64,
-            rolling_hash: self.rolling_hash.clone(),
+            rolling_hash: self.rolling_hash,
             epoch: self.current_epoch,
         };
         self.snapshots.push(snap.clone());
@@ -1319,15 +1319,15 @@ mod tests {
     #[test]
     fn rolling_hash_changes_per_record() {
         let mut recorder = test_recorder();
-        let h0 = recorder.rolling_hash().clone();
+        let h0 = *recorder.rolling_hash();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
             .unwrap();
-        let h1 = recorder.rolling_hash().clone();
+        let h1 = *recorder.rolling_hash();
         recorder
             .record(2000, test_input("ext-001", HostcallType::FsWrite))
             .unwrap();
-        let h2 = recorder.rolling_hash().clone();
+        let h2 = *recorder.rolling_hash();
 
         assert_ne!(h0, h1);
         assert_ne!(h1, h2);
@@ -1340,11 +1340,11 @@ mod tests {
             epoch: SecurityEpoch::GENESIS,
             enable_rolling_hash: false,
         });
-        let h0 = recorder.rolling_hash().clone();
+        let h0 = *recorder.rolling_hash();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
             .unwrap();
-        let h1 = recorder.rolling_hash().clone();
+        let h1 = *recorder.rolling_hash();
         // Rolling hash should not change when disabled.
         assert_eq!(h0, h1);
     }

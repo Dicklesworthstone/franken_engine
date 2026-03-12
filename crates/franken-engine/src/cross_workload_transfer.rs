@@ -495,7 +495,7 @@ impl TransferSession {
             candidate_key: candidate.candidate_key.clone(),
             verdict,
             reason,
-            decision_hash: decision_hash.clone(),
+            decision_hash,
             epoch: self.epoch,
         };
 
@@ -503,7 +503,7 @@ impl TransferSession {
             self.active_transfers.push(ActiveTransfer {
                 candidate_key: candidate.candidate_key.clone(),
                 kind: candidate.kind,
-                prior_hash: candidate.prior_hash.clone(),
+                prior_hash: candidate.prior_hash,
                 accepted_epoch: self.epoch,
                 drift_signals: Vec::new(),
                 observation_count: 0,
@@ -571,7 +571,7 @@ impl TransferSession {
                 (
                     transfer.candidate_key.clone(),
                     transfer.kind,
-                    transfer.prior_hash.clone(),
+                    transfer.prior_hash,
                     trigger_signals,
                 )
             };
@@ -1080,9 +1080,7 @@ mod tests {
     fn evaluate_candidate_rejects_already_present() {
         let mut session = make_session();
         let candidate = make_candidate("c1", TransferableKind::RewritePack);
-        session
-            .local_prior_hashes
-            .insert(candidate.prior_hash.clone());
+        session.local_prior_hashes.insert(candidate.prior_hash);
         let decision = session.evaluate_candidate(&candidate);
         assert_eq!(decision.verdict, TransferVerdict::Rejected);
         assert_eq!(

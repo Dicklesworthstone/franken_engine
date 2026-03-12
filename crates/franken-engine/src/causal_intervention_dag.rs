@@ -775,7 +775,7 @@ impl CausalDag {
             front_door_mediator,
             instrument,
             unidentifiable_reasons: Vec::new(),
-            dag_hash: self.structure_hash.clone(),
+            dag_hash: self.structure_hash,
             certificate_hash: ContentHash::compute(&cert_data),
         }
     }
@@ -798,7 +798,7 @@ impl CausalDag {
             front_door_mediator: None,
             instrument: None,
             unidentifiable_reasons: reasons,
-            dag_hash: self.structure_hash.clone(),
+            dag_hash: self.structure_hash,
             certificate_hash: ContentHash::compute(&cert_data),
         }
     }

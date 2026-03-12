@@ -448,10 +448,10 @@ pub fn is_waived(
 ) -> bool {
     policy.waivers.iter().any(|w| {
         // Check expiry.
-        if let Some(exp) = w.expiry_epoch {
-            if current_epoch.as_u64() > exp.as_u64() {
-                return false;
-            }
+        if let Some(exp) = w.expiry_epoch
+            && current_epoch.as_u64() > exp.as_u64()
+        {
+            return false;
         }
         // Check file pattern (exact match or suffix match).
         let file_matches = file_path == w.file_pattern || file_path.ends_with(&w.file_pattern);
@@ -533,15 +533,12 @@ pub fn scan_file_content(
             && !trimmed.is_empty()
             && !trimmed.starts_with(' ')
             && !trimmed.starts_with('\t')
-        {
-            if trimmed.starts_with("pub mod ")
+            && (trimmed.starts_with("pub mod ")
                 || trimmed.starts_with("pub fn ")
-                || trimmed.starts_with("pub struct ")
-            {
-                if !trimmed.contains("test") {
-                    in_test_block = false;
-                }
-            }
+                || trimmed.starts_with("pub struct "))
+            && !trimmed.contains("test")
+        {
+            in_test_block = false;
         }
 
         for pattern in &all_patterns {
@@ -721,8 +718,8 @@ pub fn build_guard_report(
         total_production_violations: total_production,
         total_test_only_matches: total_test_only,
         file_results: included_results,
-        registry_hash: registry.registry_hash.clone(),
-        waiver_policy_hash: waiver_policy.policy_hash.clone(),
+        registry_hash: registry.registry_hash,
+        waiver_policy_hash: waiver_policy.policy_hash,
         sweep_epoch,
         report_hash,
         violation_categories,

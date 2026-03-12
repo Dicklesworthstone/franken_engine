@@ -636,10 +636,8 @@ impl NodeHealthTracker {
             .insert(heartbeat.node_id.clone(), heartbeat.timestamp_ns);
         self.last_policy_version
             .insert(heartbeat.node_id.clone(), heartbeat.policy_version);
-        self.last_frontier_hash.insert(
-            heartbeat.node_id.clone(),
-            heartbeat.evidence_frontier_hash.clone(),
-        );
+        self.last_frontier_hash
+            .insert(heartbeat.node_id.clone(), heartbeat.evidence_frontier_hash);
     }
 
     /// Return nodes that have not sent a heartbeat within the timeout.

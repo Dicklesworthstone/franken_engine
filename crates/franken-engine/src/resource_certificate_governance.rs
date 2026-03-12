@@ -181,11 +181,10 @@ impl CertificateEvidence {
         sample_count: u64,
         max_utilisation: u64,
     ) -> Self {
-        let utilisation_millionths = if certified_budget == 0 {
-            if measured_usage == 0 { 0 } else { FIXED_ONE }
-        } else {
-            measured_usage.saturating_mul(FIXED_ONE) / certified_budget
-        };
+        let utilisation_millionths = measured_usage
+            .saturating_mul(FIXED_ONE)
+            .checked_div(certified_budget)
+            .unwrap_or(if measured_usage == 0 { 0 } else { FIXED_ONE });
         let within_budget = utilisation_millionths <= max_utilisation;
         let mut buf = Vec::with_capacity(64);
         append_str(&mut buf, &dimension.to_string());
@@ -239,14 +238,11 @@ impl RegressionEntry {
         current_usage: u64,
         max_regression: u64,
     ) -> Self {
-        let regression_millionths = if previous_usage == 0 {
-            if current_usage == 0 { 0 } else { FIXED_ONE }
-        } else {
-            current_usage
-                .saturating_sub(previous_usage)
-                .saturating_mul(FIXED_ONE)
-                / previous_usage
-        };
+        let regression_millionths = current_usage
+            .saturating_sub(previous_usage)
+            .saturating_mul(FIXED_ONE)
+            .checked_div(previous_usage)
+            .unwrap_or(if current_usage == 0 { 0 } else { FIXED_ONE });
         let within_budget = regression_millionths <= max_regression;
         let mut buf = Vec::with_capacity(64);
         append_str(&mut buf, &dimension.to_string());

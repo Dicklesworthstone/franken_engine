@@ -939,7 +939,7 @@ mod tests {
             correct_output: true,
             fallback_receipt_emitted: true,
             crash_or_hang: false,
-            fallback_output_digest: digest.clone(),
+            fallback_output_digest: digest,
             expected_output_digest: digest,
             fallback_latency_ns: 1000,
             ambient_latency_ns: 1000,

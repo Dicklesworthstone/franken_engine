@@ -589,7 +589,7 @@ impl DelegateCellHarness {
         } else {
             ReplayVerification::Mismatch {
                 sequence: original.sequence,
-                expected_hash: original.output_hash.clone(),
+                expected_hash: original.output_hash,
                 actual_hash: replay_hash,
             }
         }

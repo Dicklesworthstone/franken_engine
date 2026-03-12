@@ -481,11 +481,7 @@ impl ObservabilityClaimDelta {
         observed_millionths: u64,
         tolerance: u64,
     ) -> Self {
-        let delta_millionths = if observed_millionths >= baseline_millionths {
-            observed_millionths - baseline_millionths
-        } else {
-            baseline_millionths - observed_millionths
-        };
+        let delta_millionths = observed_millionths.abs_diff(baseline_millionths);
         let within_tolerance = delta_millionths <= tolerance;
         Self {
             claim_id: claim_id.into(),
@@ -1065,12 +1061,14 @@ mod tests {
 
     #[test]
     fn default_thresholds_valid() {
-        assert!(DEFAULT_MIN_CONFORMANCE > 0 && DEFAULT_MIN_CONFORMANCE <= 1_000_000);
-        assert!(DEFAULT_MAX_DROP_RATE > 0 && DEFAULT_MAX_DROP_RATE <= 1_000_000);
-        assert!(DEFAULT_MAX_DEGRADED_DURATION_NS > 0);
-        assert!(
-            DEFAULT_OBSERVABILITY_TOLERANCE > 0 && DEFAULT_OBSERVABILITY_TOLERANCE <= 1_000_000
-        );
+        const {
+            assert!(DEFAULT_MIN_CONFORMANCE > 0 && DEFAULT_MIN_CONFORMANCE <= 1_000_000);
+            assert!(DEFAULT_MAX_DROP_RATE > 0 && DEFAULT_MAX_DROP_RATE <= 1_000_000);
+            assert!(DEFAULT_MAX_DEGRADED_DURATION_NS > 0);
+            assert!(
+                DEFAULT_OBSERVABILITY_TOLERANCE > 0 && DEFAULT_OBSERVABILITY_TOLERANCE <= 1_000_000
+            );
+        }
         assert!(
             DEFAULT_MIN_REQUIRED_AXES > 0
                 && DEFAULT_MIN_REQUIRED_AXES <= ConformanceAxis::ALL.len()

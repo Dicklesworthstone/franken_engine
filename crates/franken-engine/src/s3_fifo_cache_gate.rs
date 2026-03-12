@@ -1262,7 +1262,7 @@ impl S3FifoCacheGate {
         } else {
             let ghost = GhostEntry {
                 canonical_key: key.to_string(),
-                payload_hash: entry.payload_hash.clone(),
+                payload_hash: entry.payload_hash,
                 ghost_hits: 1,
                 original_size_bytes: entry.size_bytes,
                 sequence_number: seq,

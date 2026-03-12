@@ -545,7 +545,7 @@ impl SubstrateInstance {
 
     /// Take a snapshot at the current epoch for rollback.
     pub fn take_snapshot(&mut self, epoch: SecurityEpoch) -> SubstrateSnapshot {
-        let state_hash = self.instance_hash.clone();
+        let state_hash = self.instance_hash;
         let snapshot = SubstrateSnapshot::new(
             self.structure_kind,
             self.substrate_kind,
@@ -1498,7 +1498,7 @@ mod tests {
             SubstrateInstanceStatus::Active,
             test_epoch(),
             500,
-            hash.clone(),
+            hash,
         );
         let s2 = SubstrateSnapshot::new(
             MetadataStructureKind::StringTable,

@@ -397,7 +397,7 @@ impl ExtensionManifest {
         if computed != self.artifacts_root_hash {
             return Err(RegistryError::ContentHashMismatch {
                 artifact_name: "<artifacts_root>".to_string(),
-                expected: self.artifacts_root_hash.clone(),
+                expected: self.artifacts_root_hash,
                 actual: computed,
             });
         }

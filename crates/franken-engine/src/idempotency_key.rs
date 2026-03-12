@@ -391,7 +391,7 @@ impl IdempotencyStore {
         let result = if let Some(entry) = self.entries.get(&key_hex) {
             match &entry.status {
                 DedupStatus::Completed { result_hash } => DedupResult::CachedResult {
-                    result_hash: result_hash.clone(),
+                    result_hash: *result_hash,
                 },
                 DedupStatus::InProgress => DedupResult::DuplicateInProgress,
                 DedupStatus::Failed { error_code } => DedupResult::PreviouslyFailed {
@@ -1418,7 +1418,7 @@ mod tests {
         let key = store.derive_key(&input);
         store.check_and_claim(&key, &input, 100).unwrap();
         let rh = ContentHash::compute(b"specific-result");
-        store.mark_completed(&key, rh.clone()).unwrap();
+        store.mark_completed(&key, rh).unwrap();
         let result = store.check_and_claim(&key, &input, 101).unwrap();
         if let DedupResult::CachedResult { result_hash } = result {
             assert_eq!(result_hash, rh);

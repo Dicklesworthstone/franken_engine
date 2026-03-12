@@ -1181,7 +1181,7 @@ impl RollbackSafemodeSynthesizer {
         if let Some(replay) = &input.replay_result {
             refs.push(EvidenceRef {
                 source: EvidenceSource::CounterfactualReplay,
-                artifact_hash: replay.artifact_hash.clone(),
+                artifact_hash: replay.artifact_hash,
                 summary: format!(
                     "{} traces, {} decisions, {} recommendations",
                     replay.trace_count,
@@ -1194,7 +1194,7 @@ impl RollbackSafemodeSynthesizer {
         if let Some(scan) = &input.scan_result {
             refs.push(EvidenceRef {
                 source: EvidenceSource::BifurcationScan,
-                artifact_hash: scan.artifact_hash.clone(),
+                artifact_hash: scan.artifact_hash,
                 summary: format!(
                     "{} params, {} bifurcations, {} warnings, stability={}",
                     scan.parameters_scanned,

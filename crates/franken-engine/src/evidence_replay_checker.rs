@@ -428,9 +428,9 @@ impl ReplayResult {
         ReplayManifest {
             config: config.clone(),
             source_entry_count: entries.len() as u64,
-            first_entry_hash: entries.first().map(|e| e.artifact_hash.clone()),
-            last_entry_hash: entries.last().map(|e| e.artifact_hash.clone()),
-            final_rolling_hash: self.final_rolling_hash.clone(),
+            first_entry_hash: entries.first().map(|e| e.artifact_hash),
+            last_entry_hash: entries.last().map(|e| e.artifact_hash),
+            final_rolling_hash: self.final_rolling_hash,
             passed: self.passed,
             violation_count: self.violations.len() as u64,
         }

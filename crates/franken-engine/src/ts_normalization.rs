@@ -420,6 +420,14 @@ pub fn normalize_typescript_to_es2020(
     ));
     current = no_type_imports;
 
+    let type_space_declarations_stripped = strip_type_space_declarations(&current);
+    decisions.push(build_decision(
+        "type_space_declaration_elision",
+        type_space_declarations_stripped != current,
+        "Runtime-opaque interface/type declarations were removed from normalization output.",
+    ));
+    current = type_space_declarations_stripped;
+
     let namespace_lowered = match lower_simple_namespaces(&current) {
         Ok(lowered) => lowered,
         Err(error) => {
@@ -509,6 +517,14 @@ pub fn normalize_typescript_to_es2020(
         "Abstract class declarations lowered to runtime-equivalent class declarations.",
     ));
     current = abstract_class_lowered;
+
+    let implements_clauses_stripped = strip_implements_clauses(&current);
+    decisions.push(build_decision(
+        "implements_clause_normalization",
+        implements_clauses_stripped != current,
+        "Class implements clauses were stripped from runtime normalization output.",
+    ));
+    current = implements_clauses_stripped;
 
     let jsx_lowered = if jsx_preserve {
         current.clone()
@@ -773,6 +789,9 @@ fn source_looks_typescript(source: &str) -> bool {
 
 fn line_looks_like_typescript_construct(line: &str) -> bool {
     let trimmed = line.trim_start();
+    if trimmed.starts_with("export type ") || trimmed.starts_with("export interface ") {
+        return true;
+    }
     if trimmed.starts_with("type ") && trimmed.contains('=') {
         return true;
     }
@@ -1013,6 +1032,315 @@ fn elide_type_only_imports(source: &str) -> String {
         .filter(|line| !line.trim_start().starts_with("import type "))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeSpaceDeclarationKind {
+    Interface,
+    TypeAlias,
+}
+
+fn strip_type_space_declarations(source: &str) -> String {
+    rewrite_outside_strings_and_comments(source, |source, index, output| {
+        let (kind, keyword_start) = match_type_space_declaration(source, index)?;
+        trim_trailing_inline_whitespace(output);
+        let end = match kind {
+            TypeSpaceDeclarationKind::Interface => {
+                find_interface_declaration_end(source, keyword_start)?
+            }
+            TypeSpaceDeclarationKind::TypeAlias => {
+                find_type_alias_declaration_end(source, keyword_start)?
+            }
+        };
+        Some(end)
+    })
+}
+
+fn match_type_space_declaration(
+    source: &str,
+    index: usize,
+) -> Option<(TypeSpaceDeclarationKind, usize)> {
+    if !is_statement_start(source, index) {
+        return None;
+    }
+
+    if starts_with_keyword(source, index, "export") {
+        let after_export = skip_ascii_whitespace(source, index + "export".len());
+        if starts_with_keyword(source, after_export, "interface") {
+            return Some((TypeSpaceDeclarationKind::Interface, after_export));
+        }
+        if starts_with_keyword(source, after_export, "type") {
+            return Some((TypeSpaceDeclarationKind::TypeAlias, after_export));
+        }
+        return None;
+    }
+
+    if starts_with_keyword(source, index, "interface") {
+        return Some((TypeSpaceDeclarationKind::Interface, index));
+    }
+    if starts_with_keyword(source, index, "type") {
+        return Some((TypeSpaceDeclarationKind::TypeAlias, index));
+    }
+
+    None
+}
+
+fn is_statement_start(source: &str, index: usize) -> bool {
+    for ch in source[..index].chars().rev() {
+        if ch == '\n' {
+            return true;
+        }
+        if ch.is_ascii_whitespace() {
+            continue;
+        }
+        return matches!(ch, ';' | '{' | '}');
+    }
+
+    true
+}
+
+fn skip_identifier(source: &str, index: usize) -> Option<usize> {
+    let mut chars = source[index..].char_indices();
+    let (_, first) = chars.next()?;
+    if !matches!(first, '_' | '$') && !first.is_ascii_alphabetic() {
+        return None;
+    }
+
+    let mut end = index + first.len_utf8();
+    for (offset, ch) in chars {
+        if is_identifier_char(ch) {
+            end = index + offset + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    Some(end)
+}
+
+fn find_interface_declaration_end(source: &str, keyword_start: usize) -> Option<usize> {
+    let mut cursor = skip_ascii_whitespace(source, keyword_start + "interface".len());
+    cursor = skip_identifier(source, cursor)?;
+    let body_start = find_top_level_char(source, cursor, '{')?;
+    let body_end = find_matching_delimiter(source, body_start, '{', '}')?;
+    let mut end = body_end + '}'.len_utf8();
+    end = skip_ascii_whitespace(source, end);
+    if source[end..].starts_with(';') {
+        end += 1;
+    }
+    Some(end)
+}
+
+fn find_type_alias_declaration_end(source: &str, keyword_start: usize) -> Option<usize> {
+    let mut cursor = skip_ascii_whitespace(source, keyword_start + "type".len());
+    cursor = skip_identifier(source, cursor)?;
+    find_top_level_statement_terminator(source, cursor)
+}
+
+fn next_code_scan_char(
+    source: &str,
+    cursor: &mut usize,
+    state: &mut LexicalRewriteState,
+) -> Option<(usize, char)> {
+    let bytes = source.as_bytes();
+
+    while *cursor < source.len() {
+        match *state {
+            LexicalRewriteState::Code => {
+                if bytes[*cursor] == b'/' && *cursor + 1 < source.len() {
+                    match bytes[*cursor + 1] {
+                        b'/' => {
+                            *cursor += 2;
+                            *state = LexicalRewriteState::LineComment;
+                            continue;
+                        }
+                        b'*' => {
+                            *cursor += 2;
+                            *state = LexicalRewriteState::BlockComment;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+
+                let index = *cursor;
+                let ch = source[index..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                *cursor += ch.len_utf8();
+
+                match ch {
+                    '\'' => *state = LexicalRewriteState::SingleQuote,
+                    '"' => *state = LexicalRewriteState::DoubleQuote,
+                    '`' => *state = LexicalRewriteState::TemplateLiteral,
+                    _ => return Some((index, ch)),
+                }
+            }
+            LexicalRewriteState::SingleQuote => {
+                let ch = source[*cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                *cursor += ch.len_utf8();
+                if ch == '\\' && *cursor < source.len() {
+                    let escaped = source[*cursor..]
+                        .chars()
+                        .next()
+                        .expect("escaped string should remain on a char boundary");
+                    *cursor += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '\'' {
+                    *state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::DoubleQuote => {
+                let ch = source[*cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                *cursor += ch.len_utf8();
+                if ch == '\\' && *cursor < source.len() {
+                    let escaped = source[*cursor..]
+                        .chars()
+                        .next()
+                        .expect("escaped string should remain on a char boundary");
+                    *cursor += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '"' {
+                    *state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::TemplateLiteral => {
+                let ch = source[*cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                *cursor += ch.len_utf8();
+                if ch == '\\' && *cursor < source.len() {
+                    let escaped = source[*cursor..]
+                        .chars()
+                        .next()
+                        .expect("escaped template should remain on a char boundary");
+                    *cursor += escaped.len_utf8();
+                    continue;
+                }
+                if ch == '`' {
+                    *state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::LineComment => {
+                let ch = source[*cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                *cursor += ch.len_utf8();
+                if ch == '\n' {
+                    *state = LexicalRewriteState::Code;
+                }
+            }
+            LexicalRewriteState::BlockComment => {
+                if bytes[*cursor] == b'*'
+                    && *cursor + 1 < source.len()
+                    && bytes[*cursor + 1] == b'/'
+                {
+                    *cursor += 2;
+                    *state = LexicalRewriteState::Code;
+                    continue;
+                }
+
+                let ch = source[*cursor..]
+                    .chars()
+                    .next()
+                    .expect("cursor should remain on a char boundary");
+                *cursor += ch.len_utf8();
+            }
+        }
+    }
+
+    None
+}
+
+fn find_top_level_char(source: &str, start: usize, target: char) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut cursor = start;
+    let mut state = LexicalRewriteState::Code;
+
+    while let Some((index, ch)) = next_code_scan_char(source, &mut cursor, &mut state) {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            _ if ch == target && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 => {
+                return Some(index);
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn find_matching_delimiter(source: &str, start: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut cursor = start;
+    let mut state = LexicalRewriteState::Code;
+
+    while let Some((index, ch)) = next_code_scan_char(source, &mut cursor, &mut state) {
+        if ch == open {
+            depth += 1;
+        } else if ch == close {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(index);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_top_level_statement_terminator(source: &str, start: usize) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut cursor = start;
+    let mut state = LexicalRewriteState::Code;
+
+    while let Some((index, ch)) = next_code_scan_char(source, &mut cursor, &mut state) {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            ';' if paren_depth == 0
+                && bracket_depth == 0
+                && brace_depth == 0
+                && angle_depth == 0 =>
+            {
+                return Some(index + ch.len_utf8());
+            }
+            _ => {}
+        }
+    }
+
+    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 && angle_depth == 0 {
+        Some(source.len())
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1625,6 +1953,64 @@ fn lower_abstract_class_keywords(source: &str) -> String {
     })
 }
 
+fn strip_implements_clauses(source: &str) -> String {
+    rewrite_outside_strings_and_comments(source, |source, index, output| {
+        if !starts_with_keyword(source, index, "implements")
+            || !class_header_precedes_implements(source, index)
+        {
+            return None;
+        }
+
+        let mut cursor = index + "implements".len();
+        let mut paren_depth = 0usize;
+        let mut bracket_depth = 0usize;
+        let mut angle_depth = 0usize;
+
+        while cursor < source.len() {
+            let ch = source[cursor..]
+                .chars()
+                .next()
+                .expect("cursor should remain on a char boundary");
+            match ch {
+                '(' => paren_depth += 1,
+                ')' => paren_depth = paren_depth.saturating_sub(1),
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth = bracket_depth.saturating_sub(1),
+                '<' => angle_depth += 1,
+                '>' => angle_depth = angle_depth.saturating_sub(1),
+                '{' if paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 => {
+                    trim_trailing_inline_whitespace(output);
+                    if output
+                        .chars()
+                        .next_back()
+                        .is_some_and(|last| !last.is_ascii_whitespace() && last != '{')
+                    {
+                        output.push(' ');
+                    }
+                    return Some(cursor);
+                }
+                _ => {}
+            }
+            cursor += ch.len_utf8();
+        }
+
+        None
+    })
+}
+
+fn class_header_precedes_implements(source: &str, index: usize) -> bool {
+    let mut cursor = index;
+    while let Some((prev_index, ch)) = source[..cursor].char_indices().last() {
+        if matches!(ch, '\n' | ';' | '{' | '}') {
+            let header_start = prev_index + ch.len_utf8();
+            return source[header_start..index].contains("class ");
+        }
+        cursor = prev_index;
+    }
+
+    source[..index].contains("class ")
+}
+
 fn strip_type_annotations(source: &str) -> String {
     let mut output = String::new();
     let mut chars = source.chars().peekable();
@@ -1825,6 +2211,76 @@ const value: number = 1;
 
         assert!(output.normalized_source.contains("this.service = service;"));
         assert!(output.normalized_source.contains("this.count = count;"));
+    }
+
+    #[test]
+    fn strips_interface_declarations() {
+        let source = "interface Shape { area(): number; }\nconst shape = {};";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("interface declaration should be removed");
+
+        assert!(!output.normalized_source.contains("interface Shape"));
+        assert!(output.normalized_source.contains("const shape = {};"));
+    }
+
+    #[test]
+    fn strips_export_type_alias_declarations() {
+        let source = "export type UserId = string;\nconst userId = \"u1\";";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("type alias declaration should be removed");
+
+        assert!(!output.normalized_source.contains("export type"));
+        assert!(!output.normalized_source.contains("type UserId"));
+        assert!(output.normalized_source.contains("const userId = \"u1\";"));
+    }
+
+    #[test]
+    fn strips_type_aliases_with_comments_and_template_literals() {
+        let source = r#"type Route = /* comment; */ `/api;${string}`;
+const route = "/api/x";"#;
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("type alias with comment/template literal should be removed");
+
+        assert!(!output.normalized_source.contains("type Route"));
+        assert!(
+            output
+                .normalized_source
+                .contains("const route = \"/api/x\";")
+        );
+    }
+
+    #[test]
+    fn strips_interface_declarations_with_comment_delimiters() {
+        let source = "interface Shape { /* { nested } ; */ area(): number; }\nconst shape = {};";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("interface declaration with comments should be removed");
+
+        assert!(!output.normalized_source.contains("interface Shape"));
+        assert!(output.normalized_source.contains("const shape = {};"));
     }
 
     #[test]
@@ -2106,6 +2562,26 @@ abstract class Base { }"#;
         assert!(normalized.contains(r#""abstract class""#));
         assert!(normalized.contains("/* abstract class Commented {} */"));
         assert!(normalized.contains("class Base { }"));
+    }
+
+    #[test]
+    fn strips_implements_clause_from_class_headers() {
+        let source = "class Service implements Disposable, NamedService { run() { return 1; } }";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "t",
+            "d",
+            "p",
+        )
+        .unwrap();
+
+        assert!(!output.normalized_source.contains("implements Disposable"));
+        assert!(
+            output
+                .normalized_source
+                .contains("class Service { run() { return 1; } }")
+        );
     }
 
     // --- Decorator lowering ---
@@ -2911,6 +3387,10 @@ abstract class Base { }"#;
         );
         assert_eq!(
             classify_source_language(None, "import type { Foo } from './foo';"),
+            SourceLanguage::TypeScript
+        );
+        assert_eq!(
+            classify_source_language(None, "export type UserId = string;"),
             SourceLanguage::TypeScript
         );
     }

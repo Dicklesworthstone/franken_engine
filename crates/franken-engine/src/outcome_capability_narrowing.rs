@@ -520,11 +520,11 @@ impl CapabilityNarrowingValidator {
         }
 
         // Update the last transition if it matches
-        if let Some(last) = self.transitions.last_mut() {
-            if last.boundary_label == boundary_label {
-                last.child_outcome = Some(child_outcome);
-                last.propagated_outcome = Some(propagated);
-            }
+        if let Some(last) = self.transitions.last_mut()
+            && last.boundary_label == boundary_label
+        {
+            last.child_outcome = Some(child_outcome);
+            last.propagated_outcome = Some(propagated);
         }
 
         propagated

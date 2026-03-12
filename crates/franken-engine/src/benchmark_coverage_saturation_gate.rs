@@ -463,7 +463,7 @@ impl DecisionReceipt {
             component: COMPONENT.to_string(),
             epoch,
             decision: result.decision,
-            evidence_hash: result.receipt_hash.clone(),
+            evidence_hash: result.receipt_hash,
         }
     }
 }

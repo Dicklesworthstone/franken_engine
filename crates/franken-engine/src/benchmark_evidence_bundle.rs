@@ -1629,7 +1629,7 @@ mod tests {
     #[test]
     fn bundle_hash_changes_on_add() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(1));
-        let h1 = bundle.bundle_hash.clone();
+        let h1 = bundle.bundle_hash;
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
@@ -1642,7 +1642,7 @@ mod tests {
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
-        let h1 = bundle.bundle_hash.clone();
+        let h1 = bundle.bundle_hash;
         bundle.add_run(test_run("r1", "w1", 100, 0)).unwrap();
         assert_ne!(h1, bundle.bundle_hash);
     }

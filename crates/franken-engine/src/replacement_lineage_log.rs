@@ -146,7 +146,7 @@ fn compute_merkle_root(entry_hashes: &[ContentHash]) -> ContentHash {
                 next_level.push(merkle_node(&current_level[i], &current_level[i + 1]));
             } else {
                 // Odd node promoted directly.
-                next_level.push(current_level[i].clone());
+                next_level.push(current_level[i]);
             }
             i += 2;
         }
@@ -195,7 +195,7 @@ fn build_inclusion_proof(entry_hashes: &[ContentHash], index: usize) -> Option<I
     if entry_hashes.len() == 1 {
         return Some(InclusionProof {
             entry_index: index as u64,
-            entry_hash: entry_hashes[index].clone(),
+            entry_hash: entry_hashes[index],
             path: Vec::new(),
             root,
         });
@@ -211,7 +211,7 @@ fn build_inclusion_proof(entry_hashes: &[ContentHash], index: usize) -> Option<I
             // We're a left child; sibling is to our right (if exists).
             if pos + 1 < current_level.len() {
                 path.push(MerkleProofStep {
-                    sibling_hash: current_level[pos + 1].clone(),
+                    sibling_hash: current_level[pos + 1],
                     direction: ProofDirection::Right,
                 });
             }
@@ -219,7 +219,7 @@ fn build_inclusion_proof(entry_hashes: &[ContentHash], index: usize) -> Option<I
         } else {
             // We're a right child; sibling is to our left.
             path.push(MerkleProofStep {
-                sibling_hash: current_level[pos - 1].clone(),
+                sibling_hash: current_level[pos - 1],
                 direction: ProofDirection::Left,
             });
         }
@@ -231,7 +231,7 @@ fn build_inclusion_proof(entry_hashes: &[ContentHash], index: usize) -> Option<I
             if i + 1 < current_level.len() {
                 next_level.push(merkle_node(&current_level[i], &current_level[i + 1]));
             } else {
-                next_level.push(current_level[i].clone());
+                next_level.push(current_level[i]);
             }
             i += 2;
         }
@@ -241,7 +241,7 @@ fn build_inclusion_proof(entry_hashes: &[ContentHash], index: usize) -> Option<I
 
     Some(InclusionProof {
         entry_index: index as u64,
-        entry_hash: entry_hashes[index].clone(),
+        entry_hash: entry_hashes[index],
         path,
         root,
     })
@@ -659,7 +659,7 @@ impl ReplacementLineageLog {
             .entries
             .iter()
             .take(newer.log_length as usize)
-            .map(|entry| entry.entry_hash.clone())
+            .map(|entry| entry.entry_hash)
             .collect();
         let older_entry_hashes: Vec<ContentHash> = newer_entry_hashes
             .iter()
@@ -672,8 +672,8 @@ impl ReplacementLineageLog {
             newer_checkpoint_seq,
             older_log_length: older.log_length,
             newer_log_length: newer.log_length,
-            older_root: older.merkle_root.clone(),
-            newer_root: newer.merkle_root.clone(),
+            older_root: older.merkle_root,
+            newer_root: newer.merkle_root,
             older_entry_hashes,
             newer_entry_hashes,
         })
@@ -700,7 +700,7 @@ impl ReplacementLineageLog {
 
         // Predecessor hash: hash of the previous entry, or zeros for first.
         let predecessor_hash = if let Some(last) = self.entries.last() {
-            last.entry_hash.clone()
+            last.entry_hash
         } else {
             ContentHash::compute(b"genesis")
         };
@@ -745,8 +745,7 @@ impl ReplacementLineageLog {
         }
 
         let log_length = self.entries.len() as u64;
-        let entry_hashes: Vec<ContentHash> =
-            self.entries.iter().map(|e| e.entry_hash.clone()).collect();
+        let entry_hashes: Vec<ContentHash> = self.entries.iter().map(|e| e.entry_hash).collect();
         let merkle_root = compute_merkle_root(&entry_hashes);
 
         let checkpoint_seq = self.checkpoint_seq_counter;
@@ -806,8 +805,7 @@ impl ReplacementLineageLog {
 
     /// Generate a Merkle inclusion proof for a specific entry.
     pub fn inclusion_proof(&self, sequence: u64) -> Option<InclusionProof> {
-        let entry_hashes: Vec<ContentHash> =
-            self.entries.iter().map(|e| e.entry_hash.clone()).collect();
+        let entry_hashes: Vec<ContentHash> = self.entries.iter().map(|e| e.entry_hash).collect();
         build_inclusion_proof(&entry_hashes, sequence as usize)
     }
 
@@ -885,7 +883,7 @@ impl ReplacementLineageLog {
             let expected_pred = if i == 0 {
                 ContentHash::compute(b"genesis")
             } else {
-                self.entries[i - 1].entry_hash.clone()
+                self.entries[i - 1].entry_hash
             };
 
             if entry.predecessor_hash != expected_pred {
@@ -913,8 +911,7 @@ impl ReplacementLineageLog {
         }
 
         // Verify Merkle root matches the latest checkpoint.
-        let entry_hashes: Vec<ContentHash> =
-            self.entries.iter().map(|e| e.entry_hash.clone()).collect();
+        let entry_hashes: Vec<ContentHash> = self.entries.iter().map(|e| e.entry_hash).collect();
         let current_root = compute_merkle_root(&entry_hashes);
         let mut merkle_valid = if let Some(last_cp) = self.checkpoints.last() {
             if last_cp.log_length == self.entries.len() as u64 {
@@ -993,8 +990,7 @@ impl ReplacementLineageLog {
 
     /// Get the current Merkle root.
     pub fn merkle_root(&self) -> ContentHash {
-        let entry_hashes: Vec<ContentHash> =
-            self.entries.iter().map(|e| e.entry_hash.clone()).collect();
+        let entry_hashes: Vec<ContentHash> = self.entries.iter().map(|e| e.entry_hash).collect();
         compute_merkle_root(&entry_hashes)
     }
 

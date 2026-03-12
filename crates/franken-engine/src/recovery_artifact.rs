@@ -377,9 +377,7 @@ impl ArtifactBuilder {
 
     /// Build the final artifact with computed content hash and signature.
     pub fn build(self) -> RecoveryArtifact {
-        let after_state = self
-            .after_state
-            .unwrap_or_else(|| self.before_state.clone());
+        let after_state = self.after_state.unwrap_or(self.before_state);
 
         // Compute artifact_id as ContentHash over deterministic serialized fields.
         let id_input = format!(
@@ -483,7 +481,7 @@ impl RecoveryArtifactStore {
         let computed_id = ContentHash::compute(id_input.as_bytes());
         if computed_id != artifact.artifact_id {
             return Err(VerificationError::ArtifactIdMismatch {
-                expected: artifact.artifact_id.clone(),
+                expected: artifact.artifact_id,
                 computed: computed_id,
             });
         }

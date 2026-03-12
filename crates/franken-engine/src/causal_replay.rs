@@ -483,7 +483,7 @@ impl TraceRecorder {
         let prev_hash = self
             .entries
             .last()
-            .map(|e| e.entry_hash.clone())
+            .map(|e| e.entry_hash)
             .unwrap_or_else(|| ContentHash::compute(b"genesis"));
 
         let entry_index = self.entries.len() as u64;
@@ -512,7 +512,7 @@ impl TraceRecorder {
         let chain_hash = self
             .entries
             .last()
-            .map(|e| e.entry_hash.clone())
+            .map(|e| e.entry_hash)
             .unwrap_or_else(|| ContentHash::compute(b"empty-trace"));
 
         let mut record = TraceRecord {

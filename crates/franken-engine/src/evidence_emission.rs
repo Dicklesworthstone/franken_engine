@@ -384,7 +384,7 @@ impl CanonicalEvidenceEmitter {
             schema_version: SCHEMA_VERSION.to_string(),
             ts_unix_ms: request.ts_unix_ms,
             epoch: self.epoch,
-            artifact_hash: artifact_hash.clone(),
+            artifact_hash,
             ledger_entry,
             chain_hash,
             metadata: request.metadata.clone(),
@@ -971,19 +971,19 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
 
-        let h0 = em.rolling_hash().clone();
+        let h0 = *em.rolling_hash();
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
         .unwrap();
-        let h1 = em.rolling_hash().clone();
+        let h1 = *em.rolling_hash();
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "b"),
         )
         .unwrap();
-        let h2 = em.rolling_hash().clone();
+        let h2 = *em.rolling_hash();
 
         assert_ne!(h0, h1);
         assert_ne!(h1, h2);
@@ -1146,7 +1146,7 @@ mod tests {
                 let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
                 em.emit(&mut cx, &req).unwrap();
             }
-            (em.entries().to_vec(), em.rolling_hash().clone())
+            (em.entries().to_vec(), *em.rolling_hash())
         };
 
         let (entries_a, hash_a) = run();

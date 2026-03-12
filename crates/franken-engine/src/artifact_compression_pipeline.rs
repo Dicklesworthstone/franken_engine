@@ -716,24 +716,24 @@ impl BundlePlanner {
             }
 
             // Step 2: check dedup
-            if self.config.dedup_enabled {
-                if let Some(canonical) = &desc.canonical_id {
-                    if let Some(existing_id) = self.canonical_registry.get(canonical) {
-                        entries.push(PlanEntry {
-                            artifact_id: desc.artifact_id.clone(),
-                            category: desc.category,
-                            action: CompressionAction::Dedup,
-                            algorithm: CompressionAlgorithm::Identity,
-                            dedup_target: Some(existing_id.clone()),
-                            exclusion_reason: None,
-                        });
-                        dedup_count += 1;
-                        continue;
-                    }
-                    // First occurrence — register as canonical representative
-                    self.canonical_registry
-                        .insert(canonical.clone(), desc.artifact_id.clone());
+            if self.config.dedup_enabled
+                && let Some(canonical) = &desc.canonical_id
+            {
+                if let Some(existing_id) = self.canonical_registry.get(canonical) {
+                    entries.push(PlanEntry {
+                        artifact_id: desc.artifact_id.clone(),
+                        category: desc.category,
+                        action: CompressionAction::Dedup,
+                        algorithm: CompressionAlgorithm::Identity,
+                        dedup_target: Some(existing_id.clone()),
+                        exclusion_reason: None,
+                    });
+                    dedup_count += 1;
+                    continue;
                 }
+                // First occurrence — register as canonical representative
+                self.canonical_registry
+                    .insert(*canonical, desc.artifact_id.clone());
             }
 
             // Step 3: decide compression
@@ -986,10 +986,7 @@ impl CompressionPipeline {
                 }
                 CompressionAction::Dedup => {
                     if let Some(target) = &entry.dedup_target {
-                        let canonical_hash = desc
-                            .canonical_id
-                            .clone()
-                            .unwrap_or_else(|| desc.content_hash);
+                        let canonical_hash = desc.canonical_id.unwrap_or(desc.content_hash);
                         dedup_tracker.record_dedup(
                             &desc.artifact_id,
                             target,
@@ -1113,12 +1110,12 @@ mod tests {
 
     #[test]
     fn max_bundle_size_positive() {
-        assert!(MAX_BUNDLE_SIZE > 0);
+        const { assert!(MAX_BUNDLE_SIZE > 0) };
     }
 
     #[test]
     fn max_artifact_bytes_positive() {
-        assert!(MAX_ARTIFACT_BYTES > 0);
+        const { assert!(MAX_ARTIFACT_BYTES > 0) };
     }
 
     // --- CompressionAlgorithm ---

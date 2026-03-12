@@ -818,7 +818,7 @@ pub fn evaluate_batch(
         };
         decisions.push(GovernanceDecision::new(
             action,
-            vec![ev.evidence_hash.clone()],
+            vec![ev.evidence_hash],
             &explanation,
             ev.epoch,
         ));
@@ -1159,12 +1159,7 @@ mod tests {
     #[test]
     fn test_decision_lifecycle() {
         let h = ContentHash::compute(b"ev");
-        let d = GovernanceDecision::new(
-            GovernanceAction::AllowRollout,
-            vec![h.clone()],
-            "ok",
-            ep(10),
-        );
+        let d = GovernanceDecision::new(GovernanceAction::AllowRollout, vec![h], "ok", ep(10));
         assert_eq!(d.action, GovernanceAction::AllowRollout);
         assert_eq!(d.evidence_hashes.len(), 1);
         // Determinism
@@ -1199,14 +1194,14 @@ mod tests {
     #[test]
     fn test_receipt_lifecycle() {
         let h = ContentHash::compute(b"ev");
-        let r = DecisionReceipt::new(ep(15), GovernanceAction::AllowRollout, h.clone());
+        let r = DecisionReceipt::new(ep(15), GovernanceAction::AllowRollout, h);
         assert_eq!(r.component, COMPONENT);
         assert_eq!(r.epoch.as_u64(), 15);
         // Determinism
-        let r2 = DecisionReceipt::new(ep(15), GovernanceAction::AllowRollout, h.clone());
+        let r2 = DecisionReceipt::new(ep(15), GovernanceAction::AllowRollout, h);
         assert_eq!(r.receipt_hash, r2.receipt_hash);
         // Different action -> different hash
-        let r3 = DecisionReceipt::new(ep(15), GovernanceAction::BlockRollout, h.clone());
+        let r3 = DecisionReceipt::new(ep(15), GovernanceAction::BlockRollout, h);
         assert_ne!(r.receipt_hash, r3.receipt_hash);
         assert!(r3.to_string().contains("block_rollout"));
     }

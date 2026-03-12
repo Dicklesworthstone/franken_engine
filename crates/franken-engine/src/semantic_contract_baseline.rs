@@ -1108,7 +1108,7 @@ impl DriftDetector {
             kind: DriftKind::SemanticRegression,
             severity,
             source_lane: lane,
-            violated_contract_hash: Some(fixture.expected_trace_hash.clone()),
+            violated_contract_hash: Some(fixture.expected_trace_hash),
             description: format!(
                 "Trace mismatch for fixture '{}': expected {}, got {}",
                 fixture.name,
@@ -1355,7 +1355,7 @@ impl SemanticContractFoundation {
         self.event_log.push(FoundationEvent::BaselineFrozen {
             cut_line_id,
             epoch,
-            baseline_hash: baseline.baseline_hash.clone(),
+            baseline_hash: baseline.baseline_hash,
         });
         self.frozen_baselines.push(baseline);
         Ok(self.frozen_baselines.len() - 1)
@@ -1770,7 +1770,7 @@ mod tests {
     #[test]
     fn corpus_hash_changes_on_add() {
         let mut corpus = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
-        let h1 = corpus.corpus_hash.clone();
+        let h1 = corpus.corpus_hash;
         corpus
             .add_fixture(make_fixture(
                 "x",
@@ -1784,7 +1784,7 @@ mod tests {
     #[test]
     fn corpus_hash_changes_on_freeze() {
         let mut corpus = make_corpus_with_fixtures(2);
-        let h1 = corpus.corpus_hash.clone();
+        let h1 = corpus.corpus_hash;
         corpus.freeze().unwrap();
         assert_ne!(h1, corpus.corpus_hash);
     }
@@ -1967,7 +1967,7 @@ mod tests {
     fn package_hash_changes_on_add() {
         let corpus = make_corpus_with_fixtures(1);
         let mut pkg = ContractPackage::new(corpus).unwrap();
-        let h1 = pkg.package_hash.clone();
+        let h1 = pkg.package_hash;
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
             .unwrap();
         assert_ne!(h1, pkg.package_hash);

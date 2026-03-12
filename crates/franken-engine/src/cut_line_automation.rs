@@ -1469,8 +1469,7 @@ impl CutLineEvaluator {
 
         // If approved, mark as promoted.
         if verdict == GateVerdict::Approved {
-            self.promoted
-                .insert(input.cut_line, record.record_hash.clone());
+            self.promoted.insert(input.cut_line, record.record_hash);
         }
 
         self.history.push(record.clone());

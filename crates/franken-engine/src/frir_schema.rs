@@ -1081,7 +1081,7 @@ impl FrirLoweringPipeline {
         let final_output_hash = self
             .witnesses
             .last()
-            .map(|w| w.output_hash.clone())
+            .map(|w| w.output_hash)
             .unwrap_or_else(|| ContentHash::compute(b"empty"));
 
         // Compute chain hash from all witness hashes
@@ -1095,8 +1095,8 @@ impl FrirLoweringPipeline {
             schema_version: FRIR_SCHEMA_VERSION.to_string(),
             frir_version: FrirVersion::CURRENT,
             passes: self.witnesses.clone(),
-            source_hash: source_hash.clone(),
-            final_output_hash: final_output_hash.clone(),
+            source_hash,
+            final_output_hash,
             target_lane: self.config.target_lane,
             complete: !self.fallen_back,
             chain_hash,
@@ -1265,7 +1265,7 @@ mod tests {
     fn make_chained_witnesses() -> (PassWitness, PassWitness) {
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let mut w1 = make_witness(1, PassKind::ScopeResolve, b"ir0", b"ir1");
-        w1.input_hash = w0.output_hash.clone();
+        w1.input_hash = w0.output_hash;
         (w0, w1)
     }
 
@@ -1525,8 +1525,8 @@ mod tests {
             schema_version: FRIR_SCHEMA_VERSION.to_string(),
             frir_version: FrirVersion::CURRENT,
             passes: vec![w0.clone(), w1.clone()],
-            source_hash: w0.input_hash.clone(),
-            final_output_hash: w1.output_hash.clone(),
+            source_hash: w0.input_hash,
+            final_output_hash: w1.output_hash,
             target_lane: LaneTarget::Js,
             complete: true,
             chain_hash: make_hash(b"chain"),
@@ -1544,8 +1544,8 @@ mod tests {
             schema_version: FRIR_SCHEMA_VERSION.to_string(),
             frir_version: FrirVersion::CURRENT,
             passes: vec![w0.clone(), w1.clone()],
-            source_hash: w0.input_hash.clone(),
-            final_output_hash: w1.output_hash.clone(),
+            source_hash: w0.input_hash,
+            final_output_hash: w1.output_hash,
             target_lane: LaneTarget::Js,
             complete: true,
             chain_hash: make_hash(b"chain"),
@@ -1563,7 +1563,7 @@ mod tests {
             frir_version: FrirVersion::CURRENT,
             passes: vec![w0.clone()],
             source_hash: make_hash(b"wrong_source"),
-            final_output_hash: w0.output_hash.clone(),
+            final_output_hash: w0.output_hash,
             target_lane: LaneTarget::Js,
             complete: true,
             chain_hash: make_hash(b"chain"),
@@ -1609,7 +1609,7 @@ mod tests {
         let mut w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         w0.computed_offline = true;
         let mut w1 = make_witness(1, PassKind::ScopeResolve, b"ir0", b"ir1");
-        w1.input_hash = w0.output_hash.clone();
+        w1.input_hash = w0.output_hash;
         let chain = WitnessChain {
             schema_version: FRIR_SCHEMA_VERSION.to_string(),
             frir_version: FrirVersion::CURRENT,
@@ -1631,8 +1631,8 @@ mod tests {
             schema_version: FRIR_SCHEMA_VERSION.to_string(),
             frir_version: FrirVersion::CURRENT,
             passes: vec![w0.clone(), w1.clone()],
-            source_hash: w0.input_hash.clone(),
-            final_output_hash: w1.output_hash.clone(),
+            source_hash: w0.input_hash,
+            final_output_hash: w1.output_hash,
             target_lane: LaneTarget::Js,
             complete: true,
             chain_hash: make_hash(b"chain"),
@@ -1871,7 +1871,7 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let mut w0_dup = make_witness(0, PassKind::Parse, b"source2", b"ir0_2");
-        w0_dup.input_hash = w0.output_hash.clone();
+        w0_dup.input_hash = w0.output_hash;
         p.record_pass(w0).unwrap();
         let err = p.record_pass(w0_dup).unwrap_err();
         assert!(matches!(err, FrirPipelineError::DuplicatePassIndex(0)));
@@ -1966,7 +1966,7 @@ mod tests {
     fn pipeline_finalize_success() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let (w0, w1) = make_chained_witnesses();
-        let source_hash = w0.input_hash.clone();
+        let source_hash = w0.input_hash;
         p.record_pass(w0).unwrap();
         p.record_pass(w1).unwrap();
         let artifact = p.finalize(source_hash).unwrap();
@@ -1979,7 +1979,7 @@ mod tests {
     fn pipeline_finalize_with_equivalence() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        let source_hash = w0.input_hash.clone();
+        let source_hash = w0.input_hash;
         p.record_pass(w0).unwrap();
         let ew = EquivalenceWitness {
             reference_hash: make_hash(b"ref"),
@@ -2001,7 +2001,7 @@ mod tests {
     fn pipeline_events_audit_trail() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        let source_hash = w0.input_hash.clone();
+        let source_hash = w0.input_hash;
         p.record_pass(w0).unwrap();
         p.finalize(source_hash).unwrap();
         let events = p.events();
@@ -2026,7 +2026,7 @@ mod tests {
     fn frir_artifact_serde_roundtrip() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        let source_hash = w0.input_hash.clone();
+        let source_hash = w0.input_hash;
         p.record_pass(w0).unwrap();
         let artifact = p.finalize(source_hash).unwrap();
         let json = serde_json::to_string(&artifact).unwrap();

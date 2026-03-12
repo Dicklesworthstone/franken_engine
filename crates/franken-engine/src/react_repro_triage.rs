@@ -544,45 +544,49 @@ pub fn build_triage_event(
     }
 }
 
+/// Symptom flags for failure classification.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FailureSymptoms {
+    pub has_transform_diff: bool,
+    pub has_resolver_error: bool,
+    pub has_runtime_gap: bool,
+    pub has_env_boundary: bool,
+    pub has_version_mismatch: bool,
+    pub has_hook_violation: bool,
+    pub has_hydration_diff: bool,
+    pub has_suspense_diff: bool,
+    pub has_error_boundary_diff: bool,
+}
+
 /// Classify a failure from symptoms.
 #[must_use]
-pub fn classify_failure(
-    has_transform_diff: bool,
-    has_resolver_error: bool,
-    has_runtime_gap: bool,
-    has_env_boundary: bool,
-    has_version_mismatch: bool,
-    has_hook_violation: bool,
-    has_hydration_diff: bool,
-    has_suspense_diff: bool,
-    has_error_boundary_diff: bool,
-) -> FailureClass {
+pub fn classify_failure(symptoms: &FailureSymptoms) -> FailureClass {
     // Priority order: most specific first
-    if has_hook_violation {
+    if symptoms.has_hook_violation {
         return FailureClass::HookInvariantViolation;
     }
-    if has_hydration_diff {
+    if symptoms.has_hydration_diff {
         return FailureClass::HydrationMismatch;
     }
-    if has_suspense_diff {
+    if symptoms.has_suspense_diff {
         return FailureClass::SuspenseDivergence;
     }
-    if has_error_boundary_diff {
+    if symptoms.has_error_boundary_diff {
         return FailureClass::ErrorBoundaryFailure;
     }
-    if has_transform_diff {
+    if symptoms.has_transform_diff {
         return FailureClass::TransformBug;
     }
-    if has_resolver_error {
+    if symptoms.has_resolver_error {
         return FailureClass::ResolverBug;
     }
-    if has_runtime_gap {
+    if symptoms.has_runtime_gap {
         return FailureClass::RuntimeSemanticGap;
     }
-    if has_env_boundary {
+    if symptoms.has_env_boundary {
         return FailureClass::UnsupportedEnvironment;
     }
-    if has_version_mismatch {
+    if symptoms.has_version_mismatch {
         return FailureClass::PackageMisuse;
     }
     FailureClass::Unclassified
@@ -973,24 +977,45 @@ mod tests {
     fn classify_failure_priority_order() {
         // Hook violation takes priority
         assert_eq!(
-            classify_failure(true, true, true, true, true, true, true, true, true),
+            classify_failure(&FailureSymptoms {
+                has_transform_diff: true,
+                has_resolver_error: true,
+                has_runtime_gap: true,
+                has_env_boundary: true,
+                has_version_mismatch: true,
+                has_hook_violation: true,
+                has_hydration_diff: true,
+                has_suspense_diff: true,
+                has_error_boundary_diff: true,
+            }),
             FailureClass::HookInvariantViolation
         );
         // Hydration next
         assert_eq!(
-            classify_failure(true, true, true, true, true, false, true, true, true),
+            classify_failure(&FailureSymptoms {
+                has_transform_diff: true,
+                has_resolver_error: true,
+                has_runtime_gap: true,
+                has_env_boundary: true,
+                has_version_mismatch: true,
+                has_hook_violation: false,
+                has_hydration_diff: true,
+                has_suspense_diff: true,
+                has_error_boundary_diff: true,
+            }),
             FailureClass::HydrationMismatch
         );
         // Transform when no higher-priority
         assert_eq!(
-            classify_failure(true, false, false, false, false, false, false, false, false),
+            classify_failure(&FailureSymptoms {
+                has_transform_diff: true,
+                ..FailureSymptoms::default()
+            }),
             FailureClass::TransformBug
         );
         // Unclassified when all false
         assert_eq!(
-            classify_failure(
-                false, false, false, false, false, false, false, false, false
-            ),
+            classify_failure(&FailureSymptoms::default()),
             FailureClass::Unclassified
         );
     }

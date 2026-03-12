@@ -501,7 +501,7 @@ impl TranslationValidationGate {
                 current_stage: ActivationStage::Shadow,
                 receipt_optimization_class: receipt.optimization_class.to_string(),
                 rollback_token_id: token.token_id.clone(),
-                baseline_hash: receipt.baseline_ir_hash.clone(),
+                baseline_hash: receipt.baseline_ir_hash,
                 stage_verdicts: BTreeMap::new(),
                 promotions: Vec::new(),
             },
@@ -557,7 +557,7 @@ impl TranslationValidationGate {
                 divergence_reason,
                 counterexample_hash,
                 ..
-            } => (divergence_reason.clone(), Some(counterexample_hash.clone())),
+            } => (divergence_reason.clone(), Some(*counterexample_hash)),
             ValidationVerdict::Inconclusive { reason, .. } => {
                 (format!("inconclusive: {reason}"), None)
             }
@@ -710,8 +710,8 @@ impl TranslationValidationGate {
             rollback_token_id: tracked.rollback_token_id.clone(),
             optimization_id: optimization_id.to_string(),
             failure_reason: failure_reason.to_string(),
-            counterexample_hash: counterexample_hash.clone(),
-            restoration_baseline_hash: tracked.baseline_hash.clone(),
+            counterexample_hash,
+            restoration_baseline_hash: tracked.baseline_hash,
             rollback_from_stage: tracked.current_stage,
             timestamp_ticks: now_ticks,
             epoch: current_epoch,

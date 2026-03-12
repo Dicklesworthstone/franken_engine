@@ -182,7 +182,7 @@ impl LinkageRecord {
                 .collect(),
             optimization_class: self.optimization_class.to_string(),
             validity_epoch: self.validity_epoch.as_u64(),
-            rollback_token: self.rollback.baseline_ir3_hash.clone(),
+            rollback_token: self.rollback.baseline_ir3_hash,
         }
     }
 }
@@ -675,7 +675,7 @@ impl LinkageEngine {
         for id in to_invalidate {
             if let Some(record) = self.linkages.get_mut(&id) {
                 record.active = false;
-                let baseline_hash = record.rollback.baseline_ir3_hash.clone();
+                let baseline_hash = record.rollback.baseline_ir3_hash;
                 rollbacks.push((id.clone(), baseline_hash));
                 self.invalidations.push((
                     id,
@@ -719,7 +719,7 @@ impl LinkageEngine {
         for (id, proof_id, expiry_tick) in to_invalidate {
             if let Some(record) = self.linkages.get_mut(&id) {
                 record.active = false;
-                let baseline_hash = record.rollback.baseline_ir3_hash.clone();
+                let baseline_hash = record.rollback.baseline_ir3_hash;
                 rollbacks.push((id.clone(), baseline_hash));
                 self.invalidations.push((
                     id,
@@ -762,7 +762,7 @@ impl LinkageEngine {
         for id in to_invalidate {
             if let Some(record) = self.linkages.get_mut(&id) {
                 record.active = false;
-                let baseline_hash = record.rollback.baseline_ir3_hash.clone();
+                let baseline_hash = record.rollback.baseline_ir3_hash;
                 rollbacks.push((id.clone(), baseline_hash));
                 self.invalidations.push((
                     id,
@@ -804,7 +804,7 @@ impl LinkageEngine {
         }
 
         record.active = false;
-        let baseline_hash = record.rollback.baseline_ir3_hash.clone();
+        let baseline_hash = record.rollback.baseline_ir3_hash;
         self.invalidations.push((
             linkage_id.clone(),
             InvalidationCause::ManualInvalidation {
@@ -850,7 +850,7 @@ impl LinkageEngine {
         self.linkages
             .iter()
             .filter(|(_, r)| r.active)
-            .map(|(id, r)| (id.clone(), r.rollback.baseline_ir3_hash.clone()))
+            .map(|(id, r)| (id.clone(), r.rollback.baseline_ir3_hash))
             .collect()
     }
 
@@ -1576,7 +1576,7 @@ mod tests {
     fn epoch_change_returns_rollback_hashes() {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 5, &["proof-a"]);
-        let expected_baseline = record.rollback.baseline_ir3_hash.clone();
+        let expected_baseline = record.rollback.baseline_ir3_hash;
         engine.register(record, "t1").unwrap();
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
@@ -1646,7 +1646,7 @@ mod tests {
     fn manual_invalidation() {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 5, &["proof-a"]);
-        let expected_baseline = record.rollback.baseline_ir3_hash.clone();
+        let expected_baseline = record.rollback.baseline_ir3_hash;
         engine.register(record, "t1").unwrap();
 
         let lid = LinkageId::new("link-1");
@@ -1825,7 +1825,7 @@ mod tests {
 
         // 1. Register
         let record = make_linkage("link-1", 5, &["proof-a", "proof-b"]);
-        let expected_baseline = record.rollback.baseline_ir3_hash.clone();
+        let expected_baseline = record.rollback.baseline_ir3_hash;
         engine.register(record, "t1").unwrap();
         assert_eq!(engine.active_count(), 1);
 

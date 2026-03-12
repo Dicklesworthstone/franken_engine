@@ -666,7 +666,7 @@ impl GoldenLedgerManifest {
             ledger.name.clone(),
             ManifestEntry {
                 schema_version: ledger.schema_version.clone(),
-                corpus_hash: ledger.corpus_hash.clone(),
+                corpus_hash: ledger.corpus_hash,
                 entry_count: ledger.entries.len(),
                 frozen_at_ms: ledger.frozen_at_ms,
             },

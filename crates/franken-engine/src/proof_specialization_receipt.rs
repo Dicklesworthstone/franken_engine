@@ -980,7 +980,7 @@ mod tests {
     fn validate_rejects_identical_ir_digests() {
         let mut receipt = test_receipt(epoch());
         receipt.transformation_witness.after_ir_digest =
-            receipt.transformation_witness.before_ir_digest.clone();
+            receipt.transformation_witness.before_ir_digest;
         assert_eq!(receipt.validate(), Err(ReceiptError::IdenticalIrDigests));
     }
 
@@ -2746,7 +2746,7 @@ mod tests {
             .add_proof_input(test_proof_input(ProofType::FlowProof, e))
             .transformation_witness(TransformationWitness {
                 description: "some transform".to_string(),
-                before_ir_digest: digest.clone(),
+                before_ir_digest: digest,
                 after_ir_digest: digest,
             })
             .equivalence_evidence(test_equivalence_evidence())

@@ -805,10 +805,10 @@ pub fn validate_threading(
         }
 
         // Check parent exists (if specified).
-        if let Some(ref parent_id) = ctx.parent_id {
-            if !context_map.contains_key(parent_id) {
-                // Parent might be in a different scope — warn but don't fail.
-            }
+        if let Some(ref parent_id) = ctx.parent_id
+            && !context_map.contains_key(parent_id)
+        {
+            // Parent might be in a different scope — warn but don't fail.
         }
     }
 

@@ -1507,7 +1507,7 @@ mod tests {
     #[test]
     fn test_receipt_determinism() {
         let hash = ContentHash::compute(b"test-input");
-        let r1 = compute_receipt(hash.clone(), &GateVerdict::Pass, epoch(1));
+        let r1 = compute_receipt(hash, &GateVerdict::Pass, epoch(1));
         let r2 = compute_receipt(hash, &GateVerdict::Pass, epoch(1));
         assert_eq!(r1.verdict_hash, r2.verdict_hash);
         assert_eq!(r1.schema_version, SCHEMA_VERSION);
@@ -1519,7 +1519,7 @@ mod tests {
     #[test]
     fn test_receipt_different_verdicts_differ() {
         let hash = ContentHash::compute(b"test-input");
-        let r1 = compute_receipt(hash.clone(), &GateVerdict::Pass, epoch(1));
+        let r1 = compute_receipt(hash, &GateVerdict::Pass, epoch(1));
         let r2 = compute_receipt(hash, &GateVerdict::Fail, epoch(1));
         assert_ne!(r1.verdict_hash, r2.verdict_hash);
     }
@@ -1527,7 +1527,7 @@ mod tests {
     #[test]
     fn test_receipt_different_epochs_differ() {
         let hash = ContentHash::compute(b"test-input");
-        let r1 = compute_receipt(hash.clone(), &GateVerdict::Pass, epoch(1));
+        let r1 = compute_receipt(hash, &GateVerdict::Pass, epoch(1));
         let r2 = compute_receipt(hash, &GateVerdict::Pass, epoch(2));
         assert_ne!(r1.verdict_hash, r2.verdict_hash);
     }

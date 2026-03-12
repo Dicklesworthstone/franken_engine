@@ -1332,7 +1332,7 @@ mod tests {
     #[test]
     fn receipt_deterministic() {
         let ih = ContentHash::compute(b"x");
-        let r1 = DecisionReceipt::new(test_epoch(), ih.clone(), GateVerdict::Pass, 500);
+        let r1 = DecisionReceipt::new(test_epoch(), ih, GateVerdict::Pass, 500);
         let r2 = DecisionReceipt::new(test_epoch(), ih, GateVerdict::Pass, 500);
         assert_eq!(r1.verdict_hash, r2.verdict_hash);
     }
@@ -1340,7 +1340,7 @@ mod tests {
     #[test]
     fn receipt_different_verdict_different_hash() {
         let ih = ContentHash::compute(b"x");
-        let r1 = DecisionReceipt::new(test_epoch(), ih.clone(), GateVerdict::Pass, 500);
+        let r1 = DecisionReceipt::new(test_epoch(), ih, GateVerdict::Pass, 500);
         let r2 = DecisionReceipt::new(test_epoch(), ih, GateVerdict::Block, 500);
         assert_ne!(r1.verdict_hash, r2.verdict_hash);
     }

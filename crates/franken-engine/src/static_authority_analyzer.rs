@@ -1457,8 +1457,8 @@ mod tests {
             .expect("analysis");
 
         let key = AnalysisCacheKey {
-            effect_graph_hash: report.effect_graph_hash.clone(),
-            manifest_hash: report.manifest_hash.clone(),
+            effect_graph_hash: report.effect_graph_hash,
+            manifest_hash: report.manifest_hash,
             path_sensitive: false,
         };
 
@@ -1690,8 +1690,8 @@ mod tests {
             .expect("analysis");
 
         let key = AnalysisCacheKey {
-            effect_graph_hash: report.effect_graph_hash.clone(),
-            manifest_hash: report.manifest_hash.clone(),
+            effect_graph_hash: report.effect_graph_hash,
+            manifest_hash: report.manifest_hash,
             path_sensitive: false,
         };
         cache.insert(key, report);
@@ -2143,8 +2143,8 @@ mod tests {
             .expect("r2");
 
         let key = AnalysisCacheKey {
-            effect_graph_hash: r1.effect_graph_hash.clone(),
-            manifest_hash: r1.manifest_hash.clone(),
+            effect_graph_hash: r1.effect_graph_hash,
+            manifest_hash: r1.manifest_hash,
             path_sensitive: false,
         };
 
@@ -2174,8 +2174,8 @@ mod tests {
 
         cache.insert(
             AnalysisCacheKey {
-                effect_graph_hash: report.effect_graph_hash.clone(),
-                manifest_hash: report.manifest_hash.clone(),
+                effect_graph_hash: report.effect_graph_hash,
+                manifest_hash: report.manifest_hash,
                 path_sensitive: report.path_sensitive,
             },
             report,
@@ -2748,13 +2748,13 @@ mod tests {
             .expect("analysis");
 
         let key_false = AnalysisCacheKey {
-            effect_graph_hash: report.effect_graph_hash.clone(),
-            manifest_hash: report.manifest_hash.clone(),
+            effect_graph_hash: report.effect_graph_hash,
+            manifest_hash: report.manifest_hash,
             path_sensitive: false,
         };
         let key_true = AnalysisCacheKey {
-            effect_graph_hash: report.effect_graph_hash.clone(),
-            manifest_hash: report.manifest_hash.clone(),
+            effect_graph_hash: report.effect_graph_hash,
+            manifest_hash: report.manifest_hash,
             path_sensitive: true,
         };
 

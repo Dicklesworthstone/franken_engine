@@ -785,7 +785,7 @@ impl CounterfactualEvaluator {
 
             let hw = hw.min(i64::MAX as i128) as i64;
             result.insert(
-                regime.clone(),
+                regime.to_string(),
                 ConfidenceEnvelope {
                     estimate_millionths: mean,
                     lower_millionths: mean.saturating_sub(hw),

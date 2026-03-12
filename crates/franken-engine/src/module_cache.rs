@@ -346,9 +346,9 @@ impl ModuleCache {
             .latest_versions
             .get(module_id)
             .cloned()
-            .unwrap_or_else(|| ModuleVersionFingerprint::new(new_source_hash.clone(), 0, 0));
+            .unwrap_or_else(|| ModuleVersionFingerprint::new(new_source_hash, 0, 0));
         latest.source_hash = new_source_hash;
-        let current_source_hash = latest.source_hash.clone();
+        let current_source_hash = latest.source_hash;
         self.latest_versions.insert(module_id.to_string(), latest);
 
         let removed = self.remove_module_entries_where(module_id, |entry| {
@@ -860,7 +860,7 @@ impl CacheTraceCorpusManifest {
         if expected_hash != self.corpus_hash {
             return Err(CachePolicyReportError::CorpusHashMismatch {
                 expected: expected_hash,
-                actual: self.corpus_hash.clone(),
+                actual: self.corpus_hash,
             });
         }
         Ok(())
@@ -1921,7 +1921,7 @@ pub fn emit_default_s3fifo_baseline_bundle(
         source_commit: context.source_commit.clone(),
         toolchain: context.toolchain.clone(),
         corpus_id: manifest.corpus_id.clone(),
-        corpus_hash: manifest.corpus_hash.clone(),
+        corpus_hash: manifest.corpus_hash,
         baseline_config,
         candidate_config,
         baseline_policy_name: report.baseline_policy_name.clone(),
@@ -2196,7 +2196,7 @@ pub fn evaluate_s3fifo_baseline(
     let report = CachePolicyBaselineReport {
         schema_version: CACHE_POLICY_BASELINE_SCHEMA_VERSION.to_string(),
         corpus_id: manifest.corpus_id.clone(),
-        corpus_hash: manifest.corpus_hash.clone(),
+        corpus_hash: manifest.corpus_hash,
         baseline_policy_name: CachePolicyKind::SingleQueueFifo.as_str().to_string(),
         candidate_policy_name: CachePolicyKind::S3Fifo.as_str().to_string(),
         adoption_wedge: adoption_wedge.clone(),
@@ -3417,7 +3417,7 @@ mod tests {
         assert!(cache.get("mod:a", &v1).is_some());
 
         let v2_hash = source_hash("v2");
-        cache.invalidate_source_update("mod:a", v2_hash.clone(), &context());
+        cache.invalidate_source_update("mod:a", v2_hash, &context());
         assert!(cache.get("mod:a", &v1).is_none());
 
         let v2 = ModuleVersionFingerprint::new(v2_hash, 1, 1);
@@ -4506,7 +4506,7 @@ mod tests {
             .unwrap();
         cache
             .insert(
-                CacheInsertRequest::new("mod:dup", v.clone(), art2.clone(), "/dup.js"),
+                CacheInsertRequest::new("mod:dup", v.clone(), art2, "/dup.js"),
                 &ctx,
             )
             .unwrap();

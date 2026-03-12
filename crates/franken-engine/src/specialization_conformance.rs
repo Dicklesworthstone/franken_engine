@@ -978,7 +978,7 @@ impl SpecializationConformanceEngine {
             };
 
             let rollback_token = entry
-                .map(|e| e.rollback_token_hash.clone())
+                .map(|e| e.rollback_token_hash)
                 .unwrap_or_else(|| ContentHash::compute(b"missing"));
 
             evidence.push(InvalidationEvidence {
@@ -3010,7 +3010,7 @@ mod tests {
             },
             equivalence_evidence: EquivalenceEvidence {
                 method: EquivalenceMethod::DifferentialTesting,
-                differential_test_hashes: vec![equiv_hash.clone()],
+                differential_test_hashes: vec![equiv_hash],
                 test_count: 100,
                 pass_rate_millionths: 1_000_000,
             },
@@ -3063,7 +3063,7 @@ mod tests {
             },
             equivalence_evidence: EquivalenceEvidence {
                 method: EquivalenceMethod::DifferentialTesting,
-                differential_test_hashes: vec![equiv_hash.clone()],
+                differential_test_hashes: vec![equiv_hash],
                 test_count: 50,
                 pass_rate_millionths: 1_000_000,
             },
@@ -3118,7 +3118,7 @@ mod tests {
             },
             equivalence_evidence: EquivalenceEvidence {
                 method: EquivalenceMethod::DifferentialTesting,
-                differential_test_hashes: vec![equiv_hash.clone()],
+                differential_test_hashes: vec![equiv_hash],
                 test_count: 50,
                 pass_rate_millionths: 1_000_000,
             },
@@ -3226,7 +3226,7 @@ mod tests {
             },
             equivalence_evidence: EquivalenceEvidence {
                 method: EquivalenceMethod::DifferentialTesting,
-                differential_test_hashes: vec![equiv_hash.clone()],
+                differential_test_hashes: vec![equiv_hash],
                 test_count: 50,
                 pass_rate_millionths: 1_000_000,
             },

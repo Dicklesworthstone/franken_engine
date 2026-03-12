@@ -1919,7 +1919,7 @@ mod tests {
     fn test_receipt_determinism() {
         let input_hash = ContentHash::compute(b"test input");
         let epoch = SecurityEpoch::from_raw(42);
-        let r1 = compute_receipt(input_hash.clone(), &CellVerdict::Pass, epoch);
+        let r1 = compute_receipt(input_hash, &CellVerdict::Pass, epoch);
         let r2 = compute_receipt(input_hash, &CellVerdict::Pass, epoch);
         assert_eq!(r1.verdict_hash, r2.verdict_hash);
         assert_eq!(r1.schema_version, SCHEMA_VERSION);
@@ -1932,7 +1932,7 @@ mod tests {
     fn test_receipt_different_verdicts_differ() {
         let input_hash = ContentHash::compute(b"test input");
         let epoch = SecurityEpoch::from_raw(1);
-        let r_pass = compute_receipt(input_hash.clone(), &CellVerdict::Pass, epoch);
+        let r_pass = compute_receipt(input_hash, &CellVerdict::Pass, epoch);
         let r_fail = compute_receipt(input_hash, &CellVerdict::Fail, epoch);
         assert_ne!(r_pass.verdict_hash, r_fail.verdict_hash);
     }
@@ -1940,11 +1940,7 @@ mod tests {
     #[test]
     fn test_receipt_different_epochs_differ() {
         let input_hash = ContentHash::compute(b"test input");
-        let r1 = compute_receipt(
-            input_hash.clone(),
-            &CellVerdict::Pass,
-            SecurityEpoch::from_raw(1),
-        );
+        let r1 = compute_receipt(input_hash, &CellVerdict::Pass, SecurityEpoch::from_raw(1));
         let r2 = compute_receipt(input_hash, &CellVerdict::Pass, SecurityEpoch::from_raw(2));
         assert_ne!(r1.verdict_hash, r2.verdict_hash);
     }

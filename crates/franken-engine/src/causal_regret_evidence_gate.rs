@@ -543,7 +543,7 @@ impl CausalRegretEvidenceGate {
                 safety_status: eval.safety_status,
                 improvement_lower_millionths: eval.improvement_envelope.lower_millionths,
                 effective_samples: eval.improvement_envelope.effective_samples,
-                artifact_hash: eval.artifact_hash.clone(),
+                artifact_hash: eval.artifact_hash,
             };
 
             // Check safety status.

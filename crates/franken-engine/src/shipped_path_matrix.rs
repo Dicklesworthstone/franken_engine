@@ -1633,7 +1633,7 @@ mod tests {
     fn test_receipt_determinism() {
         let e = epoch();
         let ih = ContentHash::compute(b"input");
-        let r1 = DecisionReceipt::compute(&e, ih.clone(), CellVerdict::Pass, 1_000_000);
+        let r1 = DecisionReceipt::compute(&e, ih, CellVerdict::Pass, 1_000_000);
         let r2 = DecisionReceipt::compute(&e, ih, CellVerdict::Pass, 1_000_000);
         assert_eq!(r1.verdict_hash, r2.verdict_hash);
     }
@@ -1642,7 +1642,7 @@ mod tests {
     fn test_receipt_different_verdict_different_hash() {
         let e = epoch();
         let ih = ContentHash::compute(b"input");
-        let r1 = DecisionReceipt::compute(&e, ih.clone(), CellVerdict::Pass, 1_000_000);
+        let r1 = DecisionReceipt::compute(&e, ih, CellVerdict::Pass, 1_000_000);
         let r2 = DecisionReceipt::compute(&e, ih, CellVerdict::Fail, 1_000_000);
         assert_ne!(r1.verdict_hash, r2.verdict_hash);
     }
@@ -1650,12 +1650,7 @@ mod tests {
     #[test]
     fn test_receipt_different_epoch_different_hash() {
         let ih = ContentHash::compute(b"input");
-        let r1 = DecisionReceipt::compute(
-            &SecurityEpoch::from_raw(1),
-            ih.clone(),
-            CellVerdict::Pass,
-            100,
-        );
+        let r1 = DecisionReceipt::compute(&SecurityEpoch::from_raw(1), ih, CellVerdict::Pass, 100);
         let r2 = DecisionReceipt::compute(&SecurityEpoch::from_raw(2), ih, CellVerdict::Pass, 100);
         assert_ne!(r1.verdict_hash, r2.verdict_hash);
     }

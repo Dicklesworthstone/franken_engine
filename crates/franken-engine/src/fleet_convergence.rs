@@ -936,7 +936,7 @@ impl ConvergenceEngine {
             ConvergenceVerification::Diverged {
                 checkpoint_seq: checkpoint.checkpoint_seq,
                 local_summary_hash: local_hash,
-                checkpoint_summary_hash: checkpoint_hash.clone(),
+                checkpoint_summary_hash: *checkpoint_hash,
             }
         }
     }

@@ -1245,7 +1245,7 @@ pub fn compute_receipt(
         bead_id: BEAD_ID.to_string(),
         policy_id: POLICY_ID.to_string(),
         epoch: *epoch,
-        input_hash: input_hash.clone(),
+        input_hash: *input_hash,
         verdict_hash: verdict_data,
         timestamp_micros,
     }
@@ -2280,7 +2280,7 @@ mod tests {
     fn decision_receipt_seal() {
         let ih = ContentHash::compute(b"test");
         let mut r = compute_receipt(&epoch(1), &ih, MembraneVerdict::Healthy, 1000);
-        let original_hash = r.verdict_hash.clone();
+        let original_hash = r.verdict_hash;
         r.seal();
         // seal recomputes based on fields, should produce a stable hash
         let mut r2 = r.clone();

@@ -562,7 +562,7 @@ impl DecisionReceipt {
         let bundle_id = bundle.bundle_id.clone();
         let verdict_tag = bundle.verdict.tag().to_string();
         let epoch = bundle.creation_epoch;
-        let bundle_hash = bundle.bundle_hash.clone();
+        let bundle_hash = bundle.bundle_hash;
 
         let mut h = Sha256::new();
         h.update(receipt_id.as_bytes());
@@ -866,7 +866,7 @@ pub fn validate_bundle_integrity(bundle: &EvidenceBundle) -> Result<(), BundleEr
     } else {
         Err(BundleError::IntegrityMismatch {
             expected,
-            actual: bundle.bundle_hash.clone(),
+            actual: bundle.bundle_hash,
         })
     }
 }
@@ -1473,7 +1473,7 @@ mod tests {
         let r1 = DecisionReceipt::new("r1", &bundle1, genesis);
         assert!(r1.verify());
 
-        let r2 = DecisionReceipt::new("r2", &bundle2, r1.receipt_hash.clone());
+        let r2 = DecisionReceipt::new("r2", &bundle2, r1.receipt_hash);
         assert!(r2.verify());
         assert_eq!(r2.previous_receipt_hash, r1.receipt_hash);
     }

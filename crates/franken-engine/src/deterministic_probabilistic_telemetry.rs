@@ -450,12 +450,10 @@ impl TelemetryEvent {
         sampling_rate_millionths: u64,
         payload: &[u8],
     ) -> Self {
-        let weight = if sampling_rate_millionths > 0 {
-            // weight = 1 / sampling_rate, in millionths
-            MILLIONTHS.saturating_mul(MILLIONTHS) / sampling_rate_millionths
-        } else {
-            MILLIONTHS
-        };
+        let weight = MILLIONTHS
+            .saturating_mul(MILLIONTHS)
+            .checked_div(sampling_rate_millionths)
+            .unwrap_or(MILLIONTHS);
         Self::new(
             event_id,
             domain,
@@ -794,7 +792,7 @@ impl EventWindow {
             return 0;
         }
         // Sort by event_hash for deterministic selection, take the first K.
-        self.events.sort_by(|a, b| a.event_hash.cmp(&b.event_hash));
+        self.events.sort_by_key(|a| a.event_hash);
         let removed = self.events.len() - reservoir_size;
         self.events.truncate(reservoir_size);
         removed
@@ -1009,33 +1007,35 @@ pub struct TelemetryReport {
     pub content_hash: ContentHash,
 }
 
+struct ReportHashInput<'a> {
+    epoch: &'a SecurityEpoch,
+    total_captured: u64,
+    total_thinned: u64,
+    total_rejected: u64,
+    utilization: u64,
+    breakdowns: &'a [ModeBreakdown],
+    window_count: u64,
+    domains: &'a BTreeSet<String>,
+}
+
 impl TelemetryReport {
     /// Compute the content hash for this report (excludes the hash field itself).
     #[must_use]
-    fn compute_content_hash(
-        epoch: &SecurityEpoch,
-        total_captured: u64,
-        total_thinned: u64,
-        total_rejected: u64,
-        utilization: u64,
-        breakdowns: &[ModeBreakdown],
-        window_count: u64,
-        domains: &BTreeSet<String>,
-    ) -> ContentHash {
+    fn compute_content_hash(input: &ReportHashInput<'_>) -> ContentHash {
         let mut buf = Vec::with_capacity(512);
         append_str(&mut buf, SCHEMA_VERSION);
         append_str(&mut buf, COMPONENT);
-        append_u64(&mut buf, epoch.as_u64());
-        append_u64(&mut buf, total_captured);
-        append_u64(&mut buf, total_thinned);
-        append_u64(&mut buf, total_rejected);
-        append_u64(&mut buf, utilization);
-        append_u64(&mut buf, window_count);
-        for bd in breakdowns {
+        append_u64(&mut buf, input.epoch.as_u64());
+        append_u64(&mut buf, input.total_captured);
+        append_u64(&mut buf, input.total_thinned);
+        append_u64(&mut buf, input.total_rejected);
+        append_u64(&mut buf, input.utilization);
+        append_u64(&mut buf, input.window_count);
+        for bd in input.breakdowns {
             append_str(&mut buf, bd.mode.as_str());
             append_u64(&mut buf, bd.event_count);
         }
-        for domain in domains {
+        for domain in input.domains {
             append_str(&mut buf, domain);
         }
         compute_digest(&buf)
@@ -1221,10 +1221,10 @@ impl TelemetryPlane {
     /// Apply thinning to the most recent window for the given domain.
     /// Returns the number of events removed, or 0 if no window exists.
     pub fn thin_domain(&mut self, domain: &str, config: &ThinningConfig) -> u64 {
-        if let Some(windows) = self.windows.get_mut(domain) {
-            if let Some(window) = windows.last_mut() {
-                return window.apply_thinning(config);
-            }
+        if let Some(windows) = self.windows.get_mut(domain)
+            && let Some(window) = windows.last_mut()
+        {
+            return window.apply_thinning(config);
         }
         0
     }
@@ -1297,16 +1297,16 @@ impl TelemetryPlane {
             }
         }
 
-        let content_hash = TelemetryReport::compute_content_hash(
-            &self.epoch,
+        let content_hash = TelemetryReport::compute_content_hash(&ReportHashInput {
+            epoch: &self.epoch,
             total_captured,
             total_thinned,
             total_rejected,
-            budget_utilization_millionths,
-            &mode_breakdowns,
+            utilization: budget_utilization_millionths,
+            breakdowns: &mode_breakdowns,
             window_count,
-            &domains,
-        );
+            domains: &domains,
+        });
 
         TelemetryReport {
             schema_version: SCHEMA_VERSION.to_owned(),
@@ -1393,12 +1393,14 @@ mod tests {
 
     #[test]
     fn default_constants_are_positive() {
-        assert!(DEFAULT_MAX_EVENTS_PER_WINDOW > 0);
-        assert!(DEFAULT_WINDOW_NS > 0);
-        assert!(DEFAULT_SAMPLING_RATE_MILLIONTHS > 0);
-        assert!(DEFAULT_THINNING_TARGET > 0);
-        assert!(DEFAULT_MIN_WEIGHT_MILLIONTHS > 0);
-        assert!(DEFAULT_RESERVOIR_SIZE > 0);
+        const {
+            assert!(DEFAULT_MAX_EVENTS_PER_WINDOW > 0);
+            assert!(DEFAULT_WINDOW_NS > 0);
+            assert!(DEFAULT_SAMPLING_RATE_MILLIONTHS > 0);
+            assert!(DEFAULT_THINNING_TARGET > 0);
+            assert!(DEFAULT_MIN_WEIGHT_MILLIONTHS > 0);
+            assert!(DEFAULT_RESERVOIR_SIZE > 0);
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -1016,8 +1016,10 @@ mod tests {
 
     #[test]
     fn test_validator_missing_rule_fail_closed() {
-        let mut policy = BudgetPropagationPolicy::default();
-        policy.fail_closed_on_missing_rule = true;
+        let policy = BudgetPropagationPolicy {
+            fail_closed_on_missing_rule: true,
+            ..Default::default()
+        };
         let mut validator = BudgetPropagationValidator::new(policy);
         let result = validator.derive_child_budget(
             "trace-parent",
@@ -1034,8 +1036,10 @@ mod tests {
 
     #[test]
     fn test_validator_missing_rule_fail_open() {
-        let mut policy = BudgetPropagationPolicy::default();
-        policy.fail_closed_on_missing_rule = false;
+        let policy = BudgetPropagationPolicy {
+            fail_closed_on_missing_rule: false,
+            ..Default::default()
+        };
         let mut validator = BudgetPropagationValidator::new(policy);
         let result = validator
             .derive_child_budget(
@@ -1202,8 +1206,10 @@ mod tests {
 
     #[test]
     fn test_parent_reserve_enforcement() {
-        let mut policy = BudgetPropagationPolicy::default();
-        policy.min_parent_reserve_ms = 5000; // 5s reserve
+        let policy = BudgetPropagationPolicy {
+            min_parent_reserve_ms: 5000, // 5s reserve
+            ..Default::default()
+        };
         let mut validator = BudgetPropagationValidator::new(policy);
 
         let result = validator
@@ -1247,7 +1253,8 @@ mod tests {
         };
         // Should not panic due to overflow
         let derived = strat.derive(u64::MAX);
-        assert!(derived <= u64::MAX);
+        // Verify the result is finite (no panic from saturating arithmetic).
+        let _ = derived;
     }
 
     #[test]

@@ -258,14 +258,11 @@ impl MinimizedRepro {
         reproduces: bool,
         minimisation_time_ns: u64,
     ) -> Self {
-        let reduction_ratio_millionths = if original_lines == 0 {
-            0
-        } else {
-            original_lines
-                .saturating_sub(reduced_lines)
-                .saturating_mul(FIXED_ONE)
-                / original_lines
-        };
+        let reduction_ratio_millionths = original_lines
+            .saturating_sub(reduced_lines)
+            .saturating_mul(FIXED_ONE)
+            .checked_div(original_lines)
+            .unwrap_or(0);
         let mut buf = Vec::with_capacity(64);
         append_str(&mut buf, &source_input_id);
         append_str(&mut buf, &strategy.to_string());

@@ -263,34 +263,25 @@ pub struct SkewEntry {
 
 impl SkewEntry {
     /// Create and compute hash.
-    pub fn new(
-        lane: VectorizedLane,
-        skew_millionths: u64,
-        scalar_p50_ns: u64,
-        vectorized_p50_ns: u64,
-        scalar_p99_ns: u64,
-        vectorized_p99_ns: u64,
-        sample_count: u64,
-        max_skew: u64,
-    ) -> Self {
-        let within_budget = skew_millionths <= max_skew;
+    pub fn new(input: SkewInput, max_skew: u64) -> Self {
+        let within_budget = input.skew_millionths <= max_skew;
         let mut buf = Vec::with_capacity(80);
-        append_str(&mut buf, &lane.to_string());
-        append_u64(&mut buf, skew_millionths);
-        append_u64(&mut buf, scalar_p50_ns);
-        append_u64(&mut buf, vectorized_p50_ns);
-        append_u64(&mut buf, scalar_p99_ns);
-        append_u64(&mut buf, vectorized_p99_ns);
-        append_u64(&mut buf, sample_count);
+        append_str(&mut buf, &input.lane.to_string());
+        append_u64(&mut buf, input.skew_millionths);
+        append_u64(&mut buf, input.scalar_p50_ns);
+        append_u64(&mut buf, input.vectorized_p50_ns);
+        append_u64(&mut buf, input.scalar_p99_ns);
+        append_u64(&mut buf, input.vectorized_p99_ns);
+        append_u64(&mut buf, input.sample_count);
         let entry_hash = compute_digest(&buf);
         Self {
-            lane,
-            skew_millionths,
-            scalar_p50_ns,
-            vectorized_p50_ns,
-            scalar_p99_ns,
-            vectorized_p99_ns,
-            sample_count,
+            lane: input.lane,
+            skew_millionths: input.skew_millionths,
+            scalar_p50_ns: input.scalar_p50_ns,
+            vectorized_p50_ns: input.vectorized_p50_ns,
+            scalar_p99_ns: input.scalar_p99_ns,
+            vectorized_p99_ns: input.vectorized_p99_ns,
+            sample_count: input.sample_count,
             within_budget,
             entry_hash,
         }
@@ -321,11 +312,11 @@ pub struct ColdStartEntry {
 impl ColdStartEntry {
     /// Create with computed overhead.
     pub fn new(lane: VectorizedLane, cold_ns: u64, warm_ns: u64, max_overhead: u64) -> Self {
-        let overhead_millionths = if warm_ns == 0 {
-            if cold_ns == 0 { 0 } else { FIXED_ONE }
-        } else {
-            cold_ns.saturating_sub(warm_ns).saturating_mul(FIXED_ONE) / warm_ns
-        };
+        let overhead_millionths = cold_ns
+            .saturating_sub(warm_ns)
+            .saturating_mul(FIXED_ONE)
+            .checked_div(warm_ns)
+            .unwrap_or(if cold_ns == 0 { 0 } else { FIXED_ONE });
         let within_budget = overhead_millionths <= max_overhead;
         let mut buf = Vec::with_capacity(40);
         append_str(&mut buf, &lane.to_string());
@@ -423,11 +414,10 @@ impl ObservabilityCoverage {
         instrumented_hooks: u64,
         min_coverage: u64,
     ) -> Self {
-        let coverage_millionths = if total_hooks == 0 {
-            FIXED_ONE
-        } else {
-            instrumented_hooks.saturating_mul(FIXED_ONE) / total_hooks
-        };
+        let coverage_millionths = instrumented_hooks
+            .saturating_mul(FIXED_ONE)
+            .checked_div(total_hooks)
+            .unwrap_or(FIXED_ONE);
         let adequate = coverage_millionths >= min_coverage;
         Self {
             lane,
@@ -624,6 +614,29 @@ impl GovernanceReceipt {
 }
 
 // ---------------------------------------------------------------------------
+// SkewInput
+// ---------------------------------------------------------------------------
+
+/// Input for adding a skew measurement to a [`GovernanceEvaluator`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkewInput {
+    /// Lane under test.
+    pub lane: VectorizedLane,
+    /// Skew magnitude in millionths.
+    pub skew_millionths: u64,
+    /// p50 scalar execution (ns).
+    pub scalar_p50_ns: u64,
+    /// p50 vectorized execution (ns).
+    pub vectorized_p50_ns: u64,
+    /// p99 scalar execution (ns).
+    pub scalar_p99_ns: u64,
+    /// p99 vectorized execution (ns).
+    pub vectorized_p99_ns: u64,
+    /// Sample count.
+    pub sample_count: u64,
+}
+
+// ---------------------------------------------------------------------------
 // GovernanceEvaluator
 // ---------------------------------------------------------------------------
 
@@ -677,26 +690,8 @@ impl GovernanceEvaluator {
     }
 
     /// Add a skew measurement.
-    pub fn add_skew(
-        &mut self,
-        lane: VectorizedLane,
-        skew_millionths: u64,
-        scalar_p50_ns: u64,
-        vectorized_p50_ns: u64,
-        scalar_p99_ns: u64,
-        vectorized_p99_ns: u64,
-        sample_count: u64,
-    ) {
-        let entry = SkewEntry::new(
-            lane,
-            skew_millionths,
-            scalar_p50_ns,
-            vectorized_p50_ns,
-            scalar_p99_ns,
-            vectorized_p99_ns,
-            sample_count,
-            self.config.max_skew_millionths,
-        );
+    pub fn add_skew(&mut self, input: SkewInput) {
+        let entry = SkewEntry::new(input, self.config.max_skew_millionths);
         self.skew_entries.push(entry);
     }
 
@@ -1009,13 +1004,15 @@ mod tests {
     #[test]
     fn test_skew_within_budget() {
         let s = SkewEntry::new(
-            VectorizedLane::JsonCodec,
-            50_000,
-            1000,
-            900,
-            3000,
-            2800,
-            100,
+            SkewInput {
+                lane: VectorizedLane::JsonCodec,
+                skew_millionths: 50_000,
+                scalar_p50_ns: 1000,
+                vectorized_p50_ns: 900,
+                scalar_p99_ns: 3000,
+                vectorized_p99_ns: 2800,
+                sample_count: 100,
+            },
             DEFAULT_MAX_SKEW_MILLIONTHS,
         );
         assert!(s.within_budget);
@@ -1024,13 +1021,15 @@ mod tests {
     #[test]
     fn test_skew_exceeds_budget() {
         let s = SkewEntry::new(
-            VectorizedLane::JsonCodec,
-            200_000,
-            1000,
-            900,
-            3000,
-            2800,
-            100,
+            SkewInput {
+                lane: VectorizedLane::JsonCodec,
+                skew_millionths: 200_000,
+                scalar_p50_ns: 1000,
+                vectorized_p50_ns: 900,
+                scalar_p99_ns: 3000,
+                vectorized_p99_ns: 2800,
+                sample_count: 100,
+            },
             DEFAULT_MAX_SKEW_MILLIONTHS,
         );
         assert!(!s.within_budget);
@@ -1198,15 +1197,15 @@ mod tests {
             980_000,
             50,
         );
-        eval.add_skew(
-            VectorizedLane::ArrayHigherOrder,
-            30_000,
-            1000,
-            900,
-            3000,
-            2800,
-            50,
-        );
+        eval.add_skew(SkewInput {
+            lane: VectorizedLane::ArrayHigherOrder,
+            skew_millionths: 30_000,
+            scalar_p50_ns: 1000,
+            vectorized_p50_ns: 900,
+            scalar_p99_ns: 3000,
+            vectorized_p99_ns: 2800,
+            sample_count: 50,
+        });
         eval.add_cold_start(VectorizedLane::ArrayHigherOrder, 1100, 1000);
         eval.add_tail_risk(VectorizedLane::ArrayHigherOrder, 2_100_000, 2_100_000, 50);
         eval.add_observability(VectorizedLane::ArrayHigherOrder, 10, 9);
@@ -1231,15 +1230,15 @@ mod tests {
     #[test]
     fn test_evaluator_skew_violation() {
         let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-        eval.add_skew(
-            VectorizedLane::JsonCodec,
-            200_000,
-            1000,
-            900,
-            3000,
-            2800,
-            50,
-        );
+        eval.add_skew(SkewInput {
+            lane: VectorizedLane::JsonCodec,
+            skew_millionths: 200_000,
+            scalar_p50_ns: 1000,
+            vectorized_p50_ns: 900,
+            scalar_p99_ns: 3000,
+            vectorized_p99_ns: 2800,
+            sample_count: 50,
+        });
         let receipt = eval.evaluate(epoch());
         assert_eq!(receipt.verdict, GovernanceVerdict::SkewExceeded);
     }
@@ -1253,15 +1252,15 @@ mod tests {
             800_000,
             50,
         );
-        eval.add_skew(
-            VectorizedLane::JsonCodec,
-            200_000,
-            1000,
-            900,
-            3000,
-            2800,
-            50,
-        );
+        eval.add_skew(SkewInput {
+            lane: VectorizedLane::JsonCodec,
+            skew_millionths: 200_000,
+            scalar_p50_ns: 1000,
+            vectorized_p50_ns: 900,
+            scalar_p99_ns: 3000,
+            vectorized_p99_ns: 2800,
+            sample_count: 50,
+        });
         let receipt = eval.evaluate(epoch());
         assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
     }
@@ -1285,15 +1284,15 @@ mod tests {
             FIXED_ONE,
             50,
         );
-        eval.add_skew(
-            VectorizedLane::StringSearch,
-            10_000,
-            500,
-            400,
-            1500,
-            1400,
-            50,
-        );
+        eval.add_skew(SkewInput {
+            lane: VectorizedLane::StringSearch,
+            skew_millionths: 10_000,
+            scalar_p50_ns: 500,
+            vectorized_p50_ns: 400,
+            scalar_p99_ns: 1500,
+            vectorized_p99_ns: 1400,
+            sample_count: 50,
+        });
         let receipt = eval.evaluate(epoch());
         assert!(
             receipt
@@ -1382,7 +1381,15 @@ mod tests {
         for lane in VectorizedLane::all() {
             eval.add_parity(*lane, ParityAxis::Semantic, 960_000, 50);
             eval.add_parity(*lane, ParityAxis::Performance, 970_000, 50);
-            eval.add_skew(*lane, 30_000, 1000, 900, 3000, 2800, 50);
+            eval.add_skew(SkewInput {
+                lane: *lane,
+                skew_millionths: 30_000,
+                scalar_p50_ns: 1000,
+                vectorized_p50_ns: 900,
+                scalar_p99_ns: 3000,
+                vectorized_p99_ns: 2800,
+                sample_count: 50,
+            });
             eval.add_cold_start(*lane, 1100, 1000);
             eval.add_tail_risk(*lane, 2_100_000, 2_100_000, 50);
             eval.add_observability(*lane, 10, 9);
@@ -1418,15 +1425,15 @@ mod tests {
     #[test]
     fn test_violation_detail_contents() {
         let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
-        eval.add_skew(
-            VectorizedLane::MathBatch,
-            150_000,
-            1000,
-            900,
-            3000,
-            2800,
-            50,
-        );
+        eval.add_skew(SkewInput {
+            lane: VectorizedLane::MathBatch,
+            skew_millionths: 150_000,
+            scalar_p50_ns: 1000,
+            vectorized_p50_ns: 900,
+            scalar_p99_ns: 3000,
+            vectorized_p99_ns: 2800,
+            sample_count: 50,
+        });
         let receipt = eval.evaluate(epoch());
         assert_eq!(receipt.violations.len(), 1);
         let v = &receipt.violations[0];

@@ -101,6 +101,46 @@ fn write_runtime_diagnostics_input(path: &Path, input: &RuntimeDiagnosticsCliInp
     .expect("runtime diagnostics input should write");
 }
 
+fn write_benchmark_score_input(path: &Path) {
+    let score_input = serde_json::json!({
+        "node_cases": [
+            {
+                "workload_id": "boot-storm/s",
+                "throughput_franken_tps": 3000.0,
+                "throughput_baseline_tps": 900.0,
+                "weight": null,
+                "behavior_equivalent": true,
+                "latency_envelope_ok": true,
+                "error_envelope_ok": true
+            }
+        ],
+        "bun_cases": [
+            {
+                "workload_id": "boot-storm/s",
+                "throughput_franken_tps": 3000.0,
+                "throughput_baseline_tps": 950.0,
+                "weight": null,
+                "behavior_equivalent": true,
+                "latency_envelope_ok": true,
+                "error_envelope_ok": true
+            }
+        ],
+        "native_coverage_progression": [
+            {
+                "recorded_at_utc": "2026-03-01T00:00:00Z",
+                "native_slots": 42,
+                "total_slots": 48
+            }
+        ],
+        "replacement_lineage_ids": ["lineage-a"]
+    });
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&score_input).expect("score input should serialize"),
+    )
+    .expect("score input should write");
+}
+
 #[test]
 fn frankenctl_help_lists_supported_commands() {
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
@@ -1458,47 +1498,11 @@ fn frankenctl_run_output_has_execution_fields() {
 #[test]
 fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     let score_input_path = temp_path("frankenctl_benchmark_score_input", "json");
-    let score_results_path = temp_path("frankenctl_benchmark_score_results", "json");
     let verify_report_path = temp_path("frankenctl_benchmark_verify_report", "json");
     let bundle_dir = temp_dir("frankenctl_benchmark_bundle");
+    let bundle_results_path = bundle_dir.join("results.json");
 
-    let score_input = serde_json::json!({
-        "node_cases": [
-            {
-                "workload_id": "boot-storm/s",
-                "throughput_franken_tps": 3000.0,
-                "throughput_baseline_tps": 900.0,
-                "weight": null,
-                "behavior_equivalent": true,
-                "latency_envelope_ok": true,
-                "error_envelope_ok": true
-            }
-        ],
-        "bun_cases": [
-            {
-                "workload_id": "boot-storm/s",
-                "throughput_franken_tps": 3000.0,
-                "throughput_baseline_tps": 950.0,
-                "weight": null,
-                "behavior_equivalent": true,
-                "latency_envelope_ok": true,
-                "error_envelope_ok": true
-            }
-        ],
-        "native_coverage_progression": [
-            {
-                "recorded_at_utc": "2026-03-01T00:00:00Z",
-                "native_slots": 42,
-                "total_slots": 48
-            }
-        ],
-        "replacement_lineage_ids": ["lineage-a"]
-    });
-    fs::write(
-        &score_input_path,
-        serde_json::to_vec_pretty(&score_input).expect("score input should serialize"),
-    )
-    .expect("score input should write");
+    write_benchmark_score_input(&score_input_path);
 
     let score_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -1515,7 +1519,7 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
             "--policy-id",
             "policy-bench-score-cli",
             "--output",
-            score_results_path
+            bundle_results_path
                 .to_str()
                 .expect("score result path should be valid utf8"),
         ])
@@ -1545,9 +1549,13 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
         Some("policy-bench-score-cli")
     );
     assert_eq!(score_json["publish_allowed"].as_bool(), Some(true));
+    assert_eq!(
+        score_json["bundle"].as_str(),
+        Some(bundle_dir.to_str().expect("bundle dir should be valid utf8"))
+    );
 
     let results_json: serde_json::Value = serde_json::from_slice(
-        &fs::read(&score_results_path).expect("score results should be written"),
+        &fs::read(&bundle_results_path).expect("score results should be written"),
     )
     .expect("score results should parse");
     assert_eq!(
@@ -1558,44 +1566,26 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
         results_json["claimed"]["publish_allowed"].as_bool(),
         Some(true)
     );
-
-    let bundle_results_path = bundle_dir.join("results.json");
-    fs::copy(&score_results_path, &bundle_results_path).expect("results.json should copy");
-    fs::write(
-        bundle_dir.join("env.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "toolchain": "rust-1.86.0",
-            "os": "linux",
-            "arch": "x86_64"
-        }))
-        .expect("env fixture should serialize"),
+    assert!(bundle_dir.join("env.json").is_file());
+    assert!(bundle_dir.join("manifest.json").is_file());
+    assert!(bundle_dir.join("repro.lock").is_file());
+    assert!(bundle_dir.join("commands.txt").is_file());
+    let manifest_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(bundle_dir.join("manifest.json")).expect("manifest should be written"),
     )
-    .expect("env fixture should write");
-    fs::write(
-        bundle_dir.join("manifest.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": "franken-engine.benchmark.bundle.v1",
-            "trace_id": "trace-bench-score-cli",
-            "decision_id": "decision-bench-score-cli",
-            "policy_id": "policy-bench-score-cli"
-        }))
-        .expect("manifest fixture should serialize"),
-    )
-    .expect("manifest fixture should write");
-    fs::write(
-        bundle_dir.join("repro.lock"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": "franken-engine.benchmark.repro-lock.v1",
-            "bundle_digest_sha256": "abc123"
-        }))
-        .expect("repro lock fixture should serialize"),
-    )
-    .expect("repro lock fixture should write");
-    fs::write(
-        bundle_dir.join("commands.txt"),
-        "rch exec -- cargo test -p frankenengine-engine --test benchmark_denominator\n",
-    )
-    .expect("commands fixture should write");
+    .expect("manifest should parse");
+    assert_eq!(
+        manifest_json["provenance"]["trace_id"].as_str(),
+        Some("trace-bench-score-cli")
+    );
+    assert_eq!(
+        manifest_json["artifacts"]["results"]["path"].as_str(),
+        Some("results.json")
+    );
+    let commands_txt =
+        fs::read_to_string(bundle_dir.join("commands.txt")).expect("commands.txt should read");
+    assert!(commands_txt.contains("rch exec --"));
+    assert!(commands_txt.contains("frankenctl -- benchmark verify"));
 
     let verify_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -1640,8 +1630,74 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     );
 
     let _ = fs::remove_file(score_input_path);
-    let _ = fs::remove_file(score_results_path);
     let _ = fs::remove_file(verify_report_path);
+    let _ = fs::remove_dir_all(bundle_dir);
+}
+
+#[test]
+fn frankenctl_benchmark_verify_detects_results_digest_tampering() {
+    let score_input_path = temp_path("frankenctl_benchmark_score_input_tamper", "json");
+    let bundle_dir = temp_dir("frankenctl_benchmark_bundle_tamper");
+    let bundle_results_path = bundle_dir.join("results.json");
+
+    write_benchmark_score_input(&score_input_path);
+
+    let score_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "score",
+            "--input",
+            score_input_path
+                .to_str()
+                .expect("score input path should be valid utf8"),
+            "--trace-id",
+            "trace-bench-score-tamper",
+            "--decision-id",
+            "decision-bench-score-tamper",
+            "--policy-id",
+            "policy-bench-score-tamper",
+            "--output",
+            bundle_results_path
+                .to_str()
+                .expect("bundle results path should be valid utf8"),
+        ])
+        .output()
+        .expect("benchmark score command should execute");
+
+    assert!(
+        score_output.status.success(),
+        "benchmark score failed with stderr={}",
+        String::from_utf8_lossy(&score_output.stderr)
+    );
+
+    let mut tampered_results =
+        fs::read_to_string(&bundle_results_path).expect("results.json should be readable");
+    tampered_results.push('\n');
+    fs::write(&bundle_results_path, tampered_results).expect("results.json should rewrite");
+
+    let verify_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "verify",
+            "--bundle",
+            bundle_dir
+                .to_str()
+                .expect("bundle path should be valid utf8"),
+        ])
+        .output()
+        .expect("benchmark verify command should execute");
+
+    assert_eq!(verify_output.status.code(), Some(25));
+    let verify_report = parse_stdout_json(&verify_output);
+    assert_eq!(verify_report["verdict"].as_str(), Some("failed"));
+    assert!(
+        verify_report["checks"].as_array().is_some_and(|checks| checks.iter().any(|check| {
+            check["name"].as_str() == Some("bundle_manifest_results_digest_matches")
+                && check["passed"].as_bool() == Some(false)
+        }))
+    );
+
+    let _ = fs::remove_file(score_input_path);
     let _ = fs::remove_dir_all(bundle_dir);
 }
 

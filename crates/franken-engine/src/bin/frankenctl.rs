@@ -4,8 +4,10 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{SecondsFormat, Utc};
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
@@ -47,6 +49,7 @@ use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 
 const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
@@ -58,6 +61,14 @@ const CODE_BUNDLE_MISSING_FILE: &str = "FE-TPV-BUNDLE-0001";
 const CODE_BUNDLE_PARSE_ERROR: &str = "FE-TPV-BUNDLE-0002";
 const CODE_BUNDLE_CONTEXT_MISMATCH: &str = "FE-TPV-BUNDLE-0003";
 const CODE_BUNDLE_REMOTE_EXEC: &str = "FE-TPV-BUNDLE-0004";
+const CODE_BUNDLE_DIGEST_MISMATCH: &str = "FE-TPV-BUNDLE-0005";
+const CODE_BUNDLE_SCHEMA_MISMATCH: &str = "FE-TPV-BUNDLE-0006";
+const BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION: &str = "franken-engine.env.v1";
+const BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.manifest.v1";
+const BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION: &str = "franken-engine.repro-lock.v1";
+const BENCHMARK_BUNDLE_COMPONENT: &str = "frankenctl_benchmark_bundle";
+const BENCHMARK_BUNDLE_CLAIM_ID: &str = "bd-20xc";
+const BENCHMARK_BUNDLE_REPO_URL: &str = "https://github.com/Dicklesworthstone/franken_engine";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CommandSpec {
@@ -382,6 +393,7 @@ struct BenchmarkScoreCommandOutput {
     publish_allowed: bool,
     blockers: Vec<String>,
     output: Option<String>,
+    bundle: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -393,6 +405,193 @@ struct BenchmarkArtifactPaths {
     benchmark_env_manifest: String,
     raw_results_archive: String,
     summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleEnv {
+    schema_version: String,
+    schema_hash: String,
+    captured_at_utc: String,
+    project: BenchmarkBundleProject,
+    host: BenchmarkBundleHost,
+    toolchain: BenchmarkBundleToolchain,
+    runtime: BenchmarkBundleRuntime,
+    policy: BenchmarkBundlePolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleProject {
+    name: String,
+    repo_url: String,
+    commit: String,
+    dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleHost {
+    os: String,
+    kernel: String,
+    arch: String,
+    cpu_model: String,
+    cpu_cores_logical: u64,
+    memory_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleToolchain {
+    rustup_toolchain: String,
+    rustc: String,
+    cargo: String,
+    llvm: String,
+    target_triple: String,
+    profile: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleRuntime {
+    mode: String,
+    lane: String,
+    safe_mode_enabled: bool,
+    feature_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundlePolicy {
+    policy_id: String,
+    policy_digest_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleManifest {
+    schema_version: String,
+    schema_hash: String,
+    manifest_id: String,
+    generated_at_utc: String,
+    claim: BenchmarkBundleClaimMetadata,
+    source_revision: BenchmarkBundleSourceRevision,
+    provenance: BenchmarkBundleProvenance,
+    artifacts: BenchmarkBundleArtifactsCatalog,
+    inputs: Vec<BenchmarkBundleArtifactDigest>,
+    outputs: Vec<BenchmarkBundleArtifactDigest>,
+    canonicalization: BenchmarkBundleCanonicalization,
+    validation: BenchmarkBundleValidation,
+    retention: BenchmarkBundleRetention,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleClaimMetadata {
+    claim_id: String,
+    #[serde(rename = "class")]
+    claim_class: String,
+    statement: String,
+    status: String,
+    bundle_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleSourceRevision {
+    repo: String,
+    branch: String,
+    commit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleProvenance {
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    replay_pointer: String,
+    evidence_pointer: String,
+    #[serde(default)]
+    receipt_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleArtifactsCatalog {
+    env: BenchmarkBundleArtifactDigest,
+    lock: BenchmarkBundleArtifactDigest,
+    commands: BenchmarkBundleArtifactDigest,
+    results: BenchmarkBundleArtifactDigest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleArtifactDigest {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleCanonicalization {
+    format: String,
+    key_order: String,
+    newline: String,
+    hash_algorithm: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleValidation {
+    validator: String,
+    error_taxonomy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleRetention {
+    min_days: u64,
+    high_impact_min_days: u64,
+    rotation_policy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleReproLock {
+    schema_version: String,
+    schema_hash: String,
+    generated_at_utc: String,
+    lock_id: String,
+    manifest_id: String,
+    source_commit: String,
+    determinism: BenchmarkBundleDeterminism,
+    commands: Vec<String>,
+    inputs: Vec<BenchmarkBundleMaterializedFile>,
+    expected_outputs: Vec<BenchmarkBundleMaterializedFile>,
+    replay: BenchmarkBundleReplay,
+    verification: BenchmarkBundleVerification,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleDeterminism {
+    allow_network: bool,
+    allow_wall_clock: bool,
+    allow_randomness: bool,
+    max_clock_skew_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleMaterializedFile {
+    path: String,
+    sha256: String,
+    bytes: u64,
+    kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleReplay {
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    replay_pointer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkBundleVerification {
+    command: String,
+    expected_verdict: String,
+}
+
+#[derive(Debug, Clone)]
+struct BenchmarkBundleRepoState {
+    branch: String,
+    commit: String,
+    dirty: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1570,9 +1769,7 @@ fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
         },
     };
 
-    if let Some(path) = &args.output {
-        write_json_file(path, &claim_bundle)?;
-    }
+    let bundle_dir = write_benchmark_score_output(&args, &claim_bundle)?;
 
     let output = BenchmarkScoreCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
@@ -1583,7 +1780,8 @@ fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
         score_vs_bun: claim_bundle.claimed.score_vs_bun,
         publish_allowed: claim_bundle.claimed.publish_allowed,
         blockers: claim_bundle.claimed.blockers,
-        output: args.output.map(|path| path.display().to_string()),
+        output: args.output.as_ref().map(|path| path.display().to_string()),
+        bundle: bundle_dir.map(|path| path.display().to_string()),
     };
 
     print_json(&output)?;
@@ -1594,12 +1792,252 @@ fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct BenchmarkBundleManifest {
-    schema_version: String,
-    trace_id: String,
-    decision_id: String,
-    policy_id: String,
+fn write_benchmark_score_output(
+    args: &BenchmarkScoreArgs,
+    claim_bundle: &BenchmarkClaimBundle,
+) -> Result<Option<PathBuf>, String> {
+    let Some(output_path) = &args.output else {
+        return Ok(None);
+    };
+
+    if output_path.file_name().and_then(|name| name.to_str()) != Some("results.json") {
+        write_json_file(output_path, claim_bundle)?;
+        return Ok(None);
+    }
+
+    let bundle_dir = benchmark_bundle_dir(output_path);
+    materialize_benchmark_score_bundle(&bundle_dir, output_path, args, claim_bundle)?;
+    Ok(Some(bundle_dir))
+}
+
+fn materialize_benchmark_score_bundle(
+    bundle_dir: &Path,
+    results_path: &Path,
+    args: &BenchmarkScoreArgs,
+    claim_bundle: &BenchmarkClaimBundle,
+) -> Result<(), String> {
+    let generated_at_utc = current_utc_timestamp();
+    let repo_state = current_benchmark_bundle_repo_state();
+    let input_bytes = encode_json_value(
+        &claim_bundle.input,
+        "embedded benchmark publication gate input",
+    )?;
+    let input_artifact = BenchmarkBundleArtifactDigest {
+        path: args.input.display().to_string(),
+        sha256: sha256_prefixed(&input_bytes),
+    };
+    let input_materialized = BenchmarkBundleMaterializedFile {
+        path: args.input.display().to_string(),
+        sha256: input_artifact.sha256.clone(),
+        bytes: u64::try_from(input_bytes.len()).unwrap_or(u64::MAX),
+        kind: "input".to_string(),
+    };
+
+    let results_bytes = encode_json_value(
+        claim_bundle,
+        format!("benchmark score output `{}`", results_path.display()).as_str(),
+    )?;
+    let results_artifact = bundle_artifact_digest("results.json", &results_bytes);
+    let results_materialized = bundle_materialized_file("results.json", &results_bytes, "output");
+
+    let rustc_verbose = command_stdout("rustc", &["-Vv"]);
+    let rustc_version = command_stdout("rustc", &["-V"]).unwrap_or_else(|| "unknown".to_string());
+    let cargo_version = command_stdout("cargo", &["-V"]).unwrap_or_else(|| "unknown".to_string());
+    let env_artifact_path = bundle_dir.join("env.json");
+    let env_artifact = BenchmarkBundleEnv {
+        schema_version: BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION.to_string(),
+        schema_hash: schema_hash(BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION),
+        captured_at_utc: generated_at_utc.clone(),
+        project: BenchmarkBundleProject {
+            name: "franken_engine".to_string(),
+            repo_url: BENCHMARK_BUNDLE_REPO_URL.to_string(),
+            commit: repo_state.commit.clone(),
+            dirty: repo_state.dirty,
+        },
+        host: BenchmarkBundleHost {
+            os: env::consts::OS.to_string(),
+            kernel: command_stdout("uname", &["-r"]).unwrap_or_else(|| "unknown".to_string()),
+            arch: env::consts::ARCH.to_string(),
+            cpu_model: "unknown".to_string(),
+            cpu_cores_logical: std::thread::available_parallelism()
+                .map(|count| u64::try_from(count.get()).unwrap_or(u64::MAX))
+                .unwrap_or(0),
+            memory_bytes: 0,
+        },
+        toolchain: BenchmarkBundleToolchain {
+            rustup_toolchain: env::var("RUSTUP_TOOLCHAIN")
+                .unwrap_or_else(|_| "unknown".to_string()),
+            rustc: rustc_version,
+            cargo: cargo_version,
+            llvm: rustc_verbose_field(rustc_verbose.as_deref(), "LLVM version")
+                .unwrap_or_else(|| "unknown".to_string()),
+            target_triple: rustc_verbose_field(rustc_verbose.as_deref(), "host")
+                .unwrap_or_else(|| "unknown".to_string()),
+            profile: env::var("PROFILE").unwrap_or_else(|_| "dev".to_string()),
+        },
+        runtime: BenchmarkBundleRuntime {
+            mode: "deterministic-score".to_string(),
+            lane: "publication_gate".to_string(),
+            safe_mode_enabled: true,
+            feature_flags: vec!["benchmark-score-cli".to_string()],
+        },
+        policy: BenchmarkBundlePolicy {
+            policy_id: claim_bundle.policy_id.clone(),
+            policy_digest_sha256: sha256_prefixed(claim_bundle.policy_id.as_bytes()),
+        },
+    };
+    let env_bytes = encode_json_value(
+        &env_artifact,
+        format!("benchmark bundle env `{}`", env_artifact_path.display()).as_str(),
+    )?;
+    let env_digest = bundle_artifact_digest("env.json", &env_bytes);
+    let env_materialized = bundle_materialized_file("env.json", &env_bytes, "output");
+
+    let score_command = format!(
+        "rch exec -- cargo run -p frankenengine-engine --bin frankenctl -- benchmark score --input {} --trace-id {} --decision-id {} --policy-id {} --output {}",
+        args.input.display(),
+        claim_bundle.trace_id,
+        claim_bundle.decision_id,
+        claim_bundle.policy_id,
+        results_path.display()
+    );
+    let verify_report_path = bundle_dir.join("verify_report.json");
+    let verify_command = format!(
+        "rch exec -- cargo run -p frankenengine-engine --bin frankenctl -- benchmark verify --bundle {} --output {}",
+        bundle_dir.display(),
+        verify_report_path.display()
+    );
+    let commands = vec![score_command, verify_command];
+    let commands_text = format!("{}\n", commands.join("\n"));
+    let commands_bytes = commands_text.into_bytes();
+    let commands_digest = bundle_artifact_digest("commands.txt", &commands_bytes);
+    let commands_materialized = bundle_materialized_file("commands.txt", &commands_bytes, "output");
+
+    let bundle_id = format!(
+        "frankenctl-benchmark-{}",
+        &ContentHash::compute(
+            format!(
+                "{}:{}:{}:{}",
+                claim_bundle.trace_id,
+                claim_bundle.decision_id,
+                claim_bundle.policy_id,
+                results_artifact.sha256
+            )
+            .as_bytes()
+        )
+        .to_hex()[..16]
+    );
+    let manifest_id = format!("{BENCHMARK_BUNDLE_COMPONENT}-{bundle_id}");
+    let repro_artifact = BenchmarkBundleReproLock {
+        schema_version: BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION.to_string(),
+        schema_hash: schema_hash(BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION),
+        generated_at_utc: generated_at_utc.clone(),
+        lock_id: format!("{manifest_id}-lock"),
+        manifest_id: manifest_id.clone(),
+        source_commit: repo_state.commit.clone(),
+        determinism: BenchmarkBundleDeterminism {
+            allow_network: false,
+            allow_wall_clock: false,
+            allow_randomness: false,
+            max_clock_skew_seconds: 0,
+        },
+        commands: commands.clone(),
+        inputs: vec![input_materialized.clone()],
+        expected_outputs: vec![
+            env_materialized.clone(),
+            commands_materialized.clone(),
+            results_materialized.clone(),
+        ],
+        replay: BenchmarkBundleReplay {
+            trace_id: claim_bundle.trace_id.clone(),
+            decision_id: claim_bundle.decision_id.clone(),
+            policy_id: claim_bundle.policy_id.clone(),
+            replay_pointer: format!("file://{}/commands.txt", bundle_dir.display()),
+        },
+        verification: BenchmarkBundleVerification {
+            command: format!(
+                "frankenctl benchmark verify --bundle {} --output {}",
+                bundle_dir.display(),
+                verify_report_path.display()
+            ),
+            expected_verdict: "verified".to_string(),
+        },
+    };
+    let repro_bytes = encode_json_value(
+        &repro_artifact,
+        format!(
+            "benchmark bundle repro lock `{}`",
+            bundle_dir.join("repro.lock").display()
+        )
+        .as_str(),
+    )?;
+    let repro_digest = bundle_artifact_digest("repro.lock", &repro_bytes);
+
+    let manifest_artifact = BenchmarkBundleManifest {
+        schema_version: BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION.to_string(),
+        schema_hash: schema_hash(BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION),
+        manifest_id: manifest_id.clone(),
+        generated_at_utc: generated_at_utc.clone(),
+        claim: BenchmarkBundleClaimMetadata {
+            claim_id: BENCHMARK_BUNDLE_CLAIM_ID.to_string(),
+            claim_class: "performance".to_string(),
+            statement: "Benchmark publication gate evidence bundle generated by frankenctl benchmark score."
+                .to_string(),
+            status: "observed".to_string(),
+            bundle_root: bundle_dir.display().to_string(),
+        },
+        source_revision: BenchmarkBundleSourceRevision {
+            repo: "franken_engine".to_string(),
+            branch: repo_state.branch.clone(),
+            commit: repo_state.commit.clone(),
+        },
+        provenance: BenchmarkBundleProvenance {
+            trace_id: claim_bundle.trace_id.clone(),
+            decision_id: claim_bundle.decision_id.clone(),
+            policy_id: claim_bundle.policy_id.clone(),
+            replay_pointer: format!("file://{}/commands.txt", bundle_dir.display()),
+            evidence_pointer: format!("file://{}/results.json", bundle_dir.display()),
+            receipt_ids: Vec::new(),
+        },
+        artifacts: BenchmarkBundleArtifactsCatalog {
+            env: env_digest.clone(),
+            lock: repro_digest.clone(),
+            commands: commands_digest.clone(),
+            results: results_artifact.clone(),
+        },
+        inputs: vec![input_artifact],
+        outputs: vec![results_artifact.clone()],
+        canonicalization: BenchmarkBundleCanonicalization {
+            format: "json".to_string(),
+            key_order: "struct-declaration-order".to_string(),
+            newline: "lf".to_string(),
+            hash_algorithm: "sha256".to_string(),
+        },
+        validation: BenchmarkBundleValidation {
+            validator: "frankenctl benchmark verify".to_string(),
+            error_taxonomy: "FE-TPV-BUNDLE-0001..FE-TPV-BUNDLE-0006".to_string(),
+        },
+        retention: BenchmarkBundleRetention {
+            min_days: 365,
+            high_impact_min_days: 730,
+            rotation_policy: "archive-with-addressable-retrieval".to_string(),
+        },
+    };
+    let manifest_bytes = encode_json_value(
+        &manifest_artifact,
+        format!(
+            "benchmark bundle manifest `{}`",
+            bundle_dir.join("manifest.json").display()
+        )
+        .as_str(),
+    )?;
+
+    write_bytes_file(results_path, &results_bytes)?;
+    write_bytes_file(&bundle_dir.join("env.json"), &env_bytes)?;
+    write_bytes_file(&bundle_dir.join("commands.txt"), &commands_bytes)?;
+    write_bytes_file(&bundle_dir.join("repro.lock"), &repro_bytes)?;
+    write_bytes_file(&bundle_dir.join("manifest.json"), &manifest_bytes)?;
+    Ok(())
 }
 
 fn execute_benchmark_verify(args: BenchmarkVerifyArgs) -> Result<i32, String> {
@@ -1640,6 +2078,7 @@ fn validate_benchmark_bundle_contract(
     ];
 
     let mut bundle_violations = false;
+    let mut bundle_bytes = BTreeMap::new();
     for file in required_files {
         let path = bundle_dir.join(file);
         let present = path.is_file();
@@ -1654,37 +2093,80 @@ fn validate_benchmark_bundle_contract(
                 format!("required bundle file missing: {}", path.display())
             },
         );
-        if !present {
+        if present {
+            match fs::read(&path) {
+                Ok(bytes) => {
+                    bundle_bytes.insert(file.to_string(), bytes);
+                }
+                Err(error) => {
+                    append_benchmark_bundle_check(
+                        report,
+                        format!("bundle_file_{file}_readable"),
+                        false,
+                        CODE_BUNDLE_PARSE_ERROR,
+                        format!(
+                            "failed to read required bundle file '{}': {error}",
+                            path.display()
+                        ),
+                    );
+                    bundle_violations = true;
+                }
+            }
+        } else {
             bundle_violations = true;
         }
     }
 
-    let manifest_path = bundle_dir.join("manifest.json");
-    let manifest = if manifest_path.is_file() {
-        match load_json_file::<BenchmarkBundleManifest>(&manifest_path) {
-            Ok(manifest) => {
-                let schema_ok = !manifest.schema_version.trim().is_empty();
+    let actual_digests = bundle_bytes
+        .iter()
+        .map(|(file, bytes)| (file.clone(), sha256_prefixed(bytes)))
+        .collect::<BTreeMap<_, _>>();
+    let embedded_input_digest =
+        match encode_json_value(&input.input, "embedded benchmark publication gate input") {
+            Ok(bytes) => Some(sha256_prefixed(&bytes)),
+            Err(error) => {
                 append_benchmark_bundle_check(
                     report,
-                    "bundle_manifest_schema_version_present".to_string(),
-                    schema_ok,
+                    "bundle_embedded_input_digest_recomputes".to_string(),
+                    false,
                     CODE_BUNDLE_PARSE_ERROR,
+                    error,
+                );
+                bundle_violations = true;
+                None
+            }
+        };
+
+    let manifest = if let Some(manifest_bytes) = bundle_bytes.get("manifest.json") {
+        match serde_json::from_slice::<BenchmarkBundleManifest>(manifest_bytes) {
+            Ok(manifest) => {
+                let schema_ok = manifest.schema_version == BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION
+                    && manifest.schema_hash
+                        == schema_hash(BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION);
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_manifest_schema_matches".to_string(),
+                    schema_ok,
+                    CODE_BUNDLE_SCHEMA_MISMATCH,
                     if schema_ok {
                         format!(
-                            "bundle manifest schema_version present: {}",
-                            manifest.schema_version
+                            "bundle manifest schema matches {}",
+                            BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION
                         )
                     } else {
-                        "bundle manifest schema_version must be non-empty".to_string()
+                        format!(
+                            "bundle manifest schema mismatch: schema_version={} schema_hash={}",
+                            manifest.schema_version, manifest.schema_hash
+                        )
                     },
                 );
                 if !schema_ok {
                     bundle_violations = true;
                 }
 
-                let context_matches = manifest.trace_id == input.trace_id
-                    && manifest.decision_id == input.decision_id
-                    && manifest.policy_id == input.policy_id;
+                let context_matches = manifest.provenance.trace_id == input.trace_id
+                    && manifest.provenance.decision_id == input.decision_id
+                    && manifest.provenance.policy_id == input.policy_id;
                 append_benchmark_bundle_check(
                     report,
                     "bundle_manifest_context_matches_claim".to_string(),
@@ -1696,9 +2178,9 @@ fn validate_benchmark_bundle_contract(
                     } else {
                         format!(
                             "bundle manifest context mismatch: manifest=({}, {}, {}), results=({}, {}, {})",
-                            manifest.trace_id,
-                            manifest.decision_id,
-                            manifest.policy_id,
+                            manifest.provenance.trace_id,
+                            manifest.provenance.decision_id,
+                            manifest.provenance.policy_id,
                             input.trace_id,
                             input.decision_id,
                             input.policy_id
@@ -1706,6 +2188,174 @@ fn validate_benchmark_bundle_contract(
                     },
                 );
                 if !context_matches {
+                    bundle_violations = true;
+                }
+
+                let claim_ok = manifest.claim.claim_id == BENCHMARK_BUNDLE_CLAIM_ID
+                    && manifest.claim.claim_class == "performance"
+                    && manifest.claim.status == "observed"
+                    && !manifest.claim.bundle_root.trim().is_empty();
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_manifest_claim_metadata_present".to_string(),
+                    claim_ok,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    if claim_ok {
+                        format!(
+                            "bundle manifest claim metadata references {} and observed performance status",
+                            BENCHMARK_BUNDLE_CLAIM_ID
+                        )
+                    } else {
+                        format!(
+                            "bundle manifest claim metadata invalid: claim_id={} class={} status={} bundle_root={}",
+                            manifest.claim.claim_id,
+                            manifest.claim.claim_class,
+                            manifest.claim.status,
+                            manifest.claim.bundle_root
+                        )
+                    },
+                );
+                if !claim_ok {
+                    bundle_violations = true;
+                }
+
+                let source_ok = manifest.source_revision.repo == "franken_engine"
+                    && !manifest.source_revision.branch.trim().is_empty()
+                    && !manifest.source_revision.commit.trim().is_empty();
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_manifest_source_revision_present".to_string(),
+                    source_ok,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    if source_ok {
+                        format!(
+                            "bundle manifest source revision recorded for branch={} commit={}",
+                            manifest.source_revision.branch, manifest.source_revision.commit
+                        )
+                    } else {
+                        format!(
+                            "bundle manifest source revision invalid: repo={} branch={} commit={}",
+                            manifest.source_revision.repo,
+                            manifest.source_revision.branch,
+                            manifest.source_revision.commit
+                        )
+                    },
+                );
+                if !source_ok {
+                    bundle_violations = true;
+                }
+
+                let validator_ok = manifest.validation.validator == "frankenctl benchmark verify"
+                    && !manifest.validation.error_taxonomy.trim().is_empty();
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_manifest_validation_contract_present".to_string(),
+                    validator_ok,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    if validator_ok {
+                        "bundle manifest declares frankenctl benchmark verify as the validation command".to_string()
+                    } else {
+                        format!(
+                            "bundle manifest validation block invalid: validator={} taxonomy={}",
+                            manifest.validation.validator, manifest.validation.error_taxonomy
+                        )
+                    },
+                );
+                if !validator_ok {
+                    bundle_violations = true;
+                }
+
+                for (label, artifact, file_name) in [
+                    ("env", &manifest.artifacts.env, "env.json"),
+                    ("lock", &manifest.artifacts.lock, "repro.lock"),
+                    ("commands", &manifest.artifacts.commands, "commands.txt"),
+                    ("results", &manifest.artifacts.results, "results.json"),
+                ] {
+                    let path_matches = artifact.path == file_name;
+                    append_benchmark_bundle_check(
+                        report,
+                        format!("bundle_manifest_{label}_path_matches"),
+                        path_matches,
+                        CODE_BUNDLE_PARSE_ERROR,
+                        if path_matches {
+                            format!("bundle manifest {label} path matches {file_name}")
+                        } else {
+                            format!(
+                                "bundle manifest {label} path mismatch: expected {} but found {}",
+                                file_name, artifact.path
+                            )
+                        },
+                    );
+                    if !path_matches {
+                        bundle_violations = true;
+                    }
+
+                    let digest_matches = actual_digests
+                        .get(file_name)
+                        .is_some_and(|actual| actual == &artifact.sha256);
+                    append_benchmark_bundle_check(
+                        report,
+                        format!("bundle_manifest_{label}_digest_matches"),
+                        digest_matches,
+                        CODE_BUNDLE_DIGEST_MISMATCH,
+                        if digest_matches {
+                            format!("bundle manifest {label} digest matches {file_name}")
+                        } else {
+                            format!(
+                                "bundle manifest {label} digest mismatch: declared={} actual={}",
+                                artifact.sha256,
+                                actual_digests
+                                    .get(file_name)
+                                    .cloned()
+                                    .unwrap_or_else(|| "missing".to_string())
+                            )
+                        },
+                    );
+                    if !digest_matches {
+                        bundle_violations = true;
+                    }
+                }
+
+                let manifest_input_ok = embedded_input_digest.as_ref().is_some_and(|digest| {
+                    manifest.inputs.iter().any(|artifact| {
+                        artifact.sha256 == *digest && !artifact.path.trim().is_empty()
+                    })
+                });
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_manifest_inputs_include_embedded_input".to_string(),
+                    manifest_input_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if manifest_input_ok {
+                        "bundle manifest inputs include the embedded publication gate input digest"
+                            .to_string()
+                    } else {
+                        "bundle manifest inputs must include the embedded publication gate input digest"
+                            .to_string()
+                    },
+                );
+                if !manifest_input_ok {
+                    bundle_violations = true;
+                }
+
+                let manifest_output_ok = manifest.outputs.iter().any(|artifact| {
+                    artifact.path == "results.json"
+                        && actual_digests
+                            .get("results.json")
+                            .is_some_and(|actual| actual == &artifact.sha256)
+                });
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_manifest_outputs_include_results_digest".to_string(),
+                    manifest_output_ok,
+                    CODE_BUNDLE_DIGEST_MISMATCH,
+                    if manifest_output_ok {
+                        "bundle manifest outputs include the results.json digest".to_string()
+                    } else {
+                        "bundle manifest outputs must include the results.json digest".to_string()
+                    },
+                );
+                if !manifest_output_ok {
                     bundle_violations = true;
                 }
 
@@ -1717,7 +2367,7 @@ fn validate_benchmark_bundle_contract(
                     "bundle_manifest_parses".to_string(),
                     false,
                     CODE_BUNDLE_PARSE_ERROR,
-                    error,
+                    error.to_string(),
                 );
                 bundle_violations = true;
                 None
@@ -1727,29 +2377,72 @@ fn validate_benchmark_bundle_contract(
         None
     };
 
-    let env_path = bundle_dir.join("env.json");
-    if env_path.is_file() {
-        match load_json_file::<serde_json::Value>(&env_path) {
-            Ok(value) => {
-                let env_obj = value.as_object().cloned().unwrap_or_default();
-                let env_ok = !env_obj.is_empty()
-                    && env_obj.contains_key("os")
-                    && env_obj.contains_key("arch")
-                    && (env_obj.contains_key("toolchain") || env_obj.contains_key("runtime_pins"));
+    if let Some(env_bytes) = bundle_bytes.get("env.json") {
+        match serde_json::from_slice::<BenchmarkBundleEnv>(env_bytes) {
+            Ok(env_artifact) => {
+                let schema_ok = env_artifact.schema_version == BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION
+                    && env_artifact.schema_hash == schema_hash(BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION);
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_env_schema_matches".to_string(),
+                    schema_ok,
+                    CODE_BUNDLE_SCHEMA_MISMATCH,
+                    if schema_ok {
+                        format!(
+                            "env.json schema matches {}",
+                            BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION
+                        )
+                    } else {
+                        format!(
+                            "env.json schema mismatch: schema_version={} schema_hash={}",
+                            env_artifact.schema_version, env_artifact.schema_hash
+                        )
+                    },
+                );
+                if !schema_ok {
+                    bundle_violations = true;
+                }
+
+                let env_ok = !env_artifact.host.os.trim().is_empty()
+                    && !env_artifact.host.arch.trim().is_empty()
+                    && !env_artifact.toolchain.rustup_toolchain.trim().is_empty()
+                    && !env_artifact.toolchain.rustc.trim().is_empty()
+                    && !env_artifact.toolchain.cargo.trim().is_empty();
                 append_benchmark_bundle_check(
                     report,
                     "bundle_env_has_core_fields".to_string(),
                     env_ok,
                     CODE_BUNDLE_PARSE_ERROR,
                     if env_ok {
-                        "env.json includes required fields: os, arch, and toolchain/runtime_pins"
-                            .to_string()
+                        "env.json includes host os/arch and toolchain fingerprints".to_string()
                     } else {
-                        "env.json must include os/arch and either toolchain or runtime_pins"
+                        "env.json must include non-empty host os/arch and toolchain fingerprints"
                             .to_string()
                     },
                 );
                 if !env_ok {
+                    bundle_violations = true;
+                }
+
+                let policy_ok = env_artifact.policy.policy_id == input.policy_id
+                    && env_artifact.policy.policy_digest_sha256
+                        == sha256_prefixed(input.policy_id.as_bytes());
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_env_policy_matches_claim".to_string(),
+                    policy_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if policy_ok {
+                        "env.json policy block matches the benchmark claim policy context"
+                            .to_string()
+                    } else {
+                        format!(
+                            "env.json policy mismatch: policy_id={} policy_digest_sha256={}",
+                            env_artifact.policy.policy_id, env_artifact.policy.policy_digest_sha256
+                        )
+                    },
+                );
+                if !policy_ok {
                     bundle_violations = true;
                 }
             }
@@ -1759,52 +2452,15 @@ fn validate_benchmark_bundle_contract(
                     "bundle_env_parses".to_string(),
                     false,
                     CODE_BUNDLE_PARSE_ERROR,
-                    error,
+                    error.to_string(),
                 );
                 bundle_violations = true;
             }
         }
     }
 
-    let repro_path = bundle_dir.join("repro.lock");
-    if repro_path.is_file() {
-        let repro_ok = fs::read_to_string(&repro_path)
-            .map(|content| {
-                let trimmed = content.trim();
-                if trimmed.is_empty() {
-                    return false;
-                }
-                if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                    serde_json::from_str::<serde_json::Value>(trimmed)
-                        .map(|value| value.is_object() || value.is_array())
-                        .unwrap_or(false)
-                } else {
-                    true
-                }
-            })
-            .unwrap_or(false);
-        append_benchmark_bundle_check(
-            report,
-            "bundle_repro_lock_present_and_non_empty".to_string(),
-            repro_ok,
-            CODE_BUNDLE_PARSE_ERROR,
-            if repro_ok {
-                format!(
-                    "repro.lock is present and parseable: {}",
-                    repro_path.display()
-                )
-            } else {
-                format!("repro.lock is missing or invalid: {}", repro_path.display())
-            },
-        );
-        if !repro_ok {
-            bundle_violations = true;
-        }
-    }
-
-    let commands_path = bundle_dir.join("commands.txt");
-    if commands_path.is_file() {
-        match fs::read_to_string(&commands_path) {
+    let command_lines = if let Some(command_bytes) = bundle_bytes.get("commands.txt") {
+        match String::from_utf8(command_bytes.clone()) {
             Ok(content) => {
                 let non_empty = !content.trim().is_empty();
                 append_benchmark_bundle_check(
@@ -1815,10 +2471,13 @@ fn validate_benchmark_bundle_contract(
                     if non_empty {
                         format!(
                             "commands.txt contains command transcript: {}",
-                            commands_path.display()
+                            bundle_dir.join("commands.txt").display()
                         )
                     } else {
-                        format!("commands.txt is empty: {}", commands_path.display())
+                        format!(
+                            "commands.txt is empty: {}",
+                            bundle_dir.join("commands.txt").display()
+                        )
                     },
                 );
                 if !non_empty {
@@ -1840,31 +2499,268 @@ fn validate_benchmark_bundle_contract(
                 if !remote_only {
                     bundle_violations = true;
                 }
+
+                Some(content.lines().map(str::to_string).collect::<Vec<_>>())
             }
             Err(error) => {
                 append_benchmark_bundle_check(
                     report,
-                    "bundle_commands_readable".to_string(),
+                    "bundle_commands_utf8".to_string(),
                     false,
                     CODE_BUNDLE_PARSE_ERROR,
-                    format!(
-                        "failed to read commands.txt '{}': {error}",
-                        commands_path.display()
-                    ),
+                    format!("commands.txt must be valid UTF-8: {error}"),
+                );
+                bundle_violations = true;
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(repro_bytes) = bundle_bytes.get("repro.lock") {
+        match serde_json::from_slice::<BenchmarkBundleReproLock>(repro_bytes) {
+            Ok(repro_lock) => {
+                let schema_ok = repro_lock.schema_version
+                    == BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION
+                    && repro_lock.schema_hash
+                        == schema_hash(BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION);
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_repro_lock_schema_matches".to_string(),
+                    schema_ok,
+                    CODE_BUNDLE_SCHEMA_MISMATCH,
+                    if schema_ok {
+                        format!(
+                            "repro.lock schema matches {}",
+                            BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION
+                        )
+                    } else {
+                        format!(
+                            "repro.lock schema mismatch: schema_version={} schema_hash={}",
+                            repro_lock.schema_version, repro_lock.schema_hash
+                        )
+                    },
+                );
+                if !schema_ok {
+                    bundle_violations = true;
+                }
+
+                let manifest_id_ok = manifest.as_ref().is_some_and(|bundle_manifest| {
+                    repro_lock.manifest_id == bundle_manifest.manifest_id
+                });
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_repro_lock_manifest_id_matches".to_string(),
+                    manifest_id_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if manifest_id_ok {
+                        "repro.lock manifest_id matches manifest.json".to_string()
+                    } else {
+                        format!(
+                            "repro.lock manifest_id mismatch: {}",
+                            repro_lock.manifest_id
+                        )
+                    },
+                );
+                if !manifest_id_ok {
+                    bundle_violations = true;
+                }
+
+                let determinism_ok = !repro_lock.determinism.allow_network
+                    && !repro_lock.determinism.allow_wall_clock
+                    && !repro_lock.determinism.allow_randomness
+                    && repro_lock.determinism.max_clock_skew_seconds == 0;
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_repro_lock_is_fail_closed".to_string(),
+                    determinism_ok,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    if determinism_ok {
+                        "repro.lock disables network, wall clock, randomness, and clock skew"
+                            .to_string()
+                    } else {
+                        "repro.lock must disable network, wall clock, randomness, and clock skew"
+                            .to_string()
+                    },
+                );
+                if !determinism_ok {
+                    bundle_violations = true;
+                }
+
+                let replay_ok = repro_lock.replay.trace_id == input.trace_id
+                    && repro_lock.replay.decision_id == input.decision_id
+                    && repro_lock.replay.policy_id == input.policy_id;
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_repro_lock_replay_context_matches".to_string(),
+                    replay_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if replay_ok {
+                        "repro.lock replay block matches trace/decision/policy context".to_string()
+                    } else {
+                        format!(
+                            "repro.lock replay context mismatch: replay=({}, {}, {}), claim=({}, {}, {})",
+                            repro_lock.replay.trace_id,
+                            repro_lock.replay.decision_id,
+                            repro_lock.replay.policy_id,
+                            input.trace_id,
+                            input.decision_id,
+                            input.policy_id
+                        )
+                    },
+                );
+                if !replay_ok {
+                    bundle_violations = true;
+                }
+
+                let verification_ok = repro_lock
+                    .verification
+                    .command
+                    .contains("frankenctl benchmark verify --bundle")
+                    && repro_lock
+                        .verification
+                        .command
+                        .contains(&bundle_dir.display().to_string())
+                    && repro_lock.verification.expected_verdict == "verified";
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_repro_lock_verification_contract_present".to_string(),
+                    verification_ok,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    if verification_ok {
+                        "repro.lock includes a benchmark verify command for this bundle".to_string()
+                    } else {
+                        format!(
+                            "repro.lock verification block invalid: command={} expected_verdict={}",
+                            repro_lock.verification.command,
+                            repro_lock.verification.expected_verdict
+                        )
+                    },
+                );
+                if !verification_ok {
+                    bundle_violations = true;
+                }
+
+                let command_contract_ok = command_lines
+                    .as_ref()
+                    .is_some_and(|lines| repro_lock.commands == *lines);
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_repro_lock_commands_match_transcript".to_string(),
+                    command_contract_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if command_contract_ok {
+                        "repro.lock commands exactly match commands.txt".to_string()
+                    } else {
+                        "repro.lock commands must exactly match commands.txt".to_string()
+                    },
+                );
+                if !command_contract_ok {
+                    bundle_violations = true;
+                }
+
+                let input_contract_ok = embedded_input_digest.as_ref().is_some_and(|digest| {
+                    repro_lock.inputs.iter().any(|artifact| {
+                        artifact.kind == "input"
+                            && artifact.sha256 == *digest
+                            && !artifact.path.trim().is_empty()
+                    })
+                });
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_repro_lock_inputs_include_embedded_input".to_string(),
+                    input_contract_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if input_contract_ok {
+                        "repro.lock inputs include the embedded publication gate input digest"
+                            .to_string()
+                    } else {
+                        "repro.lock inputs must include the embedded publication gate input digest"
+                            .to_string()
+                    },
+                );
+                if !input_contract_ok {
+                    bundle_violations = true;
+                }
+
+                for file_name in ["env.json", "commands.txt", "results.json"] {
+                    let output_ok = repro_lock.expected_outputs.iter().any(|artifact| {
+                        artifact.path == file_name
+                            && artifact.kind == "output"
+                            && actual_digests
+                                .get(file_name)
+                                .is_some_and(|actual| actual == &artifact.sha256)
+                    });
+                    append_benchmark_bundle_check(
+                        report,
+                        format!(
+                            "bundle_repro_lock_expected_output_{}_matches",
+                            file_name.replace('.', "_")
+                        ),
+                        output_ok,
+                        CODE_BUNDLE_DIGEST_MISMATCH,
+                        if output_ok {
+                            format!(
+                                "repro.lock expected_outputs includes the current digest for {file_name}"
+                            )
+                        } else {
+                            format!(
+                                "repro.lock expected_outputs must include the current digest for {file_name}"
+                            )
+                        },
+                    );
+                    if !output_ok {
+                        bundle_violations = true;
+                    }
+                }
+            }
+            Err(error) => {
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_repro_lock_parses".to_string(),
+                    false,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    error.to_string(),
                 );
                 bundle_violations = true;
             }
         }
     }
 
+    if let Some(repro_bytes) = bundle_bytes.get("repro.lock") {
+        let repro_ok = !repro_bytes.is_empty();
+        append_benchmark_bundle_check(
+            report,
+            "bundle_repro_lock_present_and_non_empty".to_string(),
+            repro_ok,
+            CODE_BUNDLE_PARSE_ERROR,
+            if repro_ok {
+                format!(
+                    "repro.lock is present and parseable: {}",
+                    bundle_dir.join("repro.lock").display()
+                )
+            } else {
+                format!(
+                    "repro.lock is missing or invalid: {}",
+                    bundle_dir.join("repro.lock").display()
+                )
+            },
+        );
+        if !repro_ok {
+            bundle_violations = true;
+        }
+    }
+
     let scope = if let Some(manifest) = manifest {
         format!(
-            "bundle={} schema={} trace={} decision={} policy={}",
+            "bundle={} schema={} manifest_id={} trace={} decision={} policy={}",
             bundle_dir.display(),
             manifest.schema_version,
-            manifest.trace_id,
-            manifest.decision_id,
-            manifest.policy_id
+            manifest.manifest_id,
+            manifest.provenance.trace_id,
+            manifest.provenance.decision_id,
+            manifest.provenance.policy_id
         )
     } else {
         format!("bundle={}", bundle_dir.display())
@@ -2422,6 +3318,86 @@ fn default_benchmark_out_dir(run_id: &str) -> PathBuf {
     PathBuf::from(format!("artifacts/frankenctl_benchmark/{run_id}"))
 }
 
+fn benchmark_bundle_dir(output_path: &Path) -> PathBuf {
+    output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn current_utc_timestamp() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn schema_hash(schema_version: &str) -> String {
+    sha256_prefixed(schema_version.as_bytes())
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn bundle_artifact_digest(path: &str, bytes: &[u8]) -> BenchmarkBundleArtifactDigest {
+    BenchmarkBundleArtifactDigest {
+        path: path.to_string(),
+        sha256: sha256_prefixed(bytes),
+    }
+}
+
+fn bundle_materialized_file(
+    path: &str,
+    bytes: &[u8],
+    kind: &str,
+) -> BenchmarkBundleMaterializedFile {
+    BenchmarkBundleMaterializedFile {
+        path: path.to_string(),
+        sha256: sha256_prefixed(bytes),
+        bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        kind: kind.to_string(),
+    }
+}
+
+fn current_benchmark_bundle_repo_state() -> BenchmarkBundleRepoState {
+    let branch = command_stdout("git", &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|| "main".to_string());
+    let commit =
+        command_stdout("git", &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()
+        .is_some_and(|output| output.status.success() && !output.stdout.is_empty());
+    BenchmarkBundleRepoState {
+        branch,
+        commit,
+        dirty,
+    }
+}
+
+fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn rustc_verbose_field(verbose: Option<&str>, field: &str) -> Option<String> {
+    let prefix = format!("{field}:");
+    verbose?
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix.as_str()).map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn current_unix_ns() -> u64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2437,16 +3413,24 @@ fn print_json<T: Serialize>(value: &T) -> Result<(), String> {
     Ok(())
 }
 
-fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+fn encode_json_value<T: Serialize>(value: &T, target: &str) -> Result<Vec<u8>, String> {
+    serde_json::to_vec_pretty(value)
+        .map_err(|error| format!("failed to encode JSON for {target}: {error}"))
+}
+
+fn write_bytes_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create `{}`: {error}", parent.display()))?;
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create `{}`: {error}", parent.display()))?;
+        }
     }
-    let encoded = serde_json::to_string_pretty(value)
-        .map_err(|error| format!("failed to encode JSON for `{}`: {error}", path.display()))?;
-    fs::write(path, encoded)
-        .map_err(|error| format!("failed to write `{}`: {error}", path.display()))?;
-    Ok(())
+    fs::write(path, bytes).map_err(|error| format!("failed to write `{}`: {error}", path.display()))
+}
+
+fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    let encoded = encode_json_value(value, format!("`{}`", path.display()).as_str())?;
+    write_bytes_file(path, &encoded)
 }
 
 fn load_json_file<T: DeserializeOwned>(path: &Path) -> Result<T, String> {

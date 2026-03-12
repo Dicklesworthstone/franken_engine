@@ -166,18 +166,18 @@ fn full_pipeline_hash_chain_integration() {
     let ir0 = make_ir0();
     let ir0_hash = ir0.content_hash();
 
-    let ir1 = make_ir1(ir0_hash.clone());
+    let ir1 = make_ir1(ir0_hash);
     verify_ir1_source(&ir1, &ir0_hash).unwrap();
     let ir1_hash = ir1.content_hash();
 
-    let ir2 = make_ir2(ir1_hash.clone());
+    let ir2 = make_ir2(ir1_hash);
     let ir2_hash = ir2.content_hash();
 
-    let ir3 = make_ir3(ir2_hash.clone());
+    let ir3 = make_ir3(ir2_hash);
     verify_ir3_specialization(&ir3).unwrap();
     let ir3_hash = ir3.content_hash();
 
-    let ir4 = make_ir4(ir3_hash.clone());
+    let ir4 = make_ir4(ir3_hash);
     verify_ir4_linkage(&ir4, &ir3_hash).unwrap();
 
     // All hashes distinct.
@@ -197,10 +197,10 @@ fn full_pipeline_hash_chain_integration() {
 fn verifier_full_pipeline_events() {
     let ir0 = make_ir0();
     let ir0_hash = ir0.content_hash();
-    let ir1 = make_ir1(ir0_hash.clone());
+    let ir1 = make_ir1(ir0_hash);
     let ir3 = make_ir3(ContentHash::compute(b"ir2"));
     let ir3_hash = ir3.content_hash();
-    let ir4 = make_ir4(ir3_hash.clone());
+    let ir4 = make_ir4(ir3_hash);
 
     let mut verifier = IrVerifier::new();
     verifier.verify_ir0(&ir0, &ir0_hash, "int-trace").unwrap();
@@ -270,13 +270,13 @@ fn verifier_captures_multiple_failures() {
 fn full_pipeline_serde_roundtrip() {
     let ir0 = make_ir0();
     let ir0_hash = ir0.content_hash();
-    let ir1 = make_ir1(ir0_hash.clone());
+    let ir1 = make_ir1(ir0_hash);
     let ir1_hash = ir1.content_hash();
-    let ir2 = make_ir2(ir1_hash.clone());
+    let ir2 = make_ir2(ir1_hash);
     let ir2_hash = ir2.content_hash();
-    let ir3 = make_ir3(ir2_hash.clone());
+    let ir3 = make_ir3(ir2_hash);
     let ir3_hash = ir3.content_hash();
-    let ir4 = make_ir4(ir3_hash.clone());
+    let ir4 = make_ir4(ir3_hash);
 
     // Round-trip each level through JSON.
     let ir0_json = serde_json::to_string(&ir0).unwrap();
@@ -323,13 +323,13 @@ fn deterministic_replay_produces_identical_hashes() {
     let run = || {
         let ir0 = make_ir0();
         let ir0_hash = ir0.content_hash();
-        let ir1 = make_ir1(ir0_hash.clone());
+        let ir1 = make_ir1(ir0_hash);
         let ir1_hash = ir1.content_hash();
-        let ir2 = make_ir2(ir1_hash.clone());
+        let ir2 = make_ir2(ir1_hash);
         let ir2_hash = ir2.content_hash();
-        let ir3 = make_ir3(ir2_hash.clone());
+        let ir3 = make_ir3(ir2_hash);
         let ir3_hash = ir3.content_hash();
-        let ir4 = make_ir4(ir3_hash.clone());
+        let ir4 = make_ir4(ir3_hash);
         let ir4_hash = ir4.content_hash();
         (ir0_hash, ir1_hash, ir2_hash, ir3_hash, ir4_hash)
     };
@@ -341,10 +341,10 @@ fn deterministic_replay_identical_verifier_events() {
     let run = || {
         let ir0 = make_ir0();
         let ir0_hash = ir0.content_hash();
-        let ir1 = make_ir1(ir0_hash.clone());
+        let ir1 = make_ir1(ir0_hash);
         let ir3 = make_ir3(ContentHash::compute(b"ir2"));
         let ir3_hash = ir3.content_hash();
-        let ir4 = make_ir4(ir3_hash.clone());
+        let ir4 = make_ir4(ir3_hash);
 
         let mut verifier = IrVerifier::new();
         verifier.verify_ir0(&ir0, &ir0_hash, "det").unwrap();
@@ -472,7 +472,7 @@ fn schema_version_propagates_through_all_levels() {
 #[test]
 fn verify_ir4_non_monotonic_events_rejected() {
     let ir3_hash = ContentHash::compute(b"ir3");
-    let mut ir4 = Ir4Module::new(ir3_hash.clone(), "bad.js");
+    let mut ir4 = Ir4Module::new(ir3_hash, "bad.js");
     ir4.events.push(WitnessEvent {
         seq: 5,
         kind: WitnessEventKind::HostcallDispatched,

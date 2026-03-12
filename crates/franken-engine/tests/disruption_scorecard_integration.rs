@@ -706,7 +706,11 @@ fn dimension_threshold_serde_roundtrip() {
 
 #[test]
 fn evidence_input_serde_roundtrip() {
-    let ev = evidence(DisruptionDimension::PerformanceDelta, 150_000, &["bd-1ze", "bd-2rx"]);
+    let ev = evidence(
+        DisruptionDimension::PerformanceDelta,
+        150_000,
+        &["bd-1ze", "bd-2rx"],
+    );
     let json = serde_json::to_string(&ev).unwrap();
     let restored: EvidenceInput = serde_json::from_str(&json).unwrap();
     assert_eq!(ev, restored);

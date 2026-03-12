@@ -153,10 +153,10 @@ fn integration_trace_cert_same_seed_equivalent() {
 fn integration_trace_cert_different_steps_not_equivalent() {
     let cert_a = make_cert("run1", 42, 100);
     let cert_b = TraceCertificate::new(
-        cert_a.event_hash.clone(),
-        cert_a.schedule_hash.clone(),
+        cert_a.event_hash,
+        cert_a.schedule_hash,
         101,
-        cert_a.trace_fingerprint.clone(),
+        cert_a.trace_fingerprint,
         42,
     );
     assert!(!cert_a.is_equivalent(&cert_b));

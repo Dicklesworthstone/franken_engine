@@ -476,7 +476,7 @@ fn test_receipt_fields() {
 fn test_receipt_deterministic() {
     let graph = three_module_graph("det", EntryKind::AppEntry);
     let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
-    let r1 = build_receipt(&report, graph.graph_hash.clone(), &default_config());
+    let r1 = build_receipt(&report, graph.graph_hash, &default_config());
     let r2 = build_receipt(&report, graph.graph_hash, &default_config());
     assert_eq!(r1.receipt_hash, r2.receipt_hash);
     assert_eq!(r1.config_hash, r2.config_hash);
@@ -491,7 +491,7 @@ fn test_receipt_changes_with_config() {
     cfg2.policy_revision = 42;
     let r1 = compile_entrygraph(&graph, &cfg1, epoch()).unwrap();
     let r2 = compile_entrygraph(&graph, &cfg2, epoch()).unwrap();
-    let rec1 = build_receipt(&r1, graph.graph_hash.clone(), &cfg1);
+    let rec1 = build_receipt(&r1, graph.graph_hash, &cfg1);
     let rec2 = build_receipt(&r2, graph.graph_hash, &cfg2);
     assert_ne!(rec1.config_hash, rec2.config_hash);
     assert_ne!(rec1.receipt_hash, rec2.receipt_hash);
@@ -502,7 +502,7 @@ fn test_receipt_changes_with_epoch() {
     let graph = three_module_graph("re", EntryKind::AppEntry);
     let r1 = compile_entrygraph(&graph, &default_config(), SecurityEpoch::from_raw(1)).unwrap();
     let r2 = compile_entrygraph(&graph, &default_config(), SecurityEpoch::from_raw(2)).unwrap();
-    let rec1 = build_receipt(&r1, graph.graph_hash.clone(), &default_config());
+    let rec1 = build_receipt(&r1, graph.graph_hash, &default_config());
     let rec2 = build_receipt(&r2, graph.graph_hash, &default_config());
     assert_ne!(rec1.receipt_hash, rec2.receipt_hash);
 }

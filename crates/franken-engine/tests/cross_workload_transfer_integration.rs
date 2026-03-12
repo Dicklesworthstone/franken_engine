@@ -192,7 +192,7 @@ fn rollback_cooldown_prevents_re_transfer() {
 fn already_present_prior_rejected() {
     let mut session = session_at_epoch(5);
     let c = candidate("existing", TransferableKind::RewritePack, 900_000);
-    session.local_prior_hashes.insert(c.prior_hash.clone());
+    session.local_prior_hashes.insert(c.prior_hash);
 
     let d = session.evaluate_candidate(&c);
     assert_eq!(d.verdict, TransferVerdict::Rejected);
@@ -625,12 +625,14 @@ fn schema_version_stable() {
 
 #[test]
 fn constants_reasonable() {
-    assert!(MAX_TRANSFER_CANDIDATES > 0);
-    assert!(MAX_ACTIVE_TRANSFERS >= MAX_TRANSFER_CANDIDATES);
-    assert!(DEFAULT_DRIFT_TOLERANCE > 0);
-    assert!(MIN_PROXIMITY_SCORE > 0);
-    assert!(MIN_DRIFT_OBSERVATIONS > 0);
-    assert!(MAX_ROLLBACK_HISTORY > 0);
+    const {
+        assert!(MAX_TRANSFER_CANDIDATES > 0);
+        assert!(MAX_ACTIVE_TRANSFERS >= MAX_TRANSFER_CANDIDATES);
+        assert!(DEFAULT_DRIFT_TOLERANCE > 0);
+        assert!(MIN_PROXIMITY_SCORE > 0);
+        assert!(MIN_DRIFT_OBSERVATIONS > 0);
+        assert!(MAX_ROLLBACK_HISTORY > 0);
+    }
 }
 
 #[test]

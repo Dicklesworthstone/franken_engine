@@ -557,3 +557,140 @@ fn player_debug_is_nonempty() {
     let p = Player::Attacker;
     assert!(!format!("{p:?}").is_empty());
 }
+
+// ── StrategicAction ─────────────────────────────────────────────────────
+
+#[test]
+fn strategic_action_serde_roundtrip() {
+    let action = attacker_action("inject-exploit", Subsystem::ExtensionHost);
+    let json = serde_json::to_string(&action).unwrap();
+    let back: StrategicAction = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, action);
+}
+
+#[test]
+fn strategic_action_inadmissible_has_constraints() {
+    let action = defender_action("blocked-action", Subsystem::Compiler, false);
+    assert!(!action.admissible);
+    assert!(!action.constraints.is_empty());
+}
+
+// ── HardConstraint ─────────────────────────────────────────────────────
+
+#[test]
+fn hard_constraint_serde_roundtrip() {
+    let constraint = HardConstraint {
+        constraint_id: "c-test".to_string(),
+        description: "Test constraint".to_string(),
+        forbidden_actions: {
+            let mut s = BTreeSet::new();
+            s.insert(aid("forbidden-1"));
+            s.insert(aid("forbidden-2"));
+            s
+        },
+        active_conditions: vec!["production".to_string()],
+    };
+    let json = serde_json::to_string(&constraint).unwrap();
+    let back: HardConstraint = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, constraint);
+}
+
+// ── LossEntry ──────────────────────────────────────────────────────────
+
+#[test]
+fn loss_entry_serde_roundtrip() {
+    let entry = loss("atk1", "def1", LossDimension::AvailabilityCost, 750_000);
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: LossEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, entry);
+}
+
+// ── LossTensor — edge cases ────────────────────────────────────────────
+
+#[test]
+fn loss_tensor_empty_entries() {
+    let tensor = LossTensor::from_entries(Subsystem::Compiler, vec![]);
+    assert!(tensor.entries.is_empty());
+    assert_eq!(tensor.minimax_defender(), None);
+}
+
+#[test]
+fn loss_tensor_hash_changes_with_different_entries() {
+    let t1 = LossTensor::from_entries(
+        Subsystem::Compiler,
+        vec![loss("a1", "d1", LossDimension::UserHarm, 100_000)],
+    );
+    let t2 = LossTensor::from_entries(
+        Subsystem::Compiler,
+        vec![loss("a1", "d1", LossDimension::UserHarm, 200_000)],
+    );
+    assert_ne!(t1.content_hash, t2.content_hash);
+}
+
+// ── GameModel — additional coverage ────────────────────────────────────
+
+#[test]
+fn game_model_content_hash_deterministic() {
+    let m1 = build_simple_model();
+    let m2 = build_simple_model();
+    assert_eq!(m1.content_hash, m2.content_hash);
+}
+
+#[test]
+fn game_model_compute_model_id_differs_by_epoch() {
+    let id1 = GameModel::compute_model_id(&Subsystem::Compiler, &SecurityEpoch::from_raw(1));
+    let id2 = GameModel::compute_model_id(&Subsystem::Compiler, &SecurityEpoch::from_raw(2));
+    assert_ne!(id1, id2);
+}
+
+// ── AdmissibleActionAutomaton — serde ──────────────────────────────────
+
+#[test]
+fn automaton_serde_roundtrip() {
+    let mut all = BTreeSet::new();
+    all.insert(aid("d1"));
+    all.insert(aid("d2"));
+    let automaton = AdmissibleActionAutomaton {
+        subsystem: Subsystem::Compiler,
+        constraints: vec![HardConstraint {
+            constraint_id: "c1".to_string(),
+            description: "test".to_string(),
+            forbidden_actions: {
+                let mut s = BTreeSet::new();
+                s.insert(aid("d2"));
+                s
+            },
+            active_conditions: vec!["always".to_string()],
+        }],
+        all_defender_actions: all,
+    };
+    let json = serde_json::to_string(&automaton).unwrap();
+    let back: AdmissibleActionAutomaton = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, automaton);
+}
+
+// ── ActionSpace — edge cases ───────────────────────────────────────────
+
+#[test]
+fn action_space_empty_actions() {
+    let space = ActionSpace {
+        player: Player::Attacker,
+        subsystem: Subsystem::Runtime,
+        actions: vec![],
+    };
+    assert_eq!(space.action_count(), 0);
+    assert!(space.admissible_actions().is_empty());
+}
+
+#[test]
+fn action_space_all_admissible() {
+    let space = ActionSpace {
+        player: Player::Defender,
+        subsystem: Subsystem::ControlPlane,
+        actions: vec![
+            defender_action("d1", Subsystem::ControlPlane, true),
+            defender_action("d2", Subsystem::ControlPlane, true),
+        ],
+    };
+    assert_eq!(space.admissible_actions().len(), 2);
+}

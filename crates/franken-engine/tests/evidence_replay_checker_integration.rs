@@ -97,7 +97,7 @@ fn build_ledger(n: usize) -> Vec<CanonicalEvidenceEntry> {
     for i in 0..n {
         let ts = 1_700_000_000_000 + (i as u64) * 1000;
         let entry = build_valid_entry(i as u64, ts, "policy-v1", "1.0.0", 1, prev_chain.as_ref());
-        prev_chain = Some(entry.chain_hash.clone());
+        prev_chain = Some(entry.chain_hash);
         entries.push(entry);
     }
     entries

@@ -505,7 +505,7 @@ fn integration_e2e_triage_identifies_issues() {
 
     // Should have warning for no-runs gate
     let warnings = bundle.findings_at_severity(TriageSeverity::Warning);
-    assert!(warnings.len() >= 1);
+    assert!(!warnings.is_empty());
 }
 
 // ---------------------------------------------------------------------------

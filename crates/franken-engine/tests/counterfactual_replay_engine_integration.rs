@@ -668,3 +668,241 @@ fn full_lifecycle_compare_rank_serialize() {
     // 8. Engine state
     assert_eq!(engine.replay_count(), 1);
 }
+
+// ===========================================================================
+// 17. PolicyComparisonReport edge cases
+// ===========================================================================
+
+#[test]
+fn policy_report_is_confident_improvement() {
+    let mut engine = default_engine();
+    let trace = simple_trace();
+    let policies = vec![make_alternate_policy("alt", "d")];
+    let result = engine
+        .compare(&[trace], &policies, &default_scope(), None)
+        .unwrap();
+    let report = &result.policy_reports[0];
+    // is_confident_improvement depends on safety_status == Safe AND net > 0
+    let expected =
+        report.safety_status == EnvelopeStatus::Safe && report.net_improvement_millionths > 0;
+    assert_eq!(report.is_confident_improvement(), expected);
+}
+
+#[test]
+fn policy_report_divergence_rate_zero_decisions() {
+    // A manually constructed report with zero decisions
+    let report = PolicyComparisonReport {
+        schema_version: REPLAY_ENGINE_SCHEMA_VERSION.to_string(),
+        baseline_policy_id: PolicyId("base".to_string()),
+        alternate_policy_id: PolicyId("alt".to_string()),
+        alternate_description: "test".to_string(),
+        decisions_evaluated: 0,
+        divergence_count: 0,
+        total_original_outcome_millionths: 0,
+        total_counterfactual_outcome_millionths: 0,
+        net_improvement_millionths: 0,
+        regime_breakdown: BTreeMap::new(),
+        confidence_envelope: frankenengine_engine::counterfactual_evaluator::ConfidenceEnvelope {
+            estimate_millionths: 0,
+            lower_millionths: 0,
+            upper_millionths: 0,
+            confidence_millionths: 950_000,
+            effective_samples: 0,
+        },
+        safety_status: EnvelopeStatus::Inconclusive,
+        divergent_decisions: vec![],
+        assumptions: vec![],
+        artifact_hash: ContentHash::compute(b"test"),
+    };
+    assert_eq!(report.divergence_rate_millionths(), 0);
+}
+
+// ===========================================================================
+// 18. ReplayEngineError additional coverage
+// ===========================================================================
+
+#[test]
+fn replay_engine_error_is_std_error() {
+    let err = ReplayEngineError::NoTraces;
+    let _: &dyn std::error::Error = &err;
+}
+
+#[test]
+fn replay_engine_error_all_variants_serde() {
+    let errors = vec![
+        ReplayEngineError::NoTraces,
+        ReplayEngineError::NoPolicies,
+        ReplayEngineError::TooManyPolicies {
+            count: 100,
+            max: 64,
+        },
+        ReplayEngineError::TooManyDecisions {
+            count: 200_000,
+            max: 100_000,
+        },
+        ReplayEngineError::InsufficientDecisions {
+            found: 1,
+            required: 10,
+        },
+        ReplayEngineError::TraceIntegrityFailure {
+            trace_id: "t1".into(),
+            detail: "bad".into(),
+        },
+        ReplayEngineError::IdDerivation("id err".into()),
+        ReplayEngineError::EmptyScope,
+        ReplayEngineError::DuplicatePolicy {
+            policy_id: "dup".into(),
+        },
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).unwrap();
+        let back: ReplayEngineError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*err, back);
+    }
+}
+
+// ===========================================================================
+// 19. Multiple traces
+// ===========================================================================
+
+#[test]
+fn compare_multiple_traces() {
+    let mut engine = default_engine();
+    let trace1 = make_trace(vec![
+        make_decision(0, "native", 800_000),
+        make_decision(1, "wasm", 600_000),
+    ]);
+    let trace2 = make_trace(vec![
+        make_decision(0, "native", 700_000),
+        make_decision(1, "native", 900_000),
+        make_decision(2, "wasm", 500_000),
+    ]);
+    let policies = vec![make_alternate_policy("alt", "d")];
+    let result = engine
+        .compare(&[trace1, trace2], &policies, &default_scope(), None)
+        .unwrap();
+    assert_eq!(result.trace_count, 2);
+    assert_eq!(result.total_decisions, 5);
+}
+
+// ===========================================================================
+// 20. AssumptionCard with testable fields
+// ===========================================================================
+
+#[test]
+fn assumption_card_testable_with_result() {
+    let card = AssumptionCard {
+        assumption_id: "test-pass".into(),
+        category: AssumptionCategory::Positivity,
+        description: "positivity holds".into(),
+        testable: true,
+        test_passed: Some(true),
+        sensitivity_bound_millionths: 50_000,
+    };
+    let json = serde_json::to_string(&card).unwrap();
+    let back: AssumptionCard = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, card);
+    assert!(back.testable);
+    assert_eq!(back.test_passed, Some(true));
+}
+
+#[test]
+fn assumption_card_testable_failed() {
+    let card = AssumptionCard {
+        assumption_id: "test-fail".into(),
+        category: AssumptionCategory::Sutva,
+        description: "SUTVA violated".into(),
+        testable: true,
+        test_passed: Some(false),
+        sensitivity_bound_millionths: 200_000,
+    };
+    let json = serde_json::to_string(&card).unwrap();
+    let back: AssumptionCard = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.test_passed, Some(false));
+}
+
+// ===========================================================================
+// 21. Config with non-default settings
+// ===========================================================================
+
+#[test]
+fn config_non_default_settings() {
+    let config = ReplayEngineConfig {
+        baseline_policy_id: PolicyId("custom-baseline".to_string()),
+        baseline_action: LaneAction::SuspendAdaptive,
+        estimator: EstimatorKind::Ips,
+        confidence_millionths: 990_000,
+        regime_breakdown: false,
+        record_divergences: false,
+        max_divergences_per_policy: 10,
+        verify_integrity: false,
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let back: ReplayEngineConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, config);
+    assert!(!back.regime_breakdown);
+    assert!(!back.record_divergences);
+}
+
+// ===========================================================================
+// 22. ReplayScope with incident filter
+// ===========================================================================
+
+#[test]
+fn replay_scope_with_incident_filter_serde() {
+    let mut scope = ReplayScope::default();
+    scope.incident_filter.insert("incident-1".to_string());
+    scope.incident_filter.insert("incident-2".to_string());
+    scope.min_decisions = 5;
+    let json = serde_json::to_string(&scope).unwrap();
+    let back: ReplayScope = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, scope);
+    assert_eq!(back.incident_filter.len(), 2);
+}
+
+// ===========================================================================
+// 23. Ranked recommendations ordering
+// ===========================================================================
+
+#[test]
+fn recommendations_ranked_by_improvement() {
+    let mut engine = default_engine();
+    let trace = make_trace(vec![
+        make_decision(0, "native", 800_000),
+        make_decision(1, "wasm", 600_000),
+        make_decision(2, "native", 900_000),
+        make_decision(3, "wasm", 400_000),
+    ]);
+    let policies = vec![
+        make_alternate_policy("alt-1", "d1"),
+        make_alternate_policy("alt-2", "d2"),
+        make_override_policy("force-safe", LaneAction::FallbackSafe),
+    ];
+    let result = engine
+        .compare(&[trace], &policies, &default_scope(), None)
+        .unwrap();
+    let recs = &result.ranked_recommendations;
+    // Ranks should be monotonically increasing
+    for window in recs.windows(2) {
+        assert!(window[0].rank < window[1].rank);
+    }
+}
+
+// ===========================================================================
+// 24. Global assumptions present
+// ===========================================================================
+
+#[test]
+fn global_assumptions_non_empty() {
+    let mut engine = default_engine();
+    let trace = simple_trace();
+    let policies = vec![make_alternate_policy("alt", "d")];
+    let result = engine
+        .compare(&[trace], &policies, &default_scope(), None)
+        .unwrap();
+    assert!(!result.global_assumptions.is_empty());
+    for a in &result.global_assumptions {
+        assert!(!a.assumption_id.is_empty());
+        assert!(!a.description.is_empty());
+    }
+}

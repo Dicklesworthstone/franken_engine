@@ -587,7 +587,10 @@ fn hook_kind_all_has_expected_count() {
     assert_eq!(HookKind::ALL.len(), 15);
     let mut seen = std::collections::BTreeSet::new();
     for kind in HookKind::ALL {
-        assert!(seen.insert(format!("{kind:?}")), "duplicate in ALL: {kind:?}");
+        assert!(
+            seen.insert(format!("{kind:?}")),
+            "duplicate in ALL: {kind:?}"
+        );
     }
 }
 
@@ -602,29 +605,51 @@ fn hook_kind_all_serde_roundtrip() {
 
 #[test]
 fn hook_kind_has_effect_phase_classification() {
-    let effect_hooks = [HookKind::Effect, HookKind::LayoutEffect, HookKind::InsertionEffect];
+    let effect_hooks = [
+        HookKind::Effect,
+        HookKind::LayoutEffect,
+        HookKind::InsertionEffect,
+    ];
     for kind in &effect_hooks {
         assert!(kind.has_effect_phase(), "{kind:?} should have effect phase");
     }
     let non_effect = [
-        HookKind::State, HookKind::Reducer, HookKind::Memo, HookKind::Callback,
-        HookKind::Ref, HookKind::Context, HookKind::ImperativeHandle,
-        HookKind::DebugValue, HookKind::DeferredValue, HookKind::Transition,
-        HookKind::Id, HookKind::SyncExternalStore,
+        HookKind::State,
+        HookKind::Reducer,
+        HookKind::Memo,
+        HookKind::Callback,
+        HookKind::Ref,
+        HookKind::Context,
+        HookKind::ImperativeHandle,
+        HookKind::DebugValue,
+        HookKind::DeferredValue,
+        HookKind::Transition,
+        HookKind::Id,
+        HookKind::SyncExternalStore,
     ];
     for kind in &non_effect {
-        assert!(!kind.has_effect_phase(), "{kind:?} should NOT have effect phase");
+        assert!(
+            !kind.has_effect_phase(),
+            "{kind:?} should NOT have effect phase"
+        );
     }
 }
 
 #[test]
 fn hook_kind_can_trigger_rerender_classification() {
     let rerender_hooks = [
-        HookKind::State, HookKind::Reducer, HookKind::Context,
-        HookKind::SyncExternalStore, HookKind::Transition, HookKind::DeferredValue,
+        HookKind::State,
+        HookKind::Reducer,
+        HookKind::Context,
+        HookKind::SyncExternalStore,
+        HookKind::Transition,
+        HookKind::DeferredValue,
     ];
     for kind in &rerender_hooks {
-        assert!(kind.can_trigger_rerender(), "{kind:?} should trigger rerender");
+        assert!(
+            kind.can_trigger_rerender(),
+            "{kind:?} should trigger rerender"
+        );
     }
     assert!(!HookKind::Memo.can_trigger_rerender());
     assert!(!HookKind::Effect.can_trigger_rerender());
@@ -634,11 +659,18 @@ fn hook_kind_can_trigger_rerender_classification() {
 #[test]
 fn hook_kind_has_dependency_array_classification() {
     let dep_hooks = [
-        HookKind::Effect, HookKind::LayoutEffect, HookKind::InsertionEffect,
-        HookKind::Memo, HookKind::Callback, HookKind::ImperativeHandle,
+        HookKind::Effect,
+        HookKind::LayoutEffect,
+        HookKind::InsertionEffect,
+        HookKind::Memo,
+        HookKind::Callback,
+        HookKind::ImperativeHandle,
     ];
     for kind in &dep_hooks {
-        assert!(kind.has_dependency_array(), "{kind:?} should have dep array");
+        assert!(
+            kind.has_dependency_array(),
+            "{kind:?} should have dep array"
+        );
     }
     assert!(!HookKind::State.has_dependency_array());
     assert!(!HookKind::Ref.has_dependency_array());
@@ -659,44 +691,66 @@ fn hook_manifest_validate_empty_returns_error() {
 
 #[test]
 fn hook_manifest_validate_consecutive_indices_passes() {
-    let m = HookManifest::new("Good", vec![
-        make_slot(0, HookKind::State),
-        make_slot(1, HookKind::Effect),
-        make_slot(2, HookKind::Memo),
-    ]);
+    let m = HookManifest::new(
+        "Good",
+        vec![
+            make_slot(0, HookKind::State),
+            make_slot(1, HookKind::Effect),
+            make_slot(2, HookKind::Memo),
+        ],
+    );
     let errs = m.validate();
     assert!(errs.is_empty(), "valid manifest should pass: {:?}", errs);
 }
 
 #[test]
 fn hook_manifest_validate_non_consecutive_indices() {
-    let m = HookManifest::new("Bad", vec![
-        make_slot(0, HookKind::State),
-        make_slot(5, HookKind::Effect), // should be 1
-    ]);
+    let m = HookManifest::new(
+        "Bad",
+        vec![
+            make_slot(0, HookKind::State),
+            make_slot(5, HookKind::Effect), // should be 1
+        ],
+    );
     let errs = m.validate();
-    assert!(errs.iter().any(|e| matches!(e, HookManifestError::NonConsecutiveIndices { expected: 1, found: 5 })));
+    assert!(errs.iter().any(|e| matches!(
+        e,
+        HookManifestError::NonConsecutiveIndices {
+            expected: 1,
+            found: 5
+        }
+    )));
 }
 
 #[test]
 fn hook_manifest_validate_deps_on_non_dep_hook() {
-    let m = HookManifest::new("DepErr", vec![
-        HookSlot {
+    let m = HookManifest::new(
+        "DepErr",
+        vec![HookSlot {
             index: HookSlotIndex(0),
             kind: HookKind::State, // State does not support deps
             deps: Some(vec![DepToken(1)]),
-        },
-    ]);
+        }],
+    );
     let errs = m.validate();
-    assert!(errs.iter().any(|e| matches!(e, HookManifestError::DepsOnNonDepHook { .. })));
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e, HookManifestError::DepsOnNonDepHook { .. }))
+    );
 }
 
 #[test]
 fn hook_manifest_error_serde_roundtrip() {
     let errors = vec![
         HookManifestError::EmptyManifest,
-        HookManifestError::NonConsecutiveIndices { expected: 0, found: 3 },
-        HookManifestError::DepsOnNonDepHook { index: HookSlotIndex(2), kind: HookKind::Ref },
+        HookManifestError::NonConsecutiveIndices {
+            expected: 0,
+            found: 3,
+        },
+        HookManifestError::DepsOnNonDepHook {
+            index: HookSlotIndex(2),
+            kind: HookKind::Ref,
+        },
         HookManifestError::DuplicateIndex(HookSlotIndex(1)),
     ];
     for err in &errors {
@@ -722,7 +776,10 @@ fn render_phase_legal_successors_form_valid_lifecycle() {
         RenderPhase::Idle,
     ];
     for next in lifecycle {
-        assert!(phase.can_transition_to(next), "{phase:?} -> {next:?} should be legal");
+        assert!(
+            phase.can_transition_to(next),
+            "{phase:?} -> {next:?} should be legal"
+        );
         phase = next;
     }
 }
@@ -746,7 +803,11 @@ fn render_phase_idle_can_transition_to_rendering_or_unmounting() {
 
 #[test]
 fn effect_timing_serde_roundtrip() {
-    for timing in [EffectTiming::Insertion, EffectTiming::Layout, EffectTiming::Passive] {
+    for timing in [
+        EffectTiming::Insertion,
+        EffectTiming::Layout,
+        EffectTiming::Passive,
+    ] {
         let json = serde_json::to_string(&timing).expect("serialize");
         let recovered: EffectTiming = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(timing, recovered);
@@ -761,9 +822,18 @@ fn effect_timing_scheduling_order_monotonic() {
 
 #[test]
 fn effect_timing_execution_phase_matches_lifecycle() {
-    assert_eq!(EffectTiming::Insertion.execution_phase(), RenderPhase::InsertionEffectsPending);
-    assert_eq!(EffectTiming::Layout.execution_phase(), RenderPhase::LayoutEffectsPending);
-    assert_eq!(EffectTiming::Passive.execution_phase(), RenderPhase::PassiveEffectsPending);
+    assert_eq!(
+        EffectTiming::Insertion.execution_phase(),
+        RenderPhase::InsertionEffectsPending
+    );
+    assert_eq!(
+        EffectTiming::Layout.execution_phase(),
+        RenderPhase::LayoutEffectsPending
+    );
+    assert_eq!(
+        EffectTiming::Passive.execution_phase(),
+        RenderPhase::PassiveEffectsPending
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -792,14 +862,20 @@ fn hook_slot_with_deps_serde_roundtrip() {
 
 #[test]
 fn hook_manifest_derive_id_deterministic() {
-    let m1 = HookManifest::new("IdTest", vec![
-        make_slot(0, HookKind::State),
-        make_slot(1, HookKind::Effect),
-    ]);
-    let m2 = HookManifest::new("IdTest", vec![
-        make_slot(0, HookKind::State),
-        make_slot(1, HookKind::Effect),
-    ]);
+    let m1 = HookManifest::new(
+        "IdTest",
+        vec![
+            make_slot(0, HookKind::State),
+            make_slot(1, HookKind::Effect),
+        ],
+    );
+    let m2 = HookManifest::new(
+        "IdTest",
+        vec![
+            make_slot(0, HookKind::State),
+            make_slot(1, HookKind::Effect),
+        ],
+    );
     assert_eq!(m1.derive_id(), m2.derive_id());
 }
 

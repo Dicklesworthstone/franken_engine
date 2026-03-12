@@ -998,7 +998,7 @@ fn test_gate_summary_serde_roundtrip() {
 #[test]
 fn test_decision_receipt_construction() {
     let ch = ContentHash::compute(b"test-claim");
-    let r = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, ch.clone());
+    let r = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, ch);
     assert_eq!(r.epoch, epoch());
     assert_eq!(r.verdict, ClaimVerdict::Confirmed);
     assert_eq!(r.claim_hash, ch);
@@ -1008,7 +1008,7 @@ fn test_decision_receipt_construction() {
 #[test]
 fn test_decision_receipt_hash_deterministic() {
     let ch = ContentHash::compute(b"test-claim");
-    let r1 = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, ch.clone());
+    let r1 = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, ch);
     let r2 = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, ch);
     assert_eq!(r1.receipt_hash, r2.receipt_hash);
 }
@@ -1016,7 +1016,7 @@ fn test_decision_receipt_hash_deterministic() {
 #[test]
 fn test_decision_receipt_hash_differs_by_verdict() {
     let ch = ContentHash::compute(b"test-claim");
-    let r1 = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, ch.clone());
+    let r1 = DecisionReceipt::new(epoch(), ClaimVerdict::Confirmed, ch);
     let r2 = DecisionReceipt::new(epoch(), ClaimVerdict::Unsupported, ch);
     assert_ne!(r1.receipt_hash, r2.receipt_hash);
 }
@@ -1024,11 +1024,7 @@ fn test_decision_receipt_hash_differs_by_verdict() {
 #[test]
 fn test_decision_receipt_hash_differs_by_epoch() {
     let ch = ContentHash::compute(b"test-claim");
-    let r1 = DecisionReceipt::new(
-        SecurityEpoch::from_raw(1),
-        ClaimVerdict::Confirmed,
-        ch.clone(),
-    );
+    let r1 = DecisionReceipt::new(SecurityEpoch::from_raw(1), ClaimVerdict::Confirmed, ch);
     let r2 = DecisionReceipt::new(SecurityEpoch::from_raw(2), ClaimVerdict::Confirmed, ch);
     assert_ne!(r1.receipt_hash, r2.receipt_hash);
 }

@@ -155,10 +155,12 @@ fn schema_versions_have_prefix() {
 
 #[test]
 fn threshold_constants_reasonable() {
-    assert!(MAX_ASSUMPTIONS_PER_CERTIFICATE > 0);
-    assert!(MAX_ABSTENTION_POINTS_PER_REGION > 0);
-    assert!(MIN_CERTIFICATE_CONFIDENCE > 0);
-    assert!(MIN_CERTIFICATE_CONFIDENCE <= 1_000_000);
+    const {
+        assert!(MAX_ASSUMPTIONS_PER_CERTIFICATE > 0);
+        assert!(MAX_ABSTENTION_POINTS_PER_REGION > 0);
+        assert!(MIN_CERTIFICATE_CONFIDENCE > 0);
+        assert!(MIN_CERTIFICATE_CONFIDENCE <= 1_000_000);
+    }
 }
 
 // ---------------------------------------------------------------------------

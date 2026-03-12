@@ -1047,3 +1047,1769 @@ fn demotion_error_serde_round_trip() {
         assert_eq!(*err, rt);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment batch — PearlTower 2026-03-12
+// ---------------------------------------------------------------------------
+
+// --- ObservationResult serde ---
+
+#[test]
+fn observation_result_serde_round_trip_no_trigger() {
+    use frankenengine_engine::demotion_rollback::ObservationResult;
+    let or = ObservationResult {
+        trigger_fired: false,
+        evaluation: None,
+        observations_processed: 7,
+    };
+    let json = serde_json::to_string(&or).expect("serialize");
+    let rt: ObservationResult = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(or, rt);
+}
+
+#[test]
+fn observation_result_serde_round_trip_with_trigger() {
+    use frankenengine_engine::demotion_rollback::ObservationResult;
+    let or = ObservationResult {
+        trigger_fired: true,
+        evaluation: Some(TriggerEvaluation {
+            fired: true,
+            reason: Some(DemotionReason::CapabilityViolation {
+                attempted_capability: "fs_write".into(),
+                envelope_digest: ContentHash::compute(b"env"),
+            }),
+            severity: DemotionSeverity::Critical,
+            evidence: vec![DemotionEvidenceItem {
+                artifact_hash: ContentHash::compute(b"cap-ev"),
+                category: "capability_violation".into(),
+                collected_at_ns: 100,
+                summary: "violation of fs_write".into(),
+            }],
+        }),
+        observations_processed: 1,
+    };
+    let json = serde_json::to_string(&or).expect("serialize");
+    let rt: ObservationResult = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(or, rt);
+}
+
+// --- PerformanceThreshold serde ---
+
+#[test]
+fn performance_threshold_serde_round_trip() {
+    let pt = PerformanceThreshold {
+        metric_name: "throughput_ops_sec".into(),
+        max_value_millionths: 100_000_000,
+        sustained_duration_ns: 5_000_000_000,
+    };
+    let json = serde_json::to_string(&pt).expect("serialize");
+    let rt: PerformanceThreshold = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(pt, rt);
+}
+
+// --- DemotionError Display: IdDerivationFailed and SignatureFailed ---
+
+#[test]
+fn demotion_error_display_signature_failed() {
+    use frankenengine_engine::signature_preimage::SignatureError;
+    let e = DemotionError::SignatureFailed(SignatureError::InvalidSigningKey);
+    let s = e.to_string();
+    assert!(s.contains("signature error"), "got: {s}");
+}
+
+// --- DemotionError is std::error::Error ---
+
+#[test]
+fn demotion_error_implements_std_error() {
+    let e: Box<dyn std::error::Error> = Box::new(DemotionError::NoPreviousCell {
+        slot_id: "s-1".into(),
+    });
+    assert!(e.to_string().contains("no previous cell"));
+}
+
+#[test]
+fn demotion_error_implements_std_error_all_constructible() {
+    let errors: Vec<Box<dyn std::error::Error>> = vec![
+        Box::new(DemotionError::SignatureInvalid {
+            receipt_id: "r".into(),
+        }),
+        Box::new(DemotionError::SlotMismatch {
+            expected: "a".into(),
+            got: "b".into(),
+        }),
+        Box::new(DemotionError::CandidateBlocked {
+            candidate_digest: "d".into(),
+        }),
+        Box::new(DemotionError::NoPreviousCell {
+            slot_id: "s".into(),
+        }),
+        Box::new(DemotionError::AlreadyDemoted {
+            slot_id: "s".into(),
+        }),
+    ];
+    for e in &errors {
+        assert!(!e.to_string().is_empty());
+    }
+}
+
+// --- DemotionReason Ord trait ---
+
+#[test]
+fn demotion_reason_ordering_semantic_before_performance() {
+    let a = DemotionReason::SemanticDivergence {
+        divergence_count: 1,
+        first_divergence_artifact: ContentHash::compute(b"a"),
+    };
+    let b = DemotionReason::PerformanceBreach {
+        metric_name: "lat".into(),
+        observed_millionths: 0,
+        threshold_millionths: 0,
+        sustained_duration_ns: 0,
+    };
+    assert!(
+        a < b,
+        "SemanticDivergence should be ordered before PerformanceBreach"
+    );
+}
+
+#[test]
+fn demotion_reason_ordering_risk_before_capability() {
+    let a = DemotionReason::RiskThresholdBreach {
+        observed_risk_millionths: 0,
+        max_risk_millionths: 0,
+    };
+    let b = DemotionReason::CapabilityViolation {
+        attempted_capability: "net".into(),
+        envelope_digest: ContentHash::compute(b"env"),
+    };
+    assert!(
+        a < b,
+        "RiskThresholdBreach should be ordered before CapabilityViolation"
+    );
+}
+
+#[test]
+fn demotion_reason_ordering_capability_before_operator() {
+    let a = DemotionReason::CapabilityViolation {
+        attempted_capability: "net".into(),
+        envelope_digest: ContentHash::compute(b"env"),
+    };
+    let b = DemotionReason::OperatorInitiated {
+        operator_id: "op".into(),
+        reason: "r".into(),
+    };
+    assert!(
+        a < b,
+        "CapabilityViolation should be ordered before OperatorInitiated"
+    );
+}
+
+#[test]
+fn demotion_reason_same_variant_different_count_ordering() {
+    let a = DemotionReason::SemanticDivergence {
+        divergence_count: 1,
+        first_divergence_artifact: ContentHash::compute(b"x"),
+    };
+    let b = DemotionReason::SemanticDivergence {
+        divergence_count: 5,
+        first_divergence_artifact: ContentHash::compute(b"x"),
+    };
+    assert!(a < b, "lower divergence_count should sort before higher");
+}
+
+// --- DemotionReason Hash trait ---
+
+#[test]
+fn demotion_reason_hash_equal_for_clones() {
+    use std::hash::{Hash, Hasher};
+    let r = DemotionReason::PerformanceBreach {
+        metric_name: "throughput".into(),
+        observed_millionths: 80_000_000,
+        threshold_millionths: 50_000_000,
+        sustained_duration_ns: 10_000_000_000,
+    };
+    let r2 = r.clone();
+    let hash = |v: &DemotionReason| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        v.hash(&mut h);
+        h.finish()
+    };
+    assert_eq!(hash(&r), hash(&r2));
+}
+
+// --- DemotionSeverity Clone/Copy ---
+
+#[test]
+fn demotion_severity_is_copy() {
+    let s = DemotionSeverity::Warning;
+    let s2 = s; // copy
+    assert_eq!(s, s2);
+}
+
+#[test]
+fn demotion_severity_clone_equals_original() {
+    let s = DemotionSeverity::Critical;
+    let s2 = s.clone();
+    assert_eq!(s, s2);
+}
+
+// --- Multiple performance thresholds ---
+
+#[test]
+fn multiple_performance_thresholds_fire_independently() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.performance_thresholds.push(PerformanceThreshold {
+        metric_name: "throughput_ops_sec".into(),
+        max_value_millionths: 100_000_000,
+        sustained_duration_ns: 5_000_000_000,
+    });
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    // Breach throughput threshold
+    let obs1 = MonitoringObservation::PerformanceSample {
+        metric_name: "throughput_ops_sec".into(),
+        value_millionths: 150_000_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(!m.process_observation(&obs1).trigger_fired);
+
+    // Sustained throughput breach fires at 5s
+    let obs2 = MonitoringObservation::PerformanceSample {
+        metric_name: "throughput_ops_sec".into(),
+        value_millionths: 150_000_000,
+        timestamp_ns: 8_000_000_000,
+    };
+    let r = m.process_observation(&obs2);
+    assert!(r.trigger_fired);
+    let eval = r.evaluation.unwrap();
+    assert!(matches!(
+        eval.reason.as_ref().unwrap(),
+        DemotionReason::PerformanceBreach { metric_name, .. } if metric_name == "throughput_ops_sec"
+    ));
+}
+
+// --- Performance breach exact threshold boundary ---
+
+#[test]
+fn performance_breach_at_exact_threshold_not_triggered() {
+    let mut m = monitor();
+    // Exactly at threshold (50M): not a breach (> required)
+    let obs = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 50_000_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(!m.process_observation(&obs).trigger_fired);
+
+    // Even after sustained, no fire since it's not above threshold
+    let obs2 = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 50_000_000,
+        timestamp_ns: 20_000_000_000,
+    };
+    assert!(!m.process_observation(&obs2).trigger_fired);
+}
+
+// --- Performance breach exact sustained duration boundary ---
+
+#[test]
+fn performance_breach_fires_at_exact_sustained_boundary() {
+    let mut m = monitor();
+    // Start breach at t=2s
+    let obs1 = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 60_000_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(!m.process_observation(&obs1).trigger_fired);
+
+    // Exactly 10s sustained
+    let obs2 = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 60_000_000,
+        timestamp_ns: 12_000_000_000,
+    };
+    assert!(
+        m.process_observation(&obs2).trigger_fired,
+        "should fire at exact sustained boundary"
+    );
+}
+
+// --- Semantic divergence first artifact tracking ---
+
+#[test]
+fn semantic_divergence_first_artifact_is_from_first_divergence() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.max_divergence_count = 3;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    let first_input_hash = ContentHash::compute(b"first-divergent-input");
+    let obs1 = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: first_input_hash,
+        native_output_hash: ContentHash::compute(b"n1"),
+        reference_output_hash: ContentHash::compute(b"r1"),
+        waiver_covered: false,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(!m.process_observation(&obs1).trigger_fired);
+
+    let obs2 = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: ContentHash::compute(b"second-divergent-input"),
+        native_output_hash: ContentHash::compute(b"n2"),
+        reference_output_hash: ContentHash::compute(b"r2"),
+        waiver_covered: false,
+        timestamp_ns: 3_000_000_000,
+    };
+    assert!(!m.process_observation(&obs2).trigger_fired);
+
+    // Third divergence fires
+    let obs3 = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: ContentHash::compute(b"third-divergent-input"),
+        native_output_hash: ContentHash::compute(b"n3"),
+        reference_output_hash: ContentHash::compute(b"r3"),
+        waiver_covered: false,
+        timestamp_ns: 4_000_000_000,
+    };
+    let r = m.process_observation(&obs3);
+    assert!(r.trigger_fired);
+    let eval = r.evaluation.unwrap();
+    match eval.reason.unwrap() {
+        DemotionReason::SemanticDivergence {
+            first_divergence_artifact,
+            ..
+        } => {
+            // Should track the first divergent input
+            assert_eq!(first_divergence_artifact, first_input_hash);
+        }
+        other => panic!("unexpected reason: {other}"),
+    }
+}
+
+// --- Content hash varies with different fields ---
+
+#[test]
+fn content_hash_varies_with_zone() {
+    let key = sk();
+    let make_receipt = |zone: &str| {
+        DemotionReceipt::create_signed(
+            &key,
+            CreateDemotionReceiptInput {
+                slot_id: &slot(),
+                demoted_cell_digest: "native",
+                restored_cell_digest: "delegate",
+                rollback_token_used: "tok",
+                demotion_reason: &DemotionReason::SemanticDivergence {
+                    divergence_count: 1,
+                    first_divergence_artifact: ContentHash::compute(b"d"),
+                },
+                severity: DemotionSeverity::Critical,
+                evidence: &[],
+                timestamp_ns: 1_000_000_000,
+                epoch: SecurityEpoch::from_raw(1),
+                zone,
+            },
+        )
+        .unwrap()
+    };
+    let r1 = make_receipt("zone-a");
+    let r2 = make_receipt("zone-b");
+    assert_ne!(r1.content_hash(), r2.content_hash());
+}
+
+#[test]
+fn content_hash_varies_with_epoch() {
+    let key = sk();
+    let make_receipt = |epoch_val: u64| {
+        DemotionReceipt::create_signed(
+            &key,
+            CreateDemotionReceiptInput {
+                slot_id: &slot(),
+                demoted_cell_digest: "native",
+                restored_cell_digest: "delegate",
+                rollback_token_used: "tok",
+                demotion_reason: &DemotionReason::RiskThresholdBreach {
+                    observed_risk_millionths: 900_000,
+                    max_risk_millionths: 800_000,
+                },
+                severity: DemotionSeverity::Critical,
+                evidence: &[],
+                timestamp_ns: 1_000_000_000,
+                epoch: SecurityEpoch::from_raw(epoch_val),
+                zone: "z",
+            },
+        )
+        .unwrap()
+    };
+    let r1 = make_receipt(1);
+    let r2 = make_receipt(2);
+    assert_ne!(r1.content_hash(), r2.content_hash());
+}
+
+#[test]
+fn content_hash_varies_with_severity() {
+    let key = sk();
+    let make_receipt = |severity: DemotionSeverity| {
+        DemotionReceipt::create_signed(
+            &key,
+            CreateDemotionReceiptInput {
+                slot_id: &slot(),
+                demoted_cell_digest: "native",
+                restored_cell_digest: "delegate",
+                rollback_token_used: "tok",
+                demotion_reason: &DemotionReason::OperatorInitiated {
+                    operator_id: "op".into(),
+                    reason: "manual".into(),
+                },
+                severity,
+                evidence: &[],
+                timestamp_ns: 1_000_000_000,
+                epoch: SecurityEpoch::from_raw(1),
+                zone: "z",
+            },
+        )
+        .unwrap()
+    };
+    let r1 = make_receipt(DemotionSeverity::Warning);
+    let r2 = make_receipt(DemotionSeverity::Critical);
+    assert_ne!(r1.content_hash(), r2.content_hash());
+}
+
+// --- Receipt with multiple evidence items ---
+
+#[test]
+fn receipt_with_multiple_evidence_items_preserves_order() {
+    let key = sk();
+    let evidence = vec![
+        DemotionEvidenceItem {
+            artifact_hash: ContentHash::compute(b"ev-1"),
+            category: "divergence_trace".into(),
+            collected_at_ns: 1_000_000,
+            summary: "first".into(),
+        },
+        DemotionEvidenceItem {
+            artifact_hash: ContentHash::compute(b"ev-2"),
+            category: "latency_sample".into(),
+            collected_at_ns: 2_000_000,
+            summary: "second".into(),
+        },
+        DemotionEvidenceItem {
+            artifact_hash: ContentHash::compute(b"ev-3"),
+            category: "risk_score".into(),
+            collected_at_ns: 3_000_000,
+            summary: "third".into(),
+        },
+    ];
+    let receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::SemanticDivergence {
+                divergence_count: 1,
+                first_divergence_artifact: ContentHash::compute(b"div"),
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &evidence,
+            timestamp_ns: 5_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "test",
+        },
+    )
+    .expect("create");
+    assert_eq!(receipt.evidence.len(), 3);
+    assert_eq!(receipt.evidence[0].category, "divergence_trace");
+    assert_eq!(receipt.evidence[1].category, "latency_sample");
+    assert_eq!(receipt.evidence[2].category, "risk_score");
+    receipt
+        .verify_signature(&key.verification_key())
+        .expect("verify");
+}
+
+// --- Tamper detection ---
+
+#[test]
+fn tamper_detection_demoted_cell_digest() {
+    let key = sk();
+    let mut receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::OperatorInitiated {
+                operator_id: "op".into(),
+                reason: "manual".into(),
+            },
+            severity: DemotionSeverity::Warning,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    receipt.demoted_cell_digest = "tampered".into();
+    assert!(matches!(
+        receipt.verify_signature(&key.verification_key()),
+        Err(DemotionError::SignatureInvalid { .. })
+    ));
+}
+
+#[test]
+fn tamper_detection_restored_cell_digest() {
+    let key = sk();
+    let mut receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::OperatorInitiated {
+                operator_id: "op".into(),
+                reason: "r".into(),
+            },
+            severity: DemotionSeverity::Warning,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    receipt.restored_cell_digest = "tampered".into();
+    assert!(receipt.verify_signature(&key.verification_key()).is_err());
+}
+
+#[test]
+fn tamper_detection_rollback_token() {
+    let key = sk();
+    let mut receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok-original",
+            demotion_reason: &DemotionReason::OperatorInitiated {
+                operator_id: "op".into(),
+                reason: "r".into(),
+            },
+            severity: DemotionSeverity::Warning,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    receipt.rollback_token_used = "tok-tampered".into();
+    assert!(receipt.verify_signature(&key.verification_key()).is_err());
+}
+
+#[test]
+fn tamper_detection_timestamp() {
+    let key = sk();
+    let mut receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::RiskThresholdBreach {
+                observed_risk_millionths: 900_000,
+                max_risk_millionths: 800_000,
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    receipt.timestamp_ns = 9_999_999_999;
+    assert!(receipt.verify_signature(&key.verification_key()).is_err());
+}
+
+#[test]
+fn tamper_detection_zone() {
+    let key = sk();
+    let mut receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::RiskThresholdBreach {
+                observed_risk_millionths: 900_000,
+                max_risk_millionths: 800_000,
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "production",
+        },
+    )
+    .expect("create");
+    receipt.zone = "staging".into();
+    assert!(receipt.verify_signature(&key.verification_key()).is_err());
+}
+
+#[test]
+fn tamper_detection_severity() {
+    let key = sk();
+    let mut receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::OperatorInitiated {
+                operator_id: "op".into(),
+                reason: "r".into(),
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    receipt.severity = DemotionSeverity::Advisory;
+    assert!(receipt.verify_signature(&key.verification_key()).is_err());
+}
+
+#[test]
+fn tamper_detection_reason() {
+    let key = sk();
+    let mut receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::RiskThresholdBreach {
+                observed_risk_millionths: 900_000,
+                max_risk_millionths: 800_000,
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    receipt.demotion_reason = DemotionReason::OperatorInitiated {
+        operator_id: "attacker".into(),
+        reason: "forged".into(),
+    };
+    assert!(receipt.verify_signature(&key.verification_key()).is_err());
+}
+
+// --- Burn-in edge cases ---
+
+#[test]
+fn burn_in_at_exact_boundary() {
+    let m = monitor();
+    // start=1_000_000_000, burn_in=300_000_000_000
+    let boundary = 1_000_000_000 + 300_000_000_000;
+    assert!(
+        m.is_burn_in(boundary - 1),
+        "1ns before end should be in burn-in"
+    );
+    assert!(
+        !m.is_burn_in(boundary),
+        "exact boundary should be outside burn-in"
+    );
+    assert!(!m.is_burn_in(boundary + 1));
+}
+
+#[test]
+fn burn_in_underflow_saturates() {
+    let m = monitor();
+    // monitoring_start_ns=1_000_000_000, passing current_ns=0 underflows
+    assert!(
+        m.is_burn_in(0),
+        "time before start should be within burn-in due to saturating_sub"
+    );
+}
+
+#[test]
+fn burn_in_at_start_time() {
+    let m = monitor();
+    // current_ns equals monitoring_start_ns: elapsed=0 < burn_in_duration
+    assert!(m.is_burn_in(1_000_000_000));
+}
+
+// --- Receipt ID variations ---
+
+#[test]
+fn receipt_id_varies_by_restored_digest() {
+    let id1 = DemotionReceipt::derive_receipt_id(&slot(), "native", "delegate-a", 1000, "z")
+        .expect("derive");
+    let id2 = DemotionReceipt::derive_receipt_id(&slot(), "native", "delegate-b", 1000, "z")
+        .expect("derive");
+    assert_ne!(id1, id2);
+}
+
+#[test]
+fn receipt_id_varies_by_slot() {
+    let slot_a = SlotId::new("slot-alpha").unwrap();
+    let slot_b = SlotId::new("slot-beta").unwrap();
+    let id1 = DemotionReceipt::derive_receipt_id(&slot_a, "native", "delegate", 1000, "z")
+        .expect("derive");
+    let id2 = DemotionReceipt::derive_receipt_id(&slot_b, "native", "delegate", 1000, "z")
+        .expect("derive");
+    assert_ne!(id1, id2);
+}
+
+#[test]
+fn receipt_id_varies_by_zone() {
+    let id1 = DemotionReceipt::derive_receipt_id(&slot(), "native", "delegate", 1000, "zone-a")
+        .expect("derive");
+    let id2 = DemotionReceipt::derive_receipt_id(&slot(), "native", "delegate", 1000, "zone-b")
+        .expect("derive");
+    assert_ne!(id1, id2);
+}
+
+#[test]
+fn receipt_id_varies_by_timestamp() {
+    let id1 = DemotionReceipt::derive_receipt_id(&slot(), "native", "delegate", 1000, "z")
+        .expect("derive");
+    let id2 = DemotionReceipt::derive_receipt_id(&slot(), "native", "delegate", 2000, "z")
+        .expect("derive");
+    assert_ne!(id1, id2);
+}
+
+// --- Custom severity mappings ---
+
+#[test]
+fn custom_severity_semantic_divergence_advisory() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.semantic_divergence_severity = DemotionSeverity::Advisory;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    let obs = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: ContentHash::compute(b"in"),
+        native_output_hash: ContentHash::compute(b"n"),
+        reference_output_hash: ContentHash::compute(b"r"),
+        waiver_covered: false,
+        timestamp_ns: 2_000_000_000,
+    };
+    let r = m.process_observation(&obs);
+    assert!(r.trigger_fired);
+    assert_eq!(r.evaluation.unwrap().severity, DemotionSeverity::Advisory);
+}
+
+#[test]
+fn custom_severity_risk_warning() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.risk_threshold_severity = DemotionSeverity::Warning;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    let obs = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 900_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    let r = m.process_observation(&obs);
+    assert!(r.trigger_fired);
+    assert_eq!(r.evaluation.unwrap().severity, DemotionSeverity::Warning);
+}
+
+#[test]
+fn custom_severity_capability_advisory() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.capability_violation_severity = DemotionSeverity::Advisory;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    let obs = MonitoringObservation::CapabilityEvent {
+        capability: "evil".into(),
+        within_envelope: false,
+        envelope_digest: ContentHash::compute(b"env"),
+        timestamp_ns: 2_000_000_000,
+    };
+    let r = m.process_observation(&obs);
+    assert!(r.trigger_fired);
+    assert_eq!(r.evaluation.unwrap().severity, DemotionSeverity::Advisory);
+}
+
+// --- Observation counter after demotion ---
+
+#[test]
+fn observation_counter_still_increments_post_demotion() {
+    let mut m = monitor();
+    // Trigger
+    let obs1 = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 999_999,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(m.process_observation(&obs1).trigger_fired);
+    assert_eq!(m.observations_processed(), 1);
+
+    // Post-demotion observations still counted
+    for i in 0..5 {
+        let obs = MonitoringObservation::RiskScoreUpdate {
+            risk_millionths: 100_000,
+            timestamp_ns: 3_000_000_000 + i * 1_000_000_000,
+        };
+        let r = m.process_observation(&obs);
+        assert!(!r.trigger_fired);
+        assert_eq!(r.observations_processed, i + 2);
+    }
+    assert_eq!(m.observations_processed(), 6);
+}
+
+// --- Risk score tracking ---
+
+#[test]
+fn risk_score_tracks_latest_below_threshold() {
+    let mut m = monitor();
+    for (risk, ts) in [
+        (100_000u64, 2_000_000_000u64),
+        (300_000, 3_000_000_000),
+        (700_000, 4_000_000_000),
+        (500_000, 5_000_000_000),
+    ] {
+        let obs = MonitoringObservation::RiskScoreUpdate {
+            risk_millionths: risk,
+            timestamp_ns: ts,
+        };
+        assert!(!m.process_observation(&obs).trigger_fired);
+        assert_eq!(m.latest_risk_millionths(), risk);
+    }
+}
+
+#[test]
+fn risk_score_one_above_threshold_fires() {
+    let mut m = monitor();
+    // 800_001 is just above 800_000 threshold
+    let obs = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 800_001,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(m.process_observation(&obs).trigger_fired);
+    assert_eq!(m.latest_risk_millionths(), 800_001);
+}
+
+// --- Interleaved observation types ---
+
+#[test]
+fn interleaved_observations_all_benign_no_trigger() {
+    let mut m = monitor();
+    let observations: Vec<MonitoringObservation> = vec![
+        MonitoringObservation::OutputComparison {
+            matched: true,
+            input_hash: ContentHash::compute(b"in-1"),
+            native_output_hash: ContentHash::compute(b"out-1"),
+            reference_output_hash: ContentHash::compute(b"out-1"),
+            waiver_covered: false,
+            timestamp_ns: 2_000_000_000,
+        },
+        MonitoringObservation::RiskScoreUpdate {
+            risk_millionths: 100_000,
+            timestamp_ns: 3_000_000_000,
+        },
+        MonitoringObservation::PerformanceSample {
+            metric_name: "latency_p99_ns".into(),
+            value_millionths: 10_000_000,
+            timestamp_ns: 4_000_000_000,
+        },
+        MonitoringObservation::CapabilityEvent {
+            capability: "fs_read".into(),
+            within_envelope: true,
+            envelope_digest: ContentHash::compute(b"env"),
+            timestamp_ns: 5_000_000_000,
+        },
+        MonitoringObservation::OutputComparison {
+            matched: true,
+            input_hash: ContentHash::compute(b"in-2"),
+            native_output_hash: ContentHash::compute(b"out-2"),
+            reference_output_hash: ContentHash::compute(b"out-2"),
+            waiver_covered: false,
+            timestamp_ns: 6_000_000_000,
+        },
+    ];
+    for obs in &observations {
+        assert!(!m.process_observation(obs).trigger_fired);
+    }
+    assert!(!m.is_demotion_triggered());
+    assert_eq!(m.observations_processed(), 5);
+    assert_eq!(m.divergence_count(), 0);
+}
+
+// --- Monitor serde round-trip after processing ---
+
+#[test]
+fn monitor_serde_after_processing_without_trigger() {
+    let mut m = monitor();
+    let obs = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 500_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    m.process_observation(&obs);
+    let obs2 = MonitoringObservation::OutputComparison {
+        matched: true,
+        input_hash: ContentHash::compute(b"in"),
+        native_output_hash: ContentHash::compute(b"out"),
+        reference_output_hash: ContentHash::compute(b"out"),
+        waiver_covered: false,
+        timestamp_ns: 3_000_000_000,
+    };
+    m.process_observation(&obs2);
+
+    let json = serde_json::to_string(&m).expect("serialize");
+    let rt: AutoDemotionMonitor = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(m, rt);
+    assert_eq!(rt.observations_processed(), 2);
+    assert_eq!(rt.latest_risk_millionths(), 500_000);
+    assert!(!rt.is_demotion_triggered());
+}
+
+#[test]
+fn monitor_serde_after_trigger_preserves_state() {
+    let mut m = monitor();
+    let obs = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 900_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(m.process_observation(&obs).trigger_fired);
+
+    let json = serde_json::to_string(&m).expect("serialize");
+    let rt: AutoDemotionMonitor = serde_json::from_str(&json).expect("deserialize");
+    assert!(rt.is_demotion_triggered());
+    assert_eq!(rt.latest_risk_millionths(), 900_000);
+    assert_eq!(rt.observations_processed(), 1);
+
+    // Restored monitor also ignores new observations
+    let mut rt = rt;
+    let obs2 = MonitoringObservation::CapabilityEvent {
+        capability: "evil".into(),
+        within_envelope: false,
+        envelope_digest: ContentHash::compute(b"x"),
+        timestamp_ns: 3_000_000_000,
+    };
+    let r = rt.process_observation(&obs2);
+    assert!(!r.trigger_fired);
+    assert!(r.evaluation.is_none());
+}
+
+// --- DemotionReason Display format details ---
+
+#[test]
+fn demotion_reason_display_semantic_includes_count() {
+    let r = DemotionReason::SemanticDivergence {
+        divergence_count: 42,
+        first_divergence_artifact: ContentHash::compute(b"x"),
+    };
+    let s = r.to_string();
+    assert!(s.contains("42"), "should include count 42, got: {s}");
+    assert!(s.contains("outputs"), "should include 'outputs', got: {s}");
+}
+
+#[test]
+fn demotion_reason_display_performance_includes_observed_and_threshold() {
+    let r = DemotionReason::PerformanceBreach {
+        metric_name: "my_metric".into(),
+        observed_millionths: 12345,
+        threshold_millionths: 6789,
+        sustained_duration_ns: 1000,
+    };
+    let s = r.to_string();
+    assert!(
+        s.contains("my_metric"),
+        "should contain metric name, got: {s}"
+    );
+    assert!(
+        s.contains("12345"),
+        "should contain observed value, got: {s}"
+    );
+    assert!(
+        s.contains("6789"),
+        "should contain threshold value, got: {s}"
+    );
+}
+
+#[test]
+fn demotion_reason_display_risk_includes_scores() {
+    let r = DemotionReason::RiskThresholdBreach {
+        observed_risk_millionths: 950_000,
+        max_risk_millionths: 800_000,
+    };
+    let s = r.to_string();
+    assert!(
+        s.contains("950000"),
+        "should contain observed risk, got: {s}"
+    );
+    assert!(s.contains("800000"), "should contain max risk, got: {s}");
+}
+
+#[test]
+fn demotion_reason_display_capability_includes_name() {
+    let r = DemotionReason::CapabilityViolation {
+        attempted_capability: "spawn_process".into(),
+        envelope_digest: ContentHash::compute(b"env"),
+    };
+    let s = r.to_string();
+    assert!(
+        s.contains("spawn_process"),
+        "should contain capability name, got: {s}"
+    );
+}
+
+#[test]
+fn demotion_reason_display_operator_includes_id() {
+    let r = DemotionReason::OperatorInitiated {
+        operator_id: "admin-77".into(),
+        reason: "emergency rollback".into(),
+    };
+    let s = r.to_string();
+    assert!(
+        s.contains("admin-77"),
+        "should contain operator id, got: {s}"
+    );
+}
+
+// --- Receipt creation for each reason variant ---
+
+#[test]
+fn receipt_creation_semantic_divergence() {
+    let key = sk();
+    let receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::SemanticDivergence {
+                divergence_count: 5,
+                first_divergence_artifact: ContentHash::compute(b"d"),
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    assert!(matches!(
+        receipt.demotion_reason,
+        DemotionReason::SemanticDivergence { .. }
+    ));
+    receipt
+        .verify_signature(&key.verification_key())
+        .expect("verify");
+}
+
+#[test]
+fn receipt_creation_performance_breach() {
+    let key = sk();
+    let receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::PerformanceBreach {
+                metric_name: "latency_p99_ns".into(),
+                observed_millionths: 80_000_000,
+                threshold_millionths: 50_000_000,
+                sustained_duration_ns: 15_000_000_000,
+            },
+            severity: DemotionSeverity::Warning,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    assert!(matches!(
+        receipt.demotion_reason,
+        DemotionReason::PerformanceBreach { .. }
+    ));
+    receipt
+        .verify_signature(&key.verification_key())
+        .expect("verify");
+}
+
+#[test]
+fn receipt_creation_risk_threshold() {
+    let key = sk();
+    let receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::RiskThresholdBreach {
+                observed_risk_millionths: 900_000,
+                max_risk_millionths: 800_000,
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    assert!(matches!(
+        receipt.demotion_reason,
+        DemotionReason::RiskThresholdBreach { .. }
+    ));
+    receipt
+        .verify_signature(&key.verification_key())
+        .expect("verify");
+}
+
+#[test]
+fn receipt_creation_capability_violation() {
+    let key = sk();
+    let receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::CapabilityViolation {
+                attempted_capability: "exec_shell".into(),
+                envelope_digest: ContentHash::compute(b"restricted"),
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    assert!(matches!(
+        receipt.demotion_reason,
+        DemotionReason::CapabilityViolation { .. }
+    ));
+    receipt
+        .verify_signature(&key.verification_key())
+        .expect("verify");
+}
+
+#[test]
+fn receipt_creation_operator_initiated() {
+    let key = sk();
+    let receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::OperatorInitiated {
+                operator_id: "admin-42".into(),
+                reason: "emergency rollback".into(),
+            },
+            severity: DemotionSeverity::Warning,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    assert!(matches!(
+        receipt.demotion_reason,
+        DemotionReason::OperatorInitiated { .. }
+    ));
+    receipt
+        .verify_signature(&key.verification_key())
+        .expect("verify");
+}
+
+// --- Policy with empty perf thresholds ---
+
+#[test]
+fn policy_no_perf_thresholds_ignores_perf_samples() {
+    let receipt = promotion_receipt();
+    let p = DemotionPolicy::strict(slot()); // no performance_thresholds pushed
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    let obs = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 999_999_999,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(!m.process_observation(&obs).trigger_fired);
+}
+
+// --- Large observation sequences ---
+
+#[test]
+fn large_observation_sequence_deterministic() {
+    let receipt = promotion_receipt();
+    let p = strict_policy();
+
+    let mut m1 = AutoDemotionMonitor::new(&receipt, p.clone(), 1_000_000_000).unwrap();
+    let mut m2 = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    for i in 0u64..50 {
+        let obs = MonitoringObservation::RiskScoreUpdate {
+            risk_millionths: 100_000 + i * 10_000,
+            timestamp_ns: 2_000_000_000 + i * 100_000_000,
+        };
+        let r1 = m1.process_observation(&obs);
+        let r2 = m2.process_observation(&obs);
+        assert_eq!(r1.trigger_fired, r2.trigger_fired);
+        assert_eq!(r1.observations_processed, r2.observations_processed);
+    }
+    assert_eq!(m1.latest_risk_millionths(), m2.latest_risk_millionths());
+    assert_eq!(m1.is_demotion_triggered(), m2.is_demotion_triggered());
+}
+
+// --- Evidence summary content verification ---
+
+#[test]
+fn risk_trigger_evidence_summary_includes_values() {
+    let mut m = monitor();
+    let obs = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 900_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    let r = m.process_observation(&obs);
+    assert!(r.trigger_fired);
+    let eval = r.evaluation.unwrap();
+    assert_eq!(eval.evidence.len(), 1);
+    let summary = &eval.evidence[0].summary;
+    assert!(
+        summary.contains("900000"),
+        "should contain observed risk in summary, got: {summary}"
+    );
+    assert!(
+        summary.contains("800000"),
+        "should contain max risk in summary, got: {summary}"
+    );
+}
+
+#[test]
+fn performance_trigger_evidence_summary_includes_metric() {
+    let mut m = monitor();
+    // Start breach
+    let obs1 = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 60_000_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    m.process_observation(&obs1);
+    // Fire
+    let obs2 = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 60_000_000,
+        timestamp_ns: 13_000_000_000,
+    };
+    let r = m.process_observation(&obs2);
+    assert!(r.trigger_fired);
+    let eval = r.evaluation.unwrap();
+    let summary = &eval.evidence[0].summary;
+    assert!(
+        summary.contains("latency_p99_ns"),
+        "summary should contain metric name, got: {summary}"
+    );
+    assert!(
+        summary.contains("60000000"),
+        "summary should contain observed value, got: {summary}"
+    );
+}
+
+#[test]
+fn semantic_divergence_evidence_summary_includes_slot_and_count() {
+    let mut m = monitor();
+    let obs = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: ContentHash::compute(b"in"),
+        native_output_hash: ContentHash::compute(b"n"),
+        reference_output_hash: ContentHash::compute(b"r"),
+        waiver_covered: false,
+        timestamp_ns: 2_000_000_000,
+    };
+    let r = m.process_observation(&obs);
+    assert!(r.trigger_fired);
+    let eval = r.evaluation.unwrap();
+    let summary = &eval.evidence[0].summary;
+    assert!(
+        summary.contains("slot-integ-001"),
+        "summary should include slot id, got: {summary}"
+    );
+    assert!(
+        summary.contains("divergence #1"),
+        "summary should include count, got: {summary}"
+    );
+}
+
+#[test]
+fn capability_violation_evidence_summary_includes_capability_name() {
+    let mut m = monitor();
+    let obs = MonitoringObservation::CapabilityEvent {
+        capability: "exec_shell".into(),
+        within_envelope: false,
+        envelope_digest: ContentHash::compute(b"env"),
+        timestamp_ns: 2_000_000_000,
+    };
+    let r = m.process_observation(&obs);
+    assert!(r.trigger_fired);
+    let eval = r.evaluation.unwrap();
+    let summary = &eval.evidence[0].summary;
+    assert!(
+        summary.contains("exec_shell"),
+        "summary should include capability, got: {summary}"
+    );
+}
+
+// --- Selectively disabling individual triggers ---
+
+#[test]
+fn only_semantic_divergence_disabled() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.semantic_divergence_enabled = false;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    // Semantic divergence ignored
+    let obs1 = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: ContentHash::compute(b"in"),
+        native_output_hash: ContentHash::compute(b"n"),
+        reference_output_hash: ContentHash::compute(b"r"),
+        waiver_covered: false,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(!m.process_observation(&obs1).trigger_fired);
+    assert_eq!(m.divergence_count(), 0);
+
+    // Risk still works
+    let obs2 = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 900_000,
+        timestamp_ns: 3_000_000_000,
+    };
+    assert!(m.process_observation(&obs2).trigger_fired);
+}
+
+#[test]
+fn only_risk_disabled() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.risk_threshold_enabled = false;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    // Risk ignored
+    let obs = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 999_999,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(!m.process_observation(&obs).trigger_fired);
+
+    // Capability still works
+    let obs2 = MonitoringObservation::CapabilityEvent {
+        capability: "evil".into(),
+        within_envelope: false,
+        envelope_digest: ContentHash::compute(b"x"),
+        timestamp_ns: 3_000_000_000,
+    };
+    assert!(m.process_observation(&obs2).trigger_fired);
+}
+
+#[test]
+fn only_capability_disabled() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.capability_violation_enabled = false;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    // Capability ignored
+    let obs = MonitoringObservation::CapabilityEvent {
+        capability: "evil".into(),
+        within_envelope: false,
+        envelope_digest: ContentHash::compute(b"x"),
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(!m.process_observation(&obs).trigger_fired);
+
+    // Semantic still works
+    let obs2 = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: ContentHash::compute(b"in"),
+        native_output_hash: ContentHash::compute(b"n"),
+        reference_output_hash: ContentHash::compute(b"r"),
+        waiver_covered: false,
+        timestamp_ns: 3_000_000_000,
+    };
+    assert!(m.process_observation(&obs2).trigger_fired);
+}
+
+#[test]
+fn only_performance_disabled() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.performance_breach_enabled = false;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    // Performance ignored even with sustained breach
+    let obs1 = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 60_000_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    m.process_observation(&obs1);
+    let obs2 = MonitoringObservation::PerformanceSample {
+        metric_name: "latency_p99_ns".into(),
+        value_millionths: 60_000_000,
+        timestamp_ns: 15_000_000_000,
+    };
+    assert!(!m.process_observation(&obs2).trigger_fired);
+
+    // Risk still works
+    let obs3 = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 900_000,
+        timestamp_ns: 16_000_000_000,
+    };
+    assert!(m.process_observation(&obs3).trigger_fired);
+}
+
+// --- Waived divergence not counted ---
+
+#[test]
+fn waived_divergence_mixed_with_unwaived() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.max_divergence_count = 3;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    // 5 waived divergences interleaved with 2 unwaived
+    for i in 0..5 {
+        let obs = MonitoringObservation::OutputComparison {
+            matched: false,
+            input_hash: ContentHash::compute(format!("waived-{i}").as_bytes()),
+            native_output_hash: ContentHash::compute(format!("wn-{i}").as_bytes()),
+            reference_output_hash: ContentHash::compute(format!("wr-{i}").as_bytes()),
+            waiver_covered: true,
+            timestamp_ns: 2_000_000_000 + i * 100_000_000,
+        };
+        assert!(!m.process_observation(&obs).trigger_fired);
+    }
+    assert_eq!(m.divergence_count(), 0);
+
+    // 2 unwaived: below threshold
+    for i in 0..2 {
+        let obs = MonitoringObservation::OutputComparison {
+            matched: false,
+            input_hash: ContentHash::compute(format!("real-{i}").as_bytes()),
+            native_output_hash: ContentHash::compute(format!("rn-{i}").as_bytes()),
+            reference_output_hash: ContentHash::compute(format!("rr-{i}").as_bytes()),
+            waiver_covered: false,
+            timestamp_ns: 3_000_000_000 + i * 100_000_000,
+        };
+        assert!(!m.process_observation(&obs).trigger_fired);
+    }
+    assert_eq!(m.divergence_count(), 2);
+
+    // 3rd unwaived fires
+    let obs3 = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: ContentHash::compute(b"real-3"),
+        native_output_hash: ContentHash::compute(b"rn-3"),
+        reference_output_hash: ContentHash::compute(b"rr-3"),
+        waiver_covered: false,
+        timestamp_ns: 4_000_000_000,
+    };
+    assert!(m.process_observation(&obs3).trigger_fired);
+    assert_eq!(m.divergence_count(), 3);
+}
+
+// --- Monitor clone ---
+
+#[test]
+fn monitor_clone_is_independent() {
+    let mut m = monitor();
+    let m2 = m.clone();
+
+    // Process observation on original
+    let obs = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 900_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(m.process_observation(&obs).trigger_fired);
+
+    // Clone should be unaffected
+    assert!(!m2.is_demotion_triggered());
+    assert_eq!(m2.observations_processed(), 0);
+}
+
+// --- Receipt schema_version ---
+
+#[test]
+fn receipt_schema_version_is_v1() {
+    let key = sk();
+    let receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native",
+            restored_cell_digest: "delegate",
+            rollback_token_used: "tok",
+            demotion_reason: &DemotionReason::SemanticDivergence {
+                divergence_count: 1,
+                first_divergence_artifact: ContentHash::compute(b"d"),
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[],
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "z",
+        },
+    )
+    .expect("create");
+    assert_eq!(
+        receipt.schema_version,
+        frankenengine_engine::self_replacement::SchemaVersion::V1
+    );
+}
+
+// --- Policy serde with blocked candidates ---
+
+#[test]
+fn policy_serde_preserves_blocked_candidates() {
+    let mut p = strict_policy();
+    p.block_candidate("a".into());
+    p.block_candidate("b".into());
+    p.block_candidate("c".into());
+    let json = serde_json::to_string(&p).expect("serialize");
+    let rt: DemotionPolicy = serde_json::from_str(&json).expect("deserialize");
+    assert!(rt.is_candidate_blocked("a"));
+    assert!(rt.is_candidate_blocked("b"));
+    assert!(rt.is_candidate_blocked("c"));
+    assert!(!rt.is_candidate_blocked("d"));
+}
+
+// --- Policy serde with custom severities ---
+
+#[test]
+fn policy_serde_preserves_custom_severities() {
+    let mut p = strict_policy();
+    p.semantic_divergence_severity = DemotionSeverity::Advisory;
+    p.performance_breach_severity = DemotionSeverity::Critical;
+    p.risk_threshold_severity = DemotionSeverity::Warning;
+    p.capability_violation_severity = DemotionSeverity::Advisory;
+    let json = serde_json::to_string(&p).expect("serialize");
+    let rt: DemotionPolicy = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(rt.semantic_divergence_severity, DemotionSeverity::Advisory);
+    assert_eq!(rt.performance_breach_severity, DemotionSeverity::Critical);
+    assert_eq!(rt.risk_threshold_severity, DemotionSeverity::Warning);
+    assert_eq!(rt.capability_violation_severity, DemotionSeverity::Advisory);
+}
+
+// --- Trigger evaluation without reason ---
+
+#[test]
+fn trigger_evaluation_serde_round_trip_no_reason() {
+    let eval = TriggerEvaluation {
+        fired: false,
+        reason: None,
+        severity: DemotionSeverity::Advisory,
+        evidence: Vec::new(),
+    };
+    let json = serde_json::to_string(&eval).expect("serialize");
+    let rt: TriggerEvaluation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(eval, rt);
+}
+
+// --- DemotionEvidenceItem serde with varied data ---
+
+#[test]
+fn evidence_item_serde_with_long_summary() {
+    let item = DemotionEvidenceItem {
+        artifact_hash: ContentHash::compute(b"long-evidence"),
+        category: "performance_trace".into(),
+        collected_at_ns: u64::MAX,
+        summary: "A".repeat(1000),
+    };
+    let json = serde_json::to_string(&item).expect("serialize");
+    let rt: DemotionEvidenceItem = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(item, rt);
+}
+
+// --- DemotionReason category all unique ---
+
+#[test]
+fn all_demotion_reason_categories_are_distinct() {
+    let categories = vec![
+        DemotionReason::SemanticDivergence {
+            divergence_count: 0,
+            first_divergence_artifact: ContentHash::compute(b""),
+        }
+        .category(),
+        DemotionReason::PerformanceBreach {
+            metric_name: "m".into(),
+            observed_millionths: 0,
+            threshold_millionths: 0,
+            sustained_duration_ns: 0,
+        }
+        .category(),
+        DemotionReason::RiskThresholdBreach {
+            observed_risk_millionths: 0,
+            max_risk_millionths: 0,
+        }
+        .category(),
+        DemotionReason::CapabilityViolation {
+            attempted_capability: "c".into(),
+            envelope_digest: ContentHash::compute(b""),
+        }
+        .category(),
+        DemotionReason::OperatorInitiated {
+            operator_id: "o".into(),
+            reason: "r".into(),
+        }
+        .category(),
+    ];
+    let unique: std::collections::BTreeSet<&str> = categories.iter().copied().collect();
+    assert_eq!(unique.len(), 5, "all 5 categories should be distinct");
+}
+
+// --- Severity equality ---
+
+#[test]
+fn demotion_severity_equality() {
+    assert_eq!(DemotionSeverity::Advisory, DemotionSeverity::Advisory);
+    assert_eq!(DemotionSeverity::Warning, DemotionSeverity::Warning);
+    assert_eq!(DemotionSeverity::Critical, DemotionSeverity::Critical);
+    assert_ne!(DemotionSeverity::Advisory, DemotionSeverity::Warning);
+    assert_ne!(DemotionSeverity::Warning, DemotionSeverity::Critical);
+    assert_ne!(DemotionSeverity::Advisory, DemotionSeverity::Critical);
+}
+
+// --- DemotionReason equality ---
+
+#[test]
+fn demotion_reason_equality_same_variant_same_data() {
+    let a = DemotionReason::PerformanceBreach {
+        metric_name: "lat".into(),
+        observed_millionths: 100,
+        threshold_millionths: 50,
+        sustained_duration_ns: 1000,
+    };
+    let b = a.clone();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn demotion_reason_inequality_different_data() {
+    let a = DemotionReason::PerformanceBreach {
+        metric_name: "lat".into(),
+        observed_millionths: 100,
+        threshold_millionths: 50,
+        sustained_duration_ns: 1000,
+    };
+    let b = DemotionReason::PerformanceBreach {
+        metric_name: "lat".into(),
+        observed_millionths: 200,
+        threshold_millionths: 50,
+        sustained_duration_ns: 1000,
+    };
+    assert_ne!(a, b);
+}
+
+// --- Policy custom risk threshold ---
+
+#[test]
+fn policy_custom_risk_threshold() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.max_risk_millionths = 500_000; // Lower threshold
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    // 600_000 > 500_000 fires
+    let obs = MonitoringObservation::RiskScoreUpdate {
+        risk_millionths: 600_000,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(m.process_observation(&obs).trigger_fired);
+}
+
+// --- Policy custom max_divergence_count edge ---
+
+#[test]
+fn max_divergence_count_of_one_fires_on_first() {
+    let receipt = promotion_receipt();
+    let mut p = strict_policy();
+    p.max_divergence_count = 1;
+    let mut m = AutoDemotionMonitor::new(&receipt, p, 1_000_000_000).unwrap();
+
+    let obs = MonitoringObservation::OutputComparison {
+        matched: false,
+        input_hash: ContentHash::compute(b"in"),
+        native_output_hash: ContentHash::compute(b"n"),
+        reference_output_hash: ContentHash::compute(b"r"),
+        waiver_covered: false,
+        timestamp_ns: 2_000_000_000,
+    };
+    assert!(
+        m.process_observation(&obs).trigger_fired,
+        "divergence_count=1 >= max=1 should fire"
+    );
+}
+
+// --- Receipt serde roundtrip for different reason variants ---
+
+#[test]
+fn receipt_serde_roundtrip_risk_reason() {
+    let key = sk();
+    let receipt = DemotionReceipt::create_signed(
+        &key,
+        CreateDemotionReceiptInput {
+            slot_id: &slot(),
+            demoted_cell_digest: "native-x",
+            restored_cell_digest: "delegate-y",
+            rollback_token_used: "tok-z",
+            demotion_reason: &DemotionReason::RiskThresholdBreach {
+                observed_risk_millionths: 950_000,
+                max_risk_millionths: 800_000,
+            },
+            severity: DemotionSeverity::Critical,
+            evidence: &[DemotionEvidenceItem {
+                artifact_hash: ContentHash::compute(b"risk-ev"),
+                category: "risk_score".into(),
+                collected_at_ns: 42,
+                summary: "risk high".into(),
+            }],
+            timestamp_ns: 3_000_000_000,
+            epoch: SecurityEpoch::from_raw(2),
+            zone: "staging",
+        },
+    )
+    .expect("create");
+    let json = serde_json::to_string(&receipt).expect("serialize");
+    let rt: DemotionReceipt = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(receipt, rt);
+    rt.verify_signature(&key.verification_key())
+        .expect("verify after roundtrip");
+}

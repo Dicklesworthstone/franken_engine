@@ -5,7 +5,7 @@
 
 use frankenengine_engine::orchestration_context_contract::{
     COMPONENT, CanonicalContextDescriptor, ContextError, ContextOrigin, ContextState,
-    DerivationRule, MockSeamClassification, MockSeamEntry,
+    DerivationEvent, DerivationRule, MockSeamClassification, MockSeamEntry, SCHEMA_VERSION,
     ValidationReport, cancel_context, carve_cleanup_context, consume_budget, create_root_context,
     derive_child_context, release_context, validate_threading,
 };
@@ -581,4 +581,222 @@ fn integration_display_all_types() {
 
     let report = validate_threading(&[], &[], &[], &rule, epoch(1));
     assert!(format!("{report}").contains("validation"));
+}
+
+// ---------------------------------------------------------------------------
+// Serde round-trips — additional types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_serde_derivation_event_roundtrip() {
+    let mut parent = root_ctx("p1", 10_000);
+    let rule = default_rule();
+    let (_, event) = derive_child_context(
+        &mut parent,
+        "c1".to_string(),
+        3000,
+        ContextOrigin::ChildDerivation,
+        &rule,
+    )
+    .unwrap();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: DerivationEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, restored);
+}
+
+#[test]
+fn integration_serde_mock_seam_entry_roundtrip() {
+    let seam = make_seam("s-rt", MockSeamClassification::UnderInvestigation, false);
+    let json = serde_json::to_string(&seam).unwrap();
+    let restored: MockSeamEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(seam, restored);
+}
+
+#[test]
+fn integration_serde_mock_seam_classification_all_variants() {
+    let variants = vec![
+        (
+            MockSeamClassification::MustFixProduction,
+            "\"must_fix_production\"",
+        ),
+        (
+            MockSeamClassification::AcceptableTestOnly,
+            "\"acceptable_test_only\"",
+        ),
+        (MockSeamClassification::FalsePositive, "\"false_positive\""),
+        (
+            MockSeamClassification::UnderInvestigation,
+            "\"under_investigation\"",
+        ),
+    ];
+    for (variant, expected_json) in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        assert_eq!(json, expected_json, "serde mismatch for {variant:?}");
+        let restored: MockSeamClassification = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, restored);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Constants and enum method coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_schema_version_format() {
+    assert!(SCHEMA_VERSION.starts_with("franken-engine."));
+    assert!(SCHEMA_VERSION.contains("orchestration-context-contract"));
+    assert!(SCHEMA_VERSION.ends_with(".v1"));
+}
+
+#[test]
+fn integration_context_origin_as_str_and_display_all_variants() {
+    let origins = vec![
+        (ContextOrigin::Root, "root"),
+        (ContextOrigin::ChildDerivation, "child_derivation"),
+        (ContextOrigin::CleanupCarve, "cleanup_carve"),
+        (ContextOrigin::CellClose, "cell_close"),
+        (ContextOrigin::Replay, "replay"),
+    ];
+    for (origin, expected_str) in origins {
+        assert_eq!(origin.as_str(), expected_str);
+        assert_eq!(format!("{origin}"), expected_str);
+        // All origins are production-safe by construction.
+        assert!(origin.is_production_safe());
+    }
+}
+
+#[test]
+fn integration_context_state_as_str_and_display_all_variants() {
+    let states = vec![
+        (ContextState::Active, "active", true),
+        (ContextState::Exhausted, "exhausted", false),
+        (ContextState::Released, "released", false),
+        (ContextState::Cancelled, "cancelled", false),
+    ];
+    for (state, expected_str, expected_consumable) in states {
+        assert_eq!(state.as_str(), expected_str);
+        assert_eq!(format!("{state}"), expected_str);
+        assert_eq!(state.is_consumable(), expected_consumable);
+    }
+}
+
+#[test]
+fn integration_mock_seam_classification_production_safety() {
+    assert!(!MockSeamClassification::MustFixProduction.is_production_safe());
+    assert!(MockSeamClassification::AcceptableTestOnly.is_production_safe());
+    assert!(MockSeamClassification::FalsePositive.is_production_safe());
+    assert!(!MockSeamClassification::UnderInvestigation.is_production_safe());
+}
+
+// ---------------------------------------------------------------------------
+// Budget fraction edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_consumed_fraction_zero_budget_returns_million() {
+    let ctx = root_ctx("zero-frac", 0);
+    // Zero budget means 100% consumed (MILLION = 1_000_000).
+    assert_eq!(ctx.consumed_fraction_millionths(), 1_000_000);
+}
+
+#[test]
+fn integration_consumed_fraction_partial() {
+    let mut ctx = root_ctx("partial", 1000);
+    consume_budget(&mut ctx, 250).unwrap();
+    // 250 / 1000 = 25% = 250_000 millionths.
+    assert_eq!(ctx.consumed_fraction_millionths(), 250_000);
+}
+
+// ---------------------------------------------------------------------------
+// Derivation from non-active parent
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_derive_child_from_released_parent_fails() {
+    let mut parent = root_ctx("rel-parent", 10_000);
+    release_context(&mut parent);
+    let rule = default_rule();
+    let err = derive_child_context(
+        &mut parent,
+        "child".to_string(),
+        1000,
+        ContextOrigin::ChildDerivation,
+        &rule,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ContextError::NotConsumable { .. }));
+    if let ContextError::NotConsumable { state, .. } = &err {
+        assert_eq!(*state, ContextState::Released);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DerivationEvent display and hash determinism
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_derivation_event_display_format() {
+    let mut parent = root_ctx("dp", 10_000);
+    let rule = default_rule();
+    let (_, event) = derive_child_context(
+        &mut parent,
+        "dc".to_string(),
+        2000,
+        ContextOrigin::ChildDerivation,
+        &rule,
+    )
+    .unwrap();
+    let display = format!("{event}");
+    assert!(display.contains("dp"));
+    assert!(display.contains("dc"));
+    assert!(display.contains("2000"));
+}
+
+#[test]
+fn integration_derivation_event_hash_deterministic() {
+    let make = || {
+        let mut parent = root_ctx("hp", 10_000);
+        let rule = default_rule();
+        let (_, event) = derive_child_context(
+            &mut parent,
+            "hc".to_string(),
+            3000,
+            ContextOrigin::ChildDerivation,
+            &rule,
+        )
+        .unwrap();
+        event
+    };
+    let e1 = make();
+    let e2 = make();
+    assert_eq!(e1.content_hash, e2.content_hash);
+    assert_eq!(e1.event_id, e2.event_id);
+}
+
+// ---------------------------------------------------------------------------
+// Validation with invalid context depth
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_validate_context_exceeding_rule_depth() {
+    let mut ctx = root_ctx("deep", 100_000);
+    ctx.depth = 200; // Exceeds default max_depth of 64.
+    let rule = default_rule();
+    let report = validate_threading(&[ctx], &[], &[], &rule, epoch(1));
+    assert!(!report.passed);
+    assert!(!report.all_contexts_valid);
+    assert!(!report.failure_reasons.is_empty());
+    assert!(report.failure_reasons[0].contains("exceeds max depth"));
+}
+
+// ---------------------------------------------------------------------------
+// Different context IDs produce different hashes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_different_ids_produce_different_hashes() {
+    let c1 = root_ctx("alpha", 5000);
+    let c2 = root_ctx("beta", 5000);
+    assert_ne!(c1.content_hash, c2.content_hash);
+    assert_ne!(c1.context_id, c2.context_id);
 }

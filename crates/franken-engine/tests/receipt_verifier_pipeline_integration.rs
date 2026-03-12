@@ -30,20 +30,20 @@ use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::mmr_proof::MerkleMountainRange;
 use frankenengine_engine::proof_schema::{
-    proof_schema_version_current, AttestationValidityWindow, OptReceipt, OptimizationClass,
-    ReceiptAttestationBindings,
+    AttestationValidityWindow, OptReceipt, OptimizationClass, ReceiptAttestationBindings,
+    proof_schema_version_current,
 };
 use frankenengine_engine::receipt_verifier_pipeline::{
-    render_verdict_summary, verify_receipt_by_id, verify_receipt_request, AttestationLayerInput,
-    ConsistencyProofInput, LayerCheck, LayerResult, LogOperatorKey, ReceiptVerifierCliInput,
-    ReceiptVerifierPipelineError, SignatureLayerInput, SignedLogCheckpoint, SignerRevocationCache,
-    TransparencyLayerInput, UnifiedReceiptVerificationRequest, UnifiedReceiptVerificationVerdict,
-    VerificationFailureClass, VerifierLogEvent, EXIT_CODE_ATTESTATION_FAILURE,
+    AttestationLayerInput, ConsistencyProofInput, EXIT_CODE_ATTESTATION_FAILURE,
     EXIT_CODE_SIGNATURE_FAILURE, EXIT_CODE_STALE_DATA, EXIT_CODE_SUCCESS,
-    EXIT_CODE_TRANSPARENCY_FAILURE,
+    EXIT_CODE_TRANSPARENCY_FAILURE, LayerCheck, LayerResult, LogOperatorKey,
+    ReceiptVerifierCliInput, ReceiptVerifierPipelineError, SignatureLayerInput,
+    SignedLogCheckpoint, SignerRevocationCache, TransparencyLayerInput,
+    UnifiedReceiptVerificationRequest, UnifiedReceiptVerificationVerdict, VerificationFailureClass,
+    VerifierLogEvent, render_verdict_summary, verify_receipt_by_id, verify_receipt_request,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::{sign_preimage, Signature, SigningKey};
+use frankenengine_engine::signature_preimage::{Signature, SigningKey, sign_preimage};
 use frankenengine_engine::tee_attestation_policy::{
     AttestationFreshnessWindow, DecisionImpact, MeasurementAlgorithm,
     MeasurementDigest as PolicyMeasurementDigest, PlatformTrustRoot, RevocationFallback,
@@ -473,14 +473,14 @@ fn build_valid_fixture() -> (String, UnifiedReceiptVerificationRequest) {
     let leaf1 = ContentHash::compute(b"leaf1");
 
     let mut old_mmr = MerkleMountainRange::new(5);
-    old_mmr.append(leaf0.clone());
-    old_mmr.append(leaf1.clone());
+    old_mmr.append(leaf0);
+    old_mmr.append(leaf1);
     let old_root = old_mmr.root_hash().expect("old root");
 
     let mut mmr = MerkleMountainRange::new(5);
     mmr.append(leaf0);
     mmr.append(leaf1);
-    mmr.append(receipt_leaf_hash.clone());
+    mmr.append(receipt_leaf_hash);
     let inclusion_proof = mmr.inclusion_proof(2).expect("inclusion proof");
     let consistency_proof = mmr.consistency_proof(2).expect("consistency proof");
     let current_root = mmr.root_hash().expect("root");
@@ -653,11 +653,13 @@ fn wrong_preimage_fails_signature_layer() {
         Some(VerificationFailureClass::Signature)
     );
     assert!(!verdict.signature.passed);
-    assert!(verdict
-        .signature
-        .checks
-        .iter()
-        .any(|c| c.check == "canonical_preimage_hash_matches" && c.outcome == "fail"));
+    assert!(
+        verdict
+            .signature
+            .checks
+            .iter()
+            .any(|c| c.check == "canonical_preimage_hash_matches" && c.outcome == "fail")
+    );
 }
 
 #[test]
@@ -668,11 +670,13 @@ fn wrong_signing_key_fails_signature_verification() {
 
     assert!(!verdict.passed);
     assert!(!verdict.signature.passed);
-    assert!(verdict
-        .signature
-        .checks
-        .iter()
-        .any(|c| c.check == "receipt_signature_valid" && c.outcome == "fail"));
+    assert!(
+        verdict
+            .signature
+            .checks
+            .iter()
+            .any(|c| c.check == "receipt_signature_valid" && c.outcome == "fail")
+    );
 }
 
 #[test]
@@ -683,11 +687,13 @@ fn empty_revocation_source_fails_signature_layer() {
 
     assert!(!verdict.passed);
     assert!(!verdict.signature.passed);
-    assert!(verdict
-        .signature
-        .checks
-        .iter()
-        .any(|c| c.check == "revocation_source_present" && c.outcome == "fail"));
+    assert!(
+        verdict
+            .signature
+            .checks
+            .iter()
+            .any(|c| c.check == "revocation_source_present" && c.outcome == "fail")
+    );
 }
 
 #[test]
@@ -698,11 +704,13 @@ fn mismatched_signer_key_id_fails_signature_layer() {
 
     assert!(!verdict.passed);
     assert!(!verdict.signature.passed);
-    assert!(verdict
-        .signature
-        .checks
-        .iter()
-        .any(|c| c.check == "signer_key_id_matches_receipt" && c.outcome == "fail"));
+    assert!(
+        verdict
+            .signature
+            .checks
+            .iter()
+            .any(|c| c.check == "signer_key_id_matches_receipt" && c.outcome == "fail")
+    );
 }
 
 // ── Transparency layer failures ─────────────────────────────────────────
@@ -729,11 +737,13 @@ fn revoked_operator_key_fails_transparency() {
 
     assert!(!verdict.passed);
     assert!(!verdict.transparency.passed);
-    assert!(verdict
-        .transparency
-        .checks
-        .iter()
-        .any(|c| c.check == "checkpoint_operator_key_not_revoked" && c.outcome == "fail"));
+    assert!(
+        verdict
+            .transparency
+            .checks
+            .iter()
+            .any(|c| c.check == "checkpoint_operator_key_not_revoked" && c.outcome == "fail")
+    );
 }
 
 // ── Stale cache warnings ────────────────────────────────────────────────
@@ -746,9 +756,11 @@ fn stale_signature_cache_produces_warning() {
 
     // Signature layer still passes but we get a stale data warning.
     assert!(verdict.signature.passed);
-    assert!(verdict
-        .warnings
-        .contains(&"signature_revocation_cache_stale".to_string()));
+    assert!(
+        verdict
+            .warnings
+            .contains(&"signature_revocation_cache_stale".to_string())
+    );
     assert_eq!(
         verdict.failure_class,
         Some(VerificationFailureClass::StaleData)
@@ -762,9 +774,11 @@ fn stale_transparency_cache_produces_warning() {
     request.transparency.cache_stale = true;
     let verdict = verify_receipt_request(&receipt_id, &request);
 
-    assert!(verdict
-        .warnings
-        .contains(&"transparency_cache_stale".to_string()));
+    assert!(
+        verdict
+            .warnings
+            .contains(&"transparency_cache_stale".to_string())
+    );
 }
 
 #[test]
@@ -773,9 +787,11 @@ fn stale_attestation_policy_cache_produces_warning() {
     request.attestation.policy_cache_stale = true;
     let verdict = verify_receipt_request(&receipt_id, &request);
 
-    assert!(verdict
-        .warnings
-        .contains(&"attestation_policy_cache_stale".to_string()));
+    assert!(
+        verdict
+            .warnings
+            .contains(&"attestation_policy_cache_stale".to_string())
+    );
 }
 
 #[test]
@@ -784,9 +800,11 @@ fn stale_attestation_revocation_cache_produces_warning() {
     request.attestation.revocation_cache_stale = true;
     let verdict = verify_receipt_request(&receipt_id, &request);
 
-    assert!(verdict
-        .warnings
-        .contains(&"attestation_revocation_cache_stale".to_string()));
+    assert!(
+        verdict
+            .warnings
+            .contains(&"attestation_revocation_cache_stale".to_string())
+    );
 }
 
 // ── render_verdict_summary ──────────────────────────────────────────────
@@ -886,11 +904,13 @@ fn missing_attestation_bindings_fails() {
     let verdict = verify_receipt_request(&receipt_id, &request);
 
     assert!(!verdict.attestation.passed);
-    assert!(verdict
-        .attestation
-        .checks
-        .iter()
-        .any(|c| c.check == "receipt_has_attestation_bindings" && c.outcome == "fail"));
+    assert!(
+        verdict
+            .attestation
+            .checks
+            .iter()
+            .any(|c| c.check == "receipt_has_attestation_bindings" && c.outcome == "fail")
+    );
 }
 
 // ── Deterministic verdict ───────────────────────────────────────────────
@@ -905,4 +925,276 @@ fn deterministic_verdicts_for_same_input() {
         serde_json::to_string(&v1).unwrap(),
         serde_json::to_string(&v2).unwrap()
     );
+}
+
+// ===========================================================================
+// Enrichment: LayerResult construction and properties
+// ===========================================================================
+
+#[test]
+fn layer_result_failing_has_error_code() {
+    let result = LayerResult {
+        passed: false,
+        error_code: Some("test_error".to_string()),
+        checks: vec![LayerCheck {
+            check: "failing_check".to_string(),
+            outcome: "fail".to_string(),
+            error_code: Some("test_error".to_string()),
+            detail: "something went wrong".to_string(),
+        }],
+    };
+    assert!(!result.passed);
+    assert_eq!(result.error_code.as_deref(), Some("test_error"));
+    assert_eq!(result.checks.len(), 1);
+}
+
+#[test]
+fn layer_result_with_multiple_checks_serde() {
+    let result = LayerResult {
+        passed: true,
+        error_code: None,
+        checks: vec![
+            LayerCheck {
+                check: "check_a".to_string(),
+                outcome: "pass".to_string(),
+                error_code: None,
+                detail: "ok".to_string(),
+            },
+            LayerCheck {
+                check: "check_b".to_string(),
+                outcome: "pass".to_string(),
+                error_code: None,
+                detail: "also ok".to_string(),
+            },
+        ],
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let back: LayerResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.checks.len(), 2);
+    assert!(back.passed);
+}
+
+// ===========================================================================
+// Enrichment: ReceiptVerifierPipelineError variants
+// ===========================================================================
+
+#[test]
+fn pipeline_error_receipt_not_found_display() {
+    let err = ReceiptVerifierPipelineError::ReceiptNotFound {
+        receipt_id: "rcpt-missing".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("rcpt-missing"));
+}
+
+#[test]
+fn pipeline_error_serde_roundtrip_all_variants() {
+    let err = ReceiptVerifierPipelineError::ReceiptNotFound {
+        receipt_id: "rcpt-test".to_string(),
+    };
+    let json = serde_json::to_string(&err).unwrap();
+    let back: ReceiptVerifierPipelineError = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, err);
+}
+
+// ===========================================================================
+// Enrichment: VerifierLogEvent properties
+// ===========================================================================
+
+#[test]
+fn verifier_log_event_fields_populated() {
+    let event = VerifierLogEvent {
+        trace_id: "t1".to_string(),
+        decision_id: "d1".to_string(),
+        policy_id: "p1".to_string(),
+        component: "comp".to_string(),
+        event: "verified".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+    };
+    assert_eq!(event.trace_id, "t1");
+    assert_eq!(event.decision_id, "d1");
+    assert!(event.error_code.is_none());
+}
+
+// ===========================================================================
+// Enrichment: SignerRevocationCache edge cases
+// ===========================================================================
+
+#[test]
+fn signer_revocation_cache_revoked_and_stale() {
+    let cache = SignerRevocationCache {
+        signer_key_id: EngineObjectId([0xAA; 32]),
+        source: "test-source".to_string(),
+        is_revoked: true,
+        cache_stale: true,
+    };
+    let json = serde_json::to_string(&cache).unwrap();
+    let back: SignerRevocationCache = serde_json::from_str(&json).unwrap();
+    assert!(back.is_revoked);
+    assert!(back.cache_stale);
+}
+
+// ===========================================================================
+// Enrichment: Multiple stale caches accumulate warnings
+// ===========================================================================
+
+#[test]
+fn multiple_stale_caches_accumulate_warnings() {
+    let (receipt_id, mut request) = build_valid_fixture();
+    request.signature.signer_revocation.cache_stale = true;
+    request.transparency.cache_stale = true;
+    request.attestation.policy_cache_stale = true;
+    request.attestation.revocation_cache_stale = true;
+
+    let verdict = verify_receipt_request(&receipt_id, &request);
+    // All layers pass but we get multiple warnings
+    assert!(
+        verdict.warnings.len() >= 4,
+        "should have at least 4 stale warnings"
+    );
+    assert_eq!(
+        verdict.failure_class,
+        Some(VerificationFailureClass::StaleData)
+    );
+    assert_eq!(verdict.exit_code, EXIT_CODE_STALE_DATA);
+}
+
+// ===========================================================================
+// Enrichment: render_verdict_summary with warnings
+// ===========================================================================
+
+#[test]
+fn render_verdict_summary_with_warnings() {
+    let (receipt_id, mut request) = build_valid_fixture();
+    request.signature.signer_revocation.cache_stale = true;
+    let verdict = verify_receipt_request(&receipt_id, &request);
+    let summary = render_verdict_summary(&verdict);
+    // Should mention warnings count > 0
+    assert!(!summary.contains("warnings=0"), "should have warnings");
+}
+
+// ===========================================================================
+// Enrichment: Consistency proof input serde
+// ===========================================================================
+
+#[test]
+fn consistency_proof_input_equality() {
+    let p1 = ConsistencyProofInput {
+        from_root: ContentHash::compute(b"root-a"),
+        proof: {
+            let mut mmr = MerkleMountainRange::new(1);
+            mmr.append(ContentHash::compute(b"leaf0"));
+            mmr.append(ContentHash::compute(b"leaf1"));
+            mmr.consistency_proof(1).unwrap()
+        },
+    };
+    let p2 = ConsistencyProofInput {
+        from_root: ContentHash::compute(b"root-a"),
+        proof: {
+            let mut mmr = MerkleMountainRange::new(1);
+            mmr.append(ContentHash::compute(b"leaf0"));
+            mmr.append(ContentHash::compute(b"leaf1"));
+            mmr.consistency_proof(1).unwrap()
+        },
+    };
+    assert_eq!(p1, p2);
+}
+
+// ===========================================================================
+// Enrichment: UnifiedReceiptVerificationRequest serde
+// ===========================================================================
+
+#[test]
+fn request_serde_roundtrip() {
+    let (_, request) = build_valid_fixture();
+    let json = serde_json::to_string(&request).unwrap();
+    let back: UnifiedReceiptVerificationRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.trace_id, request.trace_id);
+    assert_eq!(back.decision_id, request.decision_id);
+    assert_eq!(back.policy_id, request.policy_id);
+}
+
+// ===========================================================================
+// Enrichment: SignedLogCheckpoint properties
+// ===========================================================================
+
+#[test]
+fn signed_log_checkpoint_clone_eq() {
+    let cp = SignedLogCheckpoint {
+        checkpoint_seq: 5,
+        log_length: 200,
+        root_hash: ContentHash::compute(b"log-root"),
+        timestamp_ns: 5_000_000_000,
+        operator_key_id: "op-test".to_string(),
+        signature: Signature::from_bytes([0x33; 64]),
+    };
+    let cloned = cp.clone();
+    assert_eq!(cp, cloned);
+}
+
+// ===========================================================================
+// Enrichment: LogOperatorKey revoked vs active
+// ===========================================================================
+
+#[test]
+fn log_operator_key_revoked_flag() {
+    let active_key = LogOperatorKey {
+        key_id: "k1".to_string(),
+        verification_key: SigningKey::from_bytes([1u8; 32]).verification_key(),
+        revoked: false,
+    };
+    let revoked_key = LogOperatorKey {
+        key_id: "k2".to_string(),
+        verification_key: SigningKey::from_bytes([2u8; 32]).verification_key(),
+        revoked: true,
+    };
+    assert!(!active_key.revoked);
+    assert!(revoked_key.revoked);
+    // Serde roundtrip
+    let json = serde_json::to_string(&revoked_key).unwrap();
+    let back: LogOperatorKey = serde_json::from_str(&json).unwrap();
+    assert!(back.revoked);
+}
+
+// ===========================================================================
+// Enrichment: ReceiptVerifierCliInput with multiple receipts
+// ===========================================================================
+
+#[test]
+fn cli_input_multiple_receipts_lookup() {
+    let (receipt_id_1, request_1) = build_valid_fixture();
+    let (_, request_2) = build_valid_fixture();
+    let receipt_id_2 = "rcpt-003".to_string();
+
+    let mut input = ReceiptVerifierCliInput::default();
+    input.receipts.insert(receipt_id_1.clone(), request_1);
+    input.receipts.insert(receipt_id_2.clone(), request_2);
+
+    assert_eq!(input.receipts.len(), 2);
+    assert!(input.receipts.contains_key(&receipt_id_1));
+    assert!(input.receipts.contains_key(&receipt_id_2));
+    assert!(!input.receipts.contains_key("nonexistent"));
+}
+
+// ===========================================================================
+// Enrichment: Verdict structure for passing request
+// ===========================================================================
+
+#[test]
+fn passing_verdict_structure_complete() {
+    let (receipt_id, request) = build_valid_fixture();
+    let verdict = verify_receipt_request(&receipt_id, &request);
+
+    assert!(verdict.passed);
+    assert_eq!(verdict.exit_code, EXIT_CODE_SUCCESS);
+    assert!(verdict.failure_class.is_none());
+    assert!(verdict.warnings.is_empty());
+    assert_eq!(verdict.receipt_id, receipt_id);
+    // All three layers should pass
+    assert!(verdict.signature.passed);
+    assert!(verdict.transparency.passed);
+    assert!(verdict.attestation.passed);
+    // Logs should be present
+    assert!(!verdict.logs.is_empty());
 }

@@ -1,7 +1,5 @@
 //! Integration tests for `native_addon_parity_gate` (RGC-407C, bd-1lsy.5.9.3).
 
-use std::collections::BTreeSet;
-
 use frankenengine_engine::native_addon_parity_gate::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 

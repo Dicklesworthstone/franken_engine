@@ -454,3 +454,382 @@ fn checkpoint_coverage_debug_is_nonempty() {
     let cov = CheckpointCoverage::new();
     assert!(!format!("{cov:?}").is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// CheckpointReason — Ord and Hash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkpoint_reason_ord_is_consistent() {
+    use std::cmp::Ordering;
+    let a = CheckpointReason::Periodic;
+    let b = CheckpointReason::CancelPending;
+    let c = CheckpointReason::BudgetExhausted;
+    let d = CheckpointReason::Explicit;
+    // Ordering must be consistent: Periodic < CancelPending < BudgetExhausted < Explicit
+    assert_eq!(a.cmp(&a), Ordering::Equal);
+    assert_eq!(a.cmp(&b), Ordering::Less);
+    assert_eq!(c.cmp(&b), Ordering::Greater);
+    assert_eq!(d.cmp(&a), Ordering::Greater);
+}
+
+#[test]
+fn checkpoint_reason_hash_determinism() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let compute = |r: &CheckpointReason| {
+        let mut h = DefaultHasher::new();
+        r.hash(&mut h);
+        h.finish()
+    };
+    // Same variant produces same hash
+    assert_eq!(
+        compute(&CheckpointReason::Periodic),
+        compute(&CheckpointReason::Periodic)
+    );
+    // Different variants produce different hashes (not guaranteed but overwhelmingly likely)
+    assert_ne!(
+        compute(&CheckpointReason::Periodic),
+        compute(&CheckpointReason::Explicit)
+    );
+}
+
+#[test]
+fn checkpoint_reason_clone_and_copy() {
+    let original = CheckpointReason::BudgetExhausted;
+    let cloned = original;
+    let copied = original;
+    assert_eq!(original, cloned);
+    assert_eq!(original, copied);
+}
+
+// ---------------------------------------------------------------------------
+// LoopSite — Ord, Hash, Clone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loop_site_ord_among_builtin_variants() {
+    // Built-in variants are ordered by definition order
+    assert!(LoopSite::BytecodeDispatch < LoopSite::GcScanning);
+    assert!(LoopSite::GcScanning < LoopSite::GcSweep);
+    assert!(LoopSite::IrCompilation < LoopSite::Custom("z".to_string()));
+}
+
+#[test]
+fn loop_site_hash_sensitivity() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let compute = |s: &LoopSite| {
+        let mut h = DefaultHasher::new();
+        s.hash(&mut h);
+        h.finish()
+    };
+    // Two Custom variants with different names produce different hashes
+    assert_ne!(
+        compute(&LoopSite::Custom("alpha".to_string())),
+        compute(&LoopSite::Custom("beta".to_string()))
+    );
+    // Same custom name produces same hash
+    assert_eq!(
+        compute(&LoopSite::Custom("x".to_string())),
+        compute(&LoopSite::Custom("x".to_string()))
+    );
+}
+
+#[test]
+fn loop_site_clone_custom_is_independent() {
+    let original = LoopSite::Custom("deep".to_string());
+    let cloned = original.clone();
+    assert_eq!(original, cloned);
+    // They are equal but independent heap allocations
+    assert_eq!(format!("{original}"), format!("{cloned}"));
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointAction — Clone, Copy, PartialEq
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkpoint_action_clone_copy() {
+    let a = CheckpointAction::Drain;
+    let b = a;
+    let c = a; // Copy
+    assert_eq!(a, b);
+    assert_eq!(a, c);
+    assert_ne!(CheckpointAction::Continue, CheckpointAction::Abort);
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointEvent — Clone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkpoint_event_clone_is_deep_equal() {
+    let event = CheckpointEvent {
+        trace_id: "trace-clone".to_string(),
+        component: "comp".to_string(),
+        loop_site: LoopSite::Custom("custom_site".to_string()),
+        iteration_count: 42,
+        total_iterations: 200,
+        reason: CheckpointReason::Explicit,
+        action: CheckpointAction::Continue,
+        timestamp_virtual: 99,
+    };
+    let cloned = event.clone();
+    assert_eq!(event, cloned);
+    assert_eq!(cloned.trace_id, "trace-clone");
+    assert_eq!(cloned.iteration_count, 42);
+}
+
+// ---------------------------------------------------------------------------
+// DensityConfig — Clone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn density_config_clone() {
+    let cfg = DensityConfig {
+        max_iterations: 500,
+        max_total_iterations: 5_000_000,
+    };
+    let cloned = cfg.clone();
+    assert_eq!(cfg, cloned);
+    assert_eq!(cloned.max_iterations, 500);
+    assert_eq!(cloned.max_total_iterations, 5_000_000);
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointGuard — drain empties events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn drain_events_returns_empty_on_second_call() {
+    let (mut guard, _) = test_guard();
+    for _ in 0..10 {
+        guard.tick();
+    }
+    guard.check(); // produces periodic event
+    let first = guard.drain_events();
+    assert!(!first.is_empty());
+    let second = guard.drain_events();
+    assert!(second.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointGuard — multiple periodic checkpoints accumulate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multiple_periodic_checkpoints_accumulate_events() {
+    let (mut guard, _) = test_guard();
+    // Run 30 ticks with density=10, expect 3 periodic events
+    for _ in 0..30 {
+        guard.tick();
+        guard.check();
+    }
+    assert_eq!(guard.event_count(), 3);
+    let events = guard.drain_events();
+    for (i, e) in events.iter().enumerate() {
+        assert_eq!(e.reason, CheckpointReason::Periodic);
+        assert_eq!(e.total_iterations, ((i as u64) + 1) * 10);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointGuard — max_iterations=1 fires every tick
+// ---------------------------------------------------------------------------
+
+#[test]
+fn density_one_fires_every_tick() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::ModuleDecode,
+        "decoder",
+        "t",
+        DensityConfig {
+            max_iterations: 1,
+            max_total_iterations: 100,
+        },
+        token,
+    );
+    for _ in 0..5 {
+        guard.tick();
+        guard.check();
+    }
+    assert_eq!(guard.event_count(), 5);
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointGuard — cancel takes priority over budget
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cancel_takes_priority_over_budget() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::IrLowering,
+        "lowering",
+        "t",
+        DensityConfig {
+            max_iterations: 50,
+            max_total_iterations: 20,
+        },
+        token.clone(),
+    );
+    // Run past budget
+    for _ in 0..25 {
+        guard.tick();
+    }
+    // Now both cancel and budget are true
+    token.cancel();
+    let action = guard.check();
+    // Cancel is checked first (priority 1), budget is priority 2
+    assert_eq!(action, CheckpointAction::Drain);
+    let events = guard.drain_events();
+    assert_eq!(
+        events.last().unwrap().reason,
+        CheckpointReason::CancelPending
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointGuard — virtual_time equals total_iterations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn virtual_time_equals_total_iterations() {
+    let (mut guard, _) = test_guard();
+    for n in 1..=37 {
+        guard.tick();
+        guard.check();
+        assert_eq!(guard.virtual_time(), n);
+        assert_eq!(guard.total_iterations(), n);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointGuard — explicit checkpoint event fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn explicit_checkpoint_event_fields() {
+    let (mut guard, _) = test_guard();
+    for _ in 0..7 {
+        guard.tick();
+    }
+    guard.explicit_checkpoint();
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    let e = &events[0];
+    assert_eq!(e.reason, CheckpointReason::Explicit);
+    assert_eq!(e.action, CheckpointAction::Continue);
+    assert_eq!(e.iteration_count, 7);
+    assert_eq!(e.total_iterations, 7);
+    assert_eq!(e.timestamp_virtual, 7);
+    assert_eq!(e.loop_site, LoopSite::PolicyIteration);
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointGuard — Custom loop site
+// ---------------------------------------------------------------------------
+
+#[test]
+fn guard_with_custom_loop_site() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::Custom("my_custom_loop".to_string()),
+        "my_component",
+        "trace-custom",
+        DensityConfig {
+            max_iterations: 3,
+            max_total_iterations: 100,
+        },
+        token,
+    );
+    for _ in 0..3 {
+        guard.tick();
+    }
+    guard.check();
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].loop_site,
+        LoopSite::Custom("my_custom_loop".to_string())
+    );
+    assert_eq!(events[0].component, "my_component");
+    assert_eq!(events[0].trace_id, "trace-custom");
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointCoverage — registering custom (non-mandatory) site
+// ---------------------------------------------------------------------------
+
+#[test]
+fn coverage_register_custom_site_increases_total() {
+    let mut cov = CheckpointCoverage::new();
+    let original_total = cov.total();
+    cov.register("my_custom_site");
+    // Custom site is added as covered
+    assert_eq!(cov.total(), original_total + 1);
+    assert_eq!(cov.covered_count(), 1);
+    // Still not all_covered because mandatory sites remain unregistered
+    assert!(!cov.all_covered());
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointCoverage — double registration is idempotent
+// ---------------------------------------------------------------------------
+
+#[test]
+fn coverage_double_register_is_idempotent() {
+    let mut cov = CheckpointCoverage::new();
+    cov.register("bytecode_dispatch");
+    assert_eq!(cov.covered_count(), 1);
+    cov.register("bytecode_dispatch");
+    assert_eq!(cov.covered_count(), 1);
+    assert_eq!(cov.total(), 10); // no extra entry created
+}
+
+// ---------------------------------------------------------------------------
+// CheckpointCoverage — uncovered list is sorted (BTreeMap determinism)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn coverage_uncovered_is_sorted() {
+    let cov = CheckpointCoverage::new();
+    let uncov = cov.uncovered();
+    let mut sorted = uncov.clone();
+    sorted.sort();
+    assert_eq!(uncov, sorted);
+}
+
+// ---------------------------------------------------------------------------
+// Budget exhaustion event carries correct fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn budget_exhaustion_event_fields() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::GcSweep,
+        "gc_sweep_comp",
+        "trace-budget",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 10,
+        },
+        token,
+    );
+    for _ in 0..10 {
+        guard.tick();
+    }
+    let action = guard.check();
+    assert_eq!(action, CheckpointAction::Abort);
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    let e = &events[0];
+    assert_eq!(e.reason, CheckpointReason::BudgetExhausted);
+    assert_eq!(e.action, CheckpointAction::Abort);
+    assert_eq!(e.total_iterations, 10);
+    assert_eq!(e.loop_site, LoopSite::GcSweep);
+    assert_eq!(e.trace_id, "trace-budget");
+}

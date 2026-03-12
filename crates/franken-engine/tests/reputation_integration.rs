@@ -927,3 +927,482 @@ fn trust_lookup_last_transition_populated() {
     assert_eq!(last.new_level, TrustLevel::Suspicious);
     assert_eq!(last.old_level, TrustLevel::Provisional);
 }
+
+// ---------------------------------------------------------------------------
+// TrustLevel::is_degraded comprehensive
+// ---------------------------------------------------------------------------
+
+#[test]
+fn trust_level_is_degraded_classification() {
+    // Non-degraded states.
+    assert!(!TrustLevel::Unknown.is_degraded());
+    assert!(!TrustLevel::Provisional.is_degraded());
+    assert!(!TrustLevel::Established.is_degraded());
+    assert!(!TrustLevel::Trusted.is_degraded());
+
+    // Degraded states.
+    assert!(TrustLevel::Suspicious.is_degraded());
+    assert!(TrustLevel::Compromised.is_degraded());
+    assert!(TrustLevel::Revoked.is_degraded());
+}
+
+// ---------------------------------------------------------------------------
+// can_auto_transition_to — upgrade and same-level paths
+// ---------------------------------------------------------------------------
+
+#[test]
+fn can_auto_transition_to_same_level_always_allowed() {
+    for level in &TrustLevel::ALL {
+        assert!(
+            level.can_auto_transition_to(*level),
+            "same-level transition should be allowed for {level}"
+        );
+    }
+}
+
+#[test]
+fn can_auto_transition_to_upgrade_paths_allowed() {
+    // Non-degraded upgrade paths are auto-allowed.
+    assert!(TrustLevel::Unknown.can_auto_transition_to(TrustLevel::Provisional));
+    assert!(TrustLevel::Unknown.can_auto_transition_to(TrustLevel::Established));
+    assert!(TrustLevel::Unknown.can_auto_transition_to(TrustLevel::Trusted));
+    assert!(TrustLevel::Provisional.can_auto_transition_to(TrustLevel::Established));
+    assert!(TrustLevel::Provisional.can_auto_transition_to(TrustLevel::Trusted));
+    assert!(TrustLevel::Established.can_auto_transition_to(TrustLevel::Trusted));
+}
+
+#[test]
+fn can_auto_transition_to_degraded_always_allowed() {
+    // Any level can auto-transition to any degraded state.
+    let degraded = [
+        TrustLevel::Suspicious,
+        TrustLevel::Compromised,
+        TrustLevel::Revoked,
+    ];
+    for source in &TrustLevel::ALL {
+        for target in &degraded {
+            assert!(
+                source.can_auto_transition_to(*target),
+                "{source} -> {target} should be auto-allowed"
+            );
+        }
+    }
+}
+
+#[test]
+fn can_auto_transition_from_degraded_to_nondegraded_denied() {
+    // From degraded back to non-degraded requires operator override.
+    let degraded = [
+        TrustLevel::Suspicious,
+        TrustLevel::Compromised,
+        TrustLevel::Revoked,
+    ];
+    let non_degraded = [
+        TrustLevel::Unknown,
+        TrustLevel::Provisional,
+        TrustLevel::Established,
+        TrustLevel::Trusted,
+    ];
+    for source in &degraded {
+        for target in &non_degraded {
+            assert!(
+                !source.can_auto_transition_to(*target),
+                "{source} -> {target} should be denied without operator override"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ReputationGraphError serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reputation_graph_error_serde_roundtrip_all_variants() {
+    let errors: Vec<ReputationGraphError> = vec![
+        ReputationGraphError::ExtensionNotFound {
+            extension_id: "ext-missing".into(),
+        },
+        ReputationGraphError::PublisherNotFound {
+            publisher_id: "pub-missing".into(),
+        },
+        ReputationGraphError::AutoUpgradeDenied {
+            extension_id: "ext-1".into(),
+            current: TrustLevel::Compromised,
+            attempted: TrustLevel::Trusted,
+        },
+        ReputationGraphError::DuplicateExtension {
+            extension_id: "ext-dup".into(),
+        },
+        ReputationGraphError::DuplicateEvidence {
+            evidence_id: "ev-dup".into(),
+        },
+        ReputationGraphError::CircularDependency {
+            extension_id: "ext-a".into(),
+            dependency_chain: vec!["ext-b".into(), "ext-c".into(), "ext-a".into()],
+        },
+    ];
+
+    for err in &errors {
+        let json = serde_json::to_string(err).unwrap();
+        let back: ReputationGraphError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*err, back);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RevocationImpact serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn revocation_impact_serde_roundtrip() {
+    let impact = frankenengine_engine::reputation::RevocationImpact {
+        directly_affected: ["ext-b".into()].into_iter().collect(),
+        transitively_affected: ["ext-c".into(), "ext-d".into()].into_iter().collect(),
+        trust_degradations: vec![TrustTransition {
+            transition_id: "tt-00000001".into(),
+            extension_id: "ext-b".into(),
+            old_level: TrustLevel::Established,
+            new_level: TrustLevel::Suspicious,
+            triggering_evidence_ids: vec!["revocation-propagation:inc-1".into()],
+            policy_version: 0,
+            operator_override: false,
+            operator_justification: None,
+            timestamp_ns: 5_000,
+            epoch: epoch(1),
+        }],
+    };
+    let json = serde_json::to_string(&impact).unwrap();
+    let back: frankenengine_engine::reputation::RevocationImpact =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(impact, back);
+    assert_eq!(back.directly_affected.len(), 1);
+    assert_eq!(back.transitively_affected.len(), 2);
+    assert_eq!(back.trust_degradations.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Error paths: duplicate extension, duplicate evidence, nonexistent lookups
+// ---------------------------------------------------------------------------
+
+#[test]
+fn duplicate_extension_registration_returns_error() {
+    let mut graph = ReputationGraph::new();
+    graph
+        .register_extension(test_extension("ext-1", "pub-1"))
+        .unwrap();
+
+    let result = graph.register_extension(test_extension("ext-1", "pub-1"));
+    assert!(matches!(
+        result,
+        Err(ReputationGraphError::DuplicateExtension { .. })
+    ));
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("ext-1"));
+}
+
+#[test]
+fn duplicate_evidence_returns_error() {
+    let mut graph = ReputationGraph::new();
+    graph
+        .register_extension(test_extension("ext-1", "pub-1"))
+        .unwrap();
+    graph.add_evidence("ext-1", test_evidence("ev-1")).unwrap();
+
+    let result = graph.add_evidence("ext-1", test_evidence("ev-1"));
+    assert!(matches!(
+        result,
+        Err(ReputationGraphError::DuplicateEvidence { .. })
+    ));
+}
+
+#[test]
+fn add_evidence_to_nonexistent_extension_fails() {
+    let mut graph = ReputationGraph::new();
+    let result = graph.add_evidence("nonexistent", test_evidence("ev-1"));
+    assert!(matches!(
+        result,
+        Err(ReputationGraphError::ExtensionNotFound { .. })
+    ));
+}
+
+#[test]
+fn set_provenance_on_nonexistent_extension_fails() {
+    let mut graph = ReputationGraph::new();
+    let record = ProvenanceRecord {
+        extension_id: "nonexistent".into(),
+        publisher_verified: true,
+        build_attested: true,
+        attestation_source: Some("sigstore".into()),
+        dependency_depth: 0,
+        has_provenance_gap: false,
+        gap_descriptions: vec![],
+    };
+    let result = graph.set_provenance(record);
+    assert!(matches!(
+        result,
+        Err(ReputationGraphError::ExtensionNotFound { .. })
+    ));
+}
+
+#[test]
+fn trust_lookup_on_nonexistent_extension_fails() {
+    let graph = ReputationGraph::new();
+    let result = graph.trust_lookup("nonexistent");
+    assert!(matches!(
+        result,
+        Err(ReputationGraphError::ExtensionNotFound { .. })
+    ));
+}
+
+#[test]
+fn propagate_revocation_on_nonexistent_extension_fails() {
+    let mut graph = ReputationGraph::new();
+    let result = graph.propagate_revocation("nonexistent", "inc-1", epoch(1), 1_000);
+    assert!(matches!(
+        result,
+        Err(ReputationGraphError::ExtensionNotFound { .. })
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Dependency risk with multiple deps — average computation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dependency_risk_averaged_across_multiple_deps() {
+    let mut graph = ReputationGraph::new();
+
+    // dep-a is Trusted (risk = 0), dep-b is Revoked (risk = 1_000_000).
+    let mut dep_a = test_extension("dep-a", "pub-1");
+    dep_a.current_trust_level = TrustLevel::Trusted;
+    graph.register_extension(dep_a).unwrap();
+
+    let mut dep_b = test_extension("dep-b", "pub-1");
+    dep_b.current_trust_level = TrustLevel::Revoked;
+    graph.register_extension(dep_b).unwrap();
+
+    graph
+        .register_extension(test_extension_with_deps(
+            "ext",
+            "pub-1",
+            &["dep-a", "dep-b"],
+        ))
+        .unwrap();
+
+    let result = graph.trust_lookup("ext").unwrap();
+    // Average of 0 and 1_000_000 = 500_000.
+    assert_eq!(result.dependency_risk_score, 500_000);
+}
+
+// ---------------------------------------------------------------------------
+// Edge count tracking across operations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn edge_count_tracks_all_operations() {
+    let mut graph = ReputationGraph::new();
+
+    // register_extension adds a PublishedBy edge.
+    graph
+        .register_extension(test_extension("ext-1", "pub-1"))
+        .unwrap();
+    assert_eq!(graph.edge_count(), 1); // 1 PublishedBy
+
+    // add_evidence adds an ObservedBehavior edge.
+    graph.add_evidence("ext-1", test_evidence("ev-1")).unwrap();
+    assert_eq!(graph.edge_count(), 2); // +1 ObservedBehavior
+
+    // transition_trust adds a TrustTransitioned edge.
+    graph
+        .transition_trust("ext-1", TrustLevel::Provisional, vec![], 1, epoch(1), 1_000)
+        .unwrap();
+    assert_eq!(graph.edge_count(), 3); // +1 TrustTransitioned
+
+    // add_incident adds RevokedBy edges for affected extensions.
+    let inc = IncidentNode {
+        incident_id: "inc-1".into(),
+        severity: IncidentSeverity::High,
+        affected_extensions: ["ext-1".into()].into_iter().collect(),
+        containment_actions: vec!["isolate".into()],
+        resolution_status: ResolutionStatus::Active,
+        timestamp_ns: 5_000_000_000,
+    };
+    graph.add_incident(inc);
+    assert_eq!(graph.edge_count(), 4); // +1 RevokedBy
+}
+
+// ---------------------------------------------------------------------------
+// Clone semantics on ReputationGraph
+// ---------------------------------------------------------------------------
+
+#[test]
+fn graph_clone_is_independent() {
+    let mut graph = ReputationGraph::new();
+    graph.register_publisher(test_publisher("pub-1"));
+    graph
+        .register_extension(test_extension("ext-1", "pub-1"))
+        .unwrap();
+    graph.add_evidence("ext-1", test_evidence("ev-1")).unwrap();
+    graph
+        .transition_trust("ext-1", TrustLevel::Provisional, vec![], 1, epoch(1), 1_000)
+        .unwrap();
+
+    let cloned = graph.clone();
+
+    // Mutating the original does not affect the clone.
+    graph
+        .register_extension(test_extension("ext-2", "pub-1"))
+        .unwrap();
+    assert_eq!(graph.extension_count(), 2);
+    assert_eq!(cloned.extension_count(), 1);
+
+    // Clone preserves trust state.
+    let lookup = cloned.trust_lookup("ext-1").unwrap();
+    assert_eq!(lookup.current_trust_level, TrustLevel::Provisional);
+    assert_eq!(lookup.transition_count, 1);
+    assert_eq!(lookup.evidence_count, 1);
+}
+
+// ---------------------------------------------------------------------------
+// trust_history for extension with no transitions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn trust_history_empty_for_extension_with_no_transitions() {
+    let mut graph = ReputationGraph::new();
+    graph
+        .register_extension(test_extension("ext-1", "pub-1"))
+        .unwrap();
+
+    let history = graph.trust_history("ext-1");
+    assert!(history.is_empty());
+
+    // Also verify for nonexistent extension: returns empty (not an error).
+    let history_none = graph.trust_history("nonexistent");
+    assert!(history_none.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// get_provenance returns None when not set
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_provenance_returns_none_when_not_set() {
+    let mut graph = ReputationGraph::new();
+    graph
+        .register_extension(test_extension("ext-1", "pub-1"))
+        .unwrap();
+    assert!(graph.get_provenance("ext-1").is_none());
+    assert!(graph.get_provenance("nonexistent").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Provenance overwrite on set_provenance
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_provenance_overwrites_existing() {
+    let mut graph = ReputationGraph::new();
+    graph
+        .register_extension(test_extension("ext-1", "pub-1"))
+        .unwrap();
+
+    let record1 = ProvenanceRecord {
+        extension_id: "ext-1".into(),
+        publisher_verified: false,
+        build_attested: false,
+        attestation_source: None,
+        dependency_depth: 0,
+        has_provenance_gap: true,
+        gap_descriptions: vec!["no publisher verification".into()],
+    };
+    graph.set_provenance(record1).unwrap();
+    assert!(graph.get_provenance("ext-1").unwrap().has_provenance_gap);
+
+    let record2 = ProvenanceRecord {
+        extension_id: "ext-1".into(),
+        publisher_verified: true,
+        build_attested: true,
+        attestation_source: Some("sigstore".into()),
+        dependency_depth: 0,
+        has_provenance_gap: false,
+        gap_descriptions: vec![],
+    };
+    graph.set_provenance(record2).unwrap();
+    let prov = graph.get_provenance("ext-1").unwrap();
+    assert!(!prov.has_provenance_gap);
+    assert!(prov.publisher_verified);
+    assert_eq!(prov.attestation_source.as_deref(), Some("sigstore"));
+}
+
+// ---------------------------------------------------------------------------
+// TrustTransition serde roundtrip — non-operator (no override)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn trust_transition_without_override_serde_roundtrip() {
+    let tt = TrustTransition {
+        transition_id: "tt-00000042".into(),
+        extension_id: "ext-42".into(),
+        old_level: TrustLevel::Unknown,
+        new_level: TrustLevel::Provisional,
+        triggering_evidence_ids: vec!["ev-a".into(), "ev-b".into()],
+        policy_version: 1,
+        operator_override: false,
+        operator_justification: None,
+        timestamp_ns: 3_000_000_000,
+        epoch: epoch(1),
+    };
+    let json = serde_json::to_string(&tt).unwrap();
+    let back: TrustTransition = serde_json::from_str(&json).unwrap();
+    assert_eq!(tt, back);
+    assert!(!back.operator_override);
+    assert!(back.operator_justification.is_none());
+    assert_eq!(back.triggering_evidence_ids.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Dependency risk with zero dependencies returns zero
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dependency_risk_zero_for_no_deps() {
+    let mut graph = ReputationGraph::new();
+    graph
+        .register_extension(test_extension("ext-solo", "pub-1"))
+        .unwrap();
+
+    let result = graph.trust_lookup("ext-solo").unwrap();
+    assert_eq!(result.dependency_risk_score, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Multiple publishers support
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multiple_publishers_with_different_trust_scores() {
+    let mut graph = ReputationGraph::new();
+
+    let mut pub1 = test_publisher("pub-1");
+    pub1.trust_score = 900_000;
+    graph.register_publisher(pub1);
+
+    let mut pub2 = test_publisher("pub-2");
+    pub2.trust_score = 200_000;
+    graph.register_publisher(pub2);
+
+    graph
+        .register_extension(test_extension("ext-a", "pub-1"))
+        .unwrap();
+    graph
+        .register_extension(test_extension("ext-b", "pub-2"))
+        .unwrap();
+
+    let lookup_a = graph.trust_lookup("ext-a").unwrap();
+    assert_eq!(lookup_a.publisher_trust_score, Some(900_000));
+
+    let lookup_b = graph.trust_lookup("ext-b").unwrap();
+    assert_eq!(lookup_b.publisher_trust_score, Some(200_000));
+}

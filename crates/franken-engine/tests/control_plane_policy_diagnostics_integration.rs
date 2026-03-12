@@ -20,7 +20,7 @@ use frankenengine_engine::outcome_capability_narrowing::{
 
 #[test]
 fn integration_all_budget_errors_produce_diagnostics() {
-    let errors = vec![
+    let errors = [
         BudgetPropagationError::InsufficientBudget {
             boundary: BudgetBoundaryKind::ParentToChildExtension,
             derived_ms: 5,
@@ -111,7 +111,7 @@ fn integration_budget_errors_have_correct_severity() {
 
 #[test]
 fn integration_all_narrowing_violations_produce_diagnostics() {
-    let violations = vec![
+    let violations = [
         NarrowingViolation::CapabilityWidening {
             boundary_label: "spawn".to_owned(),
             widened_tokens: {

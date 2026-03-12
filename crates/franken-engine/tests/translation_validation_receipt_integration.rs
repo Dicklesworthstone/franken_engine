@@ -881,9 +881,11 @@ fn test_summary_schema_version() {
 fn test_constants() {
     assert_eq!(COMPONENT, "translation_validation_receipt");
     assert_eq!(BEAD_ID, "bd-1lsy.7.7.2");
-    assert!(MAX_CHAIN_LENGTH > 0);
-    assert!(MAX_RULES_PER_RECEIPT > 0);
-    assert!(SIGNIFICANT_IMPROVEMENT_THRESHOLD > 0);
+    const {
+        assert!(MAX_CHAIN_LENGTH > 0);
+        assert!(MAX_RULES_PER_RECEIPT > 0);
+        assert!(SIGNIFICANT_IMPROVEMENT_THRESHOLD > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

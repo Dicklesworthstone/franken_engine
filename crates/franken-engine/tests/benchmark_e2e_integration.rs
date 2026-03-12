@@ -21,10 +21,15 @@
 )]
 
 use frankenengine_engine::benchmark_e2e::{
-    BENCHMARK_E2E_COMPONENT, BENCHMARK_E2E_SCHEMA_VERSION, BenchmarkFamily, BenchmarkMeasurement,
-    BenchmarkSuiteConfig, LatencyDistribution, MIN_START_BUDGET_MILLIONTHS, RegressionThresholds,
-    ScaleProfile, Xorshift64, detect_regression, measurements_to_cases, run_benchmark,
-    run_benchmark_suite, run_boot_storm, run_capability_churn, write_evidence_artifacts,
+    BENCHMARK_E2E_COMPONENT, BENCHMARK_E2E_SCHEMA_VERSION, BENCHMARK_ENV_SCHEMA_VERSION,
+    BenchmarkEnvironmentManifest, BenchmarkFairnessPolicy, BenchmarkFamily,
+    BenchmarkHarnessContract, BenchmarkHarnessContractError, BenchmarkMeasurement,
+    BenchmarkRuntimePins, BenchmarkSuiteConfig, LatencyDistribution, MIN_START_BUDGET_MILLIONTHS,
+    RegressionThresholds, ScaleProfile, Xorshift64, detect_regression, measurements_to_cases,
+    run_adversarial_noise_under_load, run_benchmark, run_benchmark_suite,
+    run_benchmark_suite_with_regression, run_boot_storm, run_capability_churn,
+    run_mixed_cpu_io_agent_mesh, run_reload_revoke_churn, validate_harness_contract,
+    write_evidence_artifacts,
 };
 
 // ── Constants ───────────────────────────────────────────────────────────
@@ -434,4 +439,339 @@ fn latency_distribution_debug_is_nonempty() {
     let mut samples = vec![100u64, 200, 300];
     let dist = LatencyDistribution::from_samples(&mut samples);
     assert!(!format!("{dist:?}").is_empty());
+}
+
+// ── Additional benchmark runner families ─────────────────────────────
+
+#[test]
+fn run_mixed_cpu_io_agent_mesh_small_produces_valid_measurement() {
+    let m = run_mixed_cpu_io_agent_mesh(ScaleProfile::Small, 42);
+    assert_eq!(m.family, BenchmarkFamily::MixedCpuIoAgentMesh);
+    assert_eq!(m.profile, ScaleProfile::Small);
+    assert!(m.total_operations > 0);
+    assert!(m.duration_us > 0);
+    assert!(m.throughput_ops_per_sec > 0.0);
+    assert!(m.latency.sample_count > 0);
+    assert!(!m.correctness_digest.is_empty());
+}
+
+#[test]
+fn run_reload_revoke_churn_small_produces_valid_measurement() {
+    let m = run_reload_revoke_churn(ScaleProfile::Small, 42);
+    assert_eq!(m.family, BenchmarkFamily::ReloadRevokeChurn);
+    assert_eq!(m.profile, ScaleProfile::Small);
+    assert!(m.total_operations > 0);
+    assert!(m.throughput_ops_per_sec > 0.0);
+    assert!(m.latency.sample_count > 0);
+}
+
+#[test]
+fn run_adversarial_noise_under_load_small_produces_valid_measurement() {
+    let m = run_adversarial_noise_under_load(ScaleProfile::Small, 42);
+    assert_eq!(m.family, BenchmarkFamily::AdversarialNoiseUnderLoad);
+    assert_eq!(m.profile, ScaleProfile::Small);
+    assert!(m.total_operations > 0);
+    assert!(m.throughput_ops_per_sec > 0.0);
+    assert!(m.latency.sample_count > 0);
+    assert!(!m.correctness_digest.is_empty());
+}
+
+// ── BenchmarkRuntimePins ────────────────────────────────────────────
+
+#[test]
+fn benchmark_runtime_pins_default_non_empty() {
+    let pins = BenchmarkRuntimePins::default();
+    assert!(!pins.franken_engine.is_empty());
+    assert!(!pins.node_lts.is_empty());
+    assert!(!pins.bun_stable.is_empty());
+}
+
+#[test]
+fn benchmark_runtime_pins_serde_roundtrip() {
+    let pins = BenchmarkRuntimePins::default();
+    let json = serde_json::to_string(&pins).expect("serialize");
+    let deserialized: BenchmarkRuntimePins = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(pins, deserialized);
+}
+
+#[test]
+fn benchmark_runtime_pins_clone_eq() {
+    let pins = BenchmarkRuntimePins::default();
+    let cloned = pins.clone();
+    assert_eq!(pins, cloned);
+}
+
+// ── BenchmarkFairnessPolicy ─────────────────────────────────────────
+
+#[test]
+fn benchmark_fairness_policy_default_values() {
+    let policy = BenchmarkFairnessPolicy::default();
+    assert!(policy.warmup_runs >= 1);
+    assert!(policy.sample_count >= 3);
+    assert!(policy.case_timeout_ms >= 1);
+}
+
+#[test]
+fn benchmark_fairness_policy_serde_roundtrip() {
+    let policy = BenchmarkFairnessPolicy::default();
+    let json = serde_json::to_string(&policy).expect("serialize");
+    let deserialized: BenchmarkFairnessPolicy = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(policy, deserialized);
+}
+
+// ── BenchmarkHarnessContract ────────────────────────────────────────
+
+#[test]
+fn validate_harness_contract_default_passes() {
+    let contract = BenchmarkHarnessContract::default();
+    assert!(validate_harness_contract(&contract).is_ok());
+}
+
+#[test]
+fn validate_harness_contract_empty_franken_engine_pin() {
+    let mut contract = BenchmarkHarnessContract::default();
+    contract.runtime_pins.franken_engine = String::new();
+    let err = validate_harness_contract(&contract).unwrap_err();
+    assert!(matches!(
+        err,
+        BenchmarkHarnessContractError::EmptyRuntimePin {
+            runtime: "franken_engine"
+        }
+    ));
+    // Verify Display impl
+    let msg = err.to_string();
+    assert!(msg.contains("franken_engine"));
+    assert!(msg.contains("non-empty"));
+}
+
+#[test]
+fn validate_harness_contract_empty_node_lts_pin() {
+    let mut contract = BenchmarkHarnessContract::default();
+    contract.runtime_pins.node_lts = "   ".to_string(); // whitespace-only
+    let err = validate_harness_contract(&contract).unwrap_err();
+    assert!(matches!(
+        err,
+        BenchmarkHarnessContractError::EmptyRuntimePin {
+            runtime: "node_lts"
+        }
+    ));
+}
+
+#[test]
+fn validate_harness_contract_empty_bun_stable_pin() {
+    let mut contract = BenchmarkHarnessContract::default();
+    contract.runtime_pins.bun_stable = String::new();
+    let err = validate_harness_contract(&contract).unwrap_err();
+    assert!(matches!(
+        err,
+        BenchmarkHarnessContractError::EmptyRuntimePin {
+            runtime: "bun_stable"
+        }
+    ));
+}
+
+#[test]
+fn validate_harness_contract_invalid_warmup_runs() {
+    let mut contract = BenchmarkHarnessContract::default();
+    contract.fairness_policy.warmup_runs = 0;
+    let err = validate_harness_contract(&contract).unwrap_err();
+    assert!(matches!(
+        err,
+        BenchmarkHarnessContractError::InvalidWarmupRuns { .. }
+    ));
+    let msg = err.to_string();
+    assert!(msg.contains("warmup_runs"));
+}
+
+#[test]
+fn validate_harness_contract_invalid_sample_count() {
+    let mut contract = BenchmarkHarnessContract::default();
+    contract.fairness_policy.sample_count = 1;
+    let err = validate_harness_contract(&contract).unwrap_err();
+    assert!(matches!(
+        err,
+        BenchmarkHarnessContractError::InvalidSampleCount { .. }
+    ));
+    let msg = err.to_string();
+    assert!(msg.contains("sample_count"));
+}
+
+#[test]
+fn validate_harness_contract_invalid_case_timeout_ms() {
+    let mut contract = BenchmarkHarnessContract::default();
+    contract.fairness_policy.case_timeout_ms = 0;
+    let err = validate_harness_contract(&contract).unwrap_err();
+    assert!(matches!(
+        err,
+        BenchmarkHarnessContractError::InvalidCaseTimeoutMs { .. }
+    ));
+    let msg = err.to_string();
+    assert!(msg.contains("case_timeout_ms"));
+}
+
+// ── BenchmarkEnvironmentManifest ────────────────────────────────────
+
+#[test]
+fn benchmark_environment_manifest_serde_roundtrip() {
+    let manifest = BenchmarkEnvironmentManifest {
+        schema_version: BENCHMARK_ENV_SCHEMA_VERSION.to_string(),
+        run_id: "test-run-001".to_string(),
+        run_date: "2026-03-11".to_string(),
+        seed: 42,
+        locale: "en_US.UTF-8".to_string(),
+        timezone: "UTC".to_string(),
+        os: "linux".to_string(),
+        arch: "x86_64".to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        fairness_policy: BenchmarkFairnessPolicy::default(),
+    };
+    let json = serde_json::to_string_pretty(&manifest).expect("serialize");
+    let deserialized: BenchmarkEnvironmentManifest =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(manifest, deserialized);
+}
+
+// ── run_benchmark_suite_with_regression ──────────────────────────────
+
+#[test]
+fn suite_with_regression_detects_no_regression_against_self() {
+    let config = BenchmarkSuiteConfig {
+        seed: 42,
+        profiles: vec![ScaleProfile::Small],
+        families: vec![BenchmarkFamily::BootStorm],
+        thresholds: RegressionThresholds::default(),
+        run_id: "regression-test".to_string(),
+        run_date: "2026-03-11".to_string(),
+    };
+    let baseline_result = run_benchmark_suite(&config);
+    let baselines = baseline_result.measurements.clone();
+
+    let result = run_benchmark_suite_with_regression(&config, &baselines);
+    // Same seed => same measurements => no regression.
+    assert!(!result.regressions.is_empty());
+    for r in &result.regressions {
+        assert!(!r.blocked, "self-comparison should never block");
+        assert!(r.blockers.is_empty());
+    }
+}
+
+// ── detect_regression edge cases ────────────────────────────────────
+
+#[test]
+fn detect_regression_multiple_blockers() {
+    let baseline = make_measurement(BenchmarkFamily::CapabilityChurn, 1000.0, 500, 1000);
+    // 80% throughput regression + 200% p95 + 200% p99
+    let current = make_measurement(BenchmarkFamily::CapabilityChurn, 200.0, 1500, 3000);
+    let result = detect_regression(&current, &baseline, &RegressionThresholds::default());
+    assert!(result.blocked);
+    assert!(
+        result.blockers.len() >= 3,
+        "expected at least 3 blockers, got {}",
+        result.blockers.len()
+    );
+    assert!(result.blockers.iter().any(|b| b.contains("throughput")));
+    assert!(result.blockers.iter().any(|b| b.contains("p95")));
+    assert!(result.blockers.iter().any(|b| b.contains("p99")));
+}
+
+#[test]
+fn detect_regression_zero_baseline_throughput() {
+    let baseline = make_measurement(BenchmarkFamily::BootStorm, 0.0, 500, 1000);
+    let current = make_measurement(BenchmarkFamily::BootStorm, 1000.0, 500, 1000);
+    let result = detect_regression(&current, &baseline, &RegressionThresholds::default());
+    // Zero baseline throughput => throughput_delta_pct = 0.0 => not blocked for throughput.
+    assert!(!result.blocked);
+    assert!((result.throughput_delta_pct).abs() < 1e-9);
+}
+
+// ── measurements_to_cases edge cases ────────────────────────────────
+
+#[test]
+fn measurements_to_cases_with_invariant_violations_not_behavior_equivalent() {
+    let mut m = make_measurement(BenchmarkFamily::BootStorm, 1000.0, 500, 1000);
+    m.invariant_violations = 5;
+    let cases = measurements_to_cases(&[m], 1.0);
+    assert_eq!(cases.len(), 1);
+    assert!(!cases[0].behavior_equivalent);
+}
+
+// ── BENCHMARK_ENV_SCHEMA_VERSION constant ───────────────────────────
+
+#[test]
+fn benchmark_env_schema_version_non_empty() {
+    assert!(!BENCHMARK_ENV_SCHEMA_VERSION.is_empty());
+    assert!(BENCHMARK_ENV_SCHEMA_VERSION.contains("benchmark-env"));
+}
+
+// ── BenchmarkHarnessContractError Display coverage ──────────────────
+
+#[test]
+fn harness_contract_error_is_std_error() {
+    let err = BenchmarkHarnessContractError::EmptyRuntimePin {
+        runtime: "franken_engine",
+    };
+    // Verify it implements std::error::Error (the trait object cast compiles).
+    let dyn_err: &dyn std::error::Error = &err;
+    assert!(!dyn_err.to_string().is_empty());
+}
+
+// ── BenchmarkSuiteConfig multiple families and profiles ─────────────
+
+#[test]
+fn suite_multiple_families_produces_correct_event_count() {
+    let config = BenchmarkSuiteConfig {
+        seed: 99,
+        profiles: vec![ScaleProfile::Small],
+        families: vec![BenchmarkFamily::BootStorm, BenchmarkFamily::CapabilityChurn],
+        thresholds: RegressionThresholds::default(),
+        run_id: "multi-family".to_string(),
+        run_date: "2026-03-11".to_string(),
+    };
+    let result = run_benchmark_suite(&config);
+    // 2 families x 1 profile = 2 measurements and 2 events.
+    assert_eq!(result.measurements.len(), 2);
+    assert_eq!(result.events.len(), 2);
+    assert_eq!(result.measurements[0].family, BenchmarkFamily::BootStorm);
+    assert_eq!(
+        result.measurements[1].family,
+        BenchmarkFamily::CapabilityChurn
+    );
+}
+
+// ── RegressionResult clone and debug ────────────────────────────────
+
+#[test]
+fn regression_result_clone_and_debug() {
+    let baseline = make_measurement(BenchmarkFamily::BootStorm, 1000.0, 500, 1000);
+    let current = make_measurement(BenchmarkFamily::BootStorm, 900.0, 600, 1100);
+    let result = detect_regression(&current, &baseline, &RegressionThresholds::default());
+    let cloned = result.clone();
+    assert_eq!(cloned.family, result.family);
+    assert_eq!(cloned.profile, result.profile);
+    assert_eq!(cloned.blocked, result.blocked);
+    assert_eq!(cloned.blockers.len(), result.blockers.len());
+    assert!(!format!("{result:?}").is_empty());
+}
+
+// ── BenchmarkHarnessContract serde roundtrip ────────────────────────
+
+#[test]
+fn benchmark_harness_contract_serde_roundtrip() {
+    let contract = BenchmarkHarnessContract::default();
+    let json = serde_json::to_string(&contract).expect("serialize");
+    let deserialized: BenchmarkHarnessContract = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(contract, deserialized);
+}
+
+// ── run_benchmark dispatches all families ───────────────────────────
+
+#[test]
+fn run_benchmark_dispatches_all_five_families() {
+    for family in BenchmarkFamily::all() {
+        let m = run_benchmark(*family, ScaleProfile::Small, 7);
+        assert_eq!(m.family, *family);
+        assert_eq!(m.profile, ScaleProfile::Small);
+        assert!(m.total_operations > 0);
+        assert!(!m.correctness_digest.is_empty());
+    }
 }

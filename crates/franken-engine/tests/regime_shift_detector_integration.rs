@@ -820,10 +820,12 @@ fn test_schema_constants() {
 
 #[test]
 fn test_default_constants() {
-    assert!(DEFAULT_CUSUM_DRIFT_MILLIONTHS > 0);
-    assert!(DEFAULT_CUSUM_THRESHOLD_MILLIONTHS > DEFAULT_CUSUM_DRIFT_MILLIONTHS);
-    assert!(DEFAULT_EWMA_ALPHA_MILLIONTHS > 0);
-    assert!(DEFAULT_EWMA_ALPHA_MILLIONTHS <= 1_000_000);
-    assert!(DEFAULT_COOLDOWN_TICKS > 0);
-    assert!(DEFAULT_MIN_OBSERVATIONS > 0);
+    const {
+        assert!(DEFAULT_CUSUM_DRIFT_MILLIONTHS > 0);
+        assert!(DEFAULT_CUSUM_THRESHOLD_MILLIONTHS > DEFAULT_CUSUM_DRIFT_MILLIONTHS);
+        assert!(DEFAULT_EWMA_ALPHA_MILLIONTHS > 0);
+        assert!(DEFAULT_EWMA_ALPHA_MILLIONTHS <= 1_000_000);
+        assert!(DEFAULT_COOLDOWN_TICKS > 0);
+        assert!(DEFAULT_MIN_OBSERVATIONS > 0);
+    }
 }

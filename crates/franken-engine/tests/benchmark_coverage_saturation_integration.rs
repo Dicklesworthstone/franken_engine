@@ -920,7 +920,7 @@ fn saturation_gate_evaluate_with_receipt_returns_both() {
         .add_entry(make_entry("rr1", WorkloadFamily::BranchHeavy, 10, &["tag"]))
         .unwrap();
     let prev_hash = ContentHash::compute(b"genesis");
-    let (report, receipt) = gate.evaluate_with_receipt(&board, prev_hash.clone());
+    let (report, receipt) = gate.evaluate_with_receipt(&board, prev_hash);
     assert_eq!(receipt.report_hash, report.content_hash);
     assert_eq!(receipt.previous_receipt_hash, prev_hash);
     assert_eq!(receipt.verdict, report.verdict);
@@ -976,7 +976,7 @@ fn decision_receipt_new_verify_succeeds() {
     let config = SaturationConfig::default_config();
     let report = board.evaluate(&config);
     let prev_hash = ContentHash::compute(b"prev");
-    let receipt = DecisionReceipt::new("receipt-1", &report, prev_hash.clone());
+    let receipt = DecisionReceipt::new("receipt-1", &report, prev_hash);
     assert!(receipt.verify());
     assert_eq!(receipt.receipt_id, "receipt-1");
     assert_eq!(receipt.report_hash, report.content_hash);

@@ -84,10 +84,12 @@ fn schema_version_is_stable() {
 
 #[test]
 fn default_constants_are_reasonable() {
-    assert!(MAX_TRANSFERRED_RULES >= 64);
-    assert!(DEFAULT_DRIFT_BUDGET_MILLIONTHS > 0);
-    assert!(DEFAULT_CONFIDENCE_FLOOR_MILLIONTHS > 0);
-    assert!(DEFAULT_MAX_PRIOR_AGE_EPOCHS >= 1);
+    const {
+        assert!(MAX_TRANSFERRED_RULES >= 64);
+        assert!(DEFAULT_DRIFT_BUDGET_MILLIONTHS > 0);
+        assert!(DEFAULT_CONFIDENCE_FLOOR_MILLIONTHS > 0);
+        assert!(DEFAULT_MAX_PRIOR_AGE_EPOCHS >= 1);
+    }
 }
 
 // ---------------------------------------------------------------------------

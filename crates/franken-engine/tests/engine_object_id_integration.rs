@@ -456,3 +456,302 @@ fn derive_deterministic_across_10_runs() {
         assert_eq!(&ids[0], id);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Collision resistance — pairwise uniqueness across all 9 domains
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_domain_zone_pairs_produce_unique_ids() {
+    let schema = test_schema();
+    let zones = ["zone-a", "zone-b", "zone-c"];
+    let mut seen = std::collections::BTreeSet::new();
+    for domain in ObjectDomain::ALL {
+        for zone in &zones {
+            let id = derive_id(*domain, zone, &schema, b"data").unwrap();
+            assert!(
+                seen.insert(id.to_hex()),
+                "duplicate ID for domain={domain}, zone={zone}"
+            );
+        }
+    }
+    assert_eq!(seen.len(), ObjectDomain::ALL.len() * zones.len());
+}
+
+// ---------------------------------------------------------------------------
+// Length-prefix unambiguity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn zone_prefix_length_prevents_collision() {
+    // "ab" + "c" vs "a" + "bc" should differ because of length prefixes
+    let schema = test_schema();
+    let id1 = derive_id(ObjectDomain::PolicyObject, "abc", &schema, b"x").unwrap();
+    let id2 = derive_id(ObjectDomain::PolicyObject, "ab", &schema, b"cx").unwrap();
+    assert_ne!(id1, id2, "different zone+content splits must differ");
+}
+
+#[test]
+fn empty_vs_nonempty_content_differs() {
+    let schema = test_schema();
+    let id_short = derive_id(ObjectDomain::PolicyObject, "z", &schema, &[0x00]).unwrap();
+    let id_longer = derive_id(ObjectDomain::PolicyObject, "z", &schema, &[0x00, 0x00]).unwrap();
+    assert_ne!(id_short, id_longer);
+}
+
+// ---------------------------------------------------------------------------
+// Hex edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hex_empty_string_is_invalid() {
+    let err = EngineObjectId::from_hex("").unwrap_err();
+    assert!(matches!(err, IdError::InvalidHexLength { .. }));
+}
+
+#[test]
+fn hex_odd_length_is_invalid() {
+    let err = EngineObjectId::from_hex(&"a".repeat(63)).unwrap_err();
+    assert!(matches!(err, IdError::InvalidHexLength { .. }));
+}
+
+#[test]
+fn hex_too_long_is_invalid() {
+    let err = EngineObjectId::from_hex(&"00".repeat(33)).unwrap_err();
+    assert!(matches!(err, IdError::InvalidHexLength { .. }));
+}
+
+#[test]
+fn hex_mixed_case_accepted() {
+    let id = derive_id(ObjectDomain::PolicyObject, "z", &test_schema(), b"data").unwrap();
+    let hex = id.to_hex();
+    // Mix case: first half upper, second half lower
+    let mixed: String = hex
+        .char_indices()
+        .map(|(i, c)| if i < 32 { c.to_ascii_uppercase() } else { c })
+        .collect();
+    let restored = EngineObjectId::from_hex(&mixed).unwrap();
+    assert_eq!(id, restored);
+}
+
+#[test]
+fn hex_all_zeros_valid() {
+    let id = EngineObjectId::from_hex(&"00".repeat(32)).unwrap();
+    assert_eq!(id.as_bytes(), &[0u8; 32]);
+}
+
+#[test]
+fn hex_all_ff_valid() {
+    let id = EngineObjectId::from_hex(&"ff".repeat(32)).unwrap();
+    assert_eq!(id.as_bytes(), &[0xff; 32]);
+}
+
+// ---------------------------------------------------------------------------
+// Verify — correct ID passes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn verify_id_succeeds_for_all_domains() {
+    let schema = test_schema();
+    for domain in ObjectDomain::ALL {
+        let id = derive_id(*domain, "zone", &schema, b"verify-all").unwrap();
+        verify_id(&id, *domain, "zone", &schema, b"verify-all").unwrap();
+    }
+}
+
+#[test]
+fn verify_id_fails_with_flipped_bit() {
+    let schema = test_schema();
+    let mut id = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"data").unwrap();
+    id.0[0] ^= 0x01; // flip one bit
+    let err = verify_id(&id, ObjectDomain::PolicyObject, "z", &schema, b"data").unwrap_err();
+    if let IdError::IdMismatch { expected, computed } = &err {
+        assert_ne!(expected, computed);
+    } else {
+        panic!("expected IdMismatch, got {err}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EngineObjectId — Display, Debug, Ord
+// ---------------------------------------------------------------------------
+
+#[test]
+fn display_and_to_hex_are_identical() {
+    let id = derive_id(ObjectDomain::PolicyObject, "z", &test_schema(), b"x").unwrap();
+    assert_eq!(id.to_string(), id.to_hex());
+}
+
+#[test]
+fn engine_object_id_has_debug() {
+    let id = derive_id(ObjectDomain::PolicyObject, "z", &test_schema(), b"debug").unwrap();
+    let debug = format!("{id:?}");
+    assert!(!debug.is_empty());
+}
+
+#[test]
+fn engine_object_id_ord_consistent_with_eq() {
+    let schema = test_schema();
+    let id1 = derive_id(ObjectDomain::PolicyObject, "a", &schema, b"x").unwrap();
+    let id2 = derive_id(ObjectDomain::PolicyObject, "b", &schema, b"x").unwrap();
+    let id1_dup = derive_id(ObjectDomain::PolicyObject, "a", &schema, b"x").unwrap();
+    assert_eq!(id1.cmp(&id1_dup), std::cmp::Ordering::Equal);
+    assert_ne!(id1.cmp(&id2), std::cmp::Ordering::Equal);
+}
+
+// ---------------------------------------------------------------------------
+// IdError — IdMismatch carries both ids
+// ---------------------------------------------------------------------------
+
+#[test]
+fn id_mismatch_contains_both_ids() {
+    let schema = test_schema();
+    let real = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"real").unwrap();
+    let err = verify_id(&real, ObjectDomain::PolicyObject, "z", &schema, b"fake").unwrap_err();
+    if let IdError::IdMismatch { expected, computed } = err {
+        assert_eq!(expected, real);
+        assert_ne!(expected, computed);
+    } else {
+        panic!("expected IdMismatch");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SchemaId — edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schema_id_from_empty_definition() {
+    let schema = SchemaId::from_definition(b"");
+    assert_eq!(schema.as_bytes().len(), 32);
+}
+
+#[test]
+fn schema_id_large_definition() {
+    let large = vec![0xaa; 100_000];
+    let schema = SchemaId::from_definition(&large);
+    assert_eq!(schema.as_bytes().len(), 32);
+}
+
+#[test]
+fn schema_id_binary_content() {
+    let binary: Vec<u8> = (0..=255).collect();
+    let schema = SchemaId::from_definition(&binary);
+    let schema2 = SchemaId::from_definition(&binary);
+    assert_eq!(schema, schema2);
+}
+
+// ---------------------------------------------------------------------------
+// ObjectDomain — ordering
+// ---------------------------------------------------------------------------
+
+#[test]
+fn object_domain_ord_consistent() {
+    for (i, a) in ObjectDomain::ALL.iter().enumerate() {
+        for (j, b) in ObjectDomain::ALL.iter().enumerate() {
+            if i < j {
+                assert!(a < b, "{a} should be < {b}");
+            } else if i == j {
+                assert_eq!(a, b);
+            } else {
+                assert!(a > b, "{a} should be > {b}");
+            }
+        }
+    }
+}
+
+#[test]
+fn object_domain_hash_consistent_with_eq() {
+    use std::collections::BTreeSet;
+    let mut set = BTreeSet::new();
+    for domain in ObjectDomain::ALL {
+        assert!(set.insert(*domain));
+    }
+    assert_eq!(set.len(), ObjectDomain::ALL.len());
+    // Inserting again should fail
+    for domain in ObjectDomain::ALL {
+        assert!(!set.insert(*domain));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Domain tag uniqueness — no tag is a prefix of another
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_domain_tag_is_prefix_of_another() {
+    for (i, a) in ObjectDomain::ALL.iter().enumerate() {
+        for (j, b) in ObjectDomain::ALL.iter().enumerate() {
+            if i != j {
+                let tag_a = a.tag();
+                let tag_b = b.tag();
+                assert!(
+                    !tag_a.starts_with(tag_b) && !tag_b.starts_with(tag_a),
+                    "tag {} should not be a prefix of {}",
+                    std::str::from_utf8(tag_a).unwrap(),
+                    std::str::from_utf8(tag_b).unwrap()
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Full lifecycle integration
+// ---------------------------------------------------------------------------
+
+#[test]
+fn full_lifecycle_derive_verify_serialize_deserialize() {
+    let schema = SchemaId::from_definition(b"lifecycle-schema-v1");
+    let domain = ObjectDomain::SignedManifest;
+    let zone = "production/us-east-1";
+    let content = b"manifest-payload-bytes-here";
+
+    // 1. Derive
+    let id = derive_id(domain, zone, &schema, content).unwrap();
+    assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
+
+    // 2. Verify
+    verify_id(&id, domain, zone, &schema, content).unwrap();
+
+    // 3. Hex roundtrip
+    let hex = id.to_hex();
+    assert_eq!(hex.len(), 64);
+    let from_hex = EngineObjectId::from_hex(&hex).unwrap();
+    assert_eq!(from_hex, id);
+
+    // 4. Serde roundtrip
+    let json = serde_json::to_string(&id).unwrap();
+    let from_json: EngineObjectId = serde_json::from_str(&json).unwrap();
+    assert_eq!(from_json, id);
+
+    // 5. Schema serde
+    let schema_json = serde_json::to_string(&schema).unwrap();
+    let schema_back: SchemaId = serde_json::from_str(&schema_json).unwrap();
+    assert_eq!(schema_back, schema);
+
+    // 6. Domain serde
+    let domain_json = serde_json::to_string(&domain).unwrap();
+    let domain_back: ObjectDomain = serde_json::from_str(&domain_json).unwrap();
+    assert_eq!(domain_back, domain);
+}
+
+// ---------------------------------------------------------------------------
+// Content sensitivity — single byte change produces different ID
+// ---------------------------------------------------------------------------
+
+#[test]
+fn single_byte_change_produces_different_id() {
+    let schema = test_schema();
+    let base = vec![0x42; 100];
+    let id_base = derive_id(ObjectDomain::PolicyObject, "z", &schema, &base).unwrap();
+    for pos in 0..base.len() {
+        let mut modified = base.clone();
+        modified[pos] ^= 0x01;
+        let id_mod = derive_id(ObjectDomain::PolicyObject, "z", &schema, &modified).unwrap();
+        assert_ne!(
+            id_base, id_mod,
+            "flipping byte at position {pos} should change ID"
+        );
+    }
+}

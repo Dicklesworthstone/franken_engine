@@ -550,3 +550,398 @@ fn interpreter_error_capability_denied_display() {
     let msg = err.to_string();
     assert!(!msg.is_empty());
 }
+
+// =========================================================================
+// Section 15: require_all integration
+// =========================================================================
+
+#[test]
+fn require_all_succeeds_for_full_profile_with_multiple_caps() {
+    let full = CapabilityProfile::full();
+    let result = frankenengine_engine::capability::require_all(
+        &full,
+        &[
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::NetworkEgress,
+            RuntimeCapability::FsWrite,
+            RuntimeCapability::PolicyWrite,
+        ],
+        "integration-test",
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn require_all_collects_all_denials_from_compute_only() {
+    let co = CapabilityProfile::compute_only();
+    let result = frankenengine_engine::capability::require_all(
+        &co,
+        &[
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::NetworkEgress,
+            RuntimeCapability::FsRead,
+        ],
+        "test-bulk-deny",
+    );
+    let denials = result.unwrap_err();
+    assert_eq!(denials.len(), 3);
+    // All denials share the same component and held_profile
+    for d in &denials {
+        assert_eq!(d.component, "test-bulk-deny");
+        assert_eq!(d.held_profile, ProfileKind::ComputeOnly);
+    }
+    assert_eq!(denials[0].required, RuntimeCapability::VmDispatch);
+    assert_eq!(denials[1].required, RuntimeCapability::NetworkEgress);
+    assert_eq!(denials[2].required, RuntimeCapability::FsRead);
+}
+
+#[test]
+fn require_all_with_empty_requirements_succeeds_for_any_profile() {
+    let co = CapabilityProfile::compute_only();
+    assert!(frankenengine_engine::capability::require_all(&co, &[], "empty-check").is_ok());
+    let ec = CapabilityProfile::engine_core();
+    assert!(frankenengine_engine::capability::require_all(&ec, &[], "empty-check").is_ok());
+}
+
+#[test]
+fn require_all_partial_grant_reports_only_missing() {
+    let ec = CapabilityProfile::engine_core();
+    let result = frankenengine_engine::capability::require_all(
+        &ec,
+        &[
+            RuntimeCapability::VmDispatch,    // granted
+            RuntimeCapability::GcInvoke,      // granted
+            RuntimeCapability::NetworkEgress, // NOT granted
+            RuntimeCapability::FsWrite,       // NOT granted
+        ],
+        "partial-test",
+    );
+    let denials = result.unwrap_err();
+    assert_eq!(denials.len(), 2);
+    assert_eq!(denials[0].required, RuntimeCapability::NetworkEgress);
+    assert_eq!(denials[1].required, RuntimeCapability::FsWrite);
+}
+
+// =========================================================================
+// Section 16: CapabilityProfile intersect integration
+// =========================================================================
+
+#[test]
+fn intersect_disjoint_profiles_yields_empty() {
+    let ec = CapabilityProfile::engine_core();
+    let pol = CapabilityProfile::policy();
+    let inter = ec.intersect(&pol);
+    assert!(inter.is_empty());
+    assert_eq!(inter.len(), 0);
+    assert_eq!(inter.kind, ProfileKind::ComputeOnly);
+}
+
+#[test]
+fn intersect_full_with_engine_core_yields_engine_core_caps() {
+    let full = CapabilityProfile::full();
+    let ec = CapabilityProfile::engine_core();
+    let inter = full.intersect(&ec);
+    assert_eq!(inter.capabilities, ec.capabilities);
+    assert_eq!(inter.len(), 4);
+    assert!(inter.has(RuntimeCapability::VmDispatch));
+    assert!(inter.has(RuntimeCapability::GcInvoke));
+    assert!(inter.has(RuntimeCapability::IrLowering));
+    assert!(inter.has(RuntimeCapability::HeapAllocate));
+}
+
+#[test]
+fn intersect_is_commutative() {
+    let ec = CapabilityProfile::engine_core();
+    let remote = CapabilityProfile::remote();
+    let ab = ec.intersect(&remote);
+    let ba = remote.intersect(&ec);
+    assert_eq!(ab.capabilities, ba.capabilities);
+    assert!(ab.is_empty());
+}
+
+// =========================================================================
+// Section 17: CapabilityProfile Display and serde roundtrips
+// =========================================================================
+
+#[test]
+fn capability_profile_display_includes_kind_and_count() {
+    let ec = CapabilityProfile::engine_core();
+    assert_eq!(ec.to_string(), "EngineCoreCaps[4]");
+
+    let full = CapabilityProfile::full();
+    assert_eq!(full.to_string(), "FullCaps[16]");
+
+    let co = CapabilityProfile::compute_only();
+    assert_eq!(co.to_string(), "ComputeOnlyCaps[0]");
+
+    let pol = CapabilityProfile::policy();
+    assert_eq!(pol.to_string(), "PolicyCaps[4]");
+
+    let remote = CapabilityProfile::remote();
+    assert_eq!(remote.to_string(), "RemoteCaps[3]");
+}
+
+#[test]
+fn all_profiles_serde_roundtrip() {
+    let profiles = [
+        CapabilityProfile::full(),
+        CapabilityProfile::engine_core(),
+        CapabilityProfile::policy(),
+        CapabilityProfile::remote(),
+        CapabilityProfile::compute_only(),
+    ];
+    for profile in &profiles {
+        let json = serde_json::to_string(profile).unwrap();
+        let back: CapabilityProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            *profile, back,
+            "serde roundtrip failed for {}",
+            profile.kind
+        );
+    }
+}
+
+// =========================================================================
+// Section 18: ProfileKind Display and serde
+// =========================================================================
+
+#[test]
+fn profile_kind_display_all_variants() {
+    assert_eq!(ProfileKind::Full.to_string(), "FullCaps");
+    assert_eq!(ProfileKind::EngineCore.to_string(), "EngineCoreCaps");
+    assert_eq!(ProfileKind::Policy.to_string(), "PolicyCaps");
+    assert_eq!(ProfileKind::Remote.to_string(), "RemoteCaps");
+    assert_eq!(ProfileKind::ComputeOnly.to_string(), "ComputeOnlyCaps");
+}
+
+#[test]
+fn profile_kind_serde_roundtrip() {
+    let kinds = [
+        ProfileKind::Full,
+        ProfileKind::EngineCore,
+        ProfileKind::Policy,
+        ProfileKind::Remote,
+        ProfileKind::ComputeOnly,
+    ];
+    for kind in &kinds {
+        let json = serde_json::to_string(kind).unwrap();
+        let back: ProfileKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(*kind, back);
+    }
+}
+
+// =========================================================================
+// Section 19: RuntimeCapability Display coverage
+// =========================================================================
+
+#[test]
+fn runtime_capability_display_all_variants() {
+    let expected = [
+        (RuntimeCapability::VmDispatch, "vm_dispatch"),
+        (RuntimeCapability::GcInvoke, "gc_invoke"),
+        (RuntimeCapability::IrLowering, "ir_lowering"),
+        (RuntimeCapability::PolicyRead, "policy_read"),
+        (RuntimeCapability::PolicyWrite, "policy_write"),
+        (RuntimeCapability::EvidenceEmit, "evidence_emit"),
+        (RuntimeCapability::DecisionInvoke, "decision_invoke"),
+        (RuntimeCapability::NetworkEgress, "network_egress"),
+        (RuntimeCapability::LeaseManagement, "lease_management"),
+        (RuntimeCapability::IdempotencyDerive, "idempotency_derive"),
+        (RuntimeCapability::ExtensionLifecycle, "extension_lifecycle"),
+        (RuntimeCapability::HeapAllocate, "heap_allocate"),
+        (RuntimeCapability::EnvRead, "env_read"),
+        (RuntimeCapability::ProcessSpawn, "process_spawn"),
+        (RuntimeCapability::FsRead, "fs_read"),
+        (RuntimeCapability::FsWrite, "fs_write"),
+    ];
+    for (cap, label) in &expected {
+        assert_eq!(cap.to_string(), *label, "Display mismatch for {:?}", cap);
+    }
+}
+
+// =========================================================================
+// Section 20: CapabilityDenied Display format verification
+// =========================================================================
+
+#[test]
+fn capability_denied_display_contains_component_cap_and_profile() {
+    let denied = CapabilityDenied {
+        required: RuntimeCapability::FsWrite,
+        held_profile: ProfileKind::Remote,
+        component: "file-writer".to_string(),
+    };
+    let msg = denied.to_string();
+    assert!(msg.contains("file-writer"), "should contain component name");
+    assert!(msg.contains("fs_write"), "should contain capability name");
+    assert!(msg.contains("RemoteCaps"), "should contain profile kind");
+    assert!(
+        msg.contains("capability denied"),
+        "should start with denial prefix"
+    );
+}
+
+// =========================================================================
+// Section 21: CapabilityProfile has/len/is_empty edge cases
+// =========================================================================
+
+#[test]
+fn policy_profile_has_exactly_policy_capabilities() {
+    let pol = CapabilityProfile::policy();
+    assert_eq!(pol.len(), 4);
+    assert!(!pol.is_empty());
+    assert!(pol.has(RuntimeCapability::PolicyRead));
+    assert!(pol.has(RuntimeCapability::PolicyWrite));
+    assert!(pol.has(RuntimeCapability::EvidenceEmit));
+    assert!(pol.has(RuntimeCapability::DecisionInvoke));
+    // Must NOT have engine, network, or fs caps
+    assert!(!pol.has(RuntimeCapability::VmDispatch));
+    assert!(!pol.has(RuntimeCapability::NetworkEgress));
+    assert!(!pol.has(RuntimeCapability::FsRead));
+}
+
+#[test]
+fn remote_profile_has_exactly_remote_capabilities() {
+    let remote = CapabilityProfile::remote();
+    assert_eq!(remote.len(), 3);
+    assert!(!remote.is_empty());
+    assert!(remote.has(RuntimeCapability::NetworkEgress));
+    assert!(remote.has(RuntimeCapability::LeaseManagement));
+    assert!(remote.has(RuntimeCapability::IdempotencyDerive));
+    // Must NOT have policy, VM, or fs caps
+    assert!(!remote.has(RuntimeCapability::PolicyWrite));
+    assert!(!remote.has(RuntimeCapability::VmDispatch));
+    assert!(!remote.has(RuntimeCapability::FsWrite));
+}
+
+// =========================================================================
+// Section 22: CapabilityProfile subsumption edge cases
+// =========================================================================
+
+#[test]
+fn profile_subsumes_itself() {
+    let profiles = [
+        CapabilityProfile::full(),
+        CapabilityProfile::engine_core(),
+        CapabilityProfile::policy(),
+        CapabilityProfile::remote(),
+        CapabilityProfile::compute_only(),
+    ];
+    for p in &profiles {
+        assert!(p.subsumes(p), "{} should subsume itself", p.kind);
+    }
+}
+
+#[test]
+fn no_narrow_profile_subsumes_full() {
+    let full = CapabilityProfile::full();
+    assert!(!CapabilityProfile::engine_core().subsumes(&full));
+    assert!(!CapabilityProfile::policy().subsumes(&full));
+    assert!(!CapabilityProfile::remote().subsumes(&full));
+    assert!(!CapabilityProfile::compute_only().subsumes(&full));
+}
+
+// =========================================================================
+// Section 23: CapabilityTag clone and equality
+// =========================================================================
+
+#[test]
+fn capability_tag_clone_equals_original() {
+    let tag = CapabilityTag("fs:read".to_string());
+    let cloned = tag.clone();
+    assert_eq!(tag, cloned);
+    assert_eq!(tag.0, cloned.0);
+}
+
+#[test]
+fn capability_tag_different_values_not_equal() {
+    let a = CapabilityTag("fs:read".to_string());
+    let b = CapabilityTag("fs:write".to_string());
+    assert_ne!(a, b);
+}
+
+// =========================================================================
+// Section 24: WitnessEventKind serde roundtrip
+// =========================================================================
+
+#[test]
+fn witness_event_kind_serde_roundtrip() {
+    let kinds = [
+        WitnessEventKind::HostcallDispatched,
+        WitnessEventKind::CapabilityChecked,
+        WitnessEventKind::ExceptionRaised,
+        WitnessEventKind::GcTriggered,
+        WitnessEventKind::ExecutionCompleted,
+    ];
+    for kind in &kinds {
+        let json = serde_json::to_string(kind).unwrap();
+        let back: WitnessEventKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(*kind, back);
+    }
+}
+
+// =========================================================================
+// Section 25: HostcallDecisionRecord denied case
+// =========================================================================
+
+#[test]
+fn hostcall_decision_record_denied_serde_roundtrip() {
+    let record = HostcallDecisionRecord {
+        seq: 7,
+        capability: CapabilityTag("forbidden:op".to_string()),
+        allowed: false,
+        instruction_index: 42,
+    };
+    let json = serde_json::to_string(&record).unwrap();
+    let back: HostcallDecisionRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(record.seq, back.seq);
+    assert_eq!(record.capability, back.capability);
+    assert!(!back.allowed);
+    assert_eq!(record.instruction_index, back.instruction_index);
+}
+
+// =========================================================================
+// Section 26: InterpreterError Display for other variants
+// =========================================================================
+
+#[test]
+fn interpreter_error_display_all_capability_related_variants() {
+    // CapabilityDenied contains the capability name
+    let err = InterpreterError::CapabilityDenied {
+        capability: "custom:cap".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("custom:cap"), "should contain capability name");
+    assert!(
+        msg.contains("capability denied"),
+        "should contain denial prefix"
+    );
+}
+
+// =========================================================================
+// Section 27: EffectBoundary clone and equality
+// =========================================================================
+
+#[test]
+fn effect_boundary_clone_preserves_equality() {
+    let boundaries = [
+        EffectBoundary::Pure,
+        EffectBoundary::ReadEffect,
+        EffectBoundary::WriteEffect,
+        EffectBoundary::NetworkEffect,
+        EffectBoundary::FsEffect,
+        EffectBoundary::HostcallEffect,
+    ];
+    for b in &boundaries {
+        let cloned = *b;
+        assert_eq!(*b, cloned);
+    }
+}
+
+#[test]
+fn effect_boundary_distinct_variants_not_equal() {
+    assert_ne!(EffectBoundary::Pure, EffectBoundary::ReadEffect);
+    assert_ne!(EffectBoundary::ReadEffect, EffectBoundary::WriteEffect);
+    assert_ne!(EffectBoundary::NetworkEffect, EffectBoundary::FsEffect);
+    assert_ne!(EffectBoundary::FsEffect, EffectBoundary::HostcallEffect);
+    assert_ne!(EffectBoundary::Pure, EffectBoundary::HostcallEffect);
+}

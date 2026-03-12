@@ -131,10 +131,12 @@ fn distant_embedding() -> WorkloadEmbedding {
 #[test]
 fn constants_have_expected_properties() {
     assert!(!EMBEDDING_SCHEMA_VERSION.is_empty());
-    assert!(MAX_EMBEDDING_DIM > 0);
-    assert!(MIN_OBSERVATIONS_FOR_EMBEDDING > 0);
-    assert!(DEFAULT_NEIGHBORHOOD_RADIUS > 0);
-    assert!(DEFAULT_COSINE_NEAR_THRESHOLD > 0);
+    const {
+        assert!(MAX_EMBEDDING_DIM > 0);
+        assert!(MIN_OBSERVATIONS_FOR_EMBEDDING > 0);
+        assert!(DEFAULT_NEIGHBORHOOD_RADIUS > 0);
+        assert!(DEFAULT_COSINE_NEAR_THRESHOLD > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

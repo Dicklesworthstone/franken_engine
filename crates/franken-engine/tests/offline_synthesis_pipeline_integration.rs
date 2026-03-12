@@ -773,3 +773,341 @@ fn full_lifecycle() {
     let back: SynthesisOutput = serde_json::from_str(&json).unwrap();
     assert_eq!(back.spec_id, output.spec_id);
 }
+
+// ===========================================================================
+// 16. SynthesisError — additional Display and serde coverage
+// ===========================================================================
+
+#[test]
+fn synthesis_error_infeasible_display_lists_constraint_ids() {
+    let err = SynthesisError::Infeasible {
+        constraint_ids: vec!["c_alpha".into(), "c_beta".into()],
+    };
+    let s = err.to_string();
+    assert!(
+        s.contains("c_alpha"),
+        "expected constraint id c_alpha in: {s}"
+    );
+    assert!(
+        s.contains("c_beta"),
+        "expected constraint id c_beta in: {s}"
+    );
+    assert!(s.contains("infeasible"), "expected 'infeasible' in: {s}");
+}
+
+#[test]
+fn synthesis_error_no_safety_spec_display() {
+    let err = SynthesisError::NoSafetySpec;
+    let s = err.to_string();
+    assert!(
+        s.contains("safety") || s.contains("specification"),
+        "expected safety-related text in: {s}"
+    );
+}
+
+#[test]
+fn synthesis_error_internal_error_display() {
+    let err = SynthesisError::InternalError("something broke".into());
+    let s = err.to_string();
+    assert!(
+        s.contains("something broke"),
+        "expected inner message in: {s}"
+    );
+    assert!(s.contains("internal"), "expected 'internal' in: {s}");
+}
+
+#[test]
+fn synthesis_error_invalid_variable_display() {
+    let err = SynthesisError::InvalidVariable {
+        name: "ghost_var".into(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("ghost_var"), "expected variable name in: {s}");
+}
+
+#[test]
+fn synthesis_error_all_variants_serde_roundtrip() {
+    let variants: Vec<SynthesisError> = vec![
+        SynthesisError::EmptySpec,
+        SynthesisError::InvalidConstraint {
+            id: "c99".into(),
+            reason: "bad coeff".into(),
+        },
+        SynthesisError::Infeasible {
+            constraint_ids: vec!["c1".into(), "c2".into(), "c3".into()],
+        },
+        SynthesisError::BudgetExhausted {
+            stage: PipelineStage::ThresholdCalibration,
+        },
+        SynthesisError::NoSafetySpec,
+        SynthesisError::InvalidVariable { name: "z".into() },
+        SynthesisError::InternalError("oops".into()),
+    ];
+    for err in &variants {
+        let json = serde_json::to_string(err).unwrap();
+        let back: SynthesisError = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, err, "serde roundtrip failed for {err:?}");
+    }
+}
+
+// ===========================================================================
+// 17. StageStatus — all variants serde
+// ===========================================================================
+
+#[test]
+fn stage_status_all_variants_serde() {
+    let variants = vec![
+        StageStatus::Pending,
+        StageStatus::Running,
+        StageStatus::Completed { duration_ms: 42 },
+        StageStatus::Failed {
+            reason: "timeout".into(),
+        },
+        StageStatus::BudgetExhausted,
+    ];
+    for status in &variants {
+        let json = serde_json::to_string(status).unwrap();
+        let back: StageStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, status, "serde roundtrip failed for {status:?}");
+    }
+}
+
+// ===========================================================================
+// 18. OptDirection — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn opt_direction_both_variants_serde() {
+    for dir in [OptDirection::Minimize, OptDirection::Maximize] {
+        let json = serde_json::to_string(&dir).unwrap();
+        let back: OptDirection = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, dir);
+    }
+}
+
+// ===========================================================================
+// 19. ResourceUsage — serde roundtrip and budget_limited flag
+// ===========================================================================
+
+#[test]
+fn resource_usage_serde_roundtrip() {
+    let usage = ResourceUsage {
+        time_ms: 999,
+        iterations: 50_000,
+        memory_bytes: 2_048_000,
+        budget_limited: true,
+    };
+    let json = serde_json::to_string(&usage).unwrap();
+    let back: ResourceUsage = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, usage);
+}
+
+// ===========================================================================
+// 20. Hash determinism — same spec yields identical content hashes
+// ===========================================================================
+
+#[test]
+fn synthesis_content_hashes_are_deterministic_across_runs() {
+    let pipeline = default_pipeline();
+    let spec = minimal_spec();
+
+    let output1 = pipeline.synthesize(&spec).unwrap();
+    let output2 = pipeline.synthesize(&spec).unwrap();
+
+    // Decision table content hashes must match
+    assert_eq!(output1.decision_tables.len(), output2.decision_tables.len());
+    for (t1, t2) in output1
+        .decision_tables
+        .iter()
+        .zip(output2.decision_tables.iter())
+    {
+        assert_eq!(
+            t1.content_hash, t2.content_hash,
+            "decision table hash mismatch"
+        );
+    }
+
+    // Automaton content hashes must match
+    for (a1, a2) in output1.automata.iter().zip(output2.automata.iter()) {
+        assert_eq!(a1.content_hash, a2.content_hash, "automaton hash mismatch");
+    }
+
+    // Threshold bundle content hashes must match
+    for (b1, b2) in output1
+        .threshold_bundles
+        .iter()
+        .zip(output2.threshold_bundles.iter())
+    {
+        assert_eq!(
+            b1.content_hash, b2.content_hash,
+            "threshold bundle hash mismatch"
+        );
+    }
+
+    // Stage witness hashes must match
+    for (w1, w2) in output1
+        .stage_witnesses
+        .iter()
+        .zip(output2.stage_witnesses.iter())
+    {
+        assert_eq!(w1.input_hash, w2.input_hash, "input hash mismatch");
+        assert_eq!(w1.output_hash, w2.output_hash, "output hash mismatch");
+    }
+}
+
+// ===========================================================================
+// 21. DecisionEntry guardrail coherence
+// ===========================================================================
+
+#[test]
+fn decision_entry_guardrail_blocked_uses_safe_default() {
+    let pipeline = default_pipeline();
+    let spec = SynthesisSpec {
+        spec_id: "guardrail-check".into(),
+        variables: vec![bounded_var("x", 0, 1_000_000)],
+        constraints: vec![simple_constraint("cap", "x", 1_000_000, CmpOp::Le, 400_000)],
+        objectives: vec![simple_objective(
+            "obj1",
+            "x",
+            1_000_000,
+            OptDirection::Minimize,
+        )],
+        safety_specs: vec![simple_safety_spec("s1", "x", "x")],
+        epoch: 1,
+    };
+
+    let output = pipeline.synthesize(&spec).unwrap();
+    let table = &output.decision_tables[0];
+
+    for row in &table.rows {
+        if row.entry.guardrail_blocked {
+            // When guardrail fires, action must be the safe default
+            assert_eq!(
+                row.entry.action, "safe_fallback",
+                "guardrail-blocked row should use safe_fallback, got: {}",
+                row.entry.action
+            );
+            // pre_guardrail_action should still reference the objective
+            assert!(
+                row.entry.pre_guardrail_action.contains("obj"),
+                "pre_guardrail_action should reference the objective"
+            );
+        } else {
+            // Non-blocked rows use the objective action
+            assert!(
+                row.entry.action.contains("obj"),
+                "non-blocked entry should use objective action"
+            );
+        }
+    }
+}
+
+// ===========================================================================
+// 22. ObservableState BTreeMap ordering determinism
+// ===========================================================================
+
+#[test]
+fn observable_state_btreemap_ordering_is_deterministic() {
+    // Insert keys in different orders — BTreeMap must produce identical state
+    let mut v1 = BTreeMap::new();
+    v1.insert("z_var".into(), 100_i64);
+    v1.insert("a_var".into(), 200_i64);
+    v1.insert("m_var".into(), 300_i64);
+
+    let mut v2 = BTreeMap::new();
+    v2.insert("m_var".into(), 300_i64);
+    v2.insert("a_var".into(), 200_i64);
+    v2.insert("z_var".into(), 100_i64);
+
+    let s1 = ObservableState { values: v1 };
+    let s2 = ObservableState { values: v2 };
+
+    assert_eq!(s1, s2, "BTreeMap ordering must make states equal");
+
+    // Serde roundtrip should preserve equality
+    let j1 = serde_json::to_string(&s1).unwrap();
+    let j2 = serde_json::to_string(&s2).unwrap();
+    assert_eq!(j1, j2, "serialized form must be identical");
+}
+
+// ===========================================================================
+// 23. LinearConstraint serde roundtrip
+// ===========================================================================
+
+#[test]
+fn linear_constraint_serde_roundtrip() {
+    let c = LinearConstraint {
+        id: "lc-42".into(),
+        terms: vec![
+            LinearTerm {
+                var: "alpha".into(),
+                coeff_millionths: 750_000,
+            },
+            LinearTerm {
+                var: "beta".into(),
+                coeff_millionths: -250_000,
+            },
+        ],
+        op: CmpOp::Ge,
+        rhs_millionths: 100_000,
+        label: "lower bound check".into(),
+    };
+    let json = serde_json::to_string(&c).unwrap();
+    let back: LinearConstraint = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, c);
+}
+
+// ===========================================================================
+// 24. SafetySpec serde roundtrip
+// ===========================================================================
+
+#[test]
+fn safety_spec_serde_roundtrip() {
+    let ss = SafetySpec {
+        id: "ss-7".into(),
+        property: "tail_risk_bound".into(),
+        maximin_value_millionths: 300_000,
+        strategy_vars: vec!["alpha".into(), "beta".into()],
+        adversary_vars: vec!["gamma".into()],
+        cvar_alpha_millionths: 950_000,
+        cvar_bound_millionths: 150_000,
+    };
+    let json = serde_json::to_string(&ss).unwrap();
+    let back: SafetySpec = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ss);
+}
+
+// ===========================================================================
+// 25. PipelineBudget serde roundtrip
+// ===========================================================================
+
+#[test]
+fn pipeline_budget_serde_roundtrip() {
+    let budget = PipelineBudget {
+        max_iterations: 42_000,
+        max_stage_time_ms: 7_500,
+        max_memory_bytes: 64_000_000,
+    };
+    let json = serde_json::to_string(&budget).unwrap();
+    let back: PipelineBudget = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, budget);
+}
+
+// ===========================================================================
+// 26. OfflineSynthesisPipeline serde roundtrip
+// ===========================================================================
+
+#[test]
+fn offline_synthesis_pipeline_serde_roundtrip() {
+    let pipeline = OfflineSynthesisPipeline::new(
+        PipelineBudget {
+            max_iterations: 5_000,
+            max_stage_time_ms: 2_000,
+            max_memory_bytes: 10_000_000,
+        },
+        "emergency_stop".into(),
+    );
+    let json = serde_json::to_string(&pipeline).unwrap();
+    let back: OfflineSynthesisPipeline = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, pipeline);
+}

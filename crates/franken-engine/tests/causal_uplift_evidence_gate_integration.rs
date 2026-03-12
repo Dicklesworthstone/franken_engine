@@ -154,11 +154,13 @@ fn policy_id_format() {
 
 #[test]
 fn threshold_invariants() {
-    assert!(MIN_EFFECT_THRESHOLD > 0);
-    assert!(MIN_IDENTIFICATION_CONFIDENCE > 0);
-    assert!(MIN_IDENTIFICATION_CONFIDENCE <= 1_000_000);
-    assert!(MAX_RELATIVE_CI_WIDTH > 0);
-    assert!(DEFAULT_MAX_BATCH_SIZE > 0);
+    const {
+        assert!(MIN_EFFECT_THRESHOLD > 0);
+        assert!(MIN_IDENTIFICATION_CONFIDENCE > 0);
+        assert!(MIN_IDENTIFICATION_CONFIDENCE <= 1_000_000);
+        assert!(MAX_RELATIVE_CI_WIDTH > 0);
+        assert!(DEFAULT_MAX_BATCH_SIZE > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

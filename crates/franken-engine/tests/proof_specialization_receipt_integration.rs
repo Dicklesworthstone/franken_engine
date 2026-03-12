@@ -226,7 +226,7 @@ fn transformation_witness_identical_digests_error() {
     let hash = ContentHash::compute(b"same");
     let tw = TransformationWitness {
         description: "some transform".to_string(),
-        before_ir_digest: hash.clone(),
+        before_ir_digest: hash,
         after_ir_digest: hash,
     };
     assert_eq!(tw.validate(), Err(ReceiptError::IdenticalIrDigests));

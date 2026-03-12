@@ -529,7 +529,7 @@ fn merkle_root_single_leaf() {
 fn merkle_root_two_leaves_deterministic() {
     let l1 = ContentHash::compute(b"a");
     let l2 = ContentHash::compute(b"b");
-    let root = compute_merkle_root(&[l1.clone(), l2.clone()]);
+    let root = compute_merkle_root(&[l1, l2]);
     let root2 = compute_merkle_root(&[l1, l2]);
     assert_eq!(root, root2);
 }
@@ -538,7 +538,7 @@ fn merkle_root_two_leaves_deterministic() {
 fn merkle_root_order_matters() {
     let l1 = ContentHash::compute(b"a");
     let l2 = ContentHash::compute(b"b");
-    let root1 = compute_merkle_root(&[l1.clone(), l2.clone()]);
+    let root1 = compute_merkle_root(&[l1, l2]);
     let root2 = compute_merkle_root(&[l2, l1]);
     assert_ne!(root1, root2);
 }
@@ -554,7 +554,7 @@ fn merkle_proof_single_leaf_empty() {
 fn merkle_proof_verifies_two_leaves() {
     let l1 = ContentHash::compute(b"a");
     let l2 = ContentHash::compute(b"b");
-    let leaves = [l1.clone(), l2.clone()];
+    let leaves = [l1, l2];
     let root = compute_merkle_root(&leaves);
     let proof = build_merkle_proof(&leaves, 0);
     assert!(verify_merkle_proof(&l1, &proof, &root));

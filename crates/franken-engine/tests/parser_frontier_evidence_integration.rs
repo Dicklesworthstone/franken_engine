@@ -401,3 +401,194 @@ fn bundle_artifact_paths_relative() {
     assert!(!m.artifact_paths.events_jsonl.contains('/'));
     assert!(!m.artifact_paths.commands_txt.contains('/'));
 }
+
+// ── Additional coverage ──
+
+#[test]
+fn expected_parse_outcome_as_str() {
+    assert_eq!(ExpectedParseOutcome::Accepted.as_str(), "accepted");
+    assert_eq!(ExpectedParseOutcome::Rejected.as_str(), "rejected");
+}
+
+#[test]
+fn actual_parse_outcome_serde_roundtrip() {
+    for outcome in [ActualParseOutcome::Accepted, ActualParseOutcome::Rejected] {
+        let json = serde_json::to_string(&outcome).unwrap();
+        let back: ActualParseOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, back);
+    }
+}
+
+#[test]
+fn frontier_verdict_serde_roundtrip() {
+    for v in [FrontierVerdict::Pass, FrontierVerdict::Fail] {
+        let json = serde_json::to_string(&v).unwrap();
+        let back: FrontierVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, back);
+    }
+}
+
+#[test]
+fn artifact_paths_serde_roundtrip() {
+    let paths = FrontierEvidenceArtifactPaths {
+        evidence_inventory: "inv.json".to_string(),
+        run_manifest: "manifest.json".to_string(),
+        events_jsonl: "events.jsonl".to_string(),
+        commands_txt: "commands.txt".to_string(),
+    };
+    let json = serde_json::to_string(&paths).unwrap();
+    let back: FrontierEvidenceArtifactPaths = serde_json::from_str(&json).unwrap();
+    assert_eq!(paths, back);
+}
+
+#[test]
+fn accepted_specimens_have_no_error_code() {
+    let inv = run_frontier_corpus();
+    for ev in &inv.evidence {
+        if ev.actual_outcome == ActualParseOutcome::Accepted {
+            assert!(
+                ev.error_code.is_none(),
+                "accepted specimen {} should not have error_code",
+                ev.specimen_id
+            );
+            assert!(
+                ev.error_message.is_none(),
+                "accepted specimen {} should not have error_message",
+                ev.specimen_id
+            );
+        }
+    }
+}
+
+#[test]
+fn contract_satisfied_false_when_fail_count_positive() {
+    let mut inv = run_frontier_corpus();
+    inv.fail_count = 1;
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn family_coverage_keys_match_as_str() {
+    let inv = run_frontier_corpus();
+    for key in inv.family_coverage.keys() {
+        let matched = ParserFrontierFamily::ALL.iter().any(|f| f.as_str() == key);
+        assert!(matched, "coverage key {:?} not in family ALL", key);
+    }
+}
+
+#[test]
+fn events_mid_lines_are_specimen_evaluated() {
+    let out = unique_temp_dir("pfe-mid-events");
+    let cmds = vec!["test".to_string()];
+    let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
+    let events = fs::read_to_string(&arts.events_path).unwrap();
+    let lines: Vec<&str> = events.lines().collect();
+    // skip first (started) and last (completed)
+    for line in &lines[1..lines.len() - 1] {
+        let ev: FrontierEvidenceEvent = serde_json::from_str(line).unwrap();
+        assert_eq!(ev.event, "specimen_evaluated");
+        assert!(ev.specimen_id.is_some());
+        assert!(ev.verdict.is_some());
+    }
+}
+
+#[test]
+fn manifest_trace_id_contains_hash_prefix() {
+    let out = unique_temp_dir("pfe-trace");
+    let cmds = vec!["test".to_string()];
+    let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
+    let m: FrontierEvidenceRunManifest =
+        serde_json::from_slice(&fs::read(&arts.run_manifest_path).unwrap()).unwrap();
+    assert!(m.trace_id.starts_with("parser-frontier-"));
+    assert!(m.decision_id.starts_with("decision-parser-frontier-"));
+    // trace_id suffix should be the first 12 hex chars of the inventory hash
+    let hash_prefix: String = arts.inventory_hash.chars().take(12).collect();
+    assert!(
+        m.trace_id.ends_with(&hash_prefix),
+        "trace_id {} should end with hash prefix {}",
+        m.trace_id,
+        hash_prefix
+    );
+}
+
+#[test]
+fn inventory_clone_equals_original() {
+    let inv = run_frontier_corpus();
+    let cloned = inv.clone();
+    assert_eq!(inv, cloned);
+}
+
+#[test]
+fn specimen_evidence_clone_equals_original() {
+    let inv = run_frontier_corpus();
+    for ev in &inv.evidence {
+        let cloned = ev.clone();
+        assert_eq!(*ev, cloned);
+    }
+}
+
+#[test]
+fn family_ord_consistent_with_all_ordering() {
+    let all = ParserFrontierFamily::ALL;
+    for i in 0..all.len() {
+        for j in (i + 1)..all.len() {
+            assert!(
+                all[i] < all[j],
+                "ALL ordering broken: {:?} should be < {:?}",
+                all[i],
+                all[j]
+            );
+        }
+    }
+}
+
+#[test]
+fn accepted_specimens_have_nonempty_source() {
+    let corpus = frontier_corpus();
+    for s in &corpus {
+        if s.expected_outcome == ExpectedParseOutcome::Accepted {
+            assert!(
+                !s.source.is_empty(),
+                "accepted specimen {} should have non-empty source",
+                s.specimen_id
+            );
+        }
+    }
+}
+
+#[test]
+fn rejected_specimens_have_error_message() {
+    let inv = run_frontier_corpus();
+    for ev in &inv.evidence {
+        if ev.actual_outcome == ActualParseOutcome::Rejected {
+            assert!(
+                ev.error_message.is_some(),
+                "rejected specimen {} should have error_message",
+                ev.specimen_id
+            );
+            let msg = ev.error_message.as_ref().unwrap();
+            assert!(
+                !msg.is_empty(),
+                "rejected specimen {} error_message should be non-empty",
+                ev.specimen_id
+            );
+        }
+    }
+}
+
+#[test]
+fn manifest_specimen_counts_match_inventory() {
+    let out = unique_temp_dir("pfe-counts-match");
+    let cmds = vec!["test".to_string()];
+    let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
+    let inv: ParserFrontierEvidenceInventory =
+        serde_json::from_slice(&fs::read(&arts.inventory_path).unwrap()).unwrap();
+    let m: FrontierEvidenceRunManifest =
+        serde_json::from_slice(&fs::read(&arts.run_manifest_path).unwrap()).unwrap();
+    assert_eq!(m.specimen_count, inv.specimen_count);
+    assert_eq!(m.pass_count, inv.pass_count);
+    assert_eq!(m.fail_count, inv.fail_count);
+    assert_eq!(m.accepted_count, inv.accepted_count);
+    assert_eq!(m.rejected_count, inv.rejected_count);
+    assert_eq!(m.contract_satisfied, inv.contract_satisfied());
+}

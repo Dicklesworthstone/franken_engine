@@ -110,8 +110,10 @@ fn policy_id_starts_with_rgc() {
 
 #[test]
 fn default_size_divergence_within_scale() {
-    assert!(DEFAULT_MAX_SIZE_DIVERGENCE <= 1_000_000);
-    assert!(DEFAULT_MAX_SIZE_DIVERGENCE > 0);
+    const {
+        assert!(DEFAULT_MAX_SIZE_DIVERGENCE <= 1_000_000);
+        assert!(DEFAULT_MAX_SIZE_DIVERGENCE > 0);
+    }
 }
 
 #[test]

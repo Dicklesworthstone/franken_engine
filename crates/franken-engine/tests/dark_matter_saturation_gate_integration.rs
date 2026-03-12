@@ -139,19 +139,23 @@ fn component_name() {
 
 #[test]
 fn default_thresholds_are_sane() {
-    assert!(DEFAULT_SATURATION_THRESHOLD > 0);
-    assert!(DEFAULT_SATURATION_THRESHOLD <= MILLION);
-    assert!(DEFAULT_MAX_STALENESS_HOURS > 0);
-    assert!(DEFAULT_MIN_BURNDOWN_VELOCITY > 0);
-    assert!(DEFAULT_RATCHET_WIDENING_CEILING > 0);
-    assert!(DEFAULT_RATCHET_WIDENING_CEILING <= MILLION);
-    assert!(DEFAULT_MIN_OBSERVATIONS > 0);
+    const {
+        assert!(DEFAULT_SATURATION_THRESHOLD > 0);
+        assert!(DEFAULT_SATURATION_THRESHOLD <= MILLION);
+        assert!(DEFAULT_MAX_STALENESS_HOURS > 0);
+        assert!(DEFAULT_MIN_BURNDOWN_VELOCITY > 0);
+        assert!(DEFAULT_RATCHET_WIDENING_CEILING > 0);
+        assert!(DEFAULT_RATCHET_WIDENING_CEILING <= MILLION);
+        assert!(DEFAULT_MIN_OBSERVATIONS > 0);
+    }
 }
 
 #[test]
 fn ratchet_ceiling_below_saturation_threshold() {
     // Ratchet widening should be stricter than saturation
-    assert!(DEFAULT_RATCHET_WIDENING_CEILING <= DEFAULT_SATURATION_THRESHOLD);
+    const {
+        assert!(DEFAULT_RATCHET_WIDENING_CEILING <= DEFAULT_SATURATION_THRESHOLD);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -40,13 +40,13 @@ fn test_policy_id() {
 
 #[test]
 fn test_default_min_conformance_in_range() {
-    assert!(DEFAULT_MIN_CONFORMANCE > 0 && DEFAULT_MIN_CONFORMANCE <= 1_000_000);
+    const { assert!(DEFAULT_MIN_CONFORMANCE > 0 && DEFAULT_MIN_CONFORMANCE <= 1_000_000) };
     assert_eq!(DEFAULT_MIN_CONFORMANCE, 900_000);
 }
 
 #[test]
 fn test_default_max_drop_rate_in_range() {
-    assert!(DEFAULT_MAX_DROP_RATE > 0 && DEFAULT_MAX_DROP_RATE <= 1_000_000);
+    const { assert!(DEFAULT_MAX_DROP_RATE > 0 && DEFAULT_MAX_DROP_RATE <= 1_000_000) };
     assert_eq!(DEFAULT_MAX_DROP_RATE, 50_000);
 }
 
@@ -63,7 +63,9 @@ fn test_default_observability_tolerance() {
 #[test]
 fn test_default_min_required_axes() {
     assert_eq!(DEFAULT_MIN_REQUIRED_AXES, 4);
-    assert!(DEFAULT_MIN_REQUIRED_AXES <= ConformanceAxis::ALL.len());
+    const {
+        assert!(DEFAULT_MIN_REQUIRED_AXES <= ConformanceAxis::ALL.len());
+    }
 }
 
 // ============================================================================

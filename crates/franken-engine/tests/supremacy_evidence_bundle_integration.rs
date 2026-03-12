@@ -159,17 +159,23 @@ fn default_coverage_fraction_is_full() {
 
 #[test]
 fn default_max_staleness_positive() {
-    assert!(DEFAULT_MAX_STALENESS_EPOCHS > 0);
+    const {
+        assert!(DEFAULT_MAX_STALENESS_EPOCHS > 0);
+    }
 }
 
 #[test]
 fn max_cells_positive() {
-    assert!(MAX_CELLS_PER_BUNDLE > 0);
+    const {
+        assert!(MAX_CELLS_PER_BUNDLE > 0);
+    }
 }
 
 #[test]
 fn max_block_reasons_positive() {
-    assert!(MAX_BLOCK_REASONS > 0);
+    const {
+        assert!(MAX_BLOCK_REASONS > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1053,7 +1059,7 @@ fn receipt_hash_deterministic() {
     let config = BundleConfig::permissive();
     let bundle = assemble_bundle("rdet", &cells, &config, epoch()).unwrap();
     let genesis = ContentHash::compute(b"genesis");
-    let r1 = DecisionReceipt::new("rdet-001", &bundle, genesis.clone());
+    let r1 = DecisionReceipt::new("rdet-001", &bundle, genesis);
     let r2 = DecisionReceipt::new("rdet-001", &bundle, genesis);
     assert_eq!(r1.receipt_hash, r2.receipt_hash);
 }

@@ -132,11 +132,13 @@ fn policy_id_format() {
 #[test]
 #[allow(clippy::assertions_on_constants)]
 fn threshold_invariants() {
-    assert!(DEFAULT_MAX_CANDIDATES > 0);
-    assert!(DEFAULT_SEARCH_BUDGET > 0);
-    assert!(MAX_COUNTEREXAMPLES > 0);
-    assert!(MIN_SPEEDUP_THRESHOLD > 0);
-    assert!(MIN_SPEEDUP_THRESHOLD < 1_000_000);
+    const {
+        assert!(DEFAULT_MAX_CANDIDATES > 0);
+        assert!(DEFAULT_SEARCH_BUDGET > 0);
+        assert!(MAX_COUNTEREXAMPLES > 0);
+        assert!(MIN_SPEEDUP_THRESHOLD > 0);
+        assert!(MIN_SPEEDUP_THRESHOLD < 1_000_000);
+    }
 }
 
 // ---------------------------------------------------------------------------

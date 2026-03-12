@@ -664,7 +664,10 @@ fn integration_capability_grant_difference_is_empty_for_subset() {
     let compute = CapabilityGrant::compute_only();
     let full = CapabilityGrant::full();
     let diff = compute.difference(&full);
-    assert!(diff.is_empty(), "subset.difference(superset) should be empty");
+    assert!(
+        diff.is_empty(),
+        "subset.difference(superset) should be empty"
+    );
 }
 
 #[test]

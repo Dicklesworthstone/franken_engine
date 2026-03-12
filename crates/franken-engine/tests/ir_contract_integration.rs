@@ -159,13 +159,13 @@ fn make_ir4(ir3_hash: ContentHash) -> Ir4Module {
 fn build_full_pipeline() -> (Ir0Module, Ir1Module, Ir2Module, Ir3Module, Ir4Module) {
     let ir0 = make_ir0();
     let ir0_hash = ir0.content_hash();
-    let ir1 = make_ir1(ir0_hash.clone());
+    let ir1 = make_ir1(ir0_hash);
     let ir1_hash = ir1.content_hash();
-    let ir2 = make_ir2(ir1_hash.clone());
+    let ir2 = make_ir2(ir1_hash);
     let ir2_hash = ir2.content_hash();
-    let ir3 = make_ir3(ir2_hash.clone());
+    let ir3 = make_ir3(ir2_hash);
     let ir3_hash = ir3.content_hash();
-    let ir4 = make_ir4(ir3_hash.clone());
+    let ir4 = make_ir4(ir3_hash);
     (ir0, ir1, ir2, ir3, ir4)
 }
 
@@ -1166,7 +1166,7 @@ fn ir0_serde_roundtrip() {
 #[test]
 fn ir1_construction_sets_header() {
     let source_hash = ContentHash::compute(b"ir0-data");
-    let ir1 = Ir1Module::new(source_hash.clone(), "mod.js");
+    let ir1 = Ir1Module::new(source_hash, "mod.js");
     assert_eq!(ir1.header.level, IrLevel::Ir1);
     assert_eq!(ir1.header.source_hash, Some(source_hash));
     assert_eq!(ir1.header.source_label, "mod.js");
@@ -1177,7 +1177,7 @@ fn ir1_construction_sets_header() {
 #[test]
 fn ir1_canonical_deterministic_with_content() {
     let src = ContentHash::compute(b"test");
-    let a = make_ir1(src.clone());
+    let a = make_ir1(src);
     let b = make_ir1(src);
     assert_eq!(a.canonical_bytes(), b.canonical_bytes());
     assert_eq!(a.content_hash(), b.content_hash());
@@ -1195,7 +1195,7 @@ fn ir1_serde_roundtrip_with_scopes_and_ops() {
 #[test]
 fn ir1_different_ops_produce_different_hashes() {
     let src = ContentHash::compute(b"test");
-    let mut a = Ir1Module::new(src.clone(), "test.js");
+    let mut a = Ir1Module::new(src, "test.js");
     a.ops.push(Ir1Op::Nop);
     let mut b = Ir1Module::new(src, "test.js");
     b.ops.push(Ir1Op::Return);
@@ -1209,7 +1209,7 @@ fn ir1_different_ops_produce_different_hashes() {
 #[test]
 fn ir2_construction_sets_header() {
     let src = ContentHash::compute(b"ir1-data");
-    let ir2 = Ir2Module::new(src.clone(), "cap.js");
+    let ir2 = Ir2Module::new(src, "cap.js");
     assert_eq!(ir2.header.level, IrLevel::Ir2);
     assert_eq!(ir2.header.source_hash, Some(src));
     assert!(ir2.ops.is_empty());
@@ -1219,7 +1219,7 @@ fn ir2_construction_sets_header() {
 #[test]
 fn ir2_canonical_deterministic() {
     let src = ContentHash::compute(b"test");
-    let a = make_ir2(src.clone());
+    let a = make_ir2(src);
     let b = make_ir2(src);
     assert_eq!(a.canonical_bytes(), b.canonical_bytes());
     assert_eq!(a.content_hash(), b.content_hash());
@@ -1237,7 +1237,7 @@ fn ir2_serde_roundtrip() {
 #[test]
 fn ir2_different_effects_produce_different_hashes() {
     let src = ContentHash::compute(b"test");
-    let mut a = Ir2Module::new(src.clone(), "test.js");
+    let mut a = Ir2Module::new(src, "test.js");
     a.ops.push(Ir2Op {
         inner: Ir1Op::Nop,
         effect: EffectBoundary::Pure,
@@ -1261,7 +1261,7 @@ fn ir2_different_effects_produce_different_hashes() {
 #[test]
 fn ir3_construction_sets_header() {
     let src = ContentHash::compute(b"ir2-data");
-    let ir3 = Ir3Module::new(src.clone(), "exec.js");
+    let ir3 = Ir3Module::new(src, "exec.js");
     assert_eq!(ir3.header.level, IrLevel::Ir3);
     assert_eq!(ir3.header.source_hash, Some(src));
     assert!(ir3.instructions.is_empty());
@@ -1274,7 +1274,7 @@ fn ir3_construction_sets_header() {
 #[test]
 fn ir3_canonical_deterministic() {
     let src = ContentHash::compute(b"test");
-    let a = make_ir3(src.clone());
+    let a = make_ir3(src);
     let b = make_ir3(src);
     assert_eq!(a.canonical_bytes(), b.canonical_bytes());
     assert_eq!(a.content_hash(), b.content_hash());
@@ -1327,9 +1327,9 @@ fn ir3_with_capabilities_serde_roundtrip() {
 #[test]
 fn ir4_construction_sets_header() {
     let ir3h = ContentHash::compute(b"ir3-hash");
-    let ir4 = Ir4Module::new(ir3h.clone(), "witness.js");
+    let ir4 = Ir4Module::new(ir3h, "witness.js");
     assert_eq!(ir4.header.level, IrLevel::Ir4);
-    assert_eq!(ir4.header.source_hash, Some(ir3h.clone()));
+    assert_eq!(ir4.header.source_hash, Some(ir3h));
     assert_eq!(ir4.executed_ir3_hash, ir3h);
     assert_eq!(ir4.outcome, ExecutionOutcome::Completed);
     assert!(ir4.events.is_empty());
@@ -1342,7 +1342,7 @@ fn ir4_construction_sets_header() {
 #[test]
 fn ir4_canonical_deterministic() {
     let ir3h = ContentHash::compute(b"ir3");
-    let a = make_ir4(ir3h.clone());
+    let a = make_ir4(ir3h);
     let b = make_ir4(ir3h);
     assert_eq!(a.canonical_bytes(), b.canonical_bytes());
     assert_eq!(a.content_hash(), b.content_hash());
@@ -1360,7 +1360,7 @@ fn ir4_serde_roundtrip() {
 #[test]
 fn ir4_different_outcomes_produce_different_hashes() {
     let ir3h = ContentHash::compute(b"ir3");
-    let mut a = Ir4Module::new(ir3h.clone(), "test.js");
+    let mut a = Ir4Module::new(ir3h, "test.js");
     a.outcome = ExecutionOutcome::Completed;
     let mut b = Ir4Module::new(ir3h, "test.js");
     b.outcome = ExecutionOutcome::Exception;
@@ -1376,7 +1376,7 @@ fn ir4_all_outcome_variants_serde() {
         ExecutionOutcome::Timeout,
         ExecutionOutcome::Halted,
     ] {
-        let mut ir4 = Ir4Module::new(ir3h.clone(), "test.js");
+        let mut ir4 = Ir4Module::new(ir3h, "test.js");
         ir4.outcome = outcome;
         let json = serde_json::to_string(&ir4).unwrap();
         let restored: Ir4Module = serde_json::from_str(&json).unwrap();
@@ -1595,7 +1595,7 @@ fn verify_ir0_hash_different_trees_fail() {
 #[test]
 fn verify_ir1_source_passes_for_matching_hash() {
     let ir0_hash = ContentHash::compute(b"ir0");
-    let ir1 = Ir1Module::new(ir0_hash.clone(), "test.js");
+    let ir1 = Ir1Module::new(ir0_hash, "test.js");
     assert!(verify_ir1_source(&ir1, &ir0_hash).is_ok());
 }
 
@@ -1691,21 +1691,21 @@ fn verify_ir3_specialization_fails_empty_optimization_class() {
 #[test]
 fn verify_ir4_linkage_passes_correct_hash_monotonic_events() {
     let ir3h = ContentHash::compute(b"ir3");
-    let ir4 = make_ir4(ir3h.clone());
+    let ir4 = make_ir4(ir3h);
     assert!(verify_ir4_linkage(&ir4, &ir3h).is_ok());
 }
 
 #[test]
 fn verify_ir4_linkage_passes_empty_events() {
     let ir3h = ContentHash::compute(b"ir3");
-    let ir4 = Ir4Module::new(ir3h.clone(), "test.js");
+    let ir4 = Ir4Module::new(ir3h, "test.js");
     assert!(verify_ir4_linkage(&ir4, &ir3h).is_ok());
 }
 
 #[test]
 fn verify_ir4_linkage_passes_single_event() {
     let ir3h = ContentHash::compute(b"ir3");
-    let mut ir4 = Ir4Module::new(ir3h.clone(), "test.js");
+    let mut ir4 = Ir4Module::new(ir3h, "test.js");
     ir4.events.push(WitnessEvent {
         seq: 0,
         kind: WitnessEventKind::ExecutionCompleted,
@@ -1730,7 +1730,7 @@ fn verify_ir4_linkage_fails_wrong_hash() {
 #[test]
 fn verify_ir4_linkage_fails_non_monotonic_events() {
     let ir3h = ContentHash::compute(b"ir3");
-    let mut ir4 = Ir4Module::new(ir3h.clone(), "test.js");
+    let mut ir4 = Ir4Module::new(ir3h, "test.js");
     ir4.events.push(WitnessEvent {
         seq: 5,
         kind: WitnessEventKind::HostcallDispatched,
@@ -1753,7 +1753,7 @@ fn verify_ir4_linkage_fails_non_monotonic_events() {
 #[test]
 fn verify_ir4_linkage_fails_equal_seq_numbers() {
     let ir3h = ContentHash::compute(b"ir3");
-    let mut ir4 = Ir4Module::new(ir3h.clone(), "test.js");
+    let mut ir4 = Ir4Module::new(ir3h, "test.js");
     ir4.events.push(WitnessEvent {
         seq: 1,
         kind: WitnessEventKind::HostcallDispatched,
@@ -1893,7 +1893,7 @@ fn verifier_verify_ir0_failure_emits_error_event() {
 #[test]
 fn verifier_verify_ir1_success_emits_ok_event() {
     let ir0_hash = ContentHash::compute(b"ir0");
-    let ir1 = Ir1Module::new(ir0_hash.clone(), "test.js");
+    let ir1 = Ir1Module::new(ir0_hash, "test.js");
     let mut verifier = IrVerifier::new();
     verifier.verify_ir1(&ir1, &ir0_hash, "t-ir1").unwrap();
     let events = verifier.drain_events();
@@ -1958,7 +1958,7 @@ fn verifier_verify_ir3_failure_emits_error_event() {
 #[test]
 fn verifier_verify_ir4_success_emits_ok_event() {
     let ir3h = ContentHash::compute(b"ir3");
-    let ir4 = Ir4Module::new(ir3h.clone(), "test.js");
+    let ir4 = Ir4Module::new(ir3h, "test.js");
     let mut verifier = IrVerifier::new();
     verifier.verify_ir4(&ir4, &ir3h, "t-ir4").unwrap();
     let events = verifier.drain_events();
@@ -2218,7 +2218,7 @@ fn ir3_large_constant_pool() {
 #[test]
 fn ir4_many_events_monotonic_verified() {
     let ir3h = ContentHash::compute(b"ir3");
-    let mut ir4 = Ir4Module::new(ir3h.clone(), "many-events.js");
+    let mut ir4 = Ir4Module::new(ir3h, "many-events.js");
     for i in 0..50_u64 {
         ir4.events.push(WitnessEvent {
             seq: i,
@@ -2285,7 +2285,7 @@ fn ir0_is_only_module_without_source_hash() {
 #[test]
 fn capability_tag_flows_from_ir2_to_ir3() {
     let src = ContentHash::compute(b"test");
-    let mut ir2 = Ir2Module::new(src.clone(), "cap-flow.js");
+    let mut ir2 = Ir2Module::new(src, "cap-flow.js");
     let cap = CapabilityTag("net:http".to_string());
     ir2.ops.push(Ir2Op {
         inner: Ir1Op::Call { arg_count: 1 },
@@ -2330,7 +2330,7 @@ fn specialization_linkage_with_multiple_proofs() {
 #[test]
 fn ir4_witness_with_all_event_kinds() {
     let ir3h = ContentHash::compute(b"ir3");
-    let mut ir4 = Ir4Module::new(ir3h.clone(), "all-events.js");
+    let mut ir4 = Ir4Module::new(ir3h, "all-events.js");
     let kinds = [
         WitnessEventKind::HostcallDispatched,
         WitnessEventKind::CapabilityChecked,

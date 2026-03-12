@@ -86,7 +86,7 @@ fn test_bead_id_format() {
 #[test]
 fn test_artifact_id_new_and_fields() {
     let hash = ContentHash::compute(b"module_src");
-    let id = CacheArtifactId::new(hash.clone(), 3, "my_module");
+    let id = CacheArtifactId::new(hash, 3, "my_module");
     assert_eq!(id.source_hash, hash);
     assert_eq!(id.policy_version, 3);
     assert_eq!(id.label, "my_module");

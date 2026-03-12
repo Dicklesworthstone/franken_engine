@@ -764,7 +764,7 @@ fn receipt_seal_is_stable() {
     let ih = ContentHash::compute(b"test");
     let mut r = compute_receipt(&epoch(1), &ih, MembraneVerdict::Healthy, 1000);
     r.seal();
-    let h1 = r.verdict_hash.clone();
+    let h1 = r.verdict_hash;
     r.seal();
     assert_eq!(r.verdict_hash, h1);
 }
@@ -1143,7 +1143,9 @@ fn default_constants() {
     assert_eq!(DEFAULT_MAX_HANDLE_AGE_MICROS, 60_000_000);
     assert_eq!(DEFAULT_FAST_PATH_MAX_LATENCY_MICROS, 1_000);
     assert_eq!(DEFAULT_FALLBACK_THRESHOLD_FAILURES, 5);
-    assert!(CRASH_BREACHED_THRESHOLD < CRASH_SHUTDOWN_THRESHOLD);
+    const {
+        assert!(CRASH_BREACHED_THRESHOLD < CRASH_SHUTDOWN_THRESHOLD);
+    }
 }
 
 // ===========================================================================

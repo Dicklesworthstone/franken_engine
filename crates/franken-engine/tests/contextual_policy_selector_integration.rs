@@ -106,8 +106,10 @@ fn policy_id_format() {
 
 #[test]
 fn budget_constraints() {
-    assert!(DEFAULT_EXPLORATION_BUDGET > 0);
-    assert!(MAX_REGRET_BUDGET > DEFAULT_EXPLORATION_BUDGET);
+    const {
+        assert!(DEFAULT_EXPLORATION_BUDGET > 0);
+        assert!(MAX_REGRET_BUDGET > DEFAULT_EXPLORATION_BUDGET);
+    }
 }
 
 // ---------------------------------------------------------------------------

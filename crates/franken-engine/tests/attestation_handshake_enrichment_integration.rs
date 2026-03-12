@@ -177,7 +177,7 @@ fn error_display_challenge_signature_invalid() {
 fn error_display_measurement_not_approved() {
     let h = ContentHash::compute(b"test");
     let e = HandshakeError::MeasurementNotApproved {
-        measurement_hash: h.clone(),
+        measurement_hash: h,
     };
     let s = e.to_string();
     assert!(s.starts_with("measurement not approved: "), "got: {s}");
@@ -555,8 +555,8 @@ fn challenge_carries_approved_measurements() {
     let mut v = verifier();
     let h1 = ContentHash::compute(b"measure-1");
     let h2 = ContentHash::compute(b"measure-2");
-    v.approve_measurement(h1.clone());
-    v.approve_measurement(h2.clone());
+    v.approve_measurement(h1);
+    v.approve_measurement(h2);
 
     let challenge = v.generate_challenge([1u8; 32], 1000, 5000).unwrap();
     assert!(challenge.approved_measurements.contains(&h1));

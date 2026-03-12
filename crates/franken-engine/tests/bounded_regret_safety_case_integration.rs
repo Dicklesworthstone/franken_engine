@@ -103,11 +103,13 @@ fn constants_policy_id() {
 
 #[test]
 fn constants_defaults_positive() {
-    assert!(DEFAULT_CUMULATIVE_BUDGET > 0);
-    assert!(DEFAULT_PER_STEP_BUDGET > 0);
-    assert!(DEFAULT_DECAY_RATE > 0);
-    assert!(DEFAULT_MIN_STABILITY_STEPS > 0);
-    assert!(DEFAULT_MAX_ACTIVE_OVERRIDES > 0);
+    const {
+        assert!(DEFAULT_CUMULATIVE_BUDGET > 0);
+        assert!(DEFAULT_PER_STEP_BUDGET > 0);
+        assert!(DEFAULT_DECAY_RATE > 0);
+        assert!(DEFAULT_MIN_STABILITY_STEPS > 0);
+        assert!(DEFAULT_MAX_ACTIVE_OVERRIDES > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,8 +252,8 @@ fn accounting_violation_tracking() {
     a.record_step(DEFAULT_PER_STEP_BUDGET); // at limit, not violation
     a.record_step(DEFAULT_PER_STEP_BUDGET + 1); // violation
     assert_eq!(a.violations, 1);
-    assert!(a.entries[0].was_violation == false);
-    assert!(a.entries[1].was_violation == true);
+    assert!(!a.entries[0].was_violation);
+    assert!(a.entries[1].was_violation);
 }
 
 #[test]

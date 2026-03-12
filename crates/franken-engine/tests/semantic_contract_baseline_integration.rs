@@ -805,3 +805,1018 @@ fn full_lifecycle_corpus_to_drift_detection() {
     let json = serde_json::to_string(&detector).unwrap();
     let _back: DriftDetector = serde_json::from_str(&json).unwrap();
 }
+
+// ===========================================================================
+// 15. FixtureCategory — serde all 12 variants
+// ===========================================================================
+
+#[test]
+fn fixture_category_serde_all_12_variants() {
+    let all = [
+        FixtureCategory::HookState,
+        FixtureCategory::HookEffect,
+        FixtureCategory::HookMemo,
+        FixtureCategory::HookRef,
+        FixtureCategory::HookReducer,
+        FixtureCategory::HookContext,
+        FixtureCategory::ConcurrentRendering,
+        FixtureCategory::Suspense,
+        FixtureCategory::ErrorBoundary,
+        FixtureCategory::Hydration,
+        FixtureCategory::Portal,
+        FixtureCategory::RefEdgeCase,
+    ];
+    for cat in &all {
+        let json = serde_json::to_string(cat).unwrap();
+        let back: FixtureCategory = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, cat);
+    }
+    // Verify count matches expectations
+    assert_eq!(all.len(), 12);
+}
+
+// ===========================================================================
+// 16. MutationKind — serde all 6 variants
+// ===========================================================================
+
+#[test]
+fn mutation_kind_serde_all_variants() {
+    let all = [
+        MutationKind::SetAttribute,
+        MutationKind::RemoveAttribute,
+        MutationKind::AppendChild,
+        MutationKind::RemoveChild,
+        MutationKind::SetTextContent,
+        MutationKind::InsertBefore,
+    ];
+    for kind in &all {
+        let json = serde_json::to_string(kind).unwrap();
+        let back: MutationKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, kind);
+    }
+    assert_eq!(all.len(), 6);
+}
+
+// ===========================================================================
+// 17. DomMutation / TraceFixture serde
+// ===========================================================================
+
+#[test]
+fn dom_mutation_serde_roundtrip() {
+    let dm = DomMutation {
+        target_path: "/div[0]/span[1]".into(),
+        kind: MutationKind::AppendChild,
+        value: "new-child".into(),
+    };
+    let json = serde_json::to_string(&dm).unwrap();
+    let back: DomMutation = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, dm);
+}
+
+#[test]
+fn trace_fixture_serde_roundtrip() {
+    let f = test_fixture("roundtrip-fix", FixtureCategory::Suspense);
+    let json = serde_json::to_string(&f).unwrap();
+    let back: TraceFixture = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, f);
+}
+
+// ===========================================================================
+// 18. CompatibilityCorpus — edge cases
+// ===========================================================================
+
+#[test]
+fn corpus_duplicate_fixture_rejected() {
+    let mut c = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
+    let f = test_fixture("dup", FixtureCategory::HookState);
+    c.add_fixture(f.clone()).unwrap();
+    let err = c.add_fixture(f).unwrap_err();
+    assert!(matches!(err, FoundationError::DuplicateFixture));
+}
+
+#[test]
+fn corpus_freeze_empty_fails() {
+    let mut c = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
+    let err = c.freeze().unwrap_err();
+    assert!(matches!(err, FoundationError::EmptyCorpus));
+}
+
+#[test]
+fn corpus_freeze_twice_fails() {
+    let mut c = test_corpus();
+    c.freeze().unwrap();
+    let err = c.freeze().unwrap_err();
+    assert!(matches!(err, FoundationError::CorpusAlreadyFrozen));
+}
+
+#[test]
+fn corpus_coverage_empty_is_zero() {
+    let c = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
+    assert_eq!(c.coverage_score_millionths(), 0);
+}
+
+#[test]
+fn corpus_weighted_priority_score_empty_is_zero() {
+    let c = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
+    assert_eq!(c.weighted_priority_score_millionths(), 0);
+}
+
+#[test]
+fn corpus_weighted_priority_score_single_critical() {
+    let mut c = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
+    let mut f = test_fixture("crit", FixtureCategory::HookState);
+    f.priority = FixturePriority::Critical;
+    c.add_fixture(f).unwrap();
+    assert_eq!(c.weighted_priority_score_millionths(), 1_000_000);
+}
+
+#[test]
+fn corpus_hash_changes_on_add() {
+    let mut c = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
+    let h1 = c.corpus_hash;
+    c.add_fixture(test_fixture("change-hash", FixtureCategory::Portal))
+        .unwrap();
+    assert_ne!(c.corpus_hash, h1);
+}
+
+// ===========================================================================
+// 19. EffectKind / EffectTiming / SideEffectBoundary / DeterminismLevel serde
+// ===========================================================================
+
+#[test]
+fn effect_kind_serde_all_6_variants() {
+    let all = [
+        EffectKind::DomMutation,
+        EffectKind::NetworkIo,
+        EffectKind::TimerSetup,
+        EffectKind::StateUpdate,
+        EffectKind::Subscription,
+        EffectKind::CustomEffect,
+    ];
+    for kind in &all {
+        let json = serde_json::to_string(kind).unwrap();
+        let back: EffectKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, kind);
+    }
+    assert_eq!(all.len(), 6);
+}
+
+#[test]
+fn effect_timing_serde_all_4_variants() {
+    use frankenengine_engine::semantic_contract_baseline::EffectTiming;
+    let all = [
+        EffectTiming::AfterRender,
+        EffectTiming::BeforePaint,
+        EffectTiming::Synchronous,
+        EffectTiming::Deferred,
+    ];
+    for t in &all {
+        let json = serde_json::to_string(t).unwrap();
+        let back: EffectTiming = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, t);
+    }
+    assert_eq!(all.len(), 4);
+}
+
+#[test]
+fn side_effect_boundary_serde_all_3_variants() {
+    for b in [
+        SideEffectBoundary::Contained,
+        SideEffectBoundary::Leaks,
+        SideEffectBoundary::Unknown,
+    ] {
+        let json = serde_json::to_string(&b).unwrap();
+        let back: SideEffectBoundary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, b);
+    }
+}
+
+#[test]
+fn determinism_level_serde_all_3_variants() {
+    use frankenengine_engine::semantic_contract_baseline::DeterminismLevel;
+    let all = [
+        DeterminismLevel::FullyDeterministic,
+        DeterminismLevel::OrderDeterministic,
+        DeterminismLevel::Nondeterministic,
+    ];
+    for d in &all {
+        let json = serde_json::to_string(d).unwrap();
+        let back: DeterminismLevel = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, d);
+    }
+}
+
+// ===========================================================================
+// 20. HookKind — all 10 variants (existing test covers only 6)
+// ===========================================================================
+
+#[test]
+fn hook_kind_serde_all_10_variants() {
+    let all = [
+        HookKind::UseState,
+        HookKind::UseEffect,
+        HookKind::UseMemo,
+        HookKind::UseRef,
+        HookKind::UseReducer,
+        HookKind::UseContext,
+        HookKind::UseCallback,
+        HookKind::UseLayoutEffect,
+        HookKind::UseImperativeHandle,
+        HookKind::UseDebugValue,
+    ];
+    for k in &all {
+        let json = serde_json::to_string(k).unwrap();
+        let back: HookKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, k);
+    }
+    assert_eq!(all.len(), 10);
+}
+
+// ===========================================================================
+// 21. InvocationRule / CleanupPolicy serde
+// ===========================================================================
+
+#[test]
+fn invocation_rule_serde_all_5_variants() {
+    use frankenengine_engine::semantic_contract_baseline::InvocationRule;
+    let all = [
+        InvocationRule::MustBeTopLevel,
+        InvocationRule::MustNotBeConditional,
+        InvocationRule::MustNotBeInLoop,
+        InvocationRule::MustBeInFunctionComponent,
+        InvocationRule::OrderPreservedAcrossRenders,
+    ];
+    for r in &all {
+        let json = serde_json::to_string(r).unwrap();
+        let back: InvocationRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, r);
+    }
+}
+
+#[test]
+fn cleanup_policy_serde_all_4_variants() {
+    use frankenengine_engine::semantic_contract_baseline::CleanupPolicy;
+    let all = [
+        CleanupPolicy::RunOnUnmount,
+        CleanupPolicy::RunBeforeRerun,
+        CleanupPolicy::NoCleanup,
+        CleanupPolicy::ConditionalCleanup,
+    ];
+    for p in &all {
+        let json = serde_json::to_string(p).unwrap();
+        let back: CleanupPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, p);
+    }
+}
+
+// ===========================================================================
+// 22. OrderingConstraint / ForbiddenPattern serde
+// ===========================================================================
+
+#[test]
+fn ordering_constraint_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::OrderingConstraint;
+    let oc = OrderingConstraint {
+        before: "useState".into(),
+        after: "useEffect".into(),
+        strict: true,
+    };
+    let json = serde_json::to_string(&oc).unwrap();
+    let back: OrderingConstraint = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, oc);
+}
+
+#[test]
+fn forbidden_pattern_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::ForbiddenPattern;
+    let fp = ForbiddenPattern {
+        description: "Conditional hook invocation".into(),
+        pattern_hash: ContentHash::compute(b"conditional_hook"),
+        severity: ViolationSeverity::Fatal,
+    };
+    let json = serde_json::to_string(&fp).unwrap();
+    let back: ForbiddenPattern = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, fp);
+}
+
+// ===========================================================================
+// 23. EffectSemanticContract — is_deterministic
+// ===========================================================================
+
+#[test]
+fn effect_contract_fully_deterministic_is_deterministic() {
+    let c = EffectSemanticContract::canonical_dom_mutation();
+    assert!(c.is_deterministic());
+}
+
+#[test]
+fn effect_contract_nondeterministic_network_io() {
+    use frankenengine_engine::semantic_contract_baseline::{DeterminismLevel, EffectTiming};
+    let c = EffectSemanticContract {
+        effect_kind: EffectKind::NetworkIo,
+        timing: EffectTiming::Deferred,
+        capability_requirements: vec!["network.fetch".into()],
+        side_effect_boundary: SideEffectBoundary::Leaks,
+        determinism_guarantee: DeterminismLevel::Nondeterministic,
+    };
+    assert!(!c.is_deterministic());
+}
+
+// ===========================================================================
+// 24. AdjudicationCategory / AdjudicationResolution serde
+// ===========================================================================
+
+#[test]
+fn adjudication_category_serde_all_5_variants() {
+    use frankenengine_engine::semantic_contract_baseline::AdjudicationCategory;
+    let all = [
+        AdjudicationCategory::AmbiguousOrdering,
+        AdjudicationCategory::UndefinedEdgeCase,
+        AdjudicationCategory::VersionConflict,
+        AdjudicationCategory::PlatformDivergence,
+        AdjudicationCategory::SpecGap,
+    ];
+    for c in &all {
+        let json = serde_json::to_string(c).unwrap();
+        let back: AdjudicationCategory = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, c);
+    }
+}
+
+#[test]
+fn adjudication_resolution_serde_all_4_variants() {
+    use frankenengine_engine::semantic_contract_baseline::AdjudicationResolution;
+    let all = [
+        AdjudicationResolution::PreferReactBehavior,
+        AdjudicationResolution::PreferDeterministic,
+        AdjudicationResolution::PreferConservative,
+        AdjudicationResolution::RequireExplicitFallback,
+    ];
+    for r in &all {
+        let json = serde_json::to_string(r).unwrap();
+        let back: AdjudicationResolution = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, r);
+    }
+}
+
+// ===========================================================================
+// 25. AdjudicationRule — serde + hash
+// ===========================================================================
+
+#[test]
+fn adjudication_rule_serde_and_hash() {
+    use frankenengine_engine::semantic_contract_baseline::{
+        AdjudicationCategory, AdjudicationResolution, AdjudicationRule,
+    };
+    let rule = AdjudicationRule {
+        id: fixture_id_for("adj-rule-1"),
+        name: "ordering-ambiguity-setState".into(),
+        category: AdjudicationCategory::AmbiguousOrdering,
+        condition: "setState called during render phase".into(),
+        resolution: AdjudicationResolution::PreferReactBehavior,
+        rationale: "React batches setState calls inside event handlers".into(),
+        precedent_fixture_ids: vec![fixture_id_for("precedent-1")],
+    };
+    let json = serde_json::to_string(&rule).unwrap();
+    let back: AdjudicationRule = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, rule);
+
+    // Hash is deterministic
+    assert_eq!(rule.rule_hash(), rule.rule_hash());
+}
+
+// ===========================================================================
+// 26. ContractPackage — adjudication, freeze empty, validate
+// ===========================================================================
+
+#[test]
+fn contract_package_add_adjudication_rule() {
+    use frankenengine_engine::semantic_contract_baseline::{
+        AdjudicationCategory, AdjudicationResolution, AdjudicationRule,
+    };
+    let corpus = test_corpus();
+    let mut pkg = ContractPackage::new(corpus).unwrap();
+    let rule = AdjudicationRule {
+        id: fixture_id_for("adj-test"),
+        name: "test-rule".into(),
+        category: AdjudicationCategory::SpecGap,
+        condition: "spec unclear".into(),
+        resolution: AdjudicationResolution::PreferConservative,
+        rationale: "conservative approach".into(),
+        precedent_fixture_ids: vec![],
+    };
+    pkg.add_adjudication_rule(rule).unwrap();
+    let v = pkg.validate().unwrap();
+    assert_eq!(v.adjudication_rule_count, 1);
+}
+
+#[test]
+fn contract_package_freeze_empty_fails() {
+    let corpus = test_corpus();
+    let pkg = ContractPackage::new(corpus).unwrap();
+    // Package has no contracts, so freeze should fail
+    let mut pkg = pkg;
+    let err = pkg.freeze(100).unwrap_err();
+    assert!(matches!(err, FoundationError::EmptyPackage));
+}
+
+#[test]
+fn contract_package_validate_low_coverage_warns() {
+    let corpus = test_corpus(); // Only 2 categories covered out of 12
+    let mut pkg = ContractPackage::new(corpus).unwrap();
+    pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
+        .unwrap();
+    let v = pkg.validate().unwrap();
+    assert!(v.coverage_millionths < 500_000);
+    assert!(!v.warnings.is_empty());
+}
+
+#[test]
+fn contract_package_validate_nondeterministic_warns() {
+    use frankenengine_engine::semantic_contract_baseline::{DeterminismLevel, EffectTiming};
+    let corpus = test_corpus();
+    let mut pkg = ContractPackage::new(corpus).unwrap();
+    pkg.add_effect_contract(EffectSemanticContract {
+        effect_kind: EffectKind::NetworkIo,
+        timing: EffectTiming::Deferred,
+        capability_requirements: vec!["net".into()],
+        side_effect_boundary: SideEffectBoundary::Leaks,
+        determinism_guarantee: DeterminismLevel::Nondeterministic,
+    })
+    .unwrap();
+    let v = pkg.validate().unwrap();
+    assert!(v.warnings.iter().any(|w| w.contains("non-deterministic")));
+}
+
+#[test]
+fn package_validation_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::PackageValidation;
+    let corpus = test_corpus();
+    let mut pkg = ContractPackage::new(corpus).unwrap();
+    pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
+        .unwrap();
+    let v = pkg.validate().unwrap();
+    let json = serde_json::to_string(&v).unwrap();
+    let back: PackageValidation = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, v);
+}
+
+// ===========================================================================
+// 27. DriftKind — all 7 variants serde (existing covers only 4)
+// ===========================================================================
+
+#[test]
+fn drift_kind_serde_all_7_variants() {
+    let all = [
+        DriftKind::SemanticRegression,
+        DriftKind::OrderingViolation,
+        DriftKind::EffectBoundaryLeak,
+        DriftKind::HookContractBreach,
+        DriftKind::AdjudicationOverride,
+        DriftKind::CorpusCoverageDrop,
+        DriftKind::VersionIncompatibility,
+    ];
+    for k in &all {
+        let json = serde_json::to_string(k).unwrap();
+        let back: DriftKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, k);
+    }
+    assert_eq!(all.len(), 7);
+}
+
+// ===========================================================================
+// 28. DriftAlert / DriftSummary serde
+// ===========================================================================
+
+#[test]
+fn drift_alert_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::DriftAlert;
+    let alert = DriftAlert {
+        id: fixture_id_for("alert-1"),
+        kind: DriftKind::EffectBoundaryLeak,
+        severity: ViolationSeverity::Error,
+        source_lane: ConsumerLane::Runtime,
+        violated_contract_hash: Some(ContentHash::compute(b"contract")),
+        description: "effect leaks side effects".into(),
+        detected_epoch: 42,
+        evidence_hash: ContentHash::compute(b"evidence"),
+    };
+    let json = serde_json::to_string(&alert).unwrap();
+    let back: DriftAlert = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, alert);
+}
+
+#[test]
+fn drift_summary_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::DriftSummary;
+    let mut detector = DriftDetector::new(test_baseline());
+    detector.check_hook_ordering(&HookKind::UseState, true, ConsumerLane::Compiler, 300);
+    let summary = detector.summary();
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: DriftSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, summary);
+}
+
+// ===========================================================================
+// 29. DriftDetector — sensitivity, threshold
+// ===========================================================================
+
+#[test]
+fn drift_detector_with_sensitivity() {
+    let detector = DriftDetector::new(test_baseline()).with_sensitivity(100_000);
+    assert_eq!(detector.sensitivity_threshold_millionths, 100_000);
+}
+
+#[test]
+fn drift_detector_exceeds_threshold_with_fatal() {
+    let mut detector = DriftDetector::new(test_baseline()).with_sensitivity(0);
+    // Trigger a Fatal alert via conditional hook ordering
+    detector.check_hook_ordering(&HookKind::UseState, true, ConsumerLane::Compiler, 300);
+    // With sensitivity 0, any fatal alert should exceed threshold
+    assert!(detector.exceeds_threshold());
+}
+
+#[test]
+fn drift_detector_not_exceeds_threshold_no_alerts() {
+    let detector = DriftDetector::new(test_baseline());
+    assert!(!detector.exceeds_threshold());
+}
+
+#[test]
+fn drift_detector_check_trace_unknown_fixture() {
+    let mut detector = DriftDetector::new(test_baseline());
+    let unknown_id = fixture_id_for("totally-unknown-fixture");
+    let hash = ContentHash::compute(b"any");
+    let alert = detector.check_trace_compliance(&unknown_id, &hash, ConsumerLane::Compiler, 200);
+    assert!(alert.is_none(), "unknown fixture should return None");
+}
+
+#[test]
+fn drift_detector_check_trace_matching_hash_no_alert() {
+    let mut detector = DriftDetector::new(test_baseline());
+    let id = fixture_id_for("hook-state-basic");
+    let expected_hash = ContentHash::compute("hook-state-basic-trace".as_bytes());
+    let alert = detector.check_trace_compliance(&id, &expected_hash, ConsumerLane::Compiler, 200);
+    assert!(alert.is_none(), "matching trace should not produce alert");
+}
+
+#[test]
+fn drift_detector_check_effect_boundary_contained_no_alert() {
+    let mut detector = DriftDetector::new(test_baseline());
+    let alert = detector.check_effect_boundary(
+        &EffectKind::DomMutation,
+        &SideEffectBoundary::Contained,
+        ConsumerLane::Runtime,
+        200,
+    );
+    assert!(alert.is_none());
+}
+
+#[test]
+fn drift_detector_check_hook_non_conditional_no_alert() {
+    let mut detector = DriftDetector::new(test_baseline());
+    let alert = detector.check_hook_ordering(
+        &HookKind::UseState,
+        false, // not conditional
+        ConsumerLane::Compiler,
+        200,
+    );
+    assert!(alert.is_none());
+}
+
+// ===========================================================================
+// 30. FoundationError — all 13 variants display + serde
+// ===========================================================================
+
+#[test]
+fn foundation_error_all_13_variants_display() {
+    let errors = [
+        FoundationError::CorpusAlreadyFrozen,
+        FoundationError::CorpusCapacityExceeded,
+        FoundationError::DuplicateFixture,
+        FoundationError::EmptyCorpus,
+        FoundationError::EmptyPackage,
+        FoundationError::PackageAlreadyFrozen,
+        FoundationError::PackageNotFound,
+        FoundationError::BaselineNotFound,
+        FoundationError::ContractCapacityExceeded,
+        FoundationError::AdjudicationCapacityExceeded,
+        FoundationError::NoConsumerLanes,
+        FoundationError::InvalidContract("test detail".into()),
+        FoundationError::IncompatibleVersion,
+    ];
+    for e in &errors {
+        let s = e.to_string();
+        assert!(
+            !s.is_empty(),
+            "error {:?} should have a non-empty Display",
+            e
+        );
+    }
+    assert_eq!(errors.len(), 13);
+}
+
+#[test]
+fn foundation_error_serde_all_variants() {
+    let errors = [
+        FoundationError::CorpusAlreadyFrozen,
+        FoundationError::CorpusCapacityExceeded,
+        FoundationError::DuplicateFixture,
+        FoundationError::EmptyCorpus,
+        FoundationError::EmptyPackage,
+        FoundationError::PackageAlreadyFrozen,
+        FoundationError::PackageNotFound,
+        FoundationError::BaselineNotFound,
+        FoundationError::ContractCapacityExceeded,
+        FoundationError::AdjudicationCapacityExceeded,
+        FoundationError::NoConsumerLanes,
+        FoundationError::InvalidContract("test".into()),
+        FoundationError::IncompatibleVersion,
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: FoundationError = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, e);
+    }
+}
+
+#[test]
+fn foundation_error_invalid_contract_contains_message() {
+    let err = FoundationError::InvalidContract("bad hook rule".into());
+    assert!(err.to_string().contains("bad hook rule"));
+}
+
+// ===========================================================================
+// 31. FoundationEvent serde
+// ===========================================================================
+
+#[test]
+fn foundation_event_serde_all_variants() {
+    use frankenengine_engine::semantic_contract_baseline::FoundationEvent;
+    let events = [
+        FoundationEvent::CorpusCreated {
+            version: SemanticContractVersion::CURRENT,
+            epoch: 1,
+        },
+        FoundationEvent::FixtureAdded {
+            fixture_name: "f1".into(),
+            category: FixtureCategory::HookState,
+            priority: FixturePriority::Critical,
+        },
+        FoundationEvent::CorpusFrozen {
+            fixture_count: 5,
+            corpus_hash: ContentHash::compute(b"corpus"),
+        },
+        FoundationEvent::PackageCreated {
+            version: SemanticContractVersion::CURRENT,
+        },
+        FoundationEvent::ContractAdded {
+            contract_type: "hook".into(),
+        },
+        FoundationEvent::PackageFrozen {
+            epoch: 100,
+            package_hash: ContentHash::compute(b"pkg"),
+        },
+        FoundationEvent::BaselineFrozen {
+            cut_line_id: "cut-1".into(),
+            epoch: 200,
+            baseline_hash: ContentHash::compute(b"bl"),
+        },
+        FoundationEvent::DriftDetected {
+            kind: DriftKind::SemanticRegression,
+            severity: ViolationSeverity::Error,
+            lane: ConsumerLane::Runtime,
+        },
+    ];
+    for event in &events {
+        let json = serde_json::to_string(event).unwrap();
+        let back: FoundationEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, event);
+    }
+    assert_eq!(events.len(), 8);
+}
+
+// ===========================================================================
+// 32. SemanticContractFoundation — Default, latest_*
+// ===========================================================================
+
+#[test]
+fn foundation_default_trait() {
+    let f: SemanticContractFoundation = Default::default();
+    let f2 = SemanticContractFoundation::new();
+    assert_eq!(f, f2);
+}
+
+#[test]
+fn foundation_latest_baseline_none_when_empty() {
+    let f = SemanticContractFoundation::new();
+    assert!(f.latest_baseline().is_none());
+}
+
+#[test]
+fn foundation_latest_package_none_when_empty() {
+    let f = SemanticContractFoundation::new();
+    assert!(f.latest_package().is_none());
+}
+
+#[test]
+fn foundation_latest_baseline_returns_last() {
+    let mut f = SemanticContractFoundation::new();
+    let corpus = test_corpus();
+    let mut pkg = ContractPackage::new(corpus).unwrap();
+    pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
+        .unwrap();
+    f.register_package(pkg);
+    f.freeze_baseline(0, "cut-a".into(), 100, vec![ConsumerLane::Compiler])
+        .unwrap();
+    assert!(f.latest_baseline().is_some());
+    assert_eq!(f.latest_baseline().unwrap().cut_line_id, "cut-a");
+}
+
+#[test]
+fn foundation_latest_package_returns_last() {
+    let mut f = SemanticContractFoundation::new();
+    let corpus = test_corpus();
+    let pkg = ContractPackage::new(corpus).unwrap();
+    f.register_package(pkg);
+    assert!(f.latest_package().is_some());
+}
+
+#[test]
+fn foundation_package_not_found_error() {
+    let mut f = SemanticContractFoundation::new();
+    let err = f
+        .freeze_baseline(99, "bad".into(), 100, vec![ConsumerLane::Compiler])
+        .unwrap_err();
+    assert!(matches!(err, FoundationError::PackageNotFound));
+}
+
+#[test]
+fn foundation_baseline_not_found_error() {
+    let mut f = SemanticContractFoundation::new();
+    let err = f.activate_drift_detection(99).unwrap_err();
+    assert!(matches!(err, FoundationError::BaselineNotFound));
+}
+
+// ===========================================================================
+// 33. FrozenBaseline — no lanes error
+// ===========================================================================
+
+#[test]
+fn frozen_baseline_no_lanes_fails() {
+    let corpus = test_corpus();
+    let mut pkg = ContractPackage::new(corpus).unwrap();
+    pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
+        .unwrap();
+    let err = FrozenBaseline::create(pkg, "cut-fail".into(), 100, vec![]).unwrap_err();
+    assert!(matches!(err, FoundationError::NoConsumerLanes));
+}
+
+// ===========================================================================
+// 34. LocalSemanticAtlas — debt, blocking, validate
+// ===========================================================================
+
+#[test]
+fn atlas_quality_debt_missing_fixture_and_trace() {
+    // An entry with empty fixture_refs and trace_refs should generate blocking debt
+    let inputs = vec![LocalSemanticAtlasInput {
+        component: frankenengine_engine::static_analysis_graph::ComponentDescriptor {
+            id: frankenengine_engine::static_analysis_graph::ComponentId::new("src/Debt.tsx"),
+            is_function_component: true,
+            module_path: "src/Debt.tsx".into(),
+            export_name: Some("Debt".into()),
+            hook_slots: vec![frankenengine_engine::static_analysis_graph::HookSlot {
+                slot_index: 0,
+                kind: frankenengine_engine::static_analysis_graph::HookKind::State,
+                label: "useState".into(),
+                dependency_count: None,
+                has_cleanup: false,
+                source_offset: 0,
+                dependency_hash: None,
+            }],
+            props: BTreeMap::new(),
+            consumed_contexts: vec![],
+            provided_contexts: vec![],
+            capability_boundary:
+                frankenengine_engine::static_analysis_graph::CapabilityBoundary::pure_component(),
+            is_pure: false,
+            content_hash: ContentHash::compute(b"Debt"),
+            children: vec![],
+        },
+        fixture_refs: vec![], // empty -> debt
+        trace_refs: vec![],   // empty -> debt
+        assumption_keys: vec![],
+    }];
+    let atlas = LocalSemanticAtlas::from_inputs(SemanticContractVersion::CURRENT, 1, inputs);
+    assert!(atlas.blocking_debt_count() > 0);
+    let v = atlas.validate();
+    assert!(!v.is_valid); // blocking debt makes it invalid
+    assert!(v.blocking_debt_count > 0);
+}
+
+#[test]
+fn atlas_validate_empty_warns() {
+    let atlas = LocalSemanticAtlas::from_inputs(SemanticContractVersion::CURRENT, 1, vec![]);
+    let v = atlas.validate();
+    assert!(!v.warnings.is_empty());
+    assert!(
+        v.warnings
+            .iter()
+            .any(|w| w.contains("no component entries"))
+    );
+}
+
+#[test]
+fn atlas_validation_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::LocalSemanticAtlasValidation;
+    let atlas = LocalSemanticAtlas::from_inputs(SemanticContractVersion::CURRENT, 1, vec![]);
+    let v = atlas.validate();
+    let json = serde_json::to_string(&v).unwrap();
+    let back: LocalSemanticAtlasValidation = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, v);
+}
+
+#[test]
+fn local_semantic_contract_debt_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::LocalSemanticContractDebt;
+    let debt = LocalSemanticContractDebt {
+        component_id: "src/App.tsx".into(),
+        debt_code: "FE-FRX-14-1-LOCAL-0001".into(),
+        description: "missing fixture link".into(),
+        blocking: true,
+    };
+    let json = serde_json::to_string(&debt).unwrap();
+    let back: LocalSemanticContractDebt = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, debt);
+}
+
+// ===========================================================================
+// 35. LocalSemanticAtlas constants
+// ===========================================================================
+
+#[test]
+fn atlas_constants_nonempty() {
+    use frankenengine_engine::semantic_contract_baseline::{
+        LOCAL_SEMANTIC_ATLAS_BEAD_ID, LOCAL_SEMANTIC_ATLAS_DEBT_EMPTY_LOCAL_CONTRACT,
+        LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_CONTEXT_ASSUMPTIONS,
+        LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_FIXTURE_LINK,
+        LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_TRACE_LINK, LOCAL_SEMANTIC_ATLAS_SCHEMA_VERSION,
+    };
+    assert!(!LOCAL_SEMANTIC_ATLAS_SCHEMA_VERSION.is_empty());
+    assert!(!LOCAL_SEMANTIC_ATLAS_BEAD_ID.is_empty());
+    assert!(!LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_FIXTURE_LINK.is_empty());
+    assert!(!LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_TRACE_LINK.is_empty());
+    assert!(!LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_CONTEXT_ASSUMPTIONS.is_empty());
+    assert!(!LOCAL_SEMANTIC_ATLAS_DEBT_EMPTY_LOCAL_CONTRACT.is_empty());
+}
+
+// ===========================================================================
+// 36. Version edge cases
+// ===========================================================================
+
+#[test]
+fn version_compatible_with_self() {
+    let v = SemanticContractVersion::CURRENT;
+    assert!(v.is_compatible_with(&v));
+}
+
+#[test]
+fn version_patch_ignored_for_compatibility() {
+    let v1 = SemanticContractVersion {
+        major: 1,
+        minor: 2,
+        patch: 0,
+    };
+    let v2 = SemanticContractVersion {
+        major: 1,
+        minor: 2,
+        patch: 99,
+    };
+    assert!(v1.is_compatible_with(&v2));
+    assert!(v2.is_compatible_with(&v1));
+}
+
+#[test]
+fn version_ordering() {
+    let v010 = SemanticContractVersion {
+        major: 0,
+        minor: 1,
+        patch: 0,
+    };
+    let v020 = SemanticContractVersion {
+        major: 0,
+        minor: 2,
+        patch: 0,
+    };
+    let v100 = SemanticContractVersion {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    };
+    assert!(v010 < v020);
+    assert!(v020 < v100);
+}
+
+// ===========================================================================
+// 37. FixturePriority — weight values
+// ===========================================================================
+
+#[test]
+fn fixture_priority_weight_exact_values() {
+    assert_eq!(FixturePriority::Critical.weight_millionths(), 1_000_000);
+    assert_eq!(FixturePriority::High.weight_millionths(), 750_000);
+    assert_eq!(FixturePriority::Medium.weight_millionths(), 500_000);
+    assert_eq!(FixturePriority::Low.weight_millionths(), 250_000);
+}
+
+// ===========================================================================
+// 38. Corpus hash recomputed after freeze
+// ===========================================================================
+
+#[test]
+fn corpus_hash_changes_on_freeze() {
+    let mut c = test_corpus();
+    let hash_before = c.corpus_hash;
+    c.freeze().unwrap();
+    assert_ne!(c.corpus_hash, hash_before);
+}
+
+// ===========================================================================
+// 39. Package hash changes with contracts
+// ===========================================================================
+
+#[test]
+fn package_hash_changes_on_contract_addition() {
+    let corpus = test_corpus();
+    let mut pkg = ContractPackage::new(corpus).unwrap();
+    let h1 = pkg.package_hash;
+    pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
+        .unwrap();
+    assert_ne!(pkg.package_hash, h1);
+}
+
+// ===========================================================================
+// 40. DriftDetector summary breakdown
+// ===========================================================================
+
+#[test]
+fn drift_summary_breakdown_by_severity() {
+    let mut detector = DriftDetector::new(test_baseline());
+    // Hook ordering produces Fatal
+    detector.check_hook_ordering(&HookKind::UseState, true, ConsumerLane::Compiler, 300);
+    // Effect boundary produces Error
+    detector.check_effect_boundary(
+        &EffectKind::DomMutation,
+        &SideEffectBoundary::Leaks,
+        ConsumerLane::Runtime,
+        300,
+    );
+    let s = detector.summary();
+    assert_eq!(s.total_alerts, 2);
+    assert_eq!(s.fatal_count, 1);
+    assert_eq!(s.error_count, 1);
+    assert_eq!(s.warning_count, 0);
+    assert_eq!(s.info_count, 0);
+    assert!(
+        s.alerts_by_kind
+            .contains_key(&DriftKind::HookContractBreach)
+    );
+    assert!(
+        s.alerts_by_kind
+            .contains_key(&DriftKind::EffectBoundaryLeak)
+    );
+}
+
+// ===========================================================================
+// 41. LocalSemanticAtlasEntry serde roundtrip
+// ===========================================================================
+
+#[test]
+fn atlas_entry_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::LocalSemanticAtlasEntry;
+    let inputs = vec![LocalSemanticAtlasInput {
+        component: frankenengine_engine::static_analysis_graph::ComponentDescriptor {
+            id: frankenengine_engine::static_analysis_graph::ComponentId::new("src/Test.tsx"),
+            is_function_component: true,
+            module_path: "src/Test.tsx".into(),
+            export_name: Some("Test".into()),
+            hook_slots: vec![],
+            props: BTreeMap::new(),
+            consumed_contexts: vec![],
+            provided_contexts: vec![],
+            capability_boundary:
+                frankenengine_engine::static_analysis_graph::CapabilityBoundary::pure_component(),
+            is_pure: true,
+            content_hash: ContentHash::compute(b"Test"),
+            children: vec![],
+        },
+        fixture_refs: vec!["fix-1".into()],
+        trace_refs: vec!["trace-1".into()],
+        assumption_keys: vec![],
+    }];
+    let atlas = LocalSemanticAtlas::from_inputs(SemanticContractVersion::CURRENT, 1, inputs);
+    let entry = atlas.entry("src/Test.tsx").unwrap();
+    let json = serde_json::to_string(entry).unwrap();
+    let back: LocalSemanticAtlasEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(&back, entry);
+}

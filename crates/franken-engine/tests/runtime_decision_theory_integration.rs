@@ -782,3 +782,837 @@ fn full_lifecycle_decision_context() {
     let json = serde_json::to_string(&ctx).unwrap();
     assert!(!json.is_empty());
 }
+
+// ===========================================================================
+// 18. CVaR — VaR computation and trigger_epoch
+// ===========================================================================
+
+#[test]
+fn cvar_var_returns_none_insufficient_data() {
+    let config = CvarConfig {
+        min_observations: 10,
+        ..CvarConfig::default()
+    };
+    let cvar = CvarGuardrail::new(config);
+    assert!(cvar.var().is_none());
+}
+
+#[test]
+fn cvar_var_returns_quantile_value() {
+    let config = CvarConfig {
+        alpha_millionths: 800_000, // 80th percentile
+        min_observations: 5,
+        ..CvarConfig::default()
+    };
+    let mut cvar = CvarGuardrail::new(config);
+    for i in 0..10 {
+        cvar.observe(i * 100_000);
+    }
+    let var = cvar.var().unwrap();
+    // VaR at 80%: index = floor(10 * 0.8) = 8 → obs[8] = 800_000
+    assert_eq!(var, 800_000);
+}
+
+#[test]
+fn cvar_trigger_epoch_initially_none() {
+    let cvar = CvarGuardrail::new(CvarConfig::default());
+    assert!(cvar.trigger_epoch().is_none());
+}
+
+#[test]
+fn cvar_trigger_epoch_set_on_exceeded() {
+    let config = CvarConfig {
+        alpha_millionths: 500_000,
+        max_cvar_millionths: 1,
+        min_observations: 3,
+    };
+    let mut cvar = CvarGuardrail::new(config);
+    for _ in 0..5 {
+        cvar.observe(1_000_000);
+    }
+    cvar.check(epoch(42));
+    assert_eq!(cvar.trigger_epoch(), Some(epoch(42)));
+}
+
+#[test]
+fn cvar_cvar_value_increases_with_tail() {
+    let config = CvarConfig {
+        alpha_millionths: 900_000,
+        max_cvar_millionths: 100_000_000,
+        min_observations: 5,
+    };
+    let mut cvar_low = CvarGuardrail::new(config.clone());
+    let mut cvar_high = CvarGuardrail::new(config);
+
+    for _ in 0..10 {
+        cvar_low.observe(100_000);
+        cvar_high.observe(100_000);
+    }
+    // Add heavy tail to high
+    for _ in 0..5 {
+        cvar_high.observe(10_000_000);
+    }
+    let low_val = cvar_low.cvar().unwrap();
+    let high_val = cvar_high.cvar().unwrap();
+    assert!(high_val > low_val, "heavy tail should increase CVaR");
+}
+
+// ===========================================================================
+// 19. CvarCheckResult — serde round-trip
+// ===========================================================================
+
+#[test]
+fn cvar_check_result_insufficient_serde() {
+    let result = CvarCheckResult::InsufficientData {
+        observations: 3,
+        required: 10,
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let back: CvarCheckResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, result);
+}
+
+#[test]
+fn cvar_check_result_within_bounds_serde() {
+    let result = CvarCheckResult::WithinBounds {
+        cvar_millionths: 200_000,
+        threshold_millionths: 500_000,
+        headroom_millionths: 300_000,
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let back: CvarCheckResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, result);
+}
+
+#[test]
+fn cvar_check_result_exceeded_serde() {
+    let result = CvarCheckResult::Exceeded {
+        cvar_millionths: 600_000,
+        threshold_millionths: 500_000,
+        epoch: epoch(7),
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let back: CvarCheckResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, result);
+}
+
+// ===========================================================================
+// 20. Conformal — coverage, e-value, reset
+// ===========================================================================
+
+#[test]
+fn conformal_coverage_millionths_correct() {
+    let config = ConformalConfig {
+        min_calibration_observations: 2,
+        ..ConformalConfig::default()
+    };
+    let mut cal = ConformalCalibrator::new(config);
+    cal.record(epoch(1), true);
+    cal.record(epoch(2), false);
+    // 1 out of 2 covered = 500_000 millionths
+    assert_eq!(cal.coverage_millionths(), 500_000);
+}
+
+#[test]
+fn conformal_e_value_grows_on_misses() {
+    let config = ConformalConfig {
+        min_calibration_observations: 2,
+        max_consecutive_violations: 10,
+        ..ConformalConfig::default()
+    };
+    let mut cal = ConformalCalibrator::new(config);
+    let initial = cal.e_value_millionths();
+    // Record a miss
+    cal.record(epoch(1), false);
+    let after_miss = cal.e_value_millionths();
+    assert!(
+        after_miss > initial,
+        "e-value should grow on misses: {} vs {}",
+        after_miss,
+        initial
+    );
+}
+
+#[test]
+fn conformal_e_value_stable_on_hits() {
+    let config = ConformalConfig {
+        min_calibration_observations: 2,
+        ..ConformalConfig::default()
+    };
+    let mut cal = ConformalCalibrator::new(config);
+    cal.record(epoch(1), true);
+    // e-value should stay at 1.0 (1_000_000) when all covered
+    assert_eq!(cal.e_value_millionths(), 1_000_000);
+}
+
+#[test]
+fn conformal_reset_clears_all() {
+    let config = ConformalConfig {
+        min_calibration_observations: 2,
+        max_consecutive_violations: 2,
+        ..ConformalConfig::default()
+    };
+    let mut cal = ConformalCalibrator::new(config);
+    for i in 0..5 {
+        cal.record(epoch(i + 1), false);
+    }
+    assert!(cal.violation_flagged());
+    assert!(cal.total_predictions() > 0);
+    cal.reset();
+    assert!(!cal.violation_flagged());
+    assert_eq!(cal.total_predictions(), 0);
+    assert_eq!(cal.covered_predictions(), 0);
+    assert!(cal.ledger().is_empty());
+}
+
+#[test]
+fn conformal_is_calibrated_respects_min_observations() {
+    let config = ConformalConfig {
+        min_calibration_observations: 100,
+        ..ConformalConfig::default()
+    };
+    let mut cal = ConformalCalibrator::new(config);
+    // Record all misses but below min threshold
+    for i in 0..10 {
+        cal.record(epoch(i + 1), false);
+    }
+    // Should still be "calibrated" due to insufficient data
+    assert!(cal.is_calibrated());
+}
+
+// ===========================================================================
+// 21. Drift — last_kl, drift_epoch
+// ===========================================================================
+
+#[test]
+fn drift_last_kl_initially_none() {
+    let drift = DriftDetector::new(DriftConfig::default());
+    assert!(drift.last_kl_millionths().is_none());
+}
+
+#[test]
+fn drift_last_kl_populated_after_check() {
+    let config = DriftConfig {
+        reference_window: 10,
+        test_window: 5,
+        min_samples: 5,
+        ..DriftConfig::default()
+    };
+    let mut drift = DriftDetector::new(config);
+    for _ in 0..20 {
+        drift.observe(500_000);
+    }
+    drift.check(epoch(1));
+    assert!(drift.last_kl_millionths().is_some());
+}
+
+#[test]
+fn drift_epoch_initially_none() {
+    let drift = DriftDetector::new(DriftConfig::default());
+    assert!(drift.drift_epoch().is_none());
+}
+
+#[test]
+fn drift_epoch_set_when_detected() {
+    let config = DriftConfig {
+        kl_threshold_millionths: 1, // very low threshold
+        reference_window: 10,
+        test_window: 5,
+        min_samples: 5,
+    };
+    let mut drift = DriftDetector::new(config);
+    // Reference: low values
+    for _ in 0..12 {
+        drift.observe(100_000);
+    }
+    // Test: high values
+    for _ in 0..8 {
+        drift.observe(900_000);
+    }
+    drift.check(epoch(99));
+    if drift.is_drift_detected() {
+        assert_eq!(drift.drift_epoch(), Some(epoch(99)));
+    }
+}
+
+// ===========================================================================
+// 22. DriftCheckResult — serde round-trip
+// ===========================================================================
+
+#[test]
+fn drift_check_result_all_variants_serde() {
+    let variants: Vec<DriftCheckResult> = vec![
+        DriftCheckResult::InsufficientData {
+            observations: 5,
+            required: 30,
+        },
+        DriftCheckResult::NoDrift {
+            kl_millionths: 50_000,
+            threshold_millionths: 100_000,
+        },
+        DriftCheckResult::DriftDetected {
+            kl_millionths: 200_000,
+            threshold_millionths: 100_000,
+            epoch: epoch(3),
+        },
+    ];
+    for v in &variants {
+        let json = serde_json::to_string(v).unwrap();
+        let back: DriftCheckResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, *v);
+    }
+}
+
+// ===========================================================================
+// 23. BudgetController — memory tracking, remaining budget
+// ===========================================================================
+
+#[test]
+fn budget_memory_tracking() {
+    let config = BudgetConfig {
+        memory_budget_bytes: 1_000_000,
+        ..BudgetConfig::default()
+    };
+    let mut budget = BudgetController::new(config, epoch(1));
+    budget.record_memory(500_000);
+    assert_eq!(budget.memory_consumed_bytes(), 500_000);
+}
+
+#[test]
+fn budget_memory_exhaustion_triggers_fallback() {
+    let config = BudgetConfig {
+        memory_budget_bytes: 1_000,
+        deterministic_fallback_on_exhaust: true,
+        ..BudgetConfig::default()
+    };
+    let mut budget = BudgetController::new(config, epoch(1));
+    let status = budget.record_memory(2_000); // over budget
+    assert!(matches!(status, BudgetStatus::Exhausted { .. }));
+    assert!(budget.is_fallback_active());
+}
+
+#[test]
+fn budget_remaining_decreases_with_usage() {
+    let config = BudgetConfig {
+        compute_budget_us: 100_000,
+        ..BudgetConfig::default()
+    };
+    let mut budget = BudgetController::new(config, epoch(1));
+    let initial = budget.budget_remaining_millionths();
+    budget.record_compute(50_000);
+    let after = budget.budget_remaining_millionths();
+    assert!(
+        after < initial,
+        "remaining should decrease: {} vs {}",
+        after,
+        initial
+    );
+}
+
+#[test]
+fn budget_remaining_zero_when_exhausted() {
+    let config = BudgetConfig {
+        compute_budget_us: 100,
+        deterministic_fallback_on_exhaust: true,
+        ..BudgetConfig::default()
+    };
+    let mut budget = BudgetController::new(config, epoch(1));
+    budget.record_compute(200);
+    assert_eq!(budget.budget_remaining_millionths(), 0);
+}
+
+// ===========================================================================
+// 24. BudgetStatus — serde round-trip
+// ===========================================================================
+
+#[test]
+fn budget_status_all_variants_serde() {
+    let variants: Vec<BudgetStatus> = vec![
+        BudgetStatus::Normal {
+            compute_fraction_millionths: 200_000,
+            memory_fraction_millionths: 100_000,
+        },
+        BudgetStatus::Warning {
+            compute_fraction_millionths: 850_000,
+            memory_fraction_millionths: 300_000,
+        },
+        BudgetStatus::Exhausted {
+            compute_fraction_millionths: 1_200_000,
+            memory_fraction_millionths: 500_000,
+        },
+    ];
+    for v in &variants {
+        let json = serde_json::to_string(v).unwrap();
+        let back: BudgetStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, *v);
+    }
+}
+
+// ===========================================================================
+// 25. BudgetEvent / BudgetEventKind — serde and display
+// ===========================================================================
+
+#[test]
+fn budget_event_kind_display() {
+    use frankenengine_engine::runtime_decision_theory::BudgetEventKind;
+    assert_eq!(BudgetEventKind::Warning.to_string(), "warning");
+    assert_eq!(BudgetEventKind::Exhausted.to_string(), "exhausted");
+    assert_eq!(BudgetEventKind::EpochReset.to_string(), "epoch_reset");
+}
+
+#[test]
+fn budget_event_serde_round_trip() {
+    use frankenengine_engine::runtime_decision_theory::{BudgetEvent, BudgetEventKind};
+    let event = BudgetEvent {
+        epoch: epoch(3),
+        kind: BudgetEventKind::Exhausted,
+        compute_consumed_us: 50_000,
+        memory_consumed_bytes: 1_024,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: BudgetEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, event);
+}
+
+#[test]
+fn budget_epoch_reset_emits_event() {
+    let config = BudgetConfig {
+        compute_budget_us: 100_000,
+        deterministic_fallback_on_exhaust: true,
+        ..BudgetConfig::default()
+    };
+    let mut budget = BudgetController::new(config, epoch(1));
+    budget.record_compute(50_000);
+    budget.reset_epoch(epoch(2));
+    let events = budget.events();
+    assert!(!events.is_empty());
+    // Last event should be EpochReset
+    use frankenengine_engine::runtime_decision_theory::BudgetEventKind;
+    assert!(matches!(
+        events.last().unwrap().kind,
+        BudgetEventKind::EpochReset
+    ));
+}
+
+// ===========================================================================
+// 26. DecisionContext — guardrail-triggered fallbacks
+// ===========================================================================
+
+#[test]
+fn decision_context_cvar_triggered_produces_fallback() {
+    let config = DecisionContextConfig {
+        cvar_config: CvarConfig {
+            alpha_millionths: 500_000,
+            max_cvar_millionths: 1,
+            min_observations: 3,
+        },
+        ..default_ctx_config()
+    };
+    let mut ctx = DecisionContext::new(config, epoch(1));
+    // Feed huge losses to trigger CVaR
+    for _ in 0..5 {
+        ctx.observe_loss(10_000_000, epoch(1));
+    }
+    let outcome = ctx.decide(&default_state());
+    assert_eq!(outcome.demotion, Some(DemotionReason::CvarExceeded));
+    assert!(matches!(outcome.action, LaneAction::FallbackSafe));
+}
+
+#[test]
+fn decision_context_drift_triggered_produces_fallback() {
+    let config = DecisionContextConfig {
+        drift_config: DriftConfig {
+            kl_threshold_millionths: 1,
+            reference_window: 10,
+            test_window: 5,
+            min_samples: 5,
+        },
+        ..default_ctx_config()
+    };
+    let mut ctx = DecisionContext::new(config, epoch(1));
+    // Reference: low values
+    for _ in 0..12 {
+        ctx.observe_loss(100_000, epoch(1));
+    }
+    // Test: high values (causes drift)
+    for _ in 0..8 {
+        ctx.observe_loss(9_000_000, epoch(1));
+    }
+    let outcome = ctx.decide(&default_state());
+    if ctx.drift().is_drift_detected() {
+        assert_eq!(outcome.demotion, Some(DemotionReason::DriftDetected));
+        assert!(matches!(outcome.action, LaneAction::FallbackSafe));
+    }
+}
+
+#[test]
+fn decision_context_conformal_violation_produces_fallback() {
+    let config = DecisionContextConfig {
+        conformal_config: ConformalConfig {
+            min_calibration_observations: 3,
+            max_consecutive_violations: 3,
+            alpha_millionths: 100_000,
+        },
+        ..default_ctx_config()
+    };
+    let mut ctx = DecisionContext::new(config, epoch(1));
+    // Record all misses to trigger conformal violation
+    for i in 0..10 {
+        ctx.observe_calibration(epoch(i + 1), false);
+    }
+    let outcome = ctx.decide(&default_state());
+    assert_eq!(outcome.demotion, Some(DemotionReason::CoverageViolation));
+    assert!(matches!(outcome.action, LaneAction::FallbackSafe));
+}
+
+// ===========================================================================
+// 27. DecisionContext — accessor methods
+// ===========================================================================
+
+#[test]
+fn decision_context_accessors_return_live_state() {
+    let config = DecisionContextConfig {
+        cvar_config: CvarConfig {
+            min_observations: 3,
+            ..CvarConfig::default()
+        },
+        ..default_ctx_config()
+    };
+    let mut ctx = DecisionContext::new(config, epoch(1));
+
+    // Feed some data
+    ctx.observe_loss(100_000, epoch(1));
+    ctx.observe_calibration(epoch(1), true);
+    ctx.record_compute(1_000);
+
+    // Accessors should reflect state
+    assert_eq!(ctx.cvar().observation_count(), 1);
+    assert_eq!(ctx.calibrator().total_predictions(), 1);
+    assert_eq!(ctx.calibrator().covered_predictions(), 1);
+    assert!(ctx.drift().observation_count() > 0);
+    assert_eq!(ctx.budget().compute_consumed_us(), 1_000);
+}
+
+// ===========================================================================
+// 28. DecisionContext — fallback_events recorded
+// ===========================================================================
+
+#[test]
+fn decision_context_fallback_events_populated() {
+    let config = DecisionContextConfig {
+        budget_config: BudgetConfig {
+            compute_budget_us: 100,
+            deterministic_fallback_on_exhaust: true,
+            ..BudgetConfig::default()
+        },
+        ..default_ctx_config()
+    };
+    let mut ctx = DecisionContext::new(config, epoch(1));
+    ctx.record_compute(200);
+    ctx.decide(&default_state());
+    let events = ctx.fallback_events();
+    assert!(!events.is_empty(), "fallback events should be recorded");
+    assert_eq!(events[0].trigger, DemotionReason::BudgetExhausted);
+}
+
+#[test]
+fn decision_context_fallback_event_metrics_populated() {
+    let config = DecisionContextConfig {
+        budget_config: BudgetConfig {
+            compute_budget_us: 100,
+            deterministic_fallback_on_exhaust: true,
+            ..BudgetConfig::default()
+        },
+        ..default_ctx_config()
+    };
+    let mut ctx = DecisionContext::new(config, epoch(1));
+    ctx.record_compute(200);
+    ctx.decide(&default_state());
+    let event = &ctx.fallback_events()[0];
+    // Metrics should be populated
+    assert_eq!(event.metrics.budget_remaining_millionths, 0);
+    assert!(event.metrics.coverage_millionths > 0);
+    assert!(event.metrics.e_value_millionths > 0);
+}
+
+// ===========================================================================
+// 29. DecisionTrace — property checks
+// ===========================================================================
+
+#[test]
+fn decision_trace_guardrail_active_false_when_normal() {
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(1));
+    ctx.decide(&default_state());
+    let trace = &ctx.traces()[0];
+    assert!(!trace.guardrail_active);
+    assert!(!trace.reason.is_empty());
+}
+
+#[test]
+fn decision_trace_guardrail_active_true_when_triggered() {
+    let config = DecisionContextConfig {
+        budget_config: BudgetConfig {
+            compute_budget_us: 100,
+            deterministic_fallback_on_exhaust: true,
+            ..BudgetConfig::default()
+        },
+        ..default_ctx_config()
+    };
+    let mut ctx = DecisionContext::new(config, epoch(1));
+    ctx.record_compute(200);
+    ctx.decide(&default_state());
+    let trace = &ctx.traces()[0];
+    assert!(trace.guardrail_active);
+}
+
+#[test]
+fn decision_trace_sequence_increases() {
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(1));
+    ctx.decide(&default_state());
+    ctx.decide(&default_state());
+    ctx.decide(&default_state());
+    let traces = ctx.traces();
+    assert_eq!(traces[0].sequence, 1);
+    assert_eq!(traces[1].sequence, 2);
+    assert_eq!(traces[2].sequence, 3);
+}
+
+#[test]
+fn decision_trace_epoch_matches_context() {
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(42));
+    ctx.decide(&default_state());
+    assert_eq!(ctx.traces()[0].epoch, epoch(42));
+}
+
+// ===========================================================================
+// 30. LaneId — canonical normalization
+// ===========================================================================
+
+#[test]
+fn lane_id_legacy_quickjs_normalizes() {
+    let legacy_json = "\"quickjs_inspired_native\"";
+    let lane: LaneId = serde_json::from_str(legacy_json).unwrap();
+    assert_eq!(lane, LaneId::deterministic_profile());
+}
+
+#[test]
+fn lane_id_legacy_v8_normalizes() {
+    let legacy_json = "\"V8\"";
+    let lane: LaneId = serde_json::from_str(legacy_json).unwrap();
+    assert_eq!(lane, LaneId::throughput_profile());
+}
+
+#[test]
+fn lane_id_unknown_label_preserved() {
+    let custom_json = "\"my_custom_lane\"";
+    let lane: LaneId = serde_json::from_str(custom_json).unwrap();
+    assert_eq!(lane.to_string(), "my_custom_lane");
+}
+
+// ===========================================================================
+// 31. Edge cases — empty and degenerate configs
+// ===========================================================================
+
+#[test]
+fn decision_context_single_lane_always_routes_to_it() {
+    let mut config = default_ctx_config();
+    config.lanes = vec![LaneId("only_lane".into())];
+    let mut ctx = DecisionContext::new(config, epoch(1));
+    let outcome = ctx.decide(&default_state());
+    if let LaneAction::RouteTo(lane) = &outcome.action {
+        assert_eq!(lane.to_string(), "only_lane");
+    }
+}
+
+#[test]
+fn decision_context_zero_risk_belief() {
+    let mut state = default_state();
+    state.risk_belief_millionths = BTreeMap::new();
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(1));
+    let outcome = ctx.decide(&state);
+    // Should still route successfully
+    assert!(
+        matches!(outcome.action, LaneAction::RouteTo(_)),
+        "zero risk should still route: {:?}",
+        outcome.action
+    );
+}
+
+#[test]
+fn decision_context_degraded_regime_routes_to_safe_lane() {
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(1));
+    let state = DecisionState {
+        regime: RegimeLabel::Degraded,
+        ..default_state()
+    };
+    let outcome = ctx.decide(&state);
+    if let LaneAction::RouteTo(lane) = &outcome.action {
+        // Degraded/Recovery should route to first (safe) lane
+        assert_eq!(
+            *lane,
+            ctx.policy_bundle().lanes[0],
+            "degraded should route to safe lane"
+        );
+    }
+}
+
+#[test]
+fn decision_context_recovery_regime_routes_to_safe_lane() {
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(1));
+    let state = DecisionState {
+        regime: RegimeLabel::Recovery,
+        ..default_state()
+    };
+    let outcome = ctx.decide(&state);
+    if let LaneAction::RouteTo(lane) = &outcome.action {
+        assert_eq!(
+            *lane,
+            ctx.policy_bundle().lanes[0],
+            "recovery should route to safe lane"
+        );
+    }
+}
+
+#[test]
+fn decision_context_elevated_regime_routes_to_perf_lane() {
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(1));
+    let state = DecisionState {
+        regime: RegimeLabel::Elevated,
+        ..default_state()
+    };
+    let outcome = ctx.decide(&state);
+    if let LaneAction::RouteTo(lane) = &outcome.action {
+        // Elevated should still route to performance (second) lane
+        assert_eq!(
+            *lane,
+            ctx.policy_bundle().lanes[1],
+            "elevated should route to perf lane"
+        );
+    }
+}
+
+// ===========================================================================
+// 32. DecisionContext — serde round-trip
+// ===========================================================================
+
+#[test]
+fn decision_context_serde_round_trip() {
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(1));
+    ctx.observe_loss(100_000, epoch(1));
+    ctx.observe_calibration(epoch(1), true);
+    ctx.decide(&default_state());
+    let json = serde_json::to_string(&ctx).unwrap();
+    let back: DecisionContext = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.traces().len(), ctx.traces().len());
+    assert_eq!(
+        back.cvar().observation_count(),
+        ctx.cvar().observation_count()
+    );
+}
+
+// ===========================================================================
+// 33. Budget — no-fallback mode
+// ===========================================================================
+
+#[test]
+fn budget_no_fallback_mode() {
+    let config = BudgetConfig {
+        compute_budget_us: 100,
+        deterministic_fallback_on_exhaust: false,
+        ..BudgetConfig::default()
+    };
+    let mut budget = BudgetController::new(config, epoch(1));
+    budget.record_compute(200);
+    // Budget exhausted but fallback not activated
+    assert!(!budget.is_fallback_active());
+}
+
+// ===========================================================================
+// 34. DemotionReason — serde round-trip
+// ===========================================================================
+
+#[test]
+fn demotion_reason_all_variants_serde() {
+    let reasons = [
+        DemotionReason::CvarExceeded,
+        DemotionReason::DriftDetected,
+        DemotionReason::BudgetExhausted,
+        DemotionReason::GuardrailTriggered,
+        DemotionReason::CoverageViolation,
+        DemotionReason::OperatorOverride,
+    ];
+    for r in &reasons {
+        let json = serde_json::to_string(r).unwrap();
+        let back: DemotionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, *r);
+    }
+}
+
+// ===========================================================================
+// 35. FallbackMetrics — serde
+// ===========================================================================
+
+#[test]
+fn fallback_metrics_serde_round_trip() {
+    let metrics = FallbackMetrics {
+        cvar_millionths: None,
+        drift_kl_millionths: None,
+        budget_remaining_millionths: 500_000,
+        coverage_millionths: 900_000,
+        e_value_millionths: 1_000_000,
+    };
+    let json = serde_json::to_string(&metrics).unwrap();
+    let back: FallbackMetrics = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, metrics);
+}
+
+// ===========================================================================
+// 36. Guardrail priority order
+// ===========================================================================
+
+#[test]
+fn budget_exhaustion_takes_priority_over_cvar() {
+    let config = DecisionContextConfig {
+        cvar_config: CvarConfig {
+            alpha_millionths: 500_000,
+            max_cvar_millionths: 1,
+            min_observations: 3,
+        },
+        budget_config: BudgetConfig {
+            compute_budget_us: 100,
+            deterministic_fallback_on_exhaust: true,
+            ..BudgetConfig::default()
+        },
+        ..default_ctx_config()
+    };
+    let mut ctx = DecisionContext::new(config, epoch(1));
+    // Trigger both CVaR and budget
+    for _ in 0..5 {
+        ctx.observe_loss(10_000_000, epoch(1));
+    }
+    ctx.record_compute(200);
+    let outcome = ctx.decide(&default_state());
+    // Budget has highest priority
+    assert_eq!(outcome.demotion, Some(DemotionReason::BudgetExhausted));
+    assert!(matches!(outcome.action, LaneAction::SuspendAdaptive));
+}
+
+// ===========================================================================
+// 37. Advance epoch resets sequence
+// ===========================================================================
+
+#[test]
+fn advance_epoch_resets_sequence_counter() {
+    let mut ctx = DecisionContext::new(default_ctx_config(), epoch(1));
+    ctx.decide(&default_state());
+    ctx.decide(&default_state());
+    ctx.advance_epoch(epoch(2));
+    let state2 = DecisionState {
+        epoch: epoch(2),
+        ..default_state()
+    };
+    ctx.decide(&state2);
+    let traces = ctx.traces();
+    // After advance, sequence should restart from 1
+    assert_eq!(traces.last().unwrap().sequence, 1);
+}

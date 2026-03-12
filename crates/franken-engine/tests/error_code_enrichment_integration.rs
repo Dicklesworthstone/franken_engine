@@ -485,3 +485,216 @@ fn stable_code_format_4_digit_padded() {
     let code = FrankenErrorCode::EngineObjectIdError;
     assert_eq!(code.stable_code(), "FE-1000");
 }
+
+// ===========================================================================
+// 17) Clone trait preserves equality
+// ===========================================================================
+
+#[test]
+fn clone_franken_error_code_preserves_equality() {
+    for code in ALL_ERROR_CODES {
+        let cloned = code.clone();
+        assert_eq!(*code, cloned, "Clone should preserve equality for {code:?}");
+        assert_eq!(code.numeric(), cloned.numeric());
+        assert_eq!(code.stable_code(), cloned.stable_code());
+    }
+}
+
+#[test]
+fn clone_error_code_entry_preserves_all_fields() {
+    for code in ALL_ERROR_CODES {
+        let entry = code.to_registry_entry();
+        let cloned = entry.clone();
+        assert_eq!(entry, cloned, "ErrorCodeEntry Clone mismatch for {code:?}");
+        assert_eq!(entry.code, cloned.code);
+        assert_eq!(entry.numeric, cloned.numeric);
+        assert_eq!(entry.subsystem, cloned.subsystem);
+        assert_eq!(entry.severity, cloned.severity);
+        assert_eq!(entry.description, cloned.description);
+        assert_eq!(entry.operator_action, cloned.operator_action);
+        assert_eq!(entry.deprecated, cloned.deprecated);
+    }
+}
+
+#[test]
+fn clone_error_code_registry_preserves_equality() {
+    let registry = error_code_registry();
+    let cloned = registry.clone();
+    assert_eq!(registry, cloned);
+    assert_eq!(registry.version, cloned.version);
+    assert_eq!(registry.compatibility_policy, cloned.compatibility_policy);
+    assert_eq!(registry.entries.len(), cloned.entries.len());
+}
+
+// ===========================================================================
+// 18) Description and operator_action end with period
+// ===========================================================================
+
+#[test]
+fn all_descriptions_end_with_period() {
+    for code in ALL_ERROR_CODES {
+        let desc = code.description();
+        assert!(
+            desc.ends_with('.'),
+            "{code:?} description does not end with period: {desc}"
+        );
+    }
+}
+
+#[test]
+fn all_operator_actions_end_with_period() {
+    for code in ALL_ERROR_CODES {
+        let action = code.operator_action();
+        assert!(
+            action.ends_with('.'),
+            "{code:?} operator_action does not end with period: {action}"
+        );
+    }
+}
+
+// ===========================================================================
+// 19) JSON serialization determinism
+// ===========================================================================
+
+#[test]
+fn registry_json_serialization_is_deterministic() {
+    let registry = error_code_registry();
+    let json1 = serde_json::to_string(&registry).unwrap();
+    let json2 = serde_json::to_string(&registry).unwrap();
+    assert_eq!(
+        json1, json2,
+        "Registry JSON serialization should be deterministic"
+    );
+}
+
+#[test]
+fn registry_pretty_json_roundtrips() {
+    let registry = error_code_registry();
+    let pretty = serde_json::to_string_pretty(&registry).unwrap();
+    let rt: ErrorCodeRegistry = serde_json::from_str(&pretty).unwrap();
+    assert_eq!(
+        registry, rt,
+        "Pretty JSON roundtrip should preserve registry"
+    );
+}
+
+// ===========================================================================
+// 20) ALL_ERROR_CODES monotonically sorted by numeric
+// ===========================================================================
+
+#[test]
+fn all_error_codes_sorted_ascending_by_numeric() {
+    for pair in ALL_ERROR_CODES.windows(2) {
+        assert!(
+            pair[0].numeric() < pair[1].numeric(),
+            "ALL_ERROR_CODES not ascending: {} >= {}",
+            pair[0].numeric(),
+            pair[1].numeric()
+        );
+    }
+}
+
+// ===========================================================================
+// 21) stable_code length invariant
+// ===========================================================================
+
+#[test]
+fn stable_code_length_always_seven() {
+    for code in ALL_ERROR_CODES {
+        let stable = code.stable_code();
+        assert_eq!(
+            stable.len(),
+            7,
+            "stable_code for {code:?} has unexpected length: {stable}"
+        );
+    }
+}
+
+// ===========================================================================
+// 22) Serde rejection of invalid inputs
+// ===========================================================================
+
+#[test]
+fn serde_rejects_invalid_severity_string() {
+    let result: Result<ErrorSeverity, _> = serde_json::from_str("\"panic\"");
+    assert!(
+        result.is_err(),
+        "Deserializing invalid severity should fail"
+    );
+}
+
+#[test]
+fn serde_rejects_invalid_subsystem_string() {
+    let result: Result<ErrorSubsystem, _> = serde_json::from_str("\"networking\"");
+    assert!(
+        result.is_err(),
+        "Deserializing invalid subsystem should fail"
+    );
+}
+
+// ===========================================================================
+// 23) Per-subsystem code count
+// ===========================================================================
+
+#[test]
+fn each_subsystem_has_at_least_one_assigned_code() {
+    let subsystems_with_codes = [
+        ErrorSubsystem::SerializationEncoding,
+        ErrorSubsystem::IdentityAuthentication,
+        ErrorSubsystem::CapabilityAuthorization,
+        ErrorSubsystem::CheckpointPolicy,
+        ErrorSubsystem::Revocation,
+        ErrorSubsystem::SessionChannel,
+        ErrorSubsystem::ZoneScope,
+        ErrorSubsystem::AuditObservability,
+        ErrorSubsystem::LifecycleMigration,
+    ];
+    for sub in &subsystems_with_codes {
+        let count = ALL_ERROR_CODES
+            .iter()
+            .filter(|c| c.subsystem() == *sub)
+            .count();
+        assert!(count >= 1, "Subsystem {sub:?} has no assigned error codes");
+    }
+}
+
+// ===========================================================================
+// 24) Hash determinism across all codes
+// ===========================================================================
+
+#[test]
+fn hash_determinism_all_codes_produce_consistent_hashes() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    for code in ALL_ERROR_CODES {
+        let mut h1 = DefaultHasher::new();
+        let mut h2 = DefaultHasher::new();
+        code.hash(&mut h1);
+        code.hash(&mut h2);
+        assert_eq!(
+            h1.finish(),
+            h2.finish(),
+            "Hash should be deterministic for {code:?}"
+        );
+    }
+}
+
+#[test]
+fn hash_distinct_for_different_codes() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hashes = BTreeSet::new();
+    for code in ALL_ERROR_CODES {
+        let mut hasher = DefaultHasher::new();
+        code.hash(&mut hasher);
+        hashes.insert(hasher.finish());
+    }
+    // All 42 codes should produce distinct hashes (probabilistically guaranteed)
+    assert_eq!(
+        hashes.len(),
+        ALL_ERROR_CODES.len(),
+        "All error codes should produce distinct hashes"
+    );
+}

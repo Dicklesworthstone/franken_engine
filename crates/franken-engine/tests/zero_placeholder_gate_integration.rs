@@ -153,12 +153,16 @@ fn millionths_constant() {
 
 #[test]
 fn default_max_active_waivers_positive() {
-    assert!(DEFAULT_MAX_ACTIVE_WAIVERS > 0);
+    const {
+        assert!(DEFAULT_MAX_ACTIVE_WAIVERS > 0);
+    }
 }
 
 #[test]
 fn default_waiver_max_duration_positive() {
-    assert!(DEFAULT_WAIVER_MAX_DURATION_EPOCHS > 0);
+    const {
+        assert!(DEFAULT_WAIVER_MAX_DURATION_EPOCHS > 0);
+    }
 }
 
 // ===========================================================================
@@ -661,7 +665,7 @@ fn receipt_timestamp_matches() {
 #[test]
 fn receipt_deterministic_hash() {
     let ih = ContentHash::compute(b"x");
-    let r1 = DecisionReceipt::new(epoch(1), ih.clone(), GateVerdict::Pass, 100);
+    let r1 = DecisionReceipt::new(epoch(1), ih, GateVerdict::Pass, 100);
     let r2 = DecisionReceipt::new(epoch(1), ih, GateVerdict::Pass, 100);
     assert_eq!(r1.verdict_hash, r2.verdict_hash);
 }
@@ -669,7 +673,7 @@ fn receipt_deterministic_hash() {
 #[test]
 fn receipt_different_verdict_different_hash() {
     let ih = ContentHash::compute(b"x");
-    let r1 = DecisionReceipt::new(epoch(1), ih.clone(), GateVerdict::Pass, 100);
+    let r1 = DecisionReceipt::new(epoch(1), ih, GateVerdict::Pass, 100);
     let r2 = DecisionReceipt::new(epoch(1), ih, GateVerdict::Block, 100);
     assert_ne!(r1.verdict_hash, r2.verdict_hash);
 }
@@ -677,7 +681,7 @@ fn receipt_different_verdict_different_hash() {
 #[test]
 fn receipt_different_epoch_different_hash() {
     let ih = ContentHash::compute(b"x");
-    let r1 = DecisionReceipt::new(epoch(1), ih.clone(), GateVerdict::Pass, 100);
+    let r1 = DecisionReceipt::new(epoch(1), ih, GateVerdict::Pass, 100);
     let r2 = DecisionReceipt::new(epoch(2), ih, GateVerdict::Pass, 100);
     assert_ne!(r1.verdict_hash, r2.verdict_hash);
 }

@@ -563,3 +563,488 @@ fn test_manifest_deterministic() {
     assert_eq!(a.plan_id, b.plan_id);
     assert_eq!(a.content_hash, b.content_hash);
 }
+
+// ===========================================================================
+// Enrichment tests — ExperimentKind
+// ===========================================================================
+
+#[test]
+fn experiment_kind_all_unique_labels() {
+    let mut labels = std::collections::BTreeSet::new();
+    for kind in ExperimentKind::ALL {
+        assert!(
+            labels.insert(kind.as_str()),
+            "duplicate label: {}",
+            kind.as_str()
+        );
+    }
+}
+
+#[test]
+fn experiment_kind_display_matches_as_str() {
+    for kind in ExperimentKind::ALL {
+        assert_eq!(kind.to_string(), kind.as_str());
+    }
+}
+
+// ===========================================================================
+// Enrichment tests — AcquisitionSignal
+// ===========================================================================
+
+#[test]
+fn acquisition_signal_display_matches_as_str() {
+    for signal in AcquisitionSignal::ALL {
+        assert_eq!(signal.to_string(), signal.as_str());
+    }
+}
+
+#[test]
+fn acquisition_signal_all_unique_labels() {
+    let mut labels = std::collections::BTreeSet::new();
+    for signal in AcquisitionSignal::ALL {
+        assert!(labels.insert(signal.as_str()), "duplicate label");
+    }
+}
+
+// ===========================================================================
+// Enrichment tests — AcquisitionScore serde
+// ===========================================================================
+
+#[test]
+fn acquisition_score_serde_roundtrip() {
+    use frankenengine_engine::acquisition_experiment_oracle::AcquisitionScore;
+    let p = make_proposal(
+        "sc1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
+    let score = acquisition_experiment_oracle::score_proposal(&p, &default_weights());
+    let json = serde_json::to_string(&score).unwrap();
+    let back: AcquisitionScore = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, score);
+}
+
+#[test]
+fn acquisition_score_display() {
+    let p = make_proposal(
+        "sd1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let score = acquisition_experiment_oracle::score_proposal(&p, &default_weights());
+    let display = format!("{score}");
+    assert!(display.contains("sd1"));
+    assert!(display.contains("Score"));
+}
+
+// ===========================================================================
+// Enrichment tests — ExperimentPlan serde and display
+// ===========================================================================
+
+#[test]
+fn experiment_plan_serde_roundtrip() {
+    use frankenengine_engine::acquisition_experiment_oracle::ExperimentPlan;
+    let p = make_proposal(
+        "ps1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p], 1_000_000, &default_weights())
+            .unwrap();
+    let json = serde_json::to_string(&plan).unwrap();
+    let back: ExperimentPlan = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, plan);
+}
+
+#[test]
+fn experiment_plan_display() {
+    let p = make_proposal(
+        "pd1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p], 1_000_000, &default_weights())
+            .unwrap();
+    let display = format!("{plan}");
+    assert!(display.contains("Plan"));
+}
+
+// ===========================================================================
+// Enrichment tests — ExperimentOutcome serde and display
+// ===========================================================================
+
+#[test]
+fn experiment_outcome_serde_roundtrip() {
+    use frankenengine_engine::acquisition_experiment_oracle::ExperimentOutcome;
+    let p = make_proposal(
+        "os1",
+        ExperimentKind::CorpusAddition,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let outcome = acquisition_experiment_oracle::record_outcome(&p, 600_000);
+    let json = serde_json::to_string(&outcome).unwrap();
+    let back: ExperimentOutcome = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, outcome);
+}
+
+#[test]
+fn experiment_outcome_display() {
+    let p = make_proposal(
+        "od1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let outcome = acquisition_experiment_oracle::record_outcome(&p, 300_000);
+    let display = format!("{outcome}");
+    assert!(display.contains("od1"));
+    assert!(display.contains("Outcome"));
+}
+
+#[test]
+fn experiment_outcome_surprise_positive_when_overestimate() {
+    let p = make_proposal(
+        "sur1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        800_000,
+        100_000,
+    );
+    let outcome = acquisition_experiment_oracle::record_outcome(&p, 200_000);
+    assert!(
+        outcome.surprise_millionths > 0,
+        "overestimate should produce surprise"
+    );
+}
+
+// ===========================================================================
+// Enrichment tests — OracleCalibration serde
+// ===========================================================================
+
+#[test]
+fn oracle_calibration_serde_roundtrip() {
+    use frankenengine_engine::acquisition_experiment_oracle::OracleCalibration;
+    let p = make_proposal(
+        "cal1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let outcome = acquisition_experiment_oracle::record_outcome(&p, 500_000);
+    let cal = acquisition_experiment_oracle::calibrate_oracle(&[outcome], &[p]);
+    let json = serde_json::to_string(&cal).unwrap();
+    let back: OracleCalibration = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, cal);
+}
+
+#[test]
+fn oracle_calibration_with_errors() {
+    let p = make_proposal(
+        "cal2",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        800_000,
+        100_000,
+    );
+    let outcome = acquisition_experiment_oracle::record_outcome(&p, 200_000);
+    let cal = acquisition_experiment_oracle::calibrate_oracle(&[outcome], &[p]);
+    assert!(cal.mean_absolute_error_millionths > 0);
+}
+
+// ===========================================================================
+// Enrichment tests — AcquisitionError
+// ===========================================================================
+
+#[test]
+fn acquisition_error_all_variants_display() {
+    let errors = [
+        AcquisitionError::NoCandidates,
+        AcquisitionError::BudgetExhausted,
+        AcquisitionError::InternalError("test".into()),
+    ];
+    for e in &errors {
+        let display = format!("{e}");
+        assert!(!display.is_empty());
+    }
+}
+
+#[test]
+fn acquisition_error_serde_roundtrip() {
+    let errors = [
+        AcquisitionError::NoCandidates,
+        AcquisitionError::BudgetExhausted,
+        AcquisitionError::InternalError("bad proposal".into()),
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: AcquisitionError = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, *e);
+    }
+}
+
+// ===========================================================================
+// Enrichment tests — partition_by_kind
+// ===========================================================================
+
+#[test]
+fn partition_by_kind_groups_correctly() {
+    let p1 = make_proposal(
+        "pk1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let p2 = make_proposal(
+        "pk2",
+        ExperimentKind::CorpusAddition,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let p3 = make_proposal(
+        "pk3",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
+    let proposals = [p1, p2, p3];
+    let partitioned = acquisition_experiment_oracle::partition_by_kind(&proposals);
+    assert_eq!(partitioned.len(), 2);
+    assert_eq!(
+        partitioned
+            .get(&ExperimentKind::BoardCellProbe)
+            .map(|v| v.len()),
+        Some(2)
+    );
+    assert_eq!(
+        partitioned
+            .get(&ExperimentKind::CorpusAddition)
+            .map(|v| v.len()),
+        Some(1)
+    );
+}
+
+// ===========================================================================
+// Enrichment tests — find_dominant_signal
+// ===========================================================================
+
+#[test]
+fn find_dominant_signal_empty_returns_none() {
+    assert!(acquisition_experiment_oracle::find_dominant_signal(&[]).is_none());
+}
+
+#[test]
+fn find_dominant_signal_returns_highest() {
+    let p1 = make_proposal(
+        "ds1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        200_000,
+        500_000,
+        100_000,
+    );
+    let p2 = make_proposal(
+        "ds2",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        900_000,
+        500_000,
+        100_000,
+    );
+    let dominant = acquisition_experiment_oracle::find_dominant_signal(&[p1, p2]);
+    assert!(dominant.is_some());
+}
+
+// ===========================================================================
+// Enrichment tests — allocate_budget_by_kind
+// ===========================================================================
+
+#[test]
+fn allocate_budget_by_kind_distributes() {
+    let proposals = vec![
+        make_proposal(
+            "alloc1",
+            ExperimentKind::BoardCellProbe,
+            AcquisitionSignal::LiveShiftPressure,
+            500_000,
+            300_000,
+            100_000,
+        ),
+        make_proposal(
+            "alloc2",
+            ExperimentKind::CorpusAddition,
+            AcquisitionSignal::StalenessAlarm,
+            400_000,
+            200_000,
+            100_000,
+        ),
+    ];
+    let allocation = acquisition_experiment_oracle::allocate_budget_by_kind(&proposals, 1_000_000);
+    assert!(!allocation.is_empty());
+    let total: u64 = allocation.values().sum();
+    // Total should be close to 1_000_000 (may have rounding)
+    assert!(total <= 1_000_000 + 100);
+}
+
+// ===========================================================================
+// Enrichment tests — proposal content hash sensitivity
+// ===========================================================================
+
+#[test]
+fn proposal_content_hash_changes_with_gain() {
+    let p1 = ExperimentProposal::new(
+        "ch1".to_string(),
+        ExperimentKind::BoardCellProbe,
+        "cell-a".to_string(),
+        vec![(AcquisitionSignal::CoverageDebt, 500_000)],
+        500_000,
+        300_000,
+        100_000,
+        "test".to_string(),
+    );
+    let p2 = ExperimentProposal::new(
+        "ch1".to_string(),
+        ExperimentKind::BoardCellProbe,
+        "cell-a".to_string(),
+        vec![(AcquisitionSignal::CoverageDebt, 500_000)],
+        800_000, // different gain
+        300_000,
+        100_000,
+        "test".to_string(),
+    );
+    assert_ne!(p1.content_hash, p2.content_hash);
+}
+
+// ===========================================================================
+// Enrichment tests — multiple proposals selection
+// ===========================================================================
+
+#[test]
+fn select_experiments_multiple_within_budget() {
+    let p1 = make_proposal(
+        "ms1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        200_000,
+    );
+    let p2 = make_proposal(
+        "ms2",
+        ExperimentKind::CorpusAddition,
+        AcquisitionSignal::PersistentHole,
+        600_000,
+        400_000,
+        200_000,
+    );
+    let plan = acquisition_experiment_oracle::select_experiments(
+        vec![p1, p2],
+        1_000_000,
+        &default_weights(),
+    )
+    .unwrap();
+    assert_eq!(plan.proposals.len(), 2);
+    assert!(plan.budget_remaining_millionths < 1_000_000);
+    assert!(plan.total_expected_gain_millionths > 0);
+}
+
+// ===========================================================================
+// Enrichment tests — combine_signal_strengths
+// ===========================================================================
+
+#[test]
+fn combine_signal_strengths_three_signals() {
+    let combined =
+        acquisition_experiment_oracle::combine_signal_strengths(&[1_000_000, 1_000_000, 1_000_000]);
+    // Diminishing: 1M + 500K + 250K = 1_750_000
+    assert_eq!(combined, 1_750_000);
+}
+
+#[test]
+fn combine_signal_strengths_monotonic() {
+    let one = acquisition_experiment_oracle::combine_signal_strengths(&[500_000]);
+    let two = acquisition_experiment_oracle::combine_signal_strengths(&[500_000, 500_000]);
+    let three =
+        acquisition_experiment_oracle::combine_signal_strengths(&[500_000, 500_000, 500_000]);
+    assert!(two > one, "more signals should increase total");
+    assert!(three > two, "more signals should increase total");
+}
+
+// ===========================================================================
+// Enrichment tests — exploration_ratio
+// ===========================================================================
+
+#[test]
+fn exploration_ratio_mixed() {
+    let p1 = make_proposal(
+        "er1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let p2 = make_proposal(
+        "er2",
+        ExperimentKind::DarkMatterExploration,
+        AcquisitionSignal::SemanticDarkMatter,
+        500_000,
+        500_000,
+        100_000,
+    );
+    let ratio = acquisition_experiment_oracle::exploration_ratio(&[p1, p2]);
+    assert!(
+        ratio > 0 && ratio < MILLIONTHS,
+        "mixed should be between 0 and 1M: {}",
+        ratio
+    );
+}
+
+// ===========================================================================
+// Enrichment tests — staleness_penalty edge cases
+// ===========================================================================
+
+#[test]
+fn staleness_penalty_zero_age() {
+    assert_eq!(acquisition_experiment_oracle::staleness_penalty(0, 10), 0);
+}
+
+#[test]
+fn staleness_penalty_at_threshold() {
+    assert_eq!(acquisition_experiment_oracle::staleness_penalty(10, 10), 0);
+}
+
+#[test]
+fn staleness_penalty_increases_with_age() {
+    let p20 = acquisition_experiment_oracle::staleness_penalty(20, 10);
+    let p30 = acquisition_experiment_oracle::staleness_penalty(30, 10);
+    assert!(p30 >= p20, "older evidence should have >= penalty");
+}

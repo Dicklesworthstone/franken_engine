@@ -19,7 +19,7 @@ use frankenengine_engine::kernel_synthesis_contract::{
     KERNEL_SYNTH_POLICY_ID, KERNEL_SYNTH_SCHEMA_VERSION, KernelCorpus, KernelFamily, KernelSchema,
     KernelSynthCertificate, KernelSynthError, KernelSynthEvidenceManifest, MILLIONTHS,
     ProofRequirement, SynthesisBudget, SynthesisEnvelope, build_synthesis_envelope,
-    evaluate_eligibility, mine_canonical_kernels, run_kernel_synth_evidence,
+    evaluate_eligibility, mine_canonical_kernels, run_kernel_synth_evidence, validate_schemas,
 };
 
 // ---------------------------------------------------------------------------
@@ -498,4 +498,163 @@ fn integration_certificate_serde_roundtrip() {
     let json = serde_json::to_string(cert).unwrap();
     let back: KernelSynthCertificate = serde_json::from_str(&json).unwrap();
     assert_eq!(*cert, back);
+}
+
+// ---------------------------------------------------------------------------
+// validate_schemas
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_validate_schemas_empty_corpus_error() {
+    let result = validate_schemas(&[]);
+    assert_eq!(result, Err(KernelSynthError::EmptyCorpus));
+}
+
+#[test]
+fn integration_validate_schemas_duplicate_kernel_error() {
+    let schemas = vec![eligible_schema("dup-id"), eligible_schema("dup-id")];
+    let result = validate_schemas(&schemas);
+    match result {
+        Err(KernelSynthError::DuplicateKernel { id }) => {
+            assert_eq!(id, "dup-id");
+        }
+        other => panic!("expected DuplicateKernel, got {other:?}"),
+    }
+}
+
+#[test]
+fn integration_validate_schemas_empty_id_error() {
+    let mut schema = eligible_schema("will-clear");
+    schema.id = String::new();
+    let result = validate_schemas(&[schema]);
+    assert!(
+        matches!(result, Err(KernelSynthError::InvalidSchema { .. })),
+        "expected InvalidSchema for empty id"
+    );
+}
+
+#[test]
+fn integration_validate_schemas_valid_corpus_ok() {
+    let schemas = vec![
+        eligible_schema("v1"),
+        side_effectful_schema("v2"),
+        nondeterministic_schema("v3"),
+    ];
+    assert!(validate_schemas(&schemas).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// KernelSynthError Display — remaining variants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_error_display_invalid_budget() {
+    let e = KernelSynthError::InvalidBudget {
+        reason: "time must be positive".into(),
+    };
+    let msg = e.to_string();
+    assert!(msg.contains("invalid budget"), "got: {msg}");
+    assert!(msg.contains("time must be positive"), "got: {msg}");
+}
+
+#[test]
+fn integration_error_display_invalid_schema() {
+    let e = KernelSynthError::InvalidSchema {
+        reason: "empty pattern description".into(),
+    };
+    let msg = e.to_string();
+    assert!(msg.contains("invalid schema"), "got: {msg}");
+    assert!(msg.contains("empty pattern description"), "got: {msg}");
+}
+
+// ---------------------------------------------------------------------------
+// ForbiddenReason Display — full variant coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_forbidden_reason_display_all_variants() {
+    let expected = [
+        (ForbiddenReason::SideEffect, "side_effect"),
+        (ForbiddenReason::NonDeterministic, "non_deterministic"),
+        (ForbiddenReason::UnboundedComplexity, "unbounded_complexity"),
+        (ForbiddenReason::SecuritySensitive, "security_sensitive"),
+        (
+            ForbiddenReason::InsufficientEvidence,
+            "insufficient_evidence",
+        ),
+        (ForbiddenReason::PolicyRestriction, "policy_restriction"),
+    ];
+    for (reason, label) in expected {
+        assert_eq!(reason.to_string(), label);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// KernelFamily Display — full variant coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_kernel_family_display_all_variants() {
+    let expected = [
+        (KernelFamily::ArithmeticLoop, "arithmetic_loop"),
+        (KernelFamily::CollectionIteration, "collection_iteration"),
+        (KernelFamily::StringProcessing, "string_processing"),
+        (KernelFamily::RegExpMatch, "regexp_match"),
+        (KernelFamily::PropertyAccess, "property_access"),
+        (KernelFamily::TypeGuard, "type_guard"),
+        (KernelFamily::MemoryAllocation, "memory_allocation"),
+        (KernelFamily::HostcallBatch, "hostcall_batch"),
+        (KernelFamily::ReactRender, "react_render"),
+        (KernelFamily::ModuleInit, "module_init"),
+    ];
+    for (family, label) in expected {
+        assert_eq!(
+            family.to_string(),
+            label,
+            "family {family:?} display mismatch"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EligibilityDecision serde — forbidden decision
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_eligibility_decision_forbidden_serde_roundtrip() {
+    let decision = evaluate_eligibility(&side_effectful_schema("forbidden-serde"));
+    assert_eq!(decision.status, EligibilityStatus::Forbidden);
+    let json = serde_json::to_string(&decision).unwrap();
+    let back: EligibilityDecision = serde_json::from_str(&json).unwrap();
+    assert_eq!(decision, back);
+    assert!(!back.forbidden_reasons.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// SynthesisEnvelope — empty input determinism
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_envelope_empty_input_hash_determinism() {
+    let e1 = build_synthesis_envelope(&[]);
+    let e2 = build_synthesis_envelope(&[]);
+    assert_eq!(e1.envelope_hash, e2.envelope_hash);
+    assert!(e1.eligible.is_empty());
+    assert!(e1.forbidden.is_empty());
+    assert!(e1.deferred.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Certificate hash determinism across evidence runs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_certificate_hash_determinism_across_runs() {
+    let m1 = run_kernel_synth_evidence();
+    let m2 = run_kernel_synth_evidence();
+    assert_eq!(m1.certificates.len(), m2.certificates.len());
+    for (c1, c2) in m1.certificates.iter().zip(m2.certificates.iter()) {
+        assert_eq!(c1.certificate_hash, c2.certificate_hash);
+        assert_eq!(c1.kernel_id, c2.kernel_id);
+    }
 }

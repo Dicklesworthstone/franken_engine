@@ -119,8 +119,10 @@ fn constants_are_nonempty() {
 
 #[test]
 fn max_limits_are_positive() {
-    assert!(MAX_RULES_PER_PACK > 0);
-    assert!(MAX_INTERFERENCE_ENTRIES > 0);
+    const {
+        assert!(MAX_RULES_PER_PACK > 0);
+        assert!(MAX_INTERFERENCE_ENTRIES > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

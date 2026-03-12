@@ -207,7 +207,7 @@ fn trace_entry_serde_roundtrip() {
     let prev_hash = ContentHash::compute(b"genesis");
     let entry = TraceEntry {
         entry_index: 0,
-        prev_entry_hash: prev_hash.clone(),
+        prev_entry_hash: prev_hash,
         entry_hash: ContentHash::compute(b"test-hash"),
         decision: snapshot,
         epoch: SecurityEpoch::from_raw(5),

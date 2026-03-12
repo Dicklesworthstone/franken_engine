@@ -1,0 +1,905 @@
+#![forbid(unsafe_code)]
+//! Enrichment integration tests for the `lowering_pipeline` module.
+//!
+//! Covers gaps not addressed by existing test files: constant/schema
+//! validation, Display uniqueness, deep serde roundtrips for artifact
+//! entry types, RequiredDeclassificationArtifactEntry serde defaults,
+//! finalize-observable behavior, and pipeline-level structural assertions.
+
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::assertions_on_constants,
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op,
+    clippy::manual_abs_diff
+)]
+
+use std::collections::BTreeSet;
+
+use frankenengine_engine::ast::{
+    BindingPattern, Expression, ExpressionStatement, ParseGoal, SourceSpan, Statement,
+    SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+};
+use frankenengine_engine::ifc_artifacts::{Label, ProofMethod};
+use frankenengine_engine::ir_contract::{Ir0Module, IrLevel};
+use frankenengine_engine::lowering_pipeline::{
+    DeniedFlowArtifactEntry, FlowProofArtifactEntry, InvariantCheck, IsomorphismLedgerEntry,
+    LoweringContext, LoweringEvent, LoweringPipelineError, LoweringPipelineOutput, PassWitness,
+    RequiredDeclassificationArtifactEntry, RuntimeCheckpointArtifactEntry,
+    lower_ir0_to_ir1, lower_ir0_to_ir3,
+};
+use frankenengine_engine::parser::SemanticError;
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+fn span() -> SourceSpan {
+    SourceSpan::new(0, 1, 1, 1, 1, 2)
+}
+
+fn ctx() -> LoweringContext {
+    LoweringContext::new("trace-enrich", "decision-enrich", "policy-enrich")
+}
+
+fn script_ir0_numeric(value: i64) -> Ir0Module {
+    let tree = SyntaxTree {
+        goal: ParseGoal::Script,
+        body: vec![Statement::Expression(ExpressionStatement {
+            expression: Expression::NumericLiteral(value),
+            span: span(),
+        })],
+        span: span(),
+    };
+    Ir0Module::from_syntax_tree(tree, "enrichment_fixture.js")
+}
+
+fn var_decl_ir0(name: &str, value: i64) -> Ir0Module {
+    let tree = SyntaxTree {
+        goal: ParseGoal::Script,
+        body: vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Var,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::Identifier(name.to_string()),
+                initializer: Some(Expression::NumericLiteral(value)),
+                span: span(),
+            }],
+            span: span(),
+        })],
+        span: span(),
+    };
+    Ir0Module::from_syntax_tree(tree, "var_decl_fixture.js")
+}
+
+fn empty_ir0() -> Ir0Module {
+    let tree = SyntaxTree {
+        goal: ParseGoal::Script,
+        body: Vec::new(),
+        span: span(),
+    };
+    Ir0Module::from_syntax_tree(tree, "empty.js")
+}
+
+fn run_full_pipeline(ir0: &Ir0Module) -> LoweringPipelineOutput {
+    lower_ir0_to_ir3(ir0, &ctx()).expect("full pipeline should succeed")
+}
+
+// ============================================================================
+// Section 1: Constants and Schema (3 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_schema_version_starts_with_frankenengine() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    assert!(
+        output
+            .ir2_flow_proof_artifact
+            .schema_version
+            .starts_with("frankenengine."),
+        "schema_version should start with 'frankenengine.' but was: {}",
+        output.ir2_flow_proof_artifact.schema_version
+    );
+}
+
+#[test]
+fn enrichment_denied_flow_error_code_starts_with_fe_lower() {
+    // Construct a DeniedFlowArtifactEntry directly and verify the expected error code pattern.
+    let entry = DeniedFlowArtifactEntry {
+        op_index: 0,
+        source_label: Label::Secret,
+        sink_clearance: Label::Public,
+        capability: None,
+        reason: "test denial".to_string(),
+        error_code: "FE-LOWER-IFC-0001".to_string(),
+    };
+    assert!(
+        entry.error_code.starts_with("FE-LOWER-"),
+        "error_code should start with 'FE-LOWER-' but was: {}",
+        entry.error_code
+    );
+}
+
+#[test]
+fn enrichment_component_field_is_lowering_pipeline() {
+    let ir0 = script_ir0_numeric(1);
+    let context = LoweringContext::new("t-comp", "d-comp", "p-comp");
+    let output = lower_ir0_to_ir3(&ir0, &context).expect("pipeline");
+    for event in &output.events {
+        assert_eq!(
+            event.component, "lowering_pipeline",
+            "component should always be 'lowering_pipeline'"
+        );
+    }
+}
+
+// ============================================================================
+// Section 2: LoweringPipelineError Display uniqueness (2 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_all_error_variants_produce_unique_display_strings() {
+    let semantic_err = SemanticError::new(
+        frankenengine_engine::parser::SemanticErrorCode::DuplicateLetConstDeclaration,
+        Some("x".to_string()),
+        None,
+    );
+    let errors: Vec<LoweringPipelineError> = vec![
+        LoweringPipelineError::EmptyIr0Body,
+        LoweringPipelineError::IrContractValidation {
+            code: "FE-IR-001".to_string(),
+            level: IrLevel::Ir1,
+            message: "test message".to_string(),
+        },
+        LoweringPipelineError::InvariantViolation {
+            detail: "invariant detail",
+        },
+        LoweringPipelineError::FlowLatticeFailure {
+            detail: "lattice detail".to_string(),
+        },
+        LoweringPipelineError::UnauthorizedFlow {
+            op_index: 0,
+            source_label: Label::Secret,
+            sink_clearance: Label::Public,
+            detail: "unauthorized detail".to_string(),
+        },
+        LoweringPipelineError::SemanticViolation(semantic_err),
+    ];
+    let display_strings: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
+    assert_eq!(
+        display_strings.len(),
+        errors.len(),
+        "all error variant Display strings should be unique"
+    );
+}
+
+#[test]
+fn enrichment_error_messages_contain_discriminating_text() {
+    let err_empty = LoweringPipelineError::EmptyIr0Body;
+    assert!(err_empty.to_string().contains("no statements"));
+
+    let err_ir = LoweringPipelineError::IrContractValidation {
+        code: "FE-IR-X".to_string(),
+        level: IrLevel::Ir2,
+        message: "bad".to_string(),
+    };
+    let display = err_ir.to_string();
+    assert!(display.contains("FE-IR-X"));
+    assert!(display.contains("ir2"));
+
+    let err_flow = LoweringPipelineError::FlowLatticeFailure {
+        detail: "lattice broke".to_string(),
+    };
+    assert!(err_flow.to_string().contains("lattice broke"));
+}
+
+// ============================================================================
+// Section 3: LoweringContext (3 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_lowering_context_clone_produces_equal() {
+    let lc = LoweringContext::new("trace-clone", "decision-clone", "policy-clone");
+    let cloned = lc.clone();
+    assert_eq!(lc, cloned);
+    assert_eq!(lc.trace_id, cloned.trace_id);
+    assert_eq!(lc.decision_id, cloned.decision_id);
+    assert_eq!(lc.policy_id, cloned.policy_id);
+}
+
+#[test]
+fn enrichment_lowering_context_debug_contains_all_fields() {
+    let lc = LoweringContext::new("t-dbg", "d-dbg", "p-dbg");
+    let debug = format!("{lc:?}");
+    assert!(debug.contains("trace_id"), "Debug should contain trace_id");
+    assert!(
+        debug.contains("decision_id"),
+        "Debug should contain decision_id"
+    );
+    assert!(
+        debug.contains("policy_id"),
+        "Debug should contain policy_id"
+    );
+}
+
+#[test]
+fn enrichment_lowering_context_serde_preserves_all_fields() {
+    let lc = LoweringContext::new("trace-serde", "decision-serde", "policy-serde");
+    let json = serde_json::to_string(&lc).expect("serialize");
+    let decoded: LoweringContext = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.trace_id, "trace-serde");
+    assert_eq!(decoded.decision_id, "decision-serde");
+    assert_eq!(decoded.policy_id, "policy-serde");
+}
+
+// ============================================================================
+// Section 4: InvariantCheck (3 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_invariant_check_passed_true() {
+    let check = InvariantCheck {
+        name: "scope_valid".to_string(),
+        passed: true,
+        detail: "all scopes valid".to_string(),
+    };
+    assert!(check.passed);
+    assert_eq!(check.name, "scope_valid");
+}
+
+#[test]
+fn enrichment_invariant_check_passed_false() {
+    let check = InvariantCheck {
+        name: "hash_linkage".to_string(),
+        passed: false,
+        detail: "hash mismatch detected".to_string(),
+    };
+    assert!(!check.passed);
+    assert_eq!(check.detail, "hash mismatch detected");
+}
+
+#[test]
+fn enrichment_invariant_check_detail_preserved_in_serde() {
+    let check = InvariantCheck {
+        name: "detail_test".to_string(),
+        passed: true,
+        detail: "special chars: <>\"&\t\n".to_string(),
+    };
+    let json = serde_json::to_string(&check).expect("serialize");
+    let decoded: InvariantCheck = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.detail, check.detail);
+    assert_eq!(decoded.name, "detail_test");
+}
+
+// ============================================================================
+// Section 5: PassWitness (5 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_pass_witness_empty_invariant_checks_is_valid() {
+    let witness = PassWitness {
+        pass_id: "empty_checks".to_string(),
+        input_hash: "sha256:aaa".to_string(),
+        output_hash: "sha256:bbb".to_string(),
+        rollback_token: "sha256:aaa".to_string(),
+        invariant_checks: Vec::new(),
+    };
+    let json = serde_json::to_string(&witness).expect("serialize");
+    let decoded: PassWitness = serde_json::from_str(&json).expect("deserialize");
+    assert!(decoded.invariant_checks.is_empty());
+    assert_eq!(decoded.pass_id, "empty_checks");
+}
+
+#[test]
+fn enrichment_pass_witness_all_checks_passed_is_passing() {
+    let witness = PassWitness {
+        pass_id: "all_pass".to_string(),
+        input_hash: "sha256:in".to_string(),
+        output_hash: "sha256:out".to_string(),
+        rollback_token: "sha256:in".to_string(),
+        invariant_checks: vec![
+            InvariantCheck {
+                name: "check_a".to_string(),
+                passed: true,
+                detail: "ok".to_string(),
+            },
+            InvariantCheck {
+                name: "check_b".to_string(),
+                passed: true,
+                detail: "ok".to_string(),
+            },
+        ],
+    };
+    assert!(
+        witness.invariant_checks.iter().all(|c| c.passed),
+        "all checks passed means witness is 'passing'"
+    );
+}
+
+#[test]
+fn enrichment_pass_witness_any_check_failed_is_failing() {
+    let witness = PassWitness {
+        pass_id: "some_fail".to_string(),
+        input_hash: "sha256:in".to_string(),
+        output_hash: "sha256:out".to_string(),
+        rollback_token: "sha256:in".to_string(),
+        invariant_checks: vec![
+            InvariantCheck {
+                name: "check_ok".to_string(),
+                passed: true,
+                detail: "ok".to_string(),
+            },
+            InvariantCheck {
+                name: "check_bad".to_string(),
+                passed: false,
+                detail: "fail".to_string(),
+            },
+        ],
+    };
+    assert!(
+        !witness.invariant_checks.iter().all(|c| c.passed),
+        "any failed check means witness is 'failing'"
+    );
+}
+
+#[test]
+fn enrichment_pass_witness_pass_id_preserved_in_serde() {
+    let witness = PassWitness {
+        pass_id: "custom_pass_id_12345".to_string(),
+        input_hash: "sha256:abc".to_string(),
+        output_hash: "sha256:def".to_string(),
+        rollback_token: "sha256:abc".to_string(),
+        invariant_checks: Vec::new(),
+    };
+    let json = serde_json::to_string(&witness).expect("serialize");
+    let decoded: PassWitness = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.pass_id, "custom_pass_id_12345");
+}
+
+#[test]
+fn enrichment_pass_witness_rollback_token_equals_input_hash() {
+    let ir0 = script_ir0_numeric(7);
+    let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
+    assert_eq!(
+        result.witness.rollback_token, result.witness.input_hash,
+        "rollback_token should equal input_hash for IR0->IR1 pass"
+    );
+}
+
+// ============================================================================
+// Section 6: IsomorphismLedgerEntry (3 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_isomorphism_ledger_op_counts_preserved() {
+    let entry = IsomorphismLedgerEntry {
+        pass_id: "test_pass".to_string(),
+        input_hash: "sha256:in".to_string(),
+        output_hash: "sha256:out".to_string(),
+        input_op_count: 42,
+        output_op_count: 100,
+    };
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let decoded: IsomorphismLedgerEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.input_op_count, 42);
+    assert_eq!(decoded.output_op_count, 100);
+}
+
+#[test]
+fn enrichment_isomorphism_ledger_serde_preserves_all_fields() {
+    let entry = IsomorphismLedgerEntry {
+        pass_id: "ir1_to_ir2".to_string(),
+        input_hash: "sha256:input123".to_string(),
+        output_hash: "sha256:output456".to_string(),
+        input_op_count: 5,
+        output_op_count: 8,
+    };
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let decoded: IsomorphismLedgerEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.pass_id, "ir1_to_ir2");
+    assert_eq!(decoded.input_hash, "sha256:input123");
+    assert_eq!(decoded.output_hash, "sha256:output456");
+    assert_eq!(decoded.input_op_count, 5);
+    assert_eq!(decoded.output_op_count, 8);
+}
+
+#[test]
+fn enrichment_isomorphism_ledger_different_pass_ids_differ() {
+    let entry_a = IsomorphismLedgerEntry {
+        pass_id: "ir0_to_ir1".to_string(),
+        input_hash: "sha256:same".to_string(),
+        output_hash: "sha256:same".to_string(),
+        input_op_count: 1,
+        output_op_count: 1,
+    };
+    let entry_b = IsomorphismLedgerEntry {
+        pass_id: "ir1_to_ir2".to_string(),
+        input_hash: "sha256:same".to_string(),
+        output_hash: "sha256:same".to_string(),
+        input_op_count: 1,
+        output_op_count: 1,
+    };
+    assert_ne!(entry_a, entry_b);
+}
+
+// ============================================================================
+// Section 7: FlowProofArtifactEntry types (8 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_flow_proof_entry_none_capability() {
+    let entry = FlowProofArtifactEntry {
+        op_index: 0,
+        source_label: Label::Public,
+        sink_clearance: Label::Internal,
+        capability: None,
+        proof_method: ProofMethod::StaticAnalysis,
+    };
+    assert!(entry.capability.is_none());
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded, entry);
+}
+
+#[test]
+fn enrichment_flow_proof_entry_some_capability() {
+    let entry = FlowProofArtifactEntry {
+        op_index: 5,
+        source_label: Label::Confidential,
+        sink_clearance: Label::Secret,
+        capability: Some("fs.read".to_string()),
+        proof_method: ProofMethod::StaticAnalysis,
+    };
+    assert_eq!(entry.capability.as_deref(), Some("fs.read"));
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.capability, Some("fs.read".to_string()));
+}
+
+#[test]
+fn enrichment_flow_proof_entry_all_label_variants() {
+    let labels = vec![
+        Label::Public,
+        Label::Internal,
+        Label::Confidential,
+        Label::Secret,
+        Label::TopSecret,
+    ];
+    for label in &labels {
+        let entry = FlowProofArtifactEntry {
+            op_index: 0,
+            source_label: label.clone(),
+            sink_clearance: Label::Public,
+            capability: None,
+            proof_method: ProofMethod::StaticAnalysis,
+        };
+        let json = serde_json::to_string(&entry).expect("serialize");
+        let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded.source_label, *label);
+    }
+}
+
+#[test]
+fn enrichment_flow_proof_entry_static_analysis_method() {
+    let entry = FlowProofArtifactEntry {
+        op_index: 0,
+        source_label: Label::Public,
+        sink_clearance: Label::Public,
+        capability: None,
+        proof_method: ProofMethod::StaticAnalysis,
+    };
+    assert_eq!(entry.proof_method, ProofMethod::StaticAnalysis);
+}
+
+#[test]
+fn enrichment_denied_flow_entry_error_code_always_fe_lower_ifc() {
+    let entry = DeniedFlowArtifactEntry {
+        op_index: 3,
+        source_label: Label::TopSecret,
+        sink_clearance: Label::Public,
+        capability: Some("net.send".to_string()),
+        reason: "flow denied by policy".to_string(),
+        error_code: "FE-LOWER-IFC-0001".to_string(),
+    };
+    assert_eq!(entry.error_code, "FE-LOWER-IFC-0001");
+}
+
+#[test]
+fn enrichment_denied_flow_entry_reason_preserved() {
+    let reason_text = "secret data cannot flow to public sink without declassification";
+    let entry = DeniedFlowArtifactEntry {
+        op_index: 0,
+        source_label: Label::Secret,
+        sink_clearance: Label::Public,
+        capability: None,
+        reason: reason_text.to_string(),
+        error_code: "FE-LOWER-IFC-0001".to_string(),
+    };
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let decoded: DeniedFlowArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.reason, reason_text);
+}
+
+#[test]
+fn enrichment_runtime_checkpoint_entry_reason_preserved() {
+    let entry = RuntimeCheckpointArtifactEntry {
+        op_index: 7,
+        source_label: Label::Internal,
+        sink_clearance: Label::Public,
+        capability: Some("hostcall.invoke".to_string()),
+        reason: "dynamic_capability".to_string(),
+    };
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let decoded: RuntimeCheckpointArtifactEntry =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.reason, "dynamic_capability");
+    assert_eq!(decoded.capability, Some("hostcall.invoke".to_string()));
+}
+
+#[test]
+fn enrichment_runtime_checkpoint_entry_optional_capability() {
+    let entry = RuntimeCheckpointArtifactEntry {
+        op_index: 0,
+        source_label: Label::Public,
+        sink_clearance: Label::Public,
+        capability: None,
+        reason: "test".to_string(),
+    };
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let decoded: RuntimeCheckpointArtifactEntry =
+        serde_json::from_str(&json).expect("deserialize");
+    assert!(decoded.capability.is_none());
+}
+
+// ============================================================================
+// Section 8: Ir2FlowProofArtifact finalize (observable behavior) (5 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_artifact_id_non_empty_after_pipeline() {
+    let ir0 = script_ir0_numeric(42);
+    let output = run_full_pipeline(&ir0);
+    assert!(
+        !output.ir2_flow_proof_artifact.artifact_id.is_empty(),
+        "artifact_id should be non-empty after finalize"
+    );
+    assert!(
+        output
+            .ir2_flow_proof_artifact
+            .artifact_id
+            .starts_with("sha256:"),
+        "artifact_id should start with sha256:"
+    );
+}
+
+#[test]
+fn enrichment_same_content_produces_same_artifact_id() {
+    let ir0 = script_ir0_numeric(42);
+    let output_a = run_full_pipeline(&ir0);
+    let output_b = run_full_pipeline(&ir0);
+    assert_eq!(
+        output_a.ir2_flow_proof_artifact.artifact_id,
+        output_b.ir2_flow_proof_artifact.artifact_id,
+        "same input should produce identical artifact_id (determinism)"
+    );
+}
+
+#[test]
+fn enrichment_different_content_produces_different_artifact_id() {
+    // Use a plain numeric literal vs. a call expression to ensure
+    // the flow proof artifact genuinely differs (calls inject hostcall
+    // flow annotations that change the artifact content).
+    let ir0_a = script_ir0_numeric(42);
+    let tree_b = SyntaxTree {
+        goal: ParseGoal::Script,
+        body: vec![Statement::Expression(ExpressionStatement {
+            expression: Expression::Call {
+                callee: Box::new(Expression::Identifier("f".to_string())),
+                arguments: vec![Expression::NumericLiteral(1)],
+            },
+            span: span(),
+        })],
+        span: span(),
+    };
+    let ir0_b = Ir0Module::from_syntax_tree(tree_b, "call_fixture.js");
+    let output_a = run_full_pipeline(&ir0_a);
+    let output_b = run_full_pipeline(&ir0_b);
+    assert_ne!(
+        output_a.ir2_flow_proof_artifact.artifact_id,
+        output_b.ir2_flow_proof_artifact.artifact_id,
+        "structurally different input should produce different artifact_id"
+    );
+}
+
+#[test]
+fn enrichment_artifact_proved_flows_are_sorted() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    let proved = &output.ir2_flow_proof_artifact.proved_flows;
+    let mut sorted = proved.clone();
+    sorted.sort();
+    assert_eq!(
+        proved, &sorted,
+        "proved_flows should be sorted after finalize"
+    );
+}
+
+#[test]
+fn enrichment_artifact_denied_flows_are_sorted() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    let denied = &output.ir2_flow_proof_artifact.denied_flows;
+    let mut sorted = denied.clone();
+    sorted.sort();
+    assert_eq!(
+        denied, &sorted,
+        "denied_flows should be sorted after finalize"
+    );
+}
+
+// ============================================================================
+// Section 9: RequiredDeclassificationArtifactEntry serde defaults (4 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_required_declass_default_decision_contract_id() {
+    let json = r#"{
+        "op_index": 0,
+        "source_label": "Secret",
+        "sink_clearance": "Public",
+        "capability": null,
+        "obligation_id": "ob-1"
+    }"#;
+    let entry: RequiredDeclassificationArtifactEntry =
+        serde_json::from_str(json).expect("deserialize with defaults");
+    assert_eq!(entry.decision_contract_id, "");
+}
+
+#[test]
+fn enrichment_required_declass_default_requires_operator_approval() {
+    let json = r#"{
+        "op_index": 0,
+        "source_label": "Secret",
+        "sink_clearance": "Public",
+        "capability": null,
+        "obligation_id": "ob-2"
+    }"#;
+    let entry: RequiredDeclassificationArtifactEntry =
+        serde_json::from_str(json).expect("deserialize with defaults");
+    assert!(!entry.requires_operator_approval);
+}
+
+#[test]
+fn enrichment_required_declass_default_receipt_linkage_required() {
+    let json = r#"{
+        "op_index": 0,
+        "source_label": "Secret",
+        "sink_clearance": "Public",
+        "capability": null,
+        "obligation_id": "ob-3"
+    }"#;
+    let entry: RequiredDeclassificationArtifactEntry =
+        serde_json::from_str(json).expect("deserialize with defaults");
+    assert!(!entry.receipt_linkage_required);
+}
+
+#[test]
+fn enrichment_required_declass_default_replay_command_hint() {
+    let json = r#"{
+        "op_index": 0,
+        "source_label": "Secret",
+        "sink_clearance": "Public",
+        "capability": null,
+        "obligation_id": "ob-4"
+    }"#;
+    let entry: RequiredDeclassificationArtifactEntry =
+        serde_json::from_str(json).expect("deserialize with defaults");
+    assert_eq!(entry.replay_command_hint, "");
+}
+
+// ============================================================================
+// Section 10: LoweringEvent (4 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_lowering_event_with_error_code_serde_roundtrip() {
+    let event = LoweringEvent {
+        trace_id: "t-err".to_string(),
+        decision_id: "d-err".to_string(),
+        policy_id: "p-err".to_string(),
+        component: "lowering_pipeline".to_string(),
+        event: "ir0_to_ir1_lowered".to_string(),
+        outcome: "fail".to_string(),
+        error_code: Some("FE-LOWER-0001".to_string()),
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let decoded: LoweringEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded, event);
+    assert_eq!(decoded.error_code, Some("FE-LOWER-0001".to_string()));
+}
+
+#[test]
+fn enrichment_lowering_event_without_error_code_serde_roundtrip() {
+    let event = LoweringEvent {
+        trace_id: "t-ok".to_string(),
+        decision_id: "d-ok".to_string(),
+        policy_id: "p-ok".to_string(),
+        component: "lowering_pipeline".to_string(),
+        event: "ir1_to_ir2_lowered".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let decoded: LoweringEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded, event);
+    assert!(decoded.error_code.is_none());
+}
+
+#[test]
+fn enrichment_lowering_event_component_always_lowering_pipeline() {
+    let ir0 = script_ir0_numeric(99);
+    let context = LoweringContext::new("t-cmp", "d-cmp", "p-cmp");
+    let output = lower_ir0_to_ir3(&ir0, &context).expect("pipeline");
+    assert!(
+        !output.events.is_empty(),
+        "successful pipeline should produce events"
+    );
+    for event in &output.events {
+        assert_eq!(event.component, "lowering_pipeline");
+    }
+}
+
+#[test]
+fn enrichment_all_event_outcomes_unique_within_pipeline() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    let event_names: BTreeSet<&str> = output.events.iter().map(|e| e.event.as_str()).collect();
+    assert_eq!(
+        event_names.len(),
+        output.events.len(),
+        "all event names within a pipeline run should be unique"
+    );
+}
+
+// ============================================================================
+// Section 11: Full pipeline integration (5 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_empty_ir0_body_produces_error() {
+    let ir0 = empty_ir0();
+    let context = ctx();
+    let err = lower_ir0_to_ir3(&ir0, &context).expect_err("empty body should fail");
+    assert_eq!(err, LoweringPipelineError::EmptyIr0Body);
+}
+
+#[test]
+fn enrichment_simple_var_decl_produces_three_pass_witnesses() {
+    let ir0 = var_decl_ir0("x", 42);
+    let output = run_full_pipeline(&ir0);
+    assert_eq!(
+        output.witnesses.len(),
+        3,
+        "pipeline should produce exactly 3 pass witnesses"
+    );
+}
+
+#[test]
+fn enrichment_pipeline_output_has_three_ledger_entries() {
+    let ir0 = var_decl_ir0("y", 7);
+    let output = run_full_pipeline(&ir0);
+    assert_eq!(
+        output.isomorphism_ledger.len(),
+        3,
+        "pipeline should produce exactly 3 ledger entries (one per pass)"
+    );
+}
+
+#[test]
+fn enrichment_pass_ids_are_ir0_ir1_ir2_ir3() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+
+    let witness_ids: Vec<&str> = output.witnesses.iter().map(|w| w.pass_id.as_str()).collect();
+    assert_eq!(witness_ids, vec!["ir0_to_ir1", "ir1_to_ir2", "ir2_to_ir3"]);
+
+    let ledger_ids: Vec<&str> = output
+        .isomorphism_ledger
+        .iter()
+        .map(|e| e.pass_id.as_str())
+        .collect();
+    assert_eq!(ledger_ids, vec!["ir0_to_ir1", "ir1_to_ir2", "ir2_to_ir3"]);
+}
+
+#[test]
+fn enrichment_pipeline_determinism_same_input_identical_output() {
+    let ir0 = script_ir0_numeric(77);
+    let context = LoweringContext::new("t-det", "d-det", "p-det");
+    let first = lower_ir0_to_ir3(&ir0, &context).expect("first run");
+    let second = lower_ir0_to_ir3(&ir0, &context).expect("second run");
+
+    let first_json = serde_json::to_string(&first).expect("serialize first");
+    let second_json = serde_json::to_string(&second).expect("serialize second");
+    assert_eq!(
+        first_json, second_json,
+        "same input + context should produce byte-identical output"
+    );
+}
+
+// ============================================================================
+// Section 12: LoweringPassResult (3 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_lowering_pass_result_serde_roundtrip() {
+    let ir0 = script_ir0_numeric(10);
+    let result = lower_ir0_to_ir1(&ir0).expect("ir0->ir1");
+    let json = serde_json::to_string(&result).expect("serialize");
+    let decoded: frankenengine_engine::lowering_pipeline::LoweringPassResult<
+        frankenengine_engine::ir_contract::Ir1Module,
+    > = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.witness.pass_id, result.witness.pass_id);
+    assert_eq!(decoded.ledger_entry.pass_id, result.ledger_entry.pass_id);
+}
+
+#[test]
+fn enrichment_lowering_pass_result_witness_and_ledger_accessible() {
+    let ir0 = script_ir0_numeric(20);
+    let result = lower_ir0_to_ir1(&ir0).expect("ir0->ir1");
+    assert!(!result.witness.input_hash.is_empty());
+    assert!(!result.witness.output_hash.is_empty());
+    assert!(!result.ledger_entry.input_hash.is_empty());
+    assert!(!result.ledger_entry.output_hash.is_empty());
+    assert!(result.ledger_entry.output_op_count > 0);
+}
+
+#[test]
+fn enrichment_lowering_pass_result_pass_id_matches_witness_and_ledger() {
+    let ir0 = script_ir0_numeric(30);
+    let result = lower_ir0_to_ir1(&ir0).expect("ir0->ir1");
+    assert_eq!(
+        result.witness.pass_id, result.ledger_entry.pass_id,
+        "pass_id should match between witness and ledger_entry"
+    );
+}
+
+// ============================================================================
+// Section 13: LoweringPipelineOutput serde (2 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_full_output_serde_roundtrip() {
+    let ir0 = script_ir0_numeric(55);
+    let output = run_full_pipeline(&ir0);
+    let json = serde_json::to_string(&output).expect("serialize full output");
+    let decoded: LoweringPipelineOutput =
+        serde_json::from_str(&json).expect("deserialize full output");
+    assert_eq!(decoded.witnesses.len(), output.witnesses.len());
+    assert_eq!(
+        decoded.isomorphism_ledger.len(),
+        output.isomorphism_ledger.len()
+    );
+    assert_eq!(decoded.events.len(), output.events.len());
+    assert_eq!(
+        decoded.ir2_flow_proof_artifact.artifact_id,
+        output.ir2_flow_proof_artifact.artifact_id
+    );
+}
+
+#[test]
+fn enrichment_output_events_non_empty_for_successful_pipeline() {
+    let ir0 = script_ir0_numeric(100);
+    let output = run_full_pipeline(&ir0);
+    assert!(
+        !output.events.is_empty(),
+        "successful pipeline should produce at least one event"
+    );
+    assert_eq!(
+        output.events.len(),
+        4,
+        "successful pipeline produces 4 events (ir0->ir1, ir1->ir2, flow_check, ir2->ir3)"
+    );
+}

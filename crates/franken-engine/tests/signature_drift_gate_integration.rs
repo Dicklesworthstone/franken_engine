@@ -91,10 +91,12 @@ fn test_schema_version_is_v1() {
 
 #[test]
 fn test_default_constants_are_positive() {
-    assert!(DEFAULT_MAX_DRIFT_MILLIONTHS > 0);
-    assert!(DEFAULT_MAX_TRANSITIONS > 0);
-    assert!(DEFAULT_MAX_STALENESS_EPOCHS > 0);
-    assert!(MIN_OBSERVATIONS_FOR_DRIFT > 0);
+    const {
+        assert!(DEFAULT_MAX_DRIFT_MILLIONTHS > 0);
+        assert!(DEFAULT_MAX_TRANSITIONS > 0);
+        assert!(DEFAULT_MAX_STALENESS_EPOCHS > 0);
+        assert!(MIN_OBSERVATIONS_FOR_DRIFT > 0);
+    }
 }
 
 // ===========================================================================

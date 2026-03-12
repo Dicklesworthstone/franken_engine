@@ -639,20 +639,14 @@ fn pattern_category_serde_roundtrip() {
 #[test]
 fn scope_classification_display() {
     assert_eq!(format!("{}", ScopeClassification::TestOnly), "test_only");
-    assert_eq!(
-        format!("{}", ScopeClassification::Production),
-        "production"
-    );
+    assert_eq!(format!("{}", ScopeClassification::Production), "production");
     assert_eq!(format!("{}", ScopeClassification::Unknown), "unknown");
 }
 
 #[test]
 fn file_verdict_display() {
     assert_eq!(format!("{}", FileVerdict::Clean), "clean");
-    assert_eq!(
-        format!("{}", FileVerdict::TestOnlyUsage),
-        "test_only_usage"
-    );
+    assert_eq!(format!("{}", FileVerdict::TestOnlyUsage), "test_only_usage");
     assert_eq!(
         format!("{}", FileVerdict::ProductionViolation),
         "production_violation"

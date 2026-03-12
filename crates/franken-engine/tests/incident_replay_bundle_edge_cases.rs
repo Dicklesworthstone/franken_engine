@@ -522,7 +522,7 @@ fn policy_snapshot_different_epochs() {
 fn merkle_root_leaf_order_matters() {
     let a = ContentHash::compute(b"alpha");
     let b = ContentHash::compute(b"beta");
-    let root_ab = compute_merkle_root(&[a.clone(), b.clone()]);
+    let root_ab = compute_merkle_root(&[a, b]);
     let root_ba = compute_merkle_root(&[b, a]);
     assert_ne!(
         root_ab, root_ba,

@@ -698,3 +698,169 @@ fn obligation_error_serde_is_deterministic() {
     let b = serde_json::to_string(&err).expect("second");
     assert_eq!(a, b);
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: additional coverage
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn leak_policy_default_is_production() {
+    assert_eq!(LeakPolicy::default(), LeakPolicy::Production);
+}
+
+#[test]
+fn obligation_tracker_new_with_explicit_policy() {
+    let tracker = ObligationTracker::new(LeakPolicy::Lab);
+    assert_eq!(tracker.leak_policy(), LeakPolicy::Lab);
+    assert_eq!(tracker.active_count(), 0);
+    assert_eq!(tracker.total_count(), 0);
+}
+
+#[test]
+fn active_count_tracks_unresolved_operations() {
+    let mut cell = ExecutionCell::new("ext-active", CellKind::Extension, "trace-active");
+    let mut tracker = ObligationTracker::default();
+    tracker
+        .begin_operation(&mut cell, "act-1", TwoPhaseCategory::ResourceAlloc, "first")
+        .expect("begin");
+    tracker
+        .begin_operation(
+            &mut cell,
+            "act-2",
+            TwoPhaseCategory::StateMutation,
+            "second",
+        )
+        .expect("begin");
+    assert_eq!(tracker.active_count(), 2);
+    assert_eq!(tracker.total_count(), 2);
+
+    tracker
+        .commit_operation(&mut cell, "act-1")
+        .expect("commit");
+    assert_eq!(tracker.active_count(), 1);
+    assert_eq!(tracker.total_count(), 2);
+}
+
+#[test]
+fn drain_events_clears_and_returns() {
+    let mut cell = ExecutionCell::new("ext-drain-ev", CellKind::Extension, "trace-drain-ev");
+    let mut tracker = ObligationTracker::default();
+    tracker
+        .begin_operation(
+            &mut cell,
+            "drain-ev-op",
+            TwoPhaseCategory::ResourceAlloc,
+            "drain test",
+        )
+        .expect("begin");
+    assert!(!tracker.events().is_empty());
+    let drained = tracker.drain_events();
+    assert!(!drained.is_empty());
+    assert!(
+        tracker.events().is_empty(),
+        "events should be empty after drain"
+    );
+}
+
+#[test]
+fn leaks_accessor_returns_detected_leaks() {
+    let mut cell = ExecutionCell::new("ext-leak-acc", CellKind::Extension, "trace-leak-acc");
+    let mut cx = IntegrationCx::new(99, 300);
+    let mut tracker = ObligationTracker::default();
+    tracker
+        .begin_operation(
+            &mut cell,
+            "leak-acc-op",
+            TwoPhaseCategory::PermissionGrant,
+            "leak accessor test",
+        )
+        .expect("begin");
+    cell.close(
+        &mut cx,
+        CancelReason::OperatorShutdown,
+        DrainDeadline { max_ticks: 1 },
+    )
+    .expect("close");
+    tracker.detect_leaks(&cell);
+    let leaks = tracker.leaks();
+    assert_eq!(leaks.len(), 1);
+    assert_eq!(leaks[0].operation_id, "leak-acc-op");
+    assert_eq!(leaks[0].category, TwoPhaseCategory::PermissionGrant);
+}
+
+#[test]
+fn category_stats_serde_roundtrip() {
+    use frankenengine_engine::obligation_integration::CategoryStats;
+    let stats = CategoryStats {
+        started: 5,
+        committed: 3,
+        aborted: 1,
+        leaked: 1,
+    };
+    let json = serde_json::to_string(&stats).expect("serialize");
+    let back: CategoryStats = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, stats);
+}
+
+#[test]
+fn category_stats_default_is_zero() {
+    use frankenengine_engine::obligation_integration::CategoryStats;
+    let stats = CategoryStats::default();
+    assert_eq!(stats.started, 0);
+    assert_eq!(stats.committed, 0);
+    assert_eq!(stats.aborted, 0);
+    assert_eq!(stats.leaked, 0);
+}
+
+#[test]
+fn obligation_error_all_variants_serde_roundtrip() {
+    let errors = vec![
+        ObligationIntegrationError::CellNotRunning {
+            cell_id: "c1".to_string(),
+            current_state: RegionState::Closed,
+        },
+        ObligationIntegrationError::OperationNotFound {
+            operation_id: "op1".to_string(),
+        },
+        ObligationIntegrationError::AlreadyResolved {
+            operation_id: "op2".to_string(),
+            current_phase: OperationPhase::Committed,
+        },
+        ObligationIntegrationError::DuplicateOperation {
+            operation_id: "op3".to_string(),
+        },
+        ObligationIntegrationError::CellError {
+            message: "err".to_string(),
+        },
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).expect("serialize");
+        let back: ObligationIntegrationError = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(err.error_code(), back.error_code());
+    }
+}
+
+#[test]
+fn abort_after_commit_fails() {
+    let mut cell = ExecutionCell::new("ext-ca", CellKind::Extension, "trace-ca");
+    let mut tracker = ObligationTracker::default();
+    tracker
+        .begin_operation(
+            &mut cell,
+            "op-ca",
+            TwoPhaseCategory::EvidenceCommit,
+            "commit then abort",
+        )
+        .expect("begin");
+    tracker
+        .commit_operation(&mut cell, "op-ca")
+        .expect("commit");
+    let err = tracker.abort_operation(&mut cell, "op-ca");
+    assert!(err.is_err(), "abort after commit must fail");
+}
+
+#[test]
+fn leak_policy_display_is_nonempty() {
+    assert!(!format!("{:?}", LeakPolicy::Lab).is_empty());
+    assert!(!format!("{:?}", LeakPolicy::Production).is_empty());
+}

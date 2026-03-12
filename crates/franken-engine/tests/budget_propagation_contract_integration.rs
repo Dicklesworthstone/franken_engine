@@ -295,8 +295,10 @@ fn integration_validator_fail_open_unknown_boundary() {
 
 #[test]
 fn integration_validator_parent_reserve_enforced() {
-    let mut policy = BudgetPropagationPolicy::default();
-    policy.min_parent_reserve_ms = 8_000; // high reserve
+    let policy = BudgetPropagationPolicy {
+        min_parent_reserve_ms: 8_000, // high reserve
+        ..Default::default()
+    };
 
     let mut validator = BudgetPropagationValidator::new(policy);
     let result = validator
@@ -713,7 +715,12 @@ fn integration_violations_accessor() {
 #[test]
 fn integration_event_sequence_monotonic() {
     let mut v = BudgetPropagationValidator::with_defaults();
-    let _ = v.derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "p",
+        "c1",
+        10_000,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
     let _ = v.derive_child_budget("p", "c2", 8_000, BudgetBoundaryKind::ParentToChildSession);
     let _ = v.derive_child_budget("p", "c3", 6_000, BudgetBoundaryKind::ParentToChildDelegate);
     let _ = v.validate_cleanup("p", 4_000);
@@ -763,8 +770,10 @@ fn integration_report_hash_changes_with_different_inputs() {
 #[test]
 fn integration_report_epoch_matches_policy() {
     let epoch = SecurityEpoch::from_raw(42);
-    let mut policy = BudgetPropagationPolicy::default();
-    policy.epoch = epoch;
+    let policy = BudgetPropagationPolicy {
+        epoch,
+        ..Default::default()
+    };
     let mut v = BudgetPropagationValidator::new(policy);
     let _ = v.derive_child_budget("p", "c", 10_000, BudgetBoundaryKind::ParentToChildExtension);
     let report = v.build_report();
@@ -797,8 +806,10 @@ fn integration_policy_rule_for_missing_returns_none() {
 
 #[test]
 fn integration_reserve_forces_bounded_by_reserve_path() {
-    let mut policy = BudgetPropagationPolicy::default();
-    policy.min_parent_reserve_ms = 9_000;
+    let policy = BudgetPropagationPolicy {
+        min_parent_reserve_ms: 9_000,
+        ..Default::default()
+    };
     let mut v = BudgetPropagationValidator::new(policy);
 
     // With 10k parent, 80% = 8k, but reserve is 9k → max child = 1k

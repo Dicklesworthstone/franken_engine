@@ -433,3 +433,251 @@ fn json_fields_parse_budget() {
         assert!(obj.contains_key(key), "ParserBudget missing field: {key}");
     }
 }
+
+// ===========================================================================
+// 15) GrammarCompletenessMatrix — scalar_reference_es2020 + summary
+// ===========================================================================
+
+#[test]
+fn grammar_completeness_matrix_schema_version_stable() {
+    let matrix = frankenengine_engine::parser::GrammarCompletenessMatrix::scalar_reference_es2020();
+    assert_eq!(
+        matrix.schema_version,
+        frankenengine_engine::parser::GrammarCompletenessMatrix::SCHEMA_VERSION
+    );
+    assert!(!matrix.schema_version.is_empty());
+}
+
+#[test]
+fn grammar_completeness_matrix_has_families() {
+    let matrix = frankenengine_engine::parser::GrammarCompletenessMatrix::scalar_reference_es2020();
+    assert!(
+        matrix.families.len() >= 10,
+        "expected at least 10 grammar families, got {}",
+        matrix.families.len()
+    );
+    assert_eq!(matrix.parser_mode, ParserMode::ScalarReference);
+}
+
+#[test]
+fn grammar_completeness_summary_counts_consistent() {
+    let matrix = frankenengine_engine::parser::GrammarCompletenessMatrix::scalar_reference_es2020();
+    let summary = matrix.summary();
+    assert_eq!(summary.family_count, matrix.families.len() as u64);
+    assert_eq!(
+        summary.supported_families
+            + summary.partially_supported_families
+            + summary.unsupported_families,
+        summary.family_count
+    );
+    // Completeness in millionths should be in range [0, 1_000_000]
+    assert!(summary.completeness_millionths <= 1_000_000);
+}
+
+#[test]
+fn grammar_completeness_summary_serde_roundtrip() {
+    let matrix = frankenengine_engine::parser::GrammarCompletenessMatrix::scalar_reference_es2020();
+    let summary = matrix.summary();
+    let json = serde_json::to_string(&summary).unwrap();
+    let rt: frankenengine_engine::parser::GrammarCompletenessSummary =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(rt.family_count, summary.family_count);
+    assert_eq!(rt.completeness_millionths, summary.completeness_millionths);
+}
+
+// ===========================================================================
+// 16) ParseDiagnosticTaxonomy — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn diagnostic_taxonomy_v1_serde_roundtrip() {
+    let taxonomy = ParseDiagnosticTaxonomy::v1();
+    let json = serde_json::to_string(&taxonomy).unwrap();
+    let rt: ParseDiagnosticTaxonomy = serde_json::from_str(&json).unwrap();
+    assert_eq!(rt, taxonomy);
+    assert_eq!(rt.rules.len(), ParseErrorCode::ALL.len());
+}
+
+// ===========================================================================
+// 17) ParseDiagnosticTaxonomy rule cross-checks
+// ===========================================================================
+
+#[test]
+fn diagnostic_taxonomy_v1_rule_fields_match_error_code_methods() {
+    let taxonomy = ParseDiagnosticTaxonomy::v1();
+    for code in ParseErrorCode::ALL {
+        let rule = taxonomy.rule_for(code).unwrap();
+        assert_eq!(rule.parse_error_code, code);
+        assert_eq!(rule.diagnostic_code, code.stable_diagnostic_code());
+        assert_eq!(rule.category, code.diagnostic_category());
+        assert_eq!(rule.severity, code.diagnostic_severity());
+        assert_eq!(
+            rule.message_template,
+            code.diagnostic_message_template(None)
+        );
+    }
+}
+
+// ===========================================================================
+// 18) ParseErrorCode — budget_kind-specific message templates
+// ===========================================================================
+
+#[test]
+fn parse_error_code_budget_exceeded_message_templates_per_kind() {
+    let source_bytes_msg = ParseErrorCode::BudgetExceeded
+        .diagnostic_message_template(Some(ParseBudgetKind::SourceBytes));
+    let token_msg = ParseErrorCode::BudgetExceeded
+        .diagnostic_message_template(Some(ParseBudgetKind::TokenCount));
+    let recursion_msg = ParseErrorCode::BudgetExceeded
+        .diagnostic_message_template(Some(ParseBudgetKind::RecursionDepth));
+    let none_msg = ParseErrorCode::BudgetExceeded.diagnostic_message_template(None);
+
+    // All should be non-empty and distinct
+    let msgs: BTreeSet<&str> = [source_bytes_msg, token_msg, recursion_msg, none_msg]
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(
+        msgs.len(),
+        4,
+        "all budget-kind message templates should be distinct"
+    );
+}
+
+// ===========================================================================
+// 19) ParseDiagnosticEnvelope — static method stability
+// ===========================================================================
+
+#[test]
+fn parse_diagnostic_envelope_static_methods() {
+    assert_eq!(
+        frankenengine_engine::parser::ParseDiagnosticEnvelope::schema_version(),
+        PARSER_DIAGNOSTIC_SCHEMA_VERSION
+    );
+    assert_eq!(
+        frankenengine_engine::parser::ParseDiagnosticEnvelope::taxonomy_version(),
+        PARSER_DIAGNOSTIC_TAXONOMY_VERSION
+    );
+    assert_eq!(
+        frankenengine_engine::parser::ParseDiagnosticEnvelope::canonical_hash_algorithm(),
+        "sha256"
+    );
+    assert_eq!(
+        frankenengine_engine::parser::ParseDiagnosticEnvelope::canonical_hash_prefix(),
+        "sha256:"
+    );
+}
+
+// ===========================================================================
+// 20) ParseEventMaterializationErrorCode — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn materialization_error_code_serde_roundtrip() {
+    let codes = [
+        ParseEventMaterializationErrorCode::UnsupportedContractVersion,
+        ParseEventMaterializationErrorCode::UnsupportedSchemaVersion,
+        ParseEventMaterializationErrorCode::ParseFailedEventStream,
+        ParseEventMaterializationErrorCode::MissingParseStarted,
+        ParseEventMaterializationErrorCode::MissingParseCompleted,
+        ParseEventMaterializationErrorCode::InvalidEventSequence,
+        ParseEventMaterializationErrorCode::InconsistentEventEnvelope,
+        ParseEventMaterializationErrorCode::GoalMismatch,
+        ParseEventMaterializationErrorCode::ModeMismatch,
+        ParseEventMaterializationErrorCode::StatementCountMismatch,
+        ParseEventMaterializationErrorCode::StatementIndexMismatch,
+        ParseEventMaterializationErrorCode::StatementKindMismatch,
+        ParseEventMaterializationErrorCode::StatementHashMismatch,
+        ParseEventMaterializationErrorCode::StatementSpanMismatch,
+        ParseEventMaterializationErrorCode::SourceHashMismatch,
+        ParseEventMaterializationErrorCode::AstHashMismatch,
+        ParseEventMaterializationErrorCode::SourceParseFailed,
+    ];
+    for code in codes {
+        let json = serde_json::to_string(&code).unwrap();
+        let rt: ParseEventMaterializationErrorCode = serde_json::from_str(&json).unwrap();
+        assert_eq!(code, rt);
+    }
+}
+
+// ===========================================================================
+// 21) ParserBudget — specific default values
+// ===========================================================================
+
+#[test]
+fn parser_budget_default_specific_values() {
+    let budget = ParserBudget::default();
+    // 1 MiB source byte limit
+    assert_eq!(budget.max_source_bytes, 1_048_576);
+    // 64K token limit
+    assert_eq!(budget.max_token_count, 65_536);
+    // 256 recursion depth
+    assert_eq!(budget.max_recursion_depth, 256);
+}
+
+// ===========================================================================
+// 22) ParserBudget — clone and equality
+// ===========================================================================
+
+#[test]
+fn parser_budget_clone_eq() {
+    let budget = ParserBudget::default();
+    let cloned = budget.clone();
+    assert_eq!(budget, cloned);
+}
+
+// ===========================================================================
+// 23) GrammarCompletenessMatrix — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn grammar_completeness_matrix_serde_roundtrip() {
+    let matrix = frankenengine_engine::parser::GrammarCompletenessMatrix::scalar_reference_es2020();
+    let json = serde_json::to_string(&matrix).unwrap();
+    let rt: frankenengine_engine::parser::GrammarCompletenessMatrix =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(rt, matrix);
+}
+
+// ===========================================================================
+// 24) GrammarFamilyCoverage — family_id uniqueness
+// ===========================================================================
+
+#[test]
+fn grammar_family_ids_unique() {
+    let matrix = frankenengine_engine::parser::GrammarCompletenessMatrix::scalar_reference_es2020();
+    let ids: BTreeSet<&str> = matrix
+        .families
+        .iter()
+        .map(|f| f.family_id.as_str())
+        .collect();
+    assert_eq!(
+        ids.len(),
+        matrix.families.len(),
+        "all family_id values should be unique"
+    );
+}
+
+// ===========================================================================
+// 25) ParseEventIr — static method stability
+// ===========================================================================
+
+#[test]
+fn parse_event_ir_static_methods() {
+    assert_eq!(
+        frankenengine_engine::parser::ParseEventIr::contract_version(),
+        PARSE_EVENT_IR_CONTRACT_VERSION
+    );
+    assert_eq!(
+        frankenengine_engine::parser::ParseEventIr::schema_version(),
+        PARSE_EVENT_IR_SCHEMA_VERSION
+    );
+    assert_eq!(
+        frankenengine_engine::parser::ParseEventIr::canonical_hash_algorithm(),
+        PARSE_EVENT_IR_HASH_ALGORITHM
+    );
+    assert_eq!(
+        frankenengine_engine::parser::ParseEventIr::canonical_hash_prefix(),
+        PARSE_EVENT_IR_HASH_PREFIX
+    );
+}

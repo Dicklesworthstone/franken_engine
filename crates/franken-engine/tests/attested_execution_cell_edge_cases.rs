@@ -385,21 +385,27 @@ fn verification_result_display_all() {
 fn verification_result_is_valid_false_for_all_non_valid() {
     assert!(!VerificationResult::SignatureInvalid.is_valid());
     assert!(!VerificationResult::NonceMismatch.is_valid());
-    assert!(!VerificationResult::Expired {
-        issued_at_ns: 0,
-        validity_window_ns: 0,
-        checked_at_ns: 1,
-    }
-    .is_valid());
-    assert!(!VerificationResult::SignerRevoked {
-        key_id: "k".to_string(),
-    }
-    .is_valid());
-    assert!(!VerificationResult::MeasurementMismatch {
-        expected: ContentHash::compute(b"a"),
-        actual: ContentHash::compute(b"b"),
-    }
-    .is_valid());
+    assert!(
+        !VerificationResult::Expired {
+            issued_at_ns: 0,
+            validity_window_ns: 0,
+            checked_at_ns: 1,
+        }
+        .is_valid()
+    );
+    assert!(
+        !VerificationResult::SignerRevoked {
+            key_id: "k".to_string(),
+        }
+        .is_valid()
+    );
+    assert!(
+        !VerificationResult::MeasurementMismatch {
+            expected: ContentHash::compute(b"a"),
+            actual: ContentHash::compute(b"b"),
+        }
+        .is_valid()
+    );
 }
 
 // ===========================================================================
@@ -542,36 +548,48 @@ fn cell_error_serde_all_variants() {
 
 #[test]
 fn cell_error_display_content() {
-    assert!(CellError::IdDerivation("bad".to_string())
+    assert!(
+        CellError::IdDerivation("bad".to_string())
+            .to_string()
+            .contains("bad")
+    );
+    assert!(
+        CellError::NotFound {
+            cell_id: "c1".to_string()
+        }
         .to_string()
-        .contains("bad"));
-    assert!(CellError::NotFound {
-        cell_id: "c1".to_string()
-    }
-    .to_string()
-    .contains("c1"));
-    assert!(CellError::InvalidTransition {
-        from: CellLifecycle::Active,
-        to: CellLifecycle::Provisioning,
-    }
-    .to_string()
-    .contains("active"));
-    assert!(CellError::NotOperational {
-        lifecycle: CellLifecycle::Suspended
-    }
-    .to_string()
-    .contains("suspended"));
-    assert!(CellError::AttestationFailed {
-        reason: "expired".to_string()
-    }
-    .to_string()
-    .contains("expired"));
+        .contains("c1")
+    );
+    assert!(
+        CellError::InvalidTransition {
+            from: CellLifecycle::Active,
+            to: CellLifecycle::Provisioning,
+        }
+        .to_string()
+        .contains("active")
+    );
+    assert!(
+        CellError::NotOperational {
+            lifecycle: CellLifecycle::Suspended
+        }
+        .to_string()
+        .contains("suspended")
+    );
+    assert!(
+        CellError::AttestationFailed {
+            reason: "expired".to_string()
+        }
+        .to_string()
+        .contains("expired")
+    );
     assert!(CellError::NotMeasured.to_string().contains("measured"));
-    assert!(CellError::TrustRootRevoked {
-        key_id: "k1".to_string()
-    }
-    .to_string()
-    .contains("k1"));
+    assert!(
+        CellError::TrustRootRevoked {
+            key_id: "k1".to_string()
+        }
+        .to_string()
+        .contains("k1")
+    );
     assert!(CellError::EmptyLabel.to_string().contains("label"));
     assert!(CellError::EmptyZone.to_string().contains("zone"));
     assert!(CellError::EmptyAuthority.to_string().contains("authority"));
@@ -1123,9 +1141,10 @@ fn registry_get_nonexistent_returns_none() {
 #[test]
 fn registry_cells_by_function_empty_for_unused() {
     let reg = CellRegistry::new();
-    assert!(reg
-        .cells_by_function(CellFunction::PolicyEvaluator)
-        .is_empty());
+    assert!(
+        reg.cells_by_function(CellFunction::PolicyEvaluator)
+            .is_empty()
+    );
 }
 
 // ===========================================================================

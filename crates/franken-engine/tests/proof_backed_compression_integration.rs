@@ -782,7 +782,7 @@ fn summary_empty_pipeline() {
 #[test]
 fn pipeline_hash_changes_on_process() {
     let mut pipeline = CompressionPipeline::new(epoch(10));
-    let initial_hash = pipeline.pipeline_hash.clone();
+    let initial_hash = pipeline.pipeline_hash;
     let d = desc(
         "hash-change",
         ArtifactDomain::Cache,

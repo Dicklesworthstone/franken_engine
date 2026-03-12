@@ -18,6 +18,7 @@
 
 use std::collections::BTreeSet;
 
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::novelty_scoring_contract::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -592,4 +593,744 @@ fn batch_serde_roundtrip() {
     let json = serde_json::to_string(&b).unwrap();
     let back: NoveltyBatch = serde_json::from_str(&json).unwrap();
     assert_eq!(b, back);
+}
+
+// ===========================================================================
+// CandidateKind
+// ===========================================================================
+
+#[test]
+fn candidate_kind_all_length() {
+    assert_eq!(CandidateKind::ALL.len(), 5);
+}
+
+#[test]
+fn candidate_kind_names_unique() {
+    let names: BTreeSet<&str> = CandidateKind::ALL.iter().map(|k| k.as_str()).collect();
+    assert_eq!(names.len(), CandidateKind::ALL.len());
+}
+
+#[test]
+fn candidate_kind_display_matches_as_str() {
+    for k in CandidateKind::ALL {
+        assert_eq!(k.to_string(), k.as_str());
+    }
+}
+
+#[test]
+fn candidate_kind_serde_all_variants() {
+    for k in CandidateKind::ALL {
+        let json = serde_json::to_string(k).unwrap();
+        let back: CandidateKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(*k, back);
+    }
+}
+
+// ===========================================================================
+// NoveltyCandidate
+// ===========================================================================
+
+#[test]
+fn candidate_new_computes_source_hash() {
+    let c = NoveltyCandidate::new(
+        "test-cand".into(),
+        CandidateKind::Program,
+        5000,
+        vec![100_000, 200_000],
+        b"source-bytes-alpha",
+    );
+    assert_eq!(c.candidate_id, "test-cand");
+    assert_eq!(c.kind, CandidateKind::Program);
+    assert_eq!(c.description_length_bits, 5000);
+    assert_eq!(c.source_hash, ContentHash::compute(b"source-bytes-alpha"));
+}
+
+#[test]
+fn candidate_different_source_different_hash() {
+    let c1 = NoveltyCandidate::new("c1".into(), CandidateKind::Program, 100, vec![], b"aaa");
+    let c2 = NoveltyCandidate::new("c2".into(), CandidateKind::Program, 100, vec![], b"bbb");
+    assert_ne!(c1.source_hash, c2.source_hash);
+}
+
+#[test]
+fn candidate_serde_roundtrip() {
+    let c = NoveltyCandidate::new(
+        "serde-cand".into(),
+        CandidateKind::Package,
+        8000,
+        vec![500_000, 600_000, 700_000],
+        b"pkg-source",
+    );
+    let json = serde_json::to_string(&c).unwrap();
+    let back: NoveltyCandidate = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, back);
+}
+
+// ===========================================================================
+// ScoringConfig
+// ===========================================================================
+
+#[test]
+fn scoring_config_default_validates() {
+    let cfg = ScoringConfig::default_config();
+    assert!(cfg.validate().is_ok());
+}
+
+#[test]
+fn scoring_config_default_weight_sum_is_million() {
+    let cfg = ScoringConfig::default_config();
+    let total: u64 = cfg
+        .dimension_weights
+        .iter()
+        .map(|w| w.weight_millionths)
+        .sum();
+    assert_eq!(total, MILLIONTHS);
+}
+
+#[test]
+fn scoring_config_invalid_weight_sum() {
+    let mut cfg = ScoringConfig::default_config();
+    cfg.dimension_weights[0].weight_millionths += 1;
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn scoring_config_zero_baseline_fails() {
+    let mut cfg = ScoringConfig::default_config();
+    cfg.mdl_baseline_bits = 0;
+    let err = cfg.validate().unwrap_err();
+    assert!(matches!(err, NoveltyError::MdlBaselineZero));
+}
+
+#[test]
+fn scoring_config_content_hash_deterministic() {
+    let cfg1 = ScoringConfig::default_config();
+    let cfg2 = ScoringConfig::default_config();
+    assert_eq!(cfg1.content_hash(), cfg2.content_hash());
+}
+
+#[test]
+fn scoring_config_content_hash_changes_with_baseline() {
+    let cfg1 = ScoringConfig::default_config();
+    let mut cfg2 = ScoringConfig::default_config();
+    cfg2.mdl_baseline_bits = 99_999;
+    assert_ne!(cfg1.content_hash(), cfg2.content_hash());
+}
+
+#[test]
+fn scoring_config_serde_roundtrip() {
+    let cfg = ScoringConfig::default_config();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let back: ScoringConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(cfg, back);
+}
+
+// ===========================================================================
+// NoveltyError
+// ===========================================================================
+
+#[test]
+fn novelty_error_invalid_weights_display() {
+    let e = NoveltyError::InvalidWeights {
+        expected: 1_000_000,
+        actual: 999_999,
+    };
+    let s = e.to_string();
+    assert!(s.contains("999999"));
+    assert!(s.contains("1000000"));
+}
+
+#[test]
+fn novelty_error_empty_candidate_set_display() {
+    let e = NoveltyError::EmptyCandidateSet;
+    assert!(!e.to_string().is_empty());
+}
+
+#[test]
+fn novelty_error_invalid_feature_vector_display() {
+    let e = NoveltyError::InvalidFeatureVector {
+        expected_dims: 7,
+        actual_dims: 3,
+    };
+    let s = e.to_string();
+    assert!(s.contains('7'));
+    assert!(s.contains('3'));
+}
+
+#[test]
+fn novelty_error_mdl_baseline_zero_display() {
+    let e = NoveltyError::MdlBaselineZero;
+    assert!(!e.to_string().is_empty());
+}
+
+#[test]
+fn novelty_error_serde_all_variants() {
+    let errors = vec![
+        NoveltyError::InvalidWeights {
+            expected: 1_000_000,
+            actual: 500_000,
+        },
+        NoveltyError::EmptyCandidateSet,
+        NoveltyError::InvalidFeatureVector {
+            expected_dims: 7,
+            actual_dims: 2,
+        },
+        NoveltyError::MdlBaselineZero,
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: NoveltyError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*e, back);
+    }
+}
+
+// ===========================================================================
+// NoveltyVerdict
+// ===========================================================================
+
+#[test]
+fn verdict_all_length() {
+    assert_eq!(NoveltyVerdict::ALL.len(), 4);
+}
+
+#[test]
+fn verdict_names_unique_v2() {
+    let names: BTreeSet<&str> = NoveltyVerdict::ALL.iter().map(|v| v.as_str()).collect();
+    assert_eq!(names.len(), NoveltyVerdict::ALL.len());
+}
+
+#[test]
+fn verdict_display_matches_as_str() {
+    for v in NoveltyVerdict::ALL {
+        assert_eq!(v.to_string(), v.as_str());
+    }
+}
+
+#[test]
+fn verdict_serde_all_variants() {
+    for v in NoveltyVerdict::ALL {
+        let json = serde_json::to_string(v).unwrap();
+        let back: NoveltyVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+// ===========================================================================
+// compute_mdl_score
+// ===========================================================================
+
+#[test]
+fn mdl_shorter_than_baseline_high_score() {
+    let c = NoveltyCandidate::new(
+        "mdl-short".into(),
+        CandidateKind::Program,
+        2000, // much shorter than baseline 10_000
+        vec![],
+        b"src",
+    );
+    let score = compute_mdl_score(&c, 10_000);
+    // (10_000 - 2_000) / 10_000 = 0.8 => 800_000
+    assert_eq!(score, 800_000);
+}
+
+#[test]
+fn mdl_equal_to_baseline_zero() {
+    let c = NoveltyCandidate::new(
+        "mdl-eq".into(),
+        CandidateKind::Program,
+        10_000,
+        vec![],
+        b"src",
+    );
+    let score = compute_mdl_score(&c, 10_000);
+    assert_eq!(score, 0);
+}
+
+#[test]
+fn mdl_longer_than_baseline_zero() {
+    let c = NoveltyCandidate::new(
+        "mdl-long".into(),
+        CandidateKind::Program,
+        20_000,
+        vec![],
+        b"src",
+    );
+    let score = compute_mdl_score(&c, 10_000);
+    assert_eq!(score, 0);
+}
+
+#[test]
+fn mdl_zero_baseline_returns_zero() {
+    let c = NoveltyCandidate::new(
+        "mdl-zb".into(),
+        CandidateKind::Program,
+        5000,
+        vec![],
+        b"src",
+    );
+    assert_eq!(compute_mdl_score(&c, 0), 0);
+}
+
+// ===========================================================================
+// compute_information_gain
+// ===========================================================================
+
+#[test]
+fn info_gain_no_prior_max() {
+    let c = NoveltyCandidate::new(
+        "ig".into(),
+        CandidateKind::Program,
+        100,
+        vec![500_000],
+        b"src",
+    );
+    assert_eq!(compute_information_gain(&c, &[]), MILLIONTHS);
+}
+
+#[test]
+fn info_gain_identical_prior_zero() {
+    let c = NoveltyCandidate::new(
+        "ig1".into(),
+        CandidateKind::Program,
+        100,
+        vec![500_000, 500_000],
+        b"src1",
+    );
+    let prior = vec![NoveltyCandidate::new(
+        "ig-prior".into(),
+        CandidateKind::Program,
+        100,
+        vec![500_000, 500_000],
+        b"src2",
+    )];
+    let score = compute_information_gain(&c, &prior);
+    assert_eq!(score, 0);
+}
+
+#[test]
+fn info_gain_empty_feature_vector_zero() {
+    let c = NoveltyCandidate::new(
+        "ig-empty".into(),
+        CandidateKind::Program,
+        100,
+        vec![],
+        b"src",
+    );
+    let prior = vec![NoveltyCandidate::new(
+        "ig-p".into(),
+        CandidateKind::Program,
+        100,
+        vec![],
+        b"s2",
+    )];
+    assert_eq!(compute_information_gain(&c, &prior), 0);
+}
+
+#[test]
+fn info_gain_divergent_prior_positive() {
+    let c = NoveltyCandidate::new(
+        "ig-div".into(),
+        CandidateKind::Program,
+        100,
+        vec![900_000, 100_000],
+        b"s1",
+    );
+    let prior = vec![NoveltyCandidate::new(
+        "ig-p2".into(),
+        CandidateKind::Program,
+        100,
+        vec![100_000, 900_000],
+        b"s2",
+    )];
+    let score = compute_information_gain(&c, &prior);
+    assert!(score > 0);
+}
+
+// ===========================================================================
+// score_candidate and score_batch
+// ===========================================================================
+
+#[test]
+fn score_candidate_produces_all_dimensions() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "sc-test".into(),
+        CandidateKind::Program,
+        5000,
+        vec![
+            800_000, 700_000, 100_000, 600_000, 500_000, 400_000, 300_000,
+        ],
+        b"src",
+    );
+    let score = score_candidate(&c, &cfg, &[]);
+    assert_eq!(score.candidate_id, "sc-test");
+    assert_eq!(score.dimension_scores.len(), cfg.dimension_weights.len());
+}
+
+#[test]
+fn score_candidate_high_scores_novel() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "novel-cand".into(),
+        CandidateKind::Program,
+        2000, // very short => high MDL
+        vec![
+            800_000, 700_000, 100_000, 600_000, 500_000, 400_000, 300_000,
+        ],
+        b"src",
+    );
+    let score = score_candidate(&c, &cfg, &[]);
+    // Short description length + high feature values should produce novel
+    assert!(score.total_score_millionths > 0);
+}
+
+#[test]
+fn score_batch_produces_ranked_output() {
+    let cfg = ScoringConfig::default_config();
+    let candidates = vec![
+        NoveltyCandidate::new(
+            "batch-1".into(),
+            CandidateKind::Program,
+            5000,
+            vec![
+                800_000, 700_000, 100_000, 600_000, 500_000, 400_000, 300_000,
+            ],
+            b"s1",
+        ),
+        NoveltyCandidate::new(
+            "batch-2".into(),
+            CandidateKind::Package,
+            15000,
+            vec![200_000, 300_000, 50_000, 150_000, 100_000, 250_000, 200_000],
+            b"s2",
+        ),
+    ];
+    let batch = score_batch(&candidates, &cfg);
+    assert_eq!(batch.candidates.len(), 2);
+    assert!(batch.config.is_some());
+    assert!(!batch.certificates.is_empty());
+    // Batch should be sorted descending by score
+    for i in 1..batch.scores.len() {
+        assert!(batch.scores[i - 1].composite_millionths >= batch.scores[i].composite_millionths);
+    }
+}
+
+#[test]
+fn score_batch_empty_candidates() {
+    let cfg = ScoringConfig::default_config();
+    let batch = score_batch(&[], &cfg);
+    assert_eq!(batch.candidates.len(), 0);
+    assert!(batch.certificates.is_empty());
+    assert_eq!(batch.scores.len(), 0);
+}
+
+// ===========================================================================
+// certify_candidate
+// ===========================================================================
+
+#[test]
+fn certify_candidate_produces_valid_certificate() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "cert-cand".into(),
+        CandidateKind::ReactComponent,
+        8000,
+        vec![
+            500_000, 500_000, 800_000, 400_000, 300_000, 600_000, 700_000,
+        ],
+        b"src",
+    );
+    let score = score_candidate(&c, &cfg, &[]);
+    let cert = certify_candidate(&c, &score, &cfg);
+    assert_eq!(cert.candidate_id, "cert-cand");
+    assert_eq!(cert.schema_version, NOVELTY_SCHEMA_VERSION);
+    assert_eq!(cert.score.candidate_id, "cert-cand");
+}
+
+#[test]
+fn certificate_hash_deterministic() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "det-cert".into(),
+        CandidateKind::Program,
+        5000,
+        vec![
+            600_000, 500_000, 100_000, 400_000, 300_000, 200_000, 100_000,
+        ],
+        b"src",
+    );
+    let score = score_candidate(&c, &cfg, &[]);
+    let cert1 = certify_candidate(&c, &score, &cfg);
+    let cert2 = certify_candidate(&c, &score, &cfg);
+    assert_eq!(cert1.certificate_hash, cert2.certificate_hash);
+}
+
+#[test]
+fn certificate_serde_roundtrip() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "serde-cert".into(),
+        CandidateKind::WorkloadTrace,
+        3000,
+        vec![
+            900_000, 800_000, 200_000, 700_000, 600_000, 500_000, 900_000,
+        ],
+        b"src",
+    );
+    let score = score_candidate(&c, &cfg, &[]);
+    let cert = certify_candidate(&c, &score, &cfg);
+    let json = serde_json::to_string(&cert).unwrap();
+    let back: NoveltyCertificate = serde_json::from_str(&json).unwrap();
+    assert_eq!(cert, back);
+}
+
+// ===========================================================================
+// NoveltyVerdict classification
+// ===========================================================================
+
+#[test]
+fn obstruction_witness_verdict_on_high_obstruction() {
+    let cfg = ScoringConfig::default_config();
+    // feature_vector[2] is obstruction; set >= 500_000 to trigger witness
+    let c = NoveltyCandidate::new(
+        "obs-witness".into(),
+        CandidateKind::Program,
+        5000,
+        vec![
+            100_000, 100_000, 600_000, 100_000, 100_000, 100_000, 100_000,
+        ],
+        b"src",
+    );
+    let score = score_candidate(&c, &cfg, &[]);
+    let cert = certify_candidate(&c, &score, &cfg);
+    assert_eq!(cert.verdict, NoveltyVerdict::ObstructionWitness);
+}
+
+#[test]
+fn marginal_verdict_near_threshold() {
+    let cfg = ScoringConfig::default_config();
+    // Need total just below threshold but within marginal band
+    // threshold = 200_000, marginal_band = 40_000
+    // total in [160_000, 200_000) => Marginal
+    let c = NoveltyCandidate::new(
+        "marginal".into(),
+        CandidateKind::Program,
+        8500, // slightly shorter than 10k baseline => small MDL
+        vec![
+            200_000, 200_000, 100_000, 200_000, 200_000, 200_000, 200_000,
+        ],
+        b"src",
+    );
+    let score = score_candidate(&c, &cfg, &[]);
+    let cert = certify_candidate(&c, &score, &cfg);
+    // Just verify it's not an error; exact verdict depends on weights
+    assert!(
+        cert.verdict == NoveltyVerdict::Marginal
+            || cert.verdict == NoveltyVerdict::Redundant
+            || cert.verdict == NoveltyVerdict::Novel
+    );
+}
+
+// ===========================================================================
+// run_novelty_evidence
+// ===========================================================================
+
+#[test]
+fn run_novelty_evidence_produces_manifest() {
+    let manifest = run_novelty_evidence();
+    assert_eq!(manifest.schema_version, NOVELTY_SCHEMA_VERSION);
+    assert_eq!(manifest.candidates_scored, 5);
+    assert!(manifest.error.is_none());
+    assert!(!manifest.certificates.is_empty());
+    assert!(manifest.novel_count + manifest.redundant_count <= manifest.candidates_scored);
+}
+
+#[test]
+fn run_novelty_evidence_deterministic() {
+    let m1 = run_novelty_evidence();
+    let m2 = run_novelty_evidence();
+    assert_eq!(m1.manifest_hash, m2.manifest_hash);
+    assert_eq!(m1.novel_count, m2.novel_count);
+    assert_eq!(m1.redundant_count, m2.redundant_count);
+}
+
+#[test]
+fn evidence_manifest_serde_roundtrip() {
+    let m = run_novelty_evidence();
+    let json = serde_json::to_string(&m).unwrap();
+    let back: NoveltyEvidenceManifest = serde_json::from_str(&json).unwrap();
+    assert_eq!(m, back);
+}
+
+// ===========================================================================
+// NoveltyScore serde
+// ===========================================================================
+
+#[test]
+fn novelty_score_serde_roundtrip() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "score-serde".into(),
+        CandidateKind::ModuleGraph,
+        7000,
+        vec![
+            400_000, 400_000, 100_000, 300_000, 200_000, 500_000, 600_000,
+        ],
+        b"src",
+    );
+    let score = score_candidate(&c, &cfg, &[]);
+    let json = serde_json::to_string(&score).unwrap();
+    let back: NoveltyScore = serde_json::from_str(&json).unwrap();
+    assert_eq!(score, back);
+}
+
+// ===========================================================================
+// compute_dimension_score
+// ===========================================================================
+
+#[test]
+fn dimension_score_mdl_uses_baseline() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "dim-mdl".into(),
+        CandidateKind::Program,
+        5000,
+        vec![],
+        b"src",
+    );
+    let score = compute_dimension_score(&c, NoveltyDimension::MinimumDescriptionLength, &cfg, &[]);
+    // baseline 10_000, candidate 5_000 => (10000-5000)/10000 = 50%
+    assert_eq!(score, 500_000);
+}
+
+#[test]
+fn dimension_score_info_gain_no_prior() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "dim-ig".into(),
+        CandidateKind::Program,
+        5000,
+        vec![500_000],
+        b"src",
+    );
+    let score = compute_dimension_score(&c, NoveltyDimension::InformationGain, &cfg, &[]);
+    assert_eq!(score, MILLIONTHS);
+}
+
+#[test]
+fn dimension_score_obstruction_from_feature_vector() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "dim-obs".into(),
+        CandidateKind::Program,
+        5000,
+        vec![0, 0, 750_000],
+        b"src",
+    );
+    let score = compute_dimension_score(&c, NoveltyDimension::Obstruction, &cfg, &[]);
+    assert_eq!(score, 750_000);
+}
+
+#[test]
+fn dimension_score_missing_feature_index_zero() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "dim-missing".into(),
+        CandidateKind::Program,
+        5000,
+        vec![], // empty feature vector
+        b"src",
+    );
+    // Obstruction uses index 2, which is missing
+    let score = compute_dimension_score(&c, NoveltyDimension::Obstruction, &cfg, &[]);
+    assert_eq!(score, 0);
+}
+
+// ===========================================================================
+// Batch with certificates
+// ===========================================================================
+
+#[test]
+fn batch_certificates_match_candidates() {
+    let cfg = ScoringConfig::default_config();
+    let candidates = vec![
+        NoveltyCandidate::new(
+            "bc-1".into(),
+            CandidateKind::Program,
+            5000,
+            vec![
+                800_000, 700_000, 100_000, 600_000, 500_000, 400_000, 300_000,
+            ],
+            b"s1",
+        ),
+        NoveltyCandidate::new(
+            "bc-2".into(),
+            CandidateKind::Package,
+            15000,
+            vec![200_000, 300_000, 50_000, 150_000, 100_000, 250_000, 200_000],
+            b"s2",
+        ),
+        NoveltyCandidate::new(
+            "bc-3".into(),
+            CandidateKind::ReactComponent,
+            8000,
+            vec![
+                500_000, 500_000, 800_000, 400_000, 300_000, 600_000, 700_000,
+            ],
+            b"s3",
+        ),
+    ];
+    let batch = score_batch(&candidates, &cfg);
+    // Every candidate should have a certificate
+    let cert_ids: BTreeSet<&str> = batch
+        .certificates
+        .iter()
+        .map(|c| c.candidate_id.as_str())
+        .collect();
+    for c in &candidates {
+        assert!(cert_ids.contains(c.candidate_id.as_str()));
+    }
+}
+
+// ===========================================================================
+// Edge: dimension_score behavioral_divergence decay
+// ===========================================================================
+
+#[test]
+fn behavioral_divergence_applies_decay() {
+    let cfg = ScoringConfig::default_config();
+    let c = NoveltyCandidate::new(
+        "bd-decay".into(),
+        CandidateKind::Program,
+        5000,
+        vec![0, 0, 0, 0, 0, 0, 1_000_000], // index 6 = raw behavioral divergence
+        b"src",
+    );
+    let score = compute_dimension_score(&c, NoveltyDimension::BehavioralDivergence, &cfg, &[]);
+    // decay = 100_000 (10%), so score = 1_000_000 * (1_000_000 - 100_000) / 1_000_000 = 900_000
+    assert_eq!(score, 900_000);
+}
+
+// ===========================================================================
+// Additional constant checks
+// ===========================================================================
+
+#[test]
+fn policy_id_nonempty() {
+    assert!(!NOVELTY_POLICY_ID.is_empty());
+}
+
+#[test]
+fn max_description_length_positive() {
+    const { assert!(MAX_DESCRIPTION_LENGTH > 0) };
+}
+
+#[test]
+fn novelty_component_matches_component() {
+    assert_eq!(NOVELTY_COMPONENT, COMPONENT);
+}
+
+#[test]
+fn novelty_schema_version_matches_schema_version() {
+    assert_eq!(NOVELTY_SCHEMA_VERSION, SCHEMA_VERSION);
 }

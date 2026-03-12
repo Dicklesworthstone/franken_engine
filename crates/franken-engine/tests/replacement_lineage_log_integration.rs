@@ -674,3 +674,707 @@ fn full_lifecycle_lineage_log() {
     let back: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
     assert_eq!(back.len(), 5);
 }
+
+// ===========================================================================
+// 18. LineageLogError Display coverage
+// ===========================================================================
+
+#[test]
+fn lineage_log_error_display_all_variants() {
+    let errors: Vec<(LineageLogError, &str)> = vec![
+        (
+            LineageLogError::SequenceMismatch {
+                expected: 3,
+                got: 5,
+            },
+            "sequence mismatch",
+        ),
+        (
+            LineageLogError::DuplicateReceipt {
+                receipt_id: "r-dup".into(),
+            },
+            "duplicate receipt",
+        ),
+        (
+            LineageLogError::CheckpointNotFound { checkpoint_seq: 7 },
+            "checkpoint not found",
+        ),
+        (LineageLogError::EmptyLog, "log is empty"),
+    ];
+    for (err, expected_substr) in &errors {
+        let display = err.to_string();
+        assert!(
+            display.contains(expected_substr),
+            "Expected '{expected_substr}' in '{display}'"
+        );
+    }
+}
+
+// ===========================================================================
+// 19. Consistency proof error paths
+// ===========================================================================
+
+#[test]
+fn consistency_proof_invalid_checkpoint_order() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0..3 {
+        let receipt = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        log.append(
+            receipt,
+            ReplacementKind::DelegateToNative,
+            (i + 1) * 1_000_000,
+        )
+        .unwrap();
+    }
+    log.create_checkpoint(4_000_000, test_epoch()).unwrap();
+
+    // Same checkpoint seq for older and newer (older >= newer)
+    match log.consistency_proof(0, 0) {
+        Err(LineageLogError::InvalidCheckpointOrder { older, newer }) => {
+            assert_eq!(older, 0);
+            assert_eq!(newer, 0);
+        }
+        other => panic!("expected InvalidCheckpointOrder, got {other:?}"),
+    }
+}
+
+#[test]
+fn consistency_proof_checkpoint_not_found() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(receipt, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.create_checkpoint(2_000_000, test_epoch()).unwrap();
+
+    // Checkpoint seq 99 does not exist
+    match log.consistency_proof(0, 99) {
+        Err(LineageLogError::CheckpointNotFound { checkpoint_seq }) => {
+            assert_eq!(checkpoint_seq, 99);
+        }
+        other => panic!("expected CheckpointNotFound, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// 20. Query with timestamp filters
+// ===========================================================================
+
+#[test]
+fn query_with_min_and_max_timestamp() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0..5 {
+        let receipt = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        log.append(
+            receipt,
+            ReplacementKind::DelegateToNative,
+            (i + 1) * 1_000_000,
+        )
+        .unwrap();
+    }
+
+    // Only entries with timestamp in [2_000_000, 4_000_000]
+    let query = LineageQuery {
+        slot_id: None,
+        kinds: None,
+        min_timestamp_ns: Some(2_000_000),
+        max_timestamp_ns: Some(4_000_000),
+    };
+    let results = log.query(&query);
+    assert_eq!(results.len(), 3);
+    for entry in &results {
+        assert!(entry.receipt.timestamp_ns >= 2_000_000);
+        assert!(entry.receipt.timestamp_ns <= 4_000_000);
+    }
+}
+
+#[test]
+fn query_with_only_min_timestamp() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0..5 {
+        let receipt = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        log.append(
+            receipt,
+            ReplacementKind::DelegateToNative,
+            (i + 1) * 1_000_000,
+        )
+        .unwrap();
+    }
+
+    let query = LineageQuery {
+        slot_id: None,
+        kinds: None,
+        min_timestamp_ns: Some(4_000_000),
+        max_timestamp_ns: None,
+    };
+    let results = log.query(&query);
+    assert_eq!(results.len(), 2);
+}
+
+// ===========================================================================
+// 21. Duplicate receipt rejection
+// ===========================================================================
+
+#[test]
+fn append_duplicate_receipt_is_rejected() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(
+        receipt.clone(),
+        ReplacementKind::DelegateToNative,
+        1_000_000,
+    )
+    .unwrap();
+
+    match log.append(receipt, ReplacementKind::Demotion, 2_000_000) {
+        Err(LineageLogError::DuplicateReceipt { receipt_id }) => {
+            assert!(!receipt_id.is_empty());
+        }
+        other => panic!("expected DuplicateReceipt, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// 22. Events accessor
+// ===========================================================================
+
+#[test]
+fn events_emitted_on_append_and_checkpoint() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    assert!(log.events().is_empty());
+
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(receipt, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    // At least one event emitted for append
+    assert!(!log.events().is_empty());
+    let append_event_count = log.events().len();
+
+    log.create_checkpoint(2_000_000, test_epoch()).unwrap();
+    // Checkpoint creates an additional event
+    assert!(log.events().len() > append_event_count);
+
+    // Verify event fields are populated
+    for event in log.events() {
+        assert!(!event.trace_id.is_empty());
+        assert!(!event.decision_id.is_empty());
+        assert!(!event.policy_id.is_empty());
+        assert!(!event.component.is_empty());
+        assert!(!event.event.is_empty());
+        assert_eq!(event.outcome, "ok");
+    }
+}
+
+// ===========================================================================
+// 23. Merkle root determinism
+// ===========================================================================
+
+#[test]
+fn merkle_root_is_deterministic() {
+    // Two logs with identical entries must produce the same Merkle root.
+    let mut log1 = ReplacementLineageLog::new(default_config());
+    let mut log2 = ReplacementLineageLog::new(default_config());
+
+    for i in 0..4 {
+        let r1 = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        let r2 = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        log1.append(r1, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+        log2.append(r2, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+
+    assert_eq!(log1.merkle_root(), log2.merkle_root());
+}
+
+// ===========================================================================
+// 24. Multiple slots in the same log
+// ===========================================================================
+
+#[test]
+fn multiple_slots_tracked_independently() {
+    let mut log = ReplacementLineageLog::new(default_config());
+
+    // Create receipts for different slots
+    let arts = test_validation_artifacts();
+    let slot_a = SlotId::new("slot-alpha").unwrap();
+    let slot_b = SlotId::new("slot-beta").unwrap();
+
+    let mut r1 = ReplacementReceipt::create_unsigned(CreateReceiptInput {
+        slot_id: &slot_a,
+        old_cell_digest: "old-alpha",
+        new_cell_digest: "new-alpha",
+        validation_artifacts: &arts,
+        rollback_token: "rollback-a",
+        promotion_rationale: "promote alpha",
+        timestamp_ns: 1_000_000,
+        epoch: test_epoch(),
+        zone: "zone-a",
+        required_signatures: 1,
+    })
+    .unwrap();
+    r1.add_signature(&test_signing_key(), "gate").unwrap();
+
+    let mut r2 = ReplacementReceipt::create_unsigned(CreateReceiptInput {
+        slot_id: &slot_b,
+        old_cell_digest: "old-beta",
+        new_cell_digest: "new-beta",
+        validation_artifacts: &arts,
+        rollback_token: "rollback-b",
+        promotion_rationale: "promote beta",
+        timestamp_ns: 2_000_000,
+        epoch: test_epoch(),
+        zone: "zone-a",
+        required_signatures: 1,
+    })
+    .unwrap();
+    r2.add_signature(&test_signing_key(), "gate").unwrap();
+
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.append(r2, ReplacementKind::DelegateToNative, 2_000_000)
+        .unwrap();
+
+    let ids = log.slot_ids();
+    assert_eq!(ids.len(), 2);
+
+    let lineage_a = log.slot_lineage(&slot_a);
+    assert_eq!(lineage_a.len(), 1);
+    assert_eq!(lineage_a[0].old_cell_digest, "old-alpha");
+
+    let lineage_b = log.slot_lineage(&slot_b);
+    assert_eq!(lineage_b.len(), 1);
+    assert_eq!(lineage_b[0].old_cell_digest, "old-beta");
+}
+
+// ===========================================================================
+// 25. LineageStep serde round-trip
+// ===========================================================================
+
+#[test]
+fn lineage_step_serde_round_trip() {
+    use frankenengine_engine::replacement_lineage_log::LineageStep;
+
+    let step = LineageStep {
+        sequence: 42,
+        kind: ReplacementKind::Rollback,
+        old_cell_digest: "old-digest-abc".into(),
+        new_cell_digest: "new-digest-def".into(),
+        receipt_id: "receipt-999".into(),
+        timestamp_ns: 12_345_678,
+        epoch: SecurityEpoch::from_raw(7),
+        validation_artifact_count: 3,
+    };
+    let json = serde_json::to_string(&step).unwrap();
+    let back: LineageStep = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, step);
+}
+
+// ===========================================================================
+// 26. LineageVerification serde round-trip
+// ===========================================================================
+
+#[test]
+fn lineage_verification_serde_round_trip() {
+    use frankenengine_engine::replacement_lineage_log::LineageVerification;
+
+    let v = LineageVerification {
+        slot_id: test_slot_id(),
+        total_entries: 5,
+        chain_valid: true,
+        all_receipts_present: true,
+        issues: vec!["minor issue".into()],
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    let back: LineageVerification = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, v);
+}
+
+// ===========================================================================
+// 27. ConsistencyProof serde round-trip
+// ===========================================================================
+
+#[test]
+fn consistency_proof_serde_round_trip() {
+    use frankenengine_engine::hash_tiers::ContentHash;
+    use frankenengine_engine::replacement_lineage_log::ConsistencyProof;
+
+    let h1 = ContentHash::compute(b"older-root");
+    let h2 = ContentHash::compute(b"newer-root");
+    let eh1 = ContentHash::compute(b"entry-1");
+    let eh2 = ContentHash::compute(b"entry-2");
+
+    let proof = ConsistencyProof {
+        older_checkpoint_seq: 0,
+        newer_checkpoint_seq: 1,
+        older_log_length: 1,
+        newer_log_length: 2,
+        older_root: h1,
+        newer_root: h2,
+        older_entry_hashes: vec![eh1],
+        newer_entry_hashes: vec![eh1, eh2],
+    };
+    let json = serde_json::to_string(&proof).unwrap();
+    let back: ConsistencyProof = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, proof);
+}
+
+// ===========================================================================
+// 28. InclusionProof serde round-trip
+// ===========================================================================
+
+#[test]
+fn inclusion_proof_serde_round_trip() {
+    use frankenengine_engine::replacement_lineage_log::InclusionProof;
+
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0..3 {
+        let receipt = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        log.append(
+            receipt,
+            ReplacementKind::DelegateToNative,
+            (i + 1) * 1_000_000,
+        )
+        .unwrap();
+    }
+
+    let proof = log.inclusion_proof(1).unwrap();
+    let json = serde_json::to_string(&proof).unwrap();
+    let back: InclusionProof = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, proof);
+    // Deserialized proof still verifies
+    assert!(verify_inclusion_proof(&back));
+}
+
+// ===========================================================================
+// 29. LogCheckpoint serde round-trip
+// ===========================================================================
+
+#[test]
+fn log_checkpoint_serde_round_trip() {
+    use frankenengine_engine::replacement_lineage_log::LogCheckpoint;
+
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(receipt, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.create_checkpoint(2_000_000, test_epoch()).unwrap();
+
+    let cp = log.checkpoints()[0].clone();
+    let json = serde_json::to_string(&cp).unwrap();
+    let back: LogCheckpoint = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, cp);
+}
+
+// ===========================================================================
+// 30. Verify slot lineage for empty/missing slot
+// ===========================================================================
+
+#[test]
+fn verify_slot_lineage_for_missing_slot() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(receipt, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+
+    let other_slot = SlotId::new("nonexistent-slot").unwrap();
+    let v = log.verify_slot_lineage(&other_slot);
+    assert_eq!(v.total_entries, 0);
+    assert!(v.chain_valid);
+    assert!(!v.issues.is_empty(), "should report no entries for slot");
+}
+
+// ===========================================================================
+// 31. ReplacementKind clone and Ord
+// ===========================================================================
+
+#[test]
+fn replacement_kind_clone_and_ordering() {
+    let kinds = [
+        ReplacementKind::DelegateToNative,
+        ReplacementKind::Demotion,
+        ReplacementKind::Rollback,
+        ReplacementKind::RePromotion,
+    ];
+
+    // Clone produces equal values
+    for k in &kinds {
+        assert_eq!(k.clone(), *k);
+    }
+
+    // BTreeSet ordering is deterministic
+    let set: BTreeSet<ReplacementKind> = kinds.iter().copied().collect();
+    assert_eq!(set.len(), 4);
+
+    // Inserting duplicates doesn't increase size
+    let mut set2 = set.clone();
+    set2.insert(ReplacementKind::Rollback);
+    assert_eq!(set2.len(), 4);
+}
+
+// ===========================================================================
+// 32. Inclusion proof for all entries in a multi-entry log
+// ===========================================================================
+
+#[test]
+fn inclusion_proof_verifies_for_all_entries() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0..7 {
+        let receipt = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        log.append(
+            receipt,
+            ReplacementKind::DelegateToNative,
+            (i + 1) * 1_000_000,
+        )
+        .unwrap();
+    }
+
+    for i in 0..7 {
+        let proof = log.inclusion_proof(i).expect("proof should exist");
+        assert_eq!(proof.entry_index, i);
+        assert!(
+            verify_inclusion_proof(&proof),
+            "inclusion proof failed for entry {i}"
+        );
+    }
+
+    // Out-of-bounds returns None
+    assert!(log.inclusion_proof(7).is_none());
+    assert!(log.inclusion_proof(100).is_none());
+}
+
+// ===========================================================================
+// 33. EvidencePointerInput serde round-trip
+// ===========================================================================
+
+#[test]
+fn evidence_pointer_input_serde_round_trip() {
+    use frankenengine_engine::replacement_lineage_log::EvidencePointerInput;
+
+    let input = EvidencePointerInput {
+        category: EvidenceCategory::SentinelRiskScore,
+        artifact_digest: "sha256:abcdef1234567890".into(),
+        passed: Some(true),
+        summary: "Risk score within threshold".into(),
+    };
+    let json = serde_json::to_string(&input).unwrap();
+    let back: EvidencePointerInput = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, input);
+
+    // Also test with passed = None
+    let input_none = EvidencePointerInput {
+        category: EvidenceCategory::Additional,
+        artifact_digest: "digest-extra".into(),
+        passed: None,
+        summary: "Informational".into(),
+    };
+    let json2 = serde_json::to_string(&input_none).unwrap();
+    let back2: EvidencePointerInput = serde_json::from_str(&json2).unwrap();
+    assert_eq!(back2, input_none);
+}
+
+// ===========================================================================
+// 34. EvidencePointer serde round-trip
+// ===========================================================================
+
+#[test]
+fn evidence_pointer_serde_round_trip() {
+    use frankenengine_engine::replacement_lineage_log::EvidencePointer;
+
+    let pointer = EvidencePointer {
+        receipt_id: "receipt-42".into(),
+        category: EvidenceCategory::PerformanceBenchmark,
+        artifact_digest: "perf-digest-001".into(),
+        passed: Some(false),
+        summary: "Benchmark regression detected".into(),
+    };
+    let json = serde_json::to_string(&pointer).unwrap();
+    let back: EvidencePointer = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, pointer);
+}
+
+// ===========================================================================
+// 35. SlotLineageQuery Default and serde
+// ===========================================================================
+
+#[test]
+fn slot_lineage_query_default_and_serde() {
+    use frankenengine_engine::replacement_lineage_log::SlotLineageQuery;
+
+    let default_q = SlotLineageQuery::default();
+    assert!(default_q.min_timestamp_ns.is_none());
+    assert!(default_q.max_timestamp_ns.is_none());
+    assert!(default_q.limit.is_none());
+
+    let q = SlotLineageQuery {
+        min_timestamp_ns: Some(100),
+        max_timestamp_ns: Some(999),
+        limit: Some(10),
+    };
+    let json = serde_json::to_string(&q).unwrap();
+    let back: SlotLineageQuery = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, q);
+}
+
+// ===========================================================================
+// 36. ReplayJoinQuery Default and serde
+// ===========================================================================
+
+#[test]
+fn replay_join_query_default_and_serde() {
+    use frankenengine_engine::replacement_lineage_log::ReplayJoinQuery;
+
+    let default_q = ReplayJoinQuery::default();
+    assert!(default_q.slot_id.is_none());
+    assert!(default_q.min_timestamp_ns.is_none());
+    assert!(default_q.max_timestamp_ns.is_none());
+    assert!(default_q.limit.is_none());
+
+    let q = ReplayJoinQuery {
+        slot_id: Some(test_slot_id()),
+        min_timestamp_ns: Some(500),
+        max_timestamp_ns: Some(5000),
+        limit: Some(25),
+    };
+    let json = serde_json::to_string(&q).unwrap();
+    let back: ReplayJoinQuery = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, q);
+}
+
+// ===========================================================================
+// 37. LineageIndexEvent serde round-trip
+// ===========================================================================
+
+#[test]
+fn lineage_index_event_serde_round_trip() {
+    use frankenengine_engine::replacement_lineage_log::LineageIndexEvent;
+
+    let event = LineageIndexEvent {
+        trace_id: "trace-idx-1".into(),
+        decision_id: "dec-idx-1".into(),
+        policy_id: "policy-idx-1".into(),
+        component: "replacement_lineage_index".into(),
+        event: "index_replacement_receipt".into(),
+        outcome: "ok".into(),
+        error_code: None,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: LineageIndexEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, event);
+
+    // With error_code present
+    let event_err = LineageIndexEvent {
+        trace_id: "trace-idx-2".into(),
+        decision_id: "dec-idx-2".into(),
+        policy_id: "policy-idx-2".into(),
+        component: "replacement_lineage_index".into(),
+        event: "index_demotion_receipt".into(),
+        outcome: "error".into(),
+        error_code: Some("FE-LIDX-0004".into()),
+    };
+    let json2 = serde_json::to_string(&event_err).unwrap();
+    let back2: LineageIndexEvent = serde_json::from_str(&json2).unwrap();
+    assert_eq!(back2, event_err);
+}
+
+// ===========================================================================
+// 38. LineageIndexError code() and Display
+// ===========================================================================
+
+#[test]
+fn lineage_index_error_code_and_display() {
+    use frankenengine_engine::replacement_lineage_log::LineageIndexError;
+    use frankenengine_engine::storage_adapter::{StorageError, StoreKind};
+
+    let errors: Vec<(LineageIndexError, &str, &str)> = vec![
+        (
+            LineageIndexError::Storage(StorageError::NotFound {
+                store: StoreKind::ReplacementLineage,
+                key: "missing-key".into(),
+            }),
+            "FE-LIDX-0001",
+            "storage error",
+        ),
+        (
+            LineageIndexError::Serialization {
+                operation: "serialize".into(),
+                detail: "bad format".into(),
+            },
+            "FE-LIDX-0002",
+            "serialization error",
+        ),
+        (
+            LineageIndexError::CorruptRecord {
+                key: "bad-key".into(),
+                detail: "unreadable".into(),
+            },
+            "FE-LIDX-0003",
+            "corrupt record",
+        ),
+        (
+            LineageIndexError::InvalidInput {
+                detail: "empty field".into(),
+            },
+            "FE-LIDX-0004",
+            "invalid input",
+        ),
+    ];
+
+    for (err, expected_code, expected_substr) in &errors {
+        assert_eq!(err.code(), *expected_code);
+        let display = err.to_string();
+        assert!(
+            display.contains(expected_substr),
+            "Expected '{expected_substr}' in '{display}'"
+        );
+    }
+}
+
+// ===========================================================================
+// 39. LineageChainEntry serde round-trip
+// ===========================================================================
+
+#[test]
+fn lineage_chain_entry_serde_round_trip() {
+    use frankenengine_engine::replacement_lineage_log::LineageChainEntry;
+
+    let entry = LineageChainEntry {
+        slot_id: test_slot_id(),
+        timestamp_ns: 42_000_000,
+        receipt_id: "receipt-chain-1".into(),
+        kind: ReplacementKind::RePromotion,
+        from_cell_digest: "from-digest".into(),
+        to_cell_digest: "to-digest".into(),
+        receipt_content_hash: "content-hash-hex".into(),
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: LineageChainEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, entry);
+}

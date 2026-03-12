@@ -519,7 +519,7 @@ fn test_pipeline_supersession() {
 #[test]
 fn test_pipeline_hash_changes_on_promotion() {
     let mut pipeline = PromotionPipeline::new("hash-test", epoch(10));
-    let hash_before = pipeline.pipeline_hash.clone();
+    let hash_before = pipeline.pipeline_hash;
     let law = proved_law();
     pipeline.promote_to_rewrite(&law, "p", "r", "g", 1_000_000);
     assert_ne!(pipeline.pipeline_hash, hash_before);

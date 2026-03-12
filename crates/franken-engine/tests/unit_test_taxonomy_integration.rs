@@ -392,3 +392,216 @@ fn full_lifecycle_build_validate_serialize() {
     let back: UnitTestTaxonomyBundle = serde_json::from_str(&json).unwrap();
     assert_eq!(back, bundle);
 }
+
+// ===========================================================================
+// 11. UnitTestClass ordering and Clone
+// ===========================================================================
+
+#[test]
+fn unit_test_class_ordering_declaration() {
+    assert!(UnitTestClass::Core < UnitTestClass::Edge);
+    assert!(UnitTestClass::Edge < UnitTestClass::Adversarial);
+    assert!(UnitTestClass::Adversarial < UnitTestClass::Regression);
+    assert!(UnitTestClass::Regression < UnitTestClass::FaultInjection);
+}
+
+#[test]
+fn unit_test_class_clone_eq() {
+    for c in &UnitTestClass::ALL {
+        let cloned = *c;
+        assert_eq!(*c, cloned);
+    }
+}
+
+#[test]
+fn unit_test_class_serde_snake_case_format() {
+    let json = serde_json::to_string(&UnitTestClass::FaultInjection).unwrap();
+    assert_eq!(json, "\"fault_injection\"");
+    let json2 = serde_json::to_string(&UnitTestClass::Core).unwrap();
+    assert_eq!(json2, "\"core\"");
+}
+
+// ===========================================================================
+// 12. LaneId ordering and Clone
+// ===========================================================================
+
+#[test]
+fn lane_id_ordering_declaration() {
+    assert!(LaneId::Compiler < LaneId::JsRuntime);
+    assert!(LaneId::JsRuntime < LaneId::WasmRuntime);
+    assert!(LaneId::WasmRuntime < LaneId::HybridRouter);
+    assert!(LaneId::HybridRouter < LaneId::Verification);
+    assert!(LaneId::Verification < LaneId::Toolchain);
+    assert!(LaneId::Toolchain < LaneId::GovernanceEvidence);
+    assert!(LaneId::GovernanceEvidence < LaneId::AdoptionRelease);
+}
+
+#[test]
+fn lane_id_clone_eq() {
+    for l in &LaneId::ALL {
+        let cloned = *l;
+        assert_eq!(*l, cloned);
+    }
+}
+
+// ===========================================================================
+// 13. DeterminismContract — custom fields
+// ===========================================================================
+
+#[test]
+fn determinism_contract_custom_fields_serde() {
+    let contract = DeterminismContract {
+        schema_version: DETERMINISM_CONTRACT_SCHEMA_VERSION.into(),
+        require_seed: false,
+        require_seed_transcript_checksum: false,
+        require_fixed_timezone: false,
+        timezone: String::new(),
+        require_fixed_locale: false,
+        lang: String::new(),
+        lc_all: String::new(),
+        require_toolchain_fingerprint: false,
+        require_replay_command: false,
+    };
+    let json = serde_json::to_string(&contract).unwrap();
+    let back: DeterminismContract = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, contract);
+    assert!(!back.require_seed);
+}
+
+// ===========================================================================
+// 14. FixtureRegistryEntry — None trace_path
+// ===========================================================================
+
+#[test]
+fn fixture_entry_none_trace_path_serde() {
+    let mut entry = make_fixture("no-trace", LaneId::Toolchain);
+    entry.trace_path = None;
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: FixtureRegistryEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.trace_path, None);
+    assert_eq!(back.fixture_id, "no-trace");
+}
+
+// ===========================================================================
+// 15. Validation error — all variants serde roundtrip
+// ===========================================================================
+
+#[test]
+fn all_error_variants_serde_roundtrip() {
+    let variants = vec![
+        TaxonomyValidationError::MissingRequiredField { field: "f".into() },
+        TaxonomyValidationError::InvalidSchemaVersion {
+            field: "sv".into(),
+            expected: "v1".into(),
+            actual: "v0".into(),
+        },
+        TaxonomyValidationError::MissingStructuredLogField {
+            fixture_id: "fix1".into(),
+            field: "trace_id".into(),
+        },
+        TaxonomyValidationError::DuplicateFixtureId {
+            fixture_id: "dup".into(),
+        },
+        TaxonomyValidationError::DuplicateLaneCoverage {
+            lane: "compiler".into(),
+        },
+        TaxonomyValidationError::MissingLaneCoverage {
+            lane: "wasm".into(),
+        },
+    ];
+    for v in &variants {
+        let json = serde_json::to_string(v).unwrap();
+        let back: TaxonomyValidationError = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, v);
+    }
+}
+
+// ===========================================================================
+// 16. Validate — duplicate lane coverage
+// ===========================================================================
+
+#[test]
+fn validate_duplicate_lane_coverage() {
+    let mut bundle = default_frx20_bundle();
+    let dup = bundle.lane_coverage[0].clone();
+    bundle.lane_coverage.push(dup);
+    let err = bundle.validate_for_gate().unwrap_err();
+    assert!(matches!(
+        err,
+        TaxonomyValidationError::DuplicateLaneCoverage { .. }
+    ));
+}
+
+// ===========================================================================
+// 17. Validate — determinism contract schema propagated through bundle
+// ===========================================================================
+
+#[test]
+fn validate_determinism_contract_schema_propagates() {
+    let mut bundle = default_frx20_bundle();
+    bundle.determinism_contract.schema_version = "wrong".into();
+    let err = bundle.validate_for_gate().unwrap_err();
+    assert!(matches!(
+        err,
+        TaxonomyValidationError::InvalidSchemaVersion { .. }
+    ));
+}
+
+// ===========================================================================
+// 18. default_frx20_bundle — structural assertions
+// ===========================================================================
+
+#[test]
+fn default_bundle_fixtures_all_have_required_classes() {
+    let bundle = default_frx20_bundle();
+    for fixture in &bundle.fixture_registry {
+        assert!(
+            !fixture.required_classes.is_empty(),
+            "fixture {} has no required_classes",
+            fixture.fixture_id
+        );
+    }
+}
+
+#[test]
+fn default_bundle_lane_coverages_have_e2e_families() {
+    let bundle = default_frx20_bundle();
+    for lc in &bundle.lane_coverage {
+        assert!(
+            !lc.mapped_e2e_families.is_empty(),
+            "lane {:?} has no mapped_e2e_families",
+            lc.lane
+        );
+    }
+}
+
+#[test]
+fn default_bundle_fixture_ids_unique() {
+    let bundle = default_frx20_bundle();
+    let mut seen = std::collections::BTreeSet::new();
+    for fixture in &bundle.fixture_registry {
+        assert!(
+            seen.insert(&fixture.fixture_id),
+            "duplicate fixture_id: {}",
+            fixture.fixture_id
+        );
+    }
+}
+
+#[test]
+fn required_log_fields_count() {
+    assert_eq!(REQUIRED_STRUCTURED_LOG_FIELDS.len(), 12);
+}
+
+#[test]
+fn validate_fixture_missing_structured_log_field() {
+    let mut bundle = default_frx20_bundle();
+    bundle.fixture_registry[0]
+        .structured_log_fields
+        .retain(|f| f != "seed");
+    let err = bundle.validate_for_gate().unwrap_err();
+    assert!(matches!(
+        err,
+        TaxonomyValidationError::MissingStructuredLogField { .. }
+    ));
+}

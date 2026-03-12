@@ -687,7 +687,7 @@ fn test_receipt_hash_is_32_bytes() {
 #[test]
 fn test_decision_receipt_new() {
     let evidence_hash = ContentHash::compute(b"test evidence");
-    let receipt = DecisionReceipt::new(epoch(10), LaneVerdict::Approved, evidence_hash.clone());
+    let receipt = DecisionReceipt::new(epoch(10), LaneVerdict::Approved, evidence_hash);
     assert_eq!(receipt.component, COMPONENT);
     assert_eq!(receipt.epoch, epoch(10));
     assert_eq!(receipt.verdict, LaneVerdict::Approved);
@@ -697,7 +697,7 @@ fn test_decision_receipt_new() {
 #[test]
 fn test_decision_receipt_deterministic_hash() {
     let evidence_hash = ContentHash::compute(b"same data");
-    let r1 = DecisionReceipt::new(epoch(10), LaneVerdict::Approved, evidence_hash.clone());
+    let r1 = DecisionReceipt::new(epoch(10), LaneVerdict::Approved, evidence_hash);
     let r2 = DecisionReceipt::new(epoch(10), LaneVerdict::Approved, evidence_hash);
     assert_eq!(r1.receipt_hash, r2.receipt_hash);
 }

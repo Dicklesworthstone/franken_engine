@@ -434,3 +434,433 @@ fn error_code_registry_serde_is_deterministic() {
     let b = serde_json::to_string(&registry).expect("second");
     assert_eq!(a, b);
 }
+
+// ===========================================================================
+// 14. FrankenErrorCode — Hash trait determinism
+// ===========================================================================
+
+#[test]
+fn error_code_hash_determinism() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    for &code in ALL_ERROR_CODES {
+        let mut h1 = DefaultHasher::new();
+        code.hash(&mut h1);
+        let hash1 = h1.finish();
+
+        let mut h2 = DefaultHasher::new();
+        code.hash(&mut h2);
+        let hash2 = h2.finish();
+
+        assert_eq!(hash1, hash2, "hash not deterministic for {code:?}");
+    }
+}
+
+#[test]
+fn distinct_error_codes_produce_distinct_hashes() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hashes = std::collections::BTreeSet::new();
+    for &code in ALL_ERROR_CODES {
+        let mut h = DefaultHasher::new();
+        code.hash(&mut h);
+        hashes.insert(h.finish());
+    }
+    // All 42 codes should produce distinct hashes
+    assert_eq!(hashes.len(), ALL_ERROR_CODES.len());
+}
+
+// ===========================================================================
+// 15. FrankenErrorCode — Clone/Copy semantics
+// ===========================================================================
+
+#[test]
+fn error_code_clone_equals_original() {
+    for &code in ALL_ERROR_CODES {
+        let cloned = code.clone();
+        assert_eq!(cloned, code);
+        assert_eq!(cloned.numeric(), code.numeric());
+        assert_eq!(cloned.stable_code(), code.stable_code());
+    }
+}
+
+#[test]
+fn error_code_copy_semantics() {
+    let code = FrankenErrorCode::ForkDetectionError;
+    let copied = code;
+    // Both remain usable (Copy trait)
+    assert_eq!(code.numeric(), copied.numeric());
+    assert_eq!(code.stable_code(), copied.stable_code());
+    assert_eq!(code.severity(), copied.severity());
+}
+
+// ===========================================================================
+// 16. ErrorSeverity — Clone, Debug, boundary
+// ===========================================================================
+
+#[test]
+fn error_severity_clone_and_debug() {
+    let severities = [
+        ErrorSeverity::Critical,
+        ErrorSeverity::Error,
+        ErrorSeverity::Warning,
+        ErrorSeverity::Info,
+    ];
+    for sev in &severities {
+        let cloned = sev.clone();
+        assert_eq!(&cloned, sev);
+        let debug = format!("{sev:?}");
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn error_severity_json_snake_case() {
+    let json = serde_json::to_string(&ErrorSeverity::Critical).unwrap();
+    assert_eq!(json, "\"critical\"");
+
+    let json = serde_json::to_string(&ErrorSeverity::Error).unwrap();
+    assert_eq!(json, "\"error\"");
+
+    let json = serde_json::to_string(&ErrorSeverity::Warning).unwrap();
+    assert_eq!(json, "\"warning\"");
+
+    let json = serde_json::to_string(&ErrorSeverity::Info).unwrap();
+    assert_eq!(json, "\"info\"");
+}
+
+// ===========================================================================
+// 17. ErrorSubsystem — boundary and coverage
+// ===========================================================================
+
+#[test]
+fn every_subsystem_has_at_least_one_code() {
+    let subsystems = [
+        ErrorSubsystem::SerializationEncoding,
+        ErrorSubsystem::IdentityAuthentication,
+        ErrorSubsystem::CapabilityAuthorization,
+        ErrorSubsystem::CheckpointPolicy,
+        ErrorSubsystem::Revocation,
+        ErrorSubsystem::SessionChannel,
+        ErrorSubsystem::ZoneScope,
+        ErrorSubsystem::AuditObservability,
+        ErrorSubsystem::LifecycleMigration,
+    ];
+    for subsys in &subsystems {
+        let count = ALL_ERROR_CODES
+            .iter()
+            .filter(|c| c.subsystem() == *subsys)
+            .count();
+        assert!(
+            count >= 1,
+            "subsystem {subsys:?} has no error codes assigned"
+        );
+    }
+}
+
+#[test]
+fn subsystem_includes_boundary_values() {
+    // Test that range boundaries work correctly for all subsystems
+    let subsystems = [
+        (ErrorSubsystem::SerializationEncoding, 1, 999),
+        (ErrorSubsystem::IdentityAuthentication, 1000, 1999),
+        (ErrorSubsystem::CapabilityAuthorization, 2000, 2999),
+        (ErrorSubsystem::CheckpointPolicy, 3000, 3999),
+        (ErrorSubsystem::Revocation, 4000, 4999),
+        (ErrorSubsystem::SessionChannel, 5000, 5999),
+        (ErrorSubsystem::ZoneScope, 6000, 6999),
+        (ErrorSubsystem::AuditObservability, 7000, 7999),
+        (ErrorSubsystem::LifecycleMigration, 8000, 8999),
+        (ErrorSubsystem::Reserved, 9000, 9999),
+    ];
+    for (subsys, lo, hi) in &subsystems {
+        assert!(subsys.includes(*lo), "{subsys:?} should include {lo}");
+        assert!(subsys.includes(*hi), "{subsys:?} should include {hi}");
+        if *lo > 0 {
+            assert!(
+                !subsys.includes(lo - 1),
+                "{subsys:?} should not include {}",
+                lo - 1
+            );
+        }
+        assert!(
+            !subsys.includes(hi + 1),
+            "{subsys:?} should not include {}",
+            hi + 1
+        );
+    }
+}
+
+#[test]
+fn subsystem_json_snake_case() {
+    let json = serde_json::to_string(&ErrorSubsystem::SerializationEncoding).unwrap();
+    assert_eq!(json, "\"serialization_encoding\"");
+
+    let json = serde_json::to_string(&ErrorSubsystem::IdentityAuthentication).unwrap();
+    assert_eq!(json, "\"identity_authentication\"");
+
+    let json = serde_json::to_string(&ErrorSubsystem::Reserved).unwrap();
+    assert_eq!(json, "\"reserved\"");
+}
+
+// ===========================================================================
+// 18. Stable code zero-padding
+// ===========================================================================
+
+#[test]
+fn stable_code_zero_padding_for_low_numerics() {
+    let code = FrankenErrorCode::NonCanonicalEncodingError;
+    assert_eq!(code.numeric(), 1);
+    assert_eq!(code.stable_code(), "FE-0001");
+
+    let code2 = FrankenErrorCode::DeterministicSerdeError;
+    assert_eq!(code2.numeric(), 2);
+    assert_eq!(code2.stable_code(), "FE-0002");
+}
+
+#[test]
+fn stable_code_no_extra_padding_for_four_digit_numerics() {
+    let code = FrankenErrorCode::CapabilityDeniedError;
+    assert_eq!(code.numeric(), 2000);
+    assert_eq!(code.stable_code(), "FE-2000");
+
+    let code2 = FrankenErrorCode::EpochMonotonicityViolation;
+    assert_eq!(code2.numeric(), 8000);
+    assert_eq!(code2.stable_code(), "FE-8000");
+}
+
+// ===========================================================================
+// 19. Description and operator_action uniqueness
+// ===========================================================================
+
+#[test]
+fn all_descriptions_are_unique() {
+    let mut descriptions = std::collections::BTreeSet::new();
+    for &code in ALL_ERROR_CODES {
+        assert!(
+            descriptions.insert(code.description()),
+            "duplicate description for {code:?}: {}",
+            code.description()
+        );
+    }
+}
+
+#[test]
+fn all_operator_actions_are_unique() {
+    let mut actions = std::collections::BTreeSet::new();
+    for &code in ALL_ERROR_CODES {
+        assert!(
+            actions.insert(code.operator_action()),
+            "duplicate operator_action for {code:?}: {}",
+            code.operator_action()
+        );
+    }
+}
+
+// ===========================================================================
+// 20. ErrorCodeEntry — Clone
+// ===========================================================================
+
+#[test]
+fn error_code_entry_clone_equality() {
+    let entry = FrankenErrorCode::SagaExecutionError.to_registry_entry();
+    let cloned = entry.clone();
+    assert_eq!(cloned, entry);
+    assert_eq!(cloned.code, entry.code);
+    assert_eq!(cloned.numeric, entry.numeric);
+    assert_eq!(cloned.subsystem, entry.subsystem);
+    assert_eq!(cloned.severity, entry.severity);
+    assert_eq!(cloned.description, entry.description);
+    assert_eq!(cloned.operator_action, entry.operator_action);
+    assert_eq!(cloned.deprecated, entry.deprecated);
+}
+
+// ===========================================================================
+// 21. ErrorCodeRegistry — Clone
+// ===========================================================================
+
+#[test]
+fn error_code_registry_clone_equality() {
+    let registry = error_code_registry();
+    let cloned = registry.clone();
+    assert_eq!(cloned, registry);
+    assert_eq!(cloned.version, registry.version);
+    assert_eq!(cloned.compatibility_policy, registry.compatibility_policy);
+    assert_eq!(cloned.entries.len(), registry.entries.len());
+}
+
+// ===========================================================================
+// 22. From_numeric edge cases
+// ===========================================================================
+
+#[test]
+fn from_numeric_returns_none_for_zero() {
+    assert!(FrankenErrorCode::from_numeric(0).is_none());
+}
+
+#[test]
+fn from_numeric_returns_none_for_gap_values() {
+    // Values between assigned codes that should not resolve
+    assert!(FrankenErrorCode::from_numeric(3).is_none()); // gap after 2
+    assert!(FrankenErrorCode::from_numeric(500).is_none()); // gap in serialization range
+    assert!(FrankenErrorCode::from_numeric(1500).is_none()); // gap in identity range
+    assert!(FrankenErrorCode::from_numeric(4500).is_none()); // gap in revocation range
+    assert!(FrankenErrorCode::from_numeric(9000).is_none()); // Reserved range, no codes assigned
+}
+
+// ===========================================================================
+// 23. Severity distribution
+// ===========================================================================
+
+#[test]
+fn severity_distribution_critical_vs_error() {
+    let critical_count = ALL_ERROR_CODES
+        .iter()
+        .filter(|c| c.severity() == ErrorSeverity::Critical)
+        .count();
+    let error_count = ALL_ERROR_CODES
+        .iter()
+        .filter(|c| c.severity() == ErrorSeverity::Error)
+        .count();
+    // There should be exactly 5 critical codes
+    assert_eq!(critical_count, 5);
+    // The rest should be Error severity
+    assert_eq!(error_count, ALL_ERROR_CODES.len() - critical_count);
+    // No Warning or Info codes in v1
+    let warning_count = ALL_ERROR_CODES
+        .iter()
+        .filter(|c| c.severity() == ErrorSeverity::Warning)
+        .count();
+    let info_count = ALL_ERROR_CODES
+        .iter()
+        .filter(|c| c.severity() == ErrorSeverity::Info)
+        .count();
+    assert_eq!(warning_count, 0);
+    assert_eq!(info_count, 0);
+}
+
+// ===========================================================================
+// 24. Registry JSON structure
+// ===========================================================================
+
+#[test]
+fn registry_json_contains_expected_top_level_keys() {
+    let registry = error_code_registry();
+    let json_val: serde_json::Value = serde_json::to_value(&registry).unwrap();
+    let obj = json_val.as_object().unwrap();
+    assert!(obj.contains_key("version"));
+    assert!(obj.contains_key("compatibility_policy"));
+    assert!(obj.contains_key("entries"));
+    assert_eq!(
+        obj.len(),
+        3,
+        "registry should have exactly 3 top-level keys"
+    );
+}
+
+#[test]
+fn registry_entry_json_contains_expected_keys() {
+    let entry = FrankenErrorCode::EvalRuntimeError.to_registry_entry();
+    let json_val: serde_json::Value = serde_json::to_value(&entry).unwrap();
+    let obj = json_val.as_object().unwrap();
+    assert!(obj.contains_key("code"));
+    assert!(obj.contains_key("numeric"));
+    assert!(obj.contains_key("subsystem"));
+    assert!(obj.contains_key("severity"));
+    assert!(obj.contains_key("description"));
+    assert!(obj.contains_key("operator_action"));
+    assert!(obj.contains_key("deprecated"));
+    assert_eq!(obj.len(), 7, "entry should have exactly 7 keys");
+}
+
+// ===========================================================================
+// 25. Spot-checks for remaining subsystems
+// ===========================================================================
+
+#[test]
+fn identity_authentication_subsystem_codes() {
+    let codes = [
+        FrankenErrorCode::EngineObjectIdError,
+        FrankenErrorCode::SignatureVerificationError,
+        FrankenErrorCode::MultiSigVerificationError,
+        FrankenErrorCode::KeyDerivationFailure,
+    ];
+    for code in &codes {
+        assert_eq!(
+            code.subsystem(),
+            ErrorSubsystem::IdentityAuthentication,
+            "{code:?} should be in IdentityAuthentication subsystem"
+        );
+        assert_eq!(code.severity(), ErrorSeverity::Error);
+    }
+    assert_eq!(codes[0].numeric(), 1000);
+    assert_eq!(codes[1].numeric(), 1001);
+    assert_eq!(codes[2].numeric(), 1002);
+    assert_eq!(codes[3].numeric(), 1003);
+}
+
+#[test]
+fn session_channel_subsystem_codes() {
+    let codes = [
+        FrankenErrorCode::LeaseLifecycleError,
+        FrankenErrorCode::ObligationChannelError,
+        FrankenErrorCode::IdempotencyWorkflowError,
+        FrankenErrorCode::SchedulerLaneAdmissionError,
+        FrankenErrorCode::SagaExecutionError,
+        FrankenErrorCode::BulkheadIsolationError,
+        FrankenErrorCode::MonitorSchedulerError,
+    ];
+    for code in &codes {
+        assert_eq!(
+            code.subsystem(),
+            ErrorSubsystem::SessionChannel,
+            "{code:?} should be in SessionChannel subsystem"
+        );
+    }
+    // Numerics should be 5000..=5006
+    for (i, code) in codes.iter().enumerate() {
+        assert_eq!(code.numeric(), 5000 + i as u16);
+    }
+}
+
+#[test]
+fn zone_scope_subsystem_codes() {
+    let codes = [
+        FrankenErrorCode::AllocationDomainBudgetError,
+        FrankenErrorCode::RegionPhaseOrderError,
+        FrankenErrorCode::SlotRegistryAuthorityError,
+        FrankenErrorCode::GarbageCollectionError,
+    ];
+    for code in &codes {
+        assert_eq!(
+            code.subsystem(),
+            ErrorSubsystem::ZoneScope,
+            "{code:?} should be in ZoneScope subsystem"
+        );
+    }
+    assert_eq!(codes[0].numeric(), 6000);
+    assert_eq!(codes[1].numeric(), 6001);
+    assert_eq!(codes[2].numeric(), 6002);
+    assert_eq!(codes[3].numeric(), 6003);
+}
+
+#[test]
+fn audit_observability_subsystem_has_most_codes() {
+    let audit_count = ALL_ERROR_CODES
+        .iter()
+        .filter(|c| c.subsystem() == ErrorSubsystem::AuditObservability)
+        .count();
+    // AuditObservability has 10 codes (7000..=7009), the most of any subsystem
+    assert_eq!(audit_count, 10);
+
+    // Verify the range
+    let audit_codes: Vec<u16> = ALL_ERROR_CODES
+        .iter()
+        .filter(|c| c.subsystem() == ErrorSubsystem::AuditObservability)
+        .map(|c| c.numeric())
+        .collect();
+    assert_eq!(*audit_codes.first().unwrap(), 7000);
+    assert_eq!(*audit_codes.last().unwrap(), 7009);
+}

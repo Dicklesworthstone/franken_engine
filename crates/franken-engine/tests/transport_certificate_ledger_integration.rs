@@ -495,3 +495,409 @@ fn test_transport_error_display() {
     let s = format!("{e}");
     assert!(s.contains("incompatible"));
 }
+
+// ---------------------------------------------------------------------------
+// ArtifactKind extended
+// ---------------------------------------------------------------------------
+
+#[test]
+fn artifact_kind_all_unique_str() {
+    let strs: Vec<&str> = ArtifactKind::ALL.iter().map(|k| k.as_str()).collect();
+    for (i, a) in strs.iter().enumerate() {
+        for (j, b) in strs.iter().enumerate() {
+            if i != j {
+                assert_ne!(a, b, "duplicate as_str for artifact kinds at {i} and {j}");
+            }
+        }
+    }
+}
+
+#[test]
+fn artifact_kind_display_matches_as_str() {
+    for kind in ArtifactKind::ALL {
+        assert_eq!(format!("{kind}"), kind.as_str());
+    }
+}
+
+#[test]
+fn artifact_kind_arch_sensitive_subset() {
+    // Arch-sensitive artifacts are a subset of all artifacts
+    let sensitive_count = ArtifactKind::ALL
+        .iter()
+        .filter(|k| k.is_arch_sensitive())
+        .count();
+    assert!(sensitive_count > 0 && sensitive_count < ArtifactKind::ALL.len());
+}
+
+// ---------------------------------------------------------------------------
+// TransportOutcome extended
+// ---------------------------------------------------------------------------
+
+#[test]
+fn transport_outcome_all_serde_roundtrip() {
+    let outcomes = [
+        TransportOutcome::FullTransport,
+        TransportOutcome::PartialTransport,
+        TransportOutcome::Degraded,
+        TransportOutcome::Failed,
+        TransportOutcome::Incompatible,
+    ];
+    for o in &outcomes {
+        let json = serde_json::to_string(o).unwrap();
+        let back: TransportOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(*o, back);
+    }
+}
+
+#[test]
+fn transport_outcome_display_nonempty() {
+    let outcomes = [
+        TransportOutcome::FullTransport,
+        TransportOutcome::PartialTransport,
+        TransportOutcome::Degraded,
+        TransportOutcome::Failed,
+        TransportOutcome::Incompatible,
+    ];
+    for o in &outcomes {
+        assert!(!format!("{o}").is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DegradationReason extended
+// ---------------------------------------------------------------------------
+
+#[test]
+fn degradation_reason_serde_roundtrip() {
+    let reasons = [
+        DegradationReason::MicroarchMismatch,
+        DegradationReason::IsaMissing,
+        DegradationReason::VectorizationUnavailable,
+        DegradationReason::CachePressure,
+        DegradationReason::UnknownReason("test".into()),
+    ];
+    for r in &reasons {
+        let json = serde_json::to_string(r).unwrap();
+        let back: DegradationReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(*r, back);
+    }
+}
+
+#[test]
+fn degradation_reason_penalty_all_positive() {
+    let reasons = [
+        DegradationReason::MicroarchMismatch,
+        DegradationReason::IsaMissing,
+        DegradationReason::VectorizationUnavailable,
+        DegradationReason::CachePressure,
+        DegradationReason::UnknownReason("custom".into()),
+    ];
+    for r in &reasons {
+        assert!(
+            r.penalty_millionths() > 0,
+            "penalty should be positive for {r:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HardwareCell extended
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hardware_cell_different_ids_not_equivalent_by_id() {
+    let a = cell_x86_zen4();
+    let b = HardwareCell::new("different-id", "x86_64", "zen4", 256, 64);
+    // They are hardware_equivalent (same arch/microarch/vector/cache)
+    assert!(a.hardware_equivalent(&b));
+    // But have different cell_ids
+    assert_ne!(a.cell_id, b.cell_id);
+}
+
+#[test]
+fn hardware_cell_serde_roundtrip() {
+    let cell = cell_x86_zen4();
+    let json = serde_json::to_string(&cell).unwrap();
+    let back: HardwareCell = serde_json::from_str(&json).unwrap();
+    assert_eq!(cell.cell_id, back.cell_id);
+    assert_eq!(cell.arch_family, back.arch_family);
+    assert_eq!(cell.microarch, back.microarch);
+    assert_eq!(cell.vector_width_bits, back.vector_width_bits);
+}
+
+#[test]
+fn hardware_cell_different_vector_width_not_equivalent() {
+    let a = cell_x86_zen4(); // 256
+    let b = cell_x86_avx512(); // 512
+    assert!(!a.hardware_equivalent(&b));
+}
+
+// ---------------------------------------------------------------------------
+// detect_degradation extended
+// ---------------------------------------------------------------------------
+
+#[test]
+fn detect_degradation_vector_width_increase_no_degradation() {
+    // Going from smaller to larger vector width should not cause vectorization unavailable
+    let reasons =
+        transport_certificate_ledger::detect_degradation(&cell_x86_zen4(), &cell_x86_avx512());
+    // zen4 (256) -> avx512 (512) - target has wider vectors
+    assert!(
+        !reasons.contains(&DegradationReason::VectorizationUnavailable),
+        "increasing vector width should not degrade vectorization"
+    );
+}
+
+#[test]
+fn detect_degradation_same_hardware_equivalent_empty() {
+    let a = cell_x86_zen4();
+    let b = HardwareCell::new("clone-zen4", "x86_64", "zen4", 256, 64);
+    let reasons = transport_certificate_ledger::detect_degradation(&a, &b);
+    assert!(
+        reasons.is_empty(),
+        "hardware-equivalent cells should have no degradation"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// residual_fraction edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn residual_fraction_negative_metrics_handled() {
+    // Negative performance values should still produce valid fractions
+    let f = transport_certificate_ledger::compute_residual_fraction(1_000_000, 0);
+    assert_eq!(f, 0);
+}
+
+#[test]
+fn residual_fraction_equal_metrics_full() {
+    let f = transport_certificate_ledger::compute_residual_fraction(750_000, 750_000);
+    assert_eq!(f, 1_000_000); // Full transport
+}
+
+// ---------------------------------------------------------------------------
+// classify_outcome boundary values
+// ---------------------------------------------------------------------------
+
+#[test]
+fn classify_outcome_boundary_950000() {
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(950_000),
+        TransportOutcome::FullTransport
+    );
+}
+
+#[test]
+fn classify_outcome_boundary_949999() {
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(949_999),
+        TransportOutcome::PartialTransport
+    );
+}
+
+#[test]
+fn classify_outcome_boundary_700000() {
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(700_000),
+        TransportOutcome::PartialTransport
+    );
+}
+
+#[test]
+fn classify_outcome_boundary_699999() {
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(699_999),
+        TransportOutcome::Degraded
+    );
+}
+
+#[test]
+fn classify_outcome_boundary_300000() {
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(300_000),
+        TransportOutcome::Degraded
+    );
+}
+
+#[test]
+fn classify_outcome_boundary_299999() {
+    assert_eq!(
+        transport_certificate_ledger::classify_outcome(299_999),
+        TransportOutcome::Failed
+    );
+}
+
+// ---------------------------------------------------------------------------
+// evaluate_transport extended
+// ---------------------------------------------------------------------------
+
+#[test]
+fn evaluate_transport_same_microarch_different_cell_id() {
+    let a = cell_x86_zen4();
+    let b = HardwareCell::new("replica-zen4", "x86_64", "zen4", 256, 64);
+    let cert = transport_certificate_ledger::evaluate_transport(
+        ArtifactKind::AotModule,
+        test_hash(),
+        &a,
+        &b,
+        1_000_000,
+        1_000_000,
+    )
+    .unwrap();
+    assert_eq!(cert.outcome, TransportOutcome::FullTransport);
+    assert!(cert.same_hardware());
+}
+
+#[test]
+fn evaluate_transport_different_artifact_kinds_produce_different_certs() {
+    let h = test_hash();
+    let src = cell_x86_zen4();
+    let tgt = cell_x86_alder();
+    let cert_rewrite = transport_certificate_ledger::evaluate_transport(
+        ArtifactKind::RewriteRule,
+        h,
+        &src,
+        &tgt,
+        1_000_000,
+        800_000,
+    )
+    .unwrap();
+    let cert_aot = transport_certificate_ledger::evaluate_transport(
+        ArtifactKind::AotModule,
+        h,
+        &src,
+        &tgt,
+        1_000_000,
+        800_000,
+    )
+    .unwrap();
+    assert_ne!(
+        cert_rewrite.certificate_id, cert_aot.certificate_id,
+        "different artifact kinds should produce different cert ids"
+    );
+}
+
+#[test]
+fn evaluate_transport_content_hash_changes_with_different_perf() {
+    let cert1 = transport_certificate_ledger::evaluate_transport(
+        ArtifactKind::CacheEntry,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        900_000,
+    )
+    .unwrap();
+    let cert2 = transport_certificate_ledger::evaluate_transport(
+        ArtifactKind::CacheEntry,
+        test_hash(),
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        700_000,
+    )
+    .unwrap();
+    assert_ne!(cert1.content_hash, cert2.content_hash);
+}
+
+// ---------------------------------------------------------------------------
+// ResidualComponent extended
+// ---------------------------------------------------------------------------
+
+#[test]
+fn residual_component_serde_roundtrip() {
+    let c = ResidualComponent::new("branch_predict", 800_000, 600_000, "microarch drift");
+    let json = serde_json::to_string(&c).unwrap();
+    let back: ResidualComponent = serde_json::from_str(&json).unwrap();
+    assert_eq!(c.component_name, back.component_name);
+    assert_eq!(
+        c.source_contribution_millionths,
+        back.source_contribution_millionths
+    );
+}
+
+#[test]
+fn residual_component_loss_positive_for_degradation() {
+    let c = ResidualComponent::new("cache", 1_000_000, 500_000, "pressure");
+    assert_eq!(c.loss_millionths(), 500_000);
+}
+
+#[test]
+fn residual_component_loss_zero_for_full_transport() {
+    let c = ResidualComponent::new("cache", 1_000_000, 1_000_000, "none");
+    assert_eq!(c.loss_millionths(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// TransportError all variants display
+// ---------------------------------------------------------------------------
+
+#[test]
+fn transport_error_all_variants_display() {
+    let errors = [
+        TransportError::CellIncompatible,
+        TransportError::ArtifactCorrupted,
+        TransportError::MeasurementFailed,
+        TransportError::LedgerInconsistent,
+    ];
+    for e in &errors {
+        let msg = format!("{e}");
+        assert!(!msg.is_empty());
+    }
+}
+
+#[test]
+fn transport_error_serde_roundtrip() {
+    let errors = [
+        TransportError::CellIncompatible,
+        TransportError::ArtifactCorrupted,
+        TransportError::MeasurementFailed,
+        TransportError::LedgerInconsistent,
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: TransportError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*e, back);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Full lifecycle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn full_transport_lifecycle() {
+    let src = cell_x86_zen4();
+    let tgt = cell_x86_alder();
+    let hash = ContentHash::compute(b"rewrite-artifact");
+
+    // 1. Detect degradation
+    let reasons = transport_certificate_ledger::detect_degradation(&src, &tgt);
+    assert!(!reasons.is_empty()); // Different microarch
+
+    // 2. Evaluate transport
+    let cert = transport_certificate_ledger::evaluate_transport(
+        ArtifactKind::RewriteRule,
+        hash,
+        &src,
+        &tgt,
+        1_000_000,
+        850_000,
+    )
+    .unwrap();
+    assert!(cert.is_usable());
+    assert!(!cert.same_hardware());
+
+    // 3. Build residual ledger
+    let comp = ResidualComponent::new("branch", 600_000, 480_000, "microarch");
+    let ledger = transport_certificate_ledger::build_residual_ledger(&cert, vec![comp]).unwrap();
+    assert_eq!(ledger.component_count(), 1);
+
+    // 4. Validate
+    transport_certificate_ledger::validate_ledger_consistency(&ledger).unwrap();
+
+    // 5. Serde roundtrip
+    let json = serde_json::to_string(&cert).unwrap();
+    assert!(!json.is_empty());
+}

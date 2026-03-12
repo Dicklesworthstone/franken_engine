@@ -141,19 +141,19 @@ fn policy_id_format() {
 
 #[test]
 fn min_runs_per_workload_sensible() {
-    assert!(MIN_RUNS_PER_WORKLOAD >= 3);
+    const { assert!(MIN_RUNS_PER_WORKLOAD >= 3) };
 }
 
 #[test]
 fn max_cv_sensible() {
-    assert!(MAX_CV_MILLIONTHS > 0);
-    assert!(MAX_CV_MILLIONTHS <= 500_000);
+    const { assert!(MAX_CV_MILLIONTHS > 0) };
+    const { assert!(MAX_CV_MILLIONTHS <= 500_000) };
 }
 
 #[test]
 fn default_parity_ratio_sensible() {
-    assert!(DEFAULT_MIN_PARITY_RATIO >= 900_000);
-    assert!(DEFAULT_MIN_PARITY_RATIO <= 1_000_000);
+    const { assert!(DEFAULT_MIN_PARITY_RATIO >= 900_000) };
+    const { assert!(DEFAULT_MIN_PARITY_RATIO <= 1_000_000) };
 }
 
 // ---------------------------------------------------------------------------
@@ -679,7 +679,7 @@ fn report_verdict_pass() {
 #[test]
 fn bundle_hash_changes_on_provenance_add() {
     let mut b = EvidenceBundle::new("b1".into(), epoch(1));
-    let h1 = b.bundle_hash.clone();
+    let h1 = b.bundle_hash;
     b.add_provenance(prov("w1", WorkloadCategory::Micro))
         .unwrap();
     assert_ne!(h1, b.bundle_hash);
@@ -690,7 +690,7 @@ fn bundle_hash_changes_on_run_add() {
     let mut b = EvidenceBundle::new("b1".into(), epoch(1));
     b.add_provenance(prov("w1", WorkloadCategory::Micro))
         .unwrap();
-    let h1 = b.bundle_hash.clone();
+    let h1 = b.bundle_hash;
     b.add_run(run("r1", "w1", 100, 0)).unwrap();
     assert_ne!(h1, b.bundle_hash);
 }
@@ -698,7 +698,7 @@ fn bundle_hash_changes_on_run_add() {
 #[test]
 fn bundle_hash_changes_on_seal() {
     let mut b = full_bundle();
-    let h1 = b.bundle_hash.clone();
+    let h1 = b.bundle_hash;
     b.seal().unwrap();
     assert_ne!(h1, b.bundle_hash);
 }

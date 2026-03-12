@@ -139,11 +139,13 @@ fn test_component_matches_module_name() {
 
 #[test]
 fn test_weights_are_all_positive() {
-    assert!(SCHEDULER_WEIGHT > 0);
-    assert!(DOM_COMMIT_WEIGHT > 0);
-    assert!(ROUTER_WEIGHT > 0);
-    assert!(JS_WASM_WEIGHT > 0);
-    assert!(INTERACTION_P95_WEIGHT > 0);
+    const {
+        assert!(SCHEDULER_WEIGHT > 0);
+        assert!(DOM_COMMIT_WEIGHT > 0);
+        assert!(ROUTER_WEIGHT > 0);
+        assert!(JS_WASM_WEIGHT > 0);
+        assert!(INTERACTION_P95_WEIGHT > 0);
+    }
 }
 
 #[test]

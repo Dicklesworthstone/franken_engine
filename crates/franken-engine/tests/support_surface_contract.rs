@@ -618,3 +618,218 @@ fn rgc_911b_log_keys_remain_stable() {
         assert!(keys.contains(key), "missing required log key {key}");
     }
 }
+
+#[test]
+fn rgc_911b_surface_ids_are_unique() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for row in &contract.surface_rows {
+        assert!(
+            seen.insert(row.surface_id.clone()),
+            "duplicate surface_id: {}",
+            row.surface_id
+        );
+    }
+}
+
+#[test]
+fn rgc_911b_surface_id_format_follows_area_dot_name_convention() {
+    let contract = parse_contract();
+    for row in &contract.surface_rows {
+        assert!(
+            row.surface_id.contains('.'),
+            "surface_id must use area.name format: {}",
+            row.surface_id
+        );
+        let parts: Vec<&str> = row.surface_id.splitn(2, '.').collect();
+        assert!(
+            !parts[0].is_empty() && !parts[1].is_empty(),
+            "surface_id must have non-empty area and name: {}",
+            row.surface_id
+        );
+    }
+}
+
+#[test]
+fn rgc_911b_shipped_rows_have_no_waiver_requirement() {
+    let contract = parse_contract();
+    for row in &contract.surface_rows {
+        if row.support_status == "shipped" {
+            assert!(
+                !row.fallback_policy.waiver_required,
+                "shipped row {} must not require waivers",
+                row.surface_id
+            );
+            assert_eq!(
+                row.fallback_policy.max_waiver_age_hours, None,
+                "shipped row {} must not declare max_waiver_age_hours",
+                row.surface_id
+            );
+        }
+    }
+}
+
+#[test]
+fn rgc_911b_waiver_rows_have_bounded_age() {
+    let contract = parse_contract();
+    for row in &contract.surface_rows {
+        if row.fallback_policy.waiver_required {
+            let hours = row.fallback_policy.max_waiver_age_hours.unwrap_or_else(|| {
+                panic!(
+                    "row {} requires waiver but missing max_waiver_age_hours",
+                    row.surface_id
+                )
+            });
+            assert!(
+                hours > 0 && hours <= 720,
+                "max_waiver_age_hours for {} must be 1..=720, got {}",
+                row.surface_id,
+                hours
+            );
+        }
+    }
+}
+
+#[test]
+fn rgc_911b_evidence_sources_are_repo_relative_and_safe() {
+    let contract = parse_contract();
+    for row in &contract.surface_rows {
+        for source in &row.evidence_sources {
+            assert!(
+                !source.starts_with('/'),
+                "evidence source must be repo-relative for {}: {source}",
+                row.surface_id
+            );
+            assert!(
+                !source.contains(".."),
+                "evidence source must not traverse upward for {}: {source}",
+                row.surface_id
+            );
+        }
+    }
+}
+
+#[test]
+fn rgc_911b_contract_row_count_matches_expected() {
+    let contract = parse_contract();
+    assert_eq!(
+        contract.surface_rows.len(),
+        12,
+        "contract must declare exactly 12 surface rows"
+    );
+}
+
+#[test]
+fn rgc_911b_support_status_distribution_is_balanced() {
+    let contract = parse_contract();
+    let mut status_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for row in &contract.surface_rows {
+        *status_counts
+            .entry(row.support_status.as_str())
+            .or_insert(0) += 1;
+    }
+
+    assert!(
+        status_counts.contains_key("shipped"),
+        "must have at least one shipped surface"
+    );
+    assert!(
+        status_counts.get("shipped").copied().unwrap_or(0) >= 3,
+        "must have at least 3 shipped surfaces"
+    );
+    assert!(
+        status_counts.contains_key("unsupported"),
+        "must have at least one unsupported surface"
+    );
+}
+
+#[test]
+fn rgc_911b_mode_matrix_surface_mode_rows_have_unique_row_ids() {
+    let matrix = parse_mode_matrix();
+    let mut seen = BTreeSet::new();
+    for row in &matrix.surface_mode_rows {
+        assert!(
+            seen.insert(row.row_id.clone()),
+            "duplicate mode matrix row_id: {}",
+            row.row_id
+        );
+    }
+}
+
+#[test]
+fn rgc_911b_mode_matrix_publishable_is_subset_of_allowed() {
+    let matrix = parse_mode_matrix();
+    for row in &matrix.surface_mode_rows {
+        let allowed: BTreeSet<_> = row.allowed_modes.iter().collect();
+        for mode in &row.publishable_modes {
+            assert!(
+                allowed.contains(mode),
+                "publishable mode {mode} in {} is not in allowed_modes",
+                row.row_id
+            );
+        }
+    }
+}
+
+#[test]
+fn rgc_911b_mode_matrix_blocked_and_allowed_are_disjoint() {
+    let matrix = parse_mode_matrix();
+    for row in &matrix.surface_mode_rows {
+        let allowed: BTreeSet<_> = row.allowed_modes.iter().collect();
+        let blocked: BTreeSet<_> = row.blocked_modes.iter().collect();
+        let overlap: Vec<_> = allowed.intersection(&blocked).collect();
+        assert!(
+            overlap.is_empty(),
+            "mode matrix row {} has modes in both allowed and blocked: {:?}",
+            row.row_id,
+            overlap
+        );
+    }
+}
+
+#[test]
+fn rgc_911b_mode_precedences_are_contiguous_from_zero() {
+    let matrix = parse_mode_matrix();
+    let mut precedences: Vec<u64> = matrix.modes.iter().map(|m| m.precedence).collect();
+    precedences.sort();
+    for (i, prec) in precedences.iter().enumerate() {
+        assert_eq!(
+            *prec, i as u64,
+            "mode precedences must be contiguous from 0, gap at position {}",
+            i
+        );
+    }
+}
+
+#[test]
+fn rgc_911b_generated_at_utc_is_valid_iso8601() {
+    let contract: serde_json::Value =
+        serde_json::from_str(CONTRACT_JSON).expect("contract must parse as Value");
+    let ts = contract["generated_at_utc"]
+        .as_str()
+        .expect("generated_at_utc must be a string");
+    assert!(ts.ends_with('Z'), "generated_at_utc must be UTC: {ts}");
+    assert!(ts.contains('T'), "generated_at_utc must contain T: {ts}");
+    assert!(
+        ts.len() >= 20,
+        "generated_at_utc must be full ISO-8601: {ts}"
+    );
+}
+
+#[test]
+fn rgc_911b_operator_verification_commands_reference_correct_contract() {
+    let contract = parse_contract();
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("support_surface_contract")),
+        "at least one operator verification command must reference support_surface_contract"
+    );
+    for cmd in &contract.operator_verification {
+        assert!(
+            cmd.contains("support_surface") || cmd.contains("jq"),
+            "operator verification command must reference support_surface or jq: {cmd}"
+        );
+    }
+}

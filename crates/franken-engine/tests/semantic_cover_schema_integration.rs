@@ -1087,8 +1087,10 @@ fn constants_max_surfaces() {
 
 #[test]
 fn constants_max_features_per_surface() {
-    assert!(MAX_FEATURES_PER_SURFACE > 0);
-    assert!(MAX_FEATURES_PER_SURFACE <= 1024);
+    const {
+        assert!(MAX_FEATURES_PER_SURFACE > 0);
+        assert!(MAX_FEATURES_PER_SURFACE <= 1024);
+    }
 }
 
 // ===========================================================================

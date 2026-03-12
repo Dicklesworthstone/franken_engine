@@ -688,7 +688,7 @@ fn receipt_hash_deterministic() {
     let cfg = SpecializationConfig::default_config();
     let result = specialize_lane(&req, &cfg).unwrap();
     let g = DecisionReceipt::genesis_hash();
-    let r1 = DecisionReceipt::new(epoch(), &req, &result, g.clone());
+    let r1 = DecisionReceipt::new(epoch(), &req, &result, g);
     let r2 = DecisionReceipt::new(epoch(), &req, &result, g);
     assert_eq!(r1.content_hash, r2.content_hash);
 }

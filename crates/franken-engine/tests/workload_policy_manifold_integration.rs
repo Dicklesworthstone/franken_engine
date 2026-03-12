@@ -182,8 +182,10 @@ fn schema_constants_are_valid() {
     assert!(!MANIFOLD_SCHEMA_VERSION.is_empty());
     assert!(!COORDINATE_SCHEMA_VERSION.is_empty());
     assert!(!NEIGHBORHOOD_SCHEMA_VERSION.is_empty());
-    assert!(MAX_AXES_PER_DIMENSION > 0);
-    assert!(DEFAULT_NEIGHBORHOOD_RADIUS > 0);
+    const {
+        assert!(MAX_AXES_PER_DIMENSION > 0);
+        assert!(DEFAULT_NEIGHBORHOOD_RADIUS > 0);
+    }
 }
 
 // =========================================================================

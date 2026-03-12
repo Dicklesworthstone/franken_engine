@@ -14,9 +14,9 @@
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::law_mining::{CandidateKind, LawCandidate};
 use frankenengine_engine::law_proof_refutation::{
-    CounterexampleArchive, ProofCampaignConfig, ProofRefutationError, ProofRefutationPipeline,
-    ProofRefutationSummary, ProofStrategy, ProofVerdict, RefutationReason, RefutationWitness,
-    COMPONENT, LAW_PROOF_BEAD_ID, LAW_PROOF_SCHEMA_VERSION,
+    COMPONENT, CounterexampleArchive, LAW_PROOF_BEAD_ID, LAW_PROOF_SCHEMA_VERSION,
+    ProofCampaignConfig, ProofRefutationError, ProofRefutationPipeline, ProofRefutationSummary,
+    ProofStrategy, ProofVerdict, RefutationReason, RefutationWitness,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -593,9 +593,18 @@ fn proof_verdict_inconclusive_is_not_terminal() {
 
 #[test]
 fn strategy_confidence_weights_individual_values() {
-    assert_eq!(ProofStrategy::DifferentialReplay.confidence_weight_millionths(), 350_000);
-    assert_eq!(ProofStrategy::SolverCheck.confidence_weight_millionths(), 450_000);
-    assert_eq!(ProofStrategy::CounterexampleSearch.confidence_weight_millionths(), 200_000);
+    assert_eq!(
+        ProofStrategy::DifferentialReplay.confidence_weight_millionths(),
+        350_000
+    );
+    assert_eq!(
+        ProofStrategy::SolverCheck.confidence_weight_millionths(),
+        450_000
+    );
+    assert_eq!(
+        ProofStrategy::CounterexampleSearch.confidence_weight_millionths(),
+        200_000
+    );
 }
 
 #[test]

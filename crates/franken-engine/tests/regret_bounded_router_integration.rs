@@ -514,3 +514,222 @@ fn full_lifecycle_regret_bounded_router() {
     assert_eq!(back.rounds(), router.rounds());
     assert_eq!(back.summary(), router.summary());
 }
+
+// ===========================================================================
+// 18. RewardSignal — serde round-trip with and without counterfactuals
+// ===========================================================================
+
+#[test]
+fn reward_signal_serde_round_trip_no_counterfactual() {
+    let signal = RewardSignal {
+        arm_index: 1,
+        reward_millionths: 750_000,
+        latency_us: 42,
+        success: false,
+        epoch: SecurityEpoch::from_raw(99),
+        counterfactual_rewards_millionths: None,
+    };
+    let json = serde_json::to_string(&signal).unwrap();
+    let back: RewardSignal = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, signal);
+}
+
+#[test]
+fn reward_signal_serde_round_trip_with_counterfactual() {
+    let signal = RewardSignal {
+        arm_index: 0,
+        reward_millionths: 400_000,
+        latency_us: 1,
+        success: true,
+        epoch: SecurityEpoch::from_raw(7),
+        counterfactual_rewards_millionths: Some(vec![400_000, 600_000, 200_000]),
+    };
+    let json = serde_json::to_string(&signal).unwrap();
+    let back: RewardSignal = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, signal);
+}
+
+// ===========================================================================
+// 19. LaneArm — Ord and Hash determinism
+// ===========================================================================
+
+#[test]
+fn lane_arm_ord_deterministic() {
+    let a = LaneArm {
+        lane_id: "alpha".into(),
+        description: "Alpha lane".into(),
+    };
+    let b = LaneArm {
+        lane_id: "beta".into(),
+        description: "Beta lane".into(),
+    };
+    // Ord should be consistent across invocations.
+    let cmp1 = a.cmp(&b);
+    let cmp2 = a.cmp(&b);
+    assert_eq!(cmp1, cmp2);
+    // "alpha" < "beta" lexicographically.
+    assert!(a < b);
+}
+
+#[test]
+fn lane_arm_hash_determinism() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let arm = LaneArm {
+        lane_id: "deterministic".into(),
+        description: "Deterministic lane".into(),
+    };
+    let mut h1 = DefaultHasher::new();
+    arm.hash(&mut h1);
+    let hash1 = h1.finish();
+
+    let arm_clone = arm.clone();
+    let mut h2 = DefaultHasher::new();
+    arm_clone.hash(&mut h2);
+    let hash2 = h2.finish();
+
+    assert_eq!(hash1, hash2, "equal LaneArms must produce identical hashes");
+}
+
+// ===========================================================================
+// 20. Exp3 — select_arm covers entire arm range across seeds
+// ===========================================================================
+
+#[test]
+fn exp3_select_arm_covers_all_arms() {
+    let exp3 = Exp3State::new(4, 200_000).unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    for seed in (0..1_000_000).step_by(1000) {
+        seen.insert(exp3.select_arm(seed));
+        if seen.len() == 4 {
+            break;
+        }
+    }
+    assert_eq!(
+        seen.len(),
+        4,
+        "all 4 arms should be reachable from the uniform initial state"
+    );
+}
+
+// ===========================================================================
+// 21. FTRL — regret bound grows sublinearly
+// ===========================================================================
+
+#[test]
+fn ftrl_regret_bound_grows_sublinearly() {
+    let mut ftrl = FtrlState::new(3).unwrap();
+    ftrl.rounds = 10;
+    let bound_10 = ftrl.regret_bound_millionths();
+    ftrl.rounds = 1000;
+    let bound_1000 = ftrl.regret_bound_millionths();
+    // sqrt(1000)/sqrt(10) ~ 10, so bound_1000/bound_10 ~ 10 (sublinear)
+    assert!(bound_1000 > bound_10, "bound should grow with rounds");
+    assert!(
+        bound_1000 < bound_10 * 100,
+        "growth should be sublinear, not linear"
+    );
+}
+
+// ===========================================================================
+// 22. Router — single arm degenerate case
+// ===========================================================================
+
+#[test]
+fn router_single_arm_always_selects_zero() {
+    let router = RegretBoundedRouter::new(make_arms(1), 100_000).unwrap();
+    for seed in [0, 250_000, 500_000, 750_000, 999_999] {
+        assert_eq!(
+            router.select_arm(seed),
+            0,
+            "single-arm router must always return arm 0"
+        );
+    }
+}
+
+#[test]
+fn router_single_arm_observe_and_summarize() {
+    let mut router = RegretBoundedRouter::new(make_arms(1), 100_000).unwrap();
+    for i in 0..5 {
+        let signal = make_signal(0, 500_000, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+    let summary = router.summary();
+    assert_eq!(summary.num_arms, 1);
+    assert_eq!(summary.rounds, 5);
+    // Single-arm: probabilities must be [1_000_000]
+    assert_eq!(summary.arm_probabilities_millionths, vec![1_000_000]);
+}
+
+// ===========================================================================
+// 23. Exp3 — boundary reward values (0 and MILLION)
+// ===========================================================================
+
+#[test]
+fn exp3_update_with_zero_and_max_reward() {
+    let mut exp3 = Exp3State::new(2, 100_000).unwrap();
+    // Zero reward should be accepted without error.
+    exp3.update(0, 0).unwrap();
+    assert_eq!(exp3.rounds, 1);
+    // Maximum reward should be accepted.
+    exp3.update(1, 1_000_000).unwrap();
+    assert_eq!(exp3.rounds, 2);
+    // Probabilities must still sum to MILLION.
+    let probs = exp3.arm_probabilities();
+    let sum: i64 = probs.iter().sum();
+    assert_eq!(sum, 1_000_000);
+}
+
+// ===========================================================================
+// 24. Router — clone preserves full state
+// ===========================================================================
+
+#[test]
+fn router_clone_preserves_state() {
+    let mut router = RegretBoundedRouter::new(make_arms(3), 100_000).unwrap();
+    for i in 0..10 {
+        let arm = router.select_arm((i * 100_000) % 1_000_000);
+        let signal = make_signal(arm, 600_000, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+    let cloned = router.clone();
+    assert_eq!(cloned, router);
+    assert_eq!(cloned.rounds(), router.rounds());
+    assert_eq!(cloned.summary(), router.summary());
+    assert_eq!(cloned.regret_certificate(), router.regret_certificate());
+    // The clone should select the same arm for the same seed.
+    assert_eq!(cloned.select_arm(500_000), router.select_arm(500_000));
+}
+
+// ===========================================================================
+// 25. RegretCertificate — growth_rate_class values
+// ===========================================================================
+
+#[test]
+fn regret_certificate_growth_rate_empirical_without_counterfactuals() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 100_000).unwrap();
+    for i in 0..5 {
+        let signal = make_signal(i % 2, 500_000, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+    let cert = router.regret_certificate();
+    // Without counterfactual data, exact regret is unavailable.
+    assert!(!cert.exact_regret_available);
+    assert_eq!(cert.growth_rate_class, "empirical_estimate");
+}
+
+#[test]
+fn regret_certificate_growth_rate_with_counterfactuals() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 200_000).unwrap();
+    // Use counterfactuals so exact regret is available.
+    for i in 0..10 {
+        let signal = make_signal_full_info(i % 2, vec![500_000, 500_000], i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+    let cert = router.regret_certificate();
+    assert!(cert.exact_regret_available);
+    // When all arms get equal reward, realized regret is zero.
+    assert_eq!(cert.per_round_regret_millionths, 0);
+    assert_eq!(cert.growth_rate_class, "zero");
+}

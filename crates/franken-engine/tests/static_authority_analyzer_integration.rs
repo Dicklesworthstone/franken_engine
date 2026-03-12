@@ -561,7 +561,7 @@ fn full_analysis_cache_pipeline() {
     // Cache.
     let mut cache = AnalysisCache::new(100);
     let key = AnalysisCacheKey {
-        effect_graph_hash: report.effect_graph_hash.clone(),
+        effect_graph_hash: report.effect_graph_hash,
         manifest_hash: report.manifest_hash.clone(),
         path_sensitive: false,
     };

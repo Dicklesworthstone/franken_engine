@@ -172,6 +172,7 @@ fn rgc_016a_contract_covers_required_react_capability_rows() {
         "jsx-automatic-runtime-compile",
         "tsx-automatic-runtime-compile",
         "jsx-dev-runtime-diagnostics",
+        "tsx-dev-runtime-diagnostics",
         "react-ssr-entrypoint",
         "react-client-entry-preparation",
         "react-hydration-handoff-artifacts",
@@ -182,6 +183,30 @@ fn rgc_016a_contract_covers_required_react_capability_rows() {
             "missing required capability row: {capability_id}"
         );
     }
+}
+
+#[test]
+fn rgc_016a_dev_runtime_diagnostics_are_split_by_source_form() {
+    let contract = parse_contract();
+    let rows = capability_index(&contract);
+
+    let jsx_dev = rows
+        .get("jsx-dev-runtime-diagnostics")
+        .expect("missing JSX dev-runtime diagnostics row");
+    let tsx_dev = rows
+        .get("tsx-dev-runtime-diagnostics")
+        .expect("missing TSX dev-runtime diagnostics row");
+
+    assert_eq!(jsx_dev.source_form, "jsx");
+    assert_eq!(tsx_dev.source_form, "tsx");
+    assert_eq!(jsx_dev.runtime_mode, "jsx_dev_runtime");
+    assert_eq!(tsx_dev.runtime_mode, "jsx_dev_runtime");
+    assert_eq!(jsx_dev.entry_surface, "diagnostic_contract");
+    assert_eq!(tsx_dev.entry_surface, "diagnostic_contract");
+    assert_eq!(jsx_dev.verification_lane, "react_diagnostics_contract");
+    assert_eq!(tsx_dev.verification_lane, "react_diagnostics_contract");
+    assert_eq!(jsx_dev.product_surface_bead, "bd-1lsy.10.12.2");
+    assert_eq!(tsx_dev.product_surface_bead, "bd-1lsy.10.12.2");
 }
 
 #[test]
@@ -678,8 +703,8 @@ fn rgc_016a_contract_json_is_valid_json() {
 fn rgc_016a_capability_row_count_minimum() {
     let contract = parse_contract();
     assert!(
-        contract.capability_rows.len() >= 10,
-        "expected at least 10 capability rows, found {}",
+        contract.capability_rows.len() >= 11,
+        "expected at least 11 capability rows, found {}",
         contract.capability_rows.len()
     );
 }

@@ -585,14 +585,14 @@ fn test_decision_creation() {
 #[test]
 fn test_decision_hash_deterministic() {
     let h = ContentHash::compute(b"ev_data");
-    let a = GovernanceDecision::new(GovernanceAction::BlockRollout, vec![h.clone()], "r", ep(5));
+    let a = GovernanceDecision::new(GovernanceAction::BlockRollout, vec![h], "r", ep(5));
     let b = GovernanceDecision::new(GovernanceAction::BlockRollout, vec![h], "r", ep(5));
     assert_eq!(a.receipt_hash, b.receipt_hash);
 }
 #[test]
 fn test_decision_hash_differs() {
     let h = ContentHash::compute(b"ev_data");
-    let a = GovernanceDecision::new(GovernanceAction::AllowRollout, vec![h.clone()], "x", ep(1));
+    let a = GovernanceDecision::new(GovernanceAction::AllowRollout, vec![h], "x", ep(1));
     let b = GovernanceDecision::new(GovernanceAction::BlockRollout, vec![h], "x", ep(1));
     assert_ne!(a.receipt_hash, b.receipt_hash);
 }
@@ -763,7 +763,7 @@ fn test_supremacy_display() {
 #[test]
 fn test_receipt_fields() {
     let h = ContentHash::compute(b"evidence");
-    let r = DecisionReceipt::new(ep(15), GovernanceAction::AllowRollout, h.clone());
+    let r = DecisionReceipt::new(ep(15), GovernanceAction::AllowRollout, h);
     assert_eq!(r.component, COMPONENT);
     assert_eq!(r.epoch.as_u64(), 15);
     assert_eq!(r.action, GovernanceAction::AllowRollout);
@@ -772,21 +772,21 @@ fn test_receipt_fields() {
 #[test]
 fn test_receipt_hash_deterministic() {
     let h = ContentHash::compute(b"ev");
-    let a = DecisionReceipt::new(ep(10), GovernanceAction::BlockRollout, h.clone());
+    let a = DecisionReceipt::new(ep(10), GovernanceAction::BlockRollout, h);
     let b = DecisionReceipt::new(ep(10), GovernanceAction::BlockRollout, h);
     assert_eq!(a.receipt_hash, b.receipt_hash);
 }
 #[test]
 fn test_receipt_hash_differs_action() {
     let h = ContentHash::compute(b"ev");
-    let a = DecisionReceipt::new(ep(10), GovernanceAction::AllowRollout, h.clone());
+    let a = DecisionReceipt::new(ep(10), GovernanceAction::AllowRollout, h);
     let b = DecisionReceipt::new(ep(10), GovernanceAction::BlockRollout, h);
     assert_ne!(a.receipt_hash, b.receipt_hash);
 }
 #[test]
 fn test_receipt_hash_differs_epoch() {
     let h = ContentHash::compute(b"ev");
-    let a = DecisionReceipt::new(ep(10), GovernanceAction::AllowRollout, h.clone());
+    let a = DecisionReceipt::new(ep(10), GovernanceAction::AllowRollout, h);
     let b = DecisionReceipt::new(ep(11), GovernanceAction::AllowRollout, h);
     assert_ne!(a.receipt_hash, b.receipt_hash);
 }

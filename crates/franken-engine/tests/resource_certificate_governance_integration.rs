@@ -48,11 +48,13 @@ fn test_fixed_one_value() {
 
 #[test]
 fn test_default_constants_positive() {
-    assert!(DEFAULT_MAX_REGRESSION_MILLIONTHS > 0);
-    assert!(DEFAULT_MAX_TAIL_RISK_MILLIONTHS > 0);
-    assert!(DEFAULT_MIN_SAMPLES > 0);
-    assert!(DEFAULT_MIN_OBSERVABILITY_COVERAGE > 0);
-    assert!(DEFAULT_MAX_UTILISATION_MILLIONTHS > 0);
+    const {
+        assert!(DEFAULT_MAX_REGRESSION_MILLIONTHS > 0);
+        assert!(DEFAULT_MAX_TAIL_RISK_MILLIONTHS > 0);
+        assert!(DEFAULT_MIN_SAMPLES > 0);
+        assert!(DEFAULT_MIN_OBSERVABILITY_COVERAGE > 0);
+        assert!(DEFAULT_MAX_UTILISATION_MILLIONTHS > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

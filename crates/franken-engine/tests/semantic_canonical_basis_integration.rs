@@ -89,19 +89,25 @@ fn component_name() {
 
 #[test]
 fn max_orbit_depth_positive() {
-    assert!(MAX_ORBIT_DEPTH > 0);
-    assert!(MAX_ORBIT_DEPTH <= 256);
+    const {
+        assert!(MAX_ORBIT_DEPTH > 0);
+        assert!(MAX_ORBIT_DEPTH <= 256);
+    }
 }
 
 #[test]
 fn max_classes_per_basis_positive() {
-    assert!(MAX_CLASSES_PER_BASIS > 0);
+    const {
+        assert!(MAX_CLASSES_PER_BASIS > 0);
+    }
 }
 
 #[test]
 fn min_similarity_threshold_in_range() {
-    assert!(MIN_SIMILARITY_THRESHOLD > 0);
-    assert!(MIN_SIMILARITY_THRESHOLD <= 1_000_000);
+    const {
+        assert!(MIN_SIMILARITY_THRESHOLD > 0);
+        assert!(MIN_SIMILARITY_THRESHOLD <= 1_000_000);
+    }
 }
 
 // ---------------------------------------------------------------------------

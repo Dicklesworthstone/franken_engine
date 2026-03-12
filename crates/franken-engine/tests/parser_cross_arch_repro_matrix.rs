@@ -182,6 +182,31 @@ fn build_lane_delta_event(
     })
 }
 
+fn lane_error_code(class_id: &str) -> Option<&'static str> {
+    match class_id {
+        "digest_delta_unexplained" => Some("FE-PARSER-CROSS-ARCH-MATRIX-0001"),
+        "upstream_lane_regression" => Some("FE-PARSER-CROSS-ARCH-MATRIX-0002"),
+        "missing_input" => Some("FE-PARSER-CROSS-ARCH-MATRIX-0003"),
+        "none" | "toolchain_fingerprint_delta" => None,
+        _ => Some("FE-PARSER-CROSS-ARCH-MATRIX-0099"),
+    }
+}
+
+fn gate_error_code(
+    failed_command: Option<&str>,
+    first_critical_delta: Option<&str>,
+) -> Option<&'static str> {
+    if let Some(command) = failed_command
+        && command != "evaluate_matrix"
+    {
+        return Some("FE-PARSER-CROSS-ARCH-REPRO-MATRIX-0001");
+    }
+
+    first_critical_delta
+        .and_then(lane_error_code)
+        .or_else(|| failed_command.map(|_| "FE-PARSER-CROSS-ARCH-REPRO-MATRIX-0001"))
+}
+
 fn assert_required_event_keys(event: &Value, required_keys: &[String]) {
     for key in required_keys {
         let value = event
@@ -457,6 +482,17 @@ fn runner_script_contains_manifest_auto_discovery_contract() {
         "PARSER_CROSS_ARCH_PARALLEL_INTERFERENCE_ARTIFACT_ROOT",
         "find_latest_manifest_for_arch",
         "resolve_manifest_input",
+        "run_rch_strict_logged",
+        "rch-pid.",
+        "rch-local-fallback-detected",
+        "pkill -P \"$current_rch_pid\"",
+        "pkill -f 'frankenengine-engine --test parser_cross_arch_repro_matrix'",
+        "pkill -f \"CARGO_TARGET_DIR=${target_dir}\"",
+        "delta_class_error_code",
+        "gate_error_code",
+        "FE-PARSER-CROSS-ARCH-MATRIX-0001",
+        "FE-PARSER-CROSS-ARCH-MATRIX-0002",
+        "FE-PARSER-CROSS-ARCH-MATRIX-0003",
         "\"matrix_inputs\": {",
         "auto_discovered",
     ] {
@@ -865,4 +901,46 @@ fn build_lane_delta_event_unknown_class_gets_fallback_error_code() {
     let event = build_lane_delta_event(&fixture, "lane1", &delta);
     assert_eq!(event["error_code"], "FE-PARSER-CROSS-ARCH-MATRIX-0099");
     assert_eq!(event["outcome"], "fail");
+}
+
+// ---------- gate_error_code favors runner failures over matrix deltas ----------
+
+#[test]
+fn gate_error_code_prefers_runner_failure_for_command_errors() {
+    assert_eq!(
+        gate_error_code(
+            Some("cargo check -p frankenengine-engine --test parser_cross_arch_repro_matrix"),
+            Some("missing_input")
+        ),
+        Some("FE-PARSER-CROSS-ARCH-REPRO-MATRIX-0001")
+    );
+}
+
+#[test]
+fn gate_error_code_uses_matrix_delta_code_for_matrix_failures() {
+    assert_eq!(
+        gate_error_code(Some("evaluate_matrix"), Some("missing_input")),
+        Some("FE-PARSER-CROSS-ARCH-MATRIX-0003")
+    );
+    assert_eq!(
+        gate_error_code(Some("evaluate_matrix"), Some("upstream_lane_regression")),
+        Some("FE-PARSER-CROSS-ARCH-MATRIX-0002")
+    );
+    assert_eq!(
+        gate_error_code(Some("evaluate_matrix"), Some("digest_delta_unexplained")),
+        Some("FE-PARSER-CROSS-ARCH-MATRIX-0001")
+    );
+}
+
+#[test]
+fn gate_error_code_keeps_runner_failure_generic_for_local_fallback() {
+    assert_eq!(
+        gate_error_code(
+            Some(
+                "cargo test -p frankenengine-engine --test parser_cross_arch_repro_matrix (rch-local-fallback-detected)"
+            ),
+            Some("missing_input")
+        ),
+        Some("FE-PARSER-CROSS-ARCH-REPRO-MATRIX-0001")
+    );
 }

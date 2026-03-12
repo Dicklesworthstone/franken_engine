@@ -7,8 +7,8 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::react_repro_triage::{
-    BEAD_ID, COMPONENT, FailureClass, FailureSeverity, MinimizedRepro, OwnerRoute, POLICY_ID,
-    ReproCatalog, SCHEMA_VERSION, TriageEntry, assign_severity, build_triage_event,
+    BEAD_ID, COMPONENT, FailureClass, FailureSeverity, FailureSymptoms, MinimizedRepro, OwnerRoute,
+    POLICY_ID, ReproCatalog, SCHEMA_VERSION, TriageEntry, assign_severity, build_triage_event,
     classify_failure, default_owner_route, generate_advisory,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -40,66 +40,98 @@ fn make_entry(class: FailureClass, severity: FailureSeverity) -> TriageEntry {
 
 #[test]
 fn classify_transform_bug_only() {
-    let class = classify_failure(true, false, false, false, false, false, false, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_transform_diff: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::TransformBug);
     assert!(class.is_engine_bug());
 }
 
 #[test]
 fn classify_resolver_bug_only() {
-    let class = classify_failure(false, true, false, false, false, false, false, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_resolver_error: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::ResolverBug);
 }
 
 #[test]
 fn classify_runtime_semantic_gap_only() {
-    let class = classify_failure(false, false, true, false, false, false, false, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_runtime_gap: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::RuntimeSemanticGap);
 }
 
 #[test]
 fn classify_env_boundary_only() {
-    let class = classify_failure(false, false, false, true, false, false, false, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_env_boundary: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::UnsupportedEnvironment);
     assert!(!class.is_engine_bug());
 }
 
 #[test]
 fn classify_version_mismatch_only() {
-    let class = classify_failure(false, false, false, false, true, false, false, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_version_mismatch: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::PackageMisuse);
     assert!(!class.is_engine_bug());
 }
 
 #[test]
 fn classify_hook_violation_takes_priority() {
-    let class = classify_failure(true, true, true, true, true, true, false, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_transform_diff: true,
+        has_resolver_error: true,
+        has_runtime_gap: true,
+        has_env_boundary: true,
+        has_version_mismatch: true,
+        has_hook_violation: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::HookInvariantViolation);
 }
 
 #[test]
 fn classify_hydration_mismatch_priority() {
-    let class = classify_failure(true, true, false, false, false, false, true, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_transform_diff: true,
+        has_resolver_error: true,
+        has_hydration_diff: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::HydrationMismatch);
 }
 
 #[test]
 fn classify_suspense_divergence() {
-    let class = classify_failure(false, false, false, false, false, false, false, true, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_suspense_diff: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::SuspenseDivergence);
 }
 
 #[test]
 fn classify_error_boundary_failure() {
-    let class = classify_failure(false, false, false, false, false, false, false, false, true);
+    let class = classify_failure(&FailureSymptoms {
+        has_error_boundary_diff: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::ErrorBoundaryFailure);
 }
 
 #[test]
 fn classify_no_symptoms_is_unclassified() {
-    let class = classify_failure(
-        false, false, false, false, false, false, false, false, false,
-    );
+    let class = classify_failure(&FailureSymptoms::default());
     assert_eq!(class, FailureClass::Unclassified);
 }
 
@@ -434,7 +466,10 @@ fn catalog_build_is_deterministic() {
 #[test]
 fn full_triage_pipeline() {
     // Step 1: Classify failure symptoms
-    let class = classify_failure(true, false, false, false, false, false, false, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_transform_diff: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::TransformBug);
 
     // Step 2: Assign severity
@@ -471,7 +506,10 @@ fn full_triage_pipeline() {
 
 #[test]
 fn full_triage_pipeline_non_engine_bug() {
-    let class = classify_failure(false, false, false, false, true, false, false, false, false);
+    let class = classify_failure(&FailureSymptoms {
+        has_version_mismatch: true,
+        ..FailureSymptoms::default()
+    });
     assert_eq!(class, FailureClass::PackageMisuse);
     assert!(!class.is_engine_bug());
 

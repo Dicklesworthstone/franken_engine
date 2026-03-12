@@ -842,3 +842,246 @@ fn drain_alerts_clears_alert_list() {
     let alert_count = engine.alerts().len();
     assert!(alert_count >= 2, "alerts should accumulate across cycles");
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: serde roundtrips, Display, error variants, edge cases, hash
+// determinism, Default trait, code() coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn calibration_error_code_returns_distinct_codes_for_all_variants() {
+    let variants: Vec<CalibrationError> = vec![
+        CalibrationError::EmptyCampaignBatch,
+        CalibrationError::CampaignValidationFailed { detail: "v".into() },
+        CalibrationError::CalibrationFailed { detail: "c".into() },
+        CalibrationError::InvalidConfig { detail: "i".into() },
+    ];
+
+    let codes: Vec<&str> = variants.iter().map(|e| e.code()).collect();
+    // All codes follow the FE-GCAL-NNNN pattern.
+    for code in &codes {
+        assert!(
+            code.starts_with("FE-GCAL-"),
+            "error code should start with FE-GCAL-"
+        );
+        assert_eq!(code.len(), 12, "error code should be 12 chars: {code}");
+    }
+    // All codes are distinct.
+    let mut deduped = codes.clone();
+    deduped.sort();
+    deduped.dedup();
+    assert_eq!(deduped.len(), codes.len(), "all error codes must be unique");
+}
+
+#[test]
+fn calibration_error_display_all_variants_non_empty_and_contain_code() {
+    let variants: Vec<CalibrationError> = vec![
+        CalibrationError::EmptyCampaignBatch,
+        CalibrationError::CampaignValidationFailed {
+            detail: "detail-v".into(),
+        },
+        CalibrationError::CalibrationFailed {
+            detail: "detail-c".into(),
+        },
+        CalibrationError::InvalidConfig {
+            detail: "detail-i".into(),
+        },
+    ];
+
+    for err in &variants {
+        let display = err.to_string();
+        assert!(
+            !display.is_empty(),
+            "Display for {err:?} should not be empty"
+        );
+        assert!(
+            display.contains(err.code()),
+            "Display for {err:?} should contain its code {}",
+            err.code()
+        );
+    }
+
+    // Specifically verify detail text propagates.
+    let with_detail = CalibrationError::CalibrationFailed {
+        detail: "xyzzy".into(),
+    };
+    assert!(
+        with_detail.to_string().contains("xyzzy"),
+        "detail text should appear in Display output"
+    );
+}
+
+#[test]
+fn effectiveness_trend_display_produces_expected_strings() {
+    assert_eq!(EffectivenessTrend::Improving.to_string(), "improving");
+    assert_eq!(EffectivenessTrend::Stable.to_string(), "stable");
+    assert_eq!(EffectivenessTrend::Degrading.to_string(), "degrading");
+
+    // All display strings are distinct.
+    let strings: Vec<String> = [
+        EffectivenessTrend::Improving,
+        EffectivenessTrend::Stable,
+        EffectivenessTrend::Degrading,
+    ]
+    .iter()
+    .map(|t| t.to_string())
+    .collect();
+    let mut deduped = strings.clone();
+    deduped.sort();
+    deduped.dedup();
+    assert_eq!(deduped.len(), 3, "all trend display strings must be unique");
+}
+
+#[test]
+fn defense_effectiveness_summary_zero_state_serde_roundtrip() {
+    // An engine with no campaigns should still produce a valid summary that
+    // round-trips through serde.
+    let engine = GuardplaneCalibrationEngine::new();
+    let eff = engine.defense_effectiveness();
+
+    assert_eq!(eff.total_campaigns, 0);
+    assert_eq!(eff.total_evasions, 0);
+    assert_eq!(eff.total_containment_escapes, 0);
+    assert_eq!(eff.overall_detection_rate_millionths, 0);
+    assert!(eff.per_dimension.is_empty());
+    assert!(eff.weakest_dimension.is_none());
+
+    let json = serde_json::to_string(&eff).unwrap();
+    let restored: DefenseEffectivenessSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(eff, restored);
+}
+
+#[test]
+fn state_digest_determinism_across_independent_engines() {
+    let outcomes = vec![
+        make_outcome(AttackDimension::Exfiltration, 3, 10, false),
+        make_outcome(AttackDimension::PrivilegeEscalation, 1, 8, false),
+    ];
+    let ctx = test_ctx();
+
+    let mut engine_a = GuardplaneCalibrationEngine::new();
+    let r_a = engine_a.run_calibration_cycle(&outcomes, &ctx).unwrap();
+
+    let mut engine_b = GuardplaneCalibrationEngine::new();
+    let r_b = engine_b.run_calibration_cycle(&outcomes, &ctx).unwrap();
+
+    // Same inputs to fresh engines must produce the same state digest.
+    assert_eq!(
+        r_a.state_digest, r_b.state_digest,
+        "state digest must be deterministic for identical inputs"
+    );
+    // Verify well-formed hex.
+    assert_eq!(r_a.state_digest.len(), 16);
+    assert!(r_a.state_digest.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[test]
+fn calibration_context_clone_produces_equal_copy() {
+    let ctx = CalibrationContext {
+        trace_id: "t-clone".into(),
+        decision_id: "d-clone".into(),
+        policy_id: "p-clone".into(),
+        signing_key: [0xABu8; 32],
+        timestamp_ns: 42_000_000,
+    };
+    let cloned = ctx.clone();
+    assert_eq!(ctx, cloned);
+
+    // Serde roundtrip of the clone also matches original.
+    let json = serde_json::to_string(&cloned).unwrap();
+    let restored: CalibrationContext = serde_json::from_str(&json).unwrap();
+    assert_eq!(ctx, restored);
+}
+
+#[test]
+fn engine_default_trait_matches_new() {
+    let from_new = GuardplaneCalibrationEngine::new();
+    let from_default = GuardplaneCalibrationEngine::default();
+
+    // Both should start at the same zero state.
+    assert_eq!(from_new.cycle_count(), from_default.cycle_count());
+    assert_eq!(
+        from_new.total_campaigns_ingested(),
+        from_default.total_campaigns_ingested()
+    );
+    assert!(from_new.alerts().is_empty());
+    assert!(from_default.alerts().is_empty());
+    assert!(from_new.events().is_empty());
+    assert!(from_default.events().is_empty());
+
+    // Defense effectiveness summaries should be identical.
+    let eff_new = from_new.defense_effectiveness();
+    let eff_default = from_default.defense_effectiveness();
+    assert_eq!(eff_new, eff_default);
+}
+
+#[test]
+fn calibration_alert_serde_with_empty_string_fields() {
+    // Edge case: empty string fields should survive serde roundtrip.
+    let alert = CalibrationAlert {
+        alert_id: String::new(),
+        severity: String::new(),
+        subsystem: String::new(),
+        threat_category: String::new(),
+        description: String::new(),
+        recommended_action: String::new(),
+        evasion_rate_millionths: 0,
+        cycle_id: String::new(),
+    };
+    let json = serde_json::to_string(&alert).unwrap();
+    let restored: CalibrationAlert = serde_json::from_str(&json).unwrap();
+    assert_eq!(alert, restored);
+}
+
+#[test]
+fn calibration_event_serde_roundtrip_with_none_error_code() {
+    let event = CalibrationEvent {
+        trace_id: "t-none".into(),
+        decision_id: "d-none".into(),
+        policy_id: "p-none".into(),
+        component: "guardplane_calibration".into(),
+        event: "test_event".into(),
+        outcome: "ok".into(),
+        error_code: None,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: CalibrationEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, restored);
+
+    // Verify None serializes distinctly from Some("").
+    let event_empty = CalibrationEvent {
+        error_code: Some(String::new()),
+        ..event.clone()
+    };
+    let json_empty = serde_json::to_string(&event_empty).unwrap();
+    assert_ne!(
+        json, json_empty,
+        "None and Some(\"\") should serialize differently"
+    );
+}
+
+#[test]
+fn dimension_effectiveness_boundary_values_serde_roundtrip() {
+    // Test with maximum and minimum boundary values for millionths fields.
+    let de_max = DimensionEffectiveness {
+        dimension: "MaxBoundary".into(),
+        detection_rate_millionths: 1_000_000,
+        evasion_rate_millionths: 0,
+        trend: EffectivenessTrend::Improving,
+        sample_count: usize::MAX,
+    };
+    let json_max = serde_json::to_string(&de_max).unwrap();
+    let restored_max: DimensionEffectiveness = serde_json::from_str(&json_max).unwrap();
+    assert_eq!(de_max, restored_max);
+
+    let de_min = DimensionEffectiveness {
+        dimension: "MinBoundary".into(),
+        detection_rate_millionths: 0,
+        evasion_rate_millionths: 1_000_000,
+        trend: EffectivenessTrend::Degrading,
+        sample_count: 0,
+    };
+    let json_min = serde_json::to_string(&de_min).unwrap();
+    let restored_min: DimensionEffectiveness = serde_json::from_str(&json_min).unwrap();
+    assert_eq!(de_min, restored_min);
+}

@@ -348,7 +348,7 @@ fn integration_report_json_roundtrip() {
 }
 
 #[test]
-fn integration_report_hash_deterministic() {
+fn integration_report_hash_deterministic_initial() {
     let make = || {
         let reg = HarnessMigrationRegistry::with_default_scenarios(epoch());
         reg.build_report()
@@ -531,7 +531,7 @@ fn integration_lifecycle_scenario_unique_labels() {
 }
 
 #[test]
-fn integration_lifecycle_scenario_serde_roundtrip() {
+fn integration_lifecycle_scenario_serde_roundtrip_v2() {
     for id in LifecycleScenarioId::ALL {
         let json = serde_json::to_string(&id).unwrap();
         let round: LifecycleScenarioId = serde_json::from_str(&json).unwrap();
@@ -586,26 +586,26 @@ fn integration_scenario_entry_mark_migrated_then_verified() {
 
     entry.mark_migrated("upstream::runner");
     assert_eq!(entry.status, MigrationStatus::Migrated);
-    assert_eq!(entry.upstream_harness, "upstream::runner");
+    assert_eq!(entry.upstream_harness.as_deref(), Some("upstream::runner"));
 
     entry.mark_verified();
     assert_eq!(entry.status, MigrationStatus::Verified);
-    assert!(entry.cross_validated);
+    assert!(entry.replay_verified);
 }
 
 #[test]
 fn integration_oracle_migration_entry_local_only() {
     let entry = OracleMigrationEntry::local_only("test_oracle");
-    assert_eq!(entry.name, "test_oracle");
-    assert!(!entry.bridged_to_upstream);
+    assert_eq!(entry.invariant_name, "test_oracle");
+    assert!(!entry.available_via_bridge);
     assert!(!entry.cross_validated);
 }
 
 #[test]
 fn integration_oracle_migration_entry_bridged() {
     let entry = OracleMigrationEntry::bridged("bridge_oracle");
-    assert_eq!(entry.name, "bridge_oracle");
-    assert!(entry.bridged_to_upstream);
+    assert_eq!(entry.invariant_name, "bridge_oracle");
+    assert!(entry.available_via_bridge);
     assert!(!entry.cross_validated);
 }
 
@@ -642,7 +642,7 @@ fn integration_report_serde_roundtrip() {
 }
 
 #[test]
-fn integration_report_hash_deterministic() {
+fn integration_report_hash_deterministic_repeated() {
     let make = || {
         let reg = HarnessMigrationRegistry::with_default_scenarios(epoch());
         reg.build_report()

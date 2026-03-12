@@ -520,7 +520,7 @@ fn namespace_specimen_fails_closed() {
 }
 
 #[test]
-fn interface_specimen_is_known_gap() {
+fn interface_specimen_normalizes_away() {
     let inv = run_diagnostic_corpus();
     let ev = inv
         .evidence
@@ -528,7 +528,32 @@ fn interface_specimen_is_known_gap() {
         .find(|e| e.specimen_id == "interface_declaration")
         .unwrap();
     assert_eq!(ev.verdict, SpecimenVerdict::Pass);
-    assert_eq!(ev.expected_outcome, ExpectedOutcome::KnownGap);
+    assert_eq!(ev.expected_outcome, ExpectedOutcome::NormalizedAway);
+    assert_eq!(ev.actual_outcome, ActualOutcome::Success);
+}
+
+#[test]
+fn export_type_specimen_normalizes_away() {
+    let inv = run_diagnostic_corpus();
+    let ev = inv
+        .evidence
+        .iter()
+        .find(|e| e.specimen_id == "export_type_declaration")
+        .unwrap();
+    assert_eq!(ev.verdict, SpecimenVerdict::Pass);
+    assert_eq!(ev.expected_outcome, ExpectedOutcome::NormalizedAway);
+}
+
+#[test]
+fn implements_clause_specimen_normalizes_away() {
+    let inv = run_diagnostic_corpus();
+    let ev = inv
+        .evidence
+        .iter()
+        .find(|e| e.specimen_id == "implements_clause")
+        .unwrap();
+    assert_eq!(ev.verdict, SpecimenVerdict::Pass);
+    assert_eq!(ev.expected_outcome, ExpectedOutcome::NormalizedAway);
 }
 
 #[test]

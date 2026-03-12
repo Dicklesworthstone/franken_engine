@@ -16,8 +16,9 @@ use std::collections::BTreeSet;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hindsight_boundary_capture::{BoundaryClass, RedactionTreatment};
 use frankenengine_engine::hindsight_escalation_bundle::{
-    BundleContentKind, EscalationDecision, EscalationError, EscalationPipeline, EscalationPolicy,
-    EscalationTrigger, EscalationTriggerKind, TriggerSeverity,
+    BundleContentKind, COMPONENT, ESCALATION_BEAD_ID, ESCALATION_SCHEMA_VERSION,
+    EscalationDecision, EscalationError, EscalationPipeline, EscalationPolicy, EscalationTrigger,
+    EscalationTriggerKind, TriggerSeverity,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -556,4 +557,323 @@ fn escalation_multiple_severities_different_content_sizes() {
     for window in entry_counts.windows(2) {
         assert!(window[0] <= window[1]);
     }
+}
+
+// ===========================================================================
+// Constants integration tests
+// ===========================================================================
+
+#[test]
+fn constants_non_empty_and_well_formed() {
+    assert!(!ESCALATION_SCHEMA_VERSION.is_empty());
+    assert!(ESCALATION_SCHEMA_VERSION.starts_with("franken-engine."));
+    assert!(!ESCALATION_BEAD_ID.is_empty());
+    assert!(ESCALATION_BEAD_ID.starts_with("bd-"));
+    assert!(!COMPONENT.is_empty());
+    assert_eq!(COMPONENT, "hindsight_escalation_bundle");
+}
+
+// ===========================================================================
+// EscalationTrigger serde and clone tests
+// ===========================================================================
+
+#[test]
+fn trigger_serde_roundtrip() {
+    let t = trigger(
+        "serde-t1",
+        EscalationTriggerKind::ReplayDivergence,
+        TriggerSeverity::Warning,
+    );
+    let json = serde_json::to_string(&t).unwrap();
+    let back: EscalationTrigger = serde_json::from_str(&json).unwrap();
+    assert_eq!(t.trigger_id, back.trigger_id);
+    assert_eq!(t.kind, back.kind);
+    assert_eq!(t.severity, back.severity);
+    assert_eq!(t.description, back.description);
+    assert_eq!(t.relevant_boundaries, back.relevant_boundaries);
+    assert_eq!(t.source_component, back.source_component);
+}
+
+#[test]
+fn trigger_clone_is_independent() {
+    let t = trigger(
+        "clone-t",
+        EscalationTriggerKind::OperatorRequest,
+        TriggerSeverity::Emergency,
+    );
+    let mut cloned = t.clone();
+    cloned.trigger_id = "clone-t-modified".to_string();
+    assert_ne!(t.trigger_id, cloned.trigger_id);
+    assert_eq!(t.kind, cloned.kind);
+}
+
+// ===========================================================================
+// EscalationDecision display/serde match tests
+// ===========================================================================
+
+#[test]
+fn decision_display_matches_serde() {
+    for d in EscalationDecision::ALL {
+        let json = serde_json::to_string(d).unwrap();
+        let display = d.to_string();
+        assert_eq!(json, format!("\"{display}\""));
+    }
+}
+
+#[test]
+fn decision_serde_roundtrip_all_variants() {
+    for d in EscalationDecision::ALL {
+        let json = serde_json::to_string(d).unwrap();
+        let back: EscalationDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(*d, back);
+    }
+}
+
+// ===========================================================================
+// Pipeline receipt filter method tests
+// ===========================================================================
+
+#[test]
+fn pipeline_escalated_receipts_filter() {
+    let mut pipeline = EscalationPipeline::new(EscalationPolicy::default(), epoch(100));
+    // UserVisibleFailure is in always_escalate, so should produce escalated receipt
+    pipeline.process_trigger(trigger(
+        "esc-1",
+        EscalationTriggerKind::UserVisibleFailure,
+        TriggerSeverity::Critical,
+    ));
+    let escalated = pipeline.escalated_receipts();
+    assert_eq!(escalated.len(), 1);
+    assert_eq!(escalated[0].decision, EscalationDecision::Escalate);
+    assert_eq!(escalated[0].trigger_id, "esc-1");
+    assert!(escalated[0].bundle_id.is_some());
+}
+
+#[test]
+fn pipeline_suppressed_receipts_filter() {
+    let mut policy = EscalationPolicy::default();
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::AnomalyDetected);
+    let mut pipeline = EscalationPipeline::new(policy, epoch(100));
+    pipeline.process_trigger(trigger(
+        "sup-1",
+        EscalationTriggerKind::AnomalyDetected,
+        TriggerSeverity::Critical,
+    ));
+    let suppressed = pipeline.suppressed_receipts();
+    assert_eq!(suppressed.len(), 1);
+    assert_eq!(suppressed[0].decision, EscalationDecision::Suppress);
+    assert!(suppressed[0].bundle_id.is_none());
+}
+
+#[test]
+fn pipeline_deferred_receipts_filter() {
+    let mut policy = EscalationPolicy::default();
+    policy.cost_budget_millionths = 1;
+    policy.always_escalate.clear();
+    let mut pipeline = EscalationPipeline::new(policy, epoch(100));
+    // First trigger should escalate (Critical auto-escalates)
+    pipeline.process_trigger(trigger(
+        "def-1",
+        EscalationTriggerKind::AnomalyDetected,
+        TriggerSeverity::Critical,
+    ));
+    // Budget is now exhausted, second Critical should defer
+    pipeline.process_trigger(trigger(
+        "def-2",
+        EscalationTriggerKind::RegressionObserved,
+        TriggerSeverity::Critical,
+    ));
+    let deferred = pipeline.deferred_receipts();
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0].trigger_id, "def-2");
+    assert_eq!(deferred[0].decision, EscalationDecision::Defer);
+}
+
+// ===========================================================================
+// Pipeline hash sensitivity tests
+// ===========================================================================
+
+#[test]
+fn pipeline_hash_differs_for_different_triggers() {
+    let policy = EscalationPolicy::default();
+    let mut p1 = EscalationPipeline::new(policy.clone(), epoch(100));
+    let mut p2 = EscalationPipeline::new(policy, epoch(100));
+
+    p1.process_trigger(trigger(
+        "hash-a",
+        EscalationTriggerKind::AnomalyDetected,
+        TriggerSeverity::Warning,
+    ));
+    p2.process_trigger(trigger(
+        "hash-b",
+        EscalationTriggerKind::PolicyViolation,
+        TriggerSeverity::Critical,
+    ));
+    assert_ne!(p1.pipeline_hash, p2.pipeline_hash);
+}
+
+#[test]
+fn pipeline_hash_differs_for_different_epochs() {
+    let policy = EscalationPolicy::default();
+    let p1 = EscalationPipeline::new(policy.clone(), epoch(100));
+    let p2 = EscalationPipeline::new(policy, epoch(200));
+    assert_ne!(p1.pipeline_hash, p2.pipeline_hash);
+}
+
+// ===========================================================================
+// Pipeline empty state tests
+// ===========================================================================
+
+#[test]
+fn pipeline_empty_state() {
+    let pipeline = EscalationPipeline::new(EscalationPolicy::default(), epoch(50));
+    assert!(pipeline.triggers.is_empty());
+    assert!(pipeline.receipts.is_empty());
+    assert!(pipeline.bundles.is_empty());
+    assert_eq!(pipeline.schema_version, ESCALATION_SCHEMA_VERSION);
+    assert_eq!(pipeline.bead_id, ESCALATION_BEAD_ID);
+    assert_eq!(
+        pipeline.remaining_budget_millionths,
+        pipeline.policy.cost_budget_millionths
+    );
+    let summary = pipeline.summary_report();
+    assert_eq!(summary.total_triggers, 0);
+    assert_eq!(summary.escalated_count, 0);
+    assert_eq!(summary.suppressed_count, 0);
+    assert_eq!(summary.deferred_count, 0);
+    assert_eq!(summary.total_bundles, 0);
+    assert_eq!(summary.total_cost_millionths, 0);
+}
+
+// ===========================================================================
+// EscalationError display content validation
+// ===========================================================================
+
+#[test]
+fn error_display_contains_relevant_info() {
+    let e1 = EscalationError::TriggerNotFound {
+        trigger_id: "missing-42".to_string(),
+    };
+    assert!(e1.to_string().contains("missing-42"));
+
+    let e2 = EscalationError::BundleNotFound {
+        bundle_id: "bundle-xyz".to_string(),
+    };
+    assert!(e2.to_string().contains("bundle-xyz"));
+
+    let e3 = EscalationError::BudgetExhausted {
+        remaining: 10,
+        required: 500,
+    };
+    let display3 = e3.to_string();
+    assert!(display3.contains("10"));
+    assert!(display3.contains("500"));
+
+    let e4 = EscalationError::InvalidPolicy {
+        detail: "missing strategies".to_string(),
+    };
+    assert!(e4.to_string().contains("missing strategies"));
+}
+
+#[test]
+fn error_clone_preserves_equality() {
+    let original = EscalationError::BudgetExhausted {
+        remaining: 42,
+        required: 999,
+    };
+    let cloned = original.clone();
+    assert_eq!(original, cloned);
+}
+
+// ===========================================================================
+// EscalationSummary serde roundtrip
+// ===========================================================================
+
+#[test]
+fn summary_serde_roundtrip() {
+    let mut pipeline = EscalationPipeline::new(EscalationPolicy::default(), epoch(100));
+    pipeline.process_trigger(trigger(
+        "sum-1",
+        EscalationTriggerKind::UserVisibleFailure,
+        TriggerSeverity::Critical,
+    ));
+    pipeline.process_trigger(trigger(
+        "sum-2",
+        EscalationTriggerKind::AnomalyDetected,
+        TriggerSeverity::Advisory,
+    ));
+    let summary = pipeline.summary_report();
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: frankenengine_engine::hindsight_escalation_bundle::EscalationSummary =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(summary.total_triggers, back.total_triggers);
+    assert_eq!(summary.escalated_count, back.escalated_count);
+    assert_eq!(summary.total_cost_millionths, back.total_cost_millionths);
+    assert_eq!(summary.triggers_by_kind, back.triggers_by_kind);
+    assert_eq!(summary.triggers_by_severity, back.triggers_by_severity);
+    assert_eq!(summary.summary_hash, back.summary_hash);
+}
+
+// ===========================================================================
+// Trigger with empty boundaries edge case
+// ===========================================================================
+
+#[test]
+fn trigger_with_empty_boundaries_produces_bundle() {
+    let mut pipeline = EscalationPipeline::new(EscalationPolicy::default(), epoch(100));
+    let mut t = trigger(
+        "empty-bounds",
+        EscalationTriggerKind::UserVisibleFailure,
+        TriggerSeverity::Critical,
+    );
+    t.relevant_boundaries = vec![];
+    pipeline.process_trigger(t);
+    let bundle = pipeline.bundle_for_trigger("empty-bounds").unwrap();
+    assert!(bundle.covered_boundaries.is_empty());
+    assert!(!bundle.entries.is_empty());
+}
+
+// ===========================================================================
+// BundleContentKind display/serde match
+// ===========================================================================
+
+#[test]
+fn content_kind_display_matches_serde() {
+    for kind in BundleContentKind::ALL {
+        let json = serde_json::to_string(kind).unwrap();
+        let display = kind.to_string();
+        assert_eq!(json, format!("\"{display}\""));
+    }
+}
+
+// ===========================================================================
+// Receipt fields validation
+// ===========================================================================
+
+#[test]
+fn receipt_fields_populated_correctly() {
+    let mut pipeline = EscalationPipeline::new(EscalationPolicy::default(), epoch(100));
+    let receipt = pipeline
+        .process_trigger(trigger(
+            "rf-1",
+            EscalationTriggerKind::PolicyViolation,
+            TriggerSeverity::Warning,
+        ))
+        .clone();
+    assert_eq!(receipt.receipt_id, "receipt-rf-1");
+    assert_eq!(receipt.trigger_id, "rf-1");
+    assert_eq!(receipt.decision, EscalationDecision::Escalate);
+    assert!(receipt.bundle_id.is_some());
+    assert!(!receipt.rationale.is_empty());
+    assert!(receipt.cost_consumed_millionths > 0);
+    assert_eq!(receipt.receipt_epoch, epoch(100));
+
+    // Serde roundtrip on the receipt
+    let json = serde_json::to_string(&receipt).unwrap();
+    let back: frankenengine_engine::hindsight_escalation_bundle::EscalationReceipt =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(receipt.receipt_id, back.receipt_id);
+    assert_eq!(receipt.receipt_hash, back.receipt_hash);
 }

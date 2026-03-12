@@ -343,6 +343,21 @@ fn type_only_import_results_in_empty_source_error() {
 }
 
 #[test]
+fn type_space_only_source_results_in_empty_source_error() {
+    let source = "export interface Foo { value: string; }\nexport type Id = string;";
+    let error = normalize_typescript_to_es2020(
+        source,
+        &TsNormalizationConfig::default(),
+        "trace-type-space-only",
+        "decision-type-space-only",
+        "policy-type-space-only",
+    )
+    .expect_err("type-space-only source should produce EmptySource after stripping");
+
+    assert_eq!(error, TsNormalizationError::EmptySource);
+}
+
+#[test]
 fn default_config_targets_es2020() {
     let config = TsNormalizationConfig::default();
     assert_eq!(config.compiler_options.target, "es2020");

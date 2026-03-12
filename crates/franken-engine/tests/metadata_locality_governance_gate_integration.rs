@@ -791,7 +791,7 @@ fn test_decision_receipt_new() {
         COMPONENT,
         test_epoch(),
         GovernanceDecision::Approve,
-        ev_hash.clone(),
+        ev_hash,
     );
     assert_eq!(receipt.component, COMPONENT);
     assert_eq!(receipt.epoch, test_epoch());
@@ -806,7 +806,7 @@ fn test_decision_receipt_hash_deterministic() {
         COMPONENT,
         test_epoch(),
         GovernanceDecision::Approve,
-        ev_hash.clone(),
+        ev_hash,
     );
     let b = DecisionReceipt::new(
         COMPONENT,
@@ -824,7 +824,7 @@ fn test_decision_receipt_different_decisions_differ() {
         COMPONENT,
         test_epoch(),
         GovernanceDecision::Approve,
-        ev_hash.clone(),
+        ev_hash,
     );
     let b = DecisionReceipt::new(COMPONENT, test_epoch(), GovernanceDecision::Reject, ev_hash);
     assert_ne!(a.receipt_hash, b.receipt_hash);

@@ -90,7 +90,7 @@ fn verdict_debug_contains_variant_name() {
 #[allow(clippy::clone_on_copy)]
 fn verdict_clone_and_copy_semantics() {
     let v = DecisionVerdict::Deny;
-    let cloned = v.clone();
+    let cloned = v;
     let copied = v;
     assert_eq!(v, cloned);
     assert_eq!(v, copied);

@@ -49,13 +49,17 @@ fn component_is_snake_case() {
 
 #[test]
 fn max_bundle_size_reasonable() {
-    assert!(MAX_BUNDLE_SIZE >= 256);
-    assert!(MAX_BUNDLE_SIZE <= 65_536);
+    const {
+        assert!(MAX_BUNDLE_SIZE >= 256);
+        assert!(MAX_BUNDLE_SIZE <= 65_536);
+    }
 }
 
 #[test]
 fn max_artifact_bytes_reasonable() {
-    assert!(MAX_ARTIFACT_BYTES >= 1024 * 1024);
+    const {
+        assert!(MAX_ARTIFACT_BYTES >= 1024 * 1024);
+    }
 }
 
 // ---------------------------------------------------------------------------

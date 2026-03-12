@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hot_path_telemetry_kernel::{
     COMPONENT, CalibrationEvidence, CaptureMode, ExactShadowCounter, HotPathEvidenceEntry,
-    KernelRegistry, KernelState, KernelSummary, SCHEMA_VERSION, SketchWriterKind, TelemetryError,
+    KernelRegistry, KernelState, SCHEMA_VERSION, SketchWriterKind, TelemetryError,
     TelemetryManifest, ThinnedBundle, ThinningPolicy, ThinningStrategy, apply_thinning,
     build_manifest, build_registry, calibrate_kernel, create_kernel, register_kernel,
     submit_observation,
@@ -374,7 +374,7 @@ fn integration_thinning_priority_entries_always_kept() {
     for entry in entries.iter_mut().take(5) {
         entry.priority = 100;
     }
-    let mut policy = ThinningPolicy::new(
+    let policy = ThinningPolicy::new(
         "prio".to_string(),
         ThinningStrategy::UniformRate,
         1, // Almost zero retention.
@@ -703,14 +703,14 @@ fn integration_e2e_determinism_across_runs() {
         let policy = make_policy("det-pol", ThinningStrategy::HashDeterministic, 400_000);
         let bundle = apply_thinning(&entries, &policy, epoch(1)).unwrap();
         registry.recompute_hash();
-        let manifest = build_manifest(
+
+        build_manifest(
             "det-man".to_string(),
             &registry,
             vec![cal],
             vec![bundle],
             epoch(1),
-        );
-        manifest
+        )
     };
 
     let m1 = run();

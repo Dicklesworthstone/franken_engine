@@ -48,11 +48,11 @@ fn test_fixed_one_value() {
 
 #[test]
 fn test_default_constants_positive() {
-    assert!(DEFAULT_MAX_CACHE_MISS_RATE > 0);
-    assert!(DEFAULT_MAX_NUMA_REMOTE_RATIO > 0);
-    assert!(DEFAULT_MIN_PORTABILITY_SCORE > 0);
-    assert!(DEFAULT_MIN_SAMPLES > 0);
-    assert!(DEFAULT_MIN_OBSERVABILITY_COVERAGE > 0);
+    const { assert!(DEFAULT_MAX_CACHE_MISS_RATE > 0) };
+    const { assert!(DEFAULT_MAX_NUMA_REMOTE_RATIO > 0) };
+    const { assert!(DEFAULT_MIN_PORTABILITY_SCORE > 0) };
+    const { assert!(DEFAULT_MIN_SAMPLES > 0) };
+    const { assert!(DEFAULT_MIN_OBSERVABILITY_COVERAGE > 0) };
 }
 
 // ---------------------------------------------------------------------------

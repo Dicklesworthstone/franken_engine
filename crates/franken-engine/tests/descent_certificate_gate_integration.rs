@@ -158,15 +158,19 @@ fn policy_id_format() {
 #[test]
 #[allow(clippy::assertions_on_constants)]
 fn coverage_threshold_valid() {
-    assert!(MIN_DESCENT_COVERAGE > 0);
-    assert!(MIN_DESCENT_COVERAGE <= 1_000_000);
+    const {
+        assert!(MIN_DESCENT_COVERAGE > 0);
+        assert!(MIN_DESCENT_COVERAGE <= 1_000_000);
+    }
 }
 
 #[test]
 #[allow(clippy::assertions_on_constants)]
 fn confidence_threshold_valid() {
-    assert!(MIN_DESCENT_CONFIDENCE > 0);
-    assert!(MIN_DESCENT_CONFIDENCE <= 1_000_000);
+    const {
+        assert!(MIN_DESCENT_CONFIDENCE > 0);
+        assert!(MIN_DESCENT_CONFIDENCE <= 1_000_000);
+    }
 }
 
 #[test]

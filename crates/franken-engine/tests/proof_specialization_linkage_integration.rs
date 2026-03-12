@@ -698,7 +698,7 @@ fn invalidate_expired_proof_windows_ignores_unbounded_input() {
 fn invalidate_manual_success() {
     let mut eng = engine(5);
     let rec = linkage_record("lnk-1", 5, &["p1"]);
-    let expected_baseline = rec.rollback.baseline_ir3_hash.clone();
+    let expected_baseline = rec.rollback.baseline_ir3_hash;
     eng.register(rec, "t").unwrap();
 
     let lid = LinkageId::new("lnk-1");
@@ -798,7 +798,7 @@ fn counts_reflect_active_and_inactive() {
 fn rollback_plan_lists_active_linkages_with_baseline_hashes() {
     let mut eng = engine(5);
     let rec_a = linkage_record("lnk-a", 5, &["p1"]);
-    let expected_a = rec_a.rollback.baseline_ir3_hash.clone();
+    let expected_a = rec_a.rollback.baseline_ir3_hash;
     eng.register(rec_a, "t").unwrap();
 
     let mut rec_b = linkage_record("lnk-b", 5, &["p2"]);

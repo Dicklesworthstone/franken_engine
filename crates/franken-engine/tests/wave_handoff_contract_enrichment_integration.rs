@@ -540,3 +540,758 @@ fn serde_roundtrip_handoff_validation_report() {
     let rt: HandoffValidationReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report, rt);
 }
+
+// ===========================================================================
+// 12) validate_handoff — empty producer_owner
+// ===========================================================================
+
+#[test]
+fn validate_handoff_empty_producer_owner() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.producer_owner = "".into();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(!report.valid);
+    assert!(report.failures.iter().any(|f| f.code
+        == HandoffValidationErrorCode::MissingRequiredField
+        && f.message.contains("producer_owner")));
+}
+
+// ===========================================================================
+// 13) validate_handoff — empty consumer_owner
+// ===========================================================================
+
+#[test]
+fn validate_handoff_empty_consumer_owner() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.consumer_owner = "".into();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(!report.valid);
+    assert!(report.failures.iter().any(|f| f.code
+        == HandoffValidationErrorCode::MissingRequiredField
+        && f.message.contains("consumer_owner")));
+}
+
+// ===========================================================================
+// 14) validate_handoff — empty artifact_links
+// ===========================================================================
+
+#[test]
+fn validate_handoff_empty_artifact_links() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.artifact_links.clear();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(!report.valid);
+    assert!(report.failures.iter().any(|f| f.code
+        == HandoffValidationErrorCode::MissingRequiredField
+        && f.message.contains("artifact_links")));
+}
+
+// ===========================================================================
+// 15) validate_handoff — empty next_step_recommendations
+// ===========================================================================
+
+#[test]
+fn validate_handoff_empty_next_step_recommendations() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.next_step_recommendations.clear();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(!report.valid);
+    assert!(report.failures.iter().any(|f| f.code
+        == HandoffValidationErrorCode::MissingRequiredField
+        && f.message.contains("next_step_recommendations")));
+}
+
+// ===========================================================================
+// 16) validate_handoff — whitespace-only packet_id treated as empty
+// ===========================================================================
+
+#[test]
+fn validate_handoff_whitespace_only_packet_id() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.packet_id = "   ".into();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(!report.valid);
+    assert!(report.failures.iter().any(|f| f.code
+        == HandoffValidationErrorCode::MissingRequiredField
+        && f.message.contains("packet_id")));
+}
+
+// ===========================================================================
+// 17) validate_handoff — missing criterion attestation
+// ===========================================================================
+
+#[test]
+fn validate_handoff_missing_criterion_attestation() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.criteria_attestations.clear();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(!report.valid);
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.code == HandoffValidationErrorCode::MissingCriterionAttestation)
+    );
+}
+
+// ===========================================================================
+// 18) validate_handoff — criterion status mismatch
+// ===========================================================================
+
+#[test]
+fn validate_handoff_criterion_status_mismatch() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    for att in &mut pkg.criteria_attestations {
+        att.bead_status = RequiredBeadStatus::Closed;
+    }
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.code == HandoffValidationErrorCode::CriterionStatusMismatch)
+    );
+}
+
+// ===========================================================================
+// 19) validate_handoff — criterion bead_id mismatch
+// ===========================================================================
+
+#[test]
+fn validate_handoff_criterion_bead_id_mismatch() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    for att in &mut pkg.criteria_attestations {
+        att.bead_id = "bd-wrong".into();
+    }
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.code == HandoffValidationErrorCode::CriterionBeadMissing)
+    );
+}
+
+// ===========================================================================
+// 20) validate_handoff — criterion artifact mismatch
+// ===========================================================================
+
+#[test]
+fn validate_handoff_criterion_artifact_mismatch() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    for att in &mut pkg.criteria_attestations {
+        att.artifact_ref = "wrong/path.json".into();
+    }
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.code == HandoffValidationErrorCode::CriterionArtifactMissing)
+    );
+}
+
+// ===========================================================================
+// 21) validate_handoff — multiple failures accumulate
+// ===========================================================================
+
+#[test]
+fn validate_handoff_accumulates_multiple_failures() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.packet_id = "".into();
+    pkg.producer_owner = "".into();
+    pkg.consumer_owner = "".into();
+    pkg.completeness_score_milli = 0;
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(!report.valid);
+    assert!(
+        report.failures.len() >= 4,
+        "expected at least 4 failures, got {}",
+        report.failures.len()
+    );
+    assert_eq!(report.outcome, "fail");
+    assert_eq!(report.error_code, WAVE_HANDOFF_FAILURE_CODE);
+}
+
+// ===========================================================================
+// 22) validate_handoff — optional criterion is ignored
+// ===========================================================================
+
+#[test]
+fn validate_handoff_optional_criterion_ignored() {
+    let mut contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    contract.entry_criteria.push(WaveCriterion {
+        criterion_id: "opt-crit".into(),
+        bead_id: "bd-opt".into(),
+        required_status: RequiredBeadStatus::Closed,
+        required_artifact: "none".into(),
+        mandatory: false,
+    });
+    let pkg = HandoffPackage::baseline();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    // The optional criterion should NOT produce any failures
+    let opt_failures: Vec<_> = report
+        .failures
+        .iter()
+        .filter(|f| f.message.contains("opt-crit"))
+        .collect();
+    assert!(
+        opt_failures.is_empty(),
+        "optional criterion should not produce failures"
+    );
+}
+
+// ===========================================================================
+// 23) Clone semantics for non-Copy types
+// ===========================================================================
+
+#[test]
+fn clone_wave_criterion() {
+    let wc = WaveCriterion {
+        criterion_id: "c1".into(),
+        bead_id: "b1".into(),
+        required_status: RequiredBeadStatus::InProgress,
+        required_artifact: "art1".into(),
+        mandatory: true,
+    };
+    let cloned = wc.clone();
+    assert_eq!(wc, cloned);
+}
+
+#[test]
+fn clone_handoff_package() {
+    let pkg = HandoffPackage::baseline();
+    let cloned = pkg.clone();
+    assert_eq!(pkg, cloned);
+}
+
+#[test]
+fn clone_handoff_validation_failure() {
+    let f = HandoffValidationFailure {
+        code: HandoffValidationErrorCode::WeakHandoffPackage,
+        message: "score too low".into(),
+    };
+    let cloned = f.clone();
+    assert_eq!(f, cloned);
+}
+
+#[test]
+fn clone_handoff_validation_report() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.packet_id = "".into();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    let cloned = report.clone();
+    assert_eq!(report, cloned);
+    assert!(!cloned.valid);
+    assert!(!cloned.failures.is_empty());
+}
+
+// ===========================================================================
+// 24) Serde roundtrips for WaveCriterion and HandoffEvent
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_wave_criterion() {
+    let wc = WaveCriterion {
+        criterion_id: "c-test".into(),
+        bead_id: "bd-test".into(),
+        required_status: RequiredBeadStatus::Closed,
+        required_artifact: "artifacts/test.json".into(),
+        mandatory: false,
+    };
+    let json = serde_json::to_string(&wc).unwrap();
+    let rt: WaveCriterion = serde_json::from_str(&json).unwrap();
+    assert_eq!(wc, rt);
+}
+
+#[test]
+fn serde_roundtrip_handoff_validation_failure() {
+    let f = HandoffValidationFailure {
+        code: HandoffValidationErrorCode::CriterionArtifactMissing,
+        message: "artifact not found in links".into(),
+    };
+    let json = serde_json::to_string(&f).unwrap();
+    let rt: HandoffValidationFailure = serde_json::from_str(&json).unwrap();
+    assert_eq!(f, rt);
+}
+
+// ===========================================================================
+// 25) simulate_wave_transition — event wave_id and packet_id propagation
+// ===========================================================================
+
+#[test]
+fn simulate_events_contain_wave_and_packet_id() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let pkg = HandoffPackage::baseline();
+    let (_, events) = simulate_wave_transition("t", "d", "p", &contract, &pkg);
+    for ev in &events {
+        assert_eq!(ev.wave_id, pkg.wave_id.as_str());
+        assert_eq!(ev.packet_id, pkg.packet_id);
+    }
+}
+
+// ===========================================================================
+// 26) validate_handoff — no criteria contract passes field checks
+// ===========================================================================
+
+#[test]
+fn validate_handoff_no_criteria_passes_field_checks() {
+    let mut contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    contract.entry_criteria.clear();
+    contract.exit_criteria.clear();
+    let pkg = HandoffPackage::baseline();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    // With no criteria, no criterion-related failures should appear
+    let crit_failures: Vec<_> = report
+        .failures
+        .iter()
+        .filter(|f| {
+            matches!(
+                f.code,
+                HandoffValidationErrorCode::MissingCriterionAttestation
+                    | HandoffValidationErrorCode::CriterionStatusMismatch
+                    | HandoffValidationErrorCode::CriterionArtifactMissing
+                    | HandoffValidationErrorCode::CriterionBeadMissing
+            )
+        })
+        .collect();
+    assert!(
+        crit_failures.is_empty(),
+        "no criteria means no criterion failures"
+    );
+}
+
+// ===========================================================================
+// 27) validate_handoff — score exactly at threshold passes score check
+// ===========================================================================
+
+#[test]
+fn validate_handoff_score_at_threshold_no_weak_failure() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.completeness_score_milli = contract.minimum_handoff_score_milli;
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    let weak_failures: Vec<_> = report
+        .failures
+        .iter()
+        .filter(|f| f.code == HandoffValidationErrorCode::WeakHandoffPackage)
+        .collect();
+    assert!(
+        weak_failures.is_empty(),
+        "score at threshold should not produce weak failure"
+    );
+}
+
+// ===========================================================================
+// 28) simulate_wave_transition — first event always ok, no error_code
+// ===========================================================================
+
+#[test]
+fn simulate_first_event_always_ok() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let pkg = HandoffPackage::baseline();
+    let (_, events) = simulate_wave_transition("t", "d", "p", &contract, &pkg);
+    assert_eq!(events[0].event, "handoff_received");
+    assert_eq!(events[0].outcome, "ok");
+    assert!(events[0].error_code.is_none());
+}
+
+#[test]
+fn simulate_first_event_ok_even_on_failure() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.packet_id = "".into();
+    let (report, events) = simulate_wave_transition("t", "d", "p", &contract, &pkg);
+    assert!(!report.valid);
+    // First event is always "handoff_received" with outcome "ok"
+    assert_eq!(events[0].event, "handoff_received");
+    assert_eq!(events[0].outcome, "ok");
+    assert!(events[0].error_code.is_none());
+}
+
+// ===========================================================================
+// 29) WaveId as_str determinism — calling multiple times yields same result
+// ===========================================================================
+
+#[test]
+fn wave_id_as_str_deterministic() {
+    for wave in [WaveId::Wave0, WaveId::Wave1, WaveId::Wave2, WaveId::Wave3] {
+        let s1 = wave.as_str();
+        let s2 = wave.as_str();
+        assert_eq!(s1, s2, "as_str must be deterministic for {wave:?}");
+    }
+}
+
+// ===========================================================================
+// 30) Serde deserialization from explicit JSON strings
+// ===========================================================================
+
+#[test]
+fn serde_deserialize_wave_id_from_known_json() {
+    let w: WaveId = serde_json::from_str("\"wave0\"").unwrap();
+    assert_eq!(w, WaveId::Wave0);
+    let w: WaveId = serde_json::from_str("\"wave3\"").unwrap();
+    assert_eq!(w, WaveId::Wave3);
+}
+
+#[test]
+fn serde_deserialize_required_bead_status_from_known_json() {
+    let s: RequiredBeadStatus = serde_json::from_str("\"open\"").unwrap();
+    assert_eq!(s, RequiredBeadStatus::Open);
+    let s: RequiredBeadStatus = serde_json::from_str("\"in_progress\"").unwrap();
+    assert_eq!(s, RequiredBeadStatus::InProgress);
+    let s: RequiredBeadStatus = serde_json::from_str("\"closed\"").unwrap();
+    assert_eq!(s, RequiredBeadStatus::Closed);
+}
+
+#[test]
+fn serde_deserialize_invalid_wave_id_fails() {
+    let result = serde_json::from_str::<WaveId>("\"wave99\"");
+    assert!(result.is_err());
+}
+
+#[test]
+fn serde_deserialize_invalid_bead_status_fails() {
+    let result = serde_json::from_str::<RequiredBeadStatus>("\"deleted\"");
+    assert!(result.is_err());
+}
+
+// ===========================================================================
+// 31) Serde roundtrip for HandoffEvent (with and without error_code)
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_handoff_event_no_error() {
+    use frankenengine_engine::wave_handoff_contract::HandoffEvent;
+    let event = HandoffEvent {
+        schema_version: WAVE_HANDOFF_PACKET_SCHEMA_VERSION.into(),
+        trace_id: "t-rt".into(),
+        decision_id: "d-rt".into(),
+        policy_id: "p-rt".into(),
+        component: WAVE_HANDOFF_COMPONENT.into(),
+        event: "handoff_received".into(),
+        outcome: "ok".into(),
+        error_code: None,
+        wave_id: "wave_1".into(),
+        packet_id: "pkt-rt".into(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let rt: HandoffEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, rt);
+}
+
+#[test]
+fn serde_roundtrip_handoff_event_with_error() {
+    use frankenengine_engine::wave_handoff_contract::HandoffEvent;
+    let event = HandoffEvent {
+        schema_version: WAVE_HANDOFF_PACKET_SCHEMA_VERSION.into(),
+        trace_id: "t-err".into(),
+        decision_id: "d-err".into(),
+        policy_id: "p-err".into(),
+        component: WAVE_HANDOFF_COMPONENT.into(),
+        event: "criteria_validated".into(),
+        outcome: "fail".into(),
+        error_code: Some(WAVE_HANDOFF_FAILURE_CODE.into()),
+        wave_id: "wave_0".into(),
+        packet_id: "pkt-err".into(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let rt: HandoffEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, rt);
+}
+
+// ===========================================================================
+// 32) Serde pretty-print roundtrip — validates multi-line JSON survives
+// ===========================================================================
+
+#[test]
+fn serde_pretty_roundtrip_handoff_package() {
+    let pkg = HandoffPackage::baseline();
+    let pretty = serde_json::to_string_pretty(&pkg).unwrap();
+    let rt: HandoffPackage = serde_json::from_str(&pretty).unwrap();
+    assert_eq!(pkg, rt);
+}
+
+#[test]
+fn serde_pretty_roundtrip_wave_transition_contract() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave3);
+    let pretty = serde_json::to_string_pretty(&contract).unwrap();
+    let rt: WaveTransitionContract = serde_json::from_str(&pretty).unwrap();
+    assert_eq!(contract, rt);
+}
+
+// ===========================================================================
+// 33) JSON field count stability — no extra or missing fields
+// ===========================================================================
+
+#[test]
+fn json_field_count_wave_criterion() {
+    let wc = WaveCriterion {
+        criterion_id: "c".into(),
+        bead_id: "b".into(),
+        required_status: RequiredBeadStatus::Open,
+        required_artifact: "a".into(),
+        mandatory: false,
+    };
+    let v: serde_json::Value = serde_json::to_value(&wc).unwrap();
+    assert_eq!(
+        v.as_object().unwrap().len(),
+        5,
+        "WaveCriterion should have exactly 5 fields"
+    );
+}
+
+#[test]
+fn json_field_count_criterion_attestation() {
+    let ca = CriterionAttestation {
+        criterion_id: "c".into(),
+        bead_id: "b".into(),
+        bead_status: RequiredBeadStatus::Closed,
+        artifact_ref: "a".into(),
+    };
+    let v: serde_json::Value = serde_json::to_value(&ca).unwrap();
+    assert_eq!(
+        v.as_object().unwrap().len(),
+        4,
+        "CriterionAttestation should have exactly 4 fields"
+    );
+}
+
+#[test]
+fn json_field_count_handoff_package() {
+    let pkg = HandoffPackage::baseline();
+    let v: serde_json::Value = serde_json::to_value(&pkg).unwrap();
+    assert_eq!(
+        v.as_object().unwrap().len(),
+        10,
+        "HandoffPackage should have exactly 10 fields"
+    );
+}
+
+#[test]
+fn json_field_count_handoff_validation_report() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let pkg = HandoffPackage::baseline();
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    let v: serde_json::Value = serde_json::to_value(&report).unwrap();
+    assert_eq!(
+        v.as_object().unwrap().len(),
+        10,
+        "HandoffValidationReport should have exactly 10 fields"
+    );
+}
+
+// ===========================================================================
+// 34) Validation determinism — same inputs produce identical reports
+// ===========================================================================
+
+#[test]
+fn validate_handoff_deterministic_output() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let pkg = HandoffPackage::baseline();
+    let r1 = validate_handoff("t", "d", "p", &contract, &pkg);
+    let r2 = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert_eq!(r1, r2, "identical inputs must produce identical reports");
+    let j1 = serde_json::to_string(&r1).unwrap();
+    let j2 = serde_json::to_string(&r2).unwrap();
+    assert_eq!(j1, j2, "serialized JSON must be byte-identical");
+}
+
+#[test]
+fn simulate_wave_transition_deterministic_output() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let pkg = HandoffPackage::baseline();
+    let (r1, e1) = simulate_wave_transition("t", "d", "p", &contract, &pkg);
+    let (r2, e2) = simulate_wave_transition("t", "d", "p", &contract, &pkg);
+    assert_eq!(r1, r2);
+    assert_eq!(e1, e2);
+}
+
+// ===========================================================================
+// 35) Score boundary: one above threshold passes score check
+// ===========================================================================
+
+#[test]
+fn validate_handoff_score_one_above_threshold_no_weak_failure() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.completeness_score_milli = contract.minimum_handoff_score_milli + 1;
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    let weak: Vec<_> = report
+        .failures
+        .iter()
+        .filter(|f| f.code == HandoffValidationErrorCode::WeakHandoffPackage)
+        .collect();
+    assert!(
+        weak.is_empty(),
+        "score above threshold should not produce weak failure"
+    );
+}
+
+// ===========================================================================
+// 36) Entry vs exit criterion failure message distinguishes phase
+// ===========================================================================
+
+#[test]
+fn validate_handoff_entry_criterion_failure_says_entry() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    // Remove only the entry attestation so an entry criterion fails
+    pkg.criteria_attestations
+        .retain(|a| a.criterion_id != "entry-ready-deps");
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(
+        report.failures.iter().any(|f| f.code
+            == HandoffValidationErrorCode::MissingCriterionAttestation
+            && f.message.contains("entry")),
+        "entry criterion failure message should mention 'entry'"
+    );
+}
+
+#[test]
+fn validate_handoff_exit_criterion_failure_says_exit() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    // Remove only exit attestations so exit criteria fail
+    pkg.criteria_attestations
+        .retain(|a| a.criterion_id == "entry-ready-deps");
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(
+        report.failures.iter().any(|f| f.code
+            == HandoffValidationErrorCode::MissingCriterionAttestation
+            && f.message.contains("exit")),
+        "exit criterion failure message should mention 'exit'"
+    );
+}
+
+// ===========================================================================
+// 37) HandoffEvent error_code serializes as null when None
+// ===========================================================================
+
+#[test]
+fn handoff_event_error_code_null_in_json() {
+    use frankenengine_engine::wave_handoff_contract::HandoffEvent;
+    let event = HandoffEvent {
+        schema_version: WAVE_HANDOFF_PACKET_SCHEMA_VERSION.into(),
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        component: WAVE_HANDOFF_COMPONENT.into(),
+        event: "handoff_received".into(),
+        outcome: "ok".into(),
+        error_code: None,
+        wave_id: "wave_0".into(),
+        packet_id: "pkt".into(),
+    };
+    let v: serde_json::Value = serde_json::to_value(&event).unwrap();
+    assert!(
+        v["error_code"].is_null(),
+        "None error_code should serialize as null"
+    );
+}
+
+// ===========================================================================
+// 38) Bead attested but not in changed_beads triggers CriterionBeadMissing
+// ===========================================================================
+
+#[test]
+fn validate_handoff_attested_bead_not_in_changed_beads() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    // Keep attestations correct but remove their beads from changed_beads
+    pkg.changed_beads = vec!["bd-unrelated-only".into()];
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(
+        report.failures.iter().any(
+            |f| f.code == HandoffValidationErrorCode::CriterionBeadMissing
+                && f.message.contains("changed_beads")
+        ),
+        "attestation referencing bead not in changed_beads should fail"
+    );
+}
+
+// ===========================================================================
+// 39) Attested artifact not in artifact_links triggers CriterionArtifactMissing
+// ===========================================================================
+
+#[test]
+fn validate_handoff_attested_artifact_not_in_artifact_links() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    // Keep attestations correct but remove their artifacts from artifact_links
+    pkg.artifact_links = vec!["some/other/artifact.json".into()];
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    assert!(
+        report.failures.iter().any(|f| f.code
+            == HandoffValidationErrorCode::CriterionArtifactMissing
+            && f.message.contains("artifact_links")),
+        "attestation referencing artifact not in artifact_links should fail"
+    );
+}
+
+// ===========================================================================
+// 40) Simulate rejected: second event carries error_code
+// ===========================================================================
+
+#[test]
+fn simulate_rejected_second_event_has_error_code() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.packet_id = "".into();
+    let (_report, events) = simulate_wave_transition("t", "d", "p", &contract, &pkg);
+    assert_eq!(events[1].event, "criteria_validated");
+    assert_eq!(events[1].outcome, "fail");
+    assert_eq!(
+        events[1].error_code,
+        Some(WAVE_HANDOFF_FAILURE_CODE.into()),
+        "criteria_validated event on failure must carry the error code"
+    );
+}
+
+// ===========================================================================
+// 41) Serde roundtrip with unicode in string fields
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_unicode_strings() {
+    let mut pkg = HandoffPackage::baseline();
+    pkg.producer_owner = "agent_\u{03B1}\u{03B2}".into();
+    pkg.consumer_owner = "agent_\u{2603}".into();
+    pkg.open_risks = vec!["risk with \u{1F525} emoji".into()];
+    let json = serde_json::to_string(&pkg).unwrap();
+    let rt: HandoffPackage = serde_json::from_str(&json).unwrap();
+    assert_eq!(pkg, rt);
+    assert_eq!(rt.producer_owner, "agent_\u{03B1}\u{03B2}");
+}
+
+// ===========================================================================
+// 42) validate_handoff: max u16 completeness score passes score check
+// ===========================================================================
+
+#[test]
+fn validate_handoff_max_score_passes() {
+    let contract = WaveTransitionContract::baseline(WaveId::Wave1);
+    let mut pkg = HandoffPackage::baseline();
+    pkg.completeness_score_milli = u16::MAX;
+    let report = validate_handoff("t", "d", "p", &contract, &pkg);
+    let weak: Vec<_> = report
+        .failures
+        .iter()
+        .filter(|f| f.code == HandoffValidationErrorCode::WeakHandoffPackage)
+        .collect();
+    assert!(
+        weak.is_empty(),
+        "max u16 score should always pass threshold"
+    );
+}

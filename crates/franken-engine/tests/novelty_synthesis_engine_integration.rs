@@ -511,3 +511,451 @@ fn test_manifest_deterministic() {
     assert_eq!(a.batch_id, b.batch_id);
     assert_eq!(a.content_hash(), b.content_hash());
 }
+
+// ===========================================================================
+// Enrichment tests — SynthesisStrategy
+// ===========================================================================
+
+#[test]
+fn strategy_display_matches_as_str() {
+    for strategy in SynthesisStrategy::ALL {
+        assert_eq!(strategy.to_string(), strategy.as_str());
+    }
+}
+
+#[test]
+fn strategy_all_unique_labels() {
+    let mut labels = BTreeSet::new();
+    for strategy in SynthesisStrategy::ALL {
+        assert!(labels.insert(strategy.as_str()), "duplicate label");
+    }
+}
+
+// ===========================================================================
+// Enrichment tests — ProgramKind
+// ===========================================================================
+
+#[test]
+fn kind_display_matches_as_str() {
+    for kind in ProgramKind::ALL {
+        assert_eq!(kind.to_string(), kind.as_str());
+    }
+}
+
+#[test]
+fn kind_all_unique_extensions() {
+    // Not all extensions are unique (NodePackage and BunPackage share .js),
+    // but each kind should have a non-empty extension
+    for kind in ProgramKind::ALL {
+        assert!(!kind.file_extension().is_empty());
+        assert!(kind.file_extension().starts_with('.'));
+    }
+}
+
+#[test]
+fn kind_node_package_and_bun_package_extensions() {
+    assert_eq!(ProgramKind::NodePackage.file_extension(), ".js");
+    assert_eq!(ProgramKind::BunPackage.file_extension(), ".js");
+}
+
+// ===========================================================================
+// Enrichment tests — SynthesizedCandidate serde
+// ===========================================================================
+
+#[test]
+fn candidate_serde_roundtrip() {
+    use frankenengine_engine::novelty_synthesis_engine::SynthesizedCandidate;
+    let constraint = default_constraint();
+    let c = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::TypeScript,
+        SynthesisStrategy::TemplateDriven,
+        &constraint,
+        b"serde-test",
+    )
+    .unwrap();
+    let json = serde_json::to_string(&c).unwrap();
+    let back: SynthesizedCandidate = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, c);
+}
+
+#[test]
+fn candidate_different_seeds_different_hashes() {
+    let constraint = default_constraint();
+    let a = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"seed-A",
+    )
+    .unwrap();
+    let b = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"seed-B",
+    )
+    .unwrap();
+    assert_ne!(a.content_hash, b.content_hash);
+    assert_ne!(a.candidate_id, b.candidate_id);
+}
+
+#[test]
+fn candidate_different_strategies_different_output() {
+    let constraint = default_constraint();
+    let a = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"same-seed",
+    )
+    .unwrap();
+    let b = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::MutationBased,
+        &constraint,
+        b"same-seed",
+    )
+    .unwrap();
+    assert_ne!(a.candidate_id, b.candidate_id);
+}
+
+#[test]
+fn candidate_different_kinds_different_output() {
+    let constraint = default_constraint();
+    let a = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"kind-test",
+    )
+    .unwrap();
+    let b = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::TypeScript,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"kind-test",
+    )
+    .unwrap();
+    assert_ne!(a.content_hash, b.content_hash);
+}
+
+// ===========================================================================
+// Enrichment tests — SynthesisBatch serde
+// ===========================================================================
+
+#[test]
+fn batch_serde_roundtrip() {
+    use frankenengine_engine::novelty_synthesis_engine::SynthesisBatch;
+    let constraint = default_constraint();
+    let c = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"batch-serde",
+    )
+    .unwrap();
+    let batch = novelty_synthesis_engine::build_batch(test_epoch(), vec![c]).unwrap();
+    let json = serde_json::to_string(&batch).unwrap();
+    let back: SynthesisBatch = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, batch);
+}
+
+#[test]
+fn batch_average_novelty_correct() {
+    let constraint = default_constraint();
+    let mut candidates = Vec::new();
+    for i in 0..3u8 {
+        let c = novelty_synthesis_engine::synthesize_candidate(
+            ProgramKind::PlainJs,
+            SynthesisStrategy::GrammarGuided,
+            &constraint,
+            &[i],
+        )
+        .unwrap();
+        candidates.push(c);
+    }
+    let total: u64 = candidates.iter().map(|c| c.novelty_score_millionths).sum();
+    let batch = novelty_synthesis_engine::build_batch(test_epoch(), candidates).unwrap();
+    assert_eq!(batch.average_novelty_millionths(), total / 3);
+}
+
+#[test]
+fn batch_strategy_distribution_populated() {
+    let constraint = default_constraint();
+    let c1 = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"s1",
+    )
+    .unwrap();
+    let c2 = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::MutationBased,
+        &constraint,
+        b"s2",
+    )
+    .unwrap();
+    let batch = novelty_synthesis_engine::build_batch(test_epoch(), vec![c1, c2]).unwrap();
+    assert_eq!(batch.strategy_distribution.len(), 2);
+    assert_eq!(
+        batch
+            .strategy_distribution
+            .get(&SynthesisStrategy::GrammarGuided),
+        Some(&1)
+    );
+}
+
+// ===========================================================================
+// Enrichment tests — SynthesisReceipt serde and edge cases
+// ===========================================================================
+
+#[test]
+fn receipt_serde_roundtrip() {
+    use frankenengine_engine::novelty_synthesis_engine::SynthesisReceipt;
+    let constraint = default_constraint();
+    let c = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"receipt-serde",
+    )
+    .unwrap();
+    let batch = novelty_synthesis_engine::build_batch(test_epoch(), vec![c]).unwrap();
+    let receipt = novelty_synthesis_engine::build_receipt(&batch, 1);
+    let json = serde_json::to_string(&receipt).unwrap();
+    let back: SynthesisReceipt = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, receipt);
+}
+
+#[test]
+fn receipt_acceptance_rate_partial() {
+    let constraint = default_constraint();
+    let c1 = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"r1",
+    )
+    .unwrap();
+    let c2 = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::MutationBased,
+        &constraint,
+        b"r2",
+    )
+    .unwrap();
+    let batch = novelty_synthesis_engine::build_batch(test_epoch(), vec![c1, c2]).unwrap();
+    let receipt = novelty_synthesis_engine::build_receipt(&batch, 1);
+    assert_eq!(receipt.acceptance_rate_millionths(), 500_000); // 50%
+    assert!(!receipt.all_accepted());
+    assert!(!receipt.none_accepted());
+}
+
+#[test]
+fn receipt_clamps_accepted_to_proposed() {
+    let constraint = default_constraint();
+    let c = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"clamp",
+    )
+    .unwrap();
+    let batch = novelty_synthesis_engine::build_batch(test_epoch(), vec![c]).unwrap();
+    // Accept more than proposed
+    let receipt = novelty_synthesis_engine::build_receipt(&batch, 999);
+    assert_eq!(receipt.candidates_accepted, 1); // clamped to proposed
+    assert!(receipt.all_accepted());
+}
+
+// ===========================================================================
+// Enrichment tests — SynthesisError
+// ===========================================================================
+
+#[test]
+fn synthesis_error_all_variants_display() {
+    let errors = [
+        SynthesisError::InvalidConstraint,
+        SynthesisError::NoveltyBelowThreshold,
+        SynthesisError::BatchOverflow,
+        SynthesisError::StrategyNotApplicable,
+        SynthesisError::InternalError("test".into()),
+    ];
+    for e in &errors {
+        let display = format!("{e}");
+        assert!(!display.is_empty());
+    }
+}
+
+#[test]
+fn synthesis_error_serde_roundtrip() {
+    let errors = [
+        SynthesisError::InvalidConstraint,
+        SynthesisError::NoveltyBelowThreshold,
+        SynthesisError::BatchOverflow,
+        SynthesisError::StrategyNotApplicable,
+        SynthesisError::InternalError("some error".into()),
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: SynthesisError = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, *e);
+    }
+}
+
+// ===========================================================================
+// Enrichment tests — SynthesisDenialReason
+// ===========================================================================
+
+#[test]
+fn denial_reason_display_matches_as_str() {
+    for reason in SynthesisDenialReason::ALL {
+        assert_eq!(reason.to_string(), reason.as_str());
+    }
+}
+
+#[test]
+fn denial_reason_all_unique_labels() {
+    let mut labels = BTreeSet::new();
+    for reason in SynthesisDenialReason::ALL {
+        assert!(labels.insert(reason.as_str()), "duplicate label");
+    }
+}
+
+// ===========================================================================
+// Enrichment tests — evaluate_candidate_novelty near-duplicate
+// ===========================================================================
+
+#[test]
+fn evaluate_novelty_partial_prefix_match() {
+    let constraint = default_constraint();
+    let c = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"prefix-test",
+    )
+    .unwrap();
+    // Create a hash with a different prefix
+    let mut existing = BTreeSet::new();
+    use frankenengine_engine::hash_tiers::ContentHash;
+    existing.insert(ContentHash::compute(b"completely-different"));
+    let novelty = novelty_synthesis_engine::evaluate_candidate_novelty(&c, &existing);
+    // Different prefix → high novelty (close to 1_000_000)
+    assert!(novelty > 500_000, "should have high novelty: {}", novelty);
+}
+
+// ===========================================================================
+// Enrichment tests — filter_candidates with forbidden pattern
+// ===========================================================================
+
+#[test]
+fn filter_denies_forbidden_pattern() {
+    let constraint = default_constraint();
+    let c = novelty_synthesis_engine::synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"forbidden-test",
+    )
+    .unwrap();
+    // Create a constraint that forbids a pattern known to be in the source
+    let source_fragment = &c.source_text[0..3.min(c.source_text.len())];
+    let mut strict_constraint =
+        SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    strict_constraint.forbid_pattern(source_fragment);
+    let (accepted, denied) =
+        novelty_synthesis_engine::filter_candidates(vec![c], &strict_constraint);
+    assert!(accepted.is_empty());
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].1, SynthesisDenialReason::ForbiddenPattern);
+}
+
+// ===========================================================================
+// Enrichment tests — synthesize across all kinds
+// ===========================================================================
+
+#[test]
+fn synthesize_all_kinds_succeed() {
+    let constraint = default_constraint();
+    for kind in ProgramKind::ALL {
+        let result = novelty_synthesis_engine::synthesize_candidate(
+            *kind,
+            SynthesisStrategy::GrammarGuided,
+            &constraint,
+            b"all-kinds",
+        );
+        assert!(
+            result.is_ok(),
+            "synthesis failed for {:?}: {:?}",
+            kind,
+            result.err()
+        );
+        let c = result.unwrap();
+        assert!(!c.source_text.is_empty());
+        assert!(c.ast_node_count > 0);
+    }
+}
+
+#[test]
+fn synthesize_all_strategies_succeed() {
+    let constraint = default_constraint();
+    for strategy in SynthesisStrategy::ALL {
+        let result = novelty_synthesis_engine::synthesize_candidate(
+            ProgramKind::PlainJs,
+            *strategy,
+            &constraint,
+            b"all-strategies",
+        );
+        assert!(
+            result.is_ok(),
+            "synthesis failed for {:?}: {:?}",
+            strategy,
+            result.err()
+        );
+    }
+}
+
+// ===========================================================================
+// Enrichment tests — build_constraints
+// ===========================================================================
+
+#[test]
+fn build_constraints_respects_min_novelty() {
+    let c = novelty_synthesis_engine::build_constraints(ProgramKind::PlainJs, 100, 500_000);
+    assert_eq!(c.min_novelty_millionths, 500_000);
+}
+
+#[test]
+fn build_constraints_all_kinds_valid() {
+    for kind in ProgramKind::ALL {
+        let c = novelty_synthesis_engine::build_constraints(*kind, 256, 0);
+        assert!(c.max_ast_nodes >= 3);
+        assert!(c.max_bytes > 0);
+    }
+}
+
+// ===========================================================================
+// Enrichment tests — SynthesisConstraint edge cases
+// ===========================================================================
+
+#[test]
+fn constraint_multiple_required_features() {
+    let mut c = SynthesisConstraint::new(100, 200, 0);
+    c.require_feature("async");
+    c.require_feature("await");
+    c.require_feature("fetch");
+    assert_eq!(c.required_features.len(), 3);
+    let missing = c.missing_features("async function doFetch() { await fetch(); }");
+    assert!(missing.is_empty());
+}
+
+#[test]
+fn constraint_multiple_forbidden_patterns() {
+    let mut c = SynthesisConstraint::new(100, 200, 0);
+    c.forbid_pattern("eval(");
+    c.forbid_pattern("Function(");
+    assert!(c.contains_forbidden("new Function('return 1')").is_some());
+    assert!(c.contains_forbidden("safe code").is_none());
+}

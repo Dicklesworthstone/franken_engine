@@ -575,7 +575,7 @@ fn ledger_session_id_accessor() {
 fn ledger_envelope_hash_preserved() {
     let mut ledger = AntiReplayLedger::new("l".into(), 64, 100);
     let h = ContentHash::compute(b"envelope-data");
-    ledger.check_and_record(1, 1, Some(h.clone()));
+    ledger.check_and_record(1, 1, Some(h));
     let trail = ledger.audit_trail();
     assert_eq!(trail.len(), 1);
     assert_eq!(trail[0].envelope_hash, Some(h));

@@ -192,35 +192,47 @@ fn bead_id_format() {
 
 #[test]
 fn gc_pause_regression_default_valid() {
-    assert!(DEFAULT_MAX_GC_PAUSE_REGRESSION_MILLIONTHS > 0);
-    assert!(DEFAULT_MAX_GC_PAUSE_REGRESSION_MILLIONTHS <= 1_000_000);
+    const {
+        assert!(DEFAULT_MAX_GC_PAUSE_REGRESSION_MILLIONTHS > 0);
+        assert!(DEFAULT_MAX_GC_PAUSE_REGRESSION_MILLIONTHS <= 1_000_000);
+    }
 }
 
 #[test]
 fn tail_latency_regression_default_valid() {
-    assert!(DEFAULT_MAX_TAIL_LATENCY_REGRESSION_MILLIONTHS > 0);
-    assert!(DEFAULT_MAX_TAIL_LATENCY_REGRESSION_MILLIONTHS <= 1_000_000);
+    const {
+        assert!(DEFAULT_MAX_TAIL_LATENCY_REGRESSION_MILLIONTHS > 0);
+        assert!(DEFAULT_MAX_TAIL_LATENCY_REGRESSION_MILLIONTHS <= 1_000_000);
+    }
 }
 
 #[test]
 fn support_coverage_default_valid() {
-    assert!(DEFAULT_MIN_SUPPORT_COVERAGE_MILLIONTHS > 0);
-    assert!(DEFAULT_MIN_SUPPORT_COVERAGE_MILLIONTHS <= 1_000_000);
+    const {
+        assert!(DEFAULT_MIN_SUPPORT_COVERAGE_MILLIONTHS > 0);
+        assert!(DEFAULT_MIN_SUPPORT_COVERAGE_MILLIONTHS <= 1_000_000);
+    }
 }
 
 #[test]
 fn min_sample_count_positive() {
-    assert!(DEFAULT_MIN_SAMPLE_COUNT > 0);
+    const {
+        assert!(DEFAULT_MIN_SAMPLE_COUNT > 0);
+    }
 }
 
 #[test]
 fn rollback_cooldown_positive() {
-    assert!(DEFAULT_ROLLBACK_COOLDOWN_NS > 0);
+    const {
+        assert!(DEFAULT_ROLLBACK_COOLDOWN_NS > 0);
+    }
 }
 
 #[test]
 fn max_consecutive_rollbacks_positive() {
-    assert!(MAX_CONSECUTIVE_ROLLBACKS > 0);
+    const {
+        assert!(MAX_CONSECUTIVE_ROLLBACKS > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::SourceSpan;
 use frankenengine_engine::component_shape_catalog::{
-    ImpurityReason, PropDescriptor, PropFlowKind, PropValueKind, PurityClassification,
-    PurityConfig, RenderPurityClass, analyze_render_tree, classify_purity,
+    ImpurityReason, PropFlowKind, PropValueKind, PurityClassification, RenderPurityClass,
+    analyze_render_tree,
 };
 use frankenengine_engine::hook_effect_contract::{HookKind, HookManifest, HookSlot, HookSlotIndex};
 use frankenengine_engine::react_jsx_lowering::{
@@ -23,7 +23,6 @@ use frankenengine_engine::react_lane_inference::{
     batch_infer, partial_eval_coverage,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::shape_transition_algebra::ShapeTransitionAlgebra;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -342,7 +341,7 @@ fn blocking_reason_serde_roundtrip_all() {
 
 #[test]
 fn blocking_reason_ordering_stable() {
-    let mut reasons = vec![
+    let mut reasons = [
         InferenceBlockingReason::MutableRefs,
         InferenceBlockingReason::EffectsInRender,
         InferenceBlockingReason::ConditionalHooks,

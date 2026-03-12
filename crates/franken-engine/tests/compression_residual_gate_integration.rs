@@ -69,7 +69,7 @@ fn simple_reversibility_check(id: &str, exact: bool) -> ReversibilityCheck {
     let hash = ContentHash::compute(id.as_bytes());
     ReversibilityCheck {
         artifact_id: id.to_string(),
-        original_hash: hash.clone(),
+        original_hash: hash,
         restored_hash: if exact {
             hash
         } else {

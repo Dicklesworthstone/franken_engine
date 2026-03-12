@@ -542,3 +542,160 @@ fn runtime_capability_ord_is_deterministic() {
         "BTreeSet ordering must be independent of insertion order"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Runtime capability count
+// ---------------------------------------------------------------------------
+
+#[test]
+fn runtime_capability_all_sixteen_variants() {
+    let all: std::collections::BTreeSet<RuntimeCapability> = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::GcInvoke,
+        RuntimeCapability::IrLowering,
+        RuntimeCapability::PolicyRead,
+        RuntimeCapability::PolicyWrite,
+        RuntimeCapability::EvidenceEmit,
+        RuntimeCapability::DecisionInvoke,
+        RuntimeCapability::NetworkEgress,
+        RuntimeCapability::LeaseManagement,
+        RuntimeCapability::IdempotencyDerive,
+        RuntimeCapability::ExtensionLifecycle,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::EnvRead,
+        RuntimeCapability::ProcessSpawn,
+        RuntimeCapability::FsRead,
+        RuntimeCapability::FsWrite,
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(all.len(), 16);
+}
+
+// ---------------------------------------------------------------------------
+// Compute-only subsumes nothing except itself
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compute_only_subsumes_only_itself() {
+    let co = CapabilityProfile::compute_only();
+    assert!(co.subsumes(&co));
+    assert!(!co.subsumes(&CapabilityProfile::engine_core()));
+    assert!(!co.subsumes(&CapabilityProfile::policy()));
+    assert!(!co.subsumes(&CapabilityProfile::remote()));
+}
+
+// ---------------------------------------------------------------------------
+// Intersection with compute_only is always empty
+// ---------------------------------------------------------------------------
+
+#[test]
+fn intersection_with_compute_only_is_empty() {
+    let co = CapabilityProfile::compute_only();
+    for profile in [
+        CapabilityProfile::full(),
+        CapabilityProfile::engine_core(),
+        CapabilityProfile::policy(),
+        CapabilityProfile::remote(),
+    ] {
+        let inter = profile.intersect(&co);
+        assert!(
+            inter.is_empty(),
+            "intersection with compute_only should be empty"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CapabilityDenied — display contains all fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn capability_denied_display_contains_profile_and_capability() {
+    let denied = CapabilityDenied {
+        required: RuntimeCapability::FsWrite,
+        held_profile: ProfileKind::Remote,
+        component: "fs-writer".to_string(),
+    };
+    let s = denied.to_string();
+    assert!(s.contains("fs_write"));
+    assert!(s.contains("RemoteCaps"));
+    assert!(s.contains("fs-writer"));
+}
+
+// ---------------------------------------------------------------------------
+// require_capability — all caps against all profiles
+// ---------------------------------------------------------------------------
+
+#[test]
+fn require_capability_engine_core_allows_vm_dispatch() {
+    let ec = CapabilityProfile::engine_core();
+    assert!(require_capability(&ec, RuntimeCapability::VmDispatch, "test").is_ok());
+    assert!(require_capability(&ec, RuntimeCapability::GcInvoke, "test").is_ok());
+    assert!(require_capability(&ec, RuntimeCapability::IrLowering, "test").is_ok());
+    assert!(require_capability(&ec, RuntimeCapability::HeapAllocate, "test").is_ok());
+}
+
+#[test]
+fn require_capability_engine_core_denies_network() {
+    let ec = CapabilityProfile::engine_core();
+    assert!(require_capability(&ec, RuntimeCapability::NetworkEgress, "test").is_err());
+    assert!(require_capability(&ec, RuntimeCapability::FsWrite, "test").is_err());
+    assert!(require_capability(&ec, RuntimeCapability::PolicyWrite, "test").is_err());
+}
+
+// ---------------------------------------------------------------------------
+// ProfileKind — Ord ordering
+// ---------------------------------------------------------------------------
+
+#[test]
+fn profile_kind_ordering() {
+    assert!(ProfileKind::Full < ProfileKind::EngineCore);
+    assert!(ProfileKind::EngineCore < ProfileKind::Policy);
+    assert!(ProfileKind::Policy < ProfileKind::Remote);
+    assert!(ProfileKind::Remote < ProfileKind::ComputeOnly);
+}
+
+// ---------------------------------------------------------------------------
+// Profile — has returns false for all capabilities in empty profile
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compute_only_has_returns_false_for_all() {
+    let co = CapabilityProfile::compute_only();
+    for cap in [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::GcInvoke,
+        RuntimeCapability::IrLowering,
+        RuntimeCapability::PolicyRead,
+        RuntimeCapability::PolicyWrite,
+        RuntimeCapability::EvidenceEmit,
+        RuntimeCapability::DecisionInvoke,
+        RuntimeCapability::NetworkEgress,
+        RuntimeCapability::LeaseManagement,
+        RuntimeCapability::IdempotencyDerive,
+        RuntimeCapability::ExtensionLifecycle,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::EnvRead,
+        RuntimeCapability::ProcessSpawn,
+        RuntimeCapability::FsRead,
+        RuntimeCapability::FsWrite,
+    ] {
+        assert!(!co.has(cap), "compute_only should not have {:?}", cap);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CapabilityDenied clone and eq
+// ---------------------------------------------------------------------------
+
+#[test]
+fn capability_denied_clone_eq() {
+    let denied = CapabilityDenied {
+        required: RuntimeCapability::ProcessSpawn,
+        held_profile: ProfileKind::Policy,
+        component: "spawner".to_string(),
+    };
+    let cloned = denied.clone();
+    assert_eq!(denied, cloned);
+}

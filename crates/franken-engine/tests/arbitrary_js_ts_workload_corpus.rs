@@ -350,3 +350,549 @@ fn normative_doc_declares_replay_and_fail_closed_rules() {
         );
     }
 }
+
+#[test]
+fn coverage_axes_are_unique_and_match_expected_set() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let axes = require_string_array(&manifest, "coverage_axes");
+
+    let expected: BTreeSet<&str> = BTreeSet::from([
+        "cold_start",
+        "warm_image",
+        "unicode_text",
+        "module_resolution",
+        "native_addon",
+        "policy_pressure",
+        "telemetry_mode",
+        "async_ordering",
+        "ts_normalization",
+    ]);
+
+    let observed: BTreeSet<String> = axes.iter().cloned().collect();
+    assert_eq!(
+        observed.len(),
+        axes.len(),
+        "coverage_axes must not contain duplicates"
+    );
+
+    let observed_refs: BTreeSet<&str> = observed.iter().map(String::as_str).collect();
+    assert_eq!(observed_refs, expected);
+}
+
+#[test]
+fn generated_at_utc_is_valid_iso8601() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let ts = require_string_field(&manifest, "generated_at_utc");
+    assert!(
+        ts.ends_with('Z'),
+        "generated_at_utc must be UTC (end with Z): {ts}"
+    );
+    assert!(
+        ts.len() >= 20,
+        "generated_at_utc must be full ISO-8601: {ts}"
+    );
+    assert!(
+        ts.contains('T'),
+        "generated_at_utc must contain date-time separator T: {ts}"
+    );
+    let date_part = &ts[..10];
+    assert_eq!(
+        date_part.matches('-').count(),
+        2,
+        "date portion must have two dashes: {date_part}"
+    );
+    let time_part = &ts[11..ts.len() - 1];
+    assert_eq!(
+        time_part.matches(':').count(),
+        2,
+        "time portion must have two colons: {time_part}"
+    );
+}
+
+#[test]
+fn selection_contract_contains_exactly_four_boolean_fields() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let contract = manifest
+        .get("selection_contract")
+        .expect("missing selection_contract")
+        .as_object()
+        .expect("selection_contract must be an object");
+
+    let expected_keys: BTreeSet<&str> = BTreeSet::from([
+        "provenance_required",
+        "user_value_justification_required",
+        "report_only_before_gate",
+        "fail_closed_on_missing_sources",
+    ]);
+
+    let actual_keys: BTreeSet<&str> = contract.keys().map(String::as_str).collect();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "selection_contract must contain exactly the expected boolean fields"
+    );
+
+    for (key, val) in contract {
+        assert!(
+            val.is_boolean(),
+            "selection_contract.{key} must be a boolean, got: {val}"
+        );
+        assert!(
+            val.as_bool().unwrap(),
+            "selection_contract.{key} must be true (fail-closed posture)"
+        );
+    }
+}
+
+#[test]
+fn variant_matrix_must_cover_families_are_declared_in_family_definitions() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+
+    let family_ids: BTreeSet<String> = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array")
+        .iter()
+        .map(|f| require_string_field(f, "family_id").to_string())
+        .collect();
+
+    let variant_matrix = manifest
+        .get("variant_matrix")
+        .expect("missing variant_matrix");
+    let must_cover = require_string_array(variant_matrix, "must_cover_families");
+
+    for family_ref in &must_cover {
+        assert!(
+            family_ids.contains(family_ref),
+            "variant_matrix.must_cover_families references unknown family: {family_ref}"
+        );
+    }
+
+    assert!(
+        must_cover.len() >= 3,
+        "variant_matrix must cover at least 3 families for meaningful cross-variant validation"
+    );
+}
+
+#[test]
+fn family_ids_follow_kebab_case_convention() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+
+    for family in families {
+        let family_id = require_string_field(family, "family_id");
+        assert!(!family_id.is_empty(), "family_id must be non-empty");
+        assert!(
+            family_id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit()),
+            "family_id must be kebab-case (lowercase + hyphens): {family_id}"
+        );
+        assert!(
+            !family_id.starts_with('-') && !family_id.ends_with('-'),
+            "family_id must not start or end with a hyphen: {family_id}"
+        );
+        assert!(
+            !family_id.contains("--"),
+            "family_id must not contain consecutive hyphens: {family_id}"
+        );
+    }
+}
+
+#[test]
+fn bootstrap_source_locators_are_unique() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let sources = manifest
+        .get("bootstrap_sources")
+        .and_then(Value::as_array)
+        .expect("bootstrap_sources must be an array");
+
+    let mut locators = BTreeSet::new();
+    for source in sources {
+        let locator = require_string_field(source, "source_locator");
+        assert!(
+            locators.insert(locator.to_string()),
+            "duplicate bootstrap source locator: {locator}"
+        );
+    }
+}
+
+#[test]
+fn family_selection_rationales_are_distinct() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+
+    let mut rationales = BTreeSet::new();
+    let mut justifications = BTreeSet::new();
+    for family in families {
+        let family_id = require_string_field(family, "family_id");
+        let rationale = require_string_field(family, "selection_rationale");
+        assert!(
+            rationales.insert(rationale.to_string()),
+            "duplicate selection_rationale across families (found on {family_id})"
+        );
+
+        let justification = require_string_field(family, "user_value_justification");
+        assert!(
+            justifications.insert(justification.to_string()),
+            "duplicate user_value_justification across families (found on {family_id})"
+        );
+    }
+}
+
+#[test]
+fn every_bootstrap_source_is_referenced_by_at_least_one_family() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+
+    let sources = manifest
+        .get("bootstrap_sources")
+        .and_then(Value::as_array)
+        .expect("bootstrap_sources must be an array");
+    let all_source_ids: BTreeSet<String> = sources
+        .iter()
+        .map(|s| require_string_field(s, "source_id").to_string())
+        .collect();
+
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+    let mut referenced: BTreeSet<String> = BTreeSet::new();
+    for family in families {
+        for sid in require_string_array(family, "bootstrap_source_ids") {
+            referenced.insert(sid);
+        }
+    }
+
+    for source_id in &all_source_ids {
+        assert!(
+            referenced.contains(source_id),
+            "bootstrap source {source_id} is never referenced by any family — dead provenance anchor"
+        );
+    }
+}
+
+#[test]
+fn coverage_axes_names_follow_snake_case_convention() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let axes = require_string_array(&manifest, "coverage_axes");
+
+    for axis in &axes {
+        assert!(!axis.is_empty(), "coverage axis must be non-empty");
+        assert!(
+            axis.chars()
+                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit()),
+            "coverage axis must be snake_case: {axis}"
+        );
+        assert!(
+            !axis.starts_with('_') && !axis.ends_with('_'),
+            "coverage axis must not start or end with underscore: {axis}"
+        );
+    }
+}
+
+#[test]
+fn normative_doc_path_resolves_and_is_repo_relative() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let doc_path = require_string_field(&manifest, "normative_doc");
+
+    assert!(
+        !doc_path.starts_with('/'),
+        "normative_doc must be repo-relative, not absolute: {doc_path}"
+    );
+    assert!(
+        !doc_path.contains(".."),
+        "normative_doc must not traverse upward: {doc_path}"
+    );
+    assert!(
+        doc_path.ends_with(".md"),
+        "normative_doc must be a markdown file: {doc_path}"
+    );
+
+    let full = repo_root().join(doc_path);
+    assert!(
+        full.exists(),
+        "normative_doc must exist in repo: {}",
+        full.display()
+    );
+}
+
+#[test]
+fn manifest_top_level_keys_are_the_expected_schema_surface() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let obj = manifest
+        .as_object()
+        .expect("manifest must be a JSON object");
+
+    let expected_keys: BTreeSet<&str> = BTreeSet::from([
+        "schema_version",
+        "bead_id",
+        "generated_at_utc",
+        "normative_doc",
+        "runtime_targets",
+        "required_artifacts",
+        "selection_contract",
+        "required_observability_variants",
+        "variant_matrix",
+        "coverage_axes",
+        "bootstrap_sources",
+        "family_definitions",
+    ]);
+
+    let actual_keys: BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "manifest top-level keys must match the declared schema surface exactly"
+    );
+}
+
+#[test]
+fn family_count_matches_expected_sixteen() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+
+    assert_eq!(
+        families.len(),
+        16,
+        "corpus must declare exactly 16 workload families"
+    );
+}
+
+#[test]
+fn bootstrap_source_kinds_have_expected_distribution() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let sources = manifest
+        .get("bootstrap_sources")
+        .and_then(Value::as_array)
+        .expect("bootstrap_sources must be an array");
+
+    let mut kind_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    for source in sources {
+        let kind = require_string_field(source, "source_kind").to_string();
+        *kind_counts.entry(kind).or_insert(0) += 1;
+    }
+
+    assert!(
+        kind_counts.contains_key("repo_doc"),
+        "must have at least one repo_doc bootstrap source"
+    );
+    assert!(
+        kind_counts.contains_key("conformance_corpus"),
+        "must have at least one conformance_corpus bootstrap source"
+    );
+    assert!(
+        kind_counts.contains_key("test_fixture"),
+        "must have at least one test_fixture bootstrap source"
+    );
+    assert!(
+        kind_counts.contains_key("integration_test"),
+        "must have at least one integration_test bootstrap source"
+    );
+    assert!(
+        kind_counts.contains_key("source_module"),
+        "must have at least one source_module bootstrap source"
+    );
+
+    assert_eq!(
+        kind_counts.len(),
+        5,
+        "exactly 5 source_kind categories should be present"
+    );
+}
+
+#[test]
+fn normative_doc_mentions_every_family_id() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let doc = read_text("docs/RGC_ARBITRARY_JS_TS_WORKLOAD_CORPUS_V1.md");
+
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+
+    for family in families {
+        let family_id = require_string_field(family, "family_id");
+        assert!(
+            doc.contains(family_id),
+            "normative doc must mention family {family_id}"
+        );
+    }
+}
+
+#[test]
+fn coverage_axes_count_is_at_least_family_roster_dimensionality() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let axes = require_string_array(&manifest, "coverage_axes");
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+
+    assert!(
+        axes.len() >= 5,
+        "coverage axes must provide meaningful dimensionality (got {})",
+        axes.len()
+    );
+    assert!(
+        axes.len() <= families.len(),
+        "coverage axes ({}) should not outnumber families ({})",
+        axes.len(),
+        families.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: structural and cross-reference integrity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schema_version_follows_expected_prefix() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let sv = require_string_field(&manifest, "schema_version");
+    assert!(
+        sv.starts_with("franken-engine."),
+        "schema_version must start with franken-engine. prefix: {sv}"
+    );
+    assert!(
+        sv.ends_with(".v1"),
+        "schema_version must end with version suffix: {sv}"
+    );
+}
+
+#[test]
+fn bead_id_follows_hierarchy_format() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let bead_id = require_string_field(&manifest, "bead_id");
+    assert!(
+        bead_id.starts_with("bd-"),
+        "bead_id must start with bd- prefix: {bead_id}"
+    );
+    assert!(
+        bead_id.contains('.'),
+        "bead_id must be hierarchical (contain dots): {bead_id}"
+    );
+}
+
+#[test]
+fn runtime_targets_exactly_three() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let targets = require_string_array(&manifest, "runtime_targets");
+    assert_eq!(targets.len(), 3, "must have exactly 3 runtime targets");
+}
+
+#[test]
+fn required_artifacts_include_run_manifest_and_events() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let artifacts: BTreeSet<String> = require_string_array(&manifest, "required_artifacts")
+        .into_iter()
+        .collect();
+    assert!(
+        artifacts.contains("run_manifest.json"),
+        "must include run_manifest.json"
+    );
+    assert!(
+        artifacts.contains("events.jsonl"),
+        "must include events.jsonl"
+    );
+    assert!(artifacts.contains("repro.lock"), "must include repro.lock");
+}
+
+#[test]
+fn all_bootstrap_source_ids_are_non_empty_kebab_or_snake() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let sources = manifest
+        .get("bootstrap_sources")
+        .and_then(Value::as_array)
+        .expect("bootstrap_sources must be an array");
+    for source in sources {
+        let sid = require_string_field(source, "source_id");
+        assert!(!sid.is_empty(), "source_id must be non-empty");
+        assert!(
+            sid.chars()
+                .all(|c| c.is_ascii_lowercase() || c == '-' || c == '_' || c.is_ascii_digit()),
+            "source_id must be lowercase with hyphens/underscores: {sid}"
+        );
+    }
+}
+
+#[test]
+fn family_definitions_each_have_minimum_required_keys() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+
+    let required_keys: BTreeSet<&str> = BTreeSet::from([
+        "family_id",
+        "selection_rationale",
+        "user_value_justification",
+        "baseline_targets",
+        "observability_variants",
+        "bootstrap_source_ids",
+    ]);
+
+    for family in families {
+        let obj = family.as_object().expect("family must be an object");
+        let keys: BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        for rk in &required_keys {
+            assert!(keys.contains(rk), "family missing required key: {rk}");
+        }
+    }
+}
+
+#[test]
+fn variant_matrix_has_expected_structure() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let vm = manifest
+        .get("variant_matrix")
+        .expect("missing variant_matrix")
+        .as_object()
+        .expect("variant_matrix must be an object");
+
+    assert!(
+        vm.contains_key("must_cover_families"),
+        "variant_matrix must contain must_cover_families"
+    );
+}
+
+#[test]
+fn required_observability_variants_exactly_three() {
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let variants = require_string_array(&manifest, "required_observability_variants");
+    assert_eq!(
+        variants.len(),
+        3,
+        "must have exactly 3 observability variants"
+    );
+}
+
+#[test]
+fn manifest_json_deterministic_reparse() {
+    let a = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let b = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    assert_eq!(a, b, "manifest must parse deterministically");
+}
+
+#[test]
+fn normative_doc_is_substantial() {
+    let doc = read_text("docs/RGC_ARBITRARY_JS_TS_WORKLOAD_CORPUS_V1.md");
+    assert!(
+        doc.len() > 500,
+        "normative doc must be substantial (got {} bytes)",
+        doc.len()
+    );
+    assert!(
+        doc.lines().count() > 20,
+        "normative doc must have meaningful content"
+    );
+}

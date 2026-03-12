@@ -53,13 +53,15 @@ fn constants_are_well_formed() {
 
 #[test]
 fn default_thresholds_are_reasonable() {
-    assert!(DEFAULT_MAX_POLY_ENTRIES >= 2);
-    assert!(DEFAULT_MIN_WARM_HIT_RATE > 0);
-    assert!(DEFAULT_MIN_WARM_HIT_RATE <= 1_000_000);
-    assert!(DEFAULT_MIN_ACCESS_COUNT > 0);
-    assert!(DEFAULT_MEGAMORPHIC_THRESHOLD > DEFAULT_MAX_POLY_ENTRIES as u32);
-    assert!(DEFAULT_COLD_PRUNE_THRESHOLD > 0);
-    assert!(DEFAULT_COLD_PRUNE_THRESHOLD < 1_000_000);
+    const {
+        assert!(DEFAULT_MAX_POLY_ENTRIES >= 2);
+        assert!(DEFAULT_MIN_WARM_HIT_RATE > 0);
+        assert!(DEFAULT_MIN_WARM_HIT_RATE <= 1_000_000);
+        assert!(DEFAULT_MIN_ACCESS_COUNT > 0);
+        assert!(DEFAULT_MEGAMORPHIC_THRESHOLD > DEFAULT_MAX_POLY_ENTRIES as u32);
+        assert!(DEFAULT_COLD_PRUNE_THRESHOLD > 0);
+        assert!(DEFAULT_COLD_PRUNE_THRESHOLD < 1_000_000);
+    }
 }
 
 // =========================================================================

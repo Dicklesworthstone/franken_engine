@@ -521,3 +521,282 @@ fn full_lifecycle_pipeline_query_validate() {
     let back: FlamegraphPipelineDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(back, decision);
 }
+
+// ===========================================================================
+// 12. FlamegraphKind ordering and Clone/Copy
+// ===========================================================================
+
+#[test]
+fn flamegraph_kind_ordering_is_deterministic() {
+    let mut kinds = vec![
+        FlamegraphKind::DiffAllocation,
+        FlamegraphKind::Cpu,
+        FlamegraphKind::DiffCpu,
+        FlamegraphKind::Allocation,
+    ];
+    kinds.sort();
+    // Derive order follows variant declaration order: Cpu, Allocation, DiffCpu, DiffAllocation
+    assert_eq!(kinds[0], FlamegraphKind::Cpu);
+    assert_eq!(kinds[1], FlamegraphKind::Allocation);
+    assert_eq!(kinds[2], FlamegraphKind::DiffCpu);
+    assert_eq!(kinds[3], FlamegraphKind::DiffAllocation);
+}
+
+#[test]
+fn flamegraph_kind_clone_copy_eq() {
+    let original = FlamegraphKind::Cpu;
+    let cloned = original.clone();
+    let copied = original;
+    assert_eq!(original, cloned);
+    assert_eq!(original, copied);
+    assert_eq!(cloned, copied);
+}
+
+// ===========================================================================
+// 13. FlamegraphPipelineError Display and stable_code coverage
+// ===========================================================================
+
+#[test]
+fn pipeline_error_stable_codes_cover_all_request_fields() {
+    // Validate that each required field produces an error when empty
+    let required_fields = [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "benchmark_run_id",
+        "optimization_decision_id",
+        "workload_id",
+        "benchmark_profile",
+        "config_fingerprint",
+        "git_commit",
+    ];
+    for field in required_fields {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let mut request = make_request();
+        match field {
+            "trace_id" => request.trace_id = String::new(),
+            "decision_id" => request.decision_id = String::new(),
+            "policy_id" => request.policy_id = String::new(),
+            "benchmark_run_id" => request.benchmark_run_id = String::new(),
+            "optimization_decision_id" => request.optimization_decision_id = String::new(),
+            "workload_id" => request.workload_id = String::new(),
+            "benchmark_profile" => request.benchmark_profile = String::new(),
+            "config_fingerprint" => request.config_fingerprint = String::new(),
+            "git_commit" => request.git_commit = String::new(),
+            _ => unreachable!(),
+        }
+        let decision = run_flamegraph_pipeline(&mut adapter, &request);
+        assert!(
+            !decision.is_success(),
+            "expected failure for empty field `{field}`"
+        );
+        assert!(
+            decision.error_code.is_some(),
+            "expected error_code for empty field `{field}`"
+        );
+    }
+}
+
+#[test]
+fn pipeline_decision_failed_has_no_artifacts_or_store_keys() {
+    let mut adapter = InMemoryStorageAdapter::new();
+    let mut request = make_request();
+    request.trace_id = String::new();
+    let decision = run_flamegraph_pipeline(&mut adapter, &request);
+    assert!(!decision.is_success());
+    assert!(decision.artifacts.is_empty());
+    assert!(decision.store_keys.is_empty());
+}
+
+// ===========================================================================
+// 14. Artifact determinism — same inputs produce identical artifact IDs
+// ===========================================================================
+
+#[test]
+fn pipeline_artifact_ids_are_deterministic() {
+    let mut adapter1 = InMemoryStorageAdapter::new();
+    let mut adapter2 = InMemoryStorageAdapter::new();
+    let request = make_request();
+    let decision1 = run_flamegraph_pipeline(&mut adapter1, &request);
+    let decision2 = run_flamegraph_pipeline(&mut adapter2, &request);
+    assert!(decision1.is_success());
+    assert!(decision2.is_success());
+    assert_eq!(decision1.artifacts.len(), decision2.artifacts.len());
+    for (a1, a2) in decision1.artifacts.iter().zip(decision2.artifacts.iter()) {
+        assert_eq!(a1.artifact_id, a2.artifact_id);
+        assert_eq!(a1.svg, a2.svg);
+        assert_eq!(a1.total_samples, a2.total_samples);
+    }
+}
+
+#[test]
+fn pipeline_id_is_deterministic() {
+    let mut adapter1 = InMemoryStorageAdapter::new();
+    let mut adapter2 = InMemoryStorageAdapter::new();
+    let request = make_request();
+    let d1 = run_flamegraph_pipeline(&mut adapter1, &request);
+    let d2 = run_flamegraph_pipeline(&mut adapter2, &request);
+    assert_eq!(d1.pipeline_id, d2.pipeline_id);
+}
+
+// ===========================================================================
+// 15. Serde round-trip of FlamegraphArtifact
+// ===========================================================================
+
+#[test]
+fn flamegraph_artifact_serde_roundtrip() {
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_flamegraph_pipeline(&mut adapter, &make_request());
+    assert!(decision.is_success());
+    for artifact in &decision.artifacts {
+        let json = serde_json::to_string(artifact).unwrap();
+        let back: frankenengine_engine::flamegraph_pipeline::FlamegraphArtifact =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(&back, artifact);
+    }
+}
+
+// ===========================================================================
+// 16. Query filters — decision_id, trace_id, git_commit
+// ===========================================================================
+
+#[test]
+fn query_by_decision_id_filter() {
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_flamegraph_pipeline(&mut adapter, &make_request());
+    assert!(decision.is_success());
+
+    let query = FlamegraphQuery {
+        decision_id: Some("dec-1".into()),
+        ..Default::default()
+    };
+    let results = query_flamegraph_artifacts(&mut adapter, &query, "tq", "dq", "pq").unwrap();
+    assert_eq!(results.len(), 2);
+
+    // Non-matching decision_id returns empty
+    let query_miss = FlamegraphQuery {
+        decision_id: Some("dec-nonexistent".into()),
+        ..Default::default()
+    };
+    let empty = query_flamegraph_artifacts(&mut adapter, &query_miss, "tq", "dq", "pq").unwrap();
+    assert!(empty.is_empty());
+}
+
+#[test]
+fn query_by_git_commit_filter() {
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_flamegraph_pipeline(&mut adapter, &make_request());
+    assert!(decision.is_success());
+
+    let query = FlamegraphQuery {
+        git_commit: Some("abc123".into()),
+        ..Default::default()
+    };
+    let results = query_flamegraph_artifacts(&mut adapter, &query, "tq", "dq", "pq").unwrap();
+    assert_eq!(results.len(), 2);
+
+    let query_miss = FlamegraphQuery {
+        git_commit: Some("zzz999".into()),
+        ..Default::default()
+    };
+    let empty = query_flamegraph_artifacts(&mut adapter, &query_miss, "tq", "dq", "pq").unwrap();
+    assert!(empty.is_empty());
+}
+
+// ===========================================================================
+// 17. Whitespace-only fields treated as empty
+// ===========================================================================
+
+#[test]
+fn whitespace_only_required_field_fails() {
+    let mut adapter = InMemoryStorageAdapter::new();
+    let mut request = make_request();
+    request.workload_id = "   ".into();
+    let decision = run_flamegraph_pipeline(&mut adapter, &request);
+    assert!(!decision.is_success());
+    assert!(decision.error_code.is_some());
+}
+
+// ===========================================================================
+// 18. Empty baseline_benchmark_run_id string
+// ===========================================================================
+
+#[test]
+fn empty_baseline_benchmark_run_id_fails() {
+    let mut adapter = InMemoryStorageAdapter::new();
+    let mut request = make_request();
+    request.baseline_benchmark_run_id = Some("".into());
+    request.baseline_cpu_folded_stacks = Some("main;foo 10\n".into());
+    request.baseline_allocation_folded_stacks = Some("alloc;a 5\n".into());
+    let decision = run_flamegraph_pipeline(&mut adapter, &request);
+    assert!(!decision.is_success());
+}
+
+// ===========================================================================
+// 19. FlamegraphPipelineEvent with all optional fields populated
+// ===========================================================================
+
+#[test]
+fn flamegraph_pipeline_event_all_fields_serde() {
+    let e = FlamegraphPipelineEvent {
+        trace_id: "t-1".into(),
+        decision_id: "d-1".into(),
+        policy_id: "p-1".into(),
+        component: FLAMEGRAPH_COMPONENT.into(),
+        event: "flamegraph_generated".into(),
+        outcome: "pass".into(),
+        error_code: Some("FE-FLAME-1001".into()),
+        artifact_id: Some("art-xyz".into()),
+        flamegraph_kind: Some("cpu".into()),
+    };
+    let json = serde_json::to_string(&e).unwrap();
+    let back: FlamegraphPipelineEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, e);
+    assert_eq!(back.error_code.as_deref(), Some("FE-FLAME-1001"));
+    assert_eq!(back.artifact_id.as_deref(), Some("art-xyz"));
+    assert_eq!(back.flamegraph_kind.as_deref(), Some("cpu"));
+}
+
+// ===========================================================================
+// 20. Validate artifact rejects wrong storage_integration_point
+// ===========================================================================
+
+#[test]
+fn validate_artifact_wrong_storage_integration_point() {
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_flamegraph_pipeline(&mut adapter, &make_request());
+    let mut artifact = decision.artifacts[0].clone();
+    artifact.storage_integration_point = "wrong::integration::point".into();
+    assert!(validate_flamegraph_artifact(&artifact).is_err());
+}
+
+// ===========================================================================
+// 21. Diff pipeline events include baseline parse events
+// ===========================================================================
+
+#[test]
+fn diff_pipeline_emits_baseline_parse_events() {
+    let mut adapter = InMemoryStorageAdapter::new();
+    let mut request = make_request();
+    request.baseline_benchmark_run_id = Some("baseline-run".into());
+    request.baseline_cpu_folded_stacks = Some("main;foo 80\n".into());
+    request.baseline_allocation_folded_stacks = Some("alloc;a 40\n".into());
+    let decision = run_flamegraph_pipeline(&mut adapter, &request);
+    assert!(decision.is_success());
+
+    let folded_parsed_events: Vec<&FlamegraphPipelineEvent> = decision
+        .events
+        .iter()
+        .filter(|e| e.event == "folded_stacks_parsed")
+        .collect();
+    // cpu, allocation, baseline_cpu, baseline_allocation = 4 parse events
+    assert!(folded_parsed_events.len() >= 4);
+
+    let generated_events: Vec<&FlamegraphPipelineEvent> = decision
+        .events
+        .iter()
+        .filter(|e| e.event == "flamegraph_generated")
+        .collect();
+    // cpu, allocation, diff_cpu, diff_allocation = 4 generated events
+    assert_eq!(generated_events.len(), 4);
+}

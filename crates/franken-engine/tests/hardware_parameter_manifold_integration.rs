@@ -89,19 +89,25 @@ fn policy_id_format() {
 
 #[test]
 fn max_hardware_axes_bounds() {
-    assert!(MAX_HARDWARE_AXES > 0);
-    assert!(MAX_HARDWARE_AXES <= 256);
+    const {
+        assert!(MAX_HARDWARE_AXES > 0);
+        assert!(MAX_HARDWARE_AXES <= 256);
+    }
 }
 
 #[test]
 fn max_class_size_bounds() {
-    assert!(MAX_CLASS_SIZE > 0);
+    const {
+        assert!(MAX_CLASS_SIZE > 0);
+    }
 }
 
 #[test]
 fn default_threshold_positive() {
-    assert!(DEFAULT_SIMILARITY_THRESHOLD > 0);
-    assert!(DEFAULT_SIMILARITY_THRESHOLD < 1_000_000);
+    const {
+        assert!(DEFAULT_SIMILARITY_THRESHOLD > 0);
+        assert!(DEFAULT_SIMILARITY_THRESHOLD < 1_000_000);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -138,13 +138,17 @@ fn policy_id_correct() {
 
 #[test]
 fn default_max_divergence_is_reasonable() {
-    assert!(DEFAULT_MAX_DIVERGENCE > 0);
-    assert!(DEFAULT_MAX_DIVERGENCE <= 1_000_000);
+    const {
+        assert!(DEFAULT_MAX_DIVERGENCE > 0);
+        assert!(DEFAULT_MAX_DIVERGENCE <= 1_000_000);
+    }
 }
 
 #[test]
 fn default_min_paths_at_least_one() {
-    assert!(DEFAULT_MIN_PATHS >= 1);
+    const {
+        assert!(DEFAULT_MIN_PATHS >= 1);
+    }
 }
 
 // ===========================================================================
@@ -1142,7 +1146,7 @@ fn error_duplicate_path_id_display() {
 #[test]
 fn receipt_hash_deterministic() {
     let input = ContentHash::compute(b"inp");
-    let r1 = compute_receipt(input.clone(), &PathVerdict::Verified, &epoch(), None, 100);
+    let r1 = compute_receipt(input, &PathVerdict::Verified, &epoch(), None, 100);
     let r2 = compute_receipt(input, &PathVerdict::Verified, &epoch(), None, 100);
     assert_eq!(r1.content_hash(), r2.content_hash());
 }
@@ -1150,7 +1154,7 @@ fn receipt_hash_deterministic() {
 #[test]
 fn receipt_different_verdict_different_hash() {
     let input = ContentHash::compute(b"inp");
-    let r1 = compute_receipt(input.clone(), &PathVerdict::Verified, &epoch(), None, 100);
+    let r1 = compute_receipt(input, &PathVerdict::Verified, &epoch(), None, 100);
     let r2 = compute_receipt(input, &PathVerdict::Divergent, &epoch(), None, 100);
     assert_ne!(r1.content_hash(), r2.content_hash());
 }
@@ -1159,7 +1163,7 @@ fn receipt_different_verdict_different_hash() {
 fn receipt_with_previous_differs_from_without() {
     let input = ContentHash::compute(b"inp");
     let prev = ContentHash::compute(b"prev");
-    let r1 = compute_receipt(input.clone(), &PathVerdict::Verified, &epoch(), None, 100);
+    let r1 = compute_receipt(input, &PathVerdict::Verified, &epoch(), None, 100);
     let r2 = compute_receipt(input, &PathVerdict::Verified, &epoch(), Some(prev), 100);
     assert_ne!(r1.content_hash(), r2.content_hash());
 }

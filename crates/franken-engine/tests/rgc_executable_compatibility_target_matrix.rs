@@ -480,8 +480,14 @@ fn rgc_011_react_capability_extension_is_bound_and_covered() {
     );
     assert_eq!(
         react.required_capability_ids.len(),
-        10,
+        11,
         "expected explicit React capability row list"
+    );
+    assert!(
+        react
+            .required_capability_ids
+            .contains(&"tsx-dev-runtime-diagnostics".to_string()),
+        "react capability extension must explicitly cover TSX dev-runtime diagnostics"
     );
     assert!(
         !react.product_surface_beads.is_empty(),

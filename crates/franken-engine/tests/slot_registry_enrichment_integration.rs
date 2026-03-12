@@ -515,3 +515,214 @@ fn slot_replacement_signal_debug_is_nonempty() {
     let signal = SlotReplacementSignal::default();
     assert!(!format!("{signal:?}").is_empty());
 }
+
+// ===========================================================================
+// 15) AuthorityEnvelope — subsumes
+// ===========================================================================
+
+#[test]
+fn authority_envelope_subsumes_empty_candidate() {
+    let parent = AuthorityEnvelope {
+        required: vec![SlotCapability::ReadSource],
+        permitted: vec![SlotCapability::ReadSource, SlotCapability::EmitIr],
+    };
+    let child = AuthorityEnvelope {
+        required: vec![],
+        permitted: vec![],
+    };
+    assert!(parent.subsumes(&child));
+}
+
+#[test]
+fn authority_envelope_does_not_subsume_broader() {
+    let parent = AuthorityEnvelope {
+        required: vec![],
+        permitted: vec![SlotCapability::ReadSource],
+    };
+    let child = AuthorityEnvelope {
+        required: vec![],
+        permitted: vec![SlotCapability::ReadSource, SlotCapability::HeapAlloc],
+    };
+    assert!(!parent.subsumes(&child));
+}
+
+#[test]
+fn authority_envelope_inconsistent_when_required_exceeds_permitted() {
+    let ae = AuthorityEnvelope {
+        required: vec![SlotCapability::TriggerGc],
+        permitted: vec![SlotCapability::ReadSource],
+    };
+    assert!(!ae.is_consistent());
+}
+
+// ===========================================================================
+// 16) SlotRegistry — register and get
+// ===========================================================================
+
+#[test]
+fn slot_registry_register_delegate_and_get() {
+    let mut reg = SlotRegistry::new();
+    let id = SlotId::new("test-parser").unwrap();
+    let authority = AuthorityEnvelope {
+        required: vec![SlotCapability::ReadSource],
+        permitted: vec![SlotCapability::ReadSource, SlotCapability::EmitIr],
+    };
+    let entry = reg
+        .register_delegate(
+            id.clone(),
+            SlotKind::Parser,
+            authority,
+            "digest-001".to_string(),
+            "2026-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+    assert_eq!(entry.kind, SlotKind::Parser);
+    assert!(entry.status.is_delegate());
+
+    let fetched = reg.get(&id).expect("should find registered slot");
+    assert_eq!(fetched.implementation_digest, "digest-001");
+    assert_eq!(reg.len(), 1);
+    assert_eq!(reg.delegate_count(), 1);
+    assert_eq!(reg.native_count(), 0);
+}
+
+#[test]
+fn slot_registry_duplicate_registration_fails() {
+    let mut reg = SlotRegistry::new();
+    let id = SlotId::new("dup-slot").unwrap();
+    let authority = AuthorityEnvelope {
+        required: vec![],
+        permitted: vec![SlotCapability::ReadSource],
+    };
+    reg.register_delegate(
+        id.clone(),
+        SlotKind::Builtins,
+        authority.clone(),
+        "d1".to_string(),
+        "t1".to_string(),
+    )
+    .unwrap();
+    let err = reg
+        .register_delegate(
+            id,
+            SlotKind::Builtins,
+            authority,
+            "d2".to_string(),
+            "t2".to_string(),
+        )
+        .unwrap_err();
+    assert!(matches!(err, SlotRegistryError::DuplicateSlotId { .. }));
+}
+
+#[test]
+fn slot_registry_inconsistent_authority_fails() {
+    let mut reg = SlotRegistry::new();
+    let id = SlotId::new("bad-auth").unwrap();
+    let authority = AuthorityEnvelope {
+        required: vec![SlotCapability::TriggerGc],
+        permitted: vec![SlotCapability::ReadSource],
+    };
+    let err = reg
+        .register_delegate(
+            id,
+            SlotKind::GarbageCollector,
+            authority,
+            "d".to_string(),
+            "t".to_string(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        SlotRegistryError::InconsistentAuthority { .. }
+    ));
+}
+
+// ===========================================================================
+// 17) SlotRegistry — iter and counts
+// ===========================================================================
+
+#[test]
+fn slot_registry_iter_yields_all() {
+    let mut reg = SlotRegistry::new();
+    for name in ["slot-a", "slot-b", "slot-c"] {
+        let id = SlotId::new(name).unwrap();
+        let authority = AuthorityEnvelope {
+            required: vec![],
+            permitted: vec![SlotCapability::ReadSource],
+        };
+        reg.register_delegate(id, SlotKind::Parser, authority, "d".into(), "t".into())
+            .unwrap();
+    }
+    assert_eq!(reg.len(), 3);
+    assert!(!reg.is_empty());
+    let ids: Vec<_> = reg.iter().map(|(id, _)| id.as_str().to_string()).collect();
+    assert!(ids.contains(&"slot-a".to_string()));
+    assert!(ids.contains(&"slot-b".to_string()));
+    assert!(ids.contains(&"slot-c".to_string()));
+}
+
+// ===========================================================================
+// 18) SlotCapability serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_slot_capability_all() {
+    let caps = [
+        SlotCapability::ReadSource,
+        SlotCapability::EmitIr,
+        SlotCapability::HeapAlloc,
+        SlotCapability::ScheduleAsync,
+        SlotCapability::InvokeHostcall,
+        SlotCapability::ModuleAccess,
+        SlotCapability::TriggerGc,
+        SlotCapability::EmitEvidence,
+    ];
+    for c in &caps {
+        let json = serde_json::to_string(c).unwrap();
+        let rt: SlotCapability = serde_json::from_str(&json).unwrap();
+        assert_eq!(*c, rt);
+    }
+}
+
+// ===========================================================================
+// 19) SlotId — serde and clone
+// ===========================================================================
+
+#[test]
+fn slot_id_serde_roundtrip() {
+    let id = SlotId::new("parser-v2").unwrap();
+    let json = serde_json::to_string(&id).unwrap();
+    let rt: SlotId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, rt);
+}
+
+#[test]
+fn slot_id_clone_eq() {
+    let id = SlotId::new("clone-test").unwrap();
+    let cloned = id.clone();
+    assert_eq!(id, cloned);
+    assert_eq!(id.as_str(), cloned.as_str());
+}
+
+// ===========================================================================
+// 20) PromotionStatus — Demoted is_delegate
+// ===========================================================================
+
+#[test]
+fn promotion_status_demoted_is_delegate() {
+    let status = PromotionStatus::Demoted {
+        reason: "perf regression".into(),
+        rollback_digest: "rollback-d".into(),
+    };
+    assert!(status.is_delegate());
+    assert!(!status.is_native());
+}
+
+#[test]
+fn promotion_status_candidate_is_neither() {
+    let status = PromotionStatus::PromotionCandidate {
+        candidate_digest: "cand-d".into(),
+    };
+    assert!(!status.is_native());
+    assert!(!status.is_delegate());
+}

@@ -1117,8 +1117,8 @@ fn receipt_has_correct_fields() {
     let mut engine = new_engine();
     let spec = default_spec();
     let id = spec.specialization_id.clone();
-    let expected_rollback = spec.rollback_token_hash.clone();
-    let expected_baseline = spec.baseline_ir_hash.clone();
+    let expected_rollback = spec.rollback_token_hash;
+    let expected_baseline = spec.baseline_ir_hash;
     engine.register_specialization(spec, 1000).unwrap();
 
     let receipt = engine

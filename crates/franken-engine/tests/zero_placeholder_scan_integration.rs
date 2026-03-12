@@ -102,7 +102,9 @@ fn policy_id_constant_contains_policy_keyword() {
 
 #[test]
 fn finding_count_constant_is_positive() {
-    assert!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT > 0);
+    const {
+        assert!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT > 0);
+    }
 }
 
 #[test]

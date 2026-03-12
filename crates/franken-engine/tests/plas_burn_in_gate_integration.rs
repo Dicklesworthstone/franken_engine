@@ -667,3 +667,284 @@ fn failure_code_error_codes_are_unique() {
     let unique: std::collections::BTreeSet<&str> = codes.iter().map(|c| c.error_code()).collect();
     assert_eq!(unique.len(), codes.len());
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: Display impls, clone, edge cases, metrics detail
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn extension_risk_class_display_matches_as_str() {
+    for risk_class in [
+        ExtensionRiskClass::Low,
+        ExtensionRiskClass::Standard,
+        ExtensionRiskClass::High,
+    ] {
+        assert_eq!(format!("{risk_class}"), risk_class.as_str());
+    }
+}
+
+#[test]
+fn burn_in_lifecycle_state_display_matches_as_str() {
+    for state in [
+        BurnInLifecycleState::ShadowStart,
+        BurnInLifecycleState::ShadowEvaluation,
+        BurnInLifecycleState::PromotionGate,
+        BurnInLifecycleState::AutoEnforcement,
+        BurnInLifecycleState::Rejection,
+    ] {
+        assert_eq!(format!("{state}"), state.as_str());
+    }
+}
+
+#[test]
+fn burn_in_failure_code_display_matches_error_code() {
+    for code in [
+        BurnInFailureCode::EarlyTerminationFalseDeny,
+        BurnInFailureCode::InsufficientShadowDuration,
+        BurnInFailureCode::InsufficientShadowObservations,
+        BurnInFailureCode::ShadowSuccessRateBelowThreshold,
+        BurnInFailureCode::FalseDenyEnvelopeExceeded,
+        BurnInFailureCode::RollbackProofArtifactsMissing,
+    ] {
+        assert_eq!(format!("{code}"), code.error_code());
+    }
+}
+
+#[test]
+fn burn_in_error_all_variants_serde_round_trip() {
+    let variants = vec![
+        BurnInError::InvalidConfig {
+            detail: "test config error".to_string(),
+        },
+        BurnInError::InvalidObservation {
+            detail: "test obs error".to_string(),
+        },
+        BurnInError::InvalidTransition {
+            from: BurnInLifecycleState::ShadowStart,
+            to: BurnInLifecycleState::AutoEnforcement,
+        },
+        BurnInError::NonMonotonicTimestamp {
+            previous_ns: 500,
+            observed_ns: 100,
+        },
+    ];
+    for err in &variants {
+        let json = serde_json::to_string(&err).expect("serialize");
+        let recovered: BurnInError = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(err, &recovered);
+        // Display should produce non-empty human-readable string
+        let display = format!("{err}");
+        assert!(!display.is_empty());
+    }
+}
+
+#[test]
+fn burn_in_error_invalid_transition_display_contains_state_names() {
+    let err = BurnInError::InvalidTransition {
+        from: BurnInLifecycleState::ShadowStart,
+        to: BurnInLifecycleState::AutoEnforcement,
+    };
+    let msg = format!("{err}");
+    assert!(msg.contains("shadow_start"));
+    assert!(msg.contains("auto_enforcement"));
+}
+
+#[test]
+fn burn_in_error_non_monotonic_display_contains_timestamps() {
+    let err = BurnInError::NonMonotonicTimestamp {
+        previous_ns: 9999,
+        observed_ns: 1234,
+    };
+    let msg = format!("{err}");
+    assert!(msg.contains("9999"));
+    assert!(msg.contains("1234"));
+    assert!(msg.contains("non-monotonic"));
+}
+
+#[test]
+fn record_observation_in_wrong_state_produces_invalid_transition() {
+    let session = BurnInSession::new(session_config(), complete_rollback_artifacts()).unwrap();
+    // Session is in ShadowStart, not ShadowEvaluation
+    let mut session = session;
+    let err = session
+        .record_shadow_observation(observation("obs-wrong", 1_000_100, true, false))
+        .expect_err("should fail from ShadowStart");
+    let msg = format!("{err}");
+    assert!(msg.contains("transition"));
+}
+
+#[test]
+fn observation_with_whitespace_only_id_rejected_after_normalization() {
+    let mut session = BurnInSession::new(session_config(), complete_rollback_artifacts()).unwrap();
+    session.begin_shadow_evaluation().unwrap();
+    let obs = ShadowObservation {
+        observation_id: "   ".to_string(),
+        timestamp_ns: 1_000_100,
+        success: true,
+        false_deny: false,
+    };
+    let err = session
+        .record_shadow_observation(obs)
+        .expect_err("whitespace-only id should be rejected");
+    let msg = format!("{err}");
+    assert!(msg.contains("observation"));
+}
+
+#[test]
+fn metrics_false_deny_rate_millionths_computed_correctly() {
+    let mut session = BurnInSession::new(session_config(), complete_rollback_artifacts()).unwrap();
+    session.begin_shadow_evaluation().unwrap();
+
+    // Record 4 successes and 1 false deny
+    for idx in 0..4 {
+        session
+            .record_shadow_observation(observation(
+                &format!("obs-{idx}"),
+                1_000_100 + (idx as u64) * 100,
+                true,
+                false,
+            ))
+            .unwrap();
+    }
+    session
+        .record_shadow_observation(observation("obs-fd", 1_000_500, true, true))
+        .unwrap();
+
+    let metrics = session.metrics();
+    assert_eq!(metrics.total_observations, 5);
+    assert_eq!(metrics.false_denies, 1);
+    // 1/5 = 200_000 millionths
+    assert_eq!(metrics.false_deny_rate_millionths(), 200_000);
+    // 5/5 successes = 1_000_000
+    assert_eq!(metrics.shadow_success_rate_millionths(), 1_000_000);
+}
+
+#[test]
+fn evaluate_promotion_gate_non_monotonic_timestamp_rejected() {
+    let mut session = BurnInSession::new(session_config(), complete_rollback_artifacts()).unwrap();
+    session.begin_shadow_evaluation().unwrap();
+
+    for idx in 0..5 {
+        session
+            .record_shadow_observation(observation(
+                &format!("obs-{idx}"),
+                1_000_100 + (idx as u64) * 100,
+                true,
+                false,
+            ))
+            .unwrap();
+    }
+
+    // Evaluation timestamp earlier than the latest observation timestamp
+    let err = session
+        .evaluate_promotion_gate(1_000_000)
+        .expect_err("non-monotonic eval timestamp should fail");
+    let msg = format!("{err}");
+    assert!(msg.contains("non-monotonic"));
+}
+
+#[test]
+fn rollback_artifacts_default_is_incomplete() {
+    let artifacts = RollbackProofArtifacts::default();
+    assert!(!artifacts.is_complete());
+    assert!(!artifacts.rollback_command_tested);
+    assert!(artifacts.previous_policy_snapshot_ref.is_none());
+    assert!(!artifacts.transition_receipt_signed);
+    assert!(artifacts.transition_receipt_ref.is_none());
+    assert!(artifacts.rollback_token.is_none());
+}
+
+#[test]
+fn rollback_artifacts_missing_rollback_token_is_incomplete() {
+    let mut artifacts = complete_rollback_artifacts();
+    artifacts.rollback_token = None;
+    assert!(!artifacts.is_complete());
+}
+
+#[test]
+fn decision_artifact_fields_populated_from_config() {
+    let mut session = BurnInSession::new(session_config(), complete_rollback_artifacts()).unwrap();
+    session.begin_shadow_evaluation().unwrap();
+    for idx in 0..5 {
+        session
+            .record_shadow_observation(observation(
+                &format!("obs-{idx}"),
+                1_000_100 + (idx as u64) * 100,
+                true,
+                false,
+            ))
+            .unwrap();
+    }
+    let artifact = session.evaluate_promotion_gate(1_002_000).unwrap();
+    assert_eq!(artifact.trace_id, "trace-burn-in-001");
+    assert_eq!(artifact.decision_id, "decision-burn-in-001");
+    assert_eq!(artifact.policy_id, "policy-burn-in-v1");
+    assert_eq!(artifact.extension_id, "extension://plas/burn-in");
+    assert_eq!(artifact.risk_class, ExtensionRiskClass::Standard);
+    assert_eq!(artifact.thresholds, session_config().thresholds);
+}
+
+#[test]
+fn scorecard_metrics_after_rejection_reflects_terminal_state() {
+    let mut cfg = session_config();
+    cfg.thresholds.max_false_deny_millionths = 0;
+
+    let mut session = BurnInSession::new(cfg, complete_rollback_artifacts()).unwrap();
+    session.begin_shadow_evaluation().unwrap();
+
+    // This false deny triggers early termination since max is 0
+    let _artifact = session
+        .record_shadow_observation(observation("obs-reject", 1_000_100, false, true))
+        .unwrap()
+        .expect("expected early termination");
+
+    let scorecard = session.scorecard_metrics();
+    assert_eq!(scorecard.lifecycle_state, BurnInLifecycleState::Rejection);
+    assert!(scorecard.false_deny_rate_millionths > 0);
+    // Verify serde roundtrip of scorecard in rejected state
+    let json = serde_json::to_string(&scorecard).expect("serialize");
+    let recovered: BurnInScorecardMetrics = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(scorecard, recovered);
+}
+
+#[test]
+fn multiple_failure_codes_in_single_gate_evaluation() {
+    let mut cfg = session_config();
+    cfg.thresholds.min_shadow_success_millionths = 999_000;
+    cfg.thresholds.min_shadow_duration_ns = 1_000_000_000;
+    cfg.thresholds.min_shadow_observations = 100;
+    cfg.thresholds.max_false_deny_millionths = 0;
+
+    let mut artifacts = complete_rollback_artifacts();
+    artifacts.rollback_command_tested = false; // make rollback incomplete
+
+    let mut session = BurnInSession::new(cfg, artifacts).unwrap();
+    session.begin_shadow_evaluation().unwrap();
+
+    // Record just 1 successful observation to avoid early false-deny termination
+    session
+        .record_shadow_observation(observation("obs-only", 1_000_100, true, false))
+        .unwrap();
+
+    let artifact = session.evaluate_promotion_gate(1_000_200).unwrap();
+    assert_eq!(artifact.outcome, "fail");
+    assert_eq!(artifact.lifecycle_state, BurnInLifecycleState::Rejection);
+    // Should have multiple failures: insufficient duration, insufficient observations,
+    // and rollback artifacts missing
+    assert!(artifact.failure_codes.len() >= 3);
+    assert!(
+        artifact
+            .failure_codes
+            .contains(&BurnInFailureCode::InsufficientShadowDuration)
+    );
+    assert!(
+        artifact
+            .failure_codes
+            .contains(&BurnInFailureCode::InsufficientShadowObservations)
+    );
+    assert!(
+        artifact
+            .failure_codes
+            .contains(&BurnInFailureCode::RollbackProofArtifactsMissing)
+    );
+}

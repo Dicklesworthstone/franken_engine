@@ -692,8 +692,10 @@ fn gate_fail_aggregate_score() {
         ))
         .unwrap();
     }
-    let mut config = CatalogConfig::default();
-    config.max_open_errors = 100;
+    let config = CatalogConfig {
+        max_open_errors: 100,
+        ..CatalogConfig::default()
+    };
     let verdict = cat.evaluate(&config);
     assert!(matches!(verdict, GateVerdict::Fail { .. }));
 }
@@ -718,8 +720,10 @@ fn gate_fail_stale_entries() {
         e.detected_epoch = epoch(1);
         cat.add_entry(e).unwrap();
     }
-    let mut config = CatalogConfig::default();
-    config.min_verification_epoch = epoch(5);
+    let config = CatalogConfig {
+        min_verification_epoch: epoch(5),
+        ..CatalogConfig::default()
+    };
     let verdict = cat.evaluate(&config);
     if let GateVerdict::Fail { reasons } = &verdict {
         assert!(reasons.iter().any(|r| r.contains("stale")));
@@ -988,7 +992,7 @@ fn filter_entry_ids_works() {
 #[test]
 fn catalog_hash_changes_on_add() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    let h0 = cat.catalog_hash.clone();
+    let h0 = cat.catalog_hash;
     cat.add_entry(entry(
         "e1",
         MismatchDomain::CompileOutput,
@@ -1007,7 +1011,7 @@ fn catalog_hash_changes_on_remove() {
         MismatchSeverity::Error,
     ))
     .unwrap();
-    let h1 = cat.catalog_hash.clone();
+    let h1 = cat.catalog_hash;
     cat.remove_entry("e1").unwrap();
     assert_ne!(cat.catalog_hash, h1);
 }
@@ -1021,7 +1025,7 @@ fn catalog_hash_changes_on_remediation_update() {
         MismatchSeverity::Error,
     ))
     .unwrap();
-    let h1 = cat.catalog_hash.clone();
+    let h1 = cat.catalog_hash;
     cat.update_remediation("e1", RemediationStatus::Resolved)
         .unwrap();
     assert_ne!(cat.catalog_hash, h1);

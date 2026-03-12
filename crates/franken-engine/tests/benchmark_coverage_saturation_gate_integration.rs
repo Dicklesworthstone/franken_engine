@@ -44,11 +44,13 @@ fn test_constants() {
     assert_eq!(POLICY_ID, "RGC-705E");
     assert_eq!(FIXED_ONE, 1_000_000);
     assert_eq!(TOTAL_WORKLOAD_FAMILIES, WorkloadFamily::ALL.len());
-    assert!(DEFAULT_MIN_FAMILIES_COVERED <= TOTAL_WORKLOAD_FAMILIES);
-    assert!(DEFAULT_MIN_FAMILY_COVERAGE < FIXED_ONE);
-    assert!(DEFAULT_MAX_GINI < FIXED_ONE);
-    assert!(DEFAULT_MIN_ENTROPY < FIXED_ONE);
-    assert!(DEFAULT_MAX_SINGLE_FAMILY_SHARE < FIXED_ONE);
+    const {
+        assert!(DEFAULT_MIN_FAMILIES_COVERED <= TOTAL_WORKLOAD_FAMILIES);
+        assert!(DEFAULT_MIN_FAMILY_COVERAGE < FIXED_ONE);
+        assert!(DEFAULT_MAX_GINI < FIXED_ONE);
+        assert!(DEFAULT_MIN_ENTROPY < FIXED_ONE);
+        assert!(DEFAULT_MAX_SINGLE_FAMILY_SHARE < FIXED_ONE);
+    }
 }
 
 // -- WorkloadFamily --

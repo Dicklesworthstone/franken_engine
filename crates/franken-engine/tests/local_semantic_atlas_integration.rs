@@ -611,3 +611,250 @@ fn atlas_entry_provided_contexts_from_component() {
             .contains(&"ThemeContext".to_string())
     );
 }
+
+// ---------- entry from_input ----------
+
+#[test]
+fn atlas_entry_from_input_serde_roundtrip() {
+    let input = LocalSemanticAtlasInput {
+        component: make_component("FromInputPanel"),
+        fixture_refs: vec!["f1".to_string()],
+        trace_refs: vec!["t1".to_string()],
+        assumption_keys: vec!["AuthContext".to_string()],
+    };
+    let entry =
+        frankenengine_engine::semantic_contract_baseline::LocalSemanticAtlasEntry::from_input(
+            input,
+        );
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let back: frankenengine_engine::semantic_contract_baseline::LocalSemanticAtlasEntry =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, entry);
+}
+
+#[test]
+fn atlas_entry_content_hash_changes_with_different_component() {
+    let a = frankenengine_engine::semantic_contract_baseline::LocalSemanticAtlasEntry::from_input(
+        LocalSemanticAtlasInput {
+            component: make_component("CompAlpha"),
+            fixture_refs: vec!["f".to_string()],
+            trace_refs: vec!["t".to_string()],
+            assumption_keys: vec!["AuthContext".to_string()],
+        },
+    );
+    let b = frankenengine_engine::semantic_contract_baseline::LocalSemanticAtlasEntry::from_input(
+        LocalSemanticAtlasInput {
+            component: make_component("CompBeta"),
+            fixture_refs: vec!["f".to_string()],
+            trace_refs: vec!["t".to_string()],
+            assumption_keys: vec!["AuthContext".to_string()],
+        },
+    );
+    assert_ne!(a.content_hash, b.content_hash);
+}
+
+// ---------- debt types ----------
+
+#[test]
+fn atlas_debt_serde_roundtrip() {
+    use frankenengine_engine::semantic_contract_baseline::LocalSemanticContractDebt;
+    let debt = LocalSemanticContractDebt {
+        component_id: "TestComp".to_string(),
+        debt_code: LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_FIXTURE_LINK.to_string(),
+        description: "Missing fixture linkage".to_string(),
+        blocking: true,
+    };
+    let json = serde_json::to_string(&debt).expect("serialize");
+    let back: LocalSemanticContractDebt = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, debt);
+}
+
+#[test]
+fn atlas_debt_missing_only_trace_link() {
+    let atlas = LocalSemanticAtlas::from_inputs(
+        SemanticContractVersion::CURRENT,
+        1,
+        vec![LocalSemanticAtlasInput {
+            component: make_component("NoTrace"),
+            fixture_refs: vec!["f".to_string()],
+            trace_refs: Vec::new(),
+            assumption_keys: vec!["AuthContext".to_string()],
+        }],
+    );
+    let codes: BTreeSet<&str> = atlas
+        .quality_debt
+        .iter()
+        .map(|d| d.debt_code.as_str())
+        .collect();
+    assert!(codes.contains(LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_TRACE_LINK));
+    assert!(!codes.contains(LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_FIXTURE_LINK));
+}
+
+#[test]
+fn atlas_debt_missing_only_assumptions() {
+    let atlas = LocalSemanticAtlas::from_inputs(
+        SemanticContractVersion::CURRENT,
+        1,
+        vec![LocalSemanticAtlasInput {
+            component: make_component("NoAssume"),
+            fixture_refs: vec!["f".to_string()],
+            trace_refs: vec!["t".to_string()],
+            assumption_keys: Vec::new(),
+        }],
+    );
+    let codes: BTreeSet<&str> = atlas
+        .quality_debt
+        .iter()
+        .map(|d| d.debt_code.as_str())
+        .collect();
+    assert!(codes.contains(LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_CONTEXT_ASSUMPTIONS));
+    assert!(!codes.contains(LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_FIXTURE_LINK));
+    assert!(!codes.contains(LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_TRACE_LINK));
+}
+
+// ---------- validation serde ----------
+
+#[test]
+fn atlas_validation_serde_roundtrip() {
+    let atlas = LocalSemanticAtlas::from_inputs(
+        SemanticContractVersion::CURRENT,
+        1,
+        vec![LocalSemanticAtlasInput {
+            component: make_component("ValPanel"),
+            fixture_refs: vec!["f".to_string()],
+            trace_refs: vec!["t".to_string()],
+            assumption_keys: vec!["AuthContext".to_string()],
+        }],
+    );
+    let validation = atlas.validate();
+    let json = serde_json::to_string(&validation).expect("serialize");
+    let back: frankenengine_engine::semantic_contract_baseline::LocalSemanticAtlasValidation =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back.is_valid, validation.is_valid);
+    assert_eq!(back.entry_count, validation.entry_count);
+}
+
+// ---------- semantic contract version ----------
+
+#[test]
+fn semantic_contract_version_ordering() {
+    let v0_1 = SemanticContractVersion::CURRENT;
+    let v0_2 = SemanticContractVersion {
+        major: 0,
+        minor: 2,
+        patch: 0,
+    };
+    let v1_0 = SemanticContractVersion {
+        major: 1,
+        minor: 0,
+        patch: 0,
+    };
+    assert!(v0_1 < v0_2);
+    assert!(v0_2 < v1_0);
+}
+
+#[test]
+fn semantic_contract_version_clone_eq() {
+    let v = SemanticContractVersion::CURRENT;
+    let cloned = v.clone();
+    assert_eq!(v, cloned);
+}
+
+// ---------- atlas entries sorted ----------
+
+#[test]
+fn atlas_entries_sorted_by_component_id() {
+    let atlas = LocalSemanticAtlas::from_inputs(
+        SemanticContractVersion::CURRENT,
+        1,
+        vec![
+            LocalSemanticAtlasInput {
+                component: make_component("Zebra"),
+                fixture_refs: vec!["f".to_string()],
+                trace_refs: vec!["t".to_string()],
+                assumption_keys: vec!["AuthContext".to_string()],
+            },
+            LocalSemanticAtlasInput {
+                component: make_component("Alpha"),
+                fixture_refs: vec!["f".to_string()],
+                trace_refs: vec!["t".to_string()],
+                assumption_keys: vec!["AuthContext".to_string()],
+            },
+        ],
+    );
+    assert_eq!(atlas.entries[0].component_id, "Alpha");
+    assert_eq!(atlas.entries[1].component_id, "Zebra");
+}
+
+// ---------- debt constants ----------
+
+#[test]
+fn debt_constants_are_distinct() {
+    let constants = [
+        LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_FIXTURE_LINK,
+        LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_TRACE_LINK,
+        LOCAL_SEMANTIC_ATLAS_DEBT_MISSING_CONTEXT_ASSUMPTIONS,
+    ];
+    let unique: BTreeSet<&str> = constants.iter().copied().collect();
+    assert_eq!(unique.len(), constants.len());
+}
+
+#[test]
+fn atlas_multiple_components_debt_per_component() {
+    let atlas = LocalSemanticAtlas::from_inputs(
+        SemanticContractVersion::CURRENT,
+        1,
+        vec![
+            LocalSemanticAtlasInput {
+                component: make_component("Comp1"),
+                fixture_refs: Vec::new(),
+                trace_refs: Vec::new(),
+                assumption_keys: Vec::new(),
+            },
+            LocalSemanticAtlasInput {
+                component: make_component("Comp2"),
+                fixture_refs: Vec::new(),
+                trace_refs: Vec::new(),
+                assumption_keys: Vec::new(),
+            },
+        ],
+    );
+    // Each component with all missing links should have 3 debt items
+    let comp1_debt: Vec<_> = atlas
+        .quality_debt
+        .iter()
+        .filter(|d| d.component_id == "Comp1")
+        .collect();
+    let comp2_debt: Vec<_> = atlas
+        .quality_debt
+        .iter()
+        .filter(|d| d.component_id == "Comp2")
+        .collect();
+    assert_eq!(comp1_debt.len(), 3);
+    assert_eq!(comp2_debt.len(), 3);
+}
+
+#[test]
+fn atlas_hash_changes_with_different_inputs() {
+    let a = LocalSemanticAtlas::from_inputs(
+        SemanticContractVersion::CURRENT,
+        1,
+        vec![LocalSemanticAtlasInput {
+            component: make_component("InputA"),
+            fixture_refs: vec!["f".to_string()],
+            trace_refs: vec!["t".to_string()],
+            assumption_keys: vec!["AuthContext".to_string()],
+        }],
+    );
+    let b = LocalSemanticAtlas::from_inputs(
+        SemanticContractVersion::CURRENT,
+        1,
+        vec![LocalSemanticAtlasInput {
+            component: make_component("InputB"),
+            fixture_refs: vec!["f".to_string()],
+            trace_refs: vec!["t".to_string()],
+            assumption_keys: vec!["AuthContext".to_string()],
+        }],
+    );
+    assert_ne!(a.atlas_hash, b.atlas_hash);
+}

@@ -88,8 +88,8 @@ fn test_default_max_search_budget() {
 
 #[test]
 fn test_gap_thresholds_ordering() {
-    assert!(CRITICAL_GAP_THRESHOLD > MAJOR_GAP_THRESHOLD);
-    assert!(MAJOR_GAP_THRESHOLD > MINOR_GAP_THRESHOLD);
+    const { assert!(CRITICAL_GAP_THRESHOLD > MAJOR_GAP_THRESHOLD) };
+    const { assert!(MAJOR_GAP_THRESHOLD > MINOR_GAP_THRESHOLD) };
 }
 
 #[test]
@@ -785,8 +785,8 @@ fn test_synthesis_report_receipt_hash_determinism() {
         &cfg,
         epoch(),
     );
-    let a = summarize(&[result.clone()]);
-    let b = summarize(&[result]);
+    let a = summarize(std::slice::from_ref(&result));
+    let b = summarize(std::slice::from_ref(&result));
     assert_eq!(a.receipt_hash, b.receipt_hash);
 }
 

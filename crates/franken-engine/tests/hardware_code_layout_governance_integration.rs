@@ -498,8 +498,10 @@ fn test_evaluator_empty_fail_closed() {
 
 #[test]
 fn test_evaluator_empty_fail_open() {
-    let mut cfg = GovernanceConfig::default();
-    cfg.fail_closed_on_empty = false;
+    let cfg = GovernanceConfig {
+        fail_closed_on_empty: false,
+        ..Default::default()
+    };
     let mut ev = GovernanceEvaluator::new(cfg, ep());
     let receipt = ev.evaluate();
     assert!(receipt.is_clean());
@@ -767,8 +769,10 @@ fn test_evaluator_present_strategies() {
 
 #[test]
 fn test_receipt_is_clean_when_approved() {
-    let mut cfg = GovernanceConfig::default();
-    cfg.fail_closed_on_empty = false;
+    let cfg = GovernanceConfig {
+        fail_closed_on_empty: false,
+        ..Default::default()
+    };
     let mut ev = GovernanceEvaluator::new(cfg, ep());
     let receipt = ev.evaluate();
     assert!(receipt.is_clean());
@@ -777,8 +781,10 @@ fn test_receipt_is_clean_when_approved() {
 
 #[test]
 fn test_receipt_display() {
-    let mut cfg = GovernanceConfig::default();
-    cfg.fail_closed_on_empty = false;
+    let cfg = GovernanceConfig {
+        fail_closed_on_empty: false,
+        ..Default::default()
+    };
     let mut ev = GovernanceEvaluator::new(cfg, ep());
     let receipt = ev.evaluate();
     let s = format!("{receipt}");
@@ -989,8 +995,10 @@ fn test_e2e_full_passing_evaluation() {
 
 #[test]
 fn test_e2e_serde_roundtrip_receipt() {
-    let mut cfg = GovernanceConfig::default();
-    cfg.fail_closed_on_empty = false;
+    let cfg = GovernanceConfig {
+        fail_closed_on_empty: false,
+        ..Default::default()
+    };
     let mut ev = GovernanceEvaluator::new(cfg, ep());
     let receipt = ev.evaluate();
     let json = serde_json::to_string(&receipt).unwrap();
@@ -1025,12 +1033,14 @@ fn test_e2e_multiple_violations_verdict() {
 
 #[test]
 fn test_e2e_evaluation_count_increments() {
-    let mut cfg = GovernanceConfig::default();
-    cfg.fail_closed_on_empty = false;
+    let cfg = GovernanceConfig {
+        fail_closed_on_empty: false,
+        ..Default::default()
+    };
     let mut ev = GovernanceEvaluator::new(cfg, ep());
     assert_eq!(ev.evaluation_count(), 0);
-    ev.evaluate();
+    let _ = ev.evaluate();
     assert_eq!(ev.evaluation_count(), 1);
-    ev.evaluate();
+    let _ = ev.evaluate();
     assert_eq!(ev.evaluation_count(), 2);
 }

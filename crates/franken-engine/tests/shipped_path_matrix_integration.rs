@@ -262,7 +262,7 @@ fn test_artifact_kind_semantic_weight_range() {
     for k in ArtifactKind::ALL {
         let w = k.semantic_weight();
         assert!(
-            w >= 1 && w <= 10,
+            (1..=10).contains(&w),
             "weight {w} out of expected range for {k}"
         );
     }
@@ -1048,7 +1048,7 @@ fn test_receipt_fields() {
 #[test]
 fn test_receipt_deterministic() {
     let ih = ContentHash::compute(b"input");
-    let r1 = DecisionReceipt::compute(&epoch(), ih.clone(), CellVerdict::Pass, 42);
+    let r1 = DecisionReceipt::compute(&epoch(), ih, CellVerdict::Pass, 42);
     let r2 = DecisionReceipt::compute(&epoch(), ih, CellVerdict::Pass, 42);
     assert_eq!(r1.verdict_hash, r2.verdict_hash);
     assert_eq!(r1.input_hash, r2.input_hash);
@@ -1057,7 +1057,7 @@ fn test_receipt_deterministic() {
 #[test]
 fn test_receipt_varies_with_verdict() {
     let ih = ContentHash::compute(b"same");
-    let r1 = DecisionReceipt::compute(&epoch(), ih.clone(), CellVerdict::Pass, 1);
+    let r1 = DecisionReceipt::compute(&epoch(), ih, CellVerdict::Pass, 1);
     let r2 = DecisionReceipt::compute(&epoch(), ih, CellVerdict::Fail, 1);
     assert_ne!(r1.verdict_hash, r2.verdict_hash);
 }
@@ -1065,12 +1065,7 @@ fn test_receipt_varies_with_verdict() {
 #[test]
 fn test_receipt_varies_with_epoch() {
     let ih = ContentHash::compute(b"same");
-    let r1 = DecisionReceipt::compute(
-        &SecurityEpoch::from_raw(1),
-        ih.clone(),
-        CellVerdict::Pass,
-        1,
-    );
+    let r1 = DecisionReceipt::compute(&SecurityEpoch::from_raw(1), ih, CellVerdict::Pass, 1);
     let r2 = DecisionReceipt::compute(&SecurityEpoch::from_raw(2), ih, CellVerdict::Pass, 1);
     assert_ne!(r1.verdict_hash, r2.verdict_hash);
 }
@@ -1078,7 +1073,7 @@ fn test_receipt_varies_with_epoch() {
 #[test]
 fn test_receipt_varies_with_timestamp() {
     let ih = ContentHash::compute(b"same");
-    let r1 = DecisionReceipt::compute(&epoch(), ih.clone(), CellVerdict::Pass, 100);
+    let r1 = DecisionReceipt::compute(&epoch(), ih, CellVerdict::Pass, 100);
     let r2 = DecisionReceipt::compute(&epoch(), ih, CellVerdict::Pass, 200);
     assert_ne!(r1.verdict_hash, r2.verdict_hash);
 }

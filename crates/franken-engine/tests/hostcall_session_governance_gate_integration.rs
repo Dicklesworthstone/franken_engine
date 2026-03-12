@@ -690,7 +690,7 @@ fn test_gate_result_serde_roundtrip() {
 #[test]
 fn test_decision_receipt_new() {
     let ev_hash = ContentHash::compute(b"test-evidence");
-    let receipt = DecisionReceipt::new(epoch(), GateVerdict::Pass, ev_hash.clone());
+    let receipt = DecisionReceipt::new(epoch(), GateVerdict::Pass, ev_hash);
     assert_eq!(receipt.component, COMPONENT);
     assert_eq!(receipt.epoch, epoch());
     assert_eq!(receipt.verdict, GateVerdict::Pass);
@@ -700,7 +700,7 @@ fn test_decision_receipt_new() {
 #[test]
 fn test_decision_receipt_hash_deterministic() {
     let ev_hash = ContentHash::compute(b"test");
-    let a = DecisionReceipt::new(epoch(), GateVerdict::Pass, ev_hash.clone());
+    let a = DecisionReceipt::new(epoch(), GateVerdict::Pass, ev_hash);
     let b = DecisionReceipt::new(epoch(), GateVerdict::Pass, ev_hash);
     assert_eq!(a.receipt_hash, b.receipt_hash);
 }
@@ -708,7 +708,7 @@ fn test_decision_receipt_hash_deterministic() {
 #[test]
 fn test_decision_receipt_different_verdicts_differ() {
     let ev_hash = ContentHash::compute(b"test");
-    let a = DecisionReceipt::new(epoch(), GateVerdict::Pass, ev_hash.clone());
+    let a = DecisionReceipt::new(epoch(), GateVerdict::Pass, ev_hash);
     let b = DecisionReceipt::new(epoch(), GateVerdict::Fail, ev_hash);
     assert_ne!(a.receipt_hash, b.receipt_hash);
 }

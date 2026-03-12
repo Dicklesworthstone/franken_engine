@@ -394,7 +394,7 @@ fn test_evaluator_new_with_defaults() {
     assert!(ev.last_receipt().is_none());
     assert!(ev.parity_results().is_empty());
     // Evaluate empty with default (fail_closed) produces violation
-    let r = ev.evaluate();
+    let _r = ev.evaluate();
     assert_eq!(ev.evaluation_count(), 1);
 }
 

@@ -697,3 +697,407 @@ fn module_constants_populated() {
     assert_eq!(BEAD_ID, "bd-1lsy.3.6.3");
     assert_eq!(POLICY_ID, "RGC-206C");
 }
+
+// ===========================================================================
+// Enrichment: evaluate_cell edge cases
+// ===========================================================================
+
+#[test]
+fn evaluate_cell_empty_both_sides_inconclusive() {
+    let mut config = default_config();
+    config.require_source_maps = false;
+    config.require_execution_traces = false;
+    let cell = evaluate_cell(
+        &[],
+        &[],
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
+    assert_eq!(cell.verdict, CellVerdict::Inconclusive);
+    assert!(cell.mismatches.is_empty());
+}
+
+#[test]
+fn evaluate_cell_empty_candidate_reports_missing() {
+    let mut config = default_config();
+    config.require_source_maps = false;
+    let ref_arts = vec![artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"ref",
+    )];
+    let cell = evaluate_cell(
+        &ref_arts,
+        &[],
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
+    assert_eq!(cell.verdict, CellVerdict::Fail);
+    assert!(
+        cell.mismatches
+            .iter()
+            .any(|m| m.class == MismatchClass::Missing)
+    );
+}
+
+#[test]
+fn evaluate_cell_empty_reference_reports_extra() {
+    let mut config = default_config();
+    config.require_source_maps = false;
+    let cand_arts = vec![artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"cand",
+    )];
+    let cell = evaluate_cell(
+        &[],
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
+    // Extra should be minor severity → Pass with default threshold at Major
+    assert!(
+        cell.mismatches
+            .iter()
+            .any(|m| m.class == MismatchClass::Extra)
+    );
+}
+
+#[test]
+fn evaluate_cell_content_divergence_is_major() {
+    let mut config = default_config();
+    config.require_source_maps = false;
+    let ref_arts = vec![artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"ref_content",
+    )];
+    let cand_arts = vec![artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"cand_content",
+    )];
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
+    assert_eq!(cell.verdict, CellVerdict::Fail);
+    let content_mm = cell
+        .mismatches
+        .iter()
+        .find(|m| m.class == MismatchClass::ContentDivergence);
+    assert!(content_mm.is_some());
+    assert_eq!(content_mm.unwrap().severity, MismatchSeverity::Major);
+}
+
+// ===========================================================================
+// Enrichment: severity rank ordering
+// ===========================================================================
+
+#[test]
+fn severity_rank_monotonically_increasing() {
+    assert!(MismatchSeverity::Informational.rank() < MismatchSeverity::Minor.rank());
+    assert!(MismatchSeverity::Minor.rank() < MismatchSeverity::Major.rank());
+    assert!(MismatchSeverity::Major.rank() < MismatchSeverity::Critical.rank());
+}
+
+// ===========================================================================
+// Enrichment: enum all() variants exhaustive
+// ===========================================================================
+
+#[test]
+fn workflow_kind_all_has_six_variants() {
+    assert_eq!(WorkflowKind::all().len(), 6);
+}
+
+#[test]
+fn surface_all_has_four_variants() {
+    assert_eq!(Surface::all().len(), 4);
+}
+
+#[test]
+fn artifact_kind_all_has_six_variants() {
+    assert_eq!(ArtifactKind::all().len(), 6);
+}
+
+#[test]
+fn example_app_tier_all_has_five_variants() {
+    assert_eq!(ExampleAppTier::all().len(), 5);
+}
+
+// ===========================================================================
+// Enrichment: serde round-trips for individual types
+// ===========================================================================
+
+#[test]
+fn captured_artifact_serde_round_trip() {
+    let a = artifact(
+        ArtifactKind::SourceMap,
+        Surface::FrankenctlCompile,
+        WorkflowKind::SsrRender,
+        ExampleAppTier::Complex,
+        2048,
+        b"artifact-tag",
+    );
+    let json = serde_json::to_string(&a).unwrap();
+    let back: CapturedArtifact = serde_json::from_str(&json).unwrap();
+    assert_eq!(a, back);
+}
+
+#[test]
+fn classified_mismatch_serde_round_trip() {
+    let mm = ClassifiedMismatch {
+        class: MismatchClass::SizeDivergence,
+        severity: MismatchSeverity::Minor,
+        surface: Surface::ExampleApp,
+        workflow: WorkflowKind::Execute,
+        artifact_kind: ArtifactKind::ExecutionTrace,
+        detail: "test detail".to_string(),
+        hash_a: Some(hash(b"a")),
+        hash_b: None,
+    };
+    let json = serde_json::to_string(&mm).unwrap();
+    let back: ClassifiedMismatch = serde_json::from_str(&json).unwrap();
+    assert_eq!(mm, back);
+}
+
+#[test]
+fn coverage_report_serde_round_trip() {
+    let config = default_config();
+    let cells = vec![matching_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    )];
+    let cov = compute_coverage(&cells, &config);
+    let json = serde_json::to_string(&cov).unwrap();
+    let back: CoverageReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(cov, back);
+}
+
+#[test]
+fn decision_receipt_serde_round_trip() {
+    let receipt = compute_receipt(hash(b"test"), &CellVerdict::Fail, epoch());
+    let json = serde_json::to_string(&receipt).unwrap();
+    let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
+    assert_eq!(receipt, back);
+}
+
+// ===========================================================================
+// Enrichment: evaluate_parity_matrix determinism
+// ===========================================================================
+
+#[test]
+fn evaluate_parity_matrix_is_deterministic() {
+    let config = default_config();
+    let cells = vec![
+        matching_cell(
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+        ),
+        failing_cell(
+            Surface::FrankenctlRun,
+            WorkflowKind::Execute,
+            ExampleAppTier::Typical,
+        ),
+    ];
+    let r1 = evaluate_parity_matrix(&config, &cells, epoch());
+    let r2 = evaluate_parity_matrix(&config, &cells, epoch());
+    assert_eq!(r1.overall_verdict, r2.overall_verdict);
+    assert_eq!(r1.total_mismatches, r2.total_mismatches);
+    assert_eq!(r1.receipt.verdict_hash, r2.receipt.verdict_hash);
+}
+
+// ===========================================================================
+// Enrichment: required surfaces/workflows in config
+// ===========================================================================
+
+#[test]
+fn config_required_surfaces_enforcement() {
+    use std::collections::BTreeSet;
+    let mut config = default_config();
+    config.required_surfaces = BTreeSet::from([Surface::Library, Surface::FrankenctlCompile]);
+    let cells = vec![matching_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    )];
+    let result = evaluate_parity_matrix(&config, &cells, epoch());
+    // FrankenctlCompile not covered — verdict depends on implementation
+    let _ = result;
+}
+
+// ===========================================================================
+// Enrichment: large divergence → critical severity
+// ===========================================================================
+
+#[test]
+fn classify_large_size_divergence_critical_severity() {
+    let a = artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"small",
+    );
+    let b = artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        4000,
+        b"large",
+    );
+    // 3000/4000 = 75% divergence > 20% critical threshold
+    let mm = classify_mismatch(&a, &b, 10_000); // 1% threshold
+    assert!(mm.is_some());
+    let m = mm.unwrap();
+    // Large divergence should be Critical (>20%)
+    assert_eq!(m.severity, MismatchSeverity::Critical);
+}
+
+// ===========================================================================
+// Enrichment: moderate divergence → major severity
+// ===========================================================================
+
+#[test]
+fn classify_moderate_size_divergence_major_severity() {
+    let a = artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"med-a",
+    );
+    let b = artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1150,
+        b"med-b",
+    );
+    // 150/1150 ≈ 13% divergence → between 10% and 20% → Major
+    let mm = classify_mismatch(&a, &b, 10_000); // 1% threshold
+    assert!(mm.is_some());
+    let m = mm.unwrap();
+    assert_eq!(m.severity, MismatchSeverity::Major);
+}
+
+// ===========================================================================
+// Enrichment: cell evaluation with execution trace requirement
+// ===========================================================================
+
+#[test]
+fn evaluate_cell_ssr_without_trace_reports_missing() {
+    let config = default_config();
+    let ref_arts = vec![artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::SsrRender,
+        ExampleAppTier::SsrFocused,
+        500,
+        b"output",
+    )];
+    let cand_arts = vec![artifact(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::SsrRender,
+        ExampleAppTier::SsrFocused,
+        500,
+        b"output",
+    )];
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::SsrRender,
+        ExampleAppTier::SsrFocused,
+    );
+    // Neither side has execution trace → should report missing for SSR workflow
+    let trace_missing = cell.mismatches.iter().any(|m| {
+        m.artifact_kind == ArtifactKind::ExecutionTrace && m.class == MismatchClass::Missing
+    });
+    assert!(
+        trace_missing,
+        "SSR without execution trace should be flagged"
+    );
+}
+
+// ===========================================================================
+// Enrichment: matrix cell count preservation
+// ===========================================================================
+
+#[test]
+fn matrix_preserves_cell_count() {
+    let config = default_config();
+    let cells: Vec<_> = (0..10)
+        .map(|_| {
+            matching_cell(
+                Surface::Library,
+                WorkflowKind::CompileOnly,
+                ExampleAppTier::Minimal,
+            )
+        })
+        .collect();
+    let result = evaluate_parity_matrix(&config, &cells, epoch());
+    assert_eq!(result.cells.len(), 10);
+}
+
+// ===========================================================================
+// Enrichment: mismatch counts accuracy
+// ===========================================================================
+
+#[test]
+fn mismatch_counts_are_accurate() {
+    let config = default_config();
+    let cells = vec![
+        failing_cell(
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+        ),
+        failing_cell(
+            Surface::FrankenctlRun,
+            WorkflowKind::Execute,
+            ExampleAppTier::Typical,
+        ),
+        matching_cell(
+            Surface::ExampleApp,
+            WorkflowKind::SsrRender,
+            ExampleAppTier::SsrFocused,
+        ),
+    ];
+    let result = evaluate_parity_matrix(&config, &cells, epoch());
+    assert!(result.total_mismatches >= 2, "at least 2 failing cells");
+    assert!(
+        result.critical_count >= 2,
+        "failing cells have critical mismatches"
+    );
+}

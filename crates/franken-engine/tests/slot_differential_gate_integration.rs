@@ -1162,3 +1162,328 @@ fn evidence_with_only_informational_divergences_passes_gate() {
     // Gate passes because resource divergence is informational
     assert!(gate.passes());
 }
+
+// ---------------------------------------------------------------------------
+// DifferentialOutcome serde round-trip and Display
+// ---------------------------------------------------------------------------
+
+#[test]
+fn differential_outcome_serde_round_trip() {
+    for outcome in [DifferentialOutcome::Match, DifferentialOutcome::Diverge] {
+        let json = serde_json::to_string(&outcome).unwrap();
+        let back: DifferentialOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, back);
+    }
+}
+
+#[test]
+fn differential_outcome_display_strings() {
+    assert_eq!(DifferentialOutcome::Match.to_string(), "match");
+    assert_eq!(DifferentialOutcome::Diverge.to_string(), "diverge");
+}
+
+// ---------------------------------------------------------------------------
+// PromotionReadiness Display and serde round-trip for all variants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn promotion_readiness_display_all_variants() {
+    let ready = PromotionReadiness::Ready {
+        workload_count: 10,
+        improvement_count: 2,
+    };
+    assert_eq!(ready.to_string(), "ready");
+
+    let mut counts = std::collections::BTreeMap::new();
+    counts.insert("semantic_divergence".to_string(), 3_u64);
+    let blocked = PromotionReadiness::Blocked {
+        divergence_counts: counts.clone(),
+        repro_hashes: vec![ContentHash::compute(b"r1")],
+    };
+    assert_eq!(blocked.to_string(), "blocked");
+
+    let regressed = PromotionReadiness::Regressed {
+        divergence_counts: counts,
+        repro_hashes: vec![ContentHash::compute(b"r2")],
+        trigger_demotion: true,
+    };
+    assert_eq!(regressed.to_string(), "regressed");
+}
+
+#[test]
+fn promotion_readiness_serde_round_trip_all_variants() {
+    let ready = PromotionReadiness::Ready {
+        workload_count: 5,
+        improvement_count: 1,
+    };
+    let json = serde_json::to_string(&ready).unwrap();
+    let back: PromotionReadiness = serde_json::from_str(&json).unwrap();
+    assert_eq!(ready, back);
+
+    let mut counts = std::collections::BTreeMap::new();
+    counts.insert("capability_divergence".to_string(), 2_u64);
+    let blocked = PromotionReadiness::Blocked {
+        divergence_counts: counts.clone(),
+        repro_hashes: vec![
+            ContentHash::compute(b"hash1"),
+            ContentHash::compute(b"hash2"),
+        ],
+    };
+    let json = serde_json::to_string(&blocked).unwrap();
+    let back: PromotionReadiness = serde_json::from_str(&json).unwrap();
+    assert_eq!(blocked, back);
+
+    let regressed = PromotionReadiness::Regressed {
+        divergence_counts: counts,
+        repro_hashes: vec![],
+        trigger_demotion: false,
+    };
+    let json = serde_json::to_string(&regressed).unwrap();
+    let back: PromotionReadiness = serde_json::from_str(&json).unwrap();
+    assert_eq!(regressed, back);
+}
+
+// ---------------------------------------------------------------------------
+// WorkloadLogEntry serde round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workload_log_entry_serde_round_trip() {
+    let entry = WorkloadLogEntry {
+        trace_id: "trace-001".to_string(),
+        slot_id: slot("log-slot"),
+        workload_id: "wl-7".to_string(),
+        corpus_category: WorkloadCategory::Adversarial,
+        outcome: DifferentialOutcome::Diverge,
+        divergence_class: Some(DivergenceClass::SemanticDivergence),
+        native_duration_us: 120,
+        delegate_duration_us: 100,
+        capability_diff: vec!["InvokeHostcall".to_string()],
+        resource_diff: "+200 bytes".to_string(),
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: WorkloadLogEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, back);
+}
+
+// ---------------------------------------------------------------------------
+// Workload serde round-trip including expected_output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workload_serde_round_trip_with_expected_output() {
+    let wl = Workload {
+        workload_id: "wl-42".to_string(),
+        category: WorkloadCategory::EdgeCase,
+        input: "some tricky input".to_string(),
+        expected_output: Some(matching_output("expected-val")),
+    };
+    let json = serde_json::to_string(&wl).unwrap();
+    let back: Workload = serde_json::from_str(&json).unwrap();
+    assert_eq!(wl, back);
+
+    // Also round-trip with None expected_output
+    let wl_none = workload("wl-none", WorkloadCategory::SemanticEquivalence);
+    let json2 = serde_json::to_string(&wl_none).unwrap();
+    let back2: Workload = serde_json::from_str(&json2).unwrap();
+    assert_eq!(wl_none, back2);
+}
+
+// ---------------------------------------------------------------------------
+// Repro hash changes when inputs differ
+// ---------------------------------------------------------------------------
+
+#[test]
+fn repro_hash_differs_for_different_inputs() {
+    let sid = slot("hash-diff-slot");
+    let wl_a = workload("hash-a", WorkloadCategory::EdgeCase);
+    let wl_b = workload("hash-b", WorkloadCategory::EdgeCase);
+    let native = matching_output("x");
+    let delegate = matching_output("y");
+    let contract_hash = ContentHash::compute(b"contract");
+
+    let repro_a = build_repro(
+        &sid,
+        &wl_a,
+        &native,
+        &delegate,
+        &DivergenceClass::SemanticDivergence,
+        &contract_hash,
+    );
+    let repro_b = build_repro(
+        &sid,
+        &wl_b,
+        &native,
+        &delegate,
+        &DivergenceClass::SemanticDivergence,
+        &contract_hash,
+    );
+
+    // Different workload inputs produce different hashes
+    assert_ne!(repro_a.artifact_hash, repro_b.artifact_hash);
+
+    // Different divergence class also changes hash
+    let repro_c = build_repro(
+        &sid,
+        &wl_a,
+        &native,
+        &delegate,
+        &DivergenceClass::CapabilityDivergence,
+        &contract_hash,
+    );
+    assert_ne!(repro_a.artifact_hash, repro_c.artifact_hash);
+
+    // Different contract hash also changes artifact hash
+    let contract_hash_2 = ContentHash::compute(b"other-contract");
+    let repro_d = build_repro(
+        &sid,
+        &wl_a,
+        &native,
+        &delegate,
+        &DivergenceClass::SemanticDivergence,
+        &contract_hash_2,
+    );
+    assert_ne!(repro_a.artifact_hash, repro_d.artifact_hash);
+}
+
+// ---------------------------------------------------------------------------
+// CellOutput semantic and capability equivalence helpers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cell_output_semantic_equivalence_edge_cases() {
+    let base = matching_output("42");
+
+    // Identical outputs are semantically equivalent
+    assert!(base.semantically_equivalent(&base));
+
+    // Different return value breaks equivalence
+    let diff_return = CellOutput {
+        return_value: "99".to_string(),
+        ..base.clone()
+    };
+    assert!(!base.semantically_equivalent(&diff_return));
+
+    // Different side effects breaks equivalence
+    let diff_effects = CellOutput {
+        side_effects: vec!["hostcall:net".to_string()],
+        ..base.clone()
+    };
+    assert!(!base.semantically_equivalent(&diff_effects));
+
+    // Different exceptions breaks equivalence
+    let diff_exc = CellOutput {
+        exceptions: vec!["RangeError".to_string()],
+        ..base.clone()
+    };
+    assert!(!base.semantically_equivalent(&diff_exc));
+
+    // Different duration/memory does NOT break semantic equivalence
+    let diff_perf = CellOutput {
+        duration_us: 9999,
+        memory_bytes: 99999,
+        ..base.clone()
+    };
+    assert!(base.semantically_equivalent(&diff_perf));
+}
+
+#[test]
+fn cell_output_capability_equivalence_edge_cases() {
+    let base = matching_output("42");
+
+    // Identical capabilities are equivalent
+    assert!(base.capability_equivalent(&base));
+
+    // Empty native caps is always a subset of delegate
+    let empty_caps = CellOutput {
+        capabilities_exercised: vec![],
+        ..base.clone()
+    };
+    assert!(empty_caps.capability_equivalent(&base));
+
+    // Native broader than delegate is NOT equivalent
+    let broader = CellOutput {
+        capabilities_exercised: vec![
+            SlotCapability::ReadSource,
+            SlotCapability::EmitEvidence,
+            SlotCapability::TriggerGc,
+        ],
+        ..base.clone()
+    };
+    assert!(!broader.capability_equivalent(&base));
+}
+
+// ---------------------------------------------------------------------------
+// SlotDifferentialError serde round-trip for all variants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn slot_differential_error_serde_round_trip_all_variants() {
+    let variants: Vec<SlotDifferentialError> = vec![
+        SlotDifferentialError::SlotNotFound {
+            slot_id: "missing".into(),
+        },
+        SlotDifferentialError::EmptyCorpus {
+            slot_id: "empty".into(),
+        },
+        SlotDifferentialError::InvalidConfig {
+            detail: "threshold negative".into(),
+        },
+        SlotDifferentialError::CellExecutionFailed {
+            slot_id: "cell-slot".into(),
+            cell_type: "delegate".into(),
+            detail: "oom".into(),
+        },
+        SlotDifferentialError::InternalError {
+            detail: "corruption".into(),
+        },
+    ];
+
+    for err in &variants {
+        let json = serde_json::to_string(err).unwrap();
+        let back: SlotDifferentialError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*err, back);
+        // Verify Display produces non-empty output
+        let display = err.to_string();
+        assert!(
+            !display.is_empty(),
+            "Display for {:?} must not be empty",
+            err
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DivergenceClass ordering is total and consistent across calls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn divergence_class_ordering_is_total_and_stable() {
+    let classes = [
+        DivergenceClass::SemanticDivergence,
+        DivergenceClass::CapabilityDivergence,
+        DivergenceClass::PerformanceDivergence,
+        DivergenceClass::ResourceDivergence,
+        DivergenceClass::BenignImprovement,
+    ];
+
+    // Verify strict ascending order
+    for i in 0..classes.len() - 1 {
+        assert!(
+            classes[i] < classes[i + 1],
+            "{} should be less than {}",
+            classes[i],
+            classes[i + 1]
+        );
+    }
+
+    // Verify reflexive equality
+    for class in &classes {
+        assert_eq!(class, class);
+    }
+
+    // Verify as_str round-trips through Display
+    for class in &classes {
+        assert_eq!(class.as_str(), &class.to_string());
+    }
+}

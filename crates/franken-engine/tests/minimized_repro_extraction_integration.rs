@@ -48,9 +48,11 @@ fn test_fixed_one_value() {
 
 #[test]
 fn test_default_constants_positive() {
-    assert!(DEFAULT_MAX_REPRO_LINES > 0);
-    assert!(DEFAULT_MIN_REDUCTION_RATIO > 0);
-    assert!(DEFAULT_MAX_TRIAGE_LATENCY_NS > 0);
+    const {
+        assert!(DEFAULT_MAX_REPRO_LINES > 0);
+        assert!(DEFAULT_MIN_REDUCTION_RATIO > 0);
+        assert!(DEFAULT_MAX_TRIAGE_LATENCY_NS > 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -849,7 +851,7 @@ fn test_e2e_finding_with_repro_hash() {
         true,
         1_000_000,
     );
-    let hash = repro.repro_hash.clone();
+    let hash = repro.repro_hash;
     engine.add_repro(repro);
     engine.add_finding(TriageFinding {
         category: FailureCategory::JsxTransform,

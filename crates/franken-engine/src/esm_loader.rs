@@ -2041,7 +2041,7 @@ mod tests {
     fn content_hash_unchanged_after_link_evaluate() {
         let mut graph = ModuleGraph::new();
         let m = make_module("main.js", "const x = 1");
-        let hash_before = m.content_hash.clone();
+        let hash_before = m.content_hash;
         graph.add_module(m).unwrap();
         graph.link().unwrap();
         graph.evaluate().unwrap();

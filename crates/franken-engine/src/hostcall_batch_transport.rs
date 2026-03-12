@@ -899,7 +899,7 @@ impl BatchTransportState {
         let hash = ContentHash::compute(&payload_bytes.to_le_bytes());
         region.occupied_bytes = payload_bytes;
         region.state = RegionState::Sealed;
-        region.content_hash = Some(hash.clone());
+        region.content_hash = Some(hash);
         region.sealed_at_tick = Some(tick);
         self.total_shared_bytes = self.total_shared_bytes.saturating_add(payload_bytes);
         Ok(hash)

@@ -325,7 +325,7 @@ impl SubstrateSelectionReceipt {
             override_reason: OverrideReason::None,
             selection_rationale: rationale.to_string(),
             selection_epoch: epoch,
-            contract_hash: contract.content_hash.clone(),
+            contract_hash: contract.content_hash,
             receipt_hash: ContentHash::compute(b"placeholder"),
         };
         receipt.recompute_hash();
@@ -350,7 +350,7 @@ impl SubstrateSelectionReceipt {
             override_reason: reason,
             selection_rationale: rationale.to_string(),
             selection_epoch: epoch,
-            contract_hash: contract.content_hash.clone(),
+            contract_hash: contract.content_hash,
             receipt_hash: ContentHash::compute(b"placeholder"),
         };
         receipt.recompute_hash();

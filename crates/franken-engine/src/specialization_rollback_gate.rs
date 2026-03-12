@@ -778,7 +778,7 @@ impl SpecializationRollbackGate {
             kind: evidence.kind.clone(),
             verdict,
             blocking_reasons,
-            evidence_hash: evidence.content_hash.clone(),
+            evidence_hash: evidence.content_hash,
             content_hash: ContentHash::compute(b""),
         };
         receipt.seal();

@@ -1139,7 +1139,7 @@ mod tests {
     #[test]
     fn add_probe_changes_content_hash() {
         let mut profile = TierProfile::new("p9", "fn_hash_change");
-        let hash_before = profile.content_hash.clone();
+        let hash_before = profile.content_hash;
         add_probe(
             &mut profile,
             ProbeKind::BranchCoverage,
@@ -1488,7 +1488,7 @@ mod tests {
     #[test]
     fn content_hash_changes_on_mutation() {
         let mut profile = TierProfile::new("mut-p", "fn_mut");
-        let h1 = profile.content_hash.clone();
+        let h1 = profile.content_hash;
         profile.invocation_count = 999;
         profile.rehash();
         assert_ne!(profile.content_hash, h1);

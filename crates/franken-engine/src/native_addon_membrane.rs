@@ -1664,7 +1664,7 @@ mod tests {
     #[test]
     fn handle_record_seal_changes_hash() {
         let mut rec = HandleRecord::new(1, HandleKind::ValueHandle, "addon-a", epoch(1));
-        let h1 = rec.content_hash.clone();
+        let h1 = rec.content_hash;
         rec.state = HandleState::Revoked;
         rec.seal();
         assert_ne!(h1, rec.content_hash);

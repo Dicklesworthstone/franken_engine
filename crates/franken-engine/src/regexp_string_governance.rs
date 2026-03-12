@@ -21,7 +21,7 @@
 //!
 //! All fractional values use fixed-point millionths (1_000_000 = 1.0).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};

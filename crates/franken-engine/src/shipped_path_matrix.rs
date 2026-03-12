@@ -718,7 +718,7 @@ pub fn compare_artifacts(
                 artifact_kind: *kind,
                 workload_class: art.workload_class,
                 detail: format!("{kind} missing from CLI surface"),
-                content_hash_a: Some(art.content_hash.clone()),
+                content_hash_a: Some(art.content_hash),
                 content_hash_b: None,
             });
         }
@@ -736,7 +736,7 @@ pub fn compare_artifacts(
                 workload_class: art.workload_class,
                 detail: format!("{kind} extra on CLI surface"),
                 content_hash_a: None,
-                content_hash_b: Some(art.content_hash.clone()),
+                content_hash_b: Some(art.content_hash),
             });
         }
     }
@@ -771,8 +771,8 @@ pub fn compare_artifacts(
                     artifact_kind: *kind,
                     workload_class: aa.workload_class,
                     detail: format!("{kind} content divergence between surfaces"),
-                    content_hash_a: Some(aa.content_hash.clone()),
-                    content_hash_b: Some(bb.content_hash.clone()),
+                    content_hash_a: Some(aa.content_hash),
+                    content_hash_b: Some(bb.content_hash),
                 });
             }
 
@@ -803,8 +803,8 @@ pub fn compare_artifacts(
                             "{kind} size divergence: {} vs {} bytes ({divergence_millionths} millionths)",
                             aa.size_bytes, bb.size_bytes
                         ),
-                        content_hash_a: Some(aa.content_hash.clone()),
-                        content_hash_b: Some(bb.content_hash.clone()),
+                        content_hash_a: Some(aa.content_hash),
+                        content_hash_b: Some(bb.content_hash),
                     });
                 }
             }

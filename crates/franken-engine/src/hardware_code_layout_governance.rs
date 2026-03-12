@@ -1138,16 +1138,10 @@ impl GovernanceEvaluator {
             .iter()
             .map(|e| e.content_hash.clone())
             .collect();
-        let budget_hashes: Vec<ContentHash> = self
-            .stall_budgets
-            .iter()
-            .map(|b| b.content_hash.clone())
-            .collect();
-        let policy_hashes: Vec<ContentHash> = self
-            .policies
-            .iter()
-            .map(|p| p.content_hash.clone())
-            .collect();
+        let budget_hashes: Vec<ContentHash> =
+            self.stall_budgets.iter().map(|b| b.content_hash.clone()).collect();
+        let policy_hashes: Vec<ContentHash> =
+            self.policies.iter().map(|p| p.content_hash.clone()).collect();
 
         let mut buf = Vec::with_capacity(256);
         append_str(&mut buf, SCHEMA_VERSION);
@@ -2118,9 +2112,9 @@ mod tests {
         };
         let mut eval = GovernanceEvaluator::new(cfg, ep(1));
         assert_eq!(eval.evaluation_count(), 0);
-        eval.evaluate();
+        let _ = eval.evaluate();
         assert_eq!(eval.evaluation_count(), 1);
-        eval.evaluate();
+        let _ = eval.evaluate();
         assert_eq!(eval.evaluation_count(), 2);
     }
 

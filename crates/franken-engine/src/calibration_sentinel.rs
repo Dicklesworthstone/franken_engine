@@ -1288,7 +1288,7 @@ mod tests {
     #[test]
     fn test_update_sentinel_refreshes_hash() {
         let mut s = create_sentinel("s1", SentinelKind::ErrorBound, 500_000);
-        let hash_before = s.content_hash.clone();
+        let hash_before = s.content_hash;
         update_sentinel(&mut s, 100_000);
         assert_ne!(s.content_hash, hash_before);
     }

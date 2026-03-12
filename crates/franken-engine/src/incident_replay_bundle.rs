@@ -856,10 +856,8 @@ impl BundleBuilder {
 
         // Leaf hashes in BTreeMap order — matches verify_integrity() which
         // also iterates artifact_entries.values() in sorted-key order.
-        let leaf_hashes: Vec<ContentHash> = artifact_entries
-            .values()
-            .map(|e| e.content_hash.clone())
-            .collect();
+        let leaf_hashes: Vec<ContentHash> =
+            artifact_entries.values().map(|e| e.content_hash).collect();
         let merkle_root = compute_merkle_root(&leaf_hashes);
 
         // Derive bundle ID.
@@ -978,7 +976,7 @@ impl BundleVerifier {
             .manifest
             .artifacts
             .values()
-            .map(|a| a.content_hash.clone())
+            .map(|a| a.content_hash)
             .collect();
         let computed_root = compute_merkle_root(&leaf_hashes);
         report.add_check(VerificationCheck {

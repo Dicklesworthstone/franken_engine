@@ -786,7 +786,7 @@ impl DecisionReceipt {
         previous_receipt_hash: ContentHash,
     ) -> Self {
         let receipt_id = receipt_id.into();
-        let report_hash = report.content_hash.clone();
+        let report_hash = report.content_hash;
         let verdict = report.verdict;
         let epoch = report.epoch;
 

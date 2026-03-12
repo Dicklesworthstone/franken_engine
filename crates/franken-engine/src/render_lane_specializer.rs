@@ -876,7 +876,7 @@ pub fn specialize_batch(
         }
 
         let receipt = DecisionReceipt::new(epoch, req, &result, prev_hash);
-        prev_hash = receipt.content_hash.clone();
+        prev_hash = receipt.content_hash;
 
         results.push(result);
         receipts.push(receipt);
@@ -1479,7 +1479,7 @@ mod tests {
         let result = specialize_lane(&req, &cfg).unwrap();
         let genesis = DecisionReceipt::genesis_hash();
         let r1 = DecisionReceipt::new(epoch(), &req, &result, genesis);
-        let r2 = DecisionReceipt::new(epoch(), &req, &result, r1.content_hash.clone());
+        let r2 = DecisionReceipt::new(epoch(), &req, &result, r1.content_hash);
         assert_ne!(r1.content_hash, r2.content_hash);
     }
 

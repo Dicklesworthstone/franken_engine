@@ -606,8 +606,8 @@ pub fn classify_mismatch(
                 "size divergence {divergence_millionths} millionths \
                  (ref={size_a}, cand={size_b})"
             ),
-            hash_a: Some(artifact_a.content_hash.clone()),
-            hash_b: Some(artifact_b.content_hash.clone()),
+            hash_a: Some(artifact_a.content_hash),
+            hash_b: Some(artifact_b.content_hash),
         });
     }
 
@@ -620,8 +620,8 @@ pub fn classify_mismatch(
             workflow: artifact_a.workflow,
             artifact_kind: artifact_a.kind,
             detail: "content hashes differ".to_string(),
-            hash_a: Some(artifact_a.content_hash.clone()),
-            hash_b: Some(artifact_b.content_hash.clone()),
+            hash_a: Some(artifact_a.content_hash),
+            hash_b: Some(artifact_b.content_hash),
         });
     }
 
@@ -699,7 +699,7 @@ pub fn evaluate_cell(
                     "reference artifact {:?} not found in candidate",
                     ref_art.kind
                 ),
-                hash_a: Some(ref_art.content_hash.clone()),
+                hash_a: Some(ref_art.content_hash),
                 hash_b: None,
             });
         }
@@ -720,7 +720,7 @@ pub fn evaluate_cell(
                     cand_art.kind
                 ),
                 hash_a: None,
-                hash_b: Some(cand_art.content_hash.clone()),
+                hash_b: Some(cand_art.content_hash),
             });
         }
     }

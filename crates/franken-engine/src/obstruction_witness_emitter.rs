@@ -618,12 +618,9 @@ pub fn build_report(
 
     let report_id = format!("report-{COMPONENT}-epoch-{}", epoch.as_u64());
 
-    let witness_hashes: Vec<ContentHash> =
-        witnesses.iter().map(|w| w.content_hash.clone()).collect();
-    let program_hashes: Vec<ContentHash> =
-        programs.iter().map(|p| p.content_hash.clone()).collect();
-    let diagnosis_hashes: Vec<ContentHash> =
-        diagnoses.iter().map(|d| d.content_hash.clone()).collect();
+    let witness_hashes: Vec<ContentHash> = witnesses.iter().map(|w| w.content_hash).collect();
+    let program_hashes: Vec<ContentHash> = programs.iter().map(|p| p.content_hash).collect();
+    let diagnosis_hashes: Vec<ContentHash> = diagnoses.iter().map(|d| d.content_hash).collect();
 
     let content_hash = report_content_hash(
         &report_id,

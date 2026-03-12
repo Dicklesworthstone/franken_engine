@@ -1843,7 +1843,7 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                     old_cell_digest: replacement.old_cell_digest.clone(),
                     new_cell_digest: replacement.new_cell_digest.clone(),
                     promotion_timestamp_ns: replacement.promotion_timestamp_ns,
-                    replacement_content_hash: replacement.receipt_content_hash.clone(),
+                    replacement_content_hash: replacement.receipt_content_hash,
                     demotion_receipt_id: demotion.as_ref().map(|record| record.receipt_id.clone()),
                     demotion_reason: demotion
                         .as_ref()

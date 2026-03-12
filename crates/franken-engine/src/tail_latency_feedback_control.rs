@@ -728,8 +728,7 @@ pub fn build_feedback_report(
         compliant.saturating_mul(MILLIONTHS) / total_targets
     };
 
-    let decision_hashes: Vec<ContentHash> =
-        decisions.iter().map(|d| d.content_hash.clone()).collect();
+    let decision_hashes: Vec<ContentHash> = decisions.iter().map(|d| d.content_hash).collect();
     let content_hash = FeedbackControlReport::compute_hash(
         &report_id,
         epoch,

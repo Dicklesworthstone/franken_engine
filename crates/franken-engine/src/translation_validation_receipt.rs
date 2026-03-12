@@ -629,7 +629,7 @@ impl ReceiptChain {
         receipt: TranslationValidationReceipt,
     ) -> Result<(), ReceiptChainError> {
         // Verify parent hash linkage
-        let expected_parent = self.receipts.last().map(|r| r.content_hash.clone());
+        let expected_parent = self.receipts.last().map(|r| r.content_hash);
         if receipt.parent_hash != expected_parent {
             return Err(ReceiptChainError::ParentHashMismatch {
                 expected: expected_parent,
@@ -712,7 +712,7 @@ impl ReceiptChain {
                 if receipt.parent_hash.as_ref() != Some(&prev.content_hash) {
                     issues.push(ChainIntegrityIssue::ParentHashBroken {
                         sequence: receipt.sequence,
-                        expected_parent: Some(prev.content_hash.clone()),
+                        expected_parent: Some(prev.content_hash),
                         actual_parent: receipt.parent_hash.clone(),
                     });
                 }
@@ -1011,7 +1011,7 @@ impl ValidationReceiptEmitter {
             .cost_model_id
             .unwrap_or_else(|| self.config.default_cost_model_id.clone());
 
-        let parent_hash = self.chain.last_receipt().map(|r| r.content_hash.clone());
+        let parent_hash = self.chain.last_receipt().map(|r| r.content_hash);
         let sequence = self.chain.next_sequence;
 
         let receipt = TranslationValidationReceipt::new(
@@ -1769,7 +1769,7 @@ mod tests {
         );
         chain.append(r1).unwrap();
 
-        let parent = chain.last_receipt().unwrap().content_hash.clone();
+        let parent = chain.last_receipt().unwrap().content_hash;
         let r2 = TranslationValidationReceipt::new(
             2,
             "opt-2",
@@ -1862,7 +1862,7 @@ mod tests {
                 proven_verdict(),
                 "cm",
             );
-            parent = Some(r.content_hash.clone());
+            parent = Some(r.content_hash);
             chain.append(r).unwrap();
         }
 
@@ -1889,7 +1889,7 @@ mod tests {
         );
         chain.append(r1).unwrap();
 
-        let parent = chain.last_receipt().unwrap().content_hash.clone();
+        let parent = chain.last_receipt().unwrap().content_hash;
         let r2 = TranslationValidationReceipt::new(
             2,
             "opt-2",

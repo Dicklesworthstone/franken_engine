@@ -1933,13 +1933,13 @@ mod tests {
         let output = p.synthesize(&simple_spec()).unwrap();
         let mut hashes = BTreeSet::new();
         for table in &output.decision_tables {
-            assert!(hashes.insert(table.content_hash.clone()));
+            assert!(hashes.insert(table.content_hash));
         }
         for automaton in &output.automata {
-            assert!(hashes.insert(automaton.content_hash.clone()));
+            assert!(hashes.insert(automaton.content_hash));
         }
         for bundle in &output.threshold_bundles {
-            assert!(hashes.insert(bundle.content_hash.clone()));
+            assert!(hashes.insert(bundle.content_hash));
         }
     }
 

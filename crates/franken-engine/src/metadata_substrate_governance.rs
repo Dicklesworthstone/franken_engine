@@ -21,7 +21,7 @@
 //!
 //! Reference: [RGC-626C]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};

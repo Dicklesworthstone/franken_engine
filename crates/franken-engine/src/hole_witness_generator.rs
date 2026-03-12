@@ -1198,7 +1198,7 @@ mod tests {
         let registry = build_template_registry();
         let tmpl = &registry[0]; // Parser/JS
         let mut w = instantiate_witness(tmpl, &hole, 0);
-        let hash1 = w.content_hash.clone();
+        let hash1 = w.content_hash;
         w.description = "modified".into();
         w.seal();
         // After modifying description (not in hash), hash stays the same

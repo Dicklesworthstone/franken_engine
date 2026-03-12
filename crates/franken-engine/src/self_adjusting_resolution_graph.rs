@@ -615,7 +615,7 @@ pub fn remove_module(
         return Err(ResolutionGraphError::ModuleNotFound(module_id.to_string()));
     }
 
-    let old_hash = graph.content_hash.clone();
+    let old_hash = graph.content_hash;
 
     // Compute the affected set before removal (transitive reverse deps).
     let affected = compute_affected_set(graph, module_id);
@@ -633,7 +633,7 @@ pub fn remove_module(
 
     // Recompute hash.
     graph.recompute_hash();
-    let new_hash = graph.content_hash.clone();
+    let new_hash = graph.content_hash;
 
     let total_nodes = graph.nodes.len() as u64;
     let recomputed = affected.len() as u64;
@@ -668,7 +668,7 @@ pub fn invalidate_module(
         return Err(ResolutionGraphError::ModuleNotFound(module_id.to_string()));
     }
 
-    let old_hash = graph.content_hash.clone();
+    let old_hash = graph.content_hash;
     let affected = compute_affected_set(graph, module_id);
 
     let total = graph.nodes.len() as u64;
@@ -733,7 +733,7 @@ pub fn create_checkpoint(graph: &ResolutionGraph) -> RollbackCheckpoint {
     let mut checkpoint = RollbackCheckpoint {
         checkpoint_id,
         epoch: graph.epoch,
-        graph_snapshot_hash: graph.content_hash.clone(),
+        graph_snapshot_hash: graph.content_hash,
         invalidation_receipts: Vec::new(),
         content_hash: ContentHash::default(),
     };
@@ -1253,7 +1253,7 @@ mod tests {
     #[test]
     fn test_add_module_recomputes_hash() {
         let mut graph = simple_graph();
-        let old_hash = graph.content_hash.clone();
+        let old_hash = graph.content_hash;
         add_module(&mut graph, make_node("new")).unwrap();
         assert_ne!(graph.content_hash, old_hash);
     }
@@ -1354,7 +1354,7 @@ mod tests {
     #[test]
     fn test_invalidate_preserves_graph() {
         let graph = simple_graph();
-        let hash_before = graph.content_hash.clone();
+        let hash_before = graph.content_hash;
         let _receipt = invalidate_module(&graph, "b").unwrap();
         assert_eq!(graph.content_hash, hash_before);
     }

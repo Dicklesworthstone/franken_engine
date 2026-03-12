@@ -1813,7 +1813,7 @@ impl<A: StorageAdapter> WitnessIndexStore<A> {
                 epoch: witness.epoch,
                 lifecycle_state: witness.lifecycle_state,
                 promotion_timestamp_ns,
-                content_hash: witness.content_hash.clone(),
+                content_hash: witness.content_hash,
                 witness: witness.clone(),
             };
 
@@ -3137,7 +3137,7 @@ impl WitnessPublicationPipeline {
             extension_id: witness.extension_id.clone(),
             policy_id: witness.policy_id.clone(),
             witness_epoch: witness.epoch,
-            witness_content_hash: witness.content_hash.clone(),
+            witness_content_hash: witness.content_hash,
             timestamp_ns,
             revocation_reason,
             predecessor_leaf_hash,
@@ -4544,7 +4544,7 @@ mod tests {
         let w1 = build_promoted_witness(31);
         let w2 = build_promoted_witness(32);
         let w1_ext = w1.extension_id.clone();
-        let w2_hash = w2.content_hash.clone();
+        let w2_hash = w2.content_hash;
         pipeline.publish_witness(w1, 10).unwrap();
         pipeline.publish_witness(w2, 20).unwrap();
 
@@ -4990,7 +4990,7 @@ mod tests {
             epoch: w.epoch,
             lifecycle_state: w.lifecycle_state,
             promotion_timestamp_ns: w.timestamp_ns,
-            content_hash: w.content_hash.clone(),
+            content_hash: w.content_hash,
             witness: w,
         };
         let json = serde_json::to_string(&rec).unwrap();
@@ -7264,7 +7264,7 @@ mod tests {
             epoch: witness.epoch,
             lifecycle_state: witness.lifecycle_state,
             promotion_timestamp_ns: 1000,
-            content_hash: witness.content_hash.clone(),
+            content_hash: witness.content_hash,
             witness,
         };
         let row = WitnessReplayJoinRow {

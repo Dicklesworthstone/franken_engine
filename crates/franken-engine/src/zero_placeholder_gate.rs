@@ -897,7 +897,7 @@ mod tests {
     fn make_waiver(entry: &PlaceholderEntry, subsystem: Subsystem) -> Waiver {
         Waiver {
             waiver_id: format!("waiver-{}", entry.location_line),
-            placeholder_hash: entry.content_hash.clone(),
+            placeholder_hash: entry.content_hash,
             subsystem,
             justification: "deferred to next sprint".to_string(),
             owner: "team-alpha".to_string(),

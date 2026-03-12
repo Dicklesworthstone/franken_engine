@@ -61,7 +61,9 @@ impl fmt::Display for IntegrityHash {
 ///
 /// Scope: persisted, deterministic across platforms, NOT used for
 /// authentication.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct ContentHash(pub [u8; 32]);
 
 impl ContentHash {
@@ -109,7 +111,7 @@ impl fmt::Display for ContentHash {
 /// HMAC-based idempotency keys, evidence chain integrity.
 ///
 /// Scope: security-critical, epoch-scoped, used with signing keys.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AuthenticityHash(pub [u8; 32]);
 
 impl AuthenticityHash {

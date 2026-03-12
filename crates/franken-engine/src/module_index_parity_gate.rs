@@ -849,8 +849,8 @@ impl ModuleIndexParityGate {
             parity_verdict,
             cold_start_verdict,
             blocking_reasons,
-            parity_evidence_hash: parity_evidence.content_hash.clone(),
-            cold_start_evidence_hash: cold_start_evidence.content_hash.clone(),
+            parity_evidence_hash: parity_evidence.content_hash,
+            cold_start_evidence_hash: cold_start_evidence.content_hash,
             affected_packages,
             content_hash: ContentHash::compute(b""),
         };

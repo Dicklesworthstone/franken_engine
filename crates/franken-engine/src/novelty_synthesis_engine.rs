@@ -794,7 +794,7 @@ pub fn filter_candidates(
         }
 
         // Accepted.
-        seen_hashes.insert(candidate.content_hash.clone());
+        seen_hashes.insert(candidate.content_hash);
         accepted.push(candidate);
     }
 
@@ -1951,7 +1951,7 @@ mod tests {
     fn test_novelty_zero_for_duplicate() {
         let c = make_candidate("c1", ProgramKind::PlainJs, SynthesisStrategy::GrammarGuided);
         let mut existing = BTreeSet::new();
-        existing.insert(c.content_hash.clone());
+        existing.insert(c.content_hash);
         assert_eq!(evaluate_candidate_novelty(&c, &existing), 0);
     }
 

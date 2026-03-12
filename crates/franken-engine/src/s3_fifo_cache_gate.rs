@@ -2897,7 +2897,7 @@ mod tests {
             small_ratio_millionths: 100_000,
             content_hash: ContentHash::compute(b"pending"),
         };
-        let before = receipt.content_hash.clone();
+        let before = receipt.content_hash;
         receipt.seal();
         assert_ne!(receipt.content_hash, before);
     }

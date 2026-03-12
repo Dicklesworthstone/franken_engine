@@ -462,7 +462,7 @@ impl CompressionPipeline {
         let mut receipt = CompressionReceipt {
             receipt_id: format!("receipt-{}", descriptor.artifact_id),
             artifact_id: descriptor.artifact_id.clone(),
-            original_hash: descriptor.content_hash.clone(),
+            original_hash: descriptor.content_hash,
             compressed_hash,
             canonical_id: descriptor.canonical_id.clone(),
             strategy,

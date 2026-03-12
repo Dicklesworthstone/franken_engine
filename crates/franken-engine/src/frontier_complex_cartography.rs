@@ -1122,7 +1122,7 @@ pub fn ledger_summary(ledger: &HoleLedger) -> LedgerSummary {
         structural_holes: structural,
         stability_score_millionths: score,
         threshold_millionths: ledger.significance_threshold_millionths,
-        content_hash: ledger.content_hash.clone(),
+        content_hash: ledger.content_hash,
     }
 }
 

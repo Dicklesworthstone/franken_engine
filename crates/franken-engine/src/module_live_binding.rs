@@ -646,7 +646,7 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
             module_specifier: module.specifier.clone(),
             export_names,
             bindings,
-            source_hash: module.content_hash.clone(),
+            source_hash: module.content_hash,
         };
         map.register_namespace(ns);
     }

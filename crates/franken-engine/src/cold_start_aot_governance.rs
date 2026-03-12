@@ -806,7 +806,7 @@ pub fn produce_receipt(
 ) -> DecisionReceipt {
     let evidence_hashes: Vec<ContentHash> =
         evidence.iter().map(|e| e.evidence_hash.clone()).collect();
-    let parity_hashes: Vec<ContentHash> = parity.iter().map(|p| p.evidence_hash.clone()).collect();
+    let parity_hashes: Vec<ContentHash> = parity.iter().map(|p| p.evidence_hash).collect();
     DecisionReceipt::new(epoch, verdict.clone(), evidence_hashes, parity_hashes)
 }
 

@@ -975,7 +975,7 @@ impl CompressionPipeline {
                     };
                     let recipe = RestorationRecipe::new(
                         entry.algorithm,
-                        desc.content_hash.clone(),
+                        desc.content_hash,
                         compressed_hash,
                         desc.size_bytes,
                         compressed_size,
@@ -989,7 +989,7 @@ impl CompressionPipeline {
                         let canonical_hash = desc
                             .canonical_id
                             .clone()
-                            .unwrap_or_else(|| desc.content_hash.clone());
+                            .unwrap_or_else(|| desc.content_hash);
                         dedup_tracker.record_dedup(
                             &desc.artifact_id,
                             target,

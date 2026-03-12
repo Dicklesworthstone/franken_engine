@@ -352,7 +352,7 @@ impl RegressionCorpus {
         timestamp_ns: u64,
     ) -> bool {
         let cid = counterexample.conflict_id.clone();
-        let content_hash = counterexample.content_hash.clone();
+        let content_hash = counterexample.content_hash;
         if self.entries.contains_key(&cid) {
             return false;
         }

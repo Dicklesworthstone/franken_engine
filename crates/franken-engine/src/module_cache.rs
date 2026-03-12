@@ -1960,7 +1960,7 @@ pub fn emit_default_s3fifo_baseline_bundle(
             .iter()
             .map(|(path, content_hash)| S3FifoBaselineArtifactReference {
                 path: path.clone(),
-                content_hash: content_hash.clone(),
+                content_hash: content_hash.to_string(),
             })
             .collect(),
     };

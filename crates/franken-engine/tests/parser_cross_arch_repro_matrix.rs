@@ -254,6 +254,8 @@ fn parser_cross_arch_repro_matrix_contract_doc_has_required_sections() {
         "artifacts/parser_parallel_interference",
         "matrix_inputs",
         "incomplete_matrix",
+        "latest complete run directory",
+        "scratch-only partial directories",
     ] {
         assert!(
             doc.contains(marker),
@@ -485,6 +487,10 @@ fn runner_script_contains_manifest_auto_discovery_contract() {
         "run_rch_strict_logged",
         "rch-pid.",
         "rch-local-fallback-detected",
+        "register_temp_path",
+        "cleanup_temp_path",
+        "cleanup_registered_temp_paths",
+        "trap cleanup_registered_temp_paths EXIT",
         "pkill -P \"$current_rch_pid\"",
         "pkill -f 'frankenengine-engine --test parser_cross_arch_repro_matrix'",
         "pkill -f \"CARGO_TARGET_DIR=${target_dir}\"",
@@ -509,10 +515,14 @@ fn replay_wrapper_surfaces_latest_artifacts_after_run() {
     for marker in [
         "mode=\"${1:-matrix}\"",
         "main_exit=0",
+        "latest_complete_run_dir()",
         "latest manifest:",
         "latest matrix summary:",
         "latest events:",
-        "find \"${artifact_root}\" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1",
+        "[[ -f \"${candidate}/run_manifest.json\" ]]",
+        "[[ -f \"${candidate}/matrix_summary.json\" ]]",
+        "[[ -f \"${candidate}/events.jsonl\" ]]",
+        "could not locate a complete run directory under ${artifact_root}",
     ] {
         assert!(
             wrapper.contains(marker),

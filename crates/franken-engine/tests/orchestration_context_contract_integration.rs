@@ -3,10 +3,9 @@
 //! Tests: canonical context threading, child derivation, cleanup carving,
 //! budget consumption, mock seam validation, determinism, and serde.
 
-use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::orchestration_context_contract::{
     COMPONENT, CanonicalContextDescriptor, ContextError, ContextOrigin, ContextState,
-    DerivationEvent, DerivationRule, MockSeamClassification, MockSeamEntry, SCHEMA_VERSION,
+    DerivationRule, MockSeamClassification, MockSeamEntry,
     ValidationReport, cancel_context, carve_cleanup_context, consume_budget, create_root_context,
     derive_child_context, release_context, validate_threading,
 };
@@ -473,7 +472,8 @@ fn integration_e2e_orchestration_lifecycle() {
     // 4. Carve cleanup from cell context.
     let (mut cleanup, ev2) =
         carve_cleanup_context(&mut cell_ctx, "cell-1-cleanup".to_string(), &rule).unwrap();
-    consume_budget(&mut cleanup, cleanup.budget_ms).unwrap();
+    let cleanup_budget = cleanup.budget_ms;
+    consume_budget(&mut cleanup, cleanup_budget).unwrap();
     assert_eq!(cleanup.state, ContextState::Exhausted);
 
     // 5. Release cell context.
@@ -482,7 +482,8 @@ fn integration_e2e_orchestration_lifecycle() {
     // 6. Carve orchestrator cleanup.
     let (mut orch_cleanup, ev3) =
         carve_cleanup_context(&mut root, "orch-cleanup".to_string(), &rule).unwrap();
-    consume_budget(&mut orch_cleanup, orch_cleanup.budget_ms).unwrap();
+    let orch_cleanup_budget = orch_cleanup.budget_ms;
+    consume_budget(&mut orch_cleanup, orch_cleanup_budget).unwrap();
     release_context(&mut orch_cleanup);
 
     // 7. Release root.

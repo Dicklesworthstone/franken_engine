@@ -63,10 +63,26 @@
       "artifact_paths"
     ]
   },
+  "required_artifacts": [
+    "module_art_index_report.json",
+    "export_map_hash_catalog.json",
+    "module_index_identity_report.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "step_logs/"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_module_resolution_index_suite.sh",
+    "replay_wrapper": "scripts/e2e/rgc_module_resolution_index_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "rgc.ts-module-resolution.index.manifest.v1"
+  },
   "operator_verification": [
     "jq empty docs/rgc_module_resolution_index_v1.json",
     "./scripts/run_rgc_module_resolution_index_suite.sh ci",
     "./scripts/e2e/rgc_module_resolution_index_replay.sh ci",
-    "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_module_resolution_index cargo test -p frankenengine-engine --test module_resolution_index"
+    "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_module_resolution_index_verify cargo test -p frankenengine-engine --test module_resolution_index"
   ]
 }

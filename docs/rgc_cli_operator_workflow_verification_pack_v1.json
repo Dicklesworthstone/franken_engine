@@ -55,6 +55,7 @@
     "manifest_schema_version": "franken-engine.rgc-cli-operator-workflow-verification-pack.run-manifest.v1"
   },
   "operator_verification": [
+    "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cli_operator_workflow_verification_pack_verify cargo test -p frankenengine-engine --test rgc_cli_operator_workflow_verification_pack",
     "./scripts/run_rgc_cli_operator_workflow_verification_pack.sh ci",
     "./scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh ci",
     "jq empty docs/rgc_cli_operator_workflow_verification_pack_v1.json"

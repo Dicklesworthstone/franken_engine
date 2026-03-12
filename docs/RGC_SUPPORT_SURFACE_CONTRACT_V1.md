@@ -114,7 +114,7 @@ under `artifacts/rgc_support_surface_contract/<UTC_TIMESTAMP>/`.
 jq empty docs/support_surface_contract.json
 jq empty docs/support_surface_mode_matrix.json
 
-rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_support_surface_contract \
+rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_support_surface_contract_verify \
   cargo test -p frankenengine-engine --test support_surface_contract
 
 ./scripts/run_rgc_support_surface_contract.sh ci

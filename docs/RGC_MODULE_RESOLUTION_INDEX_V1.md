@@ -5,6 +5,10 @@ Primary bead: bd-1lsy.5.8.1
 Track id: RGC-406A
 Machine-readable contract: `docs/rgc_module_resolution_index_v1.json`
 
+The machine-readable contract also pins the runner contract under
+`gate_runner` and mirrors the emitted artifact list under
+`required_artifacts` so the JSON stays aligned with the verification lane.
+
 ## Purpose
 
 `RGC-406A` defines a deterministic startup-friendly index layer for the
@@ -73,6 +77,10 @@ Each index evidence bundle must emit:
 workspace fingerprint, index fingerprint, validation result, and artifact path
 mappings.
 
+`docs/rgc_module_resolution_index_v1.json` repeats the emitted paths under
+`required_artifacts` and binds the verification entrypoints under
+`gate_runner`.
+
 ## Operator Verification
 
 ```bash
@@ -81,6 +89,6 @@ jq empty docs/rgc_module_resolution_index_v1.json
 ./scripts/run_rgc_module_resolution_index_suite.sh ci
 ./scripts/e2e/rgc_module_resolution_index_replay.sh ci
 
-rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_module_resolution_index \
+rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_module_resolution_index_verify \
   cargo test -p frankenengine-engine --test module_resolution_index
 ```

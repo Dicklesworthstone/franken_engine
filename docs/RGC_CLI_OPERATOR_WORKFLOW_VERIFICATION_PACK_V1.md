@@ -104,7 +104,7 @@ under `artifacts/rgc_cli_operator_workflow_verification_pack/<UTC_TIMESTAMP>/`.
 ```bash
 jq empty docs/rgc_cli_operator_workflow_verification_pack_v1.json
 
-rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_cli_operator_workflow_verification_pack \
+rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cli_operator_workflow_verification_pack_verify \
   cargo test -p frankenengine-engine --test rgc_cli_operator_workflow_verification_pack
 
 ./scripts/run_rgc_cli_operator_workflow_verification_pack.sh ci

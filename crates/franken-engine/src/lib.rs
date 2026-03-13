@@ -237,6 +237,7 @@ pub mod obligation_integration;
 pub mod obligation_leak_policy;
 pub mod observability_channel_model;
 pub mod observability_probe_design;
+pub mod observability_publication_bundle;
 pub mod observability_quality_sentinel;
 pub mod obstruction_certificate;
 pub mod obstruction_witness_emitter;

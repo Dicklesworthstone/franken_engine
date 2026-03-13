@@ -75,6 +75,7 @@ pub enum RgcPlanningTrackError {
     Io { path: PathBuf, source: io::Error },
     JsonParse { path: PathBuf, reason: String },
     TimestampParse { field: &'static str, value: String },
+    MissingLinkage { field: &'static str, key: String },
     CoordinationValidation { reason: String },
 }
 
@@ -89,6 +90,9 @@ impl fmt::Display for RgcPlanningTrackError {
             }
             Self::TimestampParse { field, value } => {
                 write!(f, "failed to parse timestamp for {field}: {value}")
+            }
+            Self::MissingLinkage { field, key } => {
+                write!(f, "missing required planning linkage for {field}: {key}")
             }
             Self::CoordinationValidation { reason } => f.write_str(reason),
         }
@@ -457,8 +461,8 @@ pub fn build_rgc_planning_track_bundle_with_generated_at(
     let risk_register =
         parse_embedded_json::<RiskRegisterSource>(RISK_SOURCE_JSON, RISK_SOURCE_JSON_PATH)?;
 
-    let scope_contract_snapshot = build_scope_contract_snapshot(&matrix, &gatebook);
-    let milestone_gatebook = build_milestone_gatebook(&matrix, &gatebook);
+    let scope_contract_snapshot = build_scope_contract_snapshot(&matrix, &gatebook)?;
+    let milestone_gatebook = build_milestone_gatebook(&matrix, &gatebook)?;
     let risk_acceptance_ledger = build_risk_acceptance_ledger(&risk_register, generated_at)?;
     let wave_handoff_matrix = build_wave_handoff_matrix(generated_at_unix_ms)?;
 
@@ -566,7 +570,7 @@ pub fn write_rgc_planning_track_bundle(
 fn build_scope_contract_snapshot(
     matrix: &CompatibilityMatrixSource,
     gatebook: &MilestoneGatebookSource,
-) -> ScopeContractSnapshot {
+) -> Result<ScopeContractSnapshot, RgcPlanningTrackError> {
     let gatebook_by_milestone: BTreeMap<&str, &GatebookMilestone> = gatebook
         .milestones
         .iter()
@@ -579,7 +583,11 @@ fn build_scope_contract_snapshot(
         .map(|target| {
             let gate = gatebook_by_milestone
                 .get(target.milestone.as_str())
-                .expect("matrix milestones should exist in gatebook");
+                .copied()
+                .ok_or_else(|| RgcPlanningTrackError::MissingLinkage {
+                    field: "gatebook.milestones",
+                    key: target.milestone.clone(),
+                })?;
             let mut dependent_track_evidence = gate.required_artifacts.clone();
             dependent_track_evidence.extend(
                 gate.pass_predicates
@@ -590,7 +598,7 @@ fn build_scope_contract_snapshot(
             dependent_track_evidence.sort();
             dependent_track_evidence.dedup();
 
-            MilestoneEvidenceLink {
+            Ok(MilestoneEvidenceLink {
                 milestone: target.milestone.clone(),
                 description: target.description.clone(),
                 required_beads: target.required_beads.clone(),
@@ -599,11 +607,11 @@ fn build_scope_contract_snapshot(
                 required_artifacts: gate.required_artifacts.clone(),
                 dependent_track_evidence,
                 stop_go_rule: target.stop_go_rule.clone(),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
-    ScopeContractSnapshot {
+    Ok(ScopeContractSnapshot {
         schema_version: SCOPE_CONTRACT_SCHEMA_VERSION.to_string(),
         bead_id: BEAD_ID.to_string(),
         track: TrackRef {
@@ -618,13 +626,13 @@ fn build_scope_contract_snapshot(
         open_bead_ids: matrix.scope.open_bead_ids.clone(),
         required_structured_log_fields: matrix.required_structured_log_fields.clone(),
         milestone_evidence_links,
-    }
+    })
 }
 
 fn build_milestone_gatebook(
     matrix: &CompatibilityMatrixSource,
     gatebook: &MilestoneGatebookSource,
-) -> PlanningMilestoneGatebook {
+) -> Result<PlanningMilestoneGatebook, RgcPlanningTrackError> {
     let matrix_by_milestone: BTreeMap<&str, &MatrixMilestoneTarget> = matrix
         .milestone_targets
         .iter()
@@ -642,19 +650,14 @@ fn build_milestone_gatebook(
         .milestones
         .iter()
         .map(|milestone| {
-            let matrix_target = matrix_by_milestone.get(milestone.milestone.as_str());
-            let required_beads = if let Some(target) = matrix_target {
-                target.required_beads.clone()
-            } else {
-                let mut beads = milestone
-                    .pass_predicates
-                    .iter()
-                    .flat_map(|predicate| predicate.source_beads.clone())
-                    .collect::<Vec<_>>();
-                beads.sort();
-                beads.dedup();
-                beads
-            };
+            let matrix_target = matrix_by_milestone
+                .get(milestone.milestone.as_str())
+                .copied()
+                .ok_or_else(|| RgcPlanningTrackError::MissingLinkage {
+                    field: "matrix.milestone_targets",
+                    key: milestone.milestone.clone(),
+                })?;
+            let required_beads = matrix_target.required_beads.clone();
             let dependent_track_evidence =
                 milestone
                     .pass_predicates
@@ -674,7 +677,7 @@ fn build_milestone_gatebook(
                 .into_iter()
                 .all(|valid| valid);
 
-            PlanningMilestone {
+            Ok(PlanningMilestone {
                 milestone: milestone.milestone.clone(),
                 objective: milestone.objective.clone(),
                 gate_owner: milestone.gate_owner.clone(),
@@ -685,15 +688,15 @@ fn build_milestone_gatebook(
                 ci_gate: milestone.ci_gate.clone(),
                 cargo_commands_rch_backed,
                 dependent_track_evidence,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let all_cargo_commands_rch_backed = milestones
         .iter()
         .all(|milestone| milestone.cargo_commands_rch_backed);
 
-    PlanningMilestoneGatebook {
+    Ok(PlanningMilestoneGatebook {
         schema_version: MILESTONE_GATEBOOK_SCHEMA_VERSION.to_string(),
         bead_id: BEAD_ID.to_string(),
         track: TrackRef {
@@ -710,7 +713,7 @@ fn build_milestone_gatebook(
         dependency_order_preserved,
         all_cargo_commands_rch_backed,
         milestones,
-    }
+    })
 }
 
 fn build_risk_acceptance_ledger(
@@ -738,11 +741,15 @@ fn build_risk_acceptance_ledger(
         let mut review_gate_ids = BTreeSet::new();
         let mut review_required_evidence_fields = BTreeSet::new();
         for milestone in &risk.milestones_pending {
-            if let Some(review) = review_map.get(milestone.as_str()) {
-                review_gate_ids.insert(review.gate_id.clone());
-                for field in &review.required_evidence_fields {
-                    review_required_evidence_fields.insert(field.clone());
+            let review = review_map.get(milestone.as_str()).copied().ok_or_else(|| {
+                RgcPlanningTrackError::MissingLinkage {
+                    field: "review_policy.milestone_reviews",
+                    key: milestone.clone(),
                 }
+            })?;
+            review_gate_ids.insert(review.gate_id.clone());
+            for field in &review.required_evidence_fields {
+                review_required_evidence_fields.insert(field.clone());
             }
         }
 
@@ -875,19 +882,21 @@ fn build_events(
         base_ts,
         1,
         1,
-        "rgc.planning-track.scope",
-        "scope_contract_snapshot_built",
-        scope_order_ok,
-        if scope_order_ok {
-            None
-        } else {
-            Some(DEPENDENCY_ORDER_ERROR_CODE)
-        },
-        Some(scope_path),
-        if scope_order_ok {
-            Some("scope snapshot remains sorted and duplicate-free".to_string())
-        } else {
-            Some("scope snapshot lost sorted/unique bead ordering".to_string())
+        EventForInput {
+            policy_name: "rgc.planning-track.scope",
+            event: "scope_contract_snapshot_built",
+            ok: scope_order_ok,
+            error_code: if scope_order_ok {
+                None
+            } else {
+                Some(DEPENDENCY_ORDER_ERROR_CODE)
+            },
+            artifact_ref: Some(scope_path),
+            detail: if scope_order_ok {
+                Some("scope snapshot remains sorted and duplicate-free".to_string())
+            } else {
+                Some("scope snapshot lost sorted/unique bead ordering".to_string())
+            },
         },
     );
 
@@ -911,12 +920,14 @@ fn build_events(
         base_ts,
         2,
         2,
-        "rgc.planning-track.gates",
-        "milestone_gatebook_verified",
-        milestone_ok,
-        milestone_error,
-        Some(milestone_path),
-        milestone_detail,
+        EventForInput {
+            policy_name: "rgc.planning-track.gates",
+            event: "milestone_gatebook_verified",
+            ok: milestone_ok,
+            error_code: milestone_error,
+            artifact_ref: Some(milestone_path),
+            detail: milestone_detail,
+        },
     );
 
     let risk_ok = bundle.risk_acceptance_ledger.all_acceptances_current;
@@ -932,16 +943,18 @@ fn build_events(
         base_ts,
         3,
         3,
-        "rgc.planning-track.risk",
-        "risk_acceptance_review",
-        risk_ok,
-        if risk_ok {
-            None
-        } else {
-            Some(RISK_EXPIRY_ERROR_CODE)
+        EventForInput {
+            policy_name: "rgc.planning-track.risk",
+            event: "risk_acceptance_review",
+            ok: risk_ok,
+            error_code: if risk_ok {
+                None
+            } else {
+                Some(RISK_EXPIRY_ERROR_CODE)
+            },
+            artifact_ref: Some(risk_path),
+            detail: risk_detail,
         },
-        Some(risk_path),
-        risk_detail,
     );
 
     let wave_ok = bundle.wave_handoff_matrix.protocol_validation.valid
@@ -951,39 +964,51 @@ fn build_events(
         base_ts,
         4,
         4,
-        "rgc.planning-track.wave",
-        "wave_handoff_validated",
-        wave_ok,
-        if wave_ok {
-            None
-        } else {
-            Some(WAVE_VALIDATION_ERROR_CODE)
-        },
-        Some(wave_path),
-        if wave_ok {
-            Some(
-                "wave protocol, handoff package, and baseline transition all validated".to_string(),
-            )
-        } else {
-            Some("wave validation failed closed".to_string())
+        EventForInput {
+            policy_name: "rgc.planning-track.wave",
+            event: "wave_handoff_validated",
+            ok: wave_ok,
+            error_code: if wave_ok {
+                None
+            } else {
+                Some(WAVE_VALIDATION_ERROR_CODE)
+            },
+            artifact_ref: Some(wave_path),
+            detail: if wave_ok {
+                Some(
+                    "wave protocol, handoff package, and baseline transition all validated"
+                        .to_string(),
+                )
+            } else {
+                Some("wave validation failed closed".to_string())
+            },
         },
     );
 
     let overall_ok = scope_order_ok && milestone_ok && risk_ok && wave_ok;
+    let (bundle_error_code, bundle_detail) = select_bundle_failure(
+        scope_order_ok,
+        bundle.milestone_gatebook.dependency_order_preserved,
+        bundle.milestone_gatebook.all_cargo_commands_rch_backed,
+        risk_ok,
+        wave_ok,
+    );
     let bundle_event = event_for(
         base_ts,
         5,
         5,
-        "rgc.planning-track.bundle",
-        "planning_track_bundle_written",
-        overall_ok,
-        if overall_ok {
-            None
-        } else {
-            Some(RISK_EXPIRY_ERROR_CODE)
+        EventForInput {
+            policy_name: "rgc.planning-track.bundle",
+            event: "planning_track_bundle_written",
+            ok: overall_ok,
+            error_code: bundle_error_code,
+            artifact_ref: None,
+            detail: Some(format!(
+                "report_hash={}; {}",
+                bundle.report_hash,
+                bundle_detail.unwrap_or("bundle green")
+            )),
         },
-        None,
-        Some(format!("report_hash={}", bundle.report_hash)),
     );
 
     vec![
@@ -995,21 +1020,34 @@ fn build_events(
     ]
 }
 
+struct EventForInput<'a> {
+    policy_name: &'a str,
+    event: &'a str,
+    ok: bool,
+    error_code: Option<&'a str>,
+    artifact_ref: Option<&'a Path>,
+    detail: Option<String>,
+}
+
 fn event_for(
     generated_at_unix_ms: u64,
     trace_suffix: u64,
     decision_suffix: u64,
-    policy_name: &str,
-    event: &str,
-    ok: bool,
-    error_code: Option<&str>,
-    artifact_ref: Option<&Path>,
-    detail: Option<String>,
+    input: EventForInput<'_>,
 ) -> PlanningTrackEvent {
+    let EventForInput {
+        policy_name,
+        event,
+        ok,
+        error_code,
+        artifact_ref,
+        detail,
+    } = input;
     PlanningTrackEvent {
         schema_version: EVENT_SCHEMA_VERSION.to_string(),
         trace_id: TraceId::from_parts(generated_at_unix_ms, u128::from(trace_suffix)).to_string(),
-        decision_id: DecisionId::from_parts(generated_at_unix_ms, u128::from(decision_suffix)).to_string(),
+        decision_id: DecisionId::from_parts(generated_at_unix_ms, u128::from(decision_suffix))
+            .to_string(),
         policy_id: PolicyId::new(policy_name, 1).to_string(),
         component: COMPONENT.to_string(),
         event: event.to_string(),
@@ -1147,6 +1185,43 @@ fn gate_cargo_commands_rch_backed(milestone: &GatebookMilestone) -> Vec<bool> {
 fn command_uses_rch(command: &str) -> bool {
     let trimmed = command.trim();
     !trimmed.contains("cargo ") || trimmed.starts_with("rch ")
+}
+
+fn select_bundle_failure(
+    scope_order_ok: bool,
+    dependency_order_ok: bool,
+    cargo_commands_ok: bool,
+    risk_ok: bool,
+    wave_ok: bool,
+) -> (Option<&'static str>, Option<&'static str>) {
+    if !scope_order_ok {
+        (
+            Some(DEPENDENCY_ORDER_ERROR_CODE),
+            Some("scope snapshot ordering is invalid"),
+        )
+    } else if !dependency_order_ok {
+        (
+            Some(DEPENDENCY_ORDER_ERROR_CODE),
+            Some("milestone order drifted away from M1..M5"),
+        )
+    } else if !cargo_commands_ok {
+        (
+            Some(GATE_COMMAND_ERROR_CODE),
+            Some("cargo-bearing gate command is not rch-backed"),
+        )
+    } else if !risk_ok {
+        (
+            Some(RISK_EXPIRY_ERROR_CODE),
+            Some("risk acceptance ledger contains expired entries"),
+        )
+    } else if !wave_ok {
+        (
+            Some(WAVE_VALIDATION_ERROR_CODE),
+            Some("wave handoff validation failed"),
+        )
+    } else {
+        (None, None)
+    }
 }
 
 fn sorted_unique(values: &[String]) -> bool {
@@ -1308,5 +1383,75 @@ mod tests {
             "bd-1lsy.1".to_string(),
             "bd-1lsy.1".to_string()
         ]));
+    }
+
+    #[test]
+    fn bundle_failure_selection_prefers_specific_root_cause() {
+        assert_eq!(
+            select_bundle_failure(false, true, true, true, true),
+            (
+                Some(DEPENDENCY_ORDER_ERROR_CODE),
+                Some("scope snapshot ordering is invalid")
+            )
+        );
+        assert_eq!(
+            select_bundle_failure(true, true, false, false, false),
+            (
+                Some(GATE_COMMAND_ERROR_CODE),
+                Some("cargo-bearing gate command is not rch-backed")
+            )
+        );
+        assert_eq!(
+            select_bundle_failure(true, true, true, false, true),
+            (
+                Some(RISK_EXPIRY_ERROR_CODE),
+                Some("risk acceptance ledger contains expired entries")
+            )
+        );
+    }
+
+    #[test]
+    fn risk_acceptance_ledger_requires_review_mapping() {
+        let register = RiskRegisterSource {
+            schema_version: "rgc.risk-register.v1".to_string(),
+            bead_id: "bd-1lsy.1.3".to_string(),
+            track: TrackRef {
+                id: "RGC-013".to_string(),
+                name: "Risk Register".to_string(),
+            },
+            review_policy: ReviewPolicySource {
+                fail_closed_on_stale_review: true,
+                stale_threshold_days: 14,
+                milestone_reviews: vec![],
+            },
+            risks: vec![RiskEntrySource {
+                risk_id: "RISK-1".to_string(),
+                title: "Missing milestone mapping".to_string(),
+                domain: "governance".to_string(),
+                risk_level: "high".to_string(),
+                owner_role: "RuntimeLead".to_string(),
+                mitigation_beads: vec!["bd-1lsy.1".to_string()],
+                mitigation_summary: "none".to_string(),
+                rollback_plan: "rollback".to_string(),
+                last_reviewed_utc: "2026-03-01T00:00:00Z".to_string(),
+                next_review_due_utc: "2026-03-10T00:00:00Z".to_string(),
+                milestones_pending: vec!["M1".to_string()],
+                open_actions: vec!["add mapping".to_string()],
+            }],
+            operator_verification: vec![],
+        };
+
+        let error = build_risk_acceptance_ledger(
+            &register,
+            Utc.with_ymd_and_hms(2026, 3, 2, 0, 0, 0).single().unwrap(),
+        )
+        .expect_err("missing review mapping must fail closed");
+        assert!(matches!(
+            error,
+            RgcPlanningTrackError::MissingLinkage {
+                field: "review_policy.milestone_reviews",
+                ..
+            }
+        ));
     }
 }

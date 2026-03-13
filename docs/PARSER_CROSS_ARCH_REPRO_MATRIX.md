@@ -79,7 +79,8 @@ Event streams for this lane must include:
 - `outcome`
 - `error_code`
 
-`gate_completed` events must additionally include `matrix_input_status`.
+`gate_completed` events must additionally include `matrix_input_status` and
+`missing_required_inputs`.
 Each lane-delta row must include a deterministic replay pointer.
 
 Error-code mapping is deterministic:

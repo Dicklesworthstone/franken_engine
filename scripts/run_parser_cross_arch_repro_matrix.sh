@@ -788,7 +788,7 @@ write_manifest() {
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
   {
-    echo "{\"schema_version\":\"franken-engine.parser-cross-arch-repro-matrix.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"gate_completed\",\"scenario_id\":\"${scenario_id}\",\"matrix_input_status\":\"${matrix_input_status}\",\"replay_command\":\"${replay_command}\",\"outcome\":\"${outcome}\",\"error_code\":$(json_string_or_null "${error_code}")}"
+    echo "{\"schema_version\":\"franken-engine.parser-cross-arch-repro-matrix.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"gate_completed\",\"scenario_id\":\"${scenario_id}\",\"matrix_input_status\":\"${matrix_input_status}\",\"missing_required_inputs\":${missing_required_inputs},\"replay_command\":\"${replay_command}\",\"outcome\":\"${outcome}\",\"error_code\":$(json_string_or_null "${error_code}")}"
 
     while IFS= read -r row || [[ -n "$row" ]]; do
       [[ -z "${row// }" ]] && continue

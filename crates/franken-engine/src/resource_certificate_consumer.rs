@@ -270,6 +270,11 @@ pub enum BudgetViolationReason {
     },
     /// No certificate found for the extension.
     NoCertificate { extension_id: String },
+    /// Usage targeted an enforced dimension that has no installed budget.
+    MissingBudgetDimensions {
+        extension_id: String,
+        dimensions: Vec<EnforcedDimension>,
+    },
     /// Certificate verdict is Abstained.
     CertificateAbstained {
         certificate_id: String,
@@ -308,6 +313,13 @@ impl fmt::Display for BudgetViolationReason {
             ),
             Self::NoCertificate { extension_id } => {
                 write!(f, "no_certificate({})", extension_id)
+            }
+            Self::MissingBudgetDimensions {
+                extension_id,
+                dimensions,
+            } => {
+                let names: Vec<String> = dimensions.iter().map(|d| d.to_string()).collect();
+                write!(f, "missing_budget({}: {})", extension_id, names.join(","))
             }
             Self::CertificateAbstained {
                 certificate_id,
@@ -844,54 +856,65 @@ impl BudgetEnforcer {
         // Check each dimension.
         let mut worst_ratio: u64 = 0;
         let mut worst_dim = None;
+        let mut missing_budget_dims = BTreeSet::new();
         let mut exceeded_dims = Vec::new();
 
         for (dim, delta) in usage_deltas {
             if !self.policy.should_enforce(*dim) {
                 continue;
             }
-            if let Some(budget) = state.budgets.get(dim) {
-                let projected = budget.current_usage_millionths.saturating_add(*delta);
-                let bound = budget.upper_bound_millionths;
+            let Some(budget) = state.budgets.get(dim) else {
+                missing_budget_dims.insert(*dim);
+                continue;
+            };
 
-                if bound <= 0 {
-                    // Zero bound — always reject.
-                    exceeded_dims.push(*dim);
-                    continue;
-                }
+            let projected = budget.current_usage_millionths.saturating_add(*delta);
+            let bound = budget.upper_bound_millionths;
 
-                let ratio = (projected.max(0) as u64)
-                    .saturating_mul(MILLIONTHS)
-                    .checked_div(bound as u64)
-                    .unwrap_or(MILLIONTHS);
-
-                if ratio >= self.policy.reject_threshold_millionths {
-                    exceeded_dims.push(*dim);
-                }
-
-                if ratio > worst_ratio {
-                    worst_ratio = ratio;
-                    worst_dim = Some(*dim);
-                }
+            if bound <= 0 {
+                // Zero or negative bound — always reject.
+                exceeded_dims.push((*dim, projected, bound));
+                continue;
             }
+
+            let ratio = (projected.max(0) as u64)
+                .saturating_mul(MILLIONTHS)
+                .checked_div(bound as u64)
+                .unwrap_or(MILLIONTHS);
+
+            if ratio >= self.policy.reject_threshold_millionths {
+                exceeded_dims.push((*dim, projected, bound));
+            }
+
+            if ratio > worst_ratio {
+                worst_ratio = ratio;
+                worst_dim = Some(*dim);
+            }
+        }
+
+        if self.policy.fail_closed_on_missing && !missing_budget_dims.is_empty() {
+            return EnforcementDecision::Reject {
+                reason: BudgetViolationReason::MissingBudgetDimensions {
+                    extension_id: extension_id.to_string(),
+                    dimensions: missing_budget_dims.into_iter().collect(),
+                },
+            };
         }
 
         // Check for exceeded dimensions.
         if exceeded_dims.len() > 1 {
             return EnforcementDecision::Reject {
                 reason: BudgetViolationReason::MultipleDimensionsExceeded {
-                    dimensions: exceeded_dims,
+                    dimensions: exceeded_dims.into_iter().map(|(dim, _, _)| dim).collect(),
                 },
             };
         }
-        if let Some(dim) = exceeded_dims.first()
-            && let Some(budget) = state.budgets.get(dim)
-        {
+        if let Some((dim, projected_usage, bound_millionths)) = exceeded_dims.first().copied() {
             return EnforcementDecision::Reject {
                 reason: BudgetViolationReason::BudgetExceeded {
-                    dimension: *dim,
-                    usage_millionths: budget.current_usage_millionths,
-                    bound_millionths: budget.upper_bound_millionths,
+                    dimension: dim,
+                    usage_millionths: projected_usage,
+                    bound_millionths,
                 },
             };
         }
@@ -1360,6 +1383,21 @@ mod tests {
                 reason: BudgetViolationReason::BudgetExceeded { .. }
             }
         ));
+        if let EnforcementDecision::Reject {
+            reason:
+                BudgetViolationReason::BudgetExceeded {
+                    dimension,
+                    usage_millionths,
+                    bound_millionths,
+                },
+        } = receipt.decision
+        {
+            assert_eq!(dimension, EnforcedDimension::Time);
+            assert_eq!(usage_millionths, 10_000_001);
+            assert_eq!(bound_millionths, 10_000_000);
+        } else {
+            panic!("expected budget exceeded rejection");
+        }
     }
 
     #[test]
@@ -1393,6 +1431,53 @@ mod tests {
                 description: "test".to_string(),
             },
             &[(EnforcedDimension::Time, 1_000)],
+        );
+        assert!(matches!(receipt.decision, EnforcementDecision::Allow));
+    }
+
+    #[test]
+    fn test_enforce_missing_budget_dimension_rejects_when_fail_closed() {
+        let mut enforcer = make_enforcer();
+        let mut digest = make_digest("cert-1", CertificateVerdict::Certified);
+        digest
+            .bounds
+            .retain(|bound| bound.dimension == EnforcedDimension::Time);
+        enforcer.install_certificate("ext-1", digest).unwrap();
+
+        let receipt = enforcer.enforce(
+            "ext-1",
+            EnforcementScope::General {
+                description: "missing-budget".to_string(),
+            },
+            &[(EnforcedDimension::HeapMemory, 1_000)],
+        );
+        assert!(matches!(
+            receipt.decision,
+            EnforcementDecision::Reject {
+                reason: BudgetViolationReason::MissingBudgetDimensions { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn test_enforce_missing_budget_dimension_allows_when_not_fail_closed() {
+        let policy = BudgetEnforcementPolicy {
+            fail_closed_on_missing: false,
+            ..BudgetEnforcementPolicy::default()
+        };
+        let mut enforcer = BudgetEnforcer::new(policy, test_epoch());
+        let mut digest = make_digest("cert-1", CertificateVerdict::Certified);
+        digest
+            .bounds
+            .retain(|bound| bound.dimension == EnforcedDimension::Time);
+        enforcer.install_certificate("ext-1", digest).unwrap();
+
+        let receipt = enforcer.enforce(
+            "ext-1",
+            EnforcementScope::General {
+                description: "missing-budget".to_string(),
+            },
+            &[(EnforcedDimension::HeapMemory, 1_000)],
         );
         assert!(matches!(receipt.decision, EnforcementDecision::Allow));
     }

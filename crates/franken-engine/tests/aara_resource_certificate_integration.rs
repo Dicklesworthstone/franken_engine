@@ -635,10 +635,137 @@ fn certificate_with_low_confidence_gets_provisional_verdict() {
 }
 
 #[test]
+fn certificate_with_no_bounds_is_provisional_not_certified() {
+    let cert = ResourceCertificate::new(make_cert_input(
+        "cert-empty-bounds",
+        "empty_bounds_fn",
+        vec![],
+        pure_effect_summary("empty_bounds_fn"),
+        vec![],
+        vec![],
+        vec![],
+    ));
+    assert_eq!(cert.verdict, CertificateVerdict::Provisional);
+    assert_eq!(cert.certified_dimension_count(), 0);
+}
+
+#[test]
+fn certificate_merges_effect_summary_abstentions_into_verdict_surface() {
+    let abstention = AbstentionPoint {
+        program_point: "fn:dynamic:line:9".into(),
+        reason: AbstentionReason::DynamicDispatch,
+        detail: "indirect call target".into(),
+    };
+    let effect_summary = EffectSummary::build("abs_surface_fn", vec![], vec![abstention.clone()]);
+    let cert = ResourceCertificate::new(make_cert_input(
+        "cert-merged-abs",
+        "abs_surface_fn",
+        vec![simple_bound(ResourceDimension::Time)],
+        effect_summary,
+        vec![],
+        vec![],
+        vec![simple_potential("abs_surface_fn", ResourceDimension::Time)],
+    ));
+    assert_eq!(cert.verdict, CertificateVerdict::Abstained);
+    assert_eq!(cert.abstention_points, vec![abstention]);
+}
+
+#[test]
 fn certificate_content_hash_deterministic() {
     let c1 = simple_certificate("hash_fn");
     let c2 = simple_certificate("hash_fn");
     assert_eq!(c1.content_hash, c2.content_hash);
+}
+
+#[test]
+fn effect_summary_content_hash_changes_when_exactness_changes() {
+    let exact = EffectEntry {
+        kind: EffectKind::Allocation,
+        program_point: "fn:hash:line:1".into(),
+        worst_case_count_millionths: 1_000_000,
+        is_exact: true,
+    };
+    let inexact = EffectEntry {
+        is_exact: false,
+        ..exact.clone()
+    };
+    let exact_summary = EffectSummary::build("hash_effect_fn", vec![exact], vec![]);
+    let inexact_summary = EffectSummary::build("hash_effect_fn", vec![inexact], vec![]);
+    assert_ne!(exact_summary.content_hash, inexact_summary.content_hash);
+}
+
+#[test]
+fn certificate_content_hash_changes_when_assumptions_change() {
+    let cert_a = ResourceCertificate::new(make_cert_input(
+        "cert-hash-assume",
+        "hash_assume_fn",
+        vec![simple_bound(ResourceDimension::Time)],
+        simple_effect_summary("hash_assume_fn"),
+        vec![CertificateAssumption {
+            key: "same-key".into(),
+            kind: AssumptionKind::NoEval,
+            description: "first assumption description".into(),
+            is_critical: true,
+        }],
+        vec![],
+        vec![simple_potential("hash_assume_fn", ResourceDimension::Time)],
+    ));
+    let cert_b = ResourceCertificate::new(make_cert_input(
+        "cert-hash-assume",
+        "hash_assume_fn",
+        vec![simple_bound(ResourceDimension::Time)],
+        simple_effect_summary("hash_assume_fn"),
+        vec![CertificateAssumption {
+            key: "same-key".into(),
+            kind: AssumptionKind::NoEval,
+            description: "changed assumption description".into(),
+            is_critical: true,
+        }],
+        vec![],
+        vec![simple_potential("hash_assume_fn", ResourceDimension::Time)],
+    ));
+    assert_ne!(cert_a.content_hash, cert_b.content_hash);
+}
+
+#[test]
+fn certificate_content_hash_changes_when_potentials_change() {
+    let mut points_a = BTreeMap::new();
+    points_a.insert("entry".into(), 1_000_000);
+    points_a.insert("mid".into(), 500_000);
+    points_a.insert("exit".into(), 100_000);
+    let mut points_b = BTreeMap::new();
+    points_b.insert("entry".into(), 1_000_000);
+    points_b.insert("mid".into(), 400_000);
+    points_b.insert("exit".into(), 100_000);
+    let cert_a = ResourceCertificate::new(make_cert_input(
+        "cert-hash-pot",
+        "hash_potential_fn",
+        vec![simple_bound(ResourceDimension::Time)],
+        simple_effect_summary("hash_potential_fn"),
+        vec![],
+        vec![],
+        vec![SymbolicPotential::new(
+            "hash_potential_fn",
+            ResourceDimension::Time,
+            1_000_000,
+            points_a,
+        )],
+    ));
+    let cert_b = ResourceCertificate::new(make_cert_input(
+        "cert-hash-pot",
+        "hash_potential_fn",
+        vec![simple_bound(ResourceDimension::Time)],
+        simple_effect_summary("hash_potential_fn"),
+        vec![],
+        vec![],
+        vec![SymbolicPotential::new(
+            "hash_potential_fn",
+            ResourceDimension::Time,
+            1_000_000,
+            points_b,
+        )],
+    ));
+    assert_ne!(cert_a.content_hash, cert_b.content_hash);
 }
 
 #[test]

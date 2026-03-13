@@ -265,10 +265,12 @@ impl EffectSummary {
             hasher.update(format!("{}", entry.kind).as_bytes());
             hasher.update(entry.program_point.as_bytes());
             hasher.update(entry.worst_case_count_millionths.to_le_bytes());
+            hasher.update([u8::from(entry.is_exact)]);
         }
         for abs in abstentions {
             hasher.update(abs.program_point.as_bytes());
             hasher.update(format!("{}", abs.reason).as_bytes());
+            hasher.update(abs.detail.as_bytes());
         }
         ContentHash::compute(&hasher.finalize())
     }
@@ -560,6 +562,14 @@ impl fmt::Display for CertificateVerdict {
 // ResourceCertificate — the main certificate type
 // ---------------------------------------------------------------------------
 
+struct CertificateHashInput<'a> {
+    bounds: &'a [ResourceBound],
+    effect_summary: &'a EffectSummary,
+    assumptions: &'a [CertificateAssumption],
+    abstention_points: &'a [AbstentionPoint],
+    potentials: &'a [SymbolicPotential],
+}
+
 /// A certified resource bound for a code region.
 ///
 /// Self-contained: includes the analysis inputs, derived bounds, assumptions,
@@ -614,29 +624,50 @@ pub struct CertificateInput {
 impl ResourceCertificate {
     /// Create a new resource certificate from input.
     pub fn new(input: CertificateInput) -> Self {
-        let verdict =
-            Self::compute_verdict(&input.bounds, &input.abstention_points, &input.potentials);
+        let CertificateInput {
+            certificate_id,
+            region_id,
+            epoch,
+            bounds,
+            effect_summary,
+            assumptions,
+            abstention_points: input_abstention_points,
+            potentials,
+        } = input;
+        let mut abstention_points = input_abstention_points;
+        for abstention in &effect_summary.abstention_points {
+            if !abstention_points.contains(abstention) {
+                abstention_points.push(abstention.clone());
+            }
+        }
+
+        let verdict = Self::compute_verdict(&bounds, &abstention_points, &potentials);
 
         let content_hash = Self::compute_hash(
-            &input.certificate_id,
-            &input.region_id,
-            input.epoch,
+            &certificate_id,
+            &region_id,
+            epoch,
             verdict,
-            &input.bounds,
-            &input.effect_summary,
+            CertificateHashInput {
+                bounds: &bounds,
+                effect_summary: &effect_summary,
+                assumptions: &assumptions,
+                abstention_points: &abstention_points,
+                potentials: &potentials,
+            },
         );
 
         Self {
             schema_version: CERTIFICATE_SCHEMA_VERSION.into(),
-            certificate_id: input.certificate_id,
-            region_id: input.region_id,
-            epoch: input.epoch,
+            certificate_id,
+            region_id,
+            epoch,
             verdict,
-            bounds: input.bounds,
-            effect_summary: input.effect_summary,
-            assumptions: input.assumptions,
-            abstention_points: input.abstention_points,
-            potentials: input.potentials,
+            bounds,
+            effect_summary,
+            assumptions,
+            abstention_points,
+            potentials,
             content_hash,
         }
     }
@@ -674,14 +705,21 @@ impl ResourceCertificate {
         abstention_points: &[AbstentionPoint],
         potentials: &[SymbolicPotential],
     ) -> CertificateVerdict {
-        // If any potential is violated, the certificate is violated
-        if potentials.iter().any(|p| !p.is_valid) {
+        // Negative bounds or invalid potentials indicate an inconsistent proof artifact.
+        if bounds.iter().any(|b| b.upper_bound_millionths < 0)
+            || potentials.iter().any(|p| !p.is_valid)
+        {
             return CertificateVerdict::Violated;
         }
 
         // If there are abstention points, verdict is Abstained
         if !abstention_points.is_empty() {
             return CertificateVerdict::Abstained;
+        }
+
+        // A certificate with no derived bounds is incomplete and must not certify.
+        if bounds.is_empty() {
+            return CertificateVerdict::Provisional;
         }
 
         // If all bounds meet confidence, verdict is Certified
@@ -698,9 +736,15 @@ impl ResourceCertificate {
         region_id: &str,
         epoch: SecurityEpoch,
         verdict: CertificateVerdict,
-        bounds: &[ResourceBound],
-        effect_summary: &EffectSummary,
+        input: CertificateHashInput<'_>,
     ) -> ContentHash {
+        let CertificateHashInput {
+            bounds,
+            effect_summary,
+            assumptions,
+            abstention_points,
+            potentials,
+        } = input;
         let mut hasher = Sha256::new();
         hasher.update(certificate_id.as_bytes());
         hasher.update(region_id.as_bytes());
@@ -709,9 +753,24 @@ impl ResourceCertificate {
         for bound in bounds {
             hasher.update([bound.dimension as u8]);
             hasher.update(bound.upper_bound_millionths.to_le_bytes());
+            hasher.update([u8::from(bound.is_tight)]);
             hasher.update(bound.confidence_millionths.to_le_bytes());
         }
         hasher.update(effect_summary.content_hash.as_bytes());
+        for assumption in assumptions {
+            hasher.update(assumption.key.as_bytes());
+            hasher.update(format!("{}", assumption.kind).as_bytes());
+            hasher.update(assumption.description.as_bytes());
+            hasher.update([u8::from(assumption.is_critical)]);
+        }
+        for abstention in abstention_points {
+            hasher.update(abstention.program_point.as_bytes());
+            hasher.update(format!("{}", abstention.reason).as_bytes());
+            hasher.update(abstention.detail.as_bytes());
+        }
+        for potential in potentials {
+            hasher.update(potential.content_hash.as_bytes());
+        }
         ContentHash::compute(&hasher.finalize())
     }
 }

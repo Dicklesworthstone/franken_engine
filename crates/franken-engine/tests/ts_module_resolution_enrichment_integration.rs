@@ -29,8 +29,7 @@ use frankenengine_engine::ts_module_resolution::{
     TsResolutionIndexBuildPolicy, TsResolutionIndexFallbackReason, TsResolutionIndexRunManifest,
     TsResolutionIndexStepLog, TsResolutionIndexTraceIds, TsResolutionIndexValidationReport,
     TsResolutionRunManifest, TsResolutionTraceEvent, TsWildcardExportEntry,
-    classify_resolution_drift, write_ts_resolution_artifacts,
-    write_ts_resolution_index_artifacts,
+    classify_resolution_drift, write_ts_resolution_artifacts, write_ts_resolution_index_artifacts,
 };
 
 // ---------------------------------------------------------------------------
@@ -219,8 +218,7 @@ fn enrichment_request_new_require() {
 
 #[test]
 fn enrichment_request_with_referrer_chain() {
-    let req = TsModuleRequest::new("./a", TsRequestStyle::Import)
-        .with_referrer("/src/main.ts");
+    let req = TsModuleRequest::new("./a", TsRequestStyle::Import).with_referrer("/src/main.ts");
     assert_eq!(req.referrer.as_deref(), Some("/src/main.ts"));
 }
 
@@ -339,7 +337,11 @@ fn enrichment_export_target_serde_roundtrip() {
 #[test]
 fn enrichment_export_target_multiple_conditions() {
     let target = make_target(
-        &[("import", "./esm.mjs"), ("require", "./cjs.cjs"), ("types", "./types.d.ts")],
+        &[
+            ("import", "./esm.mjs"),
+            ("require", "./cjs.cjs"),
+            ("types", "./types.d.ts"),
+        ],
         None,
     );
     assert_eq!(target.condition_targets.len(), 3);
@@ -376,8 +378,10 @@ fn enrichment_package_definition_with_export_chaining() {
 
 #[test]
 fn enrichment_package_definition_serde_roundtrip() {
-    let pkg = TsPackageDefinition::new("@scope/lib", "/nm/@scope/lib")
-        .with_export(".", make_target(&[("import", "./index.mjs")], Some("./main.js")));
+    let pkg = TsPackageDefinition::new("@scope/lib", "/nm/@scope/lib").with_export(
+        ".",
+        make_target(&[("import", "./index.mjs")], Some("./main.js")),
+    );
     let json = serde_json::to_string(&pkg).unwrap();
     let back: TsPackageDefinition = serde_json::from_str(&json).unwrap();
     assert_eq!(pkg, back);
@@ -399,27 +403,42 @@ fn enrichment_package_definition_overwrite_export() {
 
 #[test]
 fn enrichment_error_code_empty_specifier() {
-    assert_eq!(TsResolutionErrorCode::EmptySpecifier.stable_code(), "FE-TSRES-0001");
+    assert_eq!(
+        TsResolutionErrorCode::EmptySpecifier.stable_code(),
+        "FE-TSRES-0001"
+    );
 }
 
 #[test]
 fn enrichment_error_code_missing_referrer() {
-    assert_eq!(TsResolutionErrorCode::MissingReferrer.stable_code(), "FE-TSRES-0002");
+    assert_eq!(
+        TsResolutionErrorCode::MissingReferrer.stable_code(),
+        "FE-TSRES-0002"
+    );
 }
 
 #[test]
 fn enrichment_error_code_invalid_referrer() {
-    assert_eq!(TsResolutionErrorCode::InvalidReferrer.stable_code(), "FE-TSRES-0003");
+    assert_eq!(
+        TsResolutionErrorCode::InvalidReferrer.stable_code(),
+        "FE-TSRES-0003"
+    );
 }
 
 #[test]
 fn enrichment_error_code_package_resolution_failed() {
-    assert_eq!(TsResolutionErrorCode::PackageResolutionFailed.stable_code(), "FE-TSRES-0004");
+    assert_eq!(
+        TsResolutionErrorCode::PackageResolutionFailed.stable_code(),
+        "FE-TSRES-0004"
+    );
 }
 
 #[test]
 fn enrichment_error_code_module_not_found() {
-    assert_eq!(TsResolutionErrorCode::ModuleNotFound.stable_code(), "FE-TSRES-0005");
+    assert_eq!(
+        TsResolutionErrorCode::ModuleNotFound.stable_code(),
+        "FE-TSRES-0005"
+    );
 }
 
 #[test]
@@ -839,8 +858,8 @@ fn enrichment_resolve_package_no_export_entry_error() {
 fn enrichment_resolve_package_no_matching_condition_error() {
     let mut resolver = enrichment_resolver();
     let target = make_target(&[], None);
-    let pkg = TsPackageDefinition::new("empty-cond", "/workspace/nm/empty-cond")
-        .with_export(".", target);
+    let pkg =
+        TsPackageDefinition::new("empty-cond", "/workspace/nm/empty-cond").with_export(".", target);
     resolver.register_package(pkg);
     let req = enrichment_import("empty-cond");
     let err = resolver.resolve(&req, &enrichment_ctx()).unwrap_err();
@@ -855,10 +874,20 @@ fn enrichment_resolve_package_no_matching_condition_error() {
 fn enrichment_resolve_package_import_condition() {
     let mut resolver = enrichment_resolver();
     resolver.register_file("/workspace/nm/react/dist/index.mjs");
-    let pkg = TsPackageDefinition::new("react", "/workspace/nm/react")
-        .with_export(".", make_target(&[("import", "./dist/index.mjs"), ("require", "./dist/index.cjs")], None));
+    let pkg = TsPackageDefinition::new("react", "/workspace/nm/react").with_export(
+        ".",
+        make_target(
+            &[
+                ("import", "./dist/index.mjs"),
+                ("require", "./dist/index.cjs"),
+            ],
+            None,
+        ),
+    );
     resolver.register_package(pkg);
-    let outcome = resolver.resolve(&enrichment_import("react"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("react"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.resolved_path, "/workspace/nm/react/dist/index.mjs");
     assert_eq!(outcome.package_name.as_deref(), Some("react"));
     assert_eq!(outcome.selected_condition.as_deref(), Some("import"));
@@ -868,10 +897,20 @@ fn enrichment_resolve_package_import_condition() {
 fn enrichment_resolve_package_require_condition() {
     let mut resolver = enrichment_resolver();
     resolver.register_file("/workspace/nm/lodash/dist/index.cjs");
-    let pkg = TsPackageDefinition::new("lodash", "/workspace/nm/lodash")
-        .with_export(".", make_target(&[("import", "./dist/index.mjs"), ("require", "./dist/index.cjs")], None));
+    let pkg = TsPackageDefinition::new("lodash", "/workspace/nm/lodash").with_export(
+        ".",
+        make_target(
+            &[
+                ("import", "./dist/index.mjs"),
+                ("require", "./dist/index.cjs"),
+            ],
+            None,
+        ),
+    );
     resolver.register_package(pkg);
-    let outcome = resolver.resolve(&enrichment_require("lodash"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_require("lodash"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.resolved_path, "/workspace/nm/lodash/dist/index.cjs");
     assert_eq!(outcome.selected_condition.as_deref(), Some("require"));
 }
@@ -883,7 +922,9 @@ fn enrichment_resolve_package_fallback_target() {
     let pkg = TsPackageDefinition::new("fb", "/workspace/nm/fb")
         .with_export(".", make_target(&[], Some("./main.js")));
     resolver.register_package(pkg);
-    let outcome = resolver.resolve(&enrichment_import("fb"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("fb"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.resolved_path, "/workspace/nm/fb/main.js");
     assert_eq!(outcome.selected_condition.as_deref(), Some("fallback"));
 }
@@ -895,7 +936,9 @@ fn enrichment_resolve_scoped_package() {
     let pkg = TsPackageDefinition::new("@org/lib", "/workspace/nm/@org/lib")
         .with_export(".", make_target(&[("import", "./index.mjs")], None));
     resolver.register_package(pkg);
-    let outcome = resolver.resolve(&enrichment_import("@org/lib"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("@org/lib"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.package_name.as_deref(), Some("@org/lib"));
 }
 
@@ -906,7 +949,9 @@ fn enrichment_resolve_package_subpath_export() {
     let pkg = TsPackageDefinition::new("toolkit", "/workspace/nm/toolkit")
         .with_export("./utils", make_target(&[("import", "./utils.mjs")], None));
     resolver.register_package(pkg);
-    let outcome = resolver.resolve(&enrichment_import("toolkit/utils"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("toolkit/utils"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.resolved_path, "/workspace/nm/toolkit/utils.mjs");
 }
 
@@ -915,10 +960,11 @@ fn enrichment_resolve_package_wildcard_export() {
     let mut resolver = enrichment_resolver();
     resolver.register_file("/workspace/nm/wc/dist/foo.mjs");
     let target = make_target(&[("import", "./dist/*.mjs")], None);
-    let pkg = TsPackageDefinition::new("wc", "/workspace/nm/wc")
-        .with_export("./*", target);
+    let pkg = TsPackageDefinition::new("wc", "/workspace/nm/wc").with_export("./*", target);
     resolver.register_package(pkg);
-    let outcome = resolver.resolve(&enrichment_import("wc/foo"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("wc/foo"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.resolved_path, "/workspace/nm/wc/dist/foo.mjs");
 }
 
@@ -928,10 +974,14 @@ fn enrichment_resolve_package_condition_priority_order() {
     // If both "import" and "types" exist, "import" wins because it's first.
     let mut resolver = enrichment_resolver();
     resolver.register_file("/workspace/nm/prio/esm.mjs");
-    let pkg = TsPackageDefinition::new("prio", "/workspace/nm/prio")
-        .with_export(".", make_target(&[("types", "./types.d.ts"), ("import", "./esm.mjs")], None));
+    let pkg = TsPackageDefinition::new("prio", "/workspace/nm/prio").with_export(
+        ".",
+        make_target(&[("types", "./types.d.ts"), ("import", "./esm.mjs")], None),
+    );
     resolver.register_package(pkg);
-    let outcome = resolver.resolve(&enrichment_import("prio"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("prio"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.selected_condition.as_deref(), Some("import"));
 }
 
@@ -949,28 +999,38 @@ fn enrichment_resolve_path_alias_wildcard() {
         ..Default::default()
     });
     resolver.register_file("/ws/src/helpers/math.ts");
-    let outcome = resolver.resolve(&enrichment_import("@helpers/math"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("@helpers/math"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.resolved_path, "/ws/src/helpers/math.ts");
 }
 
 #[test]
 fn enrichment_resolve_path_alias_multiple_replacements_first_found() {
     let mut paths = BTreeMap::new();
-    paths.insert("@lib/*".to_string(), vec!["src/lib/*".to_string(), "lib/*".to_string()]);
+    paths.insert(
+        "@lib/*".to_string(),
+        vec!["src/lib/*".to_string(), "lib/*".to_string()],
+    );
     let mut resolver = DeterministicTsModuleResolver::new(TsModuleResolutionConfig {
         project_root: "/ws".to_string(),
         paths,
         ..Default::default()
     });
     resolver.register_file("/ws/src/lib/foo.ts");
-    let outcome = resolver.resolve(&enrichment_import("@lib/foo"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("@lib/foo"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.resolved_path, "/ws/src/lib/foo.ts");
 }
 
 #[test]
 fn enrichment_resolve_path_alias_fallback_to_second_replacement() {
     let mut paths = BTreeMap::new();
-    paths.insert("@lib/*".to_string(), vec!["src/lib/*".to_string(), "lib/*".to_string()]);
+    paths.insert(
+        "@lib/*".to_string(),
+        vec!["src/lib/*".to_string(), "lib/*".to_string()],
+    );
     let mut resolver = DeterministicTsModuleResolver::new(TsModuleResolutionConfig {
         project_root: "/ws".to_string(),
         paths,
@@ -978,7 +1038,9 @@ fn enrichment_resolve_path_alias_fallback_to_second_replacement() {
     });
     // Only register in lib/ (second replacement)
     resolver.register_file("/ws/lib/bar.ts");
-    let outcome = resolver.resolve(&enrichment_import("@lib/bar"), &enrichment_ctx()).unwrap();
+    let outcome = resolver
+        .resolve(&enrichment_import("@lib/bar"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(outcome.resolved_path, "/ws/lib/bar.ts");
 }
 
@@ -1086,19 +1148,13 @@ fn enrichment_drift_missing_target() {
 
 #[test]
 fn enrichment_drift_extra_target() {
-    let r = classify_resolution_drift(
-        &["a".to_string()],
-        &["a".to_string(), "b".to_string()],
-    );
+    let r = classify_resolution_drift(&["a".to_string()], &["a".to_string(), "b".to_string()]);
     assert_eq!(r.class, TsResolutionDriftClass::ExtraTarget);
 }
 
 #[test]
 fn enrichment_drift_full_mismatch() {
-    let r = classify_resolution_drift(
-        &["x".to_string()],
-        &["y".to_string()],
-    );
+    let r = classify_resolution_drift(&["x".to_string()], &["y".to_string()]);
     assert_eq!(r.class, TsResolutionDriftClass::FullMismatch);
 }
 
@@ -1239,7 +1295,9 @@ fn enrichment_index_build_policy_default() {
 
 #[test]
 fn enrichment_index_build_policy_serde_roundtrip() {
-    let policy = TsResolutionIndexBuildPolicy { max_salt_attempts: 42 };
+    let policy = TsResolutionIndexBuildPolicy {
+        max_salt_attempts: 42,
+    };
     let json = serde_json::to_string(&policy).unwrap();
     let back: TsResolutionIndexBuildPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(policy.max_salt_attempts, back.max_salt_attempts);
@@ -1267,7 +1325,8 @@ fn enrichment_index_bundle_deterministic() {
 }
 
 #[test]
-fn enrichment_index_bundle_different_timestamp_yields_different_fingerprint_only_if_content_differs() {
+fn enrichment_index_bundle_different_timestamp_yields_different_fingerprint_only_if_content_differs()
+ {
     let mut resolver = enrichment_resolver();
     resolver.register_file("/workspace/nm/react/dist/index.mjs");
     resolver.register_package(
@@ -1293,7 +1352,12 @@ fn enrichment_index_bundle_schema_versions() {
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
     assert!(!bundle.module_art_index_report.schema_version.is_empty());
     assert!(!bundle.export_map_hash_catalog.schema_version.is_empty());
-    assert!(!bundle.module_index_identity_report.schema_version.is_empty());
+    assert!(
+        !bundle
+            .module_index_identity_report
+            .schema_version
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1349,7 +1413,10 @@ fn enrichment_index_validation_rejected_when_stale() {
     let bundle = resolver.build_resolution_index_bundle("2026-03-12T00:00:00Z", 1000);
     let report = resolver.validate_resolution_index_bundle(&bundle, 5000, 60);
     assert!(!report.accepted);
-    assert_eq!(report.reason, Some(TsResolutionIndexFallbackReason::ArtifactAgeExceeded));
+    assert_eq!(
+        report.reason,
+        Some(TsResolutionIndexFallbackReason::ArtifactAgeExceeded)
+    );
 }
 
 #[test]
@@ -1437,7 +1504,9 @@ fn enrichment_resolve_with_index_relative_specifier_falls_back() {
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 100);
     let ctx = enrichment_ctx();
     let req = enrichment_import("./a").with_referrer("/workspace/src/main.ts");
-    let result = resolver.resolve_with_index_or_fallback(&req, &ctx, &bundle, 200, 3600).unwrap();
+    let result = resolver
+        .resolve_with_index_or_fallback(&req, &ctx, &bundle, 200, 3600)
+        .unwrap();
     assert_eq!(result.resolved_path, "/workspace/src/a.ts");
 }
 
@@ -1447,7 +1516,9 @@ fn enrichment_resolve_with_index_empty_specifier_falls_back_to_error() {
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 100);
     let ctx = enrichment_ctx();
     let req = enrichment_import("");
-    let err = resolver.resolve_with_index_or_fallback(&req, &ctx, &bundle, 200, 3600).unwrap_err();
+    let err = resolver
+        .resolve_with_index_or_fallback(&req, &ctx, &bundle, 200, 3600)
+        .unwrap_err();
     assert_eq!(err.code, TsResolutionErrorCode::EmptySpecifier);
 }
 
@@ -1474,7 +1545,12 @@ fn enrichment_art_index_lookup_package() {
 fn enrichment_art_index_lookup_missing_package() {
     let resolver = enrichment_resolver();
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
-    assert!(bundle.module_art_index_report.lookup_package("nonexist").is_none());
+    assert!(
+        bundle
+            .module_art_index_report
+            .lookup_package("nonexist")
+            .is_none()
+    );
 }
 
 #[test]
@@ -1539,7 +1615,10 @@ fn enrichment_catalog_exact_export_lookup() {
     resolver.register_package(
         TsPackageDefinition::new("react", "/workspace/nm/react")
             .with_export(".", make_target(&[("import", "./i.mjs")], None))
-            .with_export("./jsx-runtime", make_target(&[("import", "./jsx.mjs")], None)),
+            .with_export(
+                "./jsx-runtime",
+                make_target(&[("import", "./jsx.mjs")], None),
+            ),
     );
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
     let pkg = bundle.export_map_hash_catalog.package("react").unwrap();
@@ -1554,7 +1633,10 @@ fn enrichment_catalog_hot_subpath_lookup() {
     resolver.register_package(
         TsPackageDefinition::new("react", "/workspace/nm/react")
             .with_export(".", make_target(&[("import", "./i.mjs")], None))
-            .with_export("./jsx-runtime", make_target(&[("import", "./jsx.mjs")], None)),
+            .with_export(
+                "./jsx-runtime",
+                make_target(&[("import", "./jsx.mjs")], None),
+            ),
     );
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
     let pkg = bundle.export_map_hash_catalog.package("react").unwrap();
@@ -1574,7 +1656,10 @@ fn enrichment_catalog_wildcard_exports_recorded() {
     let pkg = bundle.export_map_hash_catalog.package("wc").unwrap();
     assert_eq!(pkg.wildcard_exports.len(), 1);
     assert_eq!(pkg.wildcard_exports[0].pattern, "./*");
-    assert!(pkg.fallback_reasons.contains(&TsResolutionIndexFallbackReason::UnsupportedWildcardExport));
+    assert!(
+        pkg.fallback_reasons
+            .contains(&TsResolutionIndexFallbackReason::UnsupportedWildcardExport)
+    );
 }
 
 #[test]
@@ -1588,11 +1673,16 @@ fn enrichment_catalog_collision_search_exhausted_with_zero_attempts() {
     let bundle = resolver.build_resolution_index_bundle_with_policy(
         "2026-01-01T00:00:00Z",
         0,
-        &TsResolutionIndexBuildPolicy { max_salt_attempts: 0 },
+        &TsResolutionIndexBuildPolicy {
+            max_salt_attempts: 0,
+        },
     );
     let pkg = bundle.export_map_hash_catalog.package("react").unwrap();
     assert!(pkg.exact_export_mphf.is_none());
-    assert!(pkg.fallback_reasons.contains(&TsResolutionIndexFallbackReason::CollisionSearchExhausted));
+    assert!(
+        pkg.fallback_reasons
+            .contains(&TsResolutionIndexFallbackReason::CollisionSearchExhausted)
+    );
 }
 
 // ===========================================================================
@@ -1654,8 +1744,12 @@ fn enrichment_write_artifacts_creates_all_files() {
         candidate: None,
     }];
     let result = write_ts_resolution_artifacts(
-        &dir, "scn-1", "2026-01-01T00:00:00Z",
-        &["cmd1".to_string()], &traces, &drift,
+        &dir,
+        "scn-1",
+        "2026-01-01T00:00:00Z",
+        &["cmd1".to_string()],
+        &traces,
+        &drift,
     );
     assert!(result.is_ok());
     let manifest = result.unwrap();
@@ -1672,9 +1766,8 @@ fn enrichment_write_artifacts_creates_all_files() {
 fn enrichment_write_artifacts_manifest_is_valid_json() {
     let dir = unique_dir("write_manifest_json");
     let drift = classify_resolution_drift(&[], &[]);
-    let result = write_ts_resolution_artifacts(
-        &dir, "scn", "2026-01-01T00:00:00Z", &[], &[], &drift,
-    );
+    let result =
+        write_ts_resolution_artifacts(&dir, "scn", "2026-01-01T00:00:00Z", &[], &[], &drift);
     assert!(result.is_ok());
     let raw = fs::read_to_string(dir.join("run_manifest.json")).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -1697,14 +1790,18 @@ fn enrichment_write_index_artifacts_creates_all_files() {
     );
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 100);
     let validation = resolver.validate_resolution_index_bundle(&bundle, 200, 3600);
-    let step_logs = vec![
-        TsResolutionIndexStepLog {
-            name: "step one".to_string(),
-            contents: "log data".to_string(),
-        },
-    ];
+    let step_logs = vec![TsResolutionIndexStepLog {
+        name: "step one".to_string(),
+        contents: "log data".to_string(),
+    }];
     let result = write_ts_resolution_index_artifacts(
-        &dir, "idx-scn", &["cmd".to_string()], &[], &bundle, &validation, &step_logs,
+        &dir,
+        "idx-scn",
+        &["cmd".to_string()],
+        &[],
+        &bundle,
+        &validation,
+        &step_logs,
     );
     assert!(result.is_ok());
     let manifest = result.unwrap();
@@ -1727,11 +1824,23 @@ fn enrichment_write_index_artifacts_step_log_files_created() {
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
     let validation = resolver.validate_resolution_index_bundle(&bundle, 10, 3600);
     let step_logs = vec![
-        TsResolutionIndexStepLog { name: "init".to_string(), contents: "init done".to_string() },
-        TsResolutionIndexStepLog { name: "build".to_string(), contents: "build done".to_string() },
+        TsResolutionIndexStepLog {
+            name: "init".to_string(),
+            contents: "init done".to_string(),
+        },
+        TsResolutionIndexStepLog {
+            name: "build".to_string(),
+            contents: "build done".to_string(),
+        },
     ];
     let result = write_ts_resolution_index_artifacts(
-        &dir, "scn", &[], &[], &bundle, &validation, &step_logs,
+        &dir,
+        "scn",
+        &[],
+        &[],
+        &bundle,
+        &validation,
+        &step_logs,
     );
     assert!(result.is_ok());
     let step_dir = dir.join("step_logs");
@@ -1853,7 +1962,10 @@ fn enrichment_art_terminal_serde_roundtrip() {
 
 #[test]
 fn enrichment_art_edge_serde_roundtrip() {
-    let e = TsPackageArtEdge { label: "r".to_string(), child_index: 5 };
+    let e = TsPackageArtEdge {
+        label: "r".to_string(),
+        child_index: 5,
+    };
     let json = serde_json::to_string(&e).unwrap();
     let back: TsPackageArtEdge = serde_json::from_str(&json).unwrap();
     assert_eq!(e, back);
@@ -1865,7 +1977,10 @@ fn enrichment_art_node_serde_roundtrip() {
         node_id: 0,
         fragment: "".to_string(),
         terminal: None,
-        children: vec![TsPackageArtEdge { label: "a".to_string(), child_index: 1 }],
+        children: vec![TsPackageArtEdge {
+            label: "a".to_string(),
+            child_index: 1,
+        }],
     };
     let json = serde_json::to_string(&node).unwrap();
     let back: TsPackageArtNode = serde_json::from_str(&json).unwrap();
@@ -1894,8 +2009,16 @@ fn enrichment_perfect_hash_layout_serde_roundtrip() {
         salt: 42,
         table_size: 2,
         slots: vec![
-            TsPerfectHashSlot { slot: 0, key: "a".to_string(), key_fingerprint: "fp_a".to_string() },
-            TsPerfectHashSlot { slot: 1, key: "b".to_string(), key_fingerprint: "fp_b".to_string() },
+            TsPerfectHashSlot {
+                slot: 0,
+                key: "a".to_string(),
+                key_fingerprint: "fp_a".to_string(),
+            },
+            TsPerfectHashSlot {
+                slot: 1,
+                key: "b".to_string(),
+                key_fingerprint: "fp_b".to_string(),
+            },
         ],
     };
     let json = serde_json::to_string(&layout).unwrap();
@@ -2190,24 +2313,44 @@ fn enrichment_resolve_referrer_relative_path() {
 fn enrichment_identity_report_default_max_age() {
     let resolver = enrichment_resolver();
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
-    assert_eq!(bundle.module_index_identity_report.default_max_age_seconds, 3600);
+    assert_eq!(
+        bundle.module_index_identity_report.default_max_age_seconds,
+        3600
+    );
 }
 
 #[test]
 fn enrichment_identity_report_generated_at_utc_preserved() {
     let resolver = enrichment_resolver();
     let bundle = resolver.build_resolution_index_bundle("2026-06-15T12:30:00Z", 999);
-    assert_eq!(bundle.module_index_identity_report.generated_at_utc, "2026-06-15T12:30:00Z");
-    assert_eq!(bundle.module_index_identity_report.generated_at_unix_seconds, 999);
+    assert_eq!(
+        bundle.module_index_identity_report.generated_at_utc,
+        "2026-06-15T12:30:00Z"
+    );
+    assert_eq!(
+        bundle
+            .module_index_identity_report
+            .generated_at_unix_seconds,
+        999
+    );
 }
 
 #[test]
 fn enrichment_identity_report_component_is_ts_module_resolver() {
     let resolver = enrichment_resolver();
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
-    assert_eq!(bundle.module_index_identity_report.component, "ts_module_resolver");
-    assert_eq!(bundle.module_art_index_report.component, "ts_module_resolver");
-    assert_eq!(bundle.export_map_hash_catalog.component, "ts_module_resolver");
+    assert_eq!(
+        bundle.module_index_identity_report.component,
+        "ts_module_resolver"
+    );
+    assert_eq!(
+        bundle.module_art_index_report.component,
+        "ts_module_resolver"
+    );
+    assert_eq!(
+        bundle.export_map_hash_catalog.component,
+        "ts_module_resolver"
+    );
 }
 
 #[test]
@@ -2218,7 +2361,12 @@ fn enrichment_identity_report_fallback_packages_populated() {
             .with_export("./*", make_target(&[("import", "./dist/*.mjs")], None)),
     );
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
-    assert!(!bundle.module_index_identity_report.fallback_packages.is_empty());
+    assert!(
+        !bundle
+            .module_index_identity_report
+            .fallback_packages
+            .is_empty()
+    );
     assert_eq!(
         bundle.module_index_identity_report.fallback_packages[0].package_name,
         "wc",
@@ -2233,7 +2381,12 @@ fn enrichment_identity_report_no_fallback_when_all_exact() {
             .with_export(".", make_target(&[("import", "./i.mjs")], None)),
     );
     let bundle = resolver.build_resolution_index_bundle("2026-01-01T00:00:00Z", 0);
-    assert!(bundle.module_index_identity_report.fallback_packages.is_empty());
+    assert!(
+        bundle
+            .module_index_identity_report
+            .fallback_packages
+            .is_empty()
+    );
 }
 
 // ===========================================================================
@@ -2292,11 +2445,21 @@ fn enrichment_workspace_fingerprint_changes_with_packages() {
 fn enrichment_resolve_scoped_package_deep_subpath() {
     let mut resolver = enrichment_resolver();
     resolver.register_file("/workspace/nm/@org/lib/dist/deep/utils.mjs");
-    let pkg = TsPackageDefinition::new("@org/lib", "/workspace/nm/@org/lib")
-        .with_export("./dist/deep/utils", make_target(&[("import", "./dist/deep/utils.mjs")], None));
+    let pkg = TsPackageDefinition::new("@org/lib", "/workspace/nm/@org/lib").with_export(
+        "./dist/deep/utils",
+        make_target(&[("import", "./dist/deep/utils.mjs")], None),
+    );
     resolver.register_package(pkg);
-    let outcome = resolver.resolve(&enrichment_import("@org/lib/dist/deep/utils"), &enrichment_ctx()).unwrap();
-    assert_eq!(outcome.resolved_path, "/workspace/nm/@org/lib/dist/deep/utils.mjs");
+    let outcome = resolver
+        .resolve(
+            &enrichment_import("@org/lib/dist/deep/utils"),
+            &enrichment_ctx(),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.resolved_path,
+        "/workspace/nm/@org/lib/dist/deep/utils.mjs"
+    );
 }
 
 // ===========================================================================
@@ -2316,8 +2479,12 @@ fn enrichment_resolve_among_multiple_packages() {
         TsPackageDefinition::new("vue", "/workspace/nm/vue")
             .with_export(".", make_target(&[("import", "./index.mjs")], None)),
     );
-    let r1 = resolver.resolve(&enrichment_import("react"), &enrichment_ctx()).unwrap();
-    let r2 = resolver.resolve(&enrichment_import("vue"), &enrichment_ctx()).unwrap();
+    let r1 = resolver
+        .resolve(&enrichment_import("react"), &enrichment_ctx())
+        .unwrap();
+    let r2 = resolver
+        .resolve(&enrichment_import("vue"), &enrichment_ctx())
+        .unwrap();
     assert_eq!(r1.resolved_path, "/workspace/nm/react/index.mjs");
     assert_eq!(r2.resolved_path, "/workspace/nm/vue/index.mjs");
     assert_eq!(r1.package_name.as_deref(), Some("react"));
@@ -2353,7 +2520,10 @@ fn enrichment_validation_age_one_over_boundary() {
     // age = 1061 - 1000 = 61, max_age = 60; 61 > 60 = true => rejected
     let report = resolver.validate_resolution_index_bundle(&bundle, 1061, 60);
     assert!(!report.accepted);
-    assert_eq!(report.reason, Some(TsResolutionIndexFallbackReason::ArtifactAgeExceeded));
+    assert_eq!(
+        report.reason,
+        Some(TsResolutionIndexFallbackReason::ArtifactAgeExceeded)
+    );
 }
 
 #[test]

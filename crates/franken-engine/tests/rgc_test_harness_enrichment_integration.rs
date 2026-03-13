@@ -48,7 +48,12 @@ fn temp_dir(label: &str) -> PathBuf {
     ))
 }
 
-fn make_ctx(scenario: &str, fixture: &str, lane: HarnessLane, seed: u64) -> DeterministicTestContext {
+fn make_ctx(
+    scenario: &str,
+    fixture: &str,
+    lane: HarnessLane,
+    seed: u64,
+) -> DeterministicTestContext {
     DeterministicTestContext::new(scenario, fixture, lane, seed)
 }
 
@@ -64,7 +69,11 @@ fn make_event(ctx: &DeterministicTestContext, seq: u64) -> HarnessLogEvent {
     })
 }
 
-fn make_manifest(ctx: &DeterministicTestContext, event_count: usize, command_count: usize) -> HarnessRunManifest {
+fn make_manifest(
+    ctx: &DeterministicTestContext,
+    event_count: usize,
+    command_count: usize,
+) -> HarnessRunManifest {
     HarnessRunManifest::from_context(
         ctx,
         ctx.default_run_id(),
@@ -421,8 +430,14 @@ fn enrichment_event_serde_roundtrip_without_error_code() {
 fn enrichment_manifest_from_context_populates_schema_versions() {
     let ctx = make_ctx("sc", "fix", HarnessLane::E2e, 53);
     let manifest = make_manifest(&ctx, 2, 1);
-    assert_eq!(manifest.schema_version, RGC_TEST_HARNESS_MANIFEST_SCHEMA_VERSION);
-    assert_eq!(manifest.harness_schema_version, RGC_TEST_HARNESS_SCHEMA_VERSION);
+    assert_eq!(
+        manifest.schema_version,
+        RGC_TEST_HARNESS_MANIFEST_SCHEMA_VERSION
+    );
+    assert_eq!(
+        manifest.harness_schema_version,
+        RGC_TEST_HARNESS_SCHEMA_VERSION
+    );
 }
 
 #[test]
@@ -468,7 +483,12 @@ fn enrichment_manifest_env_fingerprint_is_hex_string() {
     let ctx = make_ctx("sc", "fix", HarnessLane::E2e, 53);
     let manifest = make_manifest(&ctx, 1, 1);
     assert!(!manifest.env_fingerprint.is_empty());
-    assert!(manifest.env_fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(
+        manifest
+            .env_fingerprint
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+    );
 }
 
 #[test]
@@ -485,9 +505,17 @@ fn enrichment_manifest_serde_roundtrip() {
 #[test]
 fn enrichment_fixture_load_error_display_unique_across_variants() {
     let errors = [
-        FixtureLoadError::InvalidRelativePath { relative_path: "../escape".to_string() },
-        FixtureLoadError::IoRead { path: "/tmp/missing.json".to_string(), message: "not found".to_string() },
-        FixtureLoadError::JsonParse { path: "/tmp/bad.json".to_string(), message: "unexpected token".to_string() },
+        FixtureLoadError::InvalidRelativePath {
+            relative_path: "../escape".to_string(),
+        },
+        FixtureLoadError::IoRead {
+            path: "/tmp/missing.json".to_string(),
+            message: "not found".to_string(),
+        },
+        FixtureLoadError::JsonParse {
+            path: "/tmp/bad.json".to_string(),
+            message: "unexpected token".to_string(),
+        },
     ];
     let display_set: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
     assert_eq!(display_set.len(), errors.len());
@@ -536,8 +564,14 @@ fn enrichment_fixture_load_error_json_parse_display_contains_details() {
 #[test]
 fn enrichment_artifact_write_error_display_unique() {
     let errors = [
-        ArtifactWriteError::Io { path: "/a".to_string(), message: "io err".to_string() },
-        ArtifactWriteError::Json { path: "/b".to_string(), message: "json err".to_string() },
+        ArtifactWriteError::Io {
+            path: "/a".to_string(),
+            message: "io err".to_string(),
+        },
+        ArtifactWriteError::Json {
+            path: "/b".to_string(),
+            message: "json err".to_string(),
+        },
     ];
     let display_set: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
     assert_eq!(display_set.len(), errors.len());
@@ -655,7 +689,11 @@ fn enrichment_artifact_bundle_correlation_signature_serde_roundtrip() {
     let sig = ArtifactBundleCorrelationSignature {
         scenario_id: "sig-test".to_string(),
         seed: 100,
-        lanes: vec![HarnessLane::Parser, HarnessLane::Runtime, HarnessLane::Security],
+        lanes: vec![
+            HarnessLane::Parser,
+            HarnessLane::Runtime,
+            HarnessLane::Security,
+        ],
     };
     let json = serde_json::to_string(&sig).unwrap();
     let back: ArtifactBundleCorrelationSignature = serde_json::from_str(&json).unwrap();
@@ -789,8 +827,7 @@ fn enrichment_baseline_registry_happy_scenarios_lack_error_codes() {
 #[test]
 fn enrichment_baseline_registry_covers_all_three_domains() {
     let registry = baseline_e2e_scenario_registry();
-    let domains: BTreeSet<BaselineScenarioDomain> =
-        registry.iter().map(|s| s.domain).collect();
+    let domains: BTreeSet<BaselineScenarioDomain> = registry.iter().map(|s| s.domain).collect();
     assert!(domains.contains(&BaselineScenarioDomain::Runtime));
     assert!(domains.contains(&BaselineScenarioDomain::Module));
     assert!(domains.contains(&BaselineScenarioDomain::Security));
@@ -804,17 +841,36 @@ fn enrichment_baseline_registry_each_domain_has_happy_and_failure() {
         BaselineScenarioDomain::Module,
         BaselineScenarioDomain::Security,
     ] {
-        let happy = registry.iter().filter(|s| s.domain == domain && s.outcome == BaselineScenarioOutcome::HappyPath).count();
-        let fail = registry.iter().filter(|s| s.domain == domain && s.outcome == BaselineScenarioOutcome::CanonicalFailure).count();
-        assert_eq!(happy, 1, "domain {} should have exactly 1 happy path", domain);
-        assert_eq!(fail, 1, "domain {} should have exactly 1 canonical failure", domain);
+        let happy = registry
+            .iter()
+            .filter(|s| s.domain == domain && s.outcome == BaselineScenarioOutcome::HappyPath)
+            .count();
+        let fail = registry
+            .iter()
+            .filter(|s| {
+                s.domain == domain && s.outcome == BaselineScenarioOutcome::CanonicalFailure
+            })
+            .count();
+        assert_eq!(
+            happy, 1,
+            "domain {} should have exactly 1 happy path",
+            domain
+        );
+        assert_eq!(
+            fail, 1,
+            "domain {} should have exactly 1 canonical failure",
+            domain
+        );
     }
 }
 
 #[test]
 fn enrichment_baseline_e2e_scenario_serde_roundtrip_happy() {
     let registry = baseline_e2e_scenario_registry();
-    let happy = registry.iter().find(|s| s.outcome == BaselineScenarioOutcome::HappyPath).unwrap();
+    let happy = registry
+        .iter()
+        .find(|s| s.outcome == BaselineScenarioOutcome::HappyPath)
+        .unwrap();
     let json = serde_json::to_string(happy).unwrap();
     let back: BaselineE2eScenario = serde_json::from_str(&json).unwrap();
     assert_eq!(*happy, back);
@@ -823,7 +879,10 @@ fn enrichment_baseline_e2e_scenario_serde_roundtrip_happy() {
 #[test]
 fn enrichment_baseline_e2e_scenario_serde_roundtrip_failure() {
     let registry = baseline_e2e_scenario_registry();
-    let fail = registry.iter().find(|s| s.outcome == BaselineScenarioOutcome::CanonicalFailure).unwrap();
+    let fail = registry
+        .iter()
+        .find(|s| s.outcome == BaselineScenarioOutcome::CanonicalFailure)
+        .unwrap();
     let json = serde_json::to_string(fail).unwrap();
     let back: BaselineE2eScenario = serde_json::from_str(&json).unwrap();
     assert_eq!(*fail, back);
@@ -866,11 +925,17 @@ fn enrichment_select_scenarios_single_domain_happy_only() {
 #[test]
 fn enrichment_select_scenarios_is_deterministic() {
     let a = select_baseline_e2e_scenarios(
-        &[BaselineScenarioDomain::Runtime, BaselineScenarioDomain::Security],
+        &[
+            BaselineScenarioDomain::Runtime,
+            BaselineScenarioDomain::Security,
+        ],
         true,
     );
     let b = select_baseline_e2e_scenarios(
-        &[BaselineScenarioDomain::Runtime, BaselineScenarioDomain::Security],
+        &[
+            BaselineScenarioDomain::Runtime,
+            BaselineScenarioDomain::Security,
+        ],
         true,
     );
     assert_eq!(a, b);
@@ -948,7 +1013,10 @@ fn enrichment_load_fixture_returns_parse_error_for_invalid_json() {
 fn enrichment_load_fixture_succeeds_for_valid_json() {
     let root = temp_dir("load_fixture_valid");
     fs::create_dir_all(&root).expect("create temp dir");
-    let fixture = TestFixture { name: "test".to_string(), value: 42 };
+    let fixture = TestFixture {
+        name: "test".to_string(),
+        value: 42,
+    };
     fs::write(
         root.join("valid.json"),
         serde_json::to_string(&fixture).unwrap(),
@@ -991,7 +1059,11 @@ fn enrichment_write_triad_manifest_is_valid_json() {
 fn enrichment_write_triad_events_are_jsonl() {
     let root = temp_dir("write_triad_events_jsonl");
     let ctx = make_ctx("jsonl-check", "fix-1", HarnessLane::Security, 2);
-    let events = vec![make_event(&ctx, 0), make_event(&ctx, 1), make_event(&ctx, 2)];
+    let events = vec![
+        make_event(&ctx, 0),
+        make_event(&ctx, 1),
+        make_event(&ctx, 2),
+    ];
     let commands = vec!["cargo test".to_string()];
     let manifest = make_manifest(&ctx, 3, 1);
     let triad = write_artifact_triad(&root, &manifest, &events, &commands).unwrap();
@@ -1056,7 +1128,9 @@ fn enrichment_validate_triad_missing_all_three_files() {
     fs::create_dir_all(&root).expect("create dir");
     let report = validate_artifact_triad(&root);
     assert!(!report.valid);
-    let missing: Vec<_> = report.findings.iter()
+    let missing: Vec<_> = report
+        .findings
+        .iter()
         .filter(|f| f.error_code == ArtifactValidationErrorCode::MissingArtifact)
         .collect();
     assert_eq!(missing.len(), 3);
@@ -1080,9 +1154,12 @@ fn enrichment_validate_triad_event_count_mismatch() {
     let triad = write_artifact_triad(&root, &manifest, &events, &commands).unwrap();
     let report = validate_artifact_triad(&triad.run_dir);
     assert!(!report.valid);
-    assert!(report.findings.iter().any(|f| {
-        f.error_code == ArtifactValidationErrorCode::CountMismatch
-    }));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| { f.error_code == ArtifactValidationErrorCode::CountMismatch })
+    );
 }
 
 #[test]
@@ -1198,9 +1275,12 @@ fn enrichment_validate_triad_empty_commands_detected() {
 
     let report = validate_artifact_triad(&run_dir);
     assert!(!report.valid);
-    assert!(report.findings.iter().any(|f| {
-        f.error_code == ArtifactValidationErrorCode::EmptyCommands
-    }));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| { f.error_code == ArtifactValidationErrorCode::EmptyCommands })
+    );
 }
 
 #[test]
@@ -1217,9 +1297,12 @@ fn enrichment_validate_triad_invalid_event_json() {
 
     let report = validate_artifact_triad(&run_dir);
     assert!(!report.valid);
-    assert!(report.findings.iter().any(|f| {
-        f.error_code == ArtifactValidationErrorCode::InvalidEventJson
-    }));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| { f.error_code == ArtifactValidationErrorCode::InvalidEventJson })
+    );
 }
 
 // ── validate_artifact_bundle ─────────────────────────────────────────────
@@ -1229,12 +1312,20 @@ fn enrichment_validate_bundle_valid_multi_lane() {
     let root = temp_dir("validate_bundle_valid_multi");
     let bundle_dir = root.join("bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    for lane in [HarnessLane::Runtime, HarnessLane::Security, HarnessLane::E2e] {
+    for lane in [
+        HarnessLane::Runtime,
+        HarnessLane::Security,
+        HarnessLane::E2e,
+    ] {
         write_lane_triad(&bundle_dir, "rgc-enrich-happy", "fixture-shared", lane, 42);
     }
     let report = validate_artifact_bundle(
         &bundle_dir,
-        &[HarnessLane::Runtime, HarnessLane::Security, HarnessLane::E2e],
+        &[
+            HarnessLane::Runtime,
+            HarnessLane::Security,
+            HarnessLane::E2e,
+        ],
     );
     assert!(report.valid, "findings: {:?}", report.findings);
     assert_eq!(report.lane_reports.len(), 3);
@@ -1251,9 +1342,12 @@ fn enrichment_validate_bundle_nonexistent_directory() {
         &[HarnessLane::Runtime],
     );
     assert!(!report.valid);
-    assert!(report.findings.iter().any(|f| {
-        f.error_code == ArtifactBundleValidationErrorCode::MissingBundleDirectory
-    }));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| { f.error_code == ArtifactBundleValidationErrorCode::MissingBundleDirectory })
+    );
 }
 
 #[test]
@@ -1262,9 +1356,12 @@ fn enrichment_validate_bundle_empty_directory() {
     fs::create_dir_all(&root).expect("create dir");
     let report = validate_artifact_bundle(&root, &[HarnessLane::Runtime]);
     assert!(!report.valid);
-    assert!(report.findings.iter().any(|f| {
-        f.error_code == ArtifactBundleValidationErrorCode::MissingRunDirectory
-    }));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| { f.error_code == ArtifactBundleValidationErrorCode::MissingRunDirectory })
+    );
 }
 
 #[test]
@@ -1272,15 +1369,22 @@ fn enrichment_validate_bundle_missing_required_lane() {
     let root = temp_dir("validate_bundle_missing_lane");
     let bundle_dir = root.join("bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    write_lane_triad(&bundle_dir, "rgc-missing-lane", "fixture-shared", HarnessLane::Runtime, 1);
-    let report = validate_artifact_bundle(
+    write_lane_triad(
         &bundle_dir,
-        &[HarnessLane::Runtime, HarnessLane::Security],
+        "rgc-missing-lane",
+        "fixture-shared",
+        HarnessLane::Runtime,
+        1,
     );
+    let report =
+        validate_artifact_bundle(&bundle_dir, &[HarnessLane::Runtime, HarnessLane::Security]);
     assert!(!report.valid);
-    assert!(report.findings.iter().any(|f| {
-        f.error_code == ArtifactBundleValidationErrorCode::MissingRequiredLane
-    }));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| { f.error_code == ArtifactBundleValidationErrorCode::MissingRequiredLane })
+    );
 }
 
 #[test]
@@ -1288,13 +1392,28 @@ fn enrichment_validate_bundle_duplicate_lane() {
     let root = temp_dir("validate_bundle_dup_lane");
     let bundle_dir = root.join("bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    write_lane_triad(&bundle_dir, "rgc-dup-lane", "fix-a", HarnessLane::Runtime, 1);
-    write_lane_triad(&bundle_dir, "rgc-dup-lane", "fix-b", HarnessLane::Runtime, 1);
+    write_lane_triad(
+        &bundle_dir,
+        "rgc-dup-lane",
+        "fix-a",
+        HarnessLane::Runtime,
+        1,
+    );
+    write_lane_triad(
+        &bundle_dir,
+        "rgc-dup-lane",
+        "fix-b",
+        HarnessLane::Runtime,
+        1,
+    );
     let report = validate_artifact_bundle(&bundle_dir, &[HarnessLane::Runtime]);
     assert!(!report.valid);
-    assert!(report.findings.iter().any(|f| {
-        f.error_code == ArtifactBundleValidationErrorCode::DuplicateLane
-    }));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| { f.error_code == ArtifactBundleValidationErrorCode::DuplicateLane })
+    );
 }
 
 #[test]
@@ -1303,11 +1422,15 @@ fn enrichment_validate_bundle_cross_lane_seed_mismatch() {
     let bundle_dir = root.join("bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
     write_lane_triad(&bundle_dir, "rgc-seed-mm", "fix", HarnessLane::Runtime, 100);
-    write_lane_triad(&bundle_dir, "rgc-seed-mm", "fix", HarnessLane::Security, 200);
-    let report = validate_artifact_bundle(
+    write_lane_triad(
         &bundle_dir,
-        &[HarnessLane::Runtime, HarnessLane::Security],
+        "rgc-seed-mm",
+        "fix",
+        HarnessLane::Security,
+        200,
     );
+    let report =
+        validate_artifact_bundle(&bundle_dir, &[HarnessLane::Runtime, HarnessLane::Security]);
     assert!(!report.valid);
     assert!(report.findings.iter().any(|f| {
         f.error_code == ArtifactBundleValidationErrorCode::CorrelationMismatch
@@ -1320,12 +1443,22 @@ fn enrichment_validate_bundle_cross_lane_scenario_mismatch() {
     let root = temp_dir("validate_bundle_scenario_mm");
     let bundle_dir = root.join("bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    write_lane_triad(&bundle_dir, "scenario-alpha", "fix", HarnessLane::Runtime, 42);
-    write_lane_triad(&bundle_dir, "scenario-beta", "fix", HarnessLane::Security, 42);
-    let report = validate_artifact_bundle(
+    write_lane_triad(
         &bundle_dir,
-        &[HarnessLane::Runtime, HarnessLane::Security],
+        "scenario-alpha",
+        "fix",
+        HarnessLane::Runtime,
+        42,
     );
+    write_lane_triad(
+        &bundle_dir,
+        "scenario-beta",
+        "fix",
+        HarnessLane::Security,
+        42,
+    );
+    let report =
+        validate_artifact_bundle(&bundle_dir, &[HarnessLane::Runtime, HarnessLane::Security]);
     assert!(!report.valid);
     assert!(report.findings.iter().any(|f| {
         f.error_code == ArtifactBundleValidationErrorCode::CorrelationMismatch
@@ -1351,9 +1484,12 @@ fn enrichment_validate_bundle_path_is_file_not_directory() {
     fs::write(&file_path, "data").expect("write file");
     let report = validate_artifact_bundle(&file_path, &[]);
     assert!(!report.valid);
-    assert!(report.findings.iter().any(|f| {
-        f.error_code == ArtifactBundleValidationErrorCode::MissingBundleDirectory
-    }));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| { f.error_code == ArtifactBundleValidationErrorCode::MissingBundleDirectory })
+    );
 }
 
 #[test]
@@ -1363,7 +1499,10 @@ fn enrichment_validate_bundle_report_schema_version() {
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
     write_lane_triad(&bundle_dir, "rgc-schema", "fix", HarnessLane::Runtime, 1);
     let report = validate_artifact_bundle(&bundle_dir, &[]);
-    assert_eq!(report.schema_version, RGC_ARTIFACT_BUNDLE_VALIDATOR_SCHEMA_VERSION);
+    assert_eq!(
+        report.schema_version,
+        RGC_ARTIFACT_BUNDLE_VALIDATOR_SCHEMA_VERSION
+    );
     assert_eq!(report.component, "rgc_artifact_bundle_validator");
     assert_eq!(report.event, "validate_artifact_bundle");
 }
@@ -1376,27 +1515,40 @@ fn enrichment_full_lifecycle_write_validate_triad_then_bundle() {
     let bundle_dir = root.join("bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
-    for lane in [HarnessLane::Parser, HarnessLane::Runtime, HarnessLane::Security] {
+    for lane in [
+        HarnessLane::Parser,
+        HarnessLane::Runtime,
+        HarnessLane::Security,
+    ] {
         let ctx = make_ctx("rgc-lifecycle", "fixture-lifecycle", lane, 777);
         let events: Vec<HarnessLogEvent> = (0..3).map(|i| make_event(&ctx, i)).collect();
-        let commands = vec![
-            "cargo check".to_string(),
-            "cargo test".to_string(),
-        ];
+        let commands = vec!["cargo check".to_string(), "cargo test".to_string()];
         let manifest = make_manifest(&ctx, 3, 2);
         let triad = write_artifact_triad(&bundle_dir, &manifest, &events, &commands).unwrap();
 
         // Validate each triad individually
         let triad_report = validate_artifact_triad(&triad.run_dir);
-        assert!(triad_report.valid, "triad for lane {} failed: {:?}", lane, triad_report.findings);
+        assert!(
+            triad_report.valid,
+            "triad for lane {} failed: {:?}",
+            lane, triad_report.findings
+        );
     }
 
     // Now validate the bundle
     let bundle_report = validate_artifact_bundle(
         &bundle_dir,
-        &[HarnessLane::Parser, HarnessLane::Runtime, HarnessLane::Security],
+        &[
+            HarnessLane::Parser,
+            HarnessLane::Runtime,
+            HarnessLane::Security,
+        ],
     );
-    assert!(bundle_report.valid, "bundle validation failed: {:?}", bundle_report.findings);
+    assert!(
+        bundle_report.valid,
+        "bundle validation failed: {:?}",
+        bundle_report.findings
+    );
     assert_eq!(bundle_report.lane_reports.len(), 3);
     let sig = bundle_report.correlation_signature.unwrap();
     assert_eq!(sig.scenario_id, "rgc-lifecycle");
@@ -1456,14 +1608,20 @@ fn enrichment_bundle_with_corrupted_trace_id_fails_correlation() {
     let raw = fs::read_to_string(&manifest_path).unwrap();
     let mut manifest: HarnessRunManifest = serde_json::from_str(&raw).unwrap();
     manifest.trace_id = "trace-rgc-corrupted".to_string();
-    fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
 
     // Also update events to match corrupted trace (so triad-level stays consistent)
     let events_path = triad_bad.run_dir.join("events.jsonl");
     let events_raw = fs::read_to_string(&events_path).unwrap();
     let mut rewritten = String::new();
     for line in events_raw.lines() {
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let mut event: HarnessLogEvent = serde_json::from_str(line).unwrap();
         event.trace_id = "trace-rgc-corrupted".to_string();
         rewritten.push_str(&serde_json::to_string(&event).unwrap());
@@ -1471,10 +1629,8 @@ fn enrichment_bundle_with_corrupted_trace_id_fails_correlation() {
     }
     fs::write(&events_path, rewritten).unwrap();
 
-    let report = validate_artifact_bundle(
-        &bundle_dir,
-        &[HarnessLane::Runtime, HarnessLane::Security],
-    );
+    let report =
+        validate_artifact_bundle(&bundle_dir, &[HarnessLane::Runtime, HarnessLane::Security]);
     assert!(!report.valid);
     // Individual triads should still be self-consistent
     assert!(report.lane_reports.iter().all(|r| r.valid));
@@ -1538,17 +1694,19 @@ fn enrichment_schema_version_constants_contain_franken_engine_prefix() {
 #[test]
 fn enrichment_multiple_events_all_share_context_correlation_ids() {
     let ctx = make_ctx("multi-ev", "fix-multi", HarnessLane::Security, 99);
-    let events: Vec<HarnessLogEvent> = (0..10).map(|i| {
-        ctx.event(EventInput {
-            sequence: i,
-            component: &format!("comp-{i}"),
-            event: &format!("evt-{i}"),
-            outcome: if i % 2 == 0 { "pass" } else { "fail" },
-            error_code: if i % 3 == 0 { Some("FE-ERR") } else { None },
-            timing_us: i * 100,
-            timestamp_unix_ms: 1_700_000_000_000 + i,
+    let events: Vec<HarnessLogEvent> = (0..10)
+        .map(|i| {
+            ctx.event(EventInput {
+                sequence: i,
+                component: &format!("comp-{i}"),
+                event: &format!("evt-{i}"),
+                outcome: if i % 2 == 0 { "pass" } else { "fail" },
+                error_code: if i % 3 == 0 { Some("FE-ERR") } else { None },
+                timing_us: i * 100,
+                timestamp_unix_ms: 1_700_000_000_000 + i,
+            })
         })
-    }).collect();
+        .collect();
 
     for event in &events {
         assert_eq!(event.trace_id, ctx.trace_id);
@@ -1629,7 +1787,9 @@ fn enrichment_lanes_with_varying_event_counts_validate() {
         (HarnessLane::Security, 1),
     ] {
         let ctx = make_ctx("rgc-vary", "fix-vary", lane, 42);
-        let events: Vec<HarnessLogEvent> = (0..event_count as u64).map(|i| make_event(&ctx, i)).collect();
+        let events: Vec<HarnessLogEvent> = (0..event_count as u64)
+            .map(|i| make_event(&ctx, i))
+            .collect();
         let commands = vec!["cargo test".to_string()];
         let manifest = HarnessRunManifest::from_context(
             &ctx,
@@ -1644,7 +1804,11 @@ fn enrichment_lanes_with_varying_event_counts_validate() {
 
     let report = validate_artifact_bundle(
         &bundle_dir,
-        &[HarnessLane::Parser, HarnessLane::Runtime, HarnessLane::Security],
+        &[
+            HarnessLane::Parser,
+            HarnessLane::Runtime,
+            HarnessLane::Security,
+        ],
     );
     assert!(report.valid, "findings: {:?}", report.findings);
 }

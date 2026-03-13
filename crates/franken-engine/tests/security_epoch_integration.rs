@@ -558,13 +558,19 @@ fn epoch_tracker_serde_roundtrip() {
 fn enrichment_security_epoch_debug_contains_value() {
     let epoch = SecurityEpoch::from_raw(99);
     let dbg = format!("{epoch:?}");
-    assert!(dbg.contains("99"), "Debug output should contain the value: {dbg}");
+    assert!(
+        dbg.contains("99"),
+        "Debug output should contain the value: {dbg}"
+    );
 }
 
 #[test]
 fn enrichment_security_epoch_debug_genesis() {
     let dbg = format!("{:?}", SecurityEpoch::GENESIS);
-    assert!(dbg.contains("0"), "Debug of GENESIS should contain 0: {dbg}");
+    assert!(
+        dbg.contains("0"),
+        "Debug of GENESIS should contain 0: {dbg}"
+    );
 }
 
 #[test]
@@ -711,7 +717,10 @@ fn enrichment_transition_reason_display_no_spaces() {
     ];
     for r in &reasons {
         let s = r.to_string();
-        assert!(!s.contains(' '), "Display should be snake_case without spaces: {s}");
+        assert!(
+            !s.contains(' '),
+            "Display should be snake_case without spaces: {s}"
+        );
     }
 }
 
@@ -719,7 +728,10 @@ fn enrichment_transition_reason_display_no_spaces() {
 fn enrichment_transition_reason_serde_json_string() {
     let reason = TransitionReason::LossMatrixUpdate;
     let json = serde_json::to_string(&reason).unwrap();
-    assert!(json.starts_with('"'), "Enum should serialize as JSON string: {json}");
+    assert!(
+        json.starts_with('"'),
+        "Enum should serialize as JSON string: {json}"
+    );
     assert!(json.ends_with('"'));
 }
 
@@ -749,7 +761,10 @@ fn enrichment_transition_reason_serde_all_six_distinct() {
 fn enrichment_epoch_metadata_debug_contains_struct_name() {
     let meta = EpochMetadata::open_ended(SecurityEpoch::from_raw(1));
     let dbg = format!("{meta:?}");
-    assert!(dbg.contains("EpochMetadata"), "Debug should name the struct: {dbg}");
+    assert!(
+        dbg.contains("EpochMetadata"),
+        "Debug should name the struct: {dbg}"
+    );
 }
 
 #[test]
@@ -768,8 +783,14 @@ fn enrichment_epoch_metadata_open_ended_json_field_names() {
     let meta = EpochMetadata::open_ended(SecurityEpoch::from_raw(3));
     let json = serde_json::to_string(&meta).unwrap();
     assert!(json.contains("\"epoch_id\""), "Missing epoch_id field");
-    assert!(json.contains("\"valid_from_epoch\""), "Missing valid_from_epoch");
-    assert!(json.contains("\"valid_until_epoch\""), "Missing valid_until_epoch");
+    assert!(
+        json.contains("\"valid_from_epoch\""),
+        "Missing valid_from_epoch"
+    );
+    assert!(
+        json.contains("\"valid_until_epoch\""),
+        "Missing valid_until_epoch"
+    );
 }
 
 #[test]
@@ -1003,7 +1024,10 @@ fn enrichment_monotonicity_violation_debug_contains_struct() {
         attempted: SecurityEpoch::from_raw(5),
     };
     let dbg = format!("{v:?}");
-    assert!(dbg.contains("MonotonicityViolation"), "Debug should name struct: {dbg}");
+    assert!(
+        dbg.contains("MonotonicityViolation"),
+        "Debug should name struct: {dbg}"
+    );
 }
 
 #[test]
@@ -1046,8 +1070,14 @@ fn enrichment_monotonicity_violation_json_field_names() {
         attempted: SecurityEpoch::from_raw(5),
     };
     let json = serde_json::to_string(&v).unwrap();
-    assert!(json.contains("\"current\""), "Missing 'current' field: {json}");
-    assert!(json.contains("\"attempted\""), "Missing 'attempted' field: {json}");
+    assert!(
+        json.contains("\"current\""),
+        "Missing 'current' field: {json}"
+    );
+    assert!(
+        json.contains("\"attempted\""),
+        "Missing 'attempted' field: {json}"
+    );
 }
 
 #[test]
@@ -1099,7 +1129,10 @@ fn enrichment_transition_record_debug_contains_struct() {
         trace_id: "trace-debug".to_string(),
     };
     let dbg = format!("{rec:?}");
-    assert!(dbg.contains("TransitionRecord"), "Debug should name struct: {dbg}");
+    assert!(
+        dbg.contains("TransitionRecord"),
+        "Debug should name struct: {dbg}"
+    );
 }
 
 #[test]
@@ -1124,7 +1157,10 @@ fn enrichment_transition_record_json_field_names() {
     };
     let json = serde_json::to_string(&rec).unwrap();
     for field in &["previous_epoch", "new_epoch", "reason", "trace_id"] {
-        assert!(json.contains(field), "Missing field {field} in JSON: {json}");
+        assert!(
+            json.contains(field),
+            "Missing field {field} in JSON: {json}"
+        );
     }
 }
 
@@ -1189,7 +1225,10 @@ fn enrichment_transition_record_inequality() {
 fn enrichment_epoch_tracker_debug_contains_struct() {
     let tracker = EpochTracker::new();
     let dbg = format!("{tracker:?}");
-    assert!(dbg.contains("EpochTracker"), "Debug should name struct: {dbg}");
+    assert!(
+        dbg.contains("EpochTracker"),
+        "Debug should name struct: {dbg}"
+    );
 }
 
 #[test]
@@ -1259,8 +1298,14 @@ fn enrichment_epoch_tracker_serde_preserves_transitions() {
 fn enrichment_epoch_tracker_serde_json_field_names() {
     let tracker = EpochTracker::new();
     let json = serde_json::to_string(&tracker).unwrap();
-    assert!(json.contains("\"current_epoch\""), "Missing current_epoch: {json}");
-    assert!(json.contains("\"transitions\""), "Missing transitions: {json}");
+    assert!(
+        json.contains("\"current_epoch\""),
+        "Missing current_epoch: {json}"
+    );
+    assert!(
+        json.contains("\"transitions\""),
+        "Missing transitions: {json}"
+    );
     assert!(
         json.contains("\"transition_counts\""),
         "Missing transition_counts: {json}"
@@ -1360,9 +1405,7 @@ fn enrichment_epoch_tracker_from_persisted_at_max() {
 #[test]
 fn enrichment_verify_persisted_at_genesis_to_genesis() {
     let mut tracker = EpochTracker::new();
-    tracker
-        .verify_persisted(SecurityEpoch::GENESIS)
-        .unwrap();
+    tracker.verify_persisted(SecurityEpoch::GENESIS).unwrap();
     assert_eq!(tracker.current(), SecurityEpoch::GENESIS);
 }
 
@@ -1375,7 +1418,11 @@ fn enrichment_verify_persisted_does_not_affect_history() {
     tracker
         .verify_persisted(SecurityEpoch::from_raw(10))
         .unwrap();
-    assert_eq!(tracker.transition_count(), 1, "verify_persisted should not add to history");
+    assert_eq!(
+        tracker.transition_count(),
+        1,
+        "verify_persisted should not add to history"
+    );
 }
 
 #[test]
@@ -1412,9 +1459,11 @@ fn enrichment_validate_artifact_future_by_one() {
     let tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(5));
     let meta = EpochMetadata::open_ended(SecurityEpoch::from_raw(6));
     let errors = tracker.validate_artifact(&meta).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, EpochValidationError::FutureArtifact { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, EpochValidationError::FutureArtifact { .. }))
+    );
 }
 
 #[test]
@@ -1426,9 +1475,11 @@ fn enrichment_validate_artifact_expired_by_one() {
         SecurityEpoch::from_raw(5),
     );
     let errors = tracker.validate_artifact(&meta).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, EpochValidationError::Expired { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, EpochValidationError::Expired { .. }))
+    );
 }
 
 #[test]
@@ -1440,9 +1491,11 @@ fn enrichment_validate_artifact_not_yet_valid_by_one() {
         SecurityEpoch::from_raw(10),
     );
     let errors = tracker.validate_artifact(&meta).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, EpochValidationError::NotYetValid { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, EpochValidationError::NotYetValid { .. }))
+    );
 }
 
 #[test]
@@ -1477,12 +1530,16 @@ fn enrichment_validate_artifact_inverted_and_not_yet_valid() {
         valid_until_epoch: Some(SecurityEpoch::from_raw(5)),
     };
     let errors = tracker.validate_artifact(&meta).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, EpochValidationError::InvertedWindow { .. })));
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, EpochValidationError::NotYetValid { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, EpochValidationError::InvertedWindow { .. }))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, EpochValidationError::NotYetValid { .. }))
+    );
 }
 
 #[test]
@@ -1494,12 +1551,16 @@ fn enrichment_validate_artifact_all_four_errors_simultaneously() {
     // - valid_until < current => Expired
     let tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(8));
     let meta = EpochMetadata {
-        epoch_id: SecurityEpoch::from_raw(20),    // future: 20 > 8
+        epoch_id: SecurityEpoch::from_raw(20),         // future: 20 > 8
         valid_from_epoch: SecurityEpoch::from_raw(15), // not yet valid: 15 > 8; also inverted: 15 > 5
         valid_until_epoch: Some(SecurityEpoch::from_raw(5)), // expired: 5 < 8
     };
     let errors = tracker.validate_artifact(&meta).unwrap_err();
-    assert_eq!(errors.len(), 4, "Should collect all 4 error types, got: {errors:?}");
+    assert_eq!(
+        errors.len(),
+        4,
+        "Should collect all 4 error types, got: {errors:?}"
+    );
 }
 
 #[test]
@@ -1545,10 +1606,7 @@ fn enrichment_stamp_open_ended_at_genesis() {
 fn enrichment_stamp_windowed_inverted_is_allowed() {
     // stamp_windowed does not validate the window — it just sets the fields
     let tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(5));
-    let meta = tracker.stamp_windowed(
-        SecurityEpoch::from_raw(10),
-        SecurityEpoch::from_raw(3),
-    );
+    let meta = tracker.stamp_windowed(SecurityEpoch::from_raw(10), SecurityEpoch::from_raw(3));
     assert_eq!(meta.epoch_id, SecurityEpoch::from_raw(5));
     assert_eq!(meta.valid_from_epoch, SecurityEpoch::from_raw(10));
     assert_eq!(meta.valid_until_epoch, Some(SecurityEpoch::from_raw(3)));
@@ -1557,10 +1615,7 @@ fn enrichment_stamp_windowed_inverted_is_allowed() {
 #[test]
 fn enrichment_stamp_windowed_same_from_and_until() {
     let tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(5));
-    let meta = tracker.stamp_windowed(
-        SecurityEpoch::from_raw(5),
-        SecurityEpoch::from_raw(5),
-    );
+    let meta = tracker.stamp_windowed(SecurityEpoch::from_raw(5), SecurityEpoch::from_raw(5));
     assert_eq!(meta.valid_from_epoch, meta.valid_until_epoch.unwrap());
 }
 
@@ -1574,10 +1629,7 @@ fn enrichment_stamp_open_ended_then_validate_self() {
 #[test]
 fn enrichment_stamp_windowed_then_validate_within() {
     let tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(5));
-    let meta = tracker.stamp_windowed(
-        SecurityEpoch::from_raw(0),
-        SecurityEpoch::from_raw(100),
-    );
+    let meta = tracker.stamp_windowed(SecurityEpoch::from_raw(0), SecurityEpoch::from_raw(100));
     assert!(tracker.validate_artifact(&meta).is_ok());
 }
 
@@ -1693,10 +1745,7 @@ fn enrichment_full_lifecycle_advance_stamp_validate() {
         .unwrap();
 
     // Stamp at current epoch
-    let meta = tracker.stamp_windowed(
-        SecurityEpoch::from_raw(1),
-        SecurityEpoch::from_raw(5),
-    );
+    let meta = tracker.stamp_windowed(SecurityEpoch::from_raw(1), SecurityEpoch::from_raw(5));
     assert!(tracker.validate_artifact(&meta).is_ok());
 
     // Advance past the window
@@ -1707,9 +1756,11 @@ fn enrichment_full_lifecycle_advance_stamp_validate() {
     }
     // Now at epoch 6, but valid_until is 5
     let errors = tracker.validate_artifact(&meta).unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, EpochValidationError::Expired { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, EpochValidationError::Expired { .. }))
+    );
 }
 
 #[test]
@@ -1774,7 +1825,10 @@ fn enrichment_multiple_reason_types_interleaved() {
     }
     assert_eq!(tracker.current().as_u64(), 8);
     assert_eq!(tracker.transition_counts()["policy_key_rotation"], 3);
-    assert_eq!(tracker.transition_counts()["revocation_frontier_advance"], 1);
+    assert_eq!(
+        tracker.transition_counts()["revocation_frontier_advance"],
+        1
+    );
     assert_eq!(tracker.transition_counts()["guardrail_config_change"], 1);
     assert_eq!(tracker.transition_counts()["loss_matrix_update"], 1);
     assert_eq!(tracker.transition_counts()["remote_trust_config_change"], 1);

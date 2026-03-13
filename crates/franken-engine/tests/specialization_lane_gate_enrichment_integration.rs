@@ -834,7 +834,10 @@ fn enrichment_gate_error_display_uniqueness() {
 
 #[test]
 fn enrichment_gate_error_display_empty_workloads() {
-    assert_eq!(GateError::EmptyWorkloads.to_string(), "no workloads provided");
+    assert_eq!(
+        GateError::EmptyWorkloads.to_string(),
+        "no workloads provided"
+    );
 }
 
 #[test]
@@ -850,10 +853,7 @@ fn enrichment_gate_error_display_workload_set_mismatch() {
 #[test]
 fn enrichment_gate_error_display_empty_receipts() {
     let e = GateError::EmptyReceipts;
-    assert_eq!(
-        e.to_string(),
-        "no receipts provided for coverage audit"
-    );
+    assert_eq!(e.to_string(), "no receipts provided for coverage audit");
 }
 
 #[test]
@@ -1283,10 +1283,12 @@ fn enrichment_gate_fails_no_positive_delta() {
     let result = evaluate_gate(&input).unwrap();
 
     assert!(!result.outcome.is_pass());
-    assert!(result
-        .blockers
-        .iter()
-        .any(|b| matches!(b, GateBlocker::NoPositiveDelta { .. })));
+    assert!(
+        result
+            .blockers
+            .iter()
+            .any(|b| matches!(b, GateBlocker::NoPositiveDelta { .. }))
+    );
 }
 
 #[test]
@@ -1338,14 +1340,18 @@ fn enrichment_gate_fails_unverified_receipt() {
     let result = evaluate_gate(&input).unwrap();
 
     assert!(!result.outcome.is_pass());
-    assert!(result
-        .blockers
-        .iter()
-        .any(|b| matches!(b, GateBlocker::UnverifiedReceipt { .. })));
-    assert!(result.blockers.iter().any(|b| matches!(
-        b,
-        GateBlocker::InsufficientReceiptCoverage { .. }
-    )));
+    assert!(
+        result
+            .blockers
+            .iter()
+            .any(|b| matches!(b, GateBlocker::UnverifiedReceipt { .. }))
+    );
+    assert!(
+        result
+            .blockers
+            .iter()
+            .any(|b| matches!(b, GateBlocker::InsufficientReceiptCoverage { .. }))
+    );
 }
 
 #[test]
@@ -1353,7 +1359,10 @@ fn enrichment_gate_fails_fallback_test_incorrect_output() {
     let spec = specialized_metrics(12);
     let amb = ambient_metrics(12);
     let receipts = verified_receipts(5);
-    let fallbacks = vec![make_fallback_fail("workload_0", InjectionKind::ProofFailure)];
+    let fallbacks = vec![make_fallback_fail(
+        "workload_0",
+        InjectionKind::ProofFailure,
+    )];
     let input = passing_input(&spec, &amb, &receipts, &fallbacks);
     let result = evaluate_gate(&input).unwrap();
 
@@ -1435,10 +1444,12 @@ fn enrichment_gate_fails_fallback_performance_regression() {
     let result = evaluate_gate(&input).unwrap();
 
     assert!(!result.outcome.is_pass());
-    assert!(result.blockers.iter().any(|b| matches!(
-        b,
-        GateBlocker::FallbackPerformanceRegression { .. }
-    )));
+    assert!(
+        result
+            .blockers
+            .iter()
+            .any(|b| matches!(b, GateBlocker::FallbackPerformanceRegression { .. }))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1746,7 +1757,10 @@ fn enrichment_log_entries_failed_fallback_has_error_code() {
     let spec = specialized_metrics(12);
     let amb = ambient_metrics(12);
     let receipts = verified_receipts(5);
-    let fallbacks = vec![make_fallback_fail("workload_0", InjectionKind::ProofFailure)];
+    let fallbacks = vec![make_fallback_fail(
+        "workload_0",
+        InjectionKind::ProofFailure,
+    )];
     let input = passing_input(&spec, &amb, &receipts, &fallbacks);
     let result = evaluate_gate(&input).unwrap();
     let entries = generate_log_entries("trace-fb-fail", &result);
@@ -1800,7 +1814,10 @@ fn enrichment_gate_evidence_bundle_failing_serde_roundtrip() {
     let spec = specialized_metrics(3);
     let amb = ambient_metrics(3);
     let receipts = verified_receipts(3);
-    let fallbacks = vec![make_fallback_fail("workload_0", InjectionKind::ProofFailure)];
+    let fallbacks = vec![make_fallback_fail(
+        "workload_0",
+        InjectionKind::ProofFailure,
+    )];
     let input = passing_input(&spec, &amb, &receipts, &fallbacks);
     let result = evaluate_gate(&input).unwrap();
 

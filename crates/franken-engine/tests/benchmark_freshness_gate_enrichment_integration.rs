@@ -21,10 +21,10 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::benchmark_freshness_gate::{
-    AcquisitionEvidence, AcquisitionLedger, AcquisitionStatus, AlarmLedger, BatchVerdict,
-    BenchmarkClaim, ClaimSurface, DecisionReceipt, FreshnessGate, FreshnessLevel, FreshnessVerdict,
-    GateConfig, GateSummary, RolloutTrustLevel, ShiftAlarm, ShiftDomain, ShiftSeverity,
-    SilenceTracker, BEAD_ID, COMPONENT, POLICY_ID, SCHEMA_VERSION,
+    AcquisitionEvidence, AcquisitionLedger, AcquisitionStatus, AlarmLedger, BEAD_ID, BatchVerdict,
+    BenchmarkClaim, COMPONENT, ClaimSurface, DecisionReceipt, FreshnessGate, FreshnessLevel,
+    FreshnessVerdict, GateConfig, GateSummary, POLICY_ID, RolloutTrustLevel, SCHEMA_VERSION,
+    ShiftAlarm, ShiftDomain, ShiftSeverity, SilenceTracker,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -270,9 +270,18 @@ fn enrichment_freshness_level_permits_full_confidence() {
 #[test]
 fn enrichment_freshness_level_confidence_multiplier_ordering() {
     // Fresh should have highest multiplier, Invalid lowest
-    assert!(FreshnessLevel::Fresh.confidence_multiplier() >= FreshnessLevel::Aging.confidence_multiplier());
-    assert!(FreshnessLevel::Aging.confidence_multiplier() >= FreshnessLevel::Stale.confidence_multiplier());
-    assert!(FreshnessLevel::Stale.confidence_multiplier() >= FreshnessLevel::Invalid.confidence_multiplier());
+    assert!(
+        FreshnessLevel::Fresh.confidence_multiplier()
+            >= FreshnessLevel::Aging.confidence_multiplier()
+    );
+    assert!(
+        FreshnessLevel::Aging.confidence_multiplier()
+            >= FreshnessLevel::Stale.confidence_multiplier()
+    );
+    assert!(
+        FreshnessLevel::Stale.confidence_multiplier()
+            >= FreshnessLevel::Invalid.confidence_multiplier()
+    );
 }
 
 // ===========================================================================
@@ -443,7 +452,12 @@ fn enrichment_alarm_ledger_empty() {
 #[test]
 fn enrichment_alarm_ledger_record_and_resolve() {
     let mut ledger = AlarmLedger::new();
-    ledger.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Warning, 1));
+    ledger.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::General,
+        ShiftSeverity::Warning,
+        1,
+    ));
     assert_eq!(ledger.active_count(), 1);
     assert!(ledger.resolve_alarm("a1", 2));
     assert_eq!(ledger.active_count(), 0);
@@ -458,8 +472,18 @@ fn enrichment_alarm_ledger_resolve_nonexistent() {
 #[test]
 fn enrichment_alarm_ledger_prune_stale() {
     let mut ledger = AlarmLedger::new();
-    ledger.record_alarm(make_alarm("old", ShiftDomain::General, ShiftSeverity::Info, 1));
-    ledger.record_alarm(make_alarm("new", ShiftDomain::General, ShiftSeverity::Info, 150));
+    ledger.record_alarm(make_alarm(
+        "old",
+        ShiftDomain::General,
+        ShiftSeverity::Info,
+        1,
+    ));
+    ledger.record_alarm(make_alarm(
+        "new",
+        ShiftDomain::General,
+        ShiftSeverity::Info,
+        150,
+    ));
     let pruned = ledger.prune_stale(epoch(200), 100);
     assert_eq!(pruned, 1); // only "old" is stale
     assert_eq!(ledger.active_count(), 1);
@@ -468,8 +492,18 @@ fn enrichment_alarm_ledger_prune_stale() {
 #[test]
 fn enrichment_alarm_ledger_worst_severity() {
     let mut ledger = AlarmLedger::new();
-    ledger.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Info, 1));
-    ledger.record_alarm(make_alarm("a2", ShiftDomain::General, ShiftSeverity::Critical, 1));
+    ledger.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::General,
+        ShiftSeverity::Info,
+        1,
+    ));
+    ledger.record_alarm(make_alarm(
+        "a2",
+        ShiftDomain::General,
+        ShiftSeverity::Critical,
+        1,
+    ));
     let worst = ledger.worst_severity_in_domain(ShiftDomain::General);
     assert_eq!(worst, Some(ShiftSeverity::Critical));
 }
@@ -477,9 +511,24 @@ fn enrichment_alarm_ledger_worst_severity() {
 #[test]
 fn enrichment_alarm_ledger_domain_count() {
     let mut ledger = AlarmLedger::new();
-    ledger.record_alarm(make_alarm("a1", ShiftDomain::ProgramSize, ShiftSeverity::Info, 1));
-    ledger.record_alarm(make_alarm("a2", ShiftDomain::ProgramSize, ShiftSeverity::Warning, 1));
-    ledger.record_alarm(make_alarm("a3", ShiftDomain::ApiUsage, ShiftSeverity::Info, 1));
+    ledger.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::ProgramSize,
+        ShiftSeverity::Info,
+        1,
+    ));
+    ledger.record_alarm(make_alarm(
+        "a2",
+        ShiftDomain::ProgramSize,
+        ShiftSeverity::Warning,
+        1,
+    ));
+    ledger.record_alarm(make_alarm(
+        "a3",
+        ShiftDomain::ApiUsage,
+        ShiftSeverity::Info,
+        1,
+    ));
     assert_eq!(ledger.active_count_in_domain(ShiftDomain::ProgramSize), 2);
     assert_eq!(ledger.active_count_in_domain(ShiftDomain::ApiUsage), 1);
     assert_eq!(ledger.active_count_in_domain(ShiftDomain::General), 0);
@@ -489,8 +538,18 @@ fn enrichment_alarm_ledger_domain_count() {
 fn enrichment_alarm_ledger_content_hash_deterministic() {
     let mut l1 = AlarmLedger::new();
     let mut l2 = AlarmLedger::new();
-    l1.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Info, 1));
-    l2.record_alarm(make_alarm("a1", ShiftDomain::General, ShiftSeverity::Info, 1));
+    l1.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::General,
+        ShiftSeverity::Info,
+        1,
+    ));
+    l2.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::General,
+        ShiftSeverity::Info,
+        1,
+    ));
     assert_eq!(l1.content_hash(), l2.content_hash());
 }
 
@@ -546,8 +605,8 @@ fn enrichment_silence_tracker_signal_resets() {
 
 #[test]
 fn enrichment_claim_with_domain() {
-    let claim = make_claim("c1", ClaimSurface::Performance, 900_000)
-        .with_domain(ShiftDomain::ProgramSize);
+    let claim =
+        make_claim("c1", ClaimSurface::Performance, 900_000).with_domain(ShiftDomain::ProgramSize);
     assert!(claim.dependent_domains.contains(&ShiftDomain::ProgramSize));
 }
 

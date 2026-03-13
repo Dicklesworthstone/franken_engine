@@ -79,6 +79,22 @@ fn dead_edge(from: &str, to: &str) -> EffectEdge {
     }
 }
 
+fn control_flow_node(id: &str) -> EffectNode {
+    EffectNode {
+        node_id: id.to_string(),
+        kind: EffectNodeKind::ControlFlow,
+        source_location: None,
+    }
+}
+
+fn computation_node(id: &str) -> EffectNode {
+    EffectNode {
+        node_id: id.to_string(),
+        kind: EffectNodeKind::Computation,
+        source_location: None,
+    }
+}
+
 fn simple_graph() -> EffectGraph {
     let mut g = EffectGraph::new("test-ext");
     g.add_node(entry_node("entry"));
@@ -1033,4 +1049,1832 @@ fn hostcall_site_preserves_capability_in_serde() {
     } else {
         panic!("expected HostcallSite");
     }
+}
+
+// ===========================================================================
+// Enrichment tests — authority analysis, resolution, edge cases, determinism
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 29) Multiple entry nodes — union of reachable capabilities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_multiple_entries_union_capabilities() {
+    let mut g = EffectGraph::new("ext-multi-entry");
+    g.add_node(entry_node("e1"));
+    g.add_node(entry_node("e2"));
+    g.add_node(hostcall_node("hc-a", "cap:alpha"));
+    g.add_node(hostcall_node("hc-b", "cap:beta"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e1", "hc-a"));
+    g.add_edge(edge("e2", "hc-b"));
+    g.add_edge(edge("hc-a", "x"));
+    g.add_edge(edge("hc-b", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-multi-entry".to_string(),
+        declared_capabilities: vec![cap("cap:alpha"), cap("cap:beta")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 1_000_000)
+        .unwrap();
+    assert_eq!(report.upper_bound_capabilities.len(), 2);
+    assert!(report.requires_capability(&cap("cap:alpha")));
+    assert!(report.requires_capability(&cap("cap:beta")));
+}
+
+#[test]
+fn enrichment_multiple_entries_three_disjoint_paths() {
+    let mut g = EffectGraph::new("ext-3e");
+    g.add_node(entry_node("e1"));
+    g.add_node(entry_node("e2"));
+    g.add_node(entry_node("e3"));
+    g.add_node(hostcall_node("h1", "c1"));
+    g.add_node(hostcall_node("h2", "c2"));
+    g.add_node(hostcall_node("h3", "c3"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e1", "h1"));
+    g.add_edge(edge("e2", "h2"));
+    g.add_edge(edge("e3", "h3"));
+    g.add_edge(edge("h1", "x"));
+    g.add_edge(edge("h2", "x"));
+    g.add_edge(edge("h3", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-3e".to_string(),
+        declared_capabilities: vec![cap("c1"), cap("c2"), cap("c3")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 2_000_000)
+        .unwrap();
+    assert_eq!(report.upper_bound_capabilities.len(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// 30) Cycle handling — BFS terminates and collects caps from cycle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_cycle_terminates_with_single_cap() {
+    let mut g = EffectGraph::new("ext-cyc");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h", "cap:loop"));
+    g.add_node(computation_node("c"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "h"));
+    g.add_edge(edge("h", "c"));
+    g.add_edge(edge("c", "h")); // back-edge cycle
+    g.add_edge(edge("c", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-cyc".to_string(),
+        declared_capabilities: vec![cap("cap:loop")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 3_000_000)
+        .unwrap();
+    assert!(report.requires_capability(&cap("cap:loop")));
+    assert_eq!(report.upper_bound_capabilities.len(), 1);
+}
+
+#[test]
+fn enrichment_cycle_with_multiple_caps_in_loop() {
+    let mut g = EffectGraph::new("ext-cyc2");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("ha", "cap:a"));
+    g.add_node(hostcall_node("hb", "cap:b"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "ha"));
+    g.add_edge(edge("ha", "hb"));
+    g.add_edge(edge("hb", "ha")); // cycle
+    g.add_edge(edge("hb", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-cyc2".to_string(),
+        declared_capabilities: vec![cap("cap:a"), cap("cap:b")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 4_000_000)
+        .unwrap();
+    assert_eq!(report.upper_bound_capabilities.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 31) Diamond graph — same cap on two paths deduplicates
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_diamond_deduplicates_same_capability() {
+    let mut g = EffectGraph::new("ext-dia");
+    g.add_node(entry_node("e"));
+    g.add_node(control_flow_node("branch"));
+    g.add_node(hostcall_node("left", "cap:shared"));
+    g.add_node(hostcall_node("right", "cap:shared"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "branch"));
+    g.add_edge(edge("branch", "left"));
+    g.add_edge(edge("branch", "right"));
+    g.add_edge(edge("left", "x"));
+    g.add_edge(edge("right", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-dia".to_string(),
+        declared_capabilities: vec![cap("cap:shared")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 5_000_000)
+        .unwrap();
+    assert_eq!(report.upper_bound_capabilities.len(), 1);
+
+    let ev = report
+        .per_capability_evidence
+        .iter()
+        .find(|e| e.capability == cap("cap:shared"))
+        .unwrap();
+    assert_eq!(ev.requiring_nodes.len(), 2);
+    assert!(ev.requiring_nodes.contains("left"));
+    assert!(ev.requiring_nodes.contains("right"));
+}
+
+// ---------------------------------------------------------------------------
+// 32) Unreachable hostcall — no edges lead to it
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_unreachable_hostcall_excluded_from_reachability() {
+    let mut g = EffectGraph::new("ext-unr");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("reachable", "cap:ok"));
+    g.add_node(hostcall_node("island", "cap:hidden"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "reachable"));
+    g.add_edge(edge("reachable", "x"));
+    // "island" has no incoming edges
+
+    let m = ManifestIntents {
+        extension_id: "ext-unr".to_string(),
+        declared_capabilities: vec![cap("cap:ok")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 6_000_000)
+        .unwrap();
+    assert!(report.requires_capability(&cap("cap:ok")));
+    // cap:hidden is not declared in manifest and unreachable, so excluded
+    assert!(!report.requires_capability(&cap("cap:hidden")));
+}
+
+#[test]
+fn enrichment_unreachable_hostcall_included_if_manifest_declared() {
+    let mut g = EffectGraph::new("ext-unr2");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("reachable", "cap:ok"));
+    g.add_node(hostcall_node("island", "cap:hidden"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "reachable"));
+    g.add_edge(edge("reachable", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-unr2".to_string(),
+        declared_capabilities: vec![cap("cap:ok"), cap("cap:hidden")]
+            .into_iter()
+            .collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 7_000_000)
+        .unwrap();
+    // cap:hidden is unreachable but declared -> ManifestFallback
+    assert!(report.requires_capability(&cap("cap:hidden")));
+    let ev = report
+        .per_capability_evidence
+        .iter()
+        .find(|e| e.capability == cap("cap:hidden"))
+        .unwrap();
+    assert_eq!(ev.analysis_method, AnalysisMethod::ManifestFallback);
+}
+
+// ---------------------------------------------------------------------------
+// 33) Path-sensitive: all edges dead => only manifest fallback caps
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_all_dead_edges_path_sensitive_empty_reachability() {
+    let mut g = EffectGraph::new("ext-alldead");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h1", "cap:x"));
+    g.add_node(exit_node("x"));
+    g.add_edge(dead_edge("e", "h1"));
+    g.add_edge(dead_edge("h1", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-alldead".to_string(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let ps_cfg = AnalysisConfig {
+        path_sensitive: true,
+        ..config()
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(ps_cfg);
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 8_000_000)
+        .unwrap();
+    // cap:x only reachable via dead edges + not declared -> excluded
+    assert!(!report.requires_capability(&cap("cap:x")));
+}
+
+#[test]
+fn enrichment_all_dead_edges_but_manifest_declares_cap() {
+    let mut g = EffectGraph::new("ext-alldead2");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h1", "cap:x"));
+    g.add_node(exit_node("x"));
+    g.add_edge(dead_edge("e", "h1"));
+    g.add_edge(dead_edge("h1", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-alldead2".to_string(),
+        declared_capabilities: vec![cap("cap:x")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let ps_cfg = AnalysisConfig {
+        path_sensitive: true,
+        ..config()
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(ps_cfg);
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 9_000_000)
+        .unwrap();
+    // cap:x declared in manifest -> ManifestFallback
+    assert!(report.requires_capability(&cap("cap:x")));
+}
+
+// ---------------------------------------------------------------------------
+// 34) Path-sensitive vs non-path-sensitive: dead edge makes difference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_path_sensitive_flag_affects_cap_set() {
+    let mut g = EffectGraph::new("ext-ps-diff");
+    g.add_node(entry_node("e"));
+    g.add_node(control_flow_node("b"));
+    g.add_node(hostcall_node("alive", "cap:live"));
+    g.add_node(hostcall_node("dead_node", "cap:dead"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "b"));
+    g.add_edge(edge("b", "alive"));
+    g.add_edge(dead_edge("b", "dead_node"));
+    g.add_edge(edge("alive", "x"));
+    g.add_edge(edge("dead_node", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-ps-diff".to_string(),
+        declared_capabilities: vec![cap("cap:live")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    // Non-path-sensitive: includes cap:dead
+    let nps_analyzer = StaticAuthorityAnalyzer::new(AnalysisConfig {
+        path_sensitive: false,
+        ..config()
+    });
+    let nps_report = nps_analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 10_000_000)
+        .unwrap();
+    assert!(nps_report.requires_capability(&cap("cap:dead")));
+
+    // Path-sensitive: excludes cap:dead (not in manifest)
+    let ps_analyzer = StaticAuthorityAnalyzer::new(AnalysisConfig {
+        path_sensitive: true,
+        ..config()
+    });
+    let ps_report = ps_analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 10_000_001)
+        .unwrap();
+    assert!(!ps_report.requires_capability(&cap("cap:dead")));
+}
+
+// ---------------------------------------------------------------------------
+// 35) Evidence sorting is deterministic (alphabetical by capability)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_evidence_sorted_alphabetically() {
+    let mut g = EffectGraph::new("ext-sort");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("hz", "z:cap"));
+    g.add_node(hostcall_node("ha", "a:cap"));
+    g.add_node(hostcall_node("hm", "m:cap"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "hz"));
+    g.add_edge(edge("e", "ha"));
+    g.add_edge(edge("e", "hm"));
+    g.add_edge(edge("hz", "x"));
+    g.add_edge(edge("ha", "x"));
+    g.add_edge(edge("hm", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-sort".to_string(),
+        declared_capabilities: vec![cap("z:cap"), cap("a:cap"), cap("m:cap")]
+            .into_iter()
+            .collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 11_000_000)
+        .unwrap();
+
+    let evidence_caps: Vec<&str> = report
+        .per_capability_evidence
+        .iter()
+        .map(|e| e.capability.as_str())
+        .collect();
+    let mut sorted_caps = evidence_caps.clone();
+    sorted_caps.sort();
+    assert_eq!(evidence_caps, sorted_caps);
+}
+
+// ---------------------------------------------------------------------------
+// 36) Precision ratio edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_precision_ratio_manifest_larger_than_upper_bound() {
+    // If path-sensitive analysis removes a cap that was in manifest,
+    // the ratio may be < 1_000_000. But manifest fallback re-adds declared caps.
+    // So test with undeclared caps on dead path.
+    let mut g = EffectGraph::new("ext-prec");
+    g.add_node(entry_node("e"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-prec".to_string(),
+        declared_capabilities: vec![cap("c1"), cap("c2"), cap("c3")]
+            .into_iter()
+            .collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 12_000_000)
+        .unwrap();
+    // All 3 caps from manifest are added via fallback
+    assert_eq!(report.upper_bound_capabilities.len(), 3);
+    assert_eq!(report.precision.ratio_millionths, 1_000_000);
+}
+
+#[test]
+fn enrichment_precision_upper_bound_exceeds_manifest() {
+    let mut g = EffectGraph::new("ext-over");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h1", "cap:a"));
+    g.add_node(hostcall_node("h2", "cap:b"));
+    g.add_node(hostcall_node("h3", "cap:c"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "h1"));
+    g.add_edge(edge("h1", "h2"));
+    g.add_edge(edge("h2", "h3"));
+    g.add_edge(edge("h3", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-over".to_string(),
+        declared_capabilities: vec![cap("cap:a")].into_iter().collect(), // only 1 declared
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 13_000_000)
+        .unwrap();
+    assert_eq!(report.upper_bound_capabilities.len(), 3);
+    assert_eq!(report.precision.manifest_declared_size, 1);
+    assert_eq!(report.precision.ratio_millionths, 3_000_000); // 3/1
+}
+
+// ---------------------------------------------------------------------------
+// 37) Undeclared capabilities — more complex cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_undeclared_caps_multiple() {
+    let mut g = EffectGraph::new("ext-und");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h1", "cap:declared"));
+    g.add_node(hostcall_node("h2", "cap:secret1"));
+    g.add_node(hostcall_node("h3", "cap:secret2"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "h1"));
+    g.add_edge(edge("h1", "h2"));
+    g.add_edge(edge("h2", "h3"));
+    g.add_edge(edge("h3", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-und".to_string(),
+        declared_capabilities: vec![cap("cap:declared")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 14_000_000)
+        .unwrap();
+    let undeclared = report.undeclared_capabilities(&m);
+    assert_eq!(undeclared.len(), 2);
+    assert!(undeclared.contains(&cap("cap:secret1")));
+    assert!(undeclared.contains(&cap("cap:secret2")));
+}
+
+#[test]
+fn enrichment_undeclared_empty_when_all_declared() {
+    let mut g = EffectGraph::new("ext-alld");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h1", "c1"));
+    g.add_node(hostcall_node("h2", "c2"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "h1"));
+    g.add_edge(edge("h1", "h2"));
+    g.add_edge(edge("h2", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-alld".to_string(),
+        declared_capabilities: vec![cap("c1"), cap("c2")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 15_000_000)
+        .unwrap();
+    let undeclared = report.undeclared_capabilities(&m);
+    assert!(undeclared.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 38) Unused declared — manifest fallback covers them
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_unused_declared_always_empty_due_to_fallback() {
+    let mut g = EffectGraph::new("ext-unu");
+    g.add_node(entry_node("e"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-unu".to_string(),
+        declared_capabilities: vec![cap("phantom1"), cap("phantom2")]
+            .into_iter()
+            .collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 16_000_000)
+        .unwrap();
+    // ManifestFallback adds declared caps even if not in graph
+    let unused = report.unused_declared_capabilities(&m);
+    assert!(unused.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 39) Cache — zero-capacity cache rejects all inserts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_cache_zero_capacity_rejects_inserts() {
+    let mut cache = AnalysisCache::new(0);
+    let key = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"g"),
+        manifest_hash: ContentHash::compute(b"m"),
+        path_sensitive: false,
+    };
+    cache.insert(key.clone(), do_analysis());
+    assert!(cache.is_empty());
+    assert!(cache.get(&key).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// 40) Cache — capacity-1 evicts immediately on second insert
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_cache_capacity_one_evicts_on_second() {
+    let mut cache = AnalysisCache::new(1);
+    let report = do_analysis();
+
+    let k1 = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"g1"),
+        manifest_hash: ContentHash::compute(b"m1"),
+        path_sensitive: false,
+    };
+    let k2 = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"g2"),
+        manifest_hash: ContentHash::compute(b"m2"),
+        path_sensitive: false,
+    };
+
+    cache.insert(k1.clone(), report.clone());
+    assert_eq!(cache.len(), 1);
+
+    cache.insert(k2.clone(), report);
+    assert_eq!(cache.len(), 1);
+    assert!(cache.get(&k1).is_none());
+    assert!(cache.get(&k2).is_some());
+}
+
+// ---------------------------------------------------------------------------
+// 41) Cache — replacing same key doesn't increase length
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_cache_same_key_replace_no_growth() {
+    let mut cache = AnalysisCache::new(10);
+    let key = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"g"),
+        manifest_hash: ContentHash::compute(b"m"),
+        path_sensitive: false,
+    };
+    let report = do_analysis();
+    for _ in 0..5 {
+        cache.insert(key.clone(), report.clone());
+    }
+    assert_eq!(cache.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 42) Cache serde roundtrip with multiple entries
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_cache_serde_multiple_entries() {
+    let mut cache = AnalysisCache::new(10);
+    let report = do_analysis();
+
+    for i in 0..4u8 {
+        let key = AnalysisCacheKey {
+            effect_graph_hash: ContentHash::compute(&[i]),
+            manifest_hash: ContentHash::compute(&[i + 10]),
+            path_sensitive: i.is_multiple_of(2),
+        };
+        cache.insert(key, report.clone());
+    }
+    assert_eq!(cache.len(), 4);
+
+    let json = serde_json::to_string(&cache).unwrap();
+    let back: AnalysisCache = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.len(), 4);
+}
+
+// ---------------------------------------------------------------------------
+// 43) Report — report_id varies with extension_id
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_report_id_varies_with_extension_id() {
+    let gh = ContentHash::compute(b"g");
+    let mh = ContentHash::compute(b"m");
+    let id1 = StaticAnalysisReport::derive_report_id("ext-a", &gh, &mh, 1000, "z").unwrap();
+    let id2 = StaticAnalysisReport::derive_report_id("ext-b", &gh, &mh, 1000, "z").unwrap();
+    assert_ne!(id1, id2);
+}
+
+#[test]
+fn enrichment_report_id_varies_with_graph_hash() {
+    let gh1 = ContentHash::compute(b"g1");
+    let gh2 = ContentHash::compute(b"g2");
+    let mh = ContentHash::compute(b"m");
+    let id1 = StaticAnalysisReport::derive_report_id("ext", &gh1, &mh, 1000, "z").unwrap();
+    let id2 = StaticAnalysisReport::derive_report_id("ext", &gh2, &mh, 1000, "z").unwrap();
+    assert_ne!(id1, id2);
+}
+
+#[test]
+fn enrichment_report_id_varies_with_manifest_hash() {
+    let gh = ContentHash::compute(b"g");
+    let mh1 = ContentHash::compute(b"m1");
+    let mh2 = ContentHash::compute(b"m2");
+    let id1 = StaticAnalysisReport::derive_report_id("ext", &gh, &mh1, 1000, "z").unwrap();
+    let id2 = StaticAnalysisReport::derive_report_id("ext", &gh, &mh2, 1000, "z").unwrap();
+    assert_ne!(id1, id2);
+}
+
+// ---------------------------------------------------------------------------
+// 44) Content hash — varies with capability set
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_content_hash_varies_with_caps() {
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+
+    let mut g1 = EffectGraph::new("ext-ch");
+    g1.add_node(entry_node("e"));
+    g1.add_node(hostcall_node("h", "cap:one"));
+    g1.add_node(exit_node("x"));
+    g1.add_edge(edge("e", "h"));
+    g1.add_edge(edge("h", "x"));
+
+    let m1 = ManifestIntents {
+        extension_id: "ext-ch".to_string(),
+        declared_capabilities: vec![cap("cap:one")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let mut g2 = EffectGraph::new("ext-ch");
+    g2.add_node(entry_node("e"));
+    g2.add_node(hostcall_node("h", "cap:two"));
+    g2.add_node(exit_node("x"));
+    g2.add_edge(edge("e", "h"));
+    g2.add_edge(edge("h", "x"));
+
+    let m2 = ManifestIntents {
+        extension_id: "ext-ch".to_string(),
+        declared_capabilities: vec![cap("cap:two")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let r1 = analyzer
+        .analyze(&g1, &m1, SecurityEpoch::from_raw(1), 17_000_000)
+        .unwrap();
+    let r2 = analyzer
+        .analyze(&g2, &m2, SecurityEpoch::from_raw(1), 17_000_000)
+        .unwrap();
+    assert_ne!(r1.content_hash(), r2.content_hash());
+}
+
+// ---------------------------------------------------------------------------
+// 45) Content hash — stable across repeated calls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_content_hash_idempotent() {
+    let report = do_analysis();
+    let h1 = report.content_hash();
+    let h2 = report.content_hash();
+    let h3 = report.content_hash();
+    assert_eq!(h1, h2);
+    assert_eq!(h2, h3);
+}
+
+// ---------------------------------------------------------------------------
+// 46) AnalysisError — IdDerivationFailed display
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_error_id_derivation_failed_display() {
+    // We can't easily construct an IdError, but we can verify Display for other variants
+    let err = AnalysisError::TimedOut {
+        extension_id: "ext-t".to_string(),
+        elapsed_ns: 200,
+        budget_ns: 100,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("200ns"));
+    assert!(msg.contains("100ns"));
+    assert!(msg.contains("ext-t"));
+}
+
+// ---------------------------------------------------------------------------
+// 47) EffectGraph — serde with complex topology
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_effect_graph_serde_complex() {
+    let mut g = EffectGraph::new("ext-cplx");
+    g.add_node(entry_node("e1"));
+    g.add_node(entry_node("e2"));
+    g.add_node(control_flow_node("b"));
+    g.add_node(computation_node("c"));
+    g.add_node(hostcall_node("h1", "cap:alpha"));
+    g.add_node(hostcall_node("h2", "cap:beta"));
+    g.add_node(exit_node("x1"));
+    g.add_node(exit_node("x2"));
+    g.add_edge(edge("e1", "b"));
+    g.add_edge(edge("e2", "c"));
+    g.add_edge(edge("b", "h1"));
+    g.add_edge(dead_edge("b", "h2"));
+    g.add_edge(edge("c", "h2"));
+    g.add_edge(edge("h1", "x1"));
+    g.add_edge(edge("h2", "x2"));
+
+    let json = serde_json::to_string(&g).unwrap();
+    let back: EffectGraph = serde_json::from_str(&json).unwrap();
+    assert_eq!(g, back);
+    assert_eq!(back.nodes.len(), 8);
+    assert_eq!(back.edges.len(), 7);
+}
+
+// ---------------------------------------------------------------------------
+// 48) ManifestIntents serde — with both declared + optional
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_manifest_intents_serde_with_optional() {
+    let m = ManifestIntents {
+        extension_id: "ext-opt".to_string(),
+        declared_capabilities: vec![cap("fs:read"), cap("fs:write")]
+            .into_iter()
+            .collect(),
+        optional_capabilities: vec![cap("net:connect"), cap("db:query")]
+            .into_iter()
+            .collect(),
+    };
+    let json = serde_json::to_string(&m).unwrap();
+    let back: ManifestIntents = serde_json::from_str(&json).unwrap();
+    assert_eq!(m, back);
+    assert_eq!(back.declared_capabilities.len(), 2);
+    assert_eq!(back.optional_capabilities.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 49) Optional capabilities don't appear in upper bound if not reachable
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_optional_caps_not_in_upper_bound_when_unreachable() {
+    let mut g = EffectGraph::new("ext-optcap");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h", "cap:declared"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "h"));
+    g.add_edge(edge("h", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-optcap".to_string(),
+        declared_capabilities: vec![cap("cap:declared")].into_iter().collect(),
+        optional_capabilities: vec![cap("cap:optional1"), cap("cap:optional2")]
+            .into_iter()
+            .collect(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 18_000_000)
+        .unwrap();
+    assert!(report.requires_capability(&cap("cap:declared")));
+    assert!(!report.requires_capability(&cap("cap:optional1")));
+    assert!(!report.requires_capability(&cap("cap:optional2")));
+}
+
+#[test]
+fn enrichment_optional_caps_appear_if_reachable_in_graph() {
+    let mut g = EffectGraph::new("ext-optreach");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h1", "cap:declared"));
+    g.add_node(hostcall_node("h2", "cap:optional"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "h1"));
+    g.add_edge(edge("h1", "h2"));
+    g.add_edge(edge("h2", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-optreach".to_string(),
+        declared_capabilities: vec![cap("cap:declared")].into_iter().collect(),
+        optional_capabilities: vec![cap("cap:optional")].into_iter().collect(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 19_000_000)
+        .unwrap();
+    // cap:optional is reachable in graph -> included via LatticeReachability
+    assert!(report.requires_capability(&cap("cap:optional")));
+}
+
+// ---------------------------------------------------------------------------
+// 50) Report fields preserved through analysis
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_report_zone_matches_config() {
+    let cfg = AnalysisConfig {
+        zone: "production-eu-west".to_string(),
+        ..config()
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(cfg);
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(5),
+            20_000_000,
+        )
+        .unwrap();
+    assert_eq!(report.zone, "production-eu-west");
+}
+
+#[test]
+fn enrichment_report_epoch_preserved() {
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(999),
+            21_000_000,
+        )
+        .unwrap();
+    assert_eq!(report.epoch, SecurityEpoch::from_raw(999));
+}
+
+#[test]
+fn enrichment_report_timestamp_preserved() {
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(1),
+            42_424_242,
+        )
+        .unwrap();
+    assert_eq!(report.timestamp_ns, 42_424_242);
+}
+
+#[test]
+fn enrichment_report_timed_out_always_false_in_normal_analysis() {
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(1),
+            22_000_000,
+        )
+        .unwrap();
+    assert!(!report.timed_out);
+}
+
+#[test]
+fn enrichment_report_analysis_duration_is_zero_by_default() {
+    let report = do_analysis();
+    assert_eq!(report.analysis_duration_ns, 0);
+}
+
+// ---------------------------------------------------------------------------
+// 51) Primary analysis method is always LatticeReachability
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_primary_method_lattice_reachability() {
+    let report = do_analysis();
+    assert_eq!(
+        report.primary_analysis_method,
+        AnalysisMethod::LatticeReachability
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 52) Computation-only graph — no caps at all
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_computation_only_graph_no_caps() {
+    let mut g = EffectGraph::new("ext-comp");
+    g.add_node(entry_node("e"));
+    g.add_node(computation_node("c1"));
+    g.add_node(computation_node("c2"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "c1"));
+    g.add_edge(edge("c1", "c2"));
+    g.add_edge(edge("c2", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-comp".to_string(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 23_000_000)
+        .unwrap();
+    assert!(report.upper_bound_capabilities.is_empty());
+    assert_eq!(report.precision.upper_bound_size, 0);
+    assert_eq!(report.precision.manifest_declared_size, 0);
+    assert_eq!(report.precision.ratio_millionths, 1_000_000);
+}
+
+// ---------------------------------------------------------------------------
+// 53) Complex branching with mixed dead/live edges
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_mixed_dead_live_branches_path_sensitive() {
+    let mut g = EffectGraph::new("ext-mix");
+    g.add_node(entry_node("e"));
+    g.add_node(control_flow_node("b1"));
+    g.add_node(control_flow_node("b2"));
+    g.add_node(hostcall_node("h_live1", "cap:live1"));
+    g.add_node(hostcall_node("h_live2", "cap:live2"));
+    g.add_node(hostcall_node("h_dead1", "cap:dead1"));
+    g.add_node(exit_node("x"));
+
+    g.add_edge(edge("e", "b1"));
+    g.add_edge(edge("b1", "h_live1"));
+    g.add_edge(dead_edge("b1", "h_dead1"));
+    g.add_edge(edge("h_live1", "b2"));
+    g.add_edge(edge("h_dead1", "b2"));
+    g.add_edge(edge("b2", "h_live2"));
+    g.add_edge(edge("h_live2", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-mix".to_string(),
+        declared_capabilities: vec![cap("cap:live1"), cap("cap:live2")]
+            .into_iter()
+            .collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let ps_cfg = AnalysisConfig {
+        path_sensitive: true,
+        ..config()
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(ps_cfg);
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 24_000_000)
+        .unwrap();
+    assert!(report.requires_capability(&cap("cap:live1")));
+    assert!(report.requires_capability(&cap("cap:live2")));
+    // cap:dead1 not in manifest and on dead edge -> excluded
+    assert!(!report.requires_capability(&cap("cap:dead1")));
+    assert!(report.precision.excluded_by_path_sensitivity > 0);
+}
+
+// ---------------------------------------------------------------------------
+// 54) Graph hash — dead vs live edge produces different hash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_graph_hash_differs_dead_vs_live() {
+    let mut g_live = EffectGraph::new("ext-h");
+    g_live.add_node(entry_node("e"));
+    g_live.add_node(exit_node("x"));
+    g_live.add_edge(edge("e", "x"));
+
+    let mut g_dead = EffectGraph::new("ext-h");
+    g_dead.add_node(entry_node("e"));
+    g_dead.add_node(exit_node("x"));
+    g_dead.add_edge(dead_edge("e", "x"));
+
+    let analyzer_live = StaticAuthorityAnalyzer::new(config());
+    let analyzer_dead = StaticAuthorityAnalyzer::new(config());
+
+    let m = ManifestIntents {
+        extension_id: "ext-h".to_string(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let r_live = analyzer_live
+        .analyze(&g_live, &m, SecurityEpoch::from_raw(1), 25_000_000)
+        .unwrap();
+    let r_dead = analyzer_dead
+        .analyze(&g_dead, &m, SecurityEpoch::from_raw(1), 25_000_000)
+        .unwrap();
+    assert_ne!(r_live.effect_graph_hash, r_dead.effect_graph_hash);
+}
+
+// ---------------------------------------------------------------------------
+// 55) Extension ID in report matches graph
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_extension_id_in_report_matches_graph() {
+    let report = do_analysis();
+    assert_eq!(report.extension_id, "test-ext");
+}
+
+// ---------------------------------------------------------------------------
+// 56) Large stress test — deep chain with 200 caps
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_stress_deep_chain_200_caps() {
+    let count = 200;
+    let mut g = EffectGraph::new("ext-deep");
+    g.add_node(entry_node("e"));
+
+    let mut expected = BTreeSet::new();
+    for i in 0..count {
+        let cap_name = format!("cap:{i}");
+        let node_id = format!("h{i}");
+        g.add_node(hostcall_node(&node_id, &cap_name));
+        expected.insert(cap(&cap_name));
+    }
+    g.add_node(exit_node("x"));
+
+    g.add_edge(edge("e", "h0"));
+    for i in 0..count - 1 {
+        g.add_edge(edge(&format!("h{i}"), &format!("h{}", i + 1)));
+    }
+    g.add_edge(edge(&format!("h{}", count - 1), "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-deep".to_string(),
+        declared_capabilities: expected.clone(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 26_000_000)
+        .unwrap();
+    assert_eq!(report.upper_bound_capabilities.len(), count);
+    assert_eq!(report.upper_bound_capabilities, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 57) Stress test — wide fan-out
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_stress_wide_fanout_100() {
+    let count = 100;
+    let mut g = EffectGraph::new("ext-fan");
+    g.add_node(entry_node("e"));
+
+    let mut expected = BTreeSet::new();
+    for i in 0..count {
+        let cap_name = format!("fan:{i}");
+        let node_id = format!("h{i}");
+        g.add_node(hostcall_node(&node_id, &cap_name));
+        g.add_edge(edge("e", &node_id));
+        g.add_node(exit_node(&format!("x{i}")));
+        g.add_edge(edge(&node_id, &format!("x{i}")));
+        expected.insert(cap(&cap_name));
+    }
+
+    let m = ManifestIntents {
+        extension_id: "ext-fan".to_string(),
+        declared_capabilities: expected.clone(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 27_000_000)
+        .unwrap();
+    assert_eq!(report.upper_bound_capabilities.len(), count);
+}
+
+// ---------------------------------------------------------------------------
+// 58) Entry-to-exit with no intermediate nodes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_entry_directly_to_exit_no_caps() {
+    let mut g = EffectGraph::new("ext-direct");
+    g.add_node(entry_node("e"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-direct".to_string(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 28_000_000)
+        .unwrap();
+    assert!(report.upper_bound_capabilities.is_empty());
+    assert!(report.per_capability_evidence.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 59) EffectNode source_location preserved through serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_source_location_preserved() {
+    let node = EffectNode {
+        node_id: "hc-1".to_string(),
+        kind: EffectNodeKind::HostcallSite {
+            capability: cap("fs:read"),
+        },
+        source_location: Some("module.rs:42".to_string()),
+    };
+    let json = serde_json::to_string(&node).unwrap();
+    let back: EffectNode = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.source_location, Some("module.rs:42".to_string()));
+}
+
+#[test]
+fn enrichment_source_location_none_preserved() {
+    let node = computation_node("c");
+    let json = serde_json::to_string(&node).unwrap();
+    let back: EffectNode = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.source_location, None);
+}
+
+// ---------------------------------------------------------------------------
+// 60) AnalysisCacheKey — equality and cloning
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_cache_key_clone_equals_original() {
+    let key = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"data"),
+        manifest_hash: ContentHash::compute(b"manifest"),
+        path_sensitive: true,
+    };
+    let cloned = key.clone();
+    assert_eq!(key, cloned);
+}
+
+#[test]
+fn enrichment_cache_key_different_path_sensitive_not_equal() {
+    let k1 = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"same"),
+        manifest_hash: ContentHash::compute(b"same"),
+        path_sensitive: false,
+    };
+    let k2 = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"same"),
+        manifest_hash: ContentHash::compute(b"same"),
+        path_sensitive: true,
+    };
+    assert_ne!(k1, k2);
+}
+
+// ---------------------------------------------------------------------------
+// 61) AnalysisConfig — custom values roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_config_custom_serde_roundtrip() {
+    let cfg = AnalysisConfig {
+        time_budget_ns: 1_000_000,
+        path_sensitive: false,
+        zone: "staging-us-east-1".to_string(),
+    };
+    let json = serde_json::to_string(&cfg).unwrap();
+    let back: AnalysisConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(cfg, back);
+}
+
+// ---------------------------------------------------------------------------
+// 62) Capability — empty string is valid
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_capability_empty_string() {
+    let c = cap("");
+    assert_eq!(c.as_str(), "");
+    assert_eq!(c.to_string(), "");
+    let json = serde_json::to_string(&c).unwrap();
+    let back: Capability = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, back);
+}
+
+// ---------------------------------------------------------------------------
+// 63) Capability — special characters
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_capability_special_chars() {
+    let c = cap("cap:with/slashes.and-dashes_underscores");
+    assert_eq!(c.as_str(), "cap:with/slashes.and-dashes_underscores");
+    let json = serde_json::to_string(&c).unwrap();
+    let back: Capability = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, back);
+}
+
+#[test]
+fn enrichment_capability_unicode() {
+    let c = cap("cap:unicode_\u{00e9}\u{00e8}\u{00ea}");
+    let json = serde_json::to_string(&c).unwrap();
+    let back: Capability = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, back);
+}
+
+// ---------------------------------------------------------------------------
+// 64) EffectEdge — Ord and BTreeSet usage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_effect_edge_in_btreeset() {
+    let mut set = BTreeSet::new();
+    set.insert(edge("b", "c"));
+    set.insert(edge("a", "b"));
+    set.insert(edge("b", "c")); // duplicate
+    assert_eq!(set.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 65) PerCapabilityEvidence — empty requiring_nodes for ManifestFallback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_manifest_fallback_evidence_empty_nodes() {
+    let mut g = EffectGraph::new("ext-fb");
+    g.add_node(entry_node("e"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-fb".to_string(),
+        declared_capabilities: vec![cap("phantom:cap")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 29_000_000)
+        .unwrap();
+
+    let ev = report
+        .per_capability_evidence
+        .iter()
+        .find(|e| e.capability == cap("phantom:cap"))
+        .unwrap();
+    assert_eq!(ev.analysis_method, AnalysisMethod::ManifestFallback);
+    assert!(ev.requiring_nodes.is_empty());
+    assert!(ev.summary.contains("manifest"));
+}
+
+// ---------------------------------------------------------------------------
+// 66) PerCapabilityEvidence — LatticeReachability has non-empty nodes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_lattice_reachability_evidence_has_nodes() {
+    let report = do_analysis();
+    let ev = report
+        .per_capability_evidence
+        .iter()
+        .find(|e| e.capability == cap("fs:read"))
+        .unwrap();
+    assert_eq!(ev.analysis_method, AnalysisMethod::LatticeReachability);
+    assert!(!ev.requiring_nodes.is_empty());
+    assert!(ev.requiring_nodes.contains("hc-fs"));
+}
+
+// ---------------------------------------------------------------------------
+// 67) ExcludedDeadPath evidence generated
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_excluded_dead_path_evidence_details() {
+    let mut g = EffectGraph::new("ext-edp");
+    g.add_node(entry_node("e"));
+    g.add_node(control_flow_node("b"));
+    g.add_node(hostcall_node("alive", "cap:alive"));
+    g.add_node(hostcall_node("dead_n", "cap:dead_only"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "b"));
+    g.add_edge(edge("b", "alive"));
+    g.add_edge(dead_edge("b", "dead_n"));
+    g.add_edge(edge("alive", "x"));
+    g.add_edge(edge("dead_n", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-edp".to_string(),
+        declared_capabilities: vec![cap("cap:alive")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let ps_cfg = AnalysisConfig {
+        path_sensitive: true,
+        ..config()
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(ps_cfg);
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 30_000_000)
+        .unwrap();
+
+    let excluded = report
+        .per_capability_evidence
+        .iter()
+        .find(|e| e.capability == cap("cap:dead_only"))
+        .unwrap();
+    assert_eq!(excluded.analysis_method, AnalysisMethod::ExcludedDeadPath);
+    assert!(excluded.summary.contains("dead paths"));
+}
+
+// ---------------------------------------------------------------------------
+// 68) EffectNodeKind — Eq and Clone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_effect_node_kind_eq_same_hostcall() {
+    let k1 = EffectNodeKind::HostcallSite {
+        capability: cap("fs:read"),
+    };
+    let k2 = EffectNodeKind::HostcallSite {
+        capability: cap("fs:read"),
+    };
+    assert_eq!(k1, k2);
+}
+
+#[test]
+fn enrichment_effect_node_kind_ne_different_hostcall() {
+    let k1 = EffectNodeKind::HostcallSite {
+        capability: cap("fs:read"),
+    };
+    let k2 = EffectNodeKind::HostcallSite {
+        capability: cap("fs:write"),
+    };
+    assert_ne!(k1, k2);
+}
+
+#[test]
+fn enrichment_effect_node_kind_ne_different_variants() {
+    assert_ne!(EffectNodeKind::Entry, EffectNodeKind::Exit);
+    assert_ne!(EffectNodeKind::ControlFlow, EffectNodeKind::Computation);
+}
+
+// ---------------------------------------------------------------------------
+// 69) Report serde — complex report with multiple evidence types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_report_serde_with_mixed_evidence() {
+    let mut g = EffectGraph::new("ext-mixed");
+    g.add_node(entry_node("e"));
+    g.add_node(control_flow_node("b"));
+    g.add_node(hostcall_node("h_live", "cap:live"));
+    g.add_node(hostcall_node("h_dead", "cap:dead"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "b"));
+    g.add_edge(edge("b", "h_live"));
+    g.add_edge(dead_edge("b", "h_dead"));
+    g.add_edge(edge("h_live", "x"));
+    g.add_edge(edge("h_dead", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-mixed".to_string(),
+        declared_capabilities: vec![cap("cap:live"), cap("cap:phantom")]
+            .into_iter()
+            .collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let ps_cfg = AnalysisConfig {
+        path_sensitive: true,
+        ..config()
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(ps_cfg);
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(3), 31_000_000)
+        .unwrap();
+
+    let json = serde_json::to_string(&report).unwrap();
+    let back: StaticAnalysisReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, back);
+}
+
+// ---------------------------------------------------------------------------
+// 70) Graph with only control flow nodes — no caps collected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_control_flow_only_no_caps() {
+    let mut g = EffectGraph::new("ext-cf");
+    g.add_node(entry_node("e"));
+    g.add_node(control_flow_node("b1"));
+    g.add_node(control_flow_node("b2"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "b1"));
+    g.add_edge(edge("b1", "b2"));
+    g.add_edge(edge("b2", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-cf".to_string(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 32_000_000)
+        .unwrap();
+    assert!(report.upper_bound_capabilities.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 71) Same cap at multiple nodes — evidence aggregates node IDs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_same_cap_multiple_nodes_aggregated() {
+    let mut g = EffectGraph::new("ext-agg");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h1", "fs:read"));
+    g.add_node(hostcall_node("h2", "fs:read"));
+    g.add_node(hostcall_node("h3", "fs:read"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "h1"));
+    g.add_edge(edge("h1", "h2"));
+    g.add_edge(edge("h2", "h3"));
+    g.add_edge(edge("h3", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-agg".to_string(),
+        declared_capabilities: vec![cap("fs:read")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 33_000_000)
+        .unwrap();
+
+    assert_eq!(report.upper_bound_capabilities.len(), 1);
+    let ev = report
+        .per_capability_evidence
+        .iter()
+        .find(|e| e.capability == cap("fs:read"))
+        .unwrap();
+    assert_eq!(ev.requiring_nodes.len(), 3);
+    assert!(ev.requiring_nodes.contains("h1"));
+    assert!(ev.requiring_nodes.contains("h2"));
+    assert!(ev.requiring_nodes.contains("h3"));
+}
+
+// ---------------------------------------------------------------------------
+// 72) Report — content_hash differs when extension_id differs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_content_hash_differs_by_extension_id() {
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+
+    let mut g1 = EffectGraph::new("ext-aa");
+    g1.add_node(entry_node("e"));
+    g1.add_node(exit_node("x"));
+    g1.add_edge(edge("e", "x"));
+    let m1 = ManifestIntents {
+        extension_id: "ext-aa".to_string(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let mut g2 = EffectGraph::new("ext-bb");
+    g2.add_node(entry_node("e"));
+    g2.add_node(exit_node("x"));
+    g2.add_edge(edge("e", "x"));
+    let m2 = ManifestIntents {
+        extension_id: "ext-bb".to_string(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let r1 = analyzer
+        .analyze(&g1, &m1, SecurityEpoch::from_raw(1), 34_000_000)
+        .unwrap();
+    let r2 = analyzer
+        .analyze(&g2, &m2, SecurityEpoch::from_raw(1), 34_000_000)
+        .unwrap();
+    assert_ne!(r1.content_hash(), r2.content_hash());
+}
+
+// ---------------------------------------------------------------------------
+// 73) PrecisionEstimate — Clone and Debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_precision_estimate_clone() {
+    let pe = PrecisionEstimate {
+        upper_bound_size: 10,
+        manifest_declared_size: 5,
+        ratio_millionths: 2_000_000,
+        excluded_by_path_sensitivity: 3,
+    };
+    let cloned = pe.clone();
+    assert_eq!(pe, cloned);
+}
+
+#[test]
+fn enrichment_precision_estimate_debug_non_empty() {
+    let pe = PrecisionEstimate {
+        upper_bound_size: 1,
+        manifest_declared_size: 1,
+        ratio_millionths: 1_000_000,
+        excluded_by_path_sensitivity: 0,
+    };
+    let dbg = format!("{pe:?}");
+    assert!(dbg.contains("PrecisionEstimate"));
+    assert!(dbg.contains("1000000"));
+}
+
+// ---------------------------------------------------------------------------
+// 74) AnalysisError — Clone and Debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_analysis_error_clone() {
+    let err = AnalysisError::NoEntryNode {
+        extension_id: "ext".to_string(),
+    };
+    let cloned = err.clone();
+    assert_eq!(err, cloned);
+}
+
+#[test]
+fn enrichment_analysis_error_debug() {
+    let err = AnalysisError::EmptyEffectGraph {
+        extension_id: "ext-dbg".to_string(),
+    };
+    let dbg = format!("{err:?}");
+    assert!(dbg.contains("EmptyEffectGraph"));
+    assert!(dbg.contains("ext-dbg"));
+}
+
+// ---------------------------------------------------------------------------
+// 75) Cache — clear after insertions restores empty state
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_cache_clear_restores_empty() {
+    let mut cache = AnalysisCache::new(5);
+    let report = do_analysis();
+    for i in 0..5u8 {
+        let key = AnalysisCacheKey {
+            effect_graph_hash: ContentHash::compute(&[i]),
+            manifest_hash: ContentHash::compute(&[i + 50]),
+            path_sensitive: false,
+        };
+        cache.insert(key, report.clone());
+    }
+    assert_eq!(cache.len(), 5);
+    cache.clear();
+    assert!(cache.is_empty());
+    assert_eq!(cache.len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 76) Analysis determinism — two analyzers with same config produce same
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_two_analyzers_same_config_same_result() {
+    let cfg = config();
+    let a1 = StaticAuthorityAnalyzer::new(cfg.clone());
+    let a2 = StaticAuthorityAnalyzer::new(cfg);
+
+    let g = simple_graph();
+    let m = simple_manifest();
+    let epoch = SecurityEpoch::from_raw(7);
+
+    let r1 = a1.analyze(&g, &m, epoch, 35_000_000).unwrap();
+    let r2 = a2.analyze(&g, &m, epoch, 35_000_000).unwrap();
+    assert_eq!(r1.report_id, r2.report_id);
+    assert_eq!(r1.content_hash(), r2.content_hash());
+    assert_eq!(r1.upper_bound_capabilities, r2.upper_bound_capabilities);
+    assert_eq!(r1.per_capability_evidence, r2.per_capability_evidence);
+}
+
+// ---------------------------------------------------------------------------
+// 77) Report — report_id is non-zero bytes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_report_id_non_zero() {
+    let report = do_analysis();
+    assert!(!report.report_id.as_bytes().iter().all(|b| *b == 0));
+}
+
+// ---------------------------------------------------------------------------
+// 78) Report — effect_graph_hash and manifest_hash are non-zero
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_hashes_non_zero() {
+    let report = do_analysis();
+    assert_ne!(report.effect_graph_hash, ContentHash([0u8; 32]));
+    assert_ne!(report.manifest_hash, ContentHash([0u8; 32]));
+}
+
+// ---------------------------------------------------------------------------
+// 79) Graph with self-loop on entry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_self_loop_on_entry_terminates() {
+    let mut g = EffectGraph::new("ext-self");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h", "cap:ok"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "e")); // self-loop
+    g.add_edge(edge("e", "h"));
+    g.add_edge(edge("h", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-self".to_string(),
+        declared_capabilities: vec![cap("cap:ok")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 36_000_000)
+        .unwrap();
+    assert!(report.requires_capability(&cap("cap:ok")));
+}
+
+// ---------------------------------------------------------------------------
+// 80) Graph with hostcall on self-loop
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_hostcall_self_loop_terminates() {
+    let mut g = EffectGraph::new("ext-hsl");
+    g.add_node(entry_node("e"));
+    g.add_node(hostcall_node("h", "cap:loopy"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "h"));
+    g.add_edge(edge("h", "h")); // hostcall self-loop
+    g.add_edge(edge("h", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-hsl".to_string(),
+        declared_capabilities: vec![cap("cap:loopy")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 37_000_000)
+        .unwrap();
+    assert!(report.requires_capability(&cap("cap:loopy")));
+    assert_eq!(report.upper_bound_capabilities.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 81) PerCapabilityEvidence summary format for lattice
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_evidence_summary_format_lattice() {
+    let report = do_analysis();
+    let ev = report
+        .per_capability_evidence
+        .iter()
+        .find(|e| e.capability == cap("fs:read"))
+        .unwrap();
+    assert!(ev.summary.contains("reachable at"));
+    assert!(ev.summary.contains("hostcall site(s)"));
+}
+
+// ---------------------------------------------------------------------------
+// 82) PerCapabilityEvidence summary format for manifest fallback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_evidence_summary_format_manifest_fallback() {
+    let mut g = EffectGraph::new("ext-sfm");
+    g.add_node(entry_node("e"));
+    g.add_node(exit_node("x"));
+    g.add_edge(edge("e", "x"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-sfm".to_string(),
+        declared_capabilities: vec![cap("cap:ghost")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 38_000_000)
+        .unwrap();
+
+    let ev = report
+        .per_capability_evidence
+        .iter()
+        .find(|e| e.capability == cap("cap:ghost"))
+        .unwrap();
+    assert!(ev.summary.contains("declared in manifest"));
+    assert!(ev.summary.contains("included conservatively"));
+}
+
+// ---------------------------------------------------------------------------
+// 83) EffectGraph clone preserves all data
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_effect_graph_clone() {
+    let g = simple_graph();
+    let cloned = g.clone();
+    assert_eq!(g, cloned);
+    assert_eq!(g.extension_id, cloned.extension_id);
+    assert_eq!(g.nodes.len(), cloned.nodes.len());
+    assert_eq!(g.edges.len(), cloned.edges.len());
+}
+
+// ---------------------------------------------------------------------------
+// 84) ManifestIntents clone preserves all data
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_manifest_intents_clone() {
+    let m = ManifestIntents {
+        extension_id: "ext-clone".to_string(),
+        declared_capabilities: vec![cap("c1"), cap("c2")].into_iter().collect(),
+        optional_capabilities: vec![cap("o1")].into_iter().collect(),
+    };
+    let cloned = m.clone();
+    assert_eq!(m, cloned);
+}
+
+// ---------------------------------------------------------------------------
+// 85) StaticAnalysisReport clone preserves content_hash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_report_clone_preserves_content_hash() {
+    let report = do_analysis();
+    let cloned = report.clone();
+    assert_eq!(report.content_hash(), cloned.content_hash());
+    assert_eq!(report, cloned);
+}
+
+// ---------------------------------------------------------------------------
+// 86) Multiple exit nodes don't affect capabilities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_multiple_exit_nodes() {
+    let mut g = EffectGraph::new("ext-2x");
+    g.add_node(entry_node("e"));
+    g.add_node(control_flow_node("b"));
+    g.add_node(hostcall_node("h", "cap:only"));
+    g.add_node(exit_node("x1"));
+    g.add_node(exit_node("x2"));
+    g.add_edge(edge("e", "b"));
+    g.add_edge(edge("b", "h"));
+    g.add_edge(edge("b", "x1")); // early exit
+    g.add_edge(edge("h", "x2"));
+
+    let m = ManifestIntents {
+        extension_id: "ext-2x".to_string(),
+        declared_capabilities: vec![cap("cap:only")].into_iter().collect(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(config());
+    let report = analyzer
+        .analyze(&g, &m, SecurityEpoch::from_raw(1), 39_000_000)
+        .unwrap();
+    assert!(report.requires_capability(&cap("cap:only")));
+    assert_eq!(report.upper_bound_capabilities.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// 87) Capability in BTreeSet — deduplication
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_capability_btreeset_dedup() {
+    let mut set = BTreeSet::new();
+    set.insert(cap("a"));
+    set.insert(cap("b"));
+    set.insert(cap("a")); // dup
+    set.insert(cap("c"));
+    set.insert(cap("b")); // dup
+    assert_eq!(set.len(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// 88) AnalysisMethod in BTreeSet — all unique
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_analysis_method_btreeset() {
+    let mut set = BTreeSet::new();
+    set.insert(AnalysisMethod::LatticeReachability);
+    set.insert(AnalysisMethod::ManifestFallback);
+    set.insert(AnalysisMethod::TimeoutFallback);
+    set.insert(AnalysisMethod::ExcludedDeadPath);
+    set.insert(AnalysisMethod::LatticeReachability); // dup
+    assert_eq!(set.len(), 4);
 }

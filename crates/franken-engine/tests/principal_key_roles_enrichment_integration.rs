@@ -12,10 +12,8 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::principal_key_roles::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
@@ -480,7 +478,8 @@ fn enrichment_role_key_entry_identity_bytes_role_specific() {
     let ep = epoch(1);
     let vk = make_signing_key(&seed, ep).verification_key();
 
-    let signing_entry = make_role_entry(KeyRole::Signing, vk.clone(), None, KeyStatus::Active, ep, 0);
+    let signing_entry =
+        make_role_entry(KeyRole::Signing, vk.clone(), None, KeyStatus::Active, ep, 0);
     let issuance_entry = make_role_entry(KeyRole::Issuance, vk, None, KeyStatus::Active, ep, 0);
 
     assert_ne!(
@@ -518,7 +517,14 @@ fn enrichment_role_key_entry_serde_roundtrip() {
     let seed = test_seed();
     let ep = epoch(1);
     let sk = make_signing_key(&seed, ep);
-    let entry = make_role_entry(KeyRole::Signing, sk.verification_key(), None, KeyStatus::Active, ep, 0);
+    let entry = make_role_entry(
+        KeyRole::Signing,
+        sk.verification_key(),
+        None,
+        KeyStatus::Active,
+        ep,
+        0,
+    );
     let json = serde_json::to_string(&entry).unwrap();
     let back: RoleKeyEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, back);
@@ -1011,7 +1017,11 @@ fn enrichment_key_role_error_display_all_unique() {
         },
     ];
     let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
-    assert_eq!(displays.len(), 8, "all 8 variants produce distinct messages");
+    assert_eq!(
+        displays.len(),
+        8,
+        "all 8 variants produce distinct messages"
+    );
 }
 
 #[test]
@@ -1221,7 +1231,14 @@ fn enrichment_store_register_key_success() {
     let ep = epoch(1);
     let vk = make_signing_key(&seed, ep).verification_key();
     let mut store = PrincipalKeyStore::new();
-    let result = store.register_key(make_role_entry(KeyRole::Signing, vk, None, KeyStatus::Active, ep, 0));
+    let result = store.register_key(make_role_entry(
+        KeyRole::Signing,
+        vk,
+        None,
+        KeyStatus::Active,
+        ep,
+        0,
+    ));
     assert!(result.is_ok());
     assert_eq!(store.total_key_count(), 1);
 }
@@ -1233,9 +1250,23 @@ fn enrichment_store_register_duplicate_key_fails() {
     let vk = make_signing_key(&seed, ep).verification_key();
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, vk.clone(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            vk.clone(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
-    let result = store.register_key(make_role_entry(KeyRole::Signing, vk, None, KeyStatus::Pending, ep, 0));
+    let result = store.register_key(make_role_entry(
+        KeyRole::Signing,
+        vk,
+        None,
+        KeyStatus::Pending,
+        ep,
+        0,
+    ));
     assert_eq!(
         result,
         Err(KeyRoleError::DuplicateKey {
@@ -1253,7 +1284,14 @@ fn enrichment_store_register_sequence_regression_fails() {
     let sk2 = make_signing_key(&seed_n(0xBB), ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Active, ep, 5))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            5,
+        ))
         .unwrap();
     let result = store.register_key(make_role_entry(
         KeyRole::Signing,
@@ -1281,7 +1319,14 @@ fn enrichment_store_register_same_sequence_different_role_ok() {
     let iss = make_issuance_key(&seed, ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
     let result = store.register_key(make_role_entry(
         KeyRole::Issuance,
@@ -1331,10 +1376,24 @@ fn enrichment_store_keys_for_role_returns_all_statuses() {
     let sk2 = make_signing_key(&seed_n(0xBB), ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk2.verification_key(), None, KeyStatus::Pending, ep, 1))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk2.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep,
+            1,
+        ))
         .unwrap();
 
     // Revoke key 0.
@@ -1351,7 +1410,14 @@ fn enrichment_store_keys_for_role_empty_for_unused_role() {
     let sk = make_signing_key(&seed, ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
     assert!(store.keys_for_role(KeyRole::Encryption).is_empty());
     assert!(store.keys_for_role(KeyRole::Issuance).is_empty());
@@ -1365,10 +1431,24 @@ fn enrichment_store_verification_keys_includes_active_and_rotated() {
     let sk2 = make_signing_key(&seed_n(0xBB), ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk2.verification_key(), None, KeyStatus::Pending, ep, 1))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk2.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep,
+            1,
+        ))
         .unwrap();
 
     // Rotate: key 0 -> Rotated, key 1 -> Active.
@@ -1385,7 +1465,14 @@ fn enrichment_store_verification_keys_excludes_revoked() {
     let sk = make_signing_key(&seed, ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
     store.revoke_key(KeyRole::Signing, 0, epoch(2)).unwrap();
 
@@ -1400,10 +1487,21 @@ fn enrichment_store_verification_keys_excludes_pending() {
     let sk = make_signing_key(&seed, ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk.verification_key(), None, KeyStatus::Pending, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep,
+            0,
+        ))
         .unwrap();
 
-    assert!(store.verification_keys_for_role(KeyRole::Signing).is_empty());
+    assert!(
+        store
+            .verification_keys_for_role(KeyRole::Signing)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -1413,7 +1511,14 @@ fn enrichment_store_activate_pending_key() {
     let sk = make_signing_key(&seed, ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk.verification_key(), None, KeyStatus::Pending, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep,
+            0,
+        ))
         .unwrap();
 
     assert!(store.get_active_key(KeyRole::Signing).is_err());
@@ -1428,7 +1533,14 @@ fn enrichment_store_activate_already_active_fails() {
     let sk = make_signing_key(&seed, ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
     let result = store.activate_key(KeyRole::Signing, 0, ep);
     assert_eq!(
@@ -1454,7 +1566,14 @@ fn enrichment_store_revoke_key_changes_status() {
     let sk = make_signing_key(&seed, ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
 
     assert!(store.get_active_key(KeyRole::Signing).is_ok());
@@ -1479,10 +1598,24 @@ fn enrichment_store_rotate_key_lifecycle() {
 
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Active, ep1, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep1,
+            0,
+        ))
         .unwrap();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk2.verification_key(), None, KeyStatus::Pending, ep2, 1))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk2.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep2,
+            1,
+        ))
         .unwrap();
 
     store.rotate_key(KeyRole::Signing, 0, 1, ep2).unwrap();
@@ -1500,10 +1633,24 @@ fn enrichment_store_rotate_non_active_old_key_fails() {
 
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Pending, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep,
+            0,
+        ))
         .unwrap();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk2.verification_key(), None, KeyStatus::Pending, ep, 1))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk2.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep,
+            1,
+        ))
         .unwrap();
 
     let result = store.rotate_key(KeyRole::Signing, 0, 1, ep);
@@ -1525,10 +1672,24 @@ fn enrichment_store_rotate_non_pending_new_key_fails() {
 
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk2.verification_key(), None, KeyStatus::Active, ep, 1))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk2.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            1,
+        ))
         .unwrap();
 
     let result = store.rotate_key(KeyRole::Signing, 0, 1, ep);
@@ -1698,7 +1859,14 @@ fn enrichment_full_lifecycle_create_activate_rotate_revoke() {
 
     // Step 1: Register key as Pending.
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Pending, ep1, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep1,
+            0,
+        ))
         .unwrap();
     assert!(store.get_active_key(KeyRole::Signing).is_err());
 
@@ -1708,7 +1876,14 @@ fn enrichment_full_lifecycle_create_activate_rotate_revoke() {
 
     // Step 3: Register a successor as Pending.
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk2.verification_key(), None, KeyStatus::Pending, ep2, 1))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk2.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep2,
+            1,
+        ))
         .unwrap();
 
     // Step 4: Rotate.
@@ -1737,20 +1912,41 @@ fn enrichment_multiple_sequential_rotations() {
     // Register and activate key 0.
     let sk0 = make_signing_key(&seed_n(0x01), ep);
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk0.verification_key(), None, KeyStatus::Active, ep, 0))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk0.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            0,
+        ))
         .unwrap();
 
     // Register key 1 as pending, rotate 0 -> 1.
     let sk1 = make_signing_key(&seed_n(0x02), ep);
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Pending, ep, 1))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep,
+            1,
+        ))
         .unwrap();
     store.rotate_key(KeyRole::Signing, 0, 1, epoch(2)).unwrap();
 
     // Register key 2 as pending, rotate 1 -> 2.
     let sk2 = make_signing_key(&seed_n(0x03), ep);
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk2.verification_key(), None, KeyStatus::Pending, ep, 2))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk2.verification_key(),
+            None,
+            KeyStatus::Pending,
+            ep,
+            2,
+        ))
         .unwrap();
     store.rotate_key(KeyRole::Signing, 1, 2, epoch(3)).unwrap();
 
@@ -1862,7 +2058,14 @@ fn enrichment_sequence_equal_to_existing_max_rejected() {
     let sk2 = make_signing_key(&seed_n(0xBB), ep);
     let mut store = PrincipalKeyStore::new();
     store
-        .register_key(make_role_entry(KeyRole::Signing, sk1.verification_key(), None, KeyStatus::Active, ep, 5))
+        .register_key(make_role_entry(
+            KeyRole::Signing,
+            sk1.verification_key(),
+            None,
+            KeyStatus::Active,
+            ep,
+            5,
+        ))
         .unwrap();
 
     // Same sequence (5) but different key should still fail because 5 <= 5.

@@ -514,10 +514,7 @@ fn enrichment_manager_decision_contract_multiple_extensions_quarantined() {
         );
     }
     assert_eq!(mgr.quarantined_extensions().len(), 10);
-    assert_eq!(
-        mgr.activation_count(FailureType::DecisionContractError),
-        10
-    );
+    assert_eq!(mgr.activation_count(FailureType::DecisionContractError), 10);
     for i in 0..10 {
         let reason = mgr.check_quarantine(&format!("ext-{i}")).unwrap();
         assert!(reason.contains(&format!("code-{i}")));
@@ -536,20 +533,11 @@ fn enrichment_manager_evidence_ledger_full_blocks_high_impact_only() {
 #[test]
 fn enrichment_manager_cx_corrupted_status_transitions() {
     let mut mgr = mgr_default();
-    assert_eq!(
-        mgr.status(FailureType::CxCorrupted),
-        SafeModeStatus::Normal
-    );
+    assert_eq!(mgr.status(FailureType::CxCorrupted), SafeModeStatus::Normal);
     mgr.handle_cx_corrupted("t1", "write_file", "budget underflow -5ms");
-    assert_eq!(
-        mgr.status(FailureType::CxCorrupted),
-        SafeModeStatus::Active
-    );
+    assert_eq!(mgr.status(FailureType::CxCorrupted), SafeModeStatus::Active);
     mgr.recover_cx("t2");
-    assert_eq!(
-        mgr.status(FailureType::CxCorrupted),
-        SafeModeStatus::Normal
-    );
+    assert_eq!(mgr.status(FailureType::CxCorrupted), SafeModeStatus::Normal);
 }
 
 #[test]
@@ -566,12 +554,7 @@ fn enrichment_manager_cancellation_deadlock_event_contains_cell_id() {
 fn enrichment_manager_write_ring_buffer_sequences_monotonically() {
     let mut mgr = mgr_with_cap(100);
     for i in 0..20 {
-        mgr.write_ring_buffer_entry(
-            &format!("t{i}"),
-            &format!("ev{i}"),
-            "ok",
-            "component",
-        );
+        mgr.write_ring_buffer_entry(&format!("t{i}"), &format!("ev{i}"), "ok", "component");
     }
     let entries = mgr.ring_buffer().entries();
     assert_eq!(entries.len(), 20);
@@ -671,10 +654,7 @@ fn enrichment_manager_partial_recovery_still_active() {
     // Recover only cx
     mgr.recover_cx("r1");
     assert!(mgr.any_active());
-    assert_eq!(
-        mgr.status(FailureType::CxCorrupted),
-        SafeModeStatus::Normal
-    );
+    assert_eq!(mgr.status(FailureType::CxCorrupted), SafeModeStatus::Normal);
     assert_eq!(
         mgr.status(FailureType::AdapterUnavailable),
         SafeModeStatus::Active
@@ -707,7 +687,9 @@ fn enrichment_validate_decision_quarantine_denies() {
 
     let mut adapter = MockDecisionContract::new(vec![DecisionVerdict::Allow]);
     let request = mock_decision_request(1);
-    let verdict = mgr.validate_decision(&mut adapter, &request, "ext-bad").unwrap();
+    let verdict = mgr
+        .validate_decision(&mut adapter, &request, "ext-bad")
+        .unwrap();
     assert_eq!(verdict, DecisionVerdict::Deny);
 }
 
@@ -740,8 +722,8 @@ fn enrichment_validate_decision_extensions_refused_denies() {
 #[test]
 fn enrichment_validate_decision_adapter_failure_activates_safe_mode() {
     let mut mgr = mgr_default();
-    let mut adapter = MockDecisionContract::new(vec![])
-        .with_failure_mode(MockFailureMode::FailAlways {
+    let mut adapter =
+        MockDecisionContract::new(vec![]).with_failure_mode(MockFailureMode::FailAlways {
             code: "gateway_timeout",
         });
 
@@ -964,13 +946,8 @@ fn enrichment_attestation_request_fields_preserved() {
 
 #[test]
 fn enrichment_attestation_request_tier_override_serde() {
-    let mut req = AttestationActionRequest::new(
-        "t",
-        "d",
-        "p",
-        AutonomousAction::MetricsEmission,
-        100,
-    );
+    let mut req =
+        AttestationActionRequest::new("t", "d", "p", AutonomousAction::MetricsEmission, 100);
     req.tier = ActionTier::HighImpact;
     let json = serde_json::to_string(&req).unwrap();
     let decoded: AttestationActionRequest = serde_json::from_str(&json).unwrap();
@@ -986,10 +963,7 @@ fn enrichment_attestation_request_tier_override_serde() {
 fn enrichment_attestation_state_display_values() {
     assert_eq!(AttestationFallbackState::Normal.to_string(), "normal");
     assert_eq!(AttestationFallbackState::Degraded.to_string(), "degraded");
-    assert_eq!(
-        AttestationFallbackState::Restoring.to_string(),
-        "restoring"
-    );
+    assert_eq!(AttestationFallbackState::Restoring.to_string(), "restoring");
 }
 
 #[test]
@@ -1179,9 +1153,7 @@ fn enrichment_evaluate_low_impact_with_all_health_states() {
         let req = req_low(AutonomousAction::MetricsEmission, 100);
         let decision = mgr.evaluate_action(req, health).unwrap();
         match decision {
-            AttestationFallbackDecision::Execute {
-                warning, ..
-            } => {
+            AttestationFallbackDecision::Execute { warning, .. } => {
                 assert!(warning.is_none(), "low-impact should never have a warning");
             }
             other => panic!("expected Execute for low-impact, got {other:?}"),
@@ -1193,9 +1165,7 @@ fn enrichment_evaluate_low_impact_with_all_health_states() {
 fn enrichment_evaluate_standard_healthy_no_warning() {
     let mut mgr = attest_mgr();
     let req = req_std(AutonomousAction::RoutineMonitoring, 100);
-    let decision = mgr
-        .evaluate_action(req, AttestationHealth::Valid)
-        .unwrap();
+    let decision = mgr.evaluate_action(req, AttestationHealth::Valid).unwrap();
     match decision {
         AttestationFallbackDecision::Execute {
             attestation_status,
@@ -1238,9 +1208,7 @@ fn enrichment_evaluate_standard_unhealthy_has_warning() {
 fn enrichment_evaluate_high_impact_healthy_normal_executes() {
     let mut mgr = attest_mgr();
     let req = req_hi(AutonomousAction::Quarantine, 100);
-    let decision = mgr
-        .evaluate_action(req, AttestationHealth::Valid)
-        .unwrap();
+    let decision = mgr.evaluate_action(req, AttestationHealth::Valid).unwrap();
     match decision {
         AttestationFallbackDecision::Execute {
             attestation_status,
@@ -1291,9 +1259,7 @@ fn enrichment_evaluate_high_impact_healthy_but_degraded_state_defers() {
     // Actually re-reading the code: update_health_state runs first and transitions
     // back to Normal, so the action should execute
     let req2 = req_hi(AutonomousAction::Terminate, 200);
-    let decision = mgr
-        .evaluate_action(req2, AttestationHealth::Valid)
-        .unwrap();
+    let decision = mgr.evaluate_action(req2, AttestationHealth::Valid).unwrap();
     // After recovery, state is Normal and health is Valid, so it should execute
     assert!(matches!(
         decision,
@@ -1321,7 +1287,10 @@ fn enrichment_evaluate_queue_ids_strictly_monotonic() {
     }
     assert_eq!(ids.len(), 20);
     for i in 1..ids.len() {
-        assert!(ids[i] > ids[i - 1], "queue_ids should be strictly increasing");
+        assert!(
+            ids[i] > ids[i - 1],
+            "queue_ids should be strictly increasing"
+        );
     }
 }
 
@@ -1435,8 +1404,7 @@ fn enrichment_recovery_backlog_preserves_all_deferred_decisions() {
     let backlog = mgr.take_recovery_backlog();
     assert_eq!(backlog.len(), 5);
     // Verify each action is represented
-    let backlog_actions: BTreeSet<AutonomousAction> =
-        backlog.iter().map(|q| q.action).collect();
+    let backlog_actions: BTreeSet<AutonomousAction> = backlog.iter().map(|q| q.action).collect();
     assert_eq!(backlog_actions.len(), 5);
 }
 
@@ -1729,7 +1697,10 @@ fn enrichment_full_lifecycle_deterministic_50_runs() {
 #[test]
 fn enrichment_health_from_verdict_all_passing_is_valid() {
     let verdict = base_verdict();
-    assert_eq!(attestation_health_from_verdict(&verdict), AttestationHealth::Valid);
+    assert_eq!(
+        attestation_health_from_verdict(&verdict),
+        AttestationHealth::Valid
+    );
 }
 
 #[test]
@@ -1807,9 +1778,7 @@ fn enrichment_health_from_verdict_attestation_stale_warning_is_expired() {
 #[test]
 fn enrichment_health_from_verdict_non_attestation_warning_stays_valid() {
     let mut verdict = base_verdict();
-    verdict
-        .warnings
-        .push("transparency_log_delay".to_string());
+    verdict.warnings.push("transparency_log_delay".to_string());
     assert_eq!(
         attestation_health_from_verdict(&verdict),
         AttestationHealth::Valid
@@ -1820,7 +1789,9 @@ fn enrichment_health_from_verdict_non_attestation_warning_stays_valid() {
 fn enrichment_health_from_verdict_attestation_warning_without_stale_is_not_expired() {
     let mut verdict = base_verdict();
     verdict.attestation.passed = false;
-    verdict.warnings.push("attestation_something_else".to_string());
+    verdict
+        .warnings
+        .push("attestation_something_else".to_string());
     // attestation failed but not stale, not one of the known unavailable codes
     // => VerificationFailed
     assert_eq!(

@@ -351,3 +351,114 @@ fn deterministic_double_parse_both() {
     assert_eq!(parse_cliff(), parse_cliff());
     assert_eq!(parse_s3fifo(), parse_s3fifo());
 }
+
+// ===== Cross-schema and structural enrichment =====
+
+#[test]
+fn cross_schema_bead_ids_are_distinct() {
+    let c = parse_cliff();
+    let s = parse_s3fifo();
+    assert_ne!(
+        c.primary_bead, s.bead_id,
+        "cliff primary_bead and s3fifo bead_id must be distinct"
+    );
+}
+
+#[test]
+fn cross_schema_versions_follow_franken_engine_prefix() {
+    let c = parse_cliff();
+    let s = parse_s3fifo();
+    assert!(
+        c.schema_version.starts_with("franken-engine."),
+        "cliff schema_version must start with franken-engine. prefix"
+    );
+    assert!(
+        s.schema_version.starts_with("franken-engine."),
+        "s3fifo schema_version must start with franken-engine. prefix"
+    );
+    assert_ne!(
+        c.schema_version, s.schema_version,
+        "schema versions must differ between the two documents"
+    );
+}
+
+#[test]
+fn cliff_operator_verification_commands_reference_cliff_or_margin() {
+    let c = parse_cliff();
+    for cmd in &c.operator_verification {
+        let lower = cmd.to_ascii_lowercase();
+        assert!(
+            lower.contains("cliff") || lower.contains("margin"),
+            "operator verification command should reference cliff or margin: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn cliff_witness_required_fields_are_unique() {
+    let c = parse_cliff();
+    let mut seen = BTreeSet::new();
+    for f in &c.witness_contract.required_fields {
+        assert!(
+            seen.insert(f.clone()),
+            "duplicate witness required_field: {f}"
+        );
+    }
+}
+
+#[test]
+fn cliff_logging_contract_component_is_nonempty() {
+    let c = parse_cliff();
+    assert!(
+        !c.logging_contract.component.is_empty(),
+        "logging contract component must not be empty"
+    );
+    assert!(
+        !c.logging_contract.component.contains(' '),
+        "logging contract component should be a single identifier without spaces"
+    );
+}
+
+#[test]
+fn s3fifo_top_level_keys_match_expected_set() {
+    let raw: serde_json::Value = serde_json::from_str(S3FIFO_JSON).expect("s3fifo raw parse");
+    let obj = raw.as_object().expect("top-level must be an object");
+    let keys: BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+    let expected: BTreeSet<&str> = [
+        "schema_version",
+        "bead_id",
+        "required_artifacts",
+        "baseline_policy_name",
+        "candidate_policy_name",
+        "workload_classes",
+        "trace_ids",
+        "win_metrics",
+        "replaced_surfaces",
+        "untouched_surfaces",
+    ]
+    .iter()
+    .copied()
+    .collect();
+    assert_eq!(keys, expected, "s3fifo top-level keys mismatch");
+}
+
+#[test]
+fn s3fifo_replaced_and_untouched_items_are_unique_and_nonempty() {
+    let s = parse_s3fifo();
+    let mut replaced_seen = BTreeSet::new();
+    for r in &s.replaced_surfaces {
+        assert!(!r.is_empty(), "replaced_surfaces item must not be empty");
+        assert!(
+            replaced_seen.insert(r.clone()),
+            "duplicate replaced_surface: {r}"
+        );
+    }
+    let mut untouched_seen = BTreeSet::new();
+    for u in &s.untouched_surfaces {
+        assert!(!u.is_empty(), "untouched_surfaces item must not be empty");
+        assert!(
+            untouched_seen.insert(u.clone()),
+            "duplicate untouched_surface: {u}"
+        );
+    }
+}

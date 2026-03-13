@@ -100,7 +100,11 @@ fn enrichment_enforced_dimension_display_unique_across_all_variants() {
         EnforcedDimension::IoOperationCount,
     ];
     let set: BTreeSet<String> = dims.iter().map(|d| d.to_string()).collect();
-    assert_eq!(set.len(), 7, "All 7 EnforcedDimension Display strings must be unique");
+    assert_eq!(
+        set.len(),
+        7,
+        "All 7 EnforcedDimension Display strings must be unique"
+    );
 }
 
 #[test]
@@ -112,7 +116,11 @@ fn enrichment_certificate_verdict_display_unique_across_all_variants() {
         CertificateVerdict::Violated,
     ];
     let set: BTreeSet<String> = verdicts.iter().map(|v| v.to_string()).collect();
-    assert_eq!(set.len(), 4, "All 4 CertificateVerdict Display strings must be unique");
+    assert_eq!(
+        set.len(),
+        4,
+        "All 4 CertificateVerdict Display strings must be unique"
+    );
 }
 
 #[test]
@@ -141,7 +149,11 @@ fn enrichment_enforcement_scope_display_unique_across_all_variants() {
         },
     ];
     let set: BTreeSet<String> = scopes.iter().map(|s| s.to_string()).collect();
-    assert_eq!(set.len(), 7, "All 7 EnforcementScope Display strings must be unique");
+    assert_eq!(
+        set.len(),
+        7,
+        "All 7 EnforcementScope Display strings must be unique"
+    );
 }
 
 #[test]
@@ -159,7 +171,11 @@ fn enrichment_enforcement_decision_display_unique() {
         },
     ];
     let set: BTreeSet<String> = decisions.iter().map(|d| d.to_string()).collect();
-    assert_eq!(set.len(), 3, "All 3 EnforcementDecision Display strings must be unique");
+    assert_eq!(
+        set.len(),
+        3,
+        "All 3 EnforcementDecision Display strings must be unique"
+    );
 }
 
 #[test]
@@ -454,7 +470,11 @@ fn enrichment_serde_resource_consumer_manifest_roundtrip() {
     enforcer
         .install_certificate("ext-mr", certified_digest("cert-mr"))
         .unwrap();
-    enforcer.enforce("ext-mr", general_scope("op1"), &[(EnforcedDimension::Time, 1_000)]);
+    enforcer.enforce(
+        "ext-mr",
+        general_scope("op1"),
+        &[(EnforcedDimension::Time, 1_000)],
+    );
     enforcer.enforce(
         "ext-mr",
         general_scope("op2"),
@@ -686,9 +706,18 @@ fn enrichment_extension_budget_state_total_decisions_accumulates() {
 #[test]
 fn enrichment_policy_default_values() {
     let p = BudgetEnforcementPolicy::default();
-    assert_eq!(p.throttle_threshold_millionths, DEFAULT_THROTTLE_THRESHOLD_MILLIONTHS);
-    assert_eq!(p.reject_threshold_millionths, DEFAULT_REJECT_THRESHOLD_MILLIONTHS);
-    assert_eq!(p.min_confidence_millionths, DEFAULT_MIN_CONFIDENCE_MILLIONTHS);
+    assert_eq!(
+        p.throttle_threshold_millionths,
+        DEFAULT_THROTTLE_THRESHOLD_MILLIONTHS
+    );
+    assert_eq!(
+        p.reject_threshold_millionths,
+        DEFAULT_REJECT_THRESHOLD_MILLIONTHS
+    );
+    assert_eq!(
+        p.min_confidence_millionths,
+        DEFAULT_MIN_CONFIDENCE_MILLIONTHS
+    );
     assert_eq!(p.max_extensions, DEFAULT_MAX_EXTENSIONS);
     assert_eq!(p.max_receipts, DEFAULT_MAX_RECEIPTS);
     assert!(p.enforced_dimensions.is_empty());
@@ -710,7 +739,10 @@ fn enrichment_policy_should_enforce_all_when_empty() {
         EnforcedDimension::IoOperationCount,
     ];
     for dim in &all_dims {
-        assert!(p.should_enforce(*dim), "should_enforce all dims when set is empty");
+        assert!(
+            p.should_enforce(*dim),
+            "should_enforce all dims when set is empty"
+        );
     }
 }
 
@@ -1450,9 +1482,17 @@ fn enrichment_decision_sequence_increments_per_enforce_call() {
 fn enrichment_decision_sequence_increments_even_on_reject() {
     let mut enforcer = make_enforcer();
     // No certificate installed - will reject.
-    enforcer.enforce("ext-no", general_scope("fail"), &[(EnforcedDimension::Time, 100)]);
+    enforcer.enforce(
+        "ext-no",
+        general_scope("fail"),
+        &[(EnforcedDimension::Time, 100)],
+    );
     assert_eq!(enforcer.decision_sequence(), 1);
-    enforcer.enforce("ext-no", general_scope("fail2"), &[(EnforcedDimension::Time, 100)]);
+    enforcer.enforce(
+        "ext-no",
+        general_scope("fail2"),
+        &[(EnforcedDimension::Time, 100)],
+    );
     assert_eq!(enforcer.decision_sequence(), 2);
 }
 

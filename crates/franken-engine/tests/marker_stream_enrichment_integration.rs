@@ -33,12 +33,7 @@ fn mk_stream() -> DecisionMarkerStream {
     DecisionMarkerStream::new(5, b"enrichment-key".to_vec())
 }
 
-fn mk_input(
-    ticks: u64,
-    epoch: u64,
-    dt: DecisionType,
-    suffix: &str,
-) -> MarkerInput {
+fn mk_input(ticks: u64, epoch: u64, dt: DecisionType, suffix: &str) -> MarkerInput {
     MarkerInput {
         timestamp_ticks: ticks,
         epoch_id: epoch,
@@ -349,7 +344,10 @@ fn enrichment_decision_type_serde_all_variants() {
 
 #[test]
 fn enrichment_decision_type_epoch_transition_display_format() {
-    assert_eq!(epoch_transition_dt(10, 20).to_string(), "epoch_transition:10->20");
+    assert_eq!(
+        epoch_transition_dt(10, 20).to_string(),
+        "epoch_transition:10->20"
+    );
 }
 
 #[test]
@@ -1210,7 +1208,12 @@ fn enrichment_redacted_summary_never_contains_full_payload() {
     input.payload_summary = "[REDACTED]".to_string();
     stream.append(input);
     let marker = stream.get(1).unwrap();
-    assert!(!marker.redacted_payload.redacted_summary.contains("SUPER_SECRET_TOKEN_12345"));
+    assert!(
+        !marker
+            .redacted_payload
+            .redacted_summary
+            .contains("SUPER_SECRET_TOKEN_12345")
+    );
 }
 
 // ===========================================================================
@@ -1227,7 +1230,12 @@ fn enrichment_multi_type_flow_with_shared_correlation() {
         (100, 1, quarantine_dt(), "quarantine target"),
         (101, 1, issuance_dt(), "revoke cert"),
         (102, 1, propagation_dt(), "propagation confirmed"),
-        (103, 1, override_dt("operator approved escalation"), "escalate"),
+        (
+            103,
+            1,
+            override_dt("operator approved escalation"),
+            "escalate",
+        ),
         (104, 2, epoch_transition_dt(1, 2), "advance epoch"),
         (105, 2, activation_dt(), "activate new policy"),
     ];
@@ -1321,7 +1329,10 @@ fn enrichment_by_event_type_across_all_decision_types() {
         (deactivation_dt(), "policy_transition:deactivation"),
         (epoch_advance_dt(), "policy_transition:epoch_advancement"),
         (issuance_dt(), "revocation_event:issuance"),
-        (propagation_dt(), "revocation_event:propagation_confirmation"),
+        (
+            propagation_dt(),
+            "revocation_event:propagation_confirmation",
+        ),
         (epoch_transition_dt(1, 2), "epoch_transition:1->2"),
         (override_dt("r"), "emergency_override"),
         (guardrail_dt("g"), "guardrail_triggered:g"),
@@ -1331,7 +1342,11 @@ fn enrichment_by_event_type_across_all_decision_types() {
     }
     for (_, display) in &types_and_displays {
         let results = stream.by_event_type(display);
-        assert_eq!(results.len(), 1, "expected 1 match for event_type={display}");
+        assert_eq!(
+            results.len(),
+            1,
+            "expected 1 match for event_type={display}"
+        );
     }
 }
 

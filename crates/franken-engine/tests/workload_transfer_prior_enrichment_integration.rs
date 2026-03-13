@@ -1682,7 +1682,7 @@ fn enrichment_rule_budget_reclaimed_on_stale_expiry() {
     // Advance past staleness for p1
     engine.advance_epoch(epoch(100));
     let expired = engine.expire_stale_priors();
-    assert!(expired.len() >= 1);
+    assert!(!expired.is_empty());
 
     // Register fresh p2 at current epoch so it is not stale
     engine

@@ -244,15 +244,21 @@ fn rgc_ci_quality_script_contract_references_rch_for_heavy_lanes() {
         "script must record a replayable regression command in commands.txt and the manifest"
     );
     assert!(
-        script.contains("record_event \"regression_verdict_missing\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0005\""),
+        script.contains(
+            "record_event \"regression_verdict_missing\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0005\""
+        ),
         "script must emit FE-RGC-CI-QUALITY-GATE-0005 when strict regression mode lacks a verdict path"
     );
     assert!(
-        script.contains("record_event \"regression_verdict_missing\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0006\""),
+        script.contains(
+            "record_event \"regression_verdict_missing\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0006\""
+        ),
         "script must emit FE-RGC-CI-QUALITY-GATE-0006 when the configured verdict file is missing"
     );
     assert!(
-        script.contains("record_event \"regression_verdict_blocked\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0007\""),
+        script.contains(
+            "record_event \"regression_verdict_blocked\" \"fail\" \"FE-RGC-CI-QUALITY-GATE-0007\""
+        ),
         "script must emit FE-RGC-CI-QUALITY-GATE-0007 when the verdict blocks promotion"
     );
     assert!(

@@ -299,21 +299,15 @@ fn rgc_061_contract_is_versioned_and_actionable() {
     }));
 
     assert!(
-        contract
-            .operator_verification
-            .iter()
-            .any(|entry| {
-                entry.contains("$PWD/target_rch_rgc_cli_operator_workflow_verification_pack_verify")
-            }),
+        contract.operator_verification.iter().any(|entry| {
+            entry.contains("$PWD/target_rch_rgc_cli_operator_workflow_verification_pack_verify")
+        }),
         "operator verification should document the repo-local target dir example"
     );
     assert!(
-        !contract
-            .operator_verification
-            .iter()
-            .any(|entry| {
-                entry.contains("/tmp/rch_target_rgc_cli_operator_workflow_verification_pack")
-            }),
+        !contract.operator_verification.iter().any(|entry| {
+            entry.contains("/tmp/rch_target_rgc_cli_operator_workflow_verification_pack")
+        }),
         "operator verification must not point back to /tmp-backed target dirs"
     );
     assert!(

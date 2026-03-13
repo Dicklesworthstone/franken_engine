@@ -158,10 +158,7 @@ fn quote_for_platform(
 ) -> AttestationQuote {
     let mut rev = BTreeMap::new();
     rev.insert("intel_pcs".to_string(), RevocationProbeStatus::Good);
-    rev.insert(
-        "manufacturer_crl".to_string(),
-        RevocationProbeStatus::Good,
-    );
+    rev.insert("manufacturer_crl".to_string(), RevocationProbeStatus::Good);
     rev.insert("internal_ledger".to_string(), RevocationProbeStatus::Good);
     AttestationQuote {
         platform,
@@ -972,15 +969,13 @@ fn enrichment_policy_duplicate_measurement_rejected() {
 #[test]
 fn enrichment_policy_invalid_measurement_digest_wrong_length() {
     let mut policy = sample_policy(1);
-    policy
-        .approved_measurements
-        .insert(
-            TeePlatform::IntelSgx,
-            vec![MeasurementDigest {
-                algorithm: MeasurementAlgorithm::Sha384,
-                digest_hex: "aabb".to_string(), // Too short
-            }],
-        );
+    policy.approved_measurements.insert(
+        TeePlatform::IntelSgx,
+        vec![MeasurementDigest {
+            algorithm: MeasurementAlgorithm::Sha384,
+            digest_hex: "aabb".to_string(), // Too short
+        }],
+    );
     let err = policy.validate().unwrap_err();
     assert!(matches!(
         err,
@@ -991,15 +986,13 @@ fn enrichment_policy_invalid_measurement_digest_wrong_length() {
 #[test]
 fn enrichment_policy_invalid_measurement_digest_non_hex() {
     let mut policy = sample_policy(1);
-    policy
-        .approved_measurements
-        .insert(
-            TeePlatform::IntelSgx,
-            vec![MeasurementDigest {
-                algorithm: MeasurementAlgorithm::Sha384,
-                digest_hex: "zz".repeat(48),
-            }],
-        );
+    policy.approved_measurements.insert(
+        TeePlatform::IntelSgx,
+        vec![MeasurementDigest {
+            algorithm: MeasurementAlgorithm::Sha384,
+            digest_hex: "zz".repeat(48),
+        }],
+    );
     let err = policy.validate().unwrap_err();
     assert!(matches!(
         err,
@@ -1139,9 +1132,7 @@ fn enrichment_canonicalize_sorts_trust_roots() {
     for i in 1..parsed.platform_trust_roots.len() {
         let prev = &parsed.platform_trust_roots[i - 1];
         let curr = &parsed.platform_trust_roots[i];
-        assert!(
-            (prev.platform, prev.root_id.as_str()) <= (curr.platform, curr.root_id.as_str())
-        );
+        assert!((prev.platform, prev.root_id.as_str()) <= (curr.platform, curr.root_id.as_str()));
     }
 }
 
@@ -1323,9 +1314,10 @@ fn enrichment_evaluate_quote_revoked_by_first_source() {
 fn enrichment_evaluate_quote_revoked_by_second_source() {
     let policy = sample_policy(1);
     let mut quote = sgx_quote(10);
-    quote
-        .revocation_observations
-        .insert("manufacturer_crl".to_string(), RevocationProbeStatus::Revoked);
+    quote.revocation_observations.insert(
+        "manufacturer_crl".to_string(),
+        RevocationProbeStatus::Revoked,
+    );
     let err = policy
         .evaluate_quote(&quote, DecisionImpact::Standard, epoch(1))
         .unwrap_err();
@@ -1340,12 +1332,10 @@ fn enrichment_evaluate_quote_fail_closed_source_unavailable() {
     let policy = sample_policy(1);
     let mut quote = sgx_quote(10);
     // internal_ledger is fail-closed; mark it unavailable
-    quote
-        .revocation_observations
-        .insert(
-            "internal_ledger".to_string(),
-            RevocationProbeStatus::Unavailable,
-        );
+    quote.revocation_observations.insert(
+        "internal_ledger".to_string(),
+        RevocationProbeStatus::Unavailable,
+    );
     let err = policy
         .evaluate_quote(&quote, DecisionImpact::Standard, epoch(1))
         .unwrap_err();
@@ -1364,12 +1354,10 @@ fn enrichment_evaluate_quote_try_next_source_fallback_works() {
     quote
         .revocation_observations
         .insert("intel_pcs".to_string(), RevocationProbeStatus::Unavailable);
-    quote
-        .revocation_observations
-        .insert(
-            "manufacturer_crl".to_string(),
-            RevocationProbeStatus::Unavailable,
-        );
+    quote.revocation_observations.insert(
+        "manufacturer_crl".to_string(),
+        RevocationProbeStatus::Unavailable,
+    );
     quote
         .revocation_observations
         .insert("internal_ledger".to_string(), RevocationProbeStatus::Good);
@@ -1386,18 +1374,14 @@ fn enrichment_evaluate_quote_all_unavailable_evidence_unavailable() {
     quote
         .revocation_observations
         .insert("intel_pcs".to_string(), RevocationProbeStatus::Unavailable);
-    quote
-        .revocation_observations
-        .insert(
-            "manufacturer_crl".to_string(),
-            RevocationProbeStatus::Unavailable,
-        );
-    quote
-        .revocation_observations
-        .insert(
-            "internal_ledger".to_string(),
-            RevocationProbeStatus::Unavailable,
-        );
+    quote.revocation_observations.insert(
+        "manufacturer_crl".to_string(),
+        RevocationProbeStatus::Unavailable,
+    );
+    quote.revocation_observations.insert(
+        "internal_ledger".to_string(),
+        RevocationProbeStatus::Unavailable,
+    );
     let err = policy
         .evaluate_quote(&quote, DecisionImpact::Standard, epoch(1))
         .unwrap_err();
@@ -1484,10 +1468,7 @@ fn enrichment_store_load_policy_json_invalid_halts() {
         .unwrap_err();
     assert_eq!(err.error_code(), "tee_policy_parse_failed");
     assert!(store.receipt_emission_halted());
-    assert_eq!(
-        store.last_error_code(),
-        Some("tee_policy_parse_failed")
-    );
+    assert_eq!(store.last_error_code(), Some("tee_policy_parse_failed"));
     // Governance event for failure
     let events = store.governance_ledger();
     assert_eq!(events.len(), 1);
@@ -1506,10 +1487,7 @@ fn enrichment_store_load_policy_epoch_regression_rejected() {
         TeeAttestationPolicyError::PolicyEpochRegression { .. }
     ));
     assert!(store.receipt_emission_halted());
-    assert_eq!(
-        store.last_error_code(),
-        Some("tee_policy_epoch_regression")
-    );
+    assert_eq!(store.last_error_code(), Some("tee_policy_epoch_regression"));
 }
 
 #[test]
@@ -1539,7 +1517,10 @@ fn enrichment_store_evaluate_quote_when_halted() {
         TeeAttestationPolicyError::ReceiptEmissionHalted
     ));
     assert_eq!(store.governance_ledger().len(), 1);
-    assert_eq!(store.governance_ledger()[0].event, "quote_evaluation_failed");
+    assert_eq!(
+        store.governance_ledger()[0].event,
+        "quote_evaluation_failed"
+    );
 }
 
 #[test]
@@ -1547,7 +1528,13 @@ fn enrichment_store_evaluate_quote_success_emits_allow() {
     let mut store = loaded_store(5);
     let quote = sgx_quote(10);
     store
-        .evaluate_quote(&quote, DecisionImpact::Standard, epoch(5), "t-eval", "d-eval")
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::Standard,
+            epoch(5),
+            "t-eval",
+            "d-eval",
+        )
         .unwrap();
     let last = store.governance_ledger().last().unwrap();
     assert_eq!(last.event, "quote_accepted");
@@ -2184,9 +2171,7 @@ fn enrichment_emitter_can_emit_one_behind_passes() {
     let mut emitter = DecisionReceiptEmitter::new("e-behind");
     let mut store = loaded_store(5);
     emitter.sync_policy(&store).unwrap();
-    store
-        .load_policy(sample_policy(6), "t-6", "d-6")
-        .unwrap();
+    store.load_policy(sample_policy(6), "t-6", "d-6").unwrap();
     // Synced at 5, active is 6 -- one behind is OK
     emitter.can_emit(epoch(6), &store).unwrap();
 }
@@ -2441,7 +2426,10 @@ fn enrichment_error_code_revocation_source_unavailable() {
 #[test]
 fn enrichment_error_code_revocation_evidence_unavailable() {
     let err = TeeAttestationPolicyError::RevocationEvidenceUnavailable;
-    assert_eq!(err.error_code(), "tee_policy_revocation_evidence_unavailable");
+    assert_eq!(
+        err.error_code(),
+        "tee_policy_revocation_evidence_unavailable"
+    );
     assert!(err.to_string().contains("fallback chain"));
 }
 
@@ -2456,7 +2444,10 @@ fn enrichment_error_code_invalid_override_artifact() {
 #[test]
 fn enrichment_error_code_override_justification_missing() {
     let err = TeeAttestationPolicyError::OverrideJustificationMissing;
-    assert_eq!(err.error_code(), "tee_policy_override_justification_missing");
+    assert_eq!(
+        err.error_code(),
+        "tee_policy_override_justification_missing"
+    );
 }
 
 #[test]
@@ -2671,7 +2662,13 @@ fn enrichment_full_lifecycle_load_evaluate_override_evaluate() {
     // Step 2: evaluate a valid quote
     let quote = sgx_quote(5);
     store
-        .evaluate_quote(&quote, DecisionImpact::Standard, epoch(10), "trace-lc-2", "decision-lc-2")
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::Standard,
+            epoch(10),
+            "trace-lc-2",
+            "decision-lc-2",
+        )
         .unwrap();
     assert_eq!(store.governance_ledger().len(), 2);
     assert_eq!(store.governance_ledger()[1].event, "quote_accepted");
@@ -2740,16 +2737,12 @@ fn enrichment_lifecycle_emitter_sync_and_emit() {
     emitter.can_emit(epoch(5), &store).unwrap();
 
     // Upgrade policy
-    store
-        .load_policy(sample_policy(6), "t-6", "d-6")
-        .unwrap();
+    store.load_policy(sample_policy(6), "t-6", "d-6").unwrap();
     // Still OK -- one behind
     emitter.can_emit(epoch(6), &store).unwrap();
 
     // Upgrade again -- now two behind
-    store
-        .load_policy(sample_policy(7), "t-7", "d-7")
-        .unwrap();
+    store.load_policy(sample_policy(7), "t-7", "d-7").unwrap();
     assert!(emitter.can_emit(epoch(7), &store).is_err());
 
     // Re-sync fixes it

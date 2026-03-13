@@ -24,14 +24,12 @@ use frankenengine_engine::engine_object_id::{EngineObjectId, ObjectDomain, Schem
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::semantic_contract_baseline::SemanticContractVersion;
 use frankenengine_engine::semantic_transport_ledger::{
-    BehavioralDelta, ContractDomain, MorphismSpec, RegressionMask,
-    SemanticTransportAnalyzer, SemanticTransportLedger, TransportAnalysisInput,
-    TransportAnalysisOutcome, TransportAnalysisResult, TransportAnalyzerConfig,
-    TransportEntrySpec, TransportError, TransportVerdict, VersionPair,
-    render_transport_report, should_block_gate,
-    DEBT_ADAPTER_REQUIRED, DEBT_BUDGET_EXHAUSTED, DEBT_MORPHISM_UNVERIFIED,
-    DEBT_REGRESSION_MASKED, DEBT_TRANSPORT_INCOMPATIBLE,
-    TRANSPORT_LEDGER_BEAD_ID, TRANSPORT_LEDGER_SCHEMA_VERSION,
+    BehavioralDelta, ContractDomain, DEBT_ADAPTER_REQUIRED, DEBT_BUDGET_EXHAUSTED,
+    DEBT_MORPHISM_UNVERIFIED, DEBT_REGRESSION_MASKED, DEBT_TRANSPORT_INCOMPATIBLE, MorphismSpec,
+    RegressionMask, SemanticTransportAnalyzer, SemanticTransportLedger, TRANSPORT_LEDGER_BEAD_ID,
+    TRANSPORT_LEDGER_SCHEMA_VERSION, TransportAnalysisInput, TransportAnalysisOutcome,
+    TransportAnalysisResult, TransportAnalyzerConfig, TransportEntrySpec, TransportError,
+    TransportVerdict, VersionPair, render_transport_report, should_block_gate,
 };
 
 // ===========================================================================
@@ -400,7 +398,10 @@ fn enrichment_full_analysis_result_serde_roundtrip() {
     let input = TransportAnalysisInput {
         entries: vec![
             simple_spec("hook.a", vec![]),
-            simple_spec("hook.b", vec![make_delta("timing", "a", "b", 200_000, true)]),
+            simple_spec(
+                "hook.b",
+                vec![make_delta("timing", "a", "b", 200_000, true)],
+            ),
         ],
         morphisms: vec![make_morphism_spec("m1", ContractDomain::Hook, true, vec![])],
         epoch: 50,
@@ -477,7 +478,12 @@ fn enrichment_deterministic_hashing_same_input_same_hash() {
             simple_spec("frag-alpha", vec![]),
             simple_spec("frag-beta", vec![make_delta("t", "a", "b", 100_000, true)]),
         ],
-        morphisms: vec![make_morphism_spec("m-det", ContractDomain::Effect, true, vec![])],
+        morphisms: vec![make_morphism_spec(
+            "m-det",
+            ContractDomain::Effect,
+            true,
+            vec![],
+        )],
         epoch: 77,
     };
     let r1 = run_analysis(&input);
@@ -511,7 +517,10 @@ fn enrichment_different_fragment_names_different_entry_hashes() {
     let r2 = analyzer
         .analyze(&simple_input(vec![simple_spec("name-B", vec![])]))
         .unwrap();
-    assert_ne!(r1.ledger.entries[0].entry_hash, r2.ledger.entries[0].entry_hash);
+    assert_ne!(
+        r1.ledger.entries[0].entry_hash,
+        r2.ledger.entries[0].entry_hash
+    );
     assert_ne!(r1.ledger.ledger_hash, r2.ledger.ledger_hash);
     assert_ne!(r1.result_hash, r2.result_hash);
 }
@@ -529,7 +538,10 @@ fn enrichment_different_domains_different_hashes() {
     spec_effect.domain = ContractDomain::Effect;
     let r1 = analyzer.analyze(&simple_input(vec![spec_hook])).unwrap();
     let r2 = analyzer.analyze(&simple_input(vec![spec_effect])).unwrap();
-    assert_ne!(r1.ledger.entries[0].entry_hash, r2.ledger.entries[0].entry_hash);
+    assert_ne!(
+        r1.ledger.entries[0].entry_hash,
+        r2.ledger.entries[0].entry_hash
+    );
 }
 
 // ===========================================================================
@@ -539,7 +551,10 @@ fn enrichment_different_domains_different_hashes() {
 #[test]
 fn enrichment_verdict_no_deltas_is_unchanged() {
     let result = run_analysis(&simple_input(vec![simple_spec("clean-frag", vec![])]));
-    assert_eq!(result.ledger.entries[0].verdict, TransportVerdict::Unchanged);
+    assert_eq!(
+        result.ledger.entries[0].verdict,
+        TransportVerdict::Unchanged
+    );
     assert_eq!(result.unchanged_entries, 1);
 }
 
@@ -860,7 +875,12 @@ fn enrichment_budget_exhaustion_limits_entries() {
 fn enrichment_morphism_verified_not_lossy_is_safe() {
     let input = TransportAnalysisInput {
         entries: vec![],
-        morphisms: vec![make_morphism_spec("safe-m", ContractDomain::Hook, true, vec![])],
+        morphisms: vec![make_morphism_spec(
+            "safe-m",
+            ContractDomain::Hook,
+            true,
+            vec![],
+        )],
         epoch: 1,
     };
     let result = run_analysis(&input);
@@ -901,7 +921,12 @@ fn enrichment_morphism_verified_lossy_not_safe() {
 fn enrichment_morphism_unverified_not_lossy_not_safe() {
     let input = TransportAnalysisInput {
         entries: vec![],
-        morphisms: vec![make_morphism_spec("unverif-m", ContractDomain::Context, false, vec![])],
+        morphisms: vec![make_morphism_spec(
+            "unverif-m",
+            ContractDomain::Context,
+            false,
+            vec![],
+        )],
         epoch: 1,
     };
     let result = run_analysis(&input);
@@ -919,12 +944,21 @@ fn enrichment_morphism_unverified_not_lossy_not_safe() {
 fn enrichment_morphism_summary_line_safety_labels() {
     let input_safe = TransportAnalysisInput {
         entries: vec![],
-        morphisms: vec![make_morphism_spec("safe", ContractDomain::Hook, true, vec![])],
+        morphisms: vec![make_morphism_spec(
+            "safe",
+            ContractDomain::Hook,
+            true,
+            vec![],
+        )],
         epoch: 1,
     };
     let r_safe = run_analysis(&input_safe);
     assert!(r_safe.ledger.morphisms[0].summary_line().contains("safe"));
-    assert!(!r_safe.ledger.morphisms[0].summary_line().contains("UNVERIFIED"));
+    assert!(
+        !r_safe.ledger.morphisms[0]
+            .summary_line()
+            .contains("UNVERIFIED")
+    );
 
     let input_lossy = TransportAnalysisInput {
         entries: vec![],
@@ -937,19 +971,28 @@ fn enrichment_morphism_summary_line_safety_labels() {
         epoch: 1,
     };
     let r_lossy = run_analysis(&input_lossy);
-    assert!(r_lossy.ledger.morphisms[0]
-        .summary_line()
-        .contains("verified-lossy"));
+    assert!(
+        r_lossy.ledger.morphisms[0]
+            .summary_line()
+            .contains("verified-lossy")
+    );
 
     let input_unverif = TransportAnalysisInput {
         entries: vec![],
-        morphisms: vec![make_morphism_spec("unverif", ContractDomain::Hook, false, vec![])],
+        morphisms: vec![make_morphism_spec(
+            "unverif",
+            ContractDomain::Hook,
+            false,
+            vec![],
+        )],
         epoch: 1,
     };
     let r_unverif = run_analysis(&input_unverif);
-    assert!(r_unverif.ledger.morphisms[0]
-        .summary_line()
-        .contains("UNVERIFIED"));
+    assert!(
+        r_unverif.ledger.morphisms[0]
+            .summary_line()
+            .contains("UNVERIFIED")
+    );
 }
 
 // ===========================================================================
@@ -1187,10 +1230,31 @@ fn enrichment_ledger_entries_by_domain_multigroup() {
         }
     }
     let result = run_analysis(&simple_input(specs));
-    assert_eq!(result.ledger.entries_by_domain(&ContractDomain::Hook).len(), 3);
-    assert_eq!(result.ledger.entries_by_domain(&ContractDomain::Effect).len(), 2);
-    assert_eq!(result.ledger.entries_by_domain(&ContractDomain::Context).len(), 1);
-    assert_eq!(result.ledger.entries_by_domain(&ContractDomain::Portal).len(), 0);
+    assert_eq!(
+        result.ledger.entries_by_domain(&ContractDomain::Hook).len(),
+        3
+    );
+    assert_eq!(
+        result
+            .ledger
+            .entries_by_domain(&ContractDomain::Effect)
+            .len(),
+        2
+    );
+    assert_eq!(
+        result
+            .ledger
+            .entries_by_domain(&ContractDomain::Context)
+            .len(),
+        1
+    );
+    assert_eq!(
+        result
+            .ledger
+            .entries_by_domain(&ContractDomain::Portal)
+            .len(),
+        0
+    );
 }
 
 // ===========================================================================
@@ -1246,10 +1310,7 @@ fn enrichment_ledger_entries_by_verdict_multigroup() {
 
 #[test]
 fn enrichment_ledger_version_pairs_deduplicates() {
-    let specs = vec![
-        simple_spec("frag-a", vec![]),
-        simple_spec("frag-b", vec![]),
-    ];
+    let specs = vec![simple_spec("frag-a", vec![]), simple_spec("frag-b", vec![])];
     let result = run_analysis(&simple_input(specs));
     let pairs = result.ledger.version_pairs();
     // Both specs have same version pair (0.1.0 -> 0.2.0)
@@ -1316,18 +1377,16 @@ fn enrichment_ledger_coverage_empty_is_zero() {
 #[test]
 fn enrichment_ledger_all_debt_codes_aggregates_entries_and_masks() {
     let input = TransportAnalysisInput {
-        entries: vec![
-            TransportEntrySpec {
-                fragment_name: "adapted-frag".to_string(),
-                domain: ContractDomain::Context,
-                source_version: ver(0, 1, 0),
-                target_version: ver(0, 2, 0),
-                behavioral_deltas: vec![make_delta("t", "a", "b", 100_000, true)],
-                required_invariants: vec!["i1".to_string()],
-                verified_invariants: vec!["i1".to_string()],
-                broken_invariants: vec![],
-            },
-        ],
+        entries: vec![TransportEntrySpec {
+            fragment_name: "adapted-frag".to_string(),
+            domain: ContractDomain::Context,
+            source_version: ver(0, 1, 0),
+            target_version: ver(0, 2, 0),
+            behavioral_deltas: vec![make_delta("t", "a", "b", 100_000, true)],
+            required_invariants: vec!["i1".to_string()],
+            verified_invariants: vec!["i1".to_string()],
+            broken_invariants: vec![],
+        }],
         morphisms: vec![MorphismSpec {
             name: "lossy-ctx-bridge".to_string(),
             domain: ContractDomain::Context,
@@ -1542,7 +1601,12 @@ fn enrichment_render_report_groups_by_verdict() {
 fn enrichment_render_report_morphisms_section() {
     let input = TransportAnalysisInput {
         entries: vec![],
-        morphisms: vec![make_morphism_spec("report-m", ContractDomain::Effect, true, vec![])],
+        morphisms: vec![make_morphism_spec(
+            "report-m",
+            ContractDomain::Effect,
+            true,
+            vec![],
+        )],
         epoch: 99,
     };
     let result = run_analysis(&input);
@@ -1580,7 +1644,13 @@ fn enrichment_render_report_regression_masks_section() {
 fn enrichment_render_report_includes_delta_details() {
     let spec = simple_spec(
         "with-deltas",
-        vec![make_delta("lifecycle", "mount", "lazy-mount", 200_000, true)],
+        vec![make_delta(
+            "lifecycle",
+            "mount",
+            "lazy-mount",
+            200_000,
+            true,
+        )],
     );
     let result = run_analysis(&simple_input(vec![spec]));
     let report = render_transport_report(&result);
@@ -1784,7 +1854,10 @@ fn enrichment_analysis_result_counts_consistent_with_ledger() {
     let result = run_analysis(&simple_input(specs));
     assert_eq!(result.total_entries, result.ledger.entry_count());
     assert_eq!(result.unchanged_entries, result.ledger.unchanged_count());
-    assert_eq!(result.adapter_entries, result.ledger.adapter_required_count());
+    assert_eq!(
+        result.adapter_entries,
+        result.ledger.adapter_required_count()
+    );
     assert_eq!(
         result.incompatible_entries,
         result.ledger.incompatible_count()
@@ -1869,10 +1942,16 @@ fn enrichment_multiple_deltas_severity_summed() {
 #[test]
 fn enrichment_transport_analysis_input_serde_roundtrip() {
     let input = TransportAnalysisInput {
-        entries: vec![
-            simple_spec("s1", vec![make_delta("t", "a", "b", 100_000, true)]),
-        ],
-        morphisms: vec![make_morphism_spec("m1", ContractDomain::Portal, true, vec![])],
+        entries: vec![simple_spec(
+            "s1",
+            vec![make_delta("t", "a", "b", 100_000, true)],
+        )],
+        morphisms: vec![make_morphism_spec(
+            "m1",
+            ContractDomain::Portal,
+            true,
+            vec![],
+        )],
         epoch: 42,
     };
     let json = serde_json::to_string(&input).unwrap();

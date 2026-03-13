@@ -23,7 +23,7 @@ use frankenengine_engine::flow_lattice::{
 use frankenengine_engine::ifc_artifacts::{
     DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
 };
-use frankenengine_engine::signature_preimage::{Signature, SigningKey, SIGNATURE_SENTINEL};
+use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
 const RUNTIME_ROUTE_ID: &str = "declass-secret-public";
 
@@ -526,7 +526,7 @@ fn runtime_lattice_rejects_receipt_with_sink_clearance_mismatch() {
     match err {
         FlowLatticeError::FlowBlocked { detail } => {
             assert!(
-                detail.contains("declassified label internal cannot flow"),
+                detail.contains("sink clearance internal cannot flow"),
                 "unexpected error detail: {detail}"
             );
         }

@@ -718,7 +718,10 @@ fn enrichment_addon_cohort_machine_learning_as_str() {
 
 #[test]
 fn enrichment_addon_cohort_system_integration_as_str() {
-    assert_eq!(AddonCohort::SystemIntegration.as_str(), "system_integration");
+    assert_eq!(
+        AddonCohort::SystemIntegration.as_str(),
+        "system_integration"
+    );
 }
 
 #[test]
@@ -991,12 +994,7 @@ fn enrichment_security_finding_debug_format() {
 
 #[test]
 fn enrichment_security_finding_empty_strings() {
-    let f = SecurityFinding::new(
-        FindingSeverity::Low,
-        FindingCategory::InfoLeak,
-        "",
-        "",
-    );
+    let f = SecurityFinding::new(FindingSeverity::Low, FindingCategory::InfoLeak, "", "");
     assert_eq!(f.addon_name, "");
     assert_eq!(f.description, "");
     assert!(!f.is_blocking());
@@ -1393,7 +1391,7 @@ fn enrichment_support_surface_entry_supported_exceeds_total() {
 #[test]
 fn enrichment_support_surface_entry_meets_minimum_boundary() {
     let e = SupportSurfaceEntry::new(AddonCohort::Crypto, 80, 100);
-    assert!(e.meets_minimum(800_000));  // exactly at minimum
+    assert!(e.meets_minimum(800_000)); // exactly at minimum
     assert!(!e.meets_minimum(800_001)); // just above
 }
 
@@ -1498,9 +1496,18 @@ fn enrichment_gate_verdict_as_str_all() {
     assert_eq!(GateVerdict::Approved.as_str(), "approved");
     assert_eq!(GateVerdict::ParityViolation.as_str(), "parity_violation");
     assert_eq!(GateVerdict::SecurityBlocking.as_str(), "security_blocking");
-    assert_eq!(GateVerdict::ThroughputExceeded.as_str(), "throughput_exceeded");
-    assert_eq!(GateVerdict::SupportInsufficient.as_str(), "support_insufficient");
-    assert_eq!(GateVerdict::MultipleViolations.as_str(), "multiple_violations");
+    assert_eq!(
+        GateVerdict::ThroughputExceeded.as_str(),
+        "throughput_exceeded"
+    );
+    assert_eq!(
+        GateVerdict::SupportInsufficient.as_str(),
+        "support_insufficient"
+    );
+    assert_eq!(
+        GateVerdict::MultipleViolations.as_str(),
+        "multiple_violations"
+    );
 }
 
 #[test]
@@ -1576,7 +1583,11 @@ fn enrichment_gate_verdict_is_approved_iff_approved() {
 
 #[test]
 fn enrichment_violation_serde_roundtrip() {
-    let v = Violation::new(GateAxis::Parity, Some(AddonCohort::Crypto), "below threshold");
+    let v = Violation::new(
+        GateAxis::Parity,
+        Some(AddonCohort::Crypto),
+        "below threshold",
+    );
     let json = serde_json::to_string(&v).unwrap();
     let back: Violation = serde_json::from_str(&json).unwrap();
     assert_eq!(v, back);
@@ -1668,9 +1679,24 @@ fn enrichment_receipt_blocking_finding_count_filters_non_blocking() {
     let cfg = GateConfig::permissive();
     let mut ev = GateEvaluator::new(cfg, ep());
     ev.add_security_finding(FindingSeverity::Low, FindingCategory::InfoLeak, "a", "x");
-    ev.add_security_finding(FindingSeverity::Medium, FindingCategory::Injection, "b", "y");
-    ev.add_security_finding(FindingSeverity::Critical, FindingCategory::BufferOverflow, "c", "z");
-    ev.add_security_finding(FindingSeverity::High, FindingCategory::UseAfterFree, "d", "w");
+    ev.add_security_finding(
+        FindingSeverity::Medium,
+        FindingCategory::Injection,
+        "b",
+        "y",
+    );
+    ev.add_security_finding(
+        FindingSeverity::Critical,
+        FindingCategory::BufferOverflow,
+        "c",
+        "z",
+    );
+    ev.add_security_finding(
+        FindingSeverity::High,
+        FindingCategory::UseAfterFree,
+        "d",
+        "w",
+    );
     let receipt = ev.evaluate();
     assert_eq!(receipt.blocking_finding_count(), 2); // Critical + High
 }
@@ -2005,8 +2031,7 @@ fn enrichment_e2e_empty_evidence_approved_with_defaults() {
 
 #[test]
 fn enrichment_e2e_fail_closed_missing_required_cohort() {
-    let cfg = GateConfig::default()
-        .with_required_cohort(AddonCohort::Crypto);
+    let cfg = GateConfig::default().with_required_cohort(AddonCohort::Crypto);
     let mut ev = GateEvaluator::new(cfg, ep());
     // No evidence at all
     let receipt = ev.evaluate();
@@ -2028,8 +2053,7 @@ fn enrichment_e2e_fail_open_missing_required_cohort() {
 
 #[test]
 fn enrichment_e2e_only_throughput_observed_cohort() {
-    let cfg = GateConfig::permissive()
-        .with_required_cohort(AddonCohort::Database);
+    let cfg = GateConfig::permissive().with_required_cohort(AddonCohort::Database);
     let mut ev = GateEvaluator::new(cfg, ep());
     // Provide only throughput evidence for Database
     ev.add_throughput(AddonCohort::Database, "pg", 10_000, 9_500);
@@ -2041,8 +2065,7 @@ fn enrichment_e2e_only_throughput_observed_cohort() {
 
 #[test]
 fn enrichment_e2e_only_support_surface_observed_cohort() {
-    let cfg = GateConfig::permissive()
-        .with_required_cohort(AddonCohort::MediaCodec);
+    let cfg = GateConfig::permissive().with_required_cohort(AddonCohort::MediaCodec);
     let mut ev = GateEvaluator::new(cfg, ep());
     ev.add_support_surface(AddonCohort::MediaCodec, 90, 100);
     let receipt = ev.evaluate();
@@ -2054,8 +2077,18 @@ fn enrichment_e2e_only_support_surface_observed_cohort() {
 fn enrichment_e2e_security_findings_at_max_allowed() {
     let cfg = GateConfig::default().with_max_security_findings(2);
     let mut ev = GateEvaluator::new(cfg, ep());
-    ev.add_security_finding(FindingSeverity::Critical, FindingCategory::BufferOverflow, "a", "d1");
-    ev.add_security_finding(FindingSeverity::High, FindingCategory::UseAfterFree, "b", "d2");
+    ev.add_security_finding(
+        FindingSeverity::Critical,
+        FindingCategory::BufferOverflow,
+        "a",
+        "d1",
+    );
+    ev.add_security_finding(
+        FindingSeverity::High,
+        FindingCategory::UseAfterFree,
+        "b",
+        "d2",
+    );
     let receipt = ev.evaluate();
     // 2 blocking findings <= max 2 -> approved
     assert!(receipt.is_approved());
@@ -2065,8 +2098,18 @@ fn enrichment_e2e_security_findings_at_max_allowed() {
 fn enrichment_e2e_security_findings_over_max_allowed() {
     let cfg = GateConfig::default().with_max_security_findings(1);
     let mut ev = GateEvaluator::new(cfg, ep());
-    ev.add_security_finding(FindingSeverity::Critical, FindingCategory::BufferOverflow, "a", "d1");
-    ev.add_security_finding(FindingSeverity::High, FindingCategory::UseAfterFree, "b", "d2");
+    ev.add_security_finding(
+        FindingSeverity::Critical,
+        FindingCategory::BufferOverflow,
+        "a",
+        "d1",
+    );
+    ev.add_security_finding(
+        FindingSeverity::High,
+        FindingCategory::UseAfterFree,
+        "b",
+        "d2",
+    );
     let receipt = ev.evaluate();
     // 2 blocking findings > max 1 -> denied
     assert_eq!(receipt.verdict, GateVerdict::SecurityBlocking);
@@ -2076,9 +2119,19 @@ fn enrichment_e2e_security_findings_over_max_allowed() {
 fn enrichment_e2e_parity_violation_message_contains_addon_name() {
     let cfg = GateConfig::default().with_min_samples(1);
     let mut ev = GateEvaluator::new(cfg, ep());
-    ev.add_parity(AddonCohort::Crypto, "special-aes-256", GateAxis::Parity, 500_000, 50);
+    ev.add_parity(
+        AddonCohort::Crypto,
+        "special-aes-256",
+        GateAxis::Parity,
+        500_000,
+        50,
+    );
     let receipt = ev.evaluate();
-    assert!(receipt.violations[0].description.contains("special-aes-256"));
+    assert!(
+        receipt.violations[0]
+            .description
+            .contains("special-aes-256")
+    );
 }
 
 #[test]
@@ -2088,7 +2141,11 @@ fn enrichment_e2e_parity_insufficient_samples_message() {
     ev.add_parity(AddonCohort::Crypto, "aes", GateAxis::Parity, 990_000, 5);
     let receipt = ev.evaluate();
     assert_eq!(receipt.verdict, GateVerdict::ParityViolation);
-    assert!(receipt.violations[0].description.contains("insufficient samples"));
+    assert!(
+        receipt.violations[0]
+            .description
+            .contains("insufficient samples")
+    );
 }
 
 #[test]
@@ -2106,16 +2163,21 @@ fn enrichment_e2e_support_violation_message_contains_cohort_name() {
     let mut ev = GateEvaluator::new(cfg, ep());
     ev.add_support_surface(AddonCohort::MachineLearning, 50, 100);
     let receipt = ev.evaluate();
-    assert!(receipt.violations[0].description.contains("machine_learning"));
+    assert!(
+        receipt.violations[0]
+            .description
+            .contains("machine_learning")
+    );
 }
 
 #[test]
 fn enrichment_e2e_missing_cohort_violation_message() {
-    let cfg = GateConfig::default()
-        .with_required_cohort(AddonCohort::Networking);
+    let cfg = GateConfig::default().with_required_cohort(AddonCohort::Networking);
     let mut ev = GateEvaluator::new(cfg, ep());
     let receipt = ev.evaluate();
-    let net_violations: Vec<_> = receipt.violations.iter()
+    let net_violations: Vec<_> = receipt
+        .violations
+        .iter()
         .filter(|v| v.description.contains("networking"))
         .collect();
     assert!(!net_violations.is_empty());

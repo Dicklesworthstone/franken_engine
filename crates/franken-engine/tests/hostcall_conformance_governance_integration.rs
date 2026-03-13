@@ -1,4 +1,10 @@
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::clone_on_copy,
+    clippy::len_zero,
+    clippy::identity_op
+)]
 
 //! Integration tests for `hostcall_conformance_governance` (RGC-505C, bd-1lsy.6.5.3).
 
@@ -662,4 +668,1337 @@ fn test_e2e_security_sensitive_drop_over_budget() {
     let receipt = ev.evaluate(ep());
     assert!(!receipt.is_approved());
     assert!(ReplayDropCategory::AuthenticationFailure.is_security_sensitive());
+}
+
+// ============================================================================
+// Enrichment tests
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// ConformanceAxis — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_conformance_axis_debug_all_variants() {
+    for axis in ConformanceAxis::ALL {
+        let dbg = format!("{axis:?}");
+        assert!(!dbg.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_conformance_axis_clone_eq() {
+    for axis in ConformanceAxis::ALL {
+        let cloned = axis.clone();
+        assert_eq!(*axis, cloned);
+    }
+}
+
+#[test]
+fn enrichment_conformance_axis_ord_is_total() {
+    for (i, a) in ConformanceAxis::ALL.iter().enumerate() {
+        for (j, b) in ConformanceAxis::ALL.iter().enumerate() {
+            if i < j {
+                assert!(*a < *b);
+            } else if i > j {
+                assert!(*a > *b);
+            } else {
+                assert_eq!(*a, *b);
+            }
+        }
+    }
+}
+
+#[test]
+fn enrichment_conformance_axis_all_names_are_lowercase() {
+    for axis in ConformanceAxis::ALL {
+        let s = axis.as_str();
+        assert_eq!(s, s.to_lowercase());
+    }
+}
+
+#[test]
+fn enrichment_conformance_axis_serde_json_field_is_snake_case() {
+    for axis in ConformanceAxis::ALL {
+        let json = serde_json::to_string(axis).unwrap();
+        // JSON string should be surrounded by quotes
+        assert!(json.starts_with('"'));
+        assert!(json.ends_with('"'));
+        let inner = &json[1..json.len() - 1];
+        assert_eq!(inner, axis.as_str());
+    }
+}
+
+#[test]
+fn enrichment_conformance_axis_all_unique() {
+    let mut seen = std::collections::BTreeSet::new();
+    for axis in ConformanceAxis::ALL {
+        assert!(seen.insert(*axis));
+    }
+    assert_eq!(seen.len(), 6);
+}
+
+#[test]
+fn enrichment_conformance_axis_protocol_is_first() {
+    assert_eq!(ConformanceAxis::ALL[0], ConformanceAxis::Protocol);
+}
+
+#[test]
+fn enrichment_conformance_axis_authorization_is_last() {
+    assert_eq!(
+        ConformanceAxis::ALL[ConformanceAxis::ALL.len() - 1],
+        ConformanceAxis::Authorization
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ConformanceResult — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_conformance_result_exact_threshold_passes() {
+    let r = ConformanceResult::new(ConformanceAxis::Protocol, 90, 10, 900_000);
+    assert_eq!(r.conformance_ratio_millionths, 900_000);
+    assert!(r.passes);
+}
+
+#[test]
+fn enrichment_conformance_result_one_below_threshold_fails() {
+    // 89/100 = 890_000 ppm, threshold 900_000
+    let r = ConformanceResult::new(ConformanceAxis::Protocol, 89, 11, 900_000);
+    assert_eq!(r.conformance_ratio_millionths, 890_000);
+    assert!(!r.passes);
+}
+
+#[test]
+fn enrichment_conformance_result_all_fail_zero_ratio() {
+    let r = ConformanceResult::new(ConformanceAxis::Encoding, 0, 100, 0);
+    assert_eq!(r.conformance_ratio_millionths, 0);
+    assert!(r.passes); // threshold 0 means 0 >= 0
+}
+
+#[test]
+fn enrichment_conformance_result_total_count_large() {
+    let r = ConformanceResult::new(ConformanceAxis::Timeout, u64::MAX / 2, 1, 0);
+    assert_eq!(r.total_count(), u64::MAX / 2 + 1);
+}
+
+#[test]
+fn enrichment_conformance_result_clone_eq() {
+    let r = ConformanceResult::new(ConformanceAxis::Authentication, 50, 50, 500_000);
+    let cloned = r.clone();
+    assert_eq!(r, cloned);
+}
+
+#[test]
+fn enrichment_conformance_result_debug_not_empty() {
+    let r = ConformanceResult::new(ConformanceAxis::Protocol, 10, 0, 900_000);
+    let dbg = format!("{r:?}");
+    assert!(dbg.contains("ConformanceResult"));
+}
+
+#[test]
+fn enrichment_conformance_result_display_fail_case() {
+    let r = ConformanceResult::new(ConformanceAxis::Ordering, 10, 90, 900_000);
+    let s = format!("{r}");
+    assert!(s.contains("FAIL"));
+    assert!(s.contains("ordering"));
+}
+
+#[test]
+fn enrichment_conformance_result_serde_roundtrip_all_axes() {
+    for axis in ConformanceAxis::ALL {
+        let r = ConformanceResult::new(*axis, 77, 23, 750_000);
+        let json = serde_json::to_string(&r).unwrap();
+        let back: ConformanceResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+}
+
+#[test]
+fn enrichment_conformance_result_serde_field_names() {
+    let r = ConformanceResult::new(ConformanceAxis::Protocol, 10, 5, 600_000);
+    let val: serde_json::Value = serde_json::to_value(&r).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("axis"));
+    assert!(obj.contains_key("pass_count"));
+    assert!(obj.contains_key("fail_count"));
+    assert!(obj.contains_key("conformance_ratio_millionths"));
+    assert!(obj.contains_key("passes"));
+}
+
+#[test]
+fn enrichment_conformance_result_display_contains_ppm() {
+    let r = ConformanceResult::new(ConformanceAxis::Authorization, 99, 1, 900_000);
+    let s = format!("{r}");
+    assert!(s.contains("ppm"));
+}
+
+#[test]
+fn enrichment_conformance_result_total_count_saturating() {
+    let r = ConformanceResult::new(ConformanceAxis::Protocol, u64::MAX, 1, 0);
+    // saturating_add means total_count is u64::MAX
+    assert_eq!(r.total_count(), u64::MAX);
+}
+
+// ---------------------------------------------------------------------------
+// ReplayDropCategory — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_replay_drop_category_debug_all() {
+    for cat in ReplayDropCategory::ALL {
+        let dbg = format!("{cat:?}");
+        assert!(!dbg.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_replay_drop_category_clone_eq() {
+    for cat in ReplayDropCategory::ALL {
+        let cloned = cat.clone();
+        assert_eq!(*cat, cloned);
+    }
+}
+
+#[test]
+fn enrichment_replay_drop_category_ord_consistent() {
+    assert!(ReplayDropCategory::TimeBudgetExceeded < ReplayDropCategory::ProtocolMismatch);
+    assert!(ReplayDropCategory::ProtocolMismatch < ReplayDropCategory::EncodingError);
+    assert!(ReplayDropCategory::EncodingError < ReplayDropCategory::AuthenticationFailure);
+    assert!(ReplayDropCategory::AuthenticationFailure < ReplayDropCategory::PolicyViolation);
+}
+
+#[test]
+fn enrichment_replay_drop_category_all_names_snake_case() {
+    for cat in ReplayDropCategory::ALL {
+        let name = cat.as_str();
+        assert_eq!(name, name.to_lowercase());
+        assert!(!name.contains('-'));
+    }
+}
+
+#[test]
+fn enrichment_replay_drop_category_security_sensitive_count() {
+    let sensitive_count = ReplayDropCategory::ALL
+        .iter()
+        .filter(|c| c.is_security_sensitive())
+        .count();
+    assert_eq!(sensitive_count, 2);
+}
+
+// ---------------------------------------------------------------------------
+// ReplayDropEntry — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_replay_drop_entry_exact_budget_is_within() {
+    // drop_rate = 50/1000 * 1_000_000 = 50_000 exactly
+    let e = ReplayDropEntry::new(ReplayDropCategory::TimeBudgetExceeded, 50, 1000, 50_000);
+    assert_eq!(e.drop_rate_millionths, 50_000);
+    assert!(e.within_budget);
+}
+
+#[test]
+fn enrichment_replay_drop_entry_one_over_budget() {
+    // drop_rate = 51/1000 * 1_000_000 = 51_000 > 50_000
+    let e = ReplayDropEntry::new(ReplayDropCategory::EncodingError, 51, 1000, 50_000);
+    assert_eq!(e.drop_rate_millionths, 51_000);
+    assert!(!e.within_budget);
+}
+
+#[test]
+fn enrichment_replay_drop_entry_debug_not_empty() {
+    let e = ReplayDropEntry::new(ReplayDropCategory::ProtocolMismatch, 1, 100, 50_000);
+    let dbg = format!("{e:?}");
+    assert!(dbg.contains("ReplayDropEntry"));
+}
+
+#[test]
+fn enrichment_replay_drop_entry_clone_eq() {
+    let e = ReplayDropEntry::new(ReplayDropCategory::AuthenticationFailure, 3, 200, 50_000);
+    let cloned = e.clone();
+    assert_eq!(e, cloned);
+}
+
+#[test]
+fn enrichment_replay_drop_entry_display_within_budget_text() {
+    let e = ReplayDropEntry::new(ReplayDropCategory::TimeBudgetExceeded, 1, 1000, 50_000);
+    let s = format!("{e}");
+    assert!(s.contains("WITHIN_BUDGET"));
+}
+
+#[test]
+fn enrichment_replay_drop_entry_display_over_budget_text() {
+    let e = ReplayDropEntry::new(ReplayDropCategory::PolicyViolation, 500, 1000, 50_000);
+    let s = format!("{e}");
+    assert!(s.contains("OVER_BUDGET"));
+}
+
+#[test]
+fn enrichment_replay_drop_entry_serde_field_names() {
+    let e = ReplayDropEntry::new(ReplayDropCategory::EncodingError, 2, 100, 50_000);
+    let val: serde_json::Value = serde_json::to_value(&e).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("category"));
+    assert!(obj.contains_key("drop_count"));
+    assert!(obj.contains_key("total_replays"));
+    assert!(obj.contains_key("drop_rate_millionths"));
+    assert!(obj.contains_key("within_budget"));
+}
+
+#[test]
+fn enrichment_replay_drop_entry_all_categories_roundtrip() {
+    for cat in ReplayDropCategory::ALL {
+        let e = ReplayDropEntry::new(*cat, 5, 200, 50_000);
+        let json = serde_json::to_string(&e).unwrap();
+        let back: ReplayDropEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, back);
+    }
+}
+
+#[test]
+fn enrichment_replay_drop_entry_max_rate_zero_always_over() {
+    let e = ReplayDropEntry::new(ReplayDropCategory::TimeBudgetExceeded, 1, 100, 0);
+    assert!(!e.within_budget);
+}
+
+#[test]
+fn enrichment_replay_drop_entry_max_rate_million_always_within() {
+    let e = ReplayDropEntry::new(ReplayDropCategory::PolicyViolation, 999, 1000, 1_000_000);
+    assert!(e.within_budget);
+}
+
+// ---------------------------------------------------------------------------
+// DegradedModeKind — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_degraded_mode_kind_debug_all() {
+    for kind in DegradedModeKind::ALL {
+        let dbg = format!("{kind:?}");
+        assert!(!dbg.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_degraded_mode_kind_clone_eq() {
+    for kind in DegradedModeKind::ALL {
+        let cloned = kind.clone();
+        assert_eq!(*kind, cloned);
+    }
+}
+
+#[test]
+fn enrichment_degraded_mode_kind_severity_rank_unique() {
+    let mut ranks = std::collections::BTreeSet::new();
+    for kind in DegradedModeKind::ALL {
+        assert!(ranks.insert(kind.severity_rank()));
+    }
+    assert_eq!(ranks.len(), 5);
+}
+
+#[test]
+fn enrichment_degraded_mode_kind_severity_rank_starts_at_one() {
+    assert_eq!(DegradedModeKind::ReducedBandwidth.severity_rank(), 1);
+}
+
+#[test]
+fn enrichment_degraded_mode_kind_severity_rank_ends_at_five() {
+    assert_eq!(DegradedModeKind::Disconnected.severity_rank(), 5);
+}
+
+#[test]
+fn enrichment_degraded_mode_kind_only_disconnected_is_terminal() {
+    let terminal_count = DegradedModeKind::ALL
+        .iter()
+        .filter(|k| k.is_terminal())
+        .count();
+    assert_eq!(terminal_count, 1);
+}
+
+#[test]
+fn enrichment_degraded_mode_kind_serde_json_snake_case() {
+    for kind in DegradedModeKind::ALL {
+        let json = serde_json::to_string(kind).unwrap();
+        let inner = &json[1..json.len() - 1];
+        assert_eq!(inner, kind.as_str());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DegradedModePolicy — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_degraded_mode_policy_for_all_kinds() {
+    for kind in DegradedModeKind::ALL {
+        let p = DegradedModePolicy::for_kind(*kind);
+        assert_eq!(p.kind, *kind);
+    }
+}
+
+#[test]
+fn enrichment_degraded_mode_policy_increased_latency() {
+    let p = DegradedModePolicy::for_kind(DegradedModeKind::IncreasedLatency);
+    assert_eq!(p.max_duration_ns, DEFAULT_MAX_DEGRADED_DURATION_NS);
+    assert!(!p.requires_operator_ack);
+    assert!(p.auto_recovery);
+    assert!(p.can_auto_recover());
+}
+
+#[test]
+fn enrichment_degraded_mode_policy_partial_functionality() {
+    let p = DegradedModePolicy::for_kind(DegradedModeKind::PartialFunctionality);
+    assert_eq!(p.max_duration_ns, DEFAULT_MAX_DEGRADED_DURATION_NS * 2);
+    assert!(p.requires_operator_ack);
+    assert!(p.auto_recovery);
+    assert!(p.can_auto_recover());
+}
+
+#[test]
+fn enrichment_degraded_mode_policy_read_only() {
+    let p = DegradedModePolicy::for_kind(DegradedModeKind::ReadOnly);
+    assert_eq!(p.max_duration_ns, DEFAULT_MAX_DEGRADED_DURATION_NS * 5);
+    assert!(p.requires_operator_ack);
+    assert!(!p.auto_recovery);
+    assert!(!p.can_auto_recover());
+}
+
+#[test]
+fn enrichment_degraded_mode_policy_disconnected_always_exceeds() {
+    let p = DegradedModePolicy::for_kind(DegradedModeKind::Disconnected);
+    // max_duration_ns is 0, so any non-zero duration exceeds
+    assert!(p.exceeds_duration(1));
+    // zero does not exceed
+    assert!(!p.exceeds_duration(0));
+}
+
+#[test]
+fn enrichment_degraded_mode_policy_debug_not_empty() {
+    let p = DegradedModePolicy::for_kind(DegradedModeKind::ReducedBandwidth);
+    let dbg = format!("{p:?}");
+    assert!(dbg.contains("DegradedModePolicy"));
+}
+
+#[test]
+fn enrichment_degraded_mode_policy_display_contains_kind() {
+    for kind in DegradedModeKind::ALL {
+        let p = DegradedModePolicy::for_kind(*kind);
+        let s = format!("{p}");
+        assert!(s.contains(kind.as_str()));
+        assert!(s.contains("degraded-policy"));
+    }
+}
+
+#[test]
+fn enrichment_degraded_mode_policy_serde_roundtrip_all() {
+    for kind in DegradedModeKind::ALL {
+        let p = DegradedModePolicy::for_kind(*kind);
+        let json = serde_json::to_string(&p).unwrap();
+        let back: DegradedModePolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+    }
+}
+
+#[test]
+fn enrichment_degraded_mode_policy_serde_field_names() {
+    let p = DegradedModePolicy::for_kind(DegradedModeKind::ReadOnly);
+    let val: serde_json::Value = serde_json::to_value(&p).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("kind"));
+    assert!(obj.contains_key("max_duration_ns"));
+    assert!(obj.contains_key("requires_operator_ack"));
+    assert!(obj.contains_key("auto_recovery"));
+}
+
+// ---------------------------------------------------------------------------
+// DegradedModeViolation — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_degraded_mode_violation_display() {
+    let v = DegradedModeViolation {
+        kind: DegradedModeKind::Disconnected,
+        observed_duration_ns: 5000,
+        max_duration_ns: 0,
+        missing_operator_ack: true,
+    };
+    let s = format!("{v}");
+    assert!(s.contains("disconnected"));
+    assert!(s.contains("5000"));
+    assert!(s.contains("ack_missing=true"));
+}
+
+#[test]
+fn enrichment_degraded_mode_violation_debug() {
+    let v = DegradedModeViolation {
+        kind: DegradedModeKind::ReducedBandwidth,
+        observed_duration_ns: 100,
+        max_duration_ns: 50,
+        missing_operator_ack: false,
+    };
+    let dbg = format!("{v:?}");
+    assert!(dbg.contains("DegradedModeViolation"));
+}
+
+#[test]
+fn enrichment_degraded_mode_violation_clone_eq() {
+    let v = DegradedModeViolation {
+        kind: DegradedModeKind::IncreasedLatency,
+        observed_duration_ns: 1000,
+        max_duration_ns: 500,
+        missing_operator_ack: true,
+    };
+    let cloned = v.clone();
+    assert_eq!(v, cloned);
+}
+
+#[test]
+fn enrichment_degraded_mode_violation_serde_roundtrip() {
+    let v = DegradedModeViolation {
+        kind: DegradedModeKind::PartialFunctionality,
+        observed_duration_ns: 999_999,
+        max_duration_ns: 500_000,
+        missing_operator_ack: false,
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    let back: DegradedModeViolation = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, back);
+}
+
+#[test]
+fn enrichment_degraded_mode_violation_serde_field_names() {
+    let v = DegradedModeViolation {
+        kind: DegradedModeKind::ReadOnly,
+        observed_duration_ns: 10,
+        max_duration_ns: 5,
+        missing_operator_ack: true,
+    };
+    let val: serde_json::Value = serde_json::to_value(&v).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("kind"));
+    assert!(obj.contains_key("observed_duration_ns"));
+    assert!(obj.contains_key("max_duration_ns"));
+    assert!(obj.contains_key("missing_operator_ack"));
+}
+
+// ---------------------------------------------------------------------------
+// ObservabilityClaimDelta — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_claim_delta_exact_tolerance_is_within() {
+    let d = ObservabilityClaimDelta::new("exact", 500_000, 550_000, 50_000);
+    assert_eq!(d.delta_millionths, 50_000);
+    assert!(d.within_tolerance);
+}
+
+#[test]
+fn enrichment_claim_delta_one_over_tolerance() {
+    let d = ObservabilityClaimDelta::new("over", 500_000, 550_001, 50_000);
+    assert_eq!(d.delta_millionths, 50_001);
+    assert!(!d.within_tolerance);
+}
+
+#[test]
+fn enrichment_claim_delta_zero_baseline_relative_drift_zero() {
+    let d = ObservabilityClaimDelta::new("zero_base", 0, 100_000, 50_000);
+    assert_eq!(d.relative_drift_millionths(), 0);
+}
+
+#[test]
+fn enrichment_claim_delta_identical_values() {
+    let d = ObservabilityClaimDelta::new("same", 777_000, 777_000, 0);
+    assert_eq!(d.delta_millionths, 0);
+    assert!(d.within_tolerance);
+    assert_eq!(d.relative_drift_millionths(), 0);
+}
+
+#[test]
+fn enrichment_claim_delta_debug_not_empty() {
+    let d = ObservabilityClaimDelta::new("dbg", 100, 200, 50);
+    let dbg = format!("{d:?}");
+    assert!(dbg.contains("ObservabilityClaimDelta"));
+}
+
+#[test]
+fn enrichment_claim_delta_display_drifted_case() {
+    let d = ObservabilityClaimDelta::new("drifted", 100_000, 300_000, 50_000);
+    let s = format!("{d}");
+    assert!(s.contains("DRIFTED"));
+    assert!(s.contains("drifted"));
+}
+
+#[test]
+fn enrichment_claim_delta_display_within_case() {
+    let d = ObservabilityClaimDelta::new("ok", 500_000, 510_000, 50_000);
+    let s = format!("{d}");
+    assert!(s.contains("WITHIN"));
+}
+
+#[test]
+fn enrichment_claim_delta_serde_field_names() {
+    let d = ObservabilityClaimDelta::new("fld", 100, 200, 50);
+    let val: serde_json::Value = serde_json::to_value(&d).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("claim_id"));
+    assert!(obj.contains_key("baseline_millionths"));
+    assert!(obj.contains_key("observed_millionths"));
+    assert!(obj.contains_key("delta_millionths"));
+    assert!(obj.contains_key("within_tolerance"));
+}
+
+#[test]
+fn enrichment_claim_delta_large_values() {
+    let d = ObservabilityClaimDelta::new("big", u64::MAX, 0, u64::MAX);
+    assert_eq!(d.delta_millionths, u64::MAX);
+    assert!(d.within_tolerance);
+}
+
+#[test]
+fn enrichment_claim_delta_claim_id_preserved() {
+    let d = ObservabilityClaimDelta::new("my-special-claim-123", 100, 200, 500);
+    assert_eq!(d.claim_id, "my-special-claim-123");
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceConfig — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_governance_config_debug_not_empty() {
+    let c = GovernanceConfig::default();
+    let dbg = format!("{c:?}");
+    assert!(dbg.contains("GovernanceConfig"));
+}
+
+#[test]
+fn enrichment_governance_config_clone_eq() {
+    let c = GovernanceConfig::strict();
+    let cloned = c.clone();
+    assert_eq!(c, cloned);
+}
+
+#[test]
+fn enrichment_governance_config_serde_roundtrip_strict() {
+    let c = GovernanceConfig::strict();
+    let json = serde_json::to_string(&c).unwrap();
+    let back: GovernanceConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, back);
+}
+
+#[test]
+fn enrichment_governance_config_serde_roundtrip_permissive() {
+    let c = GovernanceConfig::permissive();
+    let json = serde_json::to_string(&c).unwrap();
+    let back: GovernanceConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, back);
+}
+
+#[test]
+fn enrichment_governance_config_serde_field_names() {
+    let c = GovernanceConfig::default();
+    let val: serde_json::Value = serde_json::to_value(&c).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("min_conformance"));
+    assert!(obj.contains_key("max_drop_rate"));
+    assert!(obj.contains_key("max_degraded_duration"));
+    assert!(obj.contains_key("min_observability_tolerance"));
+    assert!(obj.contains_key("required_axes"));
+}
+
+#[test]
+fn enrichment_governance_config_strict_values() {
+    let c = GovernanceConfig::strict();
+    assert_eq!(c.min_conformance, 950_000);
+    assert_eq!(c.max_drop_rate, 10_000);
+    assert_eq!(c.max_degraded_duration, 30_000_000_000);
+    assert_eq!(c.min_observability_tolerance, 20_000);
+    assert_eq!(c.required_axes, 6);
+}
+
+#[test]
+fn enrichment_governance_config_permissive_values() {
+    let c = GovernanceConfig::permissive();
+    assert_eq!(c.min_conformance, 500_000);
+    assert_eq!(c.max_drop_rate, 200_000);
+    assert_eq!(c.max_degraded_duration, u64::MAX);
+    assert_eq!(c.min_observability_tolerance, 500_000);
+    assert_eq!(c.required_axes, 1);
+}
+
+#[test]
+fn enrichment_governance_config_custom_partial_override() {
+    let c = GovernanceConfig {
+        min_conformance: 800_000,
+        required_axes: 3,
+        ..GovernanceConfig::default()
+    };
+    assert_eq!(c.min_conformance, 800_000);
+    assert_eq!(c.required_axes, 3);
+    assert_eq!(c.max_drop_rate, DEFAULT_MAX_DROP_RATE);
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceVerdict — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_verdict_debug_all() {
+    for v in GovernanceVerdict::ALL {
+        let dbg = format!("{v:?}");
+        assert!(!dbg.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_verdict_clone_eq() {
+    for v in GovernanceVerdict::ALL {
+        let cloned = v.clone();
+        assert_eq!(*v, cloned);
+    }
+}
+
+#[test]
+fn enrichment_verdict_ord_consistent() {
+    // Approved should be the smallest in enum order
+    assert!(GovernanceVerdict::Approved < GovernanceVerdict::ConformanceViolation);
+    assert!(GovernanceVerdict::ConformanceViolation < GovernanceVerdict::MultipleViolations);
+}
+
+#[test]
+fn enrichment_verdict_unique_names() {
+    let mut names = std::collections::BTreeSet::new();
+    for v in GovernanceVerdict::ALL {
+        assert!(names.insert(v.as_str()));
+    }
+    assert_eq!(names.len(), 7);
+}
+
+#[test]
+fn enrichment_verdict_is_approved_xor_is_failure() {
+    for v in GovernanceVerdict::ALL {
+        assert_ne!(v.is_approved(), v.is_failure());
+    }
+}
+
+#[test]
+fn enrichment_verdict_serde_json_snake_case_all() {
+    for v in GovernanceVerdict::ALL {
+        let json = serde_json::to_string(v).unwrap();
+        let inner = &json[1..json.len() - 1];
+        assert_eq!(inner, v.as_str());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ViolationEntry — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_violation_entry_display() {
+    let ve = ViolationEntry {
+        category: GovernanceVerdict::ConformanceViolation,
+        description: "axis protocol failed".to_string(),
+    };
+    let s = format!("{ve}");
+    assert!(s.contains("conformance_violation"));
+    assert!(s.contains("axis protocol failed"));
+}
+
+#[test]
+fn enrichment_violation_entry_debug() {
+    let ve = ViolationEntry {
+        category: GovernanceVerdict::DropRateExceeded,
+        description: "too many drops".to_string(),
+    };
+    let dbg = format!("{ve:?}");
+    assert!(dbg.contains("ViolationEntry"));
+}
+
+#[test]
+fn enrichment_violation_entry_clone_eq() {
+    let ve = ViolationEntry {
+        category: GovernanceVerdict::ObservabilityDrift,
+        description: "drifted".to_string(),
+    };
+    let cloned = ve.clone();
+    assert_eq!(ve, cloned);
+}
+
+#[test]
+fn enrichment_violation_entry_serde_roundtrip() {
+    let ve = ViolationEntry {
+        category: GovernanceVerdict::DegradedModePolicyViolation,
+        description: "missing ack".to_string(),
+    };
+    let json = serde_json::to_string(&ve).unwrap();
+    let back: ViolationEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(ve, back);
+}
+
+#[test]
+fn enrichment_violation_entry_serde_field_names() {
+    let ve = ViolationEntry {
+        category: GovernanceVerdict::InsufficientCoverage,
+        description: "not enough axes".to_string(),
+    };
+    let val: serde_json::Value = serde_json::to_value(&ve).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("category"));
+    assert!(obj.contains_key("description"));
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceEvaluator — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_evaluator_with_defaults_config_is_default() {
+    let ev = GovernanceEvaluator::with_defaults();
+    assert_eq!(ev.config, GovernanceConfig::default());
+}
+
+#[test]
+fn enrichment_evaluator_debug_not_empty() {
+    let ev = GovernanceEvaluator::with_defaults();
+    let dbg = format!("{ev:?}");
+    assert!(dbg.contains("GovernanceEvaluator"));
+}
+
+#[test]
+fn enrichment_evaluator_clone_eq() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    ev.add_conformance(ConformanceAxis::Protocol, 50, 50);
+    let cloned = ev.clone();
+    assert_eq!(ev, cloned);
+}
+
+#[test]
+fn enrichment_evaluator_serde_roundtrip() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    ev.add_conformance(ConformanceAxis::Encoding, 80, 20);
+    ev.add_replay_drop(ReplayDropCategory::TimeBudgetExceeded, 3, 100);
+    let json = serde_json::to_string(&ev).unwrap();
+    let back: GovernanceEvaluator = serde_json::from_str(&json).unwrap();
+    assert_eq!(ev, back);
+}
+
+#[test]
+fn enrichment_evaluator_reset_preserves_config() {
+    let cfg = GovernanceConfig::strict();
+    let mut ev = GovernanceEvaluator::with_config(cfg.clone());
+    ev.add_conformance(ConformanceAxis::Protocol, 100, 0);
+    ev.reset();
+    assert_eq!(ev.config, cfg);
+    assert_eq!(ev.evidence_count(), 0);
+}
+
+#[test]
+fn enrichment_evaluator_empty_with_zero_required_axes_approved() {
+    let cfg = GovernanceConfig {
+        required_axes: 0,
+        ..GovernanceConfig::default()
+    };
+    let ev = GovernanceEvaluator::with_config(cfg);
+    let receipt = ev.evaluate(ep());
+    assert!(receipt.is_approved());
+}
+
+#[test]
+fn enrichment_evaluator_duplicate_axes_counted_for_coverage() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    // Add same axis multiple times — BTreeSet deduplication means coverage = 1
+    for _ in 0..10 {
+        ev.add_conformance(ConformanceAxis::Protocol, 100, 0);
+    }
+    let receipt = ev.evaluate(ep());
+    // Only 1 unique axis, need 4
+    assert_eq!(receipt.verdict, GovernanceVerdict::InsufficientCoverage);
+}
+
+#[test]
+fn enrichment_evaluator_evidence_count_increments_each_type() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    assert_eq!(ev.evidence_count(), 0);
+
+    ev.add_conformance(ConformanceAxis::Protocol, 10, 0);
+    assert_eq!(ev.evidence_count(), 1);
+
+    ev.add_conformance(ConformanceAxis::Encoding, 10, 0);
+    assert_eq!(ev.evidence_count(), 2);
+
+    ev.add_replay_drop(ReplayDropCategory::EncodingError, 1, 100);
+    assert_eq!(ev.evidence_count(), 3);
+
+    ev.add_degraded_mode(DegradedModeKind::ReducedBandwidth, 100, false);
+    assert_eq!(ev.evidence_count(), 4);
+
+    ev.add_claim_delta("c", 100, 200);
+    assert_eq!(ev.evidence_count(), 5);
+}
+
+#[test]
+fn enrichment_evaluator_add_degraded_mode_with_policy_custom() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    let policy = DegradedModePolicy {
+        kind: DegradedModeKind::ReadOnly,
+        max_duration_ns: 10_000,
+        requires_operator_ack: false,
+        auto_recovery: true,
+    };
+    ev.add_degraded_mode_with_policy(policy, 5_000, true);
+    let receipt = ev.evaluate(ep());
+    assert!(receipt.is_approved());
+    assert_eq!(receipt.degraded_policy_count, 1);
+}
+
+#[test]
+fn enrichment_evaluator_add_degraded_mode_with_policy_violation() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    let policy = DegradedModePolicy {
+        kind: DegradedModeKind::IncreasedLatency,
+        max_duration_ns: 100,
+        requires_operator_ack: true,
+        auto_recovery: false,
+    };
+    // exceeds duration and missing ack
+    ev.add_degraded_mode_with_policy(policy, 200, false);
+    let receipt = ev.evaluate(ep());
+    assert_eq!(
+        receipt.verdict,
+        GovernanceVerdict::DegradedModePolicyViolation
+    );
+}
+
+#[test]
+fn enrichment_evaluator_verdict_matches_receipt_verdict() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 99, 1);
+    }
+    let receipt = ev.evaluate(ep());
+    let verdict = ev.verdict(ep());
+    assert_eq!(receipt.verdict, verdict);
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceReceipt — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_receipt_debug_not_empty() {
+    let ev = GovernanceEvaluator::with_config(GovernanceConfig::permissive());
+    let receipt = ev.evaluate(ep());
+    let dbg = format!("{receipt:?}");
+    assert!(dbg.contains("GovernanceReceipt"));
+}
+
+#[test]
+fn enrichment_receipt_clone_eq() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 95, 5);
+    }
+    let receipt = ev.evaluate(ep());
+    let cloned = receipt.clone();
+    assert_eq!(receipt, cloned);
+}
+
+#[test]
+fn enrichment_receipt_serde_field_names() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    let receipt = ev.evaluate(ep());
+    let val: serde_json::Value = serde_json::to_value(&receipt).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("schema_version"));
+    assert!(obj.contains_key("verdict"));
+    assert!(obj.contains_key("epoch"));
+    assert!(obj.contains_key("conformance_count"));
+    assert!(obj.contains_key("drop_entry_count"));
+    assert!(obj.contains_key("degraded_policy_count"));
+    assert!(obj.contains_key("claim_delta_count"));
+    assert!(obj.contains_key("violations"));
+    assert!(obj.contains_key("content_hash"));
+}
+
+#[test]
+fn enrichment_receipt_violation_count_matches_vec_len() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    ev.add_conformance(ConformanceAxis::Protocol, 10, 90);
+    let receipt = ev.evaluate(ep());
+    assert_eq!(receipt.violation_count(), receipt.violations.len());
+}
+
+#[test]
+fn enrichment_receipt_total_entries_zero_for_empty() {
+    let cfg = GovernanceConfig {
+        required_axes: 0,
+        ..GovernanceConfig::default()
+    };
+    let ev = GovernanceEvaluator::with_config(cfg);
+    let receipt = ev.evaluate(ep());
+    assert_eq!(receipt.total_entries(), 0);
+}
+
+#[test]
+fn enrichment_receipt_display_contains_verdict() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    let receipt = ev.evaluate(ep());
+    let s = format!("{receipt}");
+    assert!(s.contains("approved"));
+    assert!(s.contains("receipt"));
+}
+
+#[test]
+fn enrichment_receipt_display_contains_violation_count_text() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    ev.add_conformance(ConformanceAxis::Protocol, 10, 90);
+    let receipt = ev.evaluate(ep());
+    let s = format!("{receipt}");
+    assert!(s.contains("violations="));
+}
+
+#[test]
+fn enrichment_receipt_approved_has_no_violations() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    let receipt = ev.evaluate(ep());
+    assert!(receipt.is_approved());
+    assert!(!receipt.has_violations());
+    assert_eq!(receipt.violation_count(), 0);
+}
+
+#[test]
+fn enrichment_receipt_is_approved_iff_verdict_approved() {
+    for _v in GovernanceVerdict::ALL {
+        // Build scenario per verdict
+        let cfg = GovernanceConfig {
+            required_axes: 0,
+            ..GovernanceConfig::permissive()
+        };
+        let ev = GovernanceEvaluator::with_config(cfg);
+        let receipt = ev.evaluate(ep());
+        assert_eq!(
+            receipt.is_approved(),
+            receipt.verdict == GovernanceVerdict::Approved
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content hash determinism — enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_content_hash_deterministic_with_drops() {
+    let build = || {
+        let mut ev = GovernanceEvaluator::with_defaults();
+        for axis in ConformanceAxis::ALL {
+            ev.add_conformance(*axis, 99, 1);
+        }
+        ev.add_replay_drop(ReplayDropCategory::TimeBudgetExceeded, 5, 1000);
+        ev.add_replay_drop(ReplayDropCategory::EncodingError, 3, 1000);
+        ev.evaluate(ep())
+    };
+    assert_eq!(build().content_hash, build().content_hash);
+}
+
+#[test]
+fn enrichment_content_hash_deterministic_with_degraded() {
+    let build = || {
+        let mut ev = GovernanceEvaluator::with_config(GovernanceConfig::permissive());
+        ev.add_degraded_mode(DegradedModeKind::ReducedBandwidth, 1000, true);
+        ev.evaluate(ep())
+    };
+    assert_eq!(build().content_hash, build().content_hash);
+}
+
+#[test]
+fn enrichment_content_hash_deterministic_with_claims() {
+    let build = || {
+        let mut ev = GovernanceEvaluator::with_config(GovernanceConfig::permissive());
+        ev.add_claim_delta("c1", 500_000, 510_000);
+        ev.add_claim_delta("c2", 700_000, 720_000);
+        ev.evaluate(ep())
+    };
+    assert_eq!(build().content_hash, build().content_hash);
+}
+
+#[test]
+fn enrichment_content_hash_changes_with_drop_count() {
+    let mut ev1 = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev1.add_conformance(*axis, 100, 0);
+    }
+    ev1.add_replay_drop(ReplayDropCategory::TimeBudgetExceeded, 1, 1000);
+    let r1 = ev1.evaluate(ep());
+
+    let mut ev2 = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev2.add_conformance(*axis, 100, 0);
+    }
+    ev2.add_replay_drop(ReplayDropCategory::TimeBudgetExceeded, 2, 1000);
+    let r2 = ev2.evaluate(ep());
+
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn enrichment_content_hash_changes_with_degraded_duration() {
+    let mut ev1 = GovernanceEvaluator::with_config(GovernanceConfig::permissive());
+    ev1.add_degraded_mode(DegradedModeKind::ReducedBandwidth, 1000, true);
+    let r1 = ev1.evaluate(ep());
+
+    let mut ev2 = GovernanceEvaluator::with_config(GovernanceConfig::permissive());
+    ev2.add_degraded_mode(DegradedModeKind::ReducedBandwidth, 2000, true);
+    let r2 = ev2.evaluate(ep());
+
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn enrichment_content_hash_changes_with_claim_values() {
+    let cfg = GovernanceConfig {
+        required_axes: 0,
+        ..GovernanceConfig::permissive()
+    };
+
+    let mut ev1 = GovernanceEvaluator::with_config(cfg.clone());
+    ev1.add_claim_delta("c1", 100, 200);
+    let r1 = ev1.evaluate(ep());
+
+    let mut ev2 = GovernanceEvaluator::with_config(cfg);
+    ev2.add_claim_delta("c1", 100, 300);
+    let r2 = ev2.evaluate(ep());
+
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+// ---------------------------------------------------------------------------
+// E2E scenario enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_e2e_all_violation_categories_in_receipt() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    // Insufficient coverage: only 1 axis
+    ev.add_conformance(ConformanceAxis::Protocol, 10, 90); // conformance violation
+    ev.add_replay_drop(ReplayDropCategory::EncodingError, 500, 1000); // drop rate exceeded
+    ev.add_degraded_mode(DegradedModeKind::Disconnected, 100, false); // degraded violation
+    ev.add_claim_delta("obs", 100_000, 500_000); // observability drift
+
+    let receipt = ev.evaluate(ep());
+    assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
+    assert!(receipt.violation_count() >= 4);
+}
+
+#[test]
+fn enrichment_e2e_strict_rejects_91_percent_conformance() {
+    let mut ev = GovernanceEvaluator::with_config(GovernanceConfig::strict());
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 91, 9); // 910_000 ppm < strict 950_000
+    }
+    let receipt = ev.evaluate(ep());
+    assert!(!receipt.is_approved());
+}
+
+#[test]
+fn enrichment_e2e_strict_accepts_96_percent_conformance() {
+    let mut ev = GovernanceEvaluator::with_config(GovernanceConfig::strict());
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 96, 4); // 960_000 ppm >= strict 950_000
+    }
+    let receipt = ev.evaluate(ep());
+    assert!(receipt.is_approved());
+}
+
+#[test]
+fn enrichment_e2e_receipt_serde_full_roundtrip() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 95, 5);
+    }
+    ev.add_replay_drop(ReplayDropCategory::TimeBudgetExceeded, 1, 1000);
+    ev.add_degraded_mode(DegradedModeKind::ReducedBandwidth, 500, false);
+    ev.add_claim_delta("metric_a", 500_000, 510_000);
+    let receipt = ev.evaluate(ep());
+    let json = serde_json::to_string_pretty(&receipt).unwrap();
+    let back: GovernanceReceipt = serde_json::from_str(&json).unwrap();
+    assert_eq!(receipt, back);
+}
+
+#[test]
+fn enrichment_e2e_multiple_drop_categories() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    for cat in ReplayDropCategory::ALL {
+        ev.add_replay_drop(*cat, 1, 1000);
+    }
+    let receipt = ev.evaluate(ep());
+    assert!(receipt.is_approved());
+    assert_eq!(receipt.drop_entry_count, 5);
+}
+
+#[test]
+fn enrichment_e2e_multiple_degraded_kinds_mixed() {
+    let cfg = GovernanceConfig {
+        required_axes: 0,
+        ..GovernanceConfig::permissive()
+    };
+    let mut ev = GovernanceEvaluator::with_config(cfg);
+    ev.add_degraded_mode(DegradedModeKind::ReducedBandwidth, 100, false);
+    ev.add_degraded_mode(DegradedModeKind::IncreasedLatency, 200, false);
+    let receipt = ev.evaluate(ep());
+    assert!(receipt.is_approved());
+    assert_eq!(receipt.degraded_policy_count, 2);
+}
+
+#[test]
+fn enrichment_e2e_multiple_claim_deltas() {
+    let cfg = GovernanceConfig {
+        required_axes: 0,
+        ..GovernanceConfig::permissive()
+    };
+    let mut ev = GovernanceEvaluator::with_config(cfg);
+    for i in 0..5 {
+        ev.add_claim_delta(format!("claim_{i}"), 500_000, 510_000);
+    }
+    let receipt = ev.evaluate(ep());
+    assert!(receipt.is_approved());
+    assert_eq!(receipt.claim_delta_count, 5);
+}
+
+#[test]
+fn enrichment_e2e_reset_then_reevaluate() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    // First evaluation: should fail (insufficient coverage)
+    ev.add_conformance(ConformanceAxis::Protocol, 10, 90);
+    let r1 = ev.evaluate(ep());
+    assert!(!r1.is_approved());
+
+    // Reset and add passing data
+    ev.reset();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    let r2 = ev.evaluate(ep());
+    assert!(r2.is_approved());
+}
+
+#[test]
+fn enrichment_e2e_evaluator_serde_preserves_behavior() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 95, 5);
+    }
+    ev.add_replay_drop(ReplayDropCategory::TimeBudgetExceeded, 2, 1000);
+
+    let json = serde_json::to_string(&ev).unwrap();
+    let restored: GovernanceEvaluator = serde_json::from_str(&json).unwrap();
+
+    let r1 = ev.evaluate(ep());
+    let r2 = restored.evaluate(ep());
+    assert_eq!(r1.verdict, r2.verdict);
+    assert_eq!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn enrichment_e2e_conformance_violation_description_contains_axis() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    // Add a failing axis on top
+    ev.add_conformance(ConformanceAxis::Protocol, 10, 90);
+    let receipt = ev.evaluate(ep());
+    // Find the conformance violation
+    let violation = receipt
+        .violations
+        .iter()
+        .find(|v| v.category == GovernanceVerdict::ConformanceViolation);
+    assert!(violation.is_some());
+    assert!(violation.unwrap().description.contains("protocol"));
+}
+
+#[test]
+fn enrichment_e2e_insufficient_coverage_description() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    ev.add_conformance(ConformanceAxis::Protocol, 100, 0);
+    ev.add_conformance(ConformanceAxis::Encoding, 100, 0);
+    let receipt = ev.evaluate(ep());
+    assert_eq!(receipt.verdict, GovernanceVerdict::InsufficientCoverage);
+    let violation = receipt
+        .violations
+        .iter()
+        .find(|v| v.category == GovernanceVerdict::InsufficientCoverage)
+        .unwrap();
+    assert!(violation.description.contains("2"));
+    assert!(violation.description.contains("4"));
+}
+
+#[test]
+fn enrichment_e2e_drop_rate_violation_description() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    ev.add_replay_drop(ReplayDropCategory::PolicyViolation, 200, 1000);
+    let receipt = ev.evaluate(ep());
+    let violation = receipt
+        .violations
+        .iter()
+        .find(|v| v.category == GovernanceVerdict::DropRateExceeded)
+        .unwrap();
+    assert!(violation.description.contains("policy_violation"));
+}
+
+#[test]
+fn enrichment_e2e_observability_drift_violation_description() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    ev.add_claim_delta("my_metric", 500_000, 700_000);
+    let receipt = ev.evaluate(ep());
+    assert_eq!(receipt.verdict, GovernanceVerdict::ObservabilityDrift);
+    let violation = receipt
+        .violations
+        .iter()
+        .find(|v| v.category == GovernanceVerdict::ObservabilityDrift)
+        .unwrap();
+    assert!(violation.description.contains("my_metric"));
+}
+
+#[test]
+fn enrichment_e2e_degraded_violation_description_contains_kind() {
+    let mut ev = GovernanceEvaluator::with_defaults();
+    for axis in ConformanceAxis::ALL {
+        ev.add_conformance(*axis, 100, 0);
+    }
+    ev.add_degraded_mode(DegradedModeKind::Disconnected, 100, false);
+    let receipt = ev.evaluate(ep());
+    let violation = receipt
+        .violations
+        .iter()
+        .find(|v| v.category == GovernanceVerdict::DegradedModePolicyViolation)
+        .unwrap();
+    assert!(violation.description.contains("disconnected"));
 }

@@ -1551,7 +1551,11 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     assert_eq!(score_json["publish_allowed"].as_bool(), Some(true));
     assert_eq!(
         score_json["bundle"].as_str(),
-        Some(bundle_dir.to_str().expect("bundle dir should be valid utf8"))
+        Some(
+            bundle_dir
+                .to_str()
+                .expect("bundle dir should be valid utf8")
+        )
     );
 
     let results_json: serde_json::Value = serde_json::from_slice(
@@ -1691,10 +1695,12 @@ fn frankenctl_benchmark_verify_detects_results_digest_tampering() {
     let verify_report = parse_stdout_json(&verify_output);
     assert_eq!(verify_report["verdict"].as_str(), Some("failed"));
     assert!(
-        verify_report["checks"].as_array().is_some_and(|checks| checks.iter().any(|check| {
-            check["name"].as_str() == Some("bundle_manifest_results_digest_matches")
-                && check["passed"].as_bool() == Some(false)
-        }))
+        verify_report["checks"]
+            .as_array()
+            .is_some_and(|checks| checks.iter().any(|check| {
+                check["name"].as_str() == Some("bundle_manifest_results_digest_matches")
+                    && check["passed"].as_bool() == Some(false)
+            }))
     );
 
     let _ = fs::remove_file(score_input_path);

@@ -26,6 +26,7 @@ use frankenengine_engine::ast::{
     ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
     VariableDeclarationKind, VariableDeclarator,
 };
+use frankenengine_engine::ir_contract::BindingKind;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 use frankenengine_engine::static_semantics::{
     STATIC_SEMANTICS_BEAD_ID, STATIC_SEMANTICS_COMPONENT, STATIC_SEMANTICS_CONTRACT_VERSION,
@@ -845,4 +846,573 @@ fn enrichment_event_counts_match_analysis() {
     assert_eq!(event.binding_count, result.bindings.len() as u64);
     assert_eq!(event.scope_count, result.scopes.len() as u64);
     assert_eq!(event.is_module, result.is_module);
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: duplicate export detected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_duplicate_export_detected() {
+    let tree = make_tree(
+        ParseGoal::Module,
+        vec![
+            var_decl(
+                VariableDeclarationKind::Let,
+                "x",
+                Some(Expression::NumericLiteral(1)),
+                1,
+            ),
+            export_named("x", 2),
+            export_named("x", 3),
+        ],
+    );
+    let result = analyze(&tree);
+    assert!(!result.passed());
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == StaticErrorKind::DuplicateExport)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: import redeclaration detected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_import_redeclaration_detected() {
+    let tree = make_tree(
+        ParseGoal::Module,
+        vec![
+            import_stmt(Some("x"), "mod-a", 1),
+            var_decl(
+                VariableDeclarationKind::Let,
+                "x",
+                Some(Expression::NumericLiteral(1)),
+                2,
+            ),
+        ],
+    );
+    let result = analyze(&tree);
+    assert!(!result.passed());
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == StaticErrorKind::ImportRedeclaration
+                || e.kind == StaticErrorKind::DuplicateBinding)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: empty declarator list
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_empty_declarator_list_detected() {
+    use frankenengine_engine::ast::VariableDeclaration;
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Let,
+            declarations: vec![],
+            span: span(1),
+        })],
+    );
+    let result = analyze(&tree);
+    assert!(!result.passed());
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == StaticErrorKind::EmptyDeclaratorList)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: reserved word binding
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_reserved_word_binding_package() {
+    let tree = make_tree(
+        ParseGoal::Module,
+        vec![var_decl(
+            VariableDeclarationKind::Let,
+            "package",
+            Some(Expression::NumericLiteral(1)),
+            1,
+        )],
+    );
+    let result = analyze(&tree);
+    // module goal implies strict mode — "package" is a strict reserved word
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == StaticErrorKind::ReservedWordBinding)
+    );
+}
+
+#[test]
+fn enrichment_reserved_word_binding_implements() {
+    let tree = make_tree(
+        ParseGoal::Module,
+        vec![var_decl(
+            VariableDeclarationKind::Let,
+            "implements",
+            Some(Expression::NumericLiteral(1)),
+            1,
+        )],
+    );
+    let result = analyze(&tree);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == StaticErrorKind::ReservedWordBinding)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: valid module with multiple imports and exports
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_valid_module_complex() {
+    let tree = make_tree(
+        ParseGoal::Module,
+        vec![
+            import_stmt(Some("a"), "mod-a", 1),
+            import_stmt(Some("b"), "mod-b", 2),
+            var_decl(
+                VariableDeclarationKind::Const,
+                "result",
+                Some(Expression::NumericLiteral(42)),
+                3,
+            ),
+            export_named("result", 4),
+        ],
+    );
+    let result = analyze(&tree);
+    assert!(result.passed());
+    assert!(result.is_module);
+    assert!(result.bindings.len() >= 3);
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: duplicate bindings across var kinds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_const_then_let_collision() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![
+            var_decl(
+                VariableDeclarationKind::Const,
+                "x",
+                Some(Expression::NumericLiteral(1)),
+                1,
+            ),
+            var_decl(
+                VariableDeclarationKind::Let,
+                "x",
+                Some(Expression::NumericLiteral(2)),
+                2,
+            ),
+        ],
+    );
+    let result = analyze(&tree);
+    assert!(!result.passed());
+}
+
+#[test]
+fn enrichment_var_then_let_collision() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![
+            var_decl(
+                VariableDeclarationKind::Var,
+                "x",
+                Some(Expression::NumericLiteral(1)),
+                1,
+            ),
+            var_decl(
+                VariableDeclarationKind::Let,
+                "x",
+                Some(Expression::NumericLiteral(2)),
+                2,
+            ),
+        ],
+    );
+    let result = analyze(&tree);
+    assert!(!result.passed());
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: var-var does NOT collide
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_var_var_no_collision() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![
+            var_decl(
+                VariableDeclarationKind::Var,
+                "x",
+                Some(Expression::NumericLiteral(1)),
+                1,
+            ),
+            var_decl(
+                VariableDeclarationKind::Var,
+                "x",
+                Some(Expression::NumericLiteral(2)),
+                2,
+            ),
+        ],
+    );
+    let result = analyze(&tree);
+    // var re-declaration is allowed in non-strict mode
+    let has_dup = result
+        .errors
+        .iter()
+        .any(|e| e.kind == StaticErrorKind::DuplicateBinding);
+    assert!(!has_dup, "var-var should not be a duplicate binding error");
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: single binding passes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_single_let_passes() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![var_decl(
+            VariableDeclarationKind::Let,
+            "x",
+            Some(Expression::NumericLiteral(1)),
+            1,
+        )],
+    );
+    let result = analyze(&tree);
+    assert!(result.passed());
+    assert!(!result.bindings.is_empty());
+}
+
+#[test]
+fn enrichment_single_const_with_init_passes() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![var_decl(
+            VariableDeclarationKind::Const,
+            "MAX",
+            Some(Expression::NumericLiteral(100)),
+            1,
+        )],
+    );
+    let result = analyze(&tree);
+    assert!(result.passed());
+}
+
+// ---------------------------------------------------------------------------
+// StaticError: clone equality
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_static_error_clone_eq() {
+    let err = StaticError::new(
+        StaticErrorKind::BreakOutsideLoop,
+        "break not in loop",
+        span(10),
+    );
+    let cloned = err.clone();
+    assert_eq!(err, cloned);
+}
+
+// ---------------------------------------------------------------------------
+// StaticAnalysisResult: serde roundtrip with errors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_result_with_errors_serde_roundtrip() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![
+            var_decl(VariableDeclarationKind::Const, "a", None, 1),
+            var_decl(
+                VariableDeclarationKind::Let,
+                "b",
+                Some(Expression::NumericLiteral(1)),
+                2,
+            ),
+            var_decl(
+                VariableDeclarationKind::Let,
+                "b",
+                Some(Expression::NumericLiteral(2)),
+                3,
+            ),
+        ],
+    );
+    let result = analyze(&tree);
+    assert!(!result.passed());
+    let json = serde_json::to_string(&result).unwrap();
+    let back: StaticAnalysisResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(result, back);
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: binding resolution produces BindingKind
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_binding_kind_let() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![var_decl(
+            VariableDeclarationKind::Let,
+            "x",
+            Some(Expression::NumericLiteral(1)),
+            1,
+        )],
+    );
+    let result = analyze(&tree);
+    assert!(
+        result
+            .bindings
+            .iter()
+            .any(|b| b.name == "x" && b.kind == BindingKind::Let)
+    );
+}
+
+#[test]
+fn enrichment_binding_kind_const() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![var_decl(
+            VariableDeclarationKind::Const,
+            "Y",
+            Some(Expression::NumericLiteral(42)),
+            1,
+        )],
+    );
+    let result = analyze(&tree);
+    assert!(
+        result
+            .bindings
+            .iter()
+            .any(|b| b.name == "Y" && b.kind == BindingKind::Const)
+    );
+}
+
+#[test]
+fn enrichment_binding_kind_var() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![var_decl(
+            VariableDeclarationKind::Var,
+            "z",
+            Some(Expression::NumericLiteral(0)),
+            1,
+        )],
+    );
+    let result = analyze(&tree);
+    assert!(
+        result
+            .bindings
+            .iter()
+            .any(|b| b.name == "z" && b.kind == BindingKind::Var)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: import binding kind
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_binding_kind_import() {
+    let tree = make_tree(
+        ParseGoal::Module,
+        vec![import_stmt(Some("React"), "react", 1)],
+    );
+    let result = analyze(&tree);
+    assert!(result.passed());
+    assert!(
+        result
+            .bindings
+            .iter()
+            .any(|b| b.name == "React" && b.kind == BindingKind::Import)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: parser-driven complex programs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_parser_nested_function_valid() {
+    let result = parse_and_analyze(
+        "function outer() { let x = 1; function inner() { let y = x; } }",
+        ParseGoal::Script,
+    );
+    assert!(result.passed());
+    assert!(result.scopes.len() >= 3); // global + outer + inner
+}
+
+#[test]
+fn enrichment_parser_arrow_function_valid() {
+    let result = parse_and_analyze("const add = (a, b) => a + b;", ParseGoal::Script);
+    assert!(result.passed());
+}
+
+#[test]
+fn enrichment_parser_if_block_scoping() {
+    let result = parse_and_analyze("if (true) { let x = 1; } let x = 2;", ParseGoal::Script);
+    // block-scoped: both x's are fine
+    assert!(result.passed());
+}
+
+#[test]
+fn enrichment_parser_for_loop_scoping() {
+    let result = parse_and_analyze(
+        "for (let i = 0; i < 10; i++) { let j = i; }",
+        ParseGoal::Script,
+    );
+    assert!(result.passed());
+}
+
+#[test]
+fn enrichment_parser_switch_scoping() {
+    let result = parse_and_analyze(
+        "switch (1) { case 1: { let x = 1; break; } case 2: { let x = 2; break; } }",
+        ParseGoal::Script,
+    );
+    assert!(result.passed());
+}
+
+#[test]
+fn enrichment_parser_try_catch_scoping() {
+    let result = parse_and_analyze(
+        "try { let x = 1; } catch (e) { let x = 2; }",
+        ParseGoal::Script,
+    );
+    assert!(result.passed());
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic code: uniqueness across all kinds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_diagnostic_codes_all_unique() {
+    let all_kinds = [
+        StaticErrorKind::DuplicateBinding,
+        StaticErrorKind::ConstWithoutInitializer,
+        StaticErrorKind::ImportInScript,
+        StaticErrorKind::ExportInScript,
+        StaticErrorKind::DuplicateExport,
+        StaticErrorKind::AwaitOutsideAsync,
+        StaticErrorKind::TemporalDeadZone,
+        StaticErrorKind::LexicalVarCollision,
+        StaticErrorKind::EmptyDeclaratorList,
+        StaticErrorKind::ReservedWordBinding,
+        StaticErrorKind::ImportRedeclaration,
+        StaticErrorKind::AssignmentToConst,
+        StaticErrorKind::ReturnOutsideFunction,
+        StaticErrorKind::BreakOutsideLoop,
+        StaticErrorKind::ContinueOutsideLoop,
+        StaticErrorKind::DuplicateParameter,
+        StaticErrorKind::DeleteOfIdentifier,
+        StaticErrorKind::EvalArgumentsBinding,
+        StaticErrorKind::ForInInitializer,
+        StaticErrorKind::DuplicateDestructuringBinding,
+    ];
+    let codes: BTreeSet<_> = all_kinds.iter().map(|k| k.diagnostic_code()).collect();
+    assert_eq!(codes.len(), 20, "all diagnostic codes must be unique");
+}
+
+// ---------------------------------------------------------------------------
+// StaticSemanticsEvent: component is always static_semantics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_event_component_always_static_semantics() {
+    let results = vec![
+        analyze(&make_tree(ParseGoal::Script, vec![])),
+        analyze(&make_tree(ParseGoal::Module, vec![])),
+        analyze(&make_tree(
+            ParseGoal::Script,
+            vec![var_decl(
+                VariableDeclarationKind::Let,
+                "a",
+                Some(Expression::NumericLiteral(1)),
+                1,
+            )],
+        )),
+    ];
+    for result in &results {
+        let event = StaticSemanticsEvent::from_result(result);
+        assert_eq!(event.component, STATIC_SEMANTICS_COMPONENT);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: scope IDs are unique
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_scope_ids_unique() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![
+            var_decl(
+                VariableDeclarationKind::Let,
+                "a",
+                Some(Expression::NumericLiteral(1)),
+                1,
+            ),
+            var_decl(
+                VariableDeclarationKind::Let,
+                "b",
+                Some(Expression::NumericLiteral(2)),
+                2,
+            ),
+        ],
+    );
+    let result = analyze(&tree);
+    let scope_ids: BTreeSet<_> = result.scopes.iter().map(|s| s.scope_id).collect();
+    assert_eq!(scope_ids.len(), result.scopes.len());
+}
+
+// ---------------------------------------------------------------------------
+// Analysis: binding IDs are unique
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_binding_ids_unique() {
+    let tree = make_tree(
+        ParseGoal::Module,
+        vec![
+            import_stmt(Some("a"), "mod-a", 1),
+            var_decl(
+                VariableDeclarationKind::Let,
+                "b",
+                Some(Expression::NumericLiteral(1)),
+                2,
+            ),
+            var_decl(
+                VariableDeclarationKind::Const,
+                "c",
+                Some(Expression::NumericLiteral(2)),
+                3,
+            ),
+        ],
+    );
+    let result = analyze(&tree);
+    let binding_ids: BTreeSet<_> = result.bindings.iter().map(|b| b.binding_id).collect();
+    assert_eq!(binding_ids.len(), result.bindings.len());
 }

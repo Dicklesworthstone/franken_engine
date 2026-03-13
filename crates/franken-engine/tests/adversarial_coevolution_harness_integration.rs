@@ -893,8 +893,7 @@ fn full_lifecycle_create_run_analyze() {
 // Enrichment tests (80–100 new tests)
 // ===========================================================================
 
-use std::collections::{BTreeMap, BTreeSet};
-use frankenengine_engine::hash_tiers::ContentHash;
+use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
 // Helpers for enrichment
@@ -1077,7 +1076,10 @@ fn enrichment_exploit_class_eq_reflexive() {
 
 #[test]
 fn enrichment_exploit_class_ne_different_variants() {
-    assert_ne!(ExploitClass::CapabilityEscalation, ExploitClass::PolicyBypass);
+    assert_ne!(
+        ExploitClass::CapabilityEscalation,
+        ExploitClass::PolicyBypass
+    );
     assert_ne!(
         ExploitClass::Novel("a".into()),
         ExploitClass::Novel("b".into())
@@ -1174,10 +1176,7 @@ fn enrichment_payoff_matrix_lookup_all_rps_entries() {
     let strats = ["rock", "paper", "scissors"];
     for a in &strats {
         for d in &strats {
-            let entry = m.lookup(
-                &StrategyId((*a).into()),
-                &StrategyId((*d).into()),
-            );
+            let entry = m.lookup(&StrategyId((*a).into()), &StrategyId((*d).into()));
             assert!(entry.is_some(), "missing entry for ({a},{d})");
         }
     }
@@ -1511,7 +1510,10 @@ fn enrichment_run_schema_version_in_result() {
     };
     let mut h = CoevolutionHarness::new(cfg, rps_matrix()).unwrap();
     let r = h.run().unwrap();
-    assert_eq!(r.schema_version, "franken-engine.adversarial-coevolution.v1");
+    assert_eq!(
+        r.schema_version,
+        "franken-engine.adversarial-coevolution.v1"
+    );
 }
 
 #[test]
@@ -1644,11 +1646,8 @@ fn enrichment_trajectory_strategies_are_valid() {
         ..TournamentConfig::default()
     };
     let m = rps_matrix();
-    let valid_strats: BTreeSet<String> = m
-        .attacker_strategies
-        .iter()
-        .map(|s| s.0.clone())
-        .collect();
+    let valid_strats: BTreeSet<String> =
+        m.attacker_strategies.iter().map(|s| s.0.clone()).collect();
     let mut h = CoevolutionHarness::new(cfg, m).unwrap();
     let r = h.run().unwrap();
     let traj = r.trajectory.unwrap();
@@ -1774,7 +1773,7 @@ fn enrichment_policy_delta_weights_positive() {
     };
     let mut h = CoevolutionHarness::new(cfg, security_matrix()).unwrap();
     let r = h.run().unwrap();
-    for (_k, &v) in &r.policy_delta.recommended_mix {
+    for &v in r.policy_delta.recommended_mix.values() {
         assert!(v > 0, "non-positive weight in recommended_mix: {v}");
     }
 }
@@ -1954,7 +1953,9 @@ fn enrichment_exploit_resource_exhaustion_classification() {
     let mut h = CoevolutionHarness::new(cfg, m).unwrap();
     let r = h.run().unwrap();
     assert!(
-        r.convergence.exploit_classes.contains("resource_exhaustion"),
+        r.convergence
+            .exploit_classes
+            .contains("resource_exhaustion"),
         "expected resource_exhaustion in {:?}",
         r.convergence.exploit_classes
     );
@@ -2230,10 +2231,7 @@ fn enrichment_minimax_dominant_defense() {
     // Defender "strong" always gives attacker 0, "weak" gives attacker 1M
     let m = PayoffMatrix {
         attacker_strategies: vec![StrategyId("a".into())],
-        defender_strategies: vec![
-            StrategyId("strong".into()),
-            StrategyId("weak".into()),
-        ],
+        defender_strategies: vec![StrategyId("strong".into()), StrategyId("weak".into())],
         entries: vec![
             PayoffEntry {
                 attacker: StrategyId("a".into()),

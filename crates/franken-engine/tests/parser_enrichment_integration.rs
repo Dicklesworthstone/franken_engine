@@ -855,7 +855,11 @@ fn enrichment_semantic_diagnostic_category_as_str_all_unique() {
     ];
     let strs: Vec<&str> = cats.iter().map(|c| c.as_str()).collect();
     let unique: BTreeSet<_> = strs.iter().collect();
-    assert_eq!(unique.len(), 6, "all 6 SemanticDiagnosticCategory as_str values must be unique");
+    assert_eq!(
+        unique.len(),
+        6,
+        "all 6 SemanticDiagnosticCategory as_str values must be unique"
+    );
 }
 
 #[test]
@@ -869,7 +873,10 @@ fn enrichment_semantic_diagnostic_category_as_str_nonempty() {
         SemanticDiagnosticCategory::ControlFlow,
         SemanticDiagnosticCategory::ContextRestriction,
     ] {
-        assert!(!cat.as_str().is_empty(), "as_str for {cat:?} should be non-empty");
+        assert!(
+            !cat.as_str().is_empty(),
+            "as_str for {cat:?} should be non-empty"
+        );
     }
 }
 
@@ -897,11 +904,7 @@ fn enrichment_semantic_diagnostic_category_serde_roundtrip() {
 #[test]
 fn enrichment_semantic_error_new_without_binding_name() {
     use frankenengine_engine::parser::{SemanticError, SemanticErrorCode};
-    let err = SemanticError::new(
-        SemanticErrorCode::ConstReassignment,
-        None,
-        None,
-    );
+    let err = SemanticError::new(SemanticErrorCode::ConstReassignment, None, None);
     assert_eq!(err.code, SemanticErrorCode::ConstReassignment);
     assert_eq!(err.message, "assignment to constant variable");
     assert!(err.binding_name.is_none());
@@ -936,11 +939,7 @@ fn enrichment_semantic_error_new_with_span() {
 #[test]
 fn enrichment_semantic_error_stable_diagnostic_code_delegates() {
     use frankenengine_engine::parser::{SemanticError, SemanticErrorCode};
-    let err = SemanticError::new(
-        SemanticErrorCode::IllegalBreak,
-        None,
-        None,
-    );
+    let err = SemanticError::new(SemanticErrorCode::IllegalBreak, None, None);
     assert_eq!(
         err.stable_diagnostic_code(),
         SemanticErrorCode::IllegalBreak.stable_diagnostic_code()
@@ -950,11 +949,7 @@ fn enrichment_semantic_error_stable_diagnostic_code_delegates() {
 #[test]
 fn enrichment_semantic_error_diagnostic_category_delegates() {
     use frankenengine_engine::parser::{SemanticError, SemanticErrorCode};
-    let err = SemanticError::new(
-        SemanticErrorCode::ModuleTopLevelReturn,
-        None,
-        None,
-    );
+    let err = SemanticError::new(SemanticErrorCode::ModuleTopLevelReturn, None, None);
     assert_eq!(
         err.diagnostic_category(),
         SemanticErrorCode::ModuleTopLevelReturn.diagnostic_category()
@@ -964,11 +959,7 @@ fn enrichment_semantic_error_diagnostic_category_delegates() {
 #[test]
 fn enrichment_semantic_error_display_without_binding() {
     use frankenengine_engine::parser::{SemanticError, SemanticErrorCode};
-    let err = SemanticError::new(
-        SemanticErrorCode::ConstReassignment,
-        None,
-        None,
-    );
+    let err = SemanticError::new(SemanticErrorCode::ConstReassignment, None, None);
     let display = format!("{err}");
     assert!(
         display.contains("FE-SEM-CONST-REASSIGN-0001"),
@@ -1035,7 +1026,9 @@ fn enrichment_semantic_validation_result_default_eq_new() {
 
 #[test]
 fn enrichment_semantic_validation_result_add_error() {
-    use frankenengine_engine::parser::{SemanticError, SemanticErrorCode, SemanticValidationResult};
+    use frankenengine_engine::parser::{
+        SemanticError, SemanticErrorCode, SemanticValidationResult,
+    };
     let mut result = SemanticValidationResult::new();
     assert!(result.is_valid());
     result.add_error(SemanticError::new(
@@ -1049,7 +1042,9 @@ fn enrichment_semantic_validation_result_add_error() {
 
 #[test]
 fn enrichment_semantic_validation_result_add_multiple_errors() {
-    use frankenengine_engine::parser::{SemanticError, SemanticErrorCode, SemanticValidationResult};
+    use frankenengine_engine::parser::{
+        SemanticError, SemanticErrorCode, SemanticValidationResult,
+    };
     let mut result = SemanticValidationResult::new();
     result.add_error(SemanticError::new(
         SemanticErrorCode::DuplicateParameter,
@@ -1068,14 +1063,16 @@ fn enrichment_semantic_validation_result_add_multiple_errors() {
 
 #[test]
 fn enrichment_semantic_validation_result_taxonomy_version() {
-    use frankenengine_engine::parser::{SemanticValidationResult, SEMANTIC_ERROR_TAXONOMY_VERSION};
+    use frankenengine_engine::parser::{SEMANTIC_ERROR_TAXONOMY_VERSION, SemanticValidationResult};
     let result = SemanticValidationResult::new();
     assert_eq!(result.taxonomy_version, SEMANTIC_ERROR_TAXONOMY_VERSION);
 }
 
 #[test]
 fn enrichment_semantic_validation_result_serde_roundtrip() {
-    use frankenengine_engine::parser::{SemanticError, SemanticErrorCode, SemanticValidationResult};
+    use frankenengine_engine::parser::{
+        SemanticError, SemanticErrorCode, SemanticValidationResult,
+    };
     let mut result = SemanticValidationResult::new();
     result.add_error(SemanticError::new(
         SemanticErrorCode::YieldOutsideGenerator,
@@ -1348,10 +1345,7 @@ fn enrichment_parse_diagnostic_envelope_canonical_value_keys() {
             "witness",
         ];
         for key in expected_keys {
-            assert!(
-                map.contains_key(key),
-                "canonical_value missing key: {key}"
-            );
+            assert!(map.contains_key(key), "canonical_value missing key: {key}");
         }
         assert_eq!(map.len(), 13);
     } else {
@@ -1431,9 +1425,9 @@ fn enrichment_parse_diagnostic_envelope_normalized_diagnostic() {
 
 #[test]
 fn enrichment_parse_event_canonical_value_keys() {
+    use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     use frankenengine_engine::parser::{ParseEvent, ParseEventKind, ParserMode};
-    use frankenengine_engine::ast::ParseGoal;
     let event = ParseEvent {
         sequence: 0,
         kind: ParseEventKind::ParseStarted,
@@ -1484,9 +1478,9 @@ fn enrichment_parse_event_canonical_value_keys() {
 
 #[test]
 fn enrichment_parse_event_canonical_value_optional_fields_null() {
+    use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     use frankenengine_engine::parser::{ParseEvent, ParseEventKind, ParserMode};
-    use frankenengine_engine::ast::ParseGoal;
     let event = ParseEvent {
         sequence: 0,
         kind: ParseEventKind::ParseStarted,
@@ -1518,8 +1512,8 @@ fn enrichment_parse_event_canonical_value_optional_fields_null() {
 
 #[test]
 fn enrichment_parse_event_serde_roundtrip() {
-    use frankenengine_engine::parser::{ParseEvent, ParseEventKind, ParserMode};
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{ParseEvent, ParseEventKind, ParserMode};
     let event = ParseEvent {
         sequence: 42,
         kind: ParseEventKind::StatementParsed,
@@ -1548,10 +1542,10 @@ fn enrichment_parse_event_serde_roundtrip() {
 
 #[test]
 fn enrichment_parse_event_ir_from_parse_error_structure() {
+    use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::parser::{
         ParseError, ParseErrorCode, ParseEventIr, ParseEventKind, ParserMode,
     };
-    use frankenengine_engine::ast::ParseGoal;
     let err = ParseError {
         code: ParseErrorCode::EmptySource,
         message: "empty".to_string(),
@@ -1573,10 +1567,8 @@ fn enrichment_parse_event_ir_from_parse_error_structure() {
 
 #[test]
 fn enrichment_parse_event_ir_from_parse_error_provenance_consistent() {
-    use frankenengine_engine::parser::{
-        ParseError, ParseErrorCode, ParseEventIr, ParserMode,
-    };
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{ParseError, ParseErrorCode, ParseEventIr, ParserMode};
     let err = ParseError {
         code: ParseErrorCode::InvalidGoal,
         message: "bad goal".to_string(),
@@ -1598,10 +1590,8 @@ fn enrichment_parse_event_ir_from_parse_error_provenance_consistent() {
 
 #[test]
 fn enrichment_parse_event_ir_canonical_hash_deterministic() {
-    use frankenengine_engine::parser::{
-        ParseError, ParseErrorCode, ParseEventIr, ParserMode,
-    };
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{ParseError, ParseErrorCode, ParseEventIr, ParserMode};
     let err = ParseError {
         code: ParseErrorCode::EmptySource,
         message: "empty".to_string(),
@@ -1618,11 +1608,9 @@ fn enrichment_parse_event_ir_canonical_hash_deterministic() {
 
 #[test]
 fn enrichment_parse_event_ir_canonical_value_keys() {
-    use frankenengine_engine::deterministic_serde::CanonicalValue;
-    use frankenengine_engine::parser::{
-        ParseError, ParseErrorCode, ParseEventIr, ParserMode,
-    };
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::deterministic_serde::CanonicalValue;
+    use frankenengine_engine::parser::{ParseError, ParseErrorCode, ParseEventIr, ParserMode};
     let err = ParseError {
         code: ParseErrorCode::EmptySource,
         message: "empty".to_string(),
@@ -1658,10 +1646,8 @@ fn enrichment_parse_event_ir_canonical_value_keys() {
 
 #[test]
 fn enrichment_parse_event_ir_serde_roundtrip() {
-    use frankenengine_engine::parser::{
-        ParseError, ParseErrorCode, ParseEventIr, ParserMode,
-    };
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{ParseError, ParseErrorCode, ParseEventIr, ParserMode};
     let err = ParseError {
         code: ParseErrorCode::EmptySource,
         message: "empty".to_string(),
@@ -1681,10 +1667,8 @@ fn enrichment_parse_event_ir_serde_roundtrip() {
 
 #[test]
 fn enrichment_canonical_parser_parse_with_event_ir_success() {
-    use frankenengine_engine::parser::{
-        CanonicalEs2020Parser, ParseEventKind, ParserOptions,
-    };
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventKind, ParserOptions};
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (result, event_ir) = parser.parse_with_event_ir("var x = 1", ParseGoal::Script, &options);
@@ -1704,10 +1688,10 @@ fn enrichment_canonical_parser_parse_with_event_ir_success() {
 
 #[test]
 fn enrichment_canonical_parser_parse_with_event_ir_failure() {
+    use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::parser::{
         CanonicalEs2020Parser, ParseErrorCode, ParseEventKind, ParserOptions,
     };
-    use frankenengine_engine::ast::ParseGoal;
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (result, event_ir) = parser.parse_with_event_ir("", ParseGoal::Script, &options);
@@ -1722,8 +1706,8 @@ fn enrichment_canonical_parser_parse_with_event_ir_failure() {
 
 #[test]
 fn enrichment_canonical_parser_parse_with_materialized_ast_success() {
-    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (result, event_ir, materialized) =
@@ -1739,10 +1723,10 @@ fn enrichment_canonical_parser_parse_with_materialized_ast_success() {
 
 #[test]
 fn enrichment_canonical_parser_parse_with_materialized_ast_failure() {
+    use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::parser::{
         CanonicalEs2020Parser, ParseEventMaterializationErrorCode, ParserOptions,
     };
-    use frankenengine_engine::ast::ParseGoal;
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (result, _event_ir, materialized) =
@@ -1762,8 +1746,8 @@ fn enrichment_canonical_parser_parse_with_materialized_ast_failure() {
 
 #[test]
 fn enrichment_materialized_syntax_tree_canonical_hash_deterministic() {
-    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (_, _, materialized) =
@@ -1777,9 +1761,9 @@ fn enrichment_materialized_syntax_tree_canonical_hash_deterministic() {
 
 #[test]
 fn enrichment_materialized_syntax_tree_canonical_value_keys() {
+    use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
-    use frankenengine_engine::ast::ParseGoal;
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (_, _, materialized) =
@@ -1815,8 +1799,10 @@ fn enrichment_materialized_syntax_tree_canonical_value_keys() {
 
 #[test]
 fn enrichment_materialized_syntax_tree_serde_roundtrip() {
-    use frankenengine_engine::parser::{CanonicalEs2020Parser, MaterializedSyntaxTree, ParserOptions};
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{
+        CanonicalEs2020Parser, MaterializedSyntaxTree, ParserOptions,
+    };
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (_, _, materialized) =
@@ -1829,8 +1815,8 @@ fn enrichment_materialized_syntax_tree_serde_roundtrip() {
 
 #[test]
 fn enrichment_materialized_syntax_tree_statement_nodes() {
-    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let source = "var a = 1\nvar b = 2";
@@ -1851,12 +1837,11 @@ fn enrichment_materialized_syntax_tree_statement_nodes() {
 
 #[test]
 fn enrichment_materialized_syntax_tree_contract_schema_versions() {
-    use frankenengine_engine::parser::{
-        CanonicalEs2020Parser, ParserOptions,
-        PARSE_EVENT_AST_MATERIALIZER_CONTRACT_VERSION,
-        PARSE_EVENT_AST_MATERIALIZER_SCHEMA_VERSION,
-    };
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{
+        CanonicalEs2020Parser, PARSE_EVENT_AST_MATERIALIZER_CONTRACT_VERSION,
+        PARSE_EVENT_AST_MATERIALIZER_SCHEMA_VERSION, ParserOptions,
+    };
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (_, _, materialized) =
@@ -1986,8 +1971,8 @@ fn enrichment_materialization_error_serde_roundtrip() {
 #[test]
 fn enrichment_normalize_parse_error_budget_with_witness() {
     use frankenengine_engine::parser::{
-        normalize_parse_error, ParseBudgetKind, ParseError, ParseErrorCode, ParseFailureWitness,
-        ParserMode,
+        ParseBudgetKind, ParseError, ParseErrorCode, ParseFailureWitness, ParserMode,
+        normalize_parse_error,
     };
     let witness = ParseFailureWitness {
         mode: ParserMode::ScalarReference,
@@ -2076,8 +2061,8 @@ fn enrichment_parse_error_code_severity_error_for_user_errors() {
 
 #[test]
 fn enrichment_es2020_parser_trait_parse_simple_script() {
-    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
     let parser = CanonicalEs2020Parser;
     let result = parser.parse("var x = 42", ParseGoal::Script);
     assert!(result.is_ok());
@@ -2088,8 +2073,8 @@ fn enrichment_es2020_parser_trait_parse_simple_script() {
 
 #[test]
 fn enrichment_es2020_parser_trait_parse_module() {
-    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
     let parser = CanonicalEs2020Parser;
     let result = parser.parse("export default 42", ParseGoal::Module);
     assert!(result.is_ok());
@@ -2099,8 +2084,8 @@ fn enrichment_es2020_parser_trait_parse_module() {
 
 #[test]
 fn enrichment_es2020_parser_trait_parse_empty_fails() {
-    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParseErrorCode};
     use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParseErrorCode};
     let parser = CanonicalEs2020Parser;
     let result = parser.parse("   ", ParseGoal::Script);
     assert!(result.is_err());
@@ -2113,9 +2098,9 @@ fn enrichment_es2020_parser_trait_parse_empty_fails() {
 
 #[test]
 fn enrichment_materialized_statement_node_canonical_value_keys() {
+    use frankenengine_engine::ast::ParseGoal;
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
-    use frankenengine_engine::ast::ParseGoal;
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     let (_, _, materialized) =
@@ -2125,7 +2110,13 @@ fn enrichment_materialized_statement_node_canonical_value_keys() {
     let node = &mat.statement_nodes[0];
     let cv = node.canonical_value();
     if let CanonicalValue::Map(map) = &cv {
-        let expected = ["node_id", "sequence", "statement_index", "payload_hash", "span"];
+        let expected = [
+            "node_id",
+            "sequence",
+            "statement_index",
+            "payload_hash",
+            "span",
+        ];
         for key in expected {
             assert!(
                 map.contains_key(key),

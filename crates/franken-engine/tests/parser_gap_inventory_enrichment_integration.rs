@@ -89,7 +89,10 @@ fn enrichment_parser_gap_stage_debug_not_empty() {
 
 #[test]
 fn enrichment_remediation_status_as_str_fail_closed() {
-    assert_eq!(ParserGapRemediationStatus::FailClosed.as_str(), "fail_closed");
+    assert_eq!(
+        ParserGapRemediationStatus::FailClosed.as_str(),
+        "fail_closed"
+    );
 }
 
 #[test]
@@ -238,7 +241,10 @@ fn enrichment_site_id_stage_distribution() {
 #[test]
 fn enrichment_site_id_all_resolved() {
     for site in ParserGapSiteId::ALL {
-        assert_eq!(site.remediation_status(), ParserGapRemediationStatus::Resolved);
+        assert_eq!(
+            site.remediation_status(),
+            ParserGapRemediationStatus::Resolved
+        );
     }
 }
 
@@ -383,7 +389,10 @@ fn enrichment_site_descriptor_from_each_site() {
             site.required_fail_closed_contract()
         );
         assert_eq!(desc.desired_diagnostic_code, site.diagnostic_code());
-        assert_eq!(desc.blocking_workloads.len(), site.blocking_workloads().len());
+        assert_eq!(
+            desc.blocking_workloads.len(),
+            site.blocking_workloads().len()
+        );
         assert_eq!(desc.source_reference, site.source_reference());
     }
 }
@@ -494,7 +503,10 @@ fn enrichment_parser_gap_inventory_deterministic() {
 fn enrichment_unsupported_syntax_diagnostic_from_each_site() {
     for site in ParserGapSiteId::ALL {
         let diag = UnsupportedSyntaxDiagnostic::from_site(site, "test_src", Some(span()));
-        assert_eq!(diag.schema_version, UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION);
+        assert_eq!(
+            diag.schema_version,
+            UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION
+        );
         assert_eq!(diag.diagnostic_code, site.diagnostic_code());
         assert_eq!(diag.site_id, site.as_str());
         assert_eq!(diag.stage, site.stage());
@@ -1043,7 +1055,8 @@ fn enrichment_write_bundle_hash_deterministic() {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos() + 1
+            .as_nanos()
+            + 1
     ));
     let a1 = write_parser_gap_inventory_bundle(&out_dir1, &[]).unwrap();
     let a2 = write_parser_gap_inventory_bundle(&out_dir2, &[]).unwrap();

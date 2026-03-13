@@ -455,7 +455,10 @@ fn display_prefixes_are_distinct() {
 fn enrichment_integrity_hash_debug_contains_value() {
     let h = IntegrityHash::compute(b"debug-test");
     let debug = format!("{:?}", h);
-    assert!(debug.contains("IntegrityHash"), "Debug must include type name");
+    assert!(
+        debug.contains("IntegrityHash"),
+        "Debug must include type name"
+    );
 }
 
 #[test]

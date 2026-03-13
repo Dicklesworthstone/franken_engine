@@ -18,6 +18,7 @@ fn make_timescale(name: &str, role: ControllerRole, obs: i64, write: i64) -> Con
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_contract(
     name: &str,
     role: ControllerRole,
@@ -175,7 +176,11 @@ fn enrichment_interaction_class_requires_timescale_separation_taxonomy() {
 fn enrichment_interaction_class_blocks_composition_only_mutually_exclusive() {
     for class in all_interaction_classes() {
         let expected = matches!(class, InteractionClass::MutuallyExclusive);
-        assert_eq!(class.blocks_composition(), expected, "mismatch for {class:?}");
+        assert_eq!(
+            class.blocks_composition(),
+            expected,
+            "mismatch for {class:?}"
+        );
     }
 }
 
@@ -682,10 +687,8 @@ fn enrichment_default_matrix_blocked_pairs_exactly_router_and_fallback() {
     let matrix = ControllerCompositionMatrix::default_matrix();
     let blocked = matrix.blocked_pairs();
     assert_eq!(blocked.len(), 2);
-    let blocked_pairs: BTreeSet<(ControllerRole, ControllerRole)> = blocked
-        .iter()
-        .map(|e| (e.role_a, e.role_b))
-        .collect();
+    let blocked_pairs: BTreeSet<(ControllerRole, ControllerRole)> =
+        blocked.iter().map(|e| (e.role_a, e.role_b)).collect();
     assert!(blocked_pairs.contains(&(ControllerRole::Router, ControllerRole::Router)));
     assert!(blocked_pairs.contains(&(ControllerRole::Fallback, ControllerRole::Fallback)));
 }
@@ -745,7 +748,11 @@ fn enrichment_lookup_empty_matrix_returns_none() {
         entries: Vec::new(),
         schema_version: "1.0.0".to_string(),
     };
-    assert!(matrix.lookup(ControllerRole::Router, ControllerRole::Monitor).is_none());
+    assert!(
+        matrix
+            .lookup(ControllerRole::Router, ControllerRole::Monitor)
+            .is_none()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -845,7 +852,10 @@ fn enrichment_build_registry_rejects_zero_observation_interval() {
         None,
     )];
     let err = build_controller_registry(&contracts).unwrap_err();
-    assert!(matches!(err, ControllerRegistryError::InvalidTimescale { .. }));
+    assert!(matches!(
+        err,
+        ControllerRegistryError::InvalidTimescale { .. }
+    ));
 }
 
 #[test]
@@ -863,7 +873,10 @@ fn enrichment_build_registry_rejects_negative_write_interval() {
         None,
     )];
     let err = build_controller_registry(&contracts).unwrap_err();
-    assert!(matches!(err, ControllerRegistryError::InvalidTimescale { .. }));
+    assert!(matches!(
+        err,
+        ControllerRegistryError::InvalidTimescale { .. }
+    ));
 }
 
 #[test]
@@ -886,7 +899,10 @@ fn enrichment_build_registry_rejects_inverted_actuation_bounds() {
         None,
     )];
     let err = build_controller_registry(&contracts).unwrap_err();
-    assert!(matches!(err, ControllerRegistryError::InvalidActuationBound { .. }));
+    assert!(matches!(
+        err,
+        ControllerRegistryError::InvalidActuationBound { .. }
+    ));
 }
 
 #[test]
@@ -896,7 +912,7 @@ fn enrichment_build_registry_detects_metadata_gaps_missing_obs_channels() {
         ControllerRole::Router,
         1_000_000,
         2_000_000,
-        &[],         // no observation channels
+        &[], // no observation channels
         &["action"],
         &["state"],
         &[],
@@ -913,10 +929,12 @@ fn enrichment_build_registry_detects_metadata_gaps_missing_obs_channels() {
         }),
     );
     let registry = build_controller_registry(&[contract]).unwrap();
-    assert!(registry
-        .metadata_gaps
-        .iter()
-        .any(|g| g.gap == MetadataGapKind::MissingObservationChannels));
+    assert!(
+        registry
+            .metadata_gaps
+            .iter()
+            .any(|g| g.gap == MetadataGapKind::MissingObservationChannels)
+    );
 }
 
 #[test]
@@ -939,10 +957,12 @@ fn enrichment_build_registry_detects_missing_fallback_for_adaptive() {
         None, // no fallback
     );
     let registry = build_controller_registry(&[contract]).unwrap();
-    assert!(registry
-        .metadata_gaps
-        .iter()
-        .any(|g| g.gap == MetadataGapKind::MissingDeterministicFallback));
+    assert!(
+        registry
+            .metadata_gaps
+            .iter()
+            .any(|g| g.gap == MetadataGapKind::MissingDeterministicFallback)
+    );
 }
 
 #[test]
@@ -1015,7 +1035,10 @@ fn enrichment_derive_operator_graph_two_controllers() {
     let matrix = ControllerCompositionMatrix::default_matrix();
     let graph = derive_controller_operator_graph(&registry, &matrix);
 
-    assert_eq!(graph.schema_version, CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION);
+    assert_eq!(
+        graph.schema_version,
+        CONTROLLER_OPERATOR_GRAPH_SCHEMA_VERSION
+    );
     assert_eq!(graph.controller_names.len(), 2);
     assert_eq!(graph.edges.len(), 1);
     assert!(!graph.graph_id.is_empty());
@@ -1085,7 +1108,11 @@ fn enrichment_derive_operator_graph_shared_resource_overlap() {
     let matrix = ControllerCompositionMatrix::default_matrix();
     let graph = derive_controller_operator_graph(&registry, &matrix);
     assert_eq!(graph.edges.len(), 1);
-    assert!(graph.edges[0].shared_resource_overlap.contains(&"shared_bus".to_string()));
+    assert!(
+        graph.edges[0]
+            .shared_resource_overlap
+            .contains(&"shared_bus".to_string())
+    );
 }
 
 #[test]
@@ -1114,7 +1141,10 @@ fn enrichment_telemetry_snapshot_counts() {
     let graph = derive_controller_operator_graph(&registry, &matrix);
     let snap = build_controller_telemetry_snapshot(&registry, &graph);
 
-    assert_eq!(snap.schema_version, CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION);
+    assert_eq!(
+        snap.schema_version,
+        CONTROLLER_TELEMETRY_SNAPSHOT_SCHEMA_VERSION
+    );
     assert_eq!(snap.controller_count, 3);
     assert_eq!(snap.edge_count, 3);
 }
@@ -1129,8 +1159,15 @@ fn enrichment_telemetry_snapshot_fallback_ready_controllers() {
     let matrix = ControllerCompositionMatrix::default_matrix();
     let graph = derive_controller_operator_graph(&registry, &matrix);
     let snap = build_controller_telemetry_snapshot(&registry, &graph);
-    assert!(snap.fallback_ready_controllers.contains(&"fb_ready".to_string()));
-    assert!(!snap.fallback_ready_controllers.contains(&"no_fb".to_string()));
+    assert!(
+        snap.fallback_ready_controllers
+            .contains(&"fb_ready".to_string())
+    );
+    assert!(
+        !snap
+            .fallback_ready_controllers
+            .contains(&"no_fb".to_string())
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1277,7 +1314,11 @@ fn enrichment_uncertainty_ledger_captures_partial_edges() {
     let ledger = build_controller_edge_uncertainty_ledger(&registry, &graph);
     // Monitor-Monitor is ReadShared, missing shared_resources -> Partial
     assert!(!ledger.is_empty());
-    assert!(ledger.iter().any(|e| e.uncertainty == EdgeUncertainty::Partial));
+    assert!(
+        ledger
+            .iter()
+            .any(|e| e.uncertainty == EdgeUncertainty::Partial)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1304,7 +1345,12 @@ fn enrichment_microbench_empty_controllers_zero_cost() {
 
 #[test]
 fn enrichment_microbench_single_controller_no_pairs() {
-    let controllers = vec![make_timescale("solo", ControllerRole::Router, 100_000, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "solo",
+        ControllerRole::Router,
+        100_000,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
     let result = run_microbench(&controllers, &matrix, &MicrobenchConfig::default());
     assert_eq!(result.pairs_measured, 0);
@@ -1388,16 +1434,29 @@ fn enrichment_gate_empty_deployment_rejected() {
     let config = GateConfig::default();
     let result = evaluate_composition_gate("t-empty", &[], &matrix, &config);
     assert!(!result.is_approved());
-    assert!(result.failures.iter().any(|f| matches!(f, GateFailureReason::EmptyDeployment)));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::EmptyDeployment))
+    );
     assert_eq!(result.controllers_evaluated, 0);
     assert_eq!(result.pairs_evaluated, 0);
 }
 
 #[test]
 fn enrichment_gate_single_valid_controller_approved() {
-    let controllers = vec![make_timescale("solo", ControllerRole::Router, 100_000, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "solo",
+        ControllerRole::Router,
+        100_000,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-solo", &controllers, &matrix, &config);
     assert!(result.is_approved());
     assert_eq!(result.pairs_evaluated, 0);
@@ -1410,27 +1469,56 @@ fn enrichment_gate_duplicate_controller_name_rejected() {
         make_timescale("same", ControllerRole::Monitor, 200_000, 2_000_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-dup", &controllers, &matrix, &config);
     assert!(!result.is_approved());
-    assert!(result.failures.iter().any(|f| matches!(f, GateFailureReason::DuplicateController { .. })));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::DuplicateController { .. }))
+    );
 }
 
 #[test]
 fn enrichment_gate_zero_observation_interval_rejected() {
-    let controllers = vec![make_timescale("bad_obs", ControllerRole::Monitor, 0, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "bad_obs",
+        ControllerRole::Monitor,
+        0,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-bad-obs", &controllers, &matrix, &config);
     assert!(!result.is_approved());
-    assert!(result.failures.iter().any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. })));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::InvalidTimescale { .. }))
+    );
 }
 
 #[test]
 fn enrichment_gate_negative_write_interval_rejected() {
-    let controllers = vec![make_timescale("neg_w", ControllerRole::Monitor, 100_000, -5)];
+    let controllers = vec![make_timescale(
+        "neg_w",
+        ControllerRole::Monitor,
+        100_000,
+        -5,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-neg-w", &controllers, &matrix, &config);
     assert!(!result.is_approved());
 }
@@ -1442,12 +1530,19 @@ fn enrichment_gate_mutually_exclusive_routers_rejected() {
         make_timescale("router_b", ControllerRole::Router, 200_000, 2_000_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-routers", &controllers, &matrix, &config);
     assert!(!result.is_approved());
     assert!(result.failures.iter().any(|f| matches!(
         f,
-        GateFailureReason::MutuallyExclusiveRoles { role_a: ControllerRole::Router, role_b: ControllerRole::Router, .. }
+        GateFailureReason::MutuallyExclusiveRoles {
+            role_a: ControllerRole::Router,
+            role_b: ControllerRole::Router,
+            ..
+        }
     )));
 }
 
@@ -1459,13 +1554,18 @@ fn enrichment_gate_insufficient_timescale_separation_rejected() {
         make_timescale("optimizer", ControllerRole::Optimizer, 100_000, 100_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-insuf-sep", &controllers, &matrix, &config);
     assert!(!result.is_approved());
-    assert!(result.failures.iter().any(|f| matches!(
-        f,
-        GateFailureReason::InsufficientTimescaleSeparation { .. }
-    )));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::InsufficientTimescaleSeparation { .. }))
+    );
 }
 
 #[test]
@@ -1475,7 +1575,10 @@ fn enrichment_gate_sufficient_timescale_separation_approved() {
         make_timescale("optimizer", ControllerRole::Optimizer, 200_000, 500_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-suf-sep", &controllers, &matrix, &config);
     assert!(result.is_approved());
 }
@@ -1494,14 +1597,27 @@ fn enrichment_gate_microbench_budget_failure() {
     };
     let result = evaluate_composition_gate("t-mb-fail", &controllers, &matrix, &config);
     assert!(!result.is_approved());
-    assert!(result.failures.iter().any(|f| matches!(f, GateFailureReason::MicrobenchBudgetExceeded { .. })));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| matches!(f, GateFailureReason::MicrobenchBudgetExceeded { .. }))
+    );
 }
 
 #[test]
 fn enrichment_gate_logs_always_have_start_and_end() {
-    let controllers = vec![make_timescale("log_ctrl", ControllerRole::Monitor, 100_000, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "log_ctrl",
+        ControllerRole::Monitor,
+        100_000,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-logs", &controllers, &matrix, &config);
     assert!(result.logs.iter().any(|l| l.event == "gate_start"));
     assert!(result.logs.iter().any(|l| l.event == "gate_end"));
@@ -1509,9 +1625,17 @@ fn enrichment_gate_logs_always_have_start_and_end() {
 
 #[test]
 fn enrichment_gate_logs_carry_correct_trace_id() {
-    let controllers = vec![make_timescale("tc", ControllerRole::Monitor, 100_000, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "tc",
+        ControllerRole::Monitor,
+        100_000,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("my-trace-42", &controllers, &matrix, &config);
     for log in &result.logs {
         assert_eq!(log.trace_id, "my-trace-42");
@@ -1525,7 +1649,10 @@ fn enrichment_gate_id_deterministic_for_same_inputs() {
         make_timescale("m", ControllerRole::Monitor, 50_000, 500_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let r1 = evaluate_composition_gate("same-trace", &controllers, &matrix, &config);
     let r2 = evaluate_composition_gate("same-trace", &controllers, &matrix, &config);
     assert_eq!(r1.gate_id, r2.gate_id);
@@ -1533,9 +1660,17 @@ fn enrichment_gate_id_deterministic_for_same_inputs() {
 
 #[test]
 fn enrichment_gate_id_differs_for_different_traces() {
-    let controllers = vec![make_timescale("c", ControllerRole::Monitor, 100_000, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "c",
+        ControllerRole::Monitor,
+        100_000,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let r1 = evaluate_composition_gate("trace-alpha", &controllers, &matrix, &config);
     let r2 = evaluate_composition_gate("trace-beta", &controllers, &matrix, &config);
     assert_ne!(r1.gate_id, r2.gate_id);
@@ -1543,9 +1678,17 @@ fn enrichment_gate_id_differs_for_different_traces() {
 
 #[test]
 fn enrichment_gate_result_evidence_id_deterministic() {
-    let controllers = vec![make_timescale("ev", ControllerRole::Monitor, 100_000, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "ev",
+        ControllerRole::Monitor,
+        100_000,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let r1 = evaluate_composition_gate("t-ev", &controllers, &matrix, &config);
     let r2 = evaluate_composition_gate("t-ev", &controllers, &matrix, &config);
     assert_eq!(r1.derive_evidence_id(), r2.derive_evidence_id());
@@ -1559,7 +1702,10 @@ fn enrichment_gate_multiple_failures_accumulate() {
         make_timescale("router-b", ControllerRole::Router, 200_000, 2_000_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-multi-fail", &controllers, &matrix, &config);
     assert!(!result.is_approved());
     assert!(result.failures.len() >= 2);
@@ -1579,7 +1725,10 @@ fn enrichment_gate_override_mutually_exclusive_allows_composition() {
         make_timescale("r1", ControllerRole::Router, 100_000, 1_000_000),
         make_timescale("r2", ControllerRole::Router, 200_000, 2_000_000),
     ];
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-override", &controllers, &matrix, &config);
     assert!(result.is_approved());
 }
@@ -1594,7 +1743,10 @@ fn enrichment_gate_five_controllers_ten_pairs() {
         make_timescale("c", ControllerRole::Custom, 400_000, 3_000_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-five", &controllers, &matrix, &config);
     assert_eq!(result.controllers_evaluated, 5);
     assert_eq!(result.pairs_evaluated, 10);
@@ -1639,7 +1791,10 @@ fn enrichment_operator_summary_approved_no_failures() {
         make_timescale("m", ControllerRole::Monitor, 50_000, 500_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-sum-ok", &controllers, &matrix, &config);
     let summary = render_operator_summary(&result);
     assert_eq!(summary.verdict, "approved");
@@ -1656,7 +1811,10 @@ fn enrichment_operator_summary_rejected_has_failure_lines() {
         make_timescale("rb", ControllerRole::Router, 200_000, 2_000_000),
     ];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-sum-rej", &controllers, &matrix, &config);
     let summary = render_operator_summary(&result);
     assert_eq!(summary.verdict, "rejected");
@@ -1684,9 +1842,17 @@ fn enrichment_operator_summary_with_microbench_includes_cost() {
 
 #[test]
 fn enrichment_operator_summary_gate_id_matches_result() {
-    let controllers = vec![make_timescale("g", ControllerRole::Monitor, 100_000, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "g",
+        ControllerRole::Monitor,
+        100_000,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-gid", &controllers, &matrix, &config);
     let summary = render_operator_summary(&result);
     assert_eq!(summary.gate_id, result.gate_id);
@@ -1755,9 +1921,17 @@ fn enrichment_content_hash_different_inputs_differ() {
 
 #[test]
 fn enrichment_gate_without_microbench_has_none() {
-    let controllers = vec![make_timescale("nm", ControllerRole::Monitor, 100_000, 1_000_000)];
+    let controllers = vec![make_timescale(
+        "nm",
+        ControllerRole::Monitor,
+        100_000,
+        1_000_000,
+    )];
     let matrix = ControllerCompositionMatrix::default_matrix();
-    let config = GateConfig { run_microbench: false, ..GateConfig::default() };
+    let config = GateConfig {
+        run_microbench: false,
+        ..GateConfig::default()
+    };
     let result = evaluate_composition_gate("t-no-mb", &controllers, &matrix, &config);
     assert!(result.microbench.is_none());
 }
@@ -1835,7 +2009,10 @@ fn enrichment_full_pipeline_registry_graph_telemetry_traces_ledger() {
     // All non-observed edges should appear
     for entry in &ledger {
         assert_ne!(entry.uncertainty, EdgeUncertainty::Observed);
-        assert_eq!(entry.schema_version, CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION);
+        assert_eq!(
+            entry.schema_version,
+            CONTROLLER_EDGE_UNCERTAINTY_SCHEMA_VERSION
+        );
     }
 }
 

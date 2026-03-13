@@ -631,9 +631,18 @@ fn enrichment_mutation_tier_display_matches_as_str() {
 
 #[test]
 fn enrichment_mutation_tier_json_field_names_stable() {
-    assert_eq!(serde_json::to_string(&MutationTier::Critical).unwrap(), "\"Critical\"");
-    assert_eq!(serde_json::to_string(&MutationTier::High).unwrap(), "\"High\"");
-    assert_eq!(serde_json::to_string(&MutationTier::Standard).unwrap(), "\"Standard\"");
+    assert_eq!(
+        serde_json::to_string(&MutationTier::Critical).unwrap(),
+        "\"Critical\""
+    );
+    assert_eq!(
+        serde_json::to_string(&MutationTier::High).unwrap(),
+        "\"High\""
+    );
+    assert_eq!(
+        serde_json::to_string(&MutationTier::Standard).unwrap(),
+        "\"Standard\""
+    );
 }
 
 #[test]
@@ -651,7 +660,10 @@ fn enrichment_mutation_tier_high_threshold_is_900k() {
 
 #[test]
 fn enrichment_mutation_tier_standard_threshold_is_750k() {
-    assert_eq!(MutationTier::Standard.default_threshold_millionths(), 750_000);
+    assert_eq!(
+        MutationTier::Standard.default_threshold_millionths(),
+        750_000
+    );
 }
 
 #[test]
@@ -716,9 +728,18 @@ fn enrichment_failure_mode_interference_mandatory_parser() {
 
 #[test]
 fn enrichment_failure_mode_json_stability() {
-    assert_eq!(serde_json::to_string(&FailureMode::Timeout).unwrap(), "\"Timeout\"");
-    assert_eq!(serde_json::to_string(&FailureMode::MalformedInput).unwrap(), "\"MalformedInput\"");
-    assert_eq!(serde_json::to_string(&FailureMode::Rollback).unwrap(), "\"Rollback\"");
+    assert_eq!(
+        serde_json::to_string(&FailureMode::Timeout).unwrap(),
+        "\"Timeout\""
+    );
+    assert_eq!(
+        serde_json::to_string(&FailureMode::MalformedInput).unwrap(),
+        "\"MalformedInput\""
+    );
+    assert_eq!(
+        serde_json::to_string(&FailureMode::Rollback).unwrap(),
+        "\"Rollback\""
+    );
 }
 
 #[test]
@@ -836,7 +857,11 @@ fn enrichment_mutation_policy_critical_at_999999_invalid() {
     };
     let violations = mp.validate();
     assert!(!violations.is_empty());
-    assert!(violations.iter().any(|v| v.message.contains("critical tier")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.message.contains("critical tier"))
+    );
 }
 
 #[test]
@@ -1002,9 +1027,18 @@ fn enrichment_regression_direction_ordering() {
 
 #[test]
 fn enrichment_regression_direction_json_stability() {
-    assert_eq!(serde_json::to_string(&RegressionDirection::Decrease).unwrap(), "\"Decrease\"");
-    assert_eq!(serde_json::to_string(&RegressionDirection::Stable).unwrap(), "\"Stable\"");
-    assert_eq!(serde_json::to_string(&RegressionDirection::Increase).unwrap(), "\"Increase\"");
+    assert_eq!(
+        serde_json::to_string(&RegressionDirection::Decrease).unwrap(),
+        "\"Decrease\""
+    );
+    assert_eq!(
+        serde_json::to_string(&RegressionDirection::Stable).unwrap(),
+        "\"Stable\""
+    );
+    assert_eq!(
+        serde_json::to_string(&RegressionDirection::Increase).unwrap(),
+        "\"Increase\""
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,9 +1144,18 @@ fn enrichment_gate_outcome_ordering() {
 
 #[test]
 fn enrichment_gate_outcome_json_stability() {
-    assert_eq!(serde_json::to_string(&GateOutcome::Pass).unwrap(), "\"Pass\"");
-    assert_eq!(serde_json::to_string(&GateOutcome::Warn).unwrap(), "\"Warn\"");
-    assert_eq!(serde_json::to_string(&GateOutcome::Block).unwrap(), "\"Block\"");
+    assert_eq!(
+        serde_json::to_string(&GateOutcome::Pass).unwrap(),
+        "\"Pass\""
+    );
+    assert_eq!(
+        serde_json::to_string(&GateOutcome::Warn).unwrap(),
+        "\"Warn\""
+    );
+    assert_eq!(
+        serde_json::to_string(&GateOutcome::Block).unwrap(),
+        "\"Block\""
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1232,7 +1275,11 @@ fn enrichment_default_coverage_targets_all_kinds_per_surface() {
 fn enrichment_default_coverage_path_always_advisory() {
     let targets = default_coverage_targets();
     for t in targets.iter().filter(|t| t.kind == CoverageKind::Path) {
-        assert!(!t.hard_gate, "path coverage should be advisory for {:?}", t.surface);
+        assert!(
+            !t.hard_gate,
+            "path coverage should be advisory for {:?}",
+            t.surface
+        );
     }
 }
 
@@ -1243,7 +1290,11 @@ fn enrichment_default_coverage_stmt_branch_hard_gated() {
         .iter()
         .filter(|t| t.kind == CoverageKind::Statement || t.kind == CoverageKind::Branch)
     {
-        assert!(t.hard_gate, "stmt/branch coverage should be hard gated for {:?}", t.surface);
+        assert!(
+            t.hard_gate,
+            "stmt/branch coverage should be hard gated for {:?}",
+            t.surface
+        );
     }
 }
 
@@ -1311,7 +1362,10 @@ fn enrichment_config_default_has_correct_schema() {
 #[test]
 fn enrichment_config_default_failure_mode_obligations_count() {
     let config = DepthGateConfig::default_config();
-    assert_eq!(config.failure_mode_obligations.len(), TestSurface::ALL.len());
+    assert_eq!(
+        config.failure_mode_obligations.len(),
+        TestSurface::ALL.len()
+    );
 }
 
 #[test]
@@ -1659,9 +1713,7 @@ fn enrichment_property_strict_regression_negative_always_blocks() {
     };
     let metrics = make_passing_metrics(TestSurface::Compiler);
     // Previous coverage higher than current (960_000) means regression
-    let prev_cov = BTreeMap::from([
-        (CoverageKind::Statement, 970_000),
-    ]);
+    let prev_cov = BTreeMap::from([(CoverageKind::Statement, 970_000)]);
     let result = config.evaluate_surface(&metrics, Some(&prev_cov), None);
     assert!(result.outcome.is_blocking());
     assert!(!result.regression_violations.is_empty());

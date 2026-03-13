@@ -64,16 +64,18 @@ fn enrichment_policy_id_non_empty() {
 
 #[test]
 fn enrichment_default_constants_sane() {
-    assert!(MAX_TRANSFER_CANDIDATES > 0);
-    assert!(MAX_ACTIVE_TRANSFERS > 0);
-    assert!(DEFAULT_DRIFT_TOLERANCE > 0);
-    assert!(MIN_PROXIMITY_SCORE > 0);
-    assert!(MIN_DRIFT_OBSERVATIONS > 0);
-    assert!(MAX_ROLLBACK_HISTORY > 0);
-    // Drift tolerance should be well under 1.0 (1_000_000)
-    assert!(DEFAULT_DRIFT_TOLERANCE < 1_000_000);
-    // Proximity score should be between 0 and 1.0
-    assert!(MIN_PROXIMITY_SCORE < 1_000_000);
+    const {
+        assert!(MAX_TRANSFER_CANDIDATES > 0);
+        assert!(MAX_ACTIVE_TRANSFERS > 0);
+        assert!(DEFAULT_DRIFT_TOLERANCE > 0);
+        assert!(MIN_PROXIMITY_SCORE > 0);
+        assert!(MIN_DRIFT_OBSERVATIONS > 0);
+        assert!(MAX_ROLLBACK_HISTORY > 0);
+        // Drift tolerance should be well under 1.0 (1_000_000)
+        assert!(DEFAULT_DRIFT_TOLERANCE < 1_000_000);
+        // Proximity score should be between 0 and 1.0
+        assert!(MIN_PROXIMITY_SCORE < 1_000_000);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -670,9 +672,11 @@ fn enrichment_session_new_has_empty_collections() {
 
 #[test]
 fn enrichment_session_preserves_config() {
-    let mut config = TransferConfig::default();
-    config.max_active_transfers = 42;
-    config.drift_tolerance = 99_000;
+    let config = TransferConfig {
+        max_active_transfers: 42,
+        drift_tolerance: 99_000,
+        ..Default::default()
+    };
     let session = TransferSession::new(
         "s1".to_string(),
         ContentHash::compute(b"recip"),

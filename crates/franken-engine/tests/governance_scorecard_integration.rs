@@ -15,14 +15,17 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::dp_budget_accountant::{AccountantConfig, BudgetAccountant};
 use frankenengine_engine::governance_scorecard::{
-    AttestedReceiptObservation, CrossRepoConformanceInput, GOVERNANCE_SCORECARD_COMPONENT,
-    GOVERNANCE_SCORECARD_SCHEMA_VERSION, GovernanceScorecardError, GovernanceScorecardOutcome,
-    GovernanceScorecardRequest, GovernanceScorecardThresholds, GovernanceScorecardTrendPoint,
-    MoonshotGovernorHealthInput, PrivacyBudgetHealthInput, publish_governance_scorecard,
+    AttestedReceiptCoverageSummary, AttestedReceiptObservation, CrossRepoConformanceInput,
+    CrossRepoConformanceStabilitySummary, GOVERNANCE_SCORECARD_COMPONENT,
+    GOVERNANCE_SCORECARD_SCHEMA_VERSION, GovernanceScorecardError, GovernanceScorecardEvent,
+    GovernanceScorecardOutcome, GovernanceScorecardPublication, GovernanceScorecardRequest,
+    GovernanceScorecardThresholds, GovernanceScorecardTrendPoint,
+    MoonshotGovernorDecisionSummary, MoonshotGovernorHealthInput, PrivacyBudgetHealthInput,
+    PrivacyBudgetHealthSummary, publish_governance_scorecard,
     verify_governance_scorecard_signature,
 };
 use frankenengine_engine::portfolio_governor::governance_audit_ledger::{
@@ -1226,4 +1229,1368 @@ fn publication_with_human_actor() {
     .unwrap();
     assert_eq!(p.outcome, GovernanceScorecardOutcome::Healthy);
     verify_governance_scorecard_signature(&p).unwrap();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Enrichment: PearlTower 2026-03-12 — ~80 additional integration tests
+// ────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn enrichment_scorecard_id_prefix_when_run_id_empty() {
+    let mut req = baseline_request();
+    req.scorecard_run_id = String::new();
+    let p = publish(&req);
+    assert!(
+        p.scorecard_id.starts_with("gov-scorecard-"),
+        "auto-derived id should have prefix, got: {}",
+        p.scorecard_id
+    );
+    let hex_part = &p.scorecard_id["gov-scorecard-".len()..];
+    assert_eq!(hex_part.len(), 24);
+    assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[test]
+fn enrichment_explicit_scorecard_run_id_used_verbatim() {
+    let mut req = baseline_request();
+    req.scorecard_run_id = "my-custom-run-42".to_string();
+    let p = publish(&req);
+    assert_eq!(p.scorecard_id, "my-custom-run-42");
+}
+
+#[test]
+fn enrichment_generated_at_ns_propagated() {
+    let req = baseline_request();
+    let p = publish(&req);
+    assert_eq!(p.generated_at_ns, req.generated_at_ns);
+}
+
+#[test]
+fn enrichment_schema_version_constant_matches_publication() {
+    let p = publish(&baseline_request());
+    assert_eq!(
+        p.schema_version,
+        "franken-engine.governance-scorecard.v1"
+    );
+}
+
+#[test]
+fn enrichment_warning_outcome_maps_to_hold_decision() {
+    let mut req = baseline_request();
+    req.historical = vec![perfect_historical_point()];
+    let mut l = ledger();
+    let p =
+        publish_governance_scorecard(&req, &signing_key(), &mut l, actor()).expect("publication");
+    assert_eq!(p.outcome, GovernanceScorecardOutcome::Warning);
+    assert_eq!(l.entries()[0].decision_type, GovernanceDecisionType::Hold);
+}
+
+#[test]
+fn enrichment_critical_outcome_maps_to_kill_decision() {
+    let mut req = baseline_request();
+    req.attested_receipts = vec![high_impact_receipt("sole", false)];
+    let mut l = ledger();
+    let p =
+        publish_governance_scorecard(&req, &signing_key(), &mut l, actor()).expect("publication");
+    assert_eq!(p.outcome, GovernanceScorecardOutcome::Critical);
+    assert_eq!(l.entries()[0].decision_type, GovernanceDecisionType::Kill);
+}
+
+#[test]
+fn enrichment_all_receipts_valid_gives_full_coverage() {
+    let mut req = baseline_request();
+    req.attested_receipts = vec![
+        high_impact_receipt("a1", true),
+        high_impact_receipt("a2", true),
+    ];
+    let p = publish(&req);
+    assert_eq!(p.attested_receipt_coverage.coverage_millionths, 1_000_000);
+    assert!(p.attested_receipt_coverage.threshold_pass);
+}
+
+#[test]
+fn enrichment_half_valid_receipts_coverage_is_500k() {
+    let mut req = baseline_request();
+    req.attested_receipts = vec![
+        high_impact_receipt("h1", true),
+        high_impact_receipt("h2", false),
+    ];
+    let p = publish(&req);
+    assert_eq!(p.attested_receipt_coverage.coverage_millionths, 500_000);
+    assert_eq!(p.attested_receipt_coverage.high_impact_total, 2);
+    assert_eq!(
+        p.attested_receipt_coverage
+            .high_impact_with_valid_attestation,
+        1
+    );
+    assert_eq!(
+        p.attested_receipt_coverage
+            .high_impact_missing_or_invalid_attestation,
+        1
+    );
+}
+
+#[test]
+fn enrichment_non_high_impact_receipts_ignored_in_coverage() {
+    let mut req = baseline_request();
+    req.attested_receipts = vec![
+        high_impact_receipt("hi", true),
+        low_impact_receipt("lo1"),
+        low_impact_receipt("lo2"),
+    ];
+    let p = publish(&req);
+    assert_eq!(p.attested_receipt_coverage.coverage_millionths, 1_000_000);
+    assert_eq!(p.attested_receipt_coverage.high_impact_total, 1);
+}
+
+#[test]
+fn enrichment_privacy_budget_epoch_fields_populated() {
+    let p = publish(&baseline_request());
+    assert!(p.privacy_budget_health.epoch_epsilon_budget_millionths > 0);
+    assert!(p.privacy_budget_health.epoch_delta_budget_millionths > 0);
+}
+
+#[test]
+fn enrichment_privacy_epoch_consumption_bounded_to_million() {
+    let p = publish(&baseline_request());
+    assert!(p.privacy_budget_health.epoch_consumption_millionths <= 1_000_000);
+}
+
+#[test]
+fn enrichment_moonshot_governor_fields_propagated() {
+    let req = baseline_request();
+    let p = publish(&req);
+    assert_eq!(p.moonshot_governor.total_decisions, 50);
+    assert_eq!(p.moonshot_governor.override_count, 2);
+    assert_eq!(p.moonshot_governor.kill_count, 3);
+    assert_eq!(p.moonshot_governor.active_moonshots, 5);
+    assert_eq!(p.moonshot_governor.paused_moonshots, 1);
+    assert_eq!(p.moonshot_governor.killed_moonshots, 2);
+}
+
+#[test]
+fn enrichment_conformance_pass_rate_computed_correctly() {
+    let req = baseline_request();
+    let p = publish(&req);
+    // 196 passed / 200 total = 980_000 millionths
+    assert_eq!(p.cross_repo_conformance.pass_rate_millionths, 980_000);
+    assert_eq!(p.cross_repo_conformance.total_cells, 200);
+    assert_eq!(p.cross_repo_conformance.passed_cells, 196);
+    assert_eq!(p.cross_repo_conformance.failed_cells, 4);
+}
+
+#[test]
+fn enrichment_conformance_failure_class_distribution_preserved() {
+    let req = baseline_request();
+    let p = publish(&req);
+    let dist = &p.cross_repo_conformance.failure_class_distribution;
+    assert_eq!(dist.get("timeout"), Some(&2));
+    assert_eq!(dist.get("assertion"), Some(&2));
+}
+
+#[test]
+fn enrichment_trend_includes_current_plus_historical() {
+    let mut req = baseline_request();
+    req.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "old-1".to_string(),
+        generated_at_ns: 100,
+        attested_receipt_coverage_millionths: 950_000,
+        privacy_epoch_consumption_millionths: 100_000,
+        moonshot_override_frequency_millionths: 50_000,
+        conformance_pass_rate_millionths: 980_000,
+        outcome: GovernanceScorecardOutcome::Healthy,
+    });
+    let p = publish(&req);
+    assert_eq!(p.trend.len(), 2);
+}
+
+#[test]
+fn enrichment_trend_sorted_by_generated_at_ns() {
+    let mut req = baseline_request();
+    req.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "later".to_string(),
+        generated_at_ns: 500,
+        attested_receipt_coverage_millionths: 950_000,
+        privacy_epoch_consumption_millionths: 100_000,
+        moonshot_override_frequency_millionths: 50_000,
+        conformance_pass_rate_millionths: 980_000,
+        outcome: GovernanceScorecardOutcome::Healthy,
+    });
+    req.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "earlier".to_string(),
+        generated_at_ns: 100,
+        attested_receipt_coverage_millionths: 960_000,
+        privacy_epoch_consumption_millionths: 80_000,
+        moonshot_override_frequency_millionths: 40_000,
+        conformance_pass_rate_millionths: 990_000,
+        outcome: GovernanceScorecardOutcome::Healthy,
+    });
+    let p = publish(&req);
+    for w in p.trend.windows(2) {
+        assert!(
+            w[0].generated_at_ns <= w[1].generated_at_ns,
+            "trend must be sorted ascending by timestamp"
+        );
+    }
+}
+
+#[test]
+fn enrichment_no_regression_when_all_metrics_improve() {
+    let mut req = baseline_request();
+    req.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "prev-worse".to_string(),
+        generated_at_ns: req.generated_at_ns.saturating_sub(1),
+        attested_receipt_coverage_millionths: 900_000,
+        privacy_epoch_consumption_millionths: 500_000,
+        moonshot_override_frequency_millionths: 200_000,
+        conformance_pass_rate_millionths: 900_000,
+        outcome: GovernanceScorecardOutcome::Warning,
+    });
+    let p = publish(&req);
+    assert!(!p.trend_regression_detected);
+}
+
+#[test]
+fn enrichment_trend_regression_on_override_frequency_increase() {
+    let mut req = baseline_request();
+    req.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "prev".to_string(),
+        generated_at_ns: req.generated_at_ns.saturating_sub(1),
+        attested_receipt_coverage_millionths: 1_000_000,
+        privacy_epoch_consumption_millionths: 1_000_000,
+        moonshot_override_frequency_millionths: 0,
+        conformance_pass_rate_millionths: 980_000,
+        outcome: GovernanceScorecardOutcome::Healthy,
+    });
+    let p = publish(&req);
+    assert!(p.trend_regression_detected);
+}
+
+#[test]
+fn enrichment_events_include_started_event() {
+    let p = publish(&baseline_request());
+    assert!(
+        p.events
+            .iter()
+            .any(|e| e.event == "governance_scorecard_started"),
+        "events should include 'governance_scorecard_started'"
+    );
+}
+
+#[test]
+fn enrichment_events_include_dimension_evaluations() {
+    let p = publish(&baseline_request());
+    let dimension_events: Vec<&GovernanceScorecardEvent> =
+        p.events.iter().filter(|e| e.dimension.is_some()).collect();
+    assert_eq!(dimension_events.len(), 4);
+    let dims: BTreeSet<String> = dimension_events
+        .iter()
+        .filter_map(|e| e.dimension.clone())
+        .collect();
+    assert!(dims.contains("attested_receipt_coverage"));
+    assert!(dims.contains("privacy_budget_health"));
+    assert!(dims.contains("moonshot_governor"));
+    assert!(dims.contains("cross_repo_conformance"));
+}
+
+#[test]
+fn enrichment_events_include_ledger_append() {
+    let p = publish(&baseline_request());
+    assert!(
+        p.events
+            .iter()
+            .any(|e| e.event == "governance_scorecard_ledger_append"),
+        "events should include ledger append"
+    );
+}
+
+#[test]
+fn enrichment_events_include_final_decision() {
+    let p = publish(&baseline_request());
+    assert!(
+        p.events
+            .iter()
+            .any(|e| e.event == "governance_scorecard_decision"),
+        "events should include the final decision event"
+    );
+}
+
+#[test]
+fn enrichment_events_trace_id_matches_request() {
+    let req = baseline_request();
+    let p = publish(&req);
+    for event in &p.events {
+        assert_eq!(event.trace_id, req.trace_id);
+    }
+}
+
+#[test]
+fn enrichment_events_decision_id_matches_request() {
+    let req = baseline_request();
+    let p = publish(&req);
+    for event in &p.events {
+        assert_eq!(event.decision_id, req.decision_id);
+    }
+}
+
+#[test]
+fn enrichment_events_policy_id_matches_request() {
+    let req = baseline_request();
+    let p = publish(&req);
+    for event in &p.events {
+        assert_eq!(event.policy_id, req.policy_id);
+    }
+}
+
+#[test]
+fn enrichment_events_component_always_governance_scorecard() {
+    let p = publish(&baseline_request());
+    for event in &p.events {
+        assert_eq!(event.component, GOVERNANCE_SCORECARD_COMPONENT);
+    }
+}
+
+#[test]
+fn enrichment_healthy_decision_event_outcome_is_allow() {
+    let p = publish(&baseline_request());
+    let decision = p
+        .events
+        .iter()
+        .find(|e| e.event == "governance_scorecard_decision")
+        .expect("should have decision event");
+    assert_eq!(decision.outcome, "allow");
+}
+
+#[test]
+fn enrichment_critical_decision_event_outcome_is_deny() {
+    let mut req = baseline_request();
+    req.attested_receipts = vec![high_impact_receipt("sole", false)];
+    let p = publish(&req);
+    let decision = p
+        .events
+        .iter()
+        .find(|e| e.event == "governance_scorecard_decision")
+        .expect("should have decision event");
+    assert_eq!(decision.outcome, "deny");
+}
+
+#[test]
+fn enrichment_warning_decision_event_outcome_is_warn() {
+    let mut req = baseline_request();
+    req.historical = vec![perfect_historical_point()];
+    let p = publish(&req);
+    let decision = p
+        .events
+        .iter()
+        .find(|e| e.event == "governance_scorecard_decision")
+        .expect("should have decision event");
+    assert_eq!(decision.outcome, "warn");
+}
+
+#[test]
+fn enrichment_artifact_hash_hex_is_64_hex_chars() {
+    let p = publish(&baseline_request());
+    assert_eq!(p.artifact_hash_hex.len(), 64);
+    assert!(p
+        .artifact_hash_hex
+        .chars()
+        .all(|c| c.is_ascii_hexdigit()));
+}
+
+#[test]
+fn enrichment_tampered_scorecard_id_fails_verification() {
+    let mut p = publish(&baseline_request());
+    p.scorecard_id = "tampered-id".to_string();
+    assert!(verify_governance_scorecard_signature(&p).is_err());
+}
+
+#[test]
+fn enrichment_tampered_blockers_fails_verification() {
+    let mut p = publish(&baseline_request());
+    p.blockers.push("injected blocker".to_string());
+    assert!(verify_governance_scorecard_signature(&p).is_err());
+}
+
+#[test]
+fn enrichment_tampered_warnings_fails_verification() {
+    let mut p = publish(&baseline_request());
+    p.warnings.push("injected warning".to_string());
+    assert!(verify_governance_scorecard_signature(&p).is_err());
+}
+
+#[test]
+fn enrichment_tampered_trend_fails_verification() {
+    let mut p = publish(&baseline_request());
+    p.trend.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "tampered".to_string(),
+        generated_at_ns: 999,
+        attested_receipt_coverage_millionths: 0,
+        privacy_epoch_consumption_millionths: 0,
+        moonshot_override_frequency_millionths: 0,
+        conformance_pass_rate_millionths: 0,
+        outcome: GovernanceScorecardOutcome::Critical,
+    });
+    assert!(verify_governance_scorecard_signature(&p).is_err());
+}
+
+#[test]
+fn enrichment_tampered_generated_at_fails_verification() {
+    let mut p = publish(&baseline_request());
+    p.generated_at_ns += 1;
+    assert!(verify_governance_scorecard_signature(&p).is_err());
+}
+
+#[test]
+fn enrichment_sequential_publications_increment_ledger_sequence() {
+    let req = baseline_request();
+    let mut l = ledger();
+    let key = signing_key();
+    let p1 = publish_governance_scorecard(&req, &key, &mut l, actor()).expect("p1");
+    let p2 = publish_governance_scorecard(&req, &key, &mut l, actor()).expect("p2");
+    assert_eq!(p2.ledger_sequence, p1.ledger_sequence + 1);
+}
+
+#[test]
+fn enrichment_validation_rejects_whitespace_trace_id() {
+    let mut req = baseline_request();
+    req.trace_id = "   ".to_string();
+    let mut l = ledger();
+    let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(matches!(
+        err,
+        GovernanceScorecardError::InvalidInput { ref field, .. } if field == "trace_id"
+    ));
+}
+
+#[test]
+fn enrichment_validation_rejects_whitespace_policy_id() {
+    let mut req = baseline_request();
+    req.policy_id = "  ".to_string();
+    let mut l = ledger();
+    let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_validation_rejects_duplicate_receipt_ids_detail() {
+    let mut req = baseline_request();
+    req.attested_receipts.push(high_impact_receipt("hi-1", true));
+    let mut l = ledger();
+    let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("duplicate"));
+}
+
+#[test]
+fn enrichment_validation_rejects_whitespace_receipt_id() {
+    let mut req = baseline_request();
+    req.attested_receipts.push(AttestedReceiptObservation {
+        receipt_id: "   ".to_string(),
+        high_impact: true,
+        attestation_binding_valid: true,
+        timestamp_ns: 999,
+    });
+    let mut l = ledger();
+    let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_threshold_validation_privacy_consumption_over_million() {
+    let mut req = baseline_request();
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        max_privacy_epoch_consumption_millionths: 2_000_000,
+        ..GovernanceScorecardThresholds::default()
+    });
+    let mut l = ledger();
+    let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_threshold_validation_override_frequency_over_million() {
+    let mut req = baseline_request();
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        max_moonshot_override_frequency_millionths: 1_500_000,
+        ..GovernanceScorecardThresholds::default()
+    });
+    let mut l = ledger();
+    let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_threshold_validation_kill_rate_over_million() {
+    let mut req = baseline_request();
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        max_moonshot_kill_rate_millionths: 1_000_001,
+        ..GovernanceScorecardThresholds::default()
+    });
+    let mut l = ledger();
+    let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_threshold_validation_conformance_over_million() {
+    let mut req = baseline_request();
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        min_conformance_pass_rate_millionths: 1_000_001,
+        ..GovernanceScorecardThresholds::default()
+    });
+    let mut l = ledger();
+    let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_markdown_report_healthy_no_blockers_section() {
+    let p = publish(&baseline_request());
+    let md = p.to_markdown_report();
+    assert!(md.contains("HEALTHY"));
+    assert!(!md.contains("## Blockers"));
+}
+
+#[test]
+fn enrichment_markdown_report_critical_has_blockers_section() {
+    let mut req = baseline_request();
+    req.attested_receipts = vec![high_impact_receipt("solo", false)];
+    let p = publish(&req);
+    let md = p.to_markdown_report();
+    assert!(md.contains("CRITICAL"));
+    assert!(md.contains("## Blockers"));
+}
+
+#[test]
+fn enrichment_markdown_report_contains_artifact_hash() {
+    let p = publish(&baseline_request());
+    let md = p.to_markdown_report();
+    assert!(md.contains(&p.artifact_hash_hex));
+}
+
+#[test]
+fn enrichment_markdown_report_contains_ledger_sequence() {
+    let p = publish(&baseline_request());
+    let md = p.to_markdown_report();
+    assert!(md.contains(&p.ledger_sequence.to_string()));
+}
+
+#[test]
+fn enrichment_markdown_report_trend_section_present() {
+    let p = publish(&baseline_request());
+    let md = p.to_markdown_report();
+    assert!(md.contains("## Trend"));
+}
+
+#[test]
+fn enrichment_json_pretty_contains_all_top_level_fields() {
+    let p = publish(&baseline_request());
+    let json = p.to_json_pretty().expect("json");
+    for field in [
+        "schema_version",
+        "scorecard_id",
+        "generated_at_ns",
+        "outcome",
+        "thresholds",
+        "attested_receipt_coverage",
+        "privacy_budget_health",
+        "moonshot_governor",
+        "cross_repo_conformance",
+        "blockers",
+        "warnings",
+        "trend",
+        "artifact_hash_hex",
+        "signature",
+        "signer_key",
+        "ledger_sequence",
+        "events",
+    ] {
+        assert!(json.contains(field), "json should contain field: {field}");
+    }
+}
+
+#[test]
+fn enrichment_publication_serde_roundtrip_full() {
+    let p = publish(&baseline_request());
+    let json = serde_json::to_string(&p).expect("serialize");
+    let recovered: GovernanceScorecardPublication =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(p.scorecard_id, recovered.scorecard_id);
+    assert_eq!(p.outcome, recovered.outcome);
+    assert_eq!(p.generated_at_ns, recovered.generated_at_ns);
+    assert_eq!(p.artifact_hash_hex, recovered.artifact_hash_hex);
+    assert_eq!(p.ledger_sequence, recovered.ledger_sequence);
+    assert_eq!(p.blockers, recovered.blockers);
+    assert_eq!(p.warnings, recovered.warnings);
+    assert_eq!(p.trend_regression_detected, recovered.trend_regression_detected);
+    assert_eq!(p.trend.len(), recovered.trend.len());
+    assert_eq!(p.events.len(), recovered.events.len());
+}
+
+#[test]
+fn enrichment_attested_receipt_observation_clone_eq() {
+    let obs = high_impact_receipt("clone-test", true);
+    let cloned = obs.clone();
+    assert_eq!(obs, cloned);
+}
+
+#[test]
+fn enrichment_trend_point_clone_eq() {
+    let tp = GovernanceScorecardTrendPoint {
+        scorecard_id: "clone-tp".to_string(),
+        generated_at_ns: 42,
+        attested_receipt_coverage_millionths: 100_000,
+        privacy_epoch_consumption_millionths: 200_000,
+        moonshot_override_frequency_millionths: 300_000,
+        conformance_pass_rate_millionths: 400_000,
+        outcome: GovernanceScorecardOutcome::Warning,
+    };
+    let cloned = tp.clone();
+    assert_eq!(tp, cloned);
+}
+
+#[test]
+fn enrichment_thresholds_default_eq_itself() {
+    let a = GovernanceScorecardThresholds::default();
+    let b = GovernanceScorecardThresholds::default();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_outcome_clone_copy() {
+    let outcome = GovernanceScorecardOutcome::Warning;
+    let copied = outcome;
+    let cloned = outcome.clone();
+    assert_eq!(outcome, copied);
+    assert_eq!(outcome, cloned);
+}
+
+#[test]
+fn enrichment_outcome_debug_format_non_empty() {
+    let dbg = format!("{:?}", GovernanceScorecardOutcome::Healthy);
+    assert!(!dbg.is_empty());
+    assert!(dbg.contains("Healthy"));
+}
+
+#[test]
+fn enrichment_error_debug_format_non_empty() {
+    let err = GovernanceScorecardError::InvalidInput {
+        field: "test_field".to_string(),
+        detail: "test_detail".to_string(),
+    };
+    let dbg = format!("{:?}", err);
+    assert!(!dbg.is_empty());
+    assert!(dbg.contains("test_field"));
+}
+
+#[test]
+fn enrichment_error_stable_codes_are_prefixed() {
+    let errors = vec![
+        GovernanceScorecardError::InvalidInput {
+            field: "f".to_string(),
+            detail: "d".to_string(),
+        },
+        GovernanceScorecardError::SerializationFailure("s".to_string()),
+        GovernanceScorecardError::SignatureFailure("s".to_string()),
+        GovernanceScorecardError::LedgerWriteFailure("l".to_string()),
+    ];
+    for err in &errors {
+        assert!(
+            err.stable_code().starts_with("FE-GOV-SCORE-"),
+            "stable code should be prefixed: {}",
+            err.stable_code()
+        );
+    }
+}
+
+#[test]
+fn enrichment_error_stable_codes_all_unique() {
+    let codes: BTreeSet<&str> = [
+        GovernanceScorecardError::InvalidInput {
+            field: "f".to_string(),
+            detail: "d".to_string(),
+        },
+        GovernanceScorecardError::SerializationFailure("s".to_string()),
+        GovernanceScorecardError::SignatureFailure("s".to_string()),
+        GovernanceScorecardError::LedgerWriteFailure("l".to_string()),
+    ]
+    .iter()
+    .map(|e| e.stable_code())
+    .collect();
+    assert_eq!(codes.len(), 4, "all stable codes must be distinct");
+}
+
+#[test]
+fn enrichment_error_is_std_error_for_all_variants() {
+    let errors: Vec<Box<dyn std::error::Error>> = vec![
+        Box::new(GovernanceScorecardError::InvalidInput {
+            field: "f".to_string(),
+            detail: "d".to_string(),
+        }),
+        Box::new(GovernanceScorecardError::SerializationFailure("s".to_string())),
+        Box::new(GovernanceScorecardError::SignatureFailure("s".to_string())),
+        Box::new(GovernanceScorecardError::LedgerWriteFailure("l".to_string())),
+    ];
+    for err in &errors {
+        assert!(!err.to_string().is_empty());
+    }
+}
+
+#[test]
+fn enrichment_moonshot_high_kill_rate_triggers_blocker() {
+    let mut req = baseline_request();
+    req.moonshot_governor
+        .governance_report
+        .kill_rate_millionths = 500_000;
+    let p = publish(&req);
+    assert_eq!(p.outcome, GovernanceScorecardOutcome::Critical);
+    assert!(p.blockers.iter().any(|b| b.contains("moonshot")));
+}
+
+#[test]
+fn enrichment_conformance_version_specific_failures_excess() {
+    let mut req = baseline_request();
+    req.conformance.matrix_health.version_specific_failures = 10;
+    req.conformance.matrix_health.failed_cells = 10;
+    req.conformance.matrix_health.passed_cells = 190;
+    req.conformance.matrix_health.total_cells = 200;
+    let p = publish(&req);
+    assert_eq!(p.outcome, GovernanceScorecardOutcome::Critical);
+    assert!(p.blockers.iter().any(|b| b.contains("conformance")));
+}
+
+#[test]
+fn enrichment_conformance_outstanding_exemptions_triggers_blocker() {
+    let mut req = baseline_request();
+    req.conformance.outstanding_exemptions = 3;
+    let p = publish(&req);
+    assert_eq!(p.outcome, GovernanceScorecardOutcome::Critical);
+    assert!(p.blockers.iter().any(|b| b.contains("exemptions")));
+}
+
+#[test]
+fn enrichment_custom_thresholds_relax_overrun_to_pass() {
+    let mut req = baseline_request();
+    req.privacy_budget.overrun_incidents = 3;
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        max_privacy_overrun_incidents: 5,
+        ..GovernanceScorecardThresholds::default()
+    });
+    let p = publish(&req);
+    assert!(p.privacy_budget_health.threshold_pass);
+}
+
+#[test]
+fn enrichment_no_exhaustion_warning_when_lead_time_none() {
+    let mut req = baseline_request();
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        warn_privacy_exhaustion_within_ns: None,
+        ..GovernanceScorecardThresholds::default()
+    });
+    let p = publish(&req);
+    assert!(!p.privacy_budget_health.near_term_exhaustion_warning);
+}
+
+#[test]
+fn enrichment_multiple_blockers_from_all_four_dimensions() {
+    let mut req = baseline_request();
+    req.attested_receipts = vec![high_impact_receipt("h1", false)];
+    req.privacy_budget.overrun_incidents = 5;
+    req.moonshot_governor
+        .governance_report
+        .override_frequency_millionths = 500_000;
+    req.conformance.outstanding_exemptions = 10;
+    let p = publish(&req);
+    assert_eq!(p.outcome, GovernanceScorecardOutcome::Critical);
+    assert!(
+        p.blockers.len() >= 4,
+        "should have at least 4 blockers, got: {}",
+        p.blockers.len()
+    );
+}
+
+#[test]
+fn enrichment_trend_regression_check_event_pass() {
+    let p = publish(&baseline_request());
+    let trend_event = p
+        .events
+        .iter()
+        .find(|e| e.event == "trend_regression_check");
+    assert!(trend_event.is_some());
+    assert_eq!(trend_event.unwrap().outcome, "pass");
+}
+
+#[test]
+fn enrichment_trend_regression_check_event_warn() {
+    let mut req = baseline_request();
+    req.historical = vec![perfect_historical_point()];
+    let p = publish(&req);
+    let trend_event = p
+        .events
+        .iter()
+        .find(|e| e.event == "trend_regression_check");
+    assert!(trend_event.is_some());
+    assert_eq!(trend_event.unwrap().outcome, "warn");
+}
+
+#[test]
+fn enrichment_trend_regression_check_event_fail() {
+    let mut req = baseline_request();
+    req.historical = vec![perfect_historical_point()];
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        fail_on_trend_regression: true,
+        ..GovernanceScorecardThresholds::default()
+    });
+    let p = publish(&req);
+    let trend_event = p
+        .events
+        .iter()
+        .find(|e| e.event == "trend_regression_check");
+    assert!(trend_event.is_some());
+    assert_eq!(trend_event.unwrap().outcome, "fail");
+}
+
+#[test]
+fn enrichment_dimension_event_error_code_when_failing() {
+    let mut req = baseline_request();
+    req.attested_receipts = vec![high_impact_receipt("solo", false)];
+    let p = publish(&req);
+    let coverage_event = p
+        .events
+        .iter()
+        .find(|e| e.dimension.as_deref() == Some("attested_receipt_coverage"));
+    assert!(coverage_event.is_some());
+    assert_eq!(coverage_event.unwrap().outcome, "fail");
+    assert!(coverage_event.unwrap().error_code.is_some());
+}
+
+#[test]
+fn enrichment_dimension_event_no_error_code_when_passing() {
+    let p = publish(&baseline_request());
+    let coverage_event = p
+        .events
+        .iter()
+        .find(|e| e.dimension.as_deref() == Some("attested_receipt_coverage"));
+    assert!(coverage_event.is_some());
+    assert_eq!(coverage_event.unwrap().outcome, "pass");
+    assert!(coverage_event.unwrap().error_code.is_none());
+}
+
+#[test]
+fn enrichment_event_serde_roundtrip_with_all_fields() {
+    let event = GovernanceScorecardEvent {
+        trace_id: "trace-1".to_string(),
+        decision_id: "dec-1".to_string(),
+        policy_id: "pol-1".to_string(),
+        component: "governance_scorecard".to_string(),
+        event: "dimension_evaluated".to_string(),
+        outcome: "pass".to_string(),
+        error_code: Some("FE-GOV-SCORE-3005".to_string()),
+        dimension: Some("privacy_budget_health".to_string()),
+        detail: Some("within budget".to_string()),
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let recovered: GovernanceScorecardEvent =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(event, recovered);
+}
+
+#[test]
+fn enrichment_event_serde_roundtrip_with_none_fields() {
+    let event = GovernanceScorecardEvent {
+        trace_id: "t".to_string(),
+        decision_id: "d".to_string(),
+        policy_id: "p".to_string(),
+        component: "c".to_string(),
+        event: "e".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        dimension: None,
+        detail: None,
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let recovered: GovernanceScorecardEvent =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(event, recovered);
+}
+
+#[test]
+fn enrichment_attested_receipt_coverage_summary_serde_roundtrip() {
+    let summary = AttestedReceiptCoverageSummary {
+        high_impact_total: 5,
+        high_impact_with_valid_attestation: 3,
+        high_impact_missing_or_invalid_attestation: 2,
+        coverage_millionths: 600_000,
+        threshold_pass: false,
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: AttestedReceiptCoverageSummary =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(summary, recovered);
+}
+
+#[test]
+fn enrichment_privacy_budget_health_summary_serde_roundtrip() {
+    let summary = PrivacyBudgetHealthSummary {
+        epoch: SecurityEpoch::from_raw(3),
+        epoch_epsilon_budget_millionths: 1_000_000,
+        epoch_epsilon_spent_millionths: 250_000,
+        epoch_delta_budget_millionths: 100_000,
+        epoch_delta_spent_millionths: 25_000,
+        epoch_consumption_millionths: 250_000,
+        lifetime_epsilon_remaining_millionths: 7_500_000,
+        lifetime_delta_remaining_millionths: 750_000,
+        estimated_remaining_operations: 30,
+        epsilon_burn_rate_per_hour_millionths: 10_000,
+        delta_burn_rate_per_hour_millionths: 1_000,
+        projected_epsilon_exhaustion_ns: Some(999_999_999_999),
+        projected_delta_exhaustion_ns: None,
+        overrun_incidents: 0,
+        threshold_pass: true,
+        near_term_exhaustion_warning: false,
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: PrivacyBudgetHealthSummary =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(summary, recovered);
+}
+
+#[test]
+fn enrichment_moonshot_governor_decision_summary_serde_roundtrip() {
+    let summary = MoonshotGovernorDecisionSummary {
+        total_decisions: 200,
+        override_count: 10,
+        kill_count: 5,
+        override_frequency_millionths: 50_000,
+        kill_rate_millionths: 25_000,
+        mean_time_to_decision_ns: Some(86_400_000_000_000),
+        active_moonshots: 8,
+        paused_moonshots: 2,
+        killed_moonshots: 3,
+        threshold_pass: true,
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: MoonshotGovernorDecisionSummary =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(summary, recovered);
+}
+
+#[test]
+fn enrichment_cross_repo_conformance_stability_summary_serde_roundtrip() {
+    let summary = CrossRepoConformanceStabilitySummary {
+        release_id: "v2.0.0".to_string(),
+        total_cells: 50,
+        passed_cells: 48,
+        failed_cells: 2,
+        pass_rate_millionths: 960_000,
+        universal_failures: 0,
+        version_specific_failures: 2,
+        outstanding_exemptions: 1,
+        failure_class_distribution: BTreeMap::from([
+            ("timeout".to_string(), 1),
+            ("assertion".to_string(), 1),
+        ]),
+        threshold_pass: true,
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: CrossRepoConformanceStabilitySummary =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(summary, recovered);
+}
+
+#[test]
+fn enrichment_thresholds_serde_roundtrip_all_custom_values() {
+    let thresholds = GovernanceScorecardThresholds {
+        min_attested_receipt_coverage_millionths: 800_000,
+        max_privacy_overrun_incidents: 3,
+        max_privacy_epoch_consumption_millionths: 700_000,
+        warn_privacy_exhaustion_within_ns: Some(48 * 3_600_000_000_000),
+        max_moonshot_override_frequency_millionths: 150_000,
+        max_moonshot_kill_rate_millionths: 200_000,
+        max_moonshot_mean_time_to_decision_ns: Some(48 * 3_600_000_000_000),
+        min_conformance_pass_rate_millionths: 900_000,
+        max_universal_failures: 1,
+        max_version_specific_failures: 10,
+        max_outstanding_exemptions: 5,
+        fail_on_trend_regression: true,
+    };
+    let json = serde_json::to_string(&thresholds).expect("serialize");
+    let recovered: GovernanceScorecardThresholds =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(thresholds, recovered);
+}
+
+#[test]
+fn enrichment_request_serde_roundtrip_with_thresholds() {
+    let mut req = baseline_request();
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        fail_on_trend_regression: true,
+        ..GovernanceScorecardThresholds::default()
+    });
+    let json = serde_json::to_string(&req).expect("serialize");
+    let recovered: GovernanceScorecardRequest =
+        serde_json::from_str(&json).expect("deserialize");
+    assert!(recovered.thresholds.is_some());
+    assert!(recovered.thresholds.unwrap().fail_on_trend_regression);
+}
+
+#[test]
+fn enrichment_request_serde_roundtrip_with_historical() {
+    let mut req = baseline_request();
+    req.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "hist-1".to_string(),
+        generated_at_ns: 100,
+        attested_receipt_coverage_millionths: 950_000,
+        privacy_epoch_consumption_millionths: 100_000,
+        moonshot_override_frequency_millionths: 50_000,
+        conformance_pass_rate_millionths: 980_000,
+        outcome: GovernanceScorecardOutcome::Healthy,
+    });
+    let json = serde_json::to_string(&req).expect("serialize");
+    let recovered: GovernanceScorecardRequest =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.historical.len(), 1);
+    assert_eq!(recovered.historical[0].scorecard_id, "hist-1");
+}
+
+#[test]
+fn enrichment_different_signing_keys_produce_different_signatures() {
+    let req = baseline_request();
+    let key_a = SigningKey::from_bytes([0x42; 32]);
+    let key_b = SigningKey::from_bytes([0x99; 32]);
+    let mut l_a = ledger();
+    let mut l_b = ledger();
+    let p_a = publish_governance_scorecard(&req, &key_a, &mut l_a, actor()).expect("a");
+    let p_b = publish_governance_scorecard(&req, &key_b, &mut l_b, actor()).expect("b");
+    assert_eq!(p_a.artifact_hash_hex, p_b.artifact_hash_hex);
+    assert_ne!(p_a.signature, p_b.signature);
+    assert_ne!(p_a.signer_key, p_b.signer_key);
+    assert!(verify_governance_scorecard_signature(&p_a).is_ok());
+    assert!(verify_governance_scorecard_signature(&p_b).is_ok());
+}
+
+#[test]
+fn enrichment_moonshot_mean_time_exceeds_threshold_fails() {
+    let mut req = baseline_request();
+    req.moonshot_governor
+        .governance_report
+        .mean_time_to_decision_ns = Some(999_999_999_999_999);
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        max_moonshot_mean_time_to_decision_ns: Some(1_000_000),
+        ..GovernanceScorecardThresholds::default()
+    });
+    let p = publish(&req);
+    assert!(!p.moonshot_governor.threshold_pass);
+    assert_eq!(p.outcome, GovernanceScorecardOutcome::Critical);
+}
+
+#[test]
+fn enrichment_moonshot_none_mean_time_passes_threshold() {
+    let mut req = baseline_request();
+    req.moonshot_governor
+        .governance_report
+        .mean_time_to_decision_ns = None;
+    req.thresholds = Some(GovernanceScorecardThresholds {
+        max_moonshot_mean_time_to_decision_ns: Some(1_000_000),
+        ..GovernanceScorecardThresholds::default()
+    });
+    let p = publish(&req);
+    assert!(p.moonshot_governor.threshold_pass);
+}
+
+#[test]
+fn enrichment_conformance_release_id_preserved_in_summary() {
+    let p = publish(&baseline_request());
+    assert_eq!(p.cross_repo_conformance.release_id, "rel-integ-001");
+}
+
+#[test]
+fn enrichment_thresholds_in_publication_match_defaults() {
+    let req = baseline_request();
+    let p = publish(&req);
+    assert_eq!(p.thresholds, GovernanceScorecardThresholds::default());
+}
+
+#[test]
+fn enrichment_thresholds_in_publication_match_custom() {
+    let mut req = baseline_request();
+    let custom = GovernanceScorecardThresholds {
+        min_attested_receipt_coverage_millionths: 800_000,
+        max_privacy_overrun_incidents: 2,
+        ..GovernanceScorecardThresholds::default()
+    };
+    req.thresholds = Some(custom.clone());
+    let p = publish(&req);
+    assert_eq!(p.thresholds, custom);
+}
+
+#[test]
+fn enrichment_ledger_entry_recorded_with_correct_decision_id() {
+    let req = baseline_request();
+    let mut l = ledger();
+    publish_governance_scorecard(&req, &signing_key(), &mut l, actor()).expect("publication");
+    assert_eq!(l.entries().len(), 1);
+    assert_eq!(l.entries()[0].decision_id, req.decision_id);
+}
+
+#[test]
+fn enrichment_outcome_serde_snake_case() {
+    let json = serde_json::to_string(&GovernanceScorecardOutcome::Healthy).expect("ser");
+    assert_eq!(json, "\"healthy\"");
+    let json = serde_json::to_string(&GovernanceScorecardOutcome::Warning).expect("ser");
+    assert_eq!(json, "\"warning\"");
+    let json = serde_json::to_string(&GovernanceScorecardOutcome::Critical).expect("ser");
+    assert_eq!(json, "\"critical\"");
+}
+
+#[test]
+fn enrichment_outcome_ordering_sort() {
+    let mut outcomes = vec![
+        GovernanceScorecardOutcome::Critical,
+        GovernanceScorecardOutcome::Healthy,
+        GovernanceScorecardOutcome::Warning,
+    ];
+    outcomes.sort();
+    assert_eq!(
+        outcomes,
+        vec![
+            GovernanceScorecardOutcome::Healthy,
+            GovernanceScorecardOutcome::Warning,
+            GovernanceScorecardOutcome::Critical,
+        ]
+    );
+}
+
+#[test]
+fn enrichment_large_receipt_set_coverage_calculation() {
+    let mut req = baseline_request();
+    req.attested_receipts.clear();
+    for i in 0..100 {
+        req.attested_receipts.push(AttestedReceiptObservation {
+            receipt_id: format!("large-{i}"),
+            high_impact: true,
+            attestation_binding_valid: i < 95,
+            timestamp_ns: i as u64,
+        });
+    }
+    let p = publish(&req);
+    assert_eq!(p.attested_receipt_coverage.coverage_millionths, 950_000);
+    assert!(p.attested_receipt_coverage.threshold_pass);
+    assert_eq!(p.attested_receipt_coverage.high_impact_total, 100);
+    assert_eq!(
+        p.attested_receipt_coverage
+            .high_impact_with_valid_attestation,
+        95
+    );
+}
+
+#[test]
+fn enrichment_mixed_impact_receipts_coverage() {
+    let mut req = baseline_request();
+    req.attested_receipts.clear();
+    for i in 0..10 {
+        req.attested_receipts.push(AttestedReceiptObservation {
+            receipt_id: format!("hi-mix-{i}"),
+            high_impact: true,
+            attestation_binding_valid: true,
+            timestamp_ns: i as u64,
+        });
+    }
+    for i in 0..90 {
+        req.attested_receipts.push(AttestedReceiptObservation {
+            receipt_id: format!("lo-mix-{i}"),
+            high_impact: false,
+            attestation_binding_valid: false,
+            timestamp_ns: (i + 10) as u64,
+        });
+    }
+    let p = publish(&req);
+    assert_eq!(p.attested_receipt_coverage.coverage_millionths, 1_000_000);
+    assert_eq!(p.attested_receipt_coverage.high_impact_total, 10);
+}
+
+#[test]
+fn enrichment_privacy_heavy_spend_causes_higher_consumption() {
+    let mut req = baseline_request();
+    req.privacy_budget = mk_privacy(800_000, 80_000);
+    let p = publish(&req);
+    assert!(p.privacy_budget_health.epoch_consumption_millionths > 0);
+    assert!(p.privacy_budget_health.epoch_epsilon_spent_millionths > 0);
+}
+
+#[test]
+fn enrichment_privacy_zero_spend_low_consumption() {
+    let mut req = baseline_request();
+    req.privacy_budget = mk_privacy(0, 0);
+    let p = publish(&req);
+    assert_eq!(p.privacy_budget_health.epoch_consumption_millionths, 0);
+}
+
+#[test]
+fn enrichment_multiple_historical_points_trend_length() {
+    let mut req = baseline_request();
+    for i in 0..5 {
+        req.historical.push(GovernanceScorecardTrendPoint {
+            scorecard_id: format!("hist-{i}"),
+            generated_at_ns: (i + 1) as u64 * 100,
+            attested_receipt_coverage_millionths: 900_000,
+            privacy_epoch_consumption_millionths: 500_000,
+            moonshot_override_frequency_millionths: 200_000,
+            conformance_pass_rate_millionths: 900_000,
+            outcome: GovernanceScorecardOutcome::Warning,
+        });
+    }
+    let p = publish(&req);
+    // 5 historical + 1 current = 6
+    assert_eq!(p.trend.len(), 6);
+}
+
+#[test]
+fn enrichment_trend_last_point_is_current() {
+    let mut req = baseline_request();
+    req.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "old".to_string(),
+        generated_at_ns: 1,
+        attested_receipt_coverage_millionths: 950_000,
+        privacy_epoch_consumption_millionths: 100_000,
+        moonshot_override_frequency_millionths: 50_000,
+        conformance_pass_rate_millionths: 980_000,
+        outcome: GovernanceScorecardOutcome::Healthy,
+    });
+    let p = publish(&req);
+    let last = p.trend.last().expect("last trend point");
+    assert_eq!(last.scorecard_id, p.scorecard_id);
+    assert_eq!(last.generated_at_ns, req.generated_at_ns);
+}
+
+#[test]
+fn enrichment_events_count_at_least_seven() {
+    let p = publish(&baseline_request());
+    // started + 4 dimension evals + trend check + ledger append + decision = 8
+    assert!(
+        p.events.len() >= 7,
+        "expected at least 7 events, got {}",
+        p.events.len()
+    );
+}
+
+#[test]
+fn enrichment_publication_with_custom_actor_name() {
+    let req = baseline_request();
+    let mut l = ledger();
+    let p = publish_governance_scorecard(
+        &req,
+        &signing_key(),
+        &mut l,
+        GovernanceActor::System("custom-actor-name".to_string()),
+    )
+    .unwrap();
+    assert_eq!(p.outcome, GovernanceScorecardOutcome::Healthy);
+    verify_governance_scorecard_signature(&p).unwrap();
+}
+
+#[test]
+fn enrichment_conformance_zero_total_cells_still_valid() {
+    let mut req = baseline_request();
+    req.conformance.matrix_health = MatrixHealthSummary {
+        total_cells: 0,
+        passed_cells: 0,
+        failed_cells: 0,
+        universal_failures: 0,
+        version_specific_failures: 0,
+    };
+    let p = publish(&req);
+    // 0/0 cells => pass_rate computes to 0, which is below 950k threshold
+    assert_eq!(p.cross_repo_conformance.pass_rate_millionths, 0);
+}
+
+#[test]
+fn enrichment_error_display_invalid_input_contains_field_name() {
+    let err = GovernanceScorecardError::InvalidInput {
+        field: "my_field".to_string(),
+        detail: "bad_value".to_string(),
+    };
+    let msg = format!("{err}");
+    assert!(msg.contains("my_field"));
+    assert!(msg.contains("bad_value"));
+}
+
+#[test]
+fn enrichment_error_display_serialization_contains_msg() {
+    let err = GovernanceScorecardError::SerializationFailure("json broken".to_string());
+    let msg = format!("{err}");
+    assert!(msg.contains("json broken"));
+}
+
+#[test]
+fn enrichment_error_display_signature_contains_msg() {
+    let err = GovernanceScorecardError::SignatureFailure("bad key material".to_string());
+    let msg = format!("{err}");
+    assert!(msg.contains("bad key material"));
+}
+
+#[test]
+fn enrichment_error_display_ledger_contains_msg() {
+    let err = GovernanceScorecardError::LedgerWriteFailure("disk full".to_string());
+    let msg = format!("{err}");
+    assert!(msg.contains("disk full"));
+}
+
+#[test]
+fn enrichment_deterministic_auto_derived_id_for_same_input() {
+    let mut req = baseline_request();
+    req.scorecard_run_id = String::new();
+    let p1 = publish(&req);
+    let p2 = publish(&req);
+    assert_eq!(p1.scorecard_id, p2.scorecard_id);
+}
+
+#[test]
+fn enrichment_different_trace_id_gives_different_auto_derived_id() {
+    let mut req1 = baseline_request();
+    req1.scorecard_run_id = String::new();
+    let mut req2 = req1.clone();
+    req2.trace_id = "different-trace".to_string();
+    let p1 = publish(&req1);
+    let p2 = publish(&req2);
+    assert_ne!(p1.scorecard_id, p2.scorecard_id);
+}
+
+#[test]
+fn enrichment_moonshot_governor_summary_serde_from_publication() {
+    let p = publish(&baseline_request());
+    let json = serde_json::to_string(&p.moonshot_governor).expect("ser");
+    let recovered: MoonshotGovernorDecisionSummary =
+        serde_json::from_str(&json).expect("deser");
+    assert_eq!(p.moonshot_governor, recovered);
+}
+
+#[test]
+fn enrichment_privacy_budget_health_summary_serde_from_publication() {
+    let p = publish(&baseline_request());
+    let json = serde_json::to_string(&p.privacy_budget_health).expect("ser");
+    let recovered: PrivacyBudgetHealthSummary =
+        serde_json::from_str(&json).expect("deser");
+    assert_eq!(p.privacy_budget_health, recovered);
+}
+
+#[test]
+fn enrichment_attested_receipt_coverage_summary_serde_from_publication() {
+    let p = publish(&baseline_request());
+    let json = serde_json::to_string(&p.attested_receipt_coverage).expect("ser");
+    let recovered: AttestedReceiptCoverageSummary =
+        serde_json::from_str(&json).expect("deser");
+    assert_eq!(p.attested_receipt_coverage, recovered);
+}
+
+#[test]
+fn enrichment_conformance_stability_summary_serde_from_publication() {
+    let p = publish(&baseline_request());
+    let json = serde_json::to_string(&p.cross_repo_conformance).expect("ser");
+    let recovered: CrossRepoConformanceStabilitySummary =
+        serde_json::from_str(&json).expect("deser");
+    assert_eq!(p.cross_repo_conformance, recovered);
 }

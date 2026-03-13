@@ -28,7 +28,7 @@ use frankenengine_engine::self_replacement::{
     SchemaVersion, SelfReplacementError, SignatureBundle, SignerEntry, ValidationArtifactKind,
     ValidationArtifactRef,
 };
-use frankenengine_engine::signature_preimage::{sign_preimage, Signature, SigningKey};
+use frankenengine_engine::signature_preimage::{Signature, SigningKey, sign_preimage};
 use frankenengine_engine::slot_registry::{AuthorityEnvelope, SlotCapability, SlotId};
 
 // ===========================================================================
@@ -769,7 +769,10 @@ fn enrichment_bundle_verify_wrong_preimage_fails() {
     let err = bundle.verify_all(b"wrong").unwrap_err();
     assert!(matches!(
         err,
-        SelfReplacementError::SignatureInvalid { signer_index: 0, .. }
+        SelfReplacementError::SignatureInvalid {
+            signer_index: 0,
+            ..
+        }
     ));
 }
 
@@ -835,12 +838,10 @@ fn enrichment_manifest_id_varies_by_behavior_hash() {
     let s = default_slot();
     let bh1 = [0x00; 32];
     let bh2 = [0xFF; 32];
-    let id1 =
-        DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh1, "z")
-            .unwrap();
-    let id2 =
-        DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh2, "z")
-            .unwrap();
+    let id1 = DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh1, "z")
+        .unwrap();
+    let id2 = DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh2, "z")
+        .unwrap();
     assert_ne!(id1, id2);
 }
 
@@ -1010,9 +1011,8 @@ fn enrichment_receipt_empty_artifacts_rejected() {
 #[test]
 fn enrichment_receipt_id_deterministic_100_iterations() {
     let s = default_slot();
-    let first =
-        ReplacementReceipt::derive_receipt_id(&s, "old-det", "new-det", 42_000, "zone-det")
-            .unwrap();
+    let first = ReplacementReceipt::derive_receipt_id(&s, "old-det", "new-det", 42_000, "zone-det")
+        .unwrap();
     for _ in 0..100 {
         let id =
             ReplacementReceipt::derive_receipt_id(&s, "old-det", "new-det", 42_000, "zone-det")
@@ -1116,7 +1116,10 @@ fn enrichment_receipt_add_and_verify_multi_party() {
     // Still insufficient
     assert!(matches!(
         receipt.verify_signatures(),
-        Err(SelfReplacementError::InsufficientSignatures { required: 2, present: 1 })
+        Err(SelfReplacementError::InsufficientSignatures {
+            required: 2,
+            present: 1
+        })
     ));
     receipt.add_signature(&sk2(), "governance").unwrap();
     assert!(receipt.verify_signatures().is_ok());
@@ -1353,10 +1356,7 @@ fn enrichment_lifecycle_receipt_with_failed_validation_rejected() {
     .unwrap();
     receipt.add_signature(&sk1(), "signer").unwrap();
     let err = lc.record_receipt(receipt).unwrap_err();
-    assert!(matches!(
-        err,
-        SelfReplacementError::ValidationFailed { .. }
-    ));
+    assert!(matches!(err, SelfReplacementError::ValidationFailed { .. }));
     // Stage should not have advanced
     assert_eq!(lc.current_stage, ReplacementStage::Research);
 }
@@ -1475,9 +1475,9 @@ fn enrichment_same_slot_different_artifact_types_distinct_ids() {
     let m_id =
         DelegateCellManifest::derive_manifest_id(&s, DelegateType::WasmBacked, &bh, "shared-zone")
             .unwrap();
-    let r_id = ReplacementReceipt::derive_receipt_id(&s, "old", "new", 5000, "shared-zone").unwrap();
-    let d_id =
-        PromotionDecision::derive_decision_id(&s, "new", 5000, "shared-zone").unwrap();
+    let r_id =
+        ReplacementReceipt::derive_receipt_id(&s, "old", "new", 5000, "shared-zone").unwrap();
+    let d_id = PromotionDecision::derive_decision_id(&s, "new", 5000, "shared-zone").unwrap();
     assert_ne!(m_id, r_id);
     assert_ne!(r_id, d_id);
     assert_ne!(m_id, d_id);

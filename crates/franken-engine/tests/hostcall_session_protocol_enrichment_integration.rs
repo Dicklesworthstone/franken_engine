@@ -91,21 +91,36 @@ fn make_complete_key_schedule() -> SessionKeySchedule {
 fn enrichment_session_phase_tag_display_all_unique() {
     let displays: Vec<String> = SessionPhaseTag::ALL.iter().map(|t| t.to_string()).collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "SessionPhaseTag Display values must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "SessionPhaseTag Display values must be unique"
+    );
 }
 
 #[test]
 fn enrichment_key_stage_purpose_display_all_unique() {
     let displays: Vec<String> = KeyStagePurpose::ALL.iter().map(|p| p.to_string()).collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "KeyStagePurpose Display values must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "KeyStagePurpose Display values must be unique"
+    );
 }
 
 #[test]
 fn enrichment_key_stage_purpose_domain_labels_all_unique() {
-    let labels: Vec<&str> = KeyStagePurpose::ALL.iter().map(|p| p.domain_label()).collect();
+    let labels: Vec<&str> = KeyStagePurpose::ALL
+        .iter()
+        .map(|p| p.domain_label())
+        .collect();
     let unique: BTreeSet<&str> = labels.iter().copied().collect();
-    assert_eq!(labels.len(), unique.len(), "KeyStagePurpose domain labels must be unique");
+    assert_eq!(
+        labels.len(),
+        unique.len(),
+        "KeyStagePurpose domain labels must be unique"
+    );
 }
 
 #[test]
@@ -117,7 +132,11 @@ fn enrichment_degraded_severity_display_all_unique() {
     ];
     let displays: Vec<String> = severities.iter().map(|s| s.to_string()).collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "DegradedSeverity Display values must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "DegradedSeverity Display values must be unique"
+    );
 }
 
 #[test]
@@ -130,7 +149,11 @@ fn enrichment_degraded_operation_kind_display_all_unique() {
     ];
     let displays: Vec<String> = ops.iter().map(|o| o.to_string()).collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "DegradedOperationKind Display values must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "DegradedOperationKind Display values must be unique"
+    );
 }
 
 #[test]
@@ -143,14 +166,25 @@ fn enrichment_replay_verdict_display_all_unique() {
     ];
     let displays: Vec<String> = verdicts.iter().map(|v| v.to_string()).collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "ReplayVerdict Display values must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "ReplayVerdict Display values must be unique"
+    );
 }
 
 #[test]
 fn enrichment_hsp_specimen_family_display_all_unique() {
-    let displays: Vec<String> = HspSpecimenFamily::ALL.iter().map(|f| f.to_string()).collect();
+    let displays: Vec<String> = HspSpecimenFamily::ALL
+        .iter()
+        .map(|f| f.to_string())
+        .collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "HspSpecimenFamily Display values must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "HspSpecimenFamily Display values must be unique"
+    );
 }
 
 #[test]
@@ -165,7 +199,11 @@ fn enrichment_transition_trigger_display_all_unit_variants_unique() {
     ];
     let displays: Vec<String> = triggers.iter().map(|t| t.to_string()).collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "TransitionTrigger unit Display values must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "TransitionTrigger unit Display values must be unique"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -269,10 +307,7 @@ fn enrichment_replay_ledger_entry_serde_roundtrip() {
         sequence: 42,
         envelope_hash: ContentHash::compute(b"envelope"),
         accepted_at_tick: 999,
-        mac: frankenengine_engine::hash_tiers::AuthenticityHash::compute_keyed(
-            b"key",
-            b"data",
-        ),
+        mac: frankenengine_engine::hash_tiers::AuthenticityHash::compute_keyed(b"key", b"data"),
     };
     let json = serde_json::to_string(&entry).unwrap();
     let back: ReplayLedgerEntry = serde_json::from_str(&json).unwrap();
@@ -430,8 +465,16 @@ fn enrichment_phase_tag_is_terminal_only_closed() {
 #[test]
 fn enrichment_phase_tag_permits_data_only_established_and_degraded() {
     for tag in SessionPhaseTag::ALL {
-        let expected = matches!(tag, SessionPhaseTag::Established | SessionPhaseTag::DegradedOpen);
-        assert_eq!(tag.permits_data(), expected, "permits_data mismatch for {}", tag);
+        let expected = matches!(
+            tag,
+            SessionPhaseTag::Established | SessionPhaseTag::DegradedOpen
+        );
+        assert_eq!(
+            tag.permits_data(),
+            expected,
+            "permits_data mismatch for {}",
+            tag
+        );
     }
 }
 
@@ -457,21 +500,32 @@ fn enrichment_phase_tag_ordering() {
 #[test]
 fn enrichment_valid_transitions_table_has_at_least_twelve_entries() {
     let table = valid_transitions();
-    assert!(table.len() >= 12, "Transition table should have at least 12 entries, got {}", table.len());
+    assert!(
+        table.len() >= 12,
+        "Transition table should have at least 12 entries, got {}",
+        table.len()
+    );
 }
 
 #[test]
 fn enrichment_no_self_loop_transitions_valid() {
     for tag in SessionPhaseTag::ALL {
-        assert!(!is_valid_transition(*tag, *tag), "Self-loop should be invalid for {}", tag);
+        assert!(
+            !is_valid_transition(*tag, *tag),
+            "Self-loop should be invalid for {}",
+            tag
+        );
     }
 }
 
 #[test]
 fn enrichment_closed_has_no_outgoing_transitions() {
     for tag in SessionPhaseTag::ALL {
-        assert!(!is_valid_transition(SessionPhaseTag::Closed, *tag),
-            "Closed should have no outgoing transition to {}", tag);
+        assert!(
+            !is_valid_transition(SessionPhaseTag::Closed, *tag),
+            "Closed should have no outgoing transition to {}",
+            tag
+        );
     }
 }
 
@@ -481,37 +535,85 @@ fn enrichment_uninit_only_transitions_to_negotiating() {
         if *tag == SessionPhaseTag::Negotiating {
             assert!(is_valid_transition(SessionPhaseTag::Uninit, *tag));
         } else {
-            assert!(!is_valid_transition(SessionPhaseTag::Uninit, *tag),
-                "Uninit should not transition to {}", tag);
+            assert!(
+                !is_valid_transition(SessionPhaseTag::Uninit, *tag),
+                "Uninit should not transition to {}",
+                tag
+            );
         }
     }
 }
 
 #[test]
 fn enrichment_negotiating_transitions_to_established_or_closed() {
-    assert!(is_valid_transition(SessionPhaseTag::Negotiating, SessionPhaseTag::Established));
-    assert!(is_valid_transition(SessionPhaseTag::Negotiating, SessionPhaseTag::Closed));
-    assert!(!is_valid_transition(SessionPhaseTag::Negotiating, SessionPhaseTag::DegradedOpen));
-    assert!(!is_valid_transition(SessionPhaseTag::Negotiating, SessionPhaseTag::Closing));
-    assert!(!is_valid_transition(SessionPhaseTag::Negotiating, SessionPhaseTag::Uninit));
+    assert!(is_valid_transition(
+        SessionPhaseTag::Negotiating,
+        SessionPhaseTag::Established
+    ));
+    assert!(is_valid_transition(
+        SessionPhaseTag::Negotiating,
+        SessionPhaseTag::Closed
+    ));
+    assert!(!is_valid_transition(
+        SessionPhaseTag::Negotiating,
+        SessionPhaseTag::DegradedOpen
+    ));
+    assert!(!is_valid_transition(
+        SessionPhaseTag::Negotiating,
+        SessionPhaseTag::Closing
+    ));
+    assert!(!is_valid_transition(
+        SessionPhaseTag::Negotiating,
+        SessionPhaseTag::Uninit
+    ));
 }
 
 #[test]
 fn enrichment_established_transitions_to_degraded_closing_or_closed() {
-    assert!(is_valid_transition(SessionPhaseTag::Established, SessionPhaseTag::DegradedOpen));
-    assert!(is_valid_transition(SessionPhaseTag::Established, SessionPhaseTag::Closing));
-    assert!(is_valid_transition(SessionPhaseTag::Established, SessionPhaseTag::Closed));
-    assert!(!is_valid_transition(SessionPhaseTag::Established, SessionPhaseTag::Uninit));
-    assert!(!is_valid_transition(SessionPhaseTag::Established, SessionPhaseTag::Negotiating));
+    assert!(is_valid_transition(
+        SessionPhaseTag::Established,
+        SessionPhaseTag::DegradedOpen
+    ));
+    assert!(is_valid_transition(
+        SessionPhaseTag::Established,
+        SessionPhaseTag::Closing
+    ));
+    assert!(is_valid_transition(
+        SessionPhaseTag::Established,
+        SessionPhaseTag::Closed
+    ));
+    assert!(!is_valid_transition(
+        SessionPhaseTag::Established,
+        SessionPhaseTag::Uninit
+    ));
+    assert!(!is_valid_transition(
+        SessionPhaseTag::Established,
+        SessionPhaseTag::Negotiating
+    ));
 }
 
 #[test]
 fn enrichment_degraded_transitions_to_established_closing_or_closed() {
-    assert!(is_valid_transition(SessionPhaseTag::DegradedOpen, SessionPhaseTag::Established));
-    assert!(is_valid_transition(SessionPhaseTag::DegradedOpen, SessionPhaseTag::Closing));
-    assert!(is_valid_transition(SessionPhaseTag::DegradedOpen, SessionPhaseTag::Closed));
-    assert!(!is_valid_transition(SessionPhaseTag::DegradedOpen, SessionPhaseTag::Uninit));
-    assert!(!is_valid_transition(SessionPhaseTag::DegradedOpen, SessionPhaseTag::Negotiating));
+    assert!(is_valid_transition(
+        SessionPhaseTag::DegradedOpen,
+        SessionPhaseTag::Established
+    ));
+    assert!(is_valid_transition(
+        SessionPhaseTag::DegradedOpen,
+        SessionPhaseTag::Closing
+    ));
+    assert!(is_valid_transition(
+        SessionPhaseTag::DegradedOpen,
+        SessionPhaseTag::Closed
+    ));
+    assert!(!is_valid_transition(
+        SessionPhaseTag::DegradedOpen,
+        SessionPhaseTag::Uninit
+    ));
+    assert!(!is_valid_transition(
+        SessionPhaseTag::DegradedOpen,
+        SessionPhaseTag::Negotiating
+    ));
 }
 
 #[test]
@@ -520,8 +622,11 @@ fn enrichment_closing_only_transitions_to_closed() {
         if *tag == SessionPhaseTag::Closed {
             assert!(is_valid_transition(SessionPhaseTag::Closing, *tag));
         } else {
-            assert!(!is_valid_transition(SessionPhaseTag::Closing, *tag),
-                "Closing should only transition to Closed, not {}", tag);
+            assert!(
+                !is_valid_transition(SessionPhaseTag::Closing, *tag),
+                "Closing should only transition to Closed, not {}",
+                tag
+            );
         }
     }
 }
@@ -552,7 +657,10 @@ fn enrichment_key_schedule_partial_is_incomplete() {
         "h".into(),
         test_hash(),
     );
-    ks.record_stage(KeyStagePurpose::MasterSecret, ContentHash::compute(b"master"));
+    ks.record_stage(
+        KeyStagePurpose::MasterSecret,
+        ContentHash::compute(b"master"),
+    );
     ks.record_stage(KeyStagePurpose::DataPlaneMac, ContentHash::compute(b"mac"));
     assert!(!ks.is_complete());
     assert_eq!(ks.derived_stages.len(), 2);
@@ -569,8 +677,11 @@ fn enrichment_key_schedule_complete_after_all_four_stages() {
 fn enrichment_key_schedule_stage_numbers_match_enum_discriminant() {
     let ks = make_complete_key_schedule();
     for stage in &ks.derived_stages {
-        assert_eq!(stage.stage, stage.purpose as u32,
-            "Stage number should match purpose discriminant for {:?}", stage.purpose);
+        assert_eq!(
+            stage.stage, stage.purpose as u32,
+            "Stage number should match purpose discriminant for {:?}",
+            stage.purpose
+        );
     }
 }
 
@@ -578,8 +689,12 @@ fn enrichment_key_schedule_stage_numbers_match_enum_discriminant() {
 fn enrichment_key_schedule_stage_domain_labels_match_purpose() {
     let ks = make_complete_key_schedule();
     for stage in &ks.derived_stages {
-        assert_eq!(stage.domain_label, stage.purpose.domain_label(),
-            "Domain label mismatch for {:?}", stage.purpose);
+        assert_eq!(
+            stage.domain_label,
+            stage.purpose.domain_label(),
+            "Domain label mismatch for {:?}",
+            stage.purpose
+        );
     }
 }
 
@@ -629,7 +744,10 @@ fn enrichment_key_schedule_binding_hash_varies_with_epoch() {
         test_hash(),
     );
     for purpose in KeyStagePurpose::ALL {
-        ks2.record_stage(*purpose, ContentHash::compute(purpose.domain_label().as_bytes()));
+        ks2.record_stage(
+            *purpose,
+            ContentHash::compute(purpose.domain_label().as_bytes()),
+        );
     }
     assert_ne!(ks1.binding_hash(), ks2.binding_hash());
 }
@@ -894,7 +1012,11 @@ fn enrichment_protocol_error_illegal_transition_display() {
     let s = e.to_string();
     assert!(s.contains("illegal"), "should contain 'illegal': {}", s);
     assert!(s.contains("uninit"), "should contain 'uninit': {}", s);
-    assert!(s.contains("established"), "should contain 'established': {}", s);
+    assert!(
+        s.contains("established"),
+        "should contain 'established': {}",
+        s
+    );
 }
 
 #[test]
@@ -934,8 +1056,16 @@ fn enrichment_protocol_error_degraded_blocked_display() {
         severity: DegradedSeverity::IdentityCompromised,
     };
     let s = e.to_string();
-    assert!(s.contains("write_hostcall"), "should contain operation: {}", s);
-    assert!(s.contains("identity_compromised"), "should contain severity: {}", s);
+    assert!(
+        s.contains("write_hostcall"),
+        "should contain operation: {}",
+        s
+    );
+    assert!(
+        s.contains("identity_compromised"),
+        "should contain severity: {}",
+        s
+    );
 }
 
 #[test]
@@ -973,11 +1103,13 @@ fn enrichment_state_machine_initial_phase_is_uninit() {
 #[test]
 fn enrichment_state_machine_transition_records_history() {
     let mut state = make_state();
-    state.transition(
-        SessionPhaseTag::Negotiating,
-        TransitionTrigger::HandshakeInitiated,
-        42,
-    ).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Negotiating,
+            TransitionTrigger::HandshakeInitiated,
+            42,
+        )
+        .unwrap();
     assert_eq!(state.transition_history.len(), 1);
     let rec = &state.transition_history[0];
     assert_eq!(rec.from, SessionPhaseTag::Uninit);
@@ -988,17 +1120,21 @@ fn enrichment_state_machine_transition_records_history() {
 #[test]
 fn enrichment_state_machine_recovery_clears_degraded_state() {
     let mut state = make_established_state();
-    state.enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 10).unwrap();
+    state
+        .enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 10)
+        .unwrap();
     assert!(state.degraded_policy.is_some());
     assert!(state.degraded_entered_tick.is_some());
     state.record_degraded_message();
     assert_eq!(state.degraded_messages, 1);
 
-    state.transition(
-        SessionPhaseTag::Established,
-        TransitionTrigger::DegradedRecovery,
-        20,
-    ).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Established,
+            TransitionTrigger::DegradedRecovery,
+            20,
+        )
+        .unwrap();
     assert!(state.degraded_policy.is_none());
     assert_eq!(state.degraded_messages, 0);
     assert!(state.degraded_entered_tick.is_none());
@@ -1043,17 +1179,26 @@ fn enrichment_state_machine_validate_epoch_no_schedule_ok() {
 #[test]
 fn enrichment_state_machine_validate_epoch_matching() {
     let mut state = make_state();
-    state.attach_key_schedule(make_complete_key_schedule()).unwrap();
+    state
+        .attach_key_schedule(make_complete_key_schedule())
+        .unwrap();
     assert!(state.validate_epoch(test_epoch()).is_ok());
 }
 
 #[test]
 fn enrichment_state_machine_validate_epoch_mismatch() {
     let mut state = make_state();
-    state.attach_key_schedule(make_complete_key_schedule()).unwrap();
-    let err = state.validate_epoch(SecurityEpoch::from_raw(99)).unwrap_err();
+    state
+        .attach_key_schedule(make_complete_key_schedule())
+        .unwrap();
+    let err = state
+        .validate_epoch(SecurityEpoch::from_raw(99))
+        .unwrap_err();
     match err {
-        ProtocolError::EpochMismatch { schedule_epoch, current_epoch } => {
+        ProtocolError::EpochMismatch {
+            schedule_epoch,
+            current_epoch,
+        } => {
             assert_eq!(schedule_epoch, test_epoch());
             assert_eq!(current_epoch, SecurityEpoch::from_raw(99));
         }
@@ -1071,11 +1216,13 @@ fn enrichment_state_machine_check_operation_in_uninit_fails() {
 #[test]
 fn enrichment_state_machine_check_operation_in_negotiating_fails() {
     let mut state = make_state();
-    state.transition(
-        SessionPhaseTag::Negotiating,
-        TransitionTrigger::HandshakeInitiated,
-        1,
-    ).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Negotiating,
+            TransitionTrigger::HandshakeInitiated,
+            1,
+        )
+        .unwrap();
     let result = state.check_operation(DegradedOperationKind::ReadHostcall, 2);
     assert!(result.is_err());
 }
@@ -1083,31 +1230,67 @@ fn enrichment_state_machine_check_operation_in_negotiating_fails() {
 #[test]
 fn enrichment_state_machine_check_operation_established_allows_all() {
     let state = make_established_state();
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 10).is_ok());
-    assert!(state.check_operation(DegradedOperationKind::WriteHostcall, 10).is_ok());
-    assert!(state.check_operation(DegradedOperationKind::LifecycleOperation, 10).is_ok());
-    assert!(state.check_operation(DegradedOperationKind::Close, 10).is_ok());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 10)
+            .is_ok()
+    );
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::WriteHostcall, 10)
+            .is_ok()
+    );
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::LifecycleOperation, 10)
+            .is_ok()
+    );
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::Close, 10)
+            .is_ok()
+    );
 }
 
 #[test]
 fn enrichment_state_machine_degraded_close_bypasses_budget() {
     let mut state = make_established_state();
-    state.enter_degraded(DegradedSeverity::IdentityCompromised, "compromised".into(), 10).unwrap();
+    state
+        .enter_degraded(
+            DegradedSeverity::IdentityCompromised,
+            "compromised".into(),
+            10,
+        )
+        .unwrap();
     // IdentityCompromised strict policy: max_degraded_messages = 0
     // Close should still work.
-    assert!(state.check_operation(DegradedOperationKind::Close, 20).is_ok());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::Close, 20)
+            .is_ok()
+    );
 }
 
 #[test]
 fn enrichment_state_machine_degraded_message_budget_enforcement() {
     let mut state = make_established_state();
-    state.enter_degraded(DegradedSeverity::PartialMacFailure, "mac".into(), 10).unwrap();
-    let limit = state.degraded_policy.as_ref().unwrap().max_degraded_messages;
+    state
+        .enter_degraded(DegradedSeverity::PartialMacFailure, "mac".into(), 10)
+        .unwrap();
+    let limit = state
+        .degraded_policy
+        .as_ref()
+        .unwrap()
+        .max_degraded_messages;
     // Within budget
     for _ in 0..(limit - 1) {
         state.record_degraded_message();
     }
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 11).is_ok());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 11)
+            .is_ok()
+    );
     // At budget
     state.record_degraded_message();
     let result = state.check_operation(DegradedOperationKind::ReadHostcall, 12);
@@ -1117,12 +1300,22 @@ fn enrichment_state_machine_degraded_message_budget_enforcement() {
 #[test]
 fn enrichment_state_machine_degraded_time_budget_at_boundary() {
     let mut state = make_established_state();
-    state.enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 100).unwrap();
+    state
+        .enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 100)
+        .unwrap();
     let max_ticks = state.degraded_policy.as_ref().unwrap().max_degraded_ticks;
     // Exactly at the boundary tick: 100 + max_ticks
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks).is_ok());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks)
+            .is_ok()
+    );
     // One tick past the boundary
-    assert!(state.check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks + 1).is_err());
+    assert!(
+        state
+            .check_operation(DegradedOperationKind::ReadHostcall, 100 + max_ticks + 1)
+            .is_err()
+    );
 }
 
 #[test]
@@ -1151,13 +1344,39 @@ fn enrichment_state_machine_check_replay_integration() {
 #[test]
 fn enrichment_state_machine_full_lifecycle_happy_path() {
     let mut state = make_state();
-    state.transition(SessionPhaseTag::Negotiating, TransitionTrigger::HandshakeInitiated, 1).unwrap();
-    state.transition(SessionPhaseTag::Established, TransitionTrigger::HandshakeCompleted, 2).unwrap();
-    state.attach_key_schedule(make_complete_key_schedule()).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Negotiating,
+            TransitionTrigger::HandshakeInitiated,
+            1,
+        )
+        .unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Established,
+            TransitionTrigger::HandshakeCompleted,
+            2,
+        )
+        .unwrap();
+    state
+        .attach_key_schedule(make_complete_key_schedule())
+        .unwrap();
     state.check_replay(1, 10, None).unwrap();
     state.check_replay(2, 20, None).unwrap();
-    state.transition(SessionPhaseTag::Closing, TransitionTrigger::CloseInitiated, 50).unwrap();
-    state.transition(SessionPhaseTag::Closed, TransitionTrigger::DrainCompleted, 60).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Closing,
+            TransitionTrigger::CloseInitiated,
+            50,
+        )
+        .unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Closed,
+            TransitionTrigger::DrainCompleted,
+            60,
+        )
+        .unwrap();
     assert!(state.phase.is_terminal());
     assert_eq!(state.transition_history.len(), 4);
 }
@@ -1165,44 +1384,77 @@ fn enrichment_state_machine_full_lifecycle_happy_path() {
 #[test]
 fn enrichment_state_machine_degraded_then_close_lifecycle() {
     let mut state = make_established_state();
-    state.enter_degraded(DegradedSeverity::IdentityCompromised, "compromised".into(), 10).unwrap();
+    state
+        .enter_degraded(
+            DegradedSeverity::IdentityCompromised,
+            "compromised".into(),
+            10,
+        )
+        .unwrap();
     assert_eq!(state.phase, SessionPhaseTag::DegradedOpen);
-    state.transition(SessionPhaseTag::Closing, TransitionTrigger::CloseInitiated, 20).unwrap();
-    state.transition(SessionPhaseTag::Closed, TransitionTrigger::DrainCompleted, 30).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Closing,
+            TransitionTrigger::CloseInitiated,
+            20,
+        )
+        .unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Closed,
+            TransitionTrigger::DrainCompleted,
+            30,
+        )
+        .unwrap();
     assert!(state.phase.is_terminal());
 }
 
 #[test]
 fn enrichment_state_machine_expiry_from_established() {
     let mut state = make_established_state();
-    state.transition(
-        SessionPhaseTag::Closed,
-        TransitionTrigger::SessionExpired { reason: "ttl".into() },
-        100,
-    ).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Closed,
+            TransitionTrigger::SessionExpired {
+                reason: "ttl".into(),
+            },
+            100,
+        )
+        .unwrap();
     assert!(state.phase.is_terminal());
 }
 
 #[test]
 fn enrichment_state_machine_expiry_from_degraded() {
     let mut state = make_established_state();
-    state.enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 10).unwrap();
-    state.transition(
-        SessionPhaseTag::Closed,
-        TransitionTrigger::SessionExpired { reason: "ttl".into() },
-        100,
-    ).unwrap();
+    state
+        .enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 10)
+        .unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Closed,
+            TransitionTrigger::SessionExpired {
+                reason: "ttl".into(),
+            },
+            100,
+        )
+        .unwrap();
     assert!(state.phase.is_terminal());
 }
 
 #[test]
 fn enrichment_state_machine_replay_threshold_breach_from_established() {
     let mut state = make_established_state();
-    state.transition(
-        SessionPhaseTag::Closed,
-        TransitionTrigger::ReplayThresholdBreached { drop_count: 50, window_ticks: 100 },
-        100,
-    ).unwrap();
+    state
+        .transition(
+            SessionPhaseTag::Closed,
+            TransitionTrigger::ReplayThresholdBreached {
+                drop_count: 50,
+                window_ticks: 100,
+            },
+            100,
+        )
+        .unwrap();
     assert!(state.phase.is_terminal());
 }
 
@@ -1219,7 +1471,11 @@ fn enrichment_corpus_not_empty() {
 #[test]
 fn enrichment_corpus_has_at_least_twelve_specimens() {
     let corpus = hsp_corpus();
-    assert!(corpus.len() >= 12, "Corpus should have at least 12 specimens, got {}", corpus.len());
+    assert!(
+        corpus.len() >= 12,
+        "Corpus should have at least 12 specimens, got {}",
+        corpus.len()
+    );
 }
 
 #[test]
@@ -1241,10 +1497,15 @@ fn enrichment_corpus_covers_all_families() {
 #[test]
 fn enrichment_corpus_content_hashes_unique() {
     let corpus = hsp_corpus();
-    let hashes: BTreeSet<Vec<u8>> = corpus.iter()
+    let hashes: BTreeSet<Vec<u8>> = corpus
+        .iter()
         .map(|s| s.content_hash.as_bytes().to_vec())
         .collect();
-    assert_eq!(hashes.len(), corpus.len(), "Specimen content hashes must be unique");
+    assert_eq!(
+        hashes.len(),
+        corpus.len(),
+        "Specimen content hashes must be unique"
+    );
 }
 
 #[test]
@@ -1273,7 +1534,11 @@ fn enrichment_runner_result_families_covered_matches_corpus() {
     let result = run_hsp_corpus();
     let families: BTreeSet<HspSpecimenFamily> = result.families_covered.iter().copied().collect();
     for fam in HspSpecimenFamily::ALL {
-        assert!(families.contains(fam), "Runner result missing family {}", fam);
+        assert!(
+            families.contains(fam),
+            "Runner result missing family {}",
+            fam
+        );
     }
 }
 
@@ -1290,7 +1555,10 @@ fn enrichment_runner_result_deterministic() {
 #[test]
 fn enrichment_runner_result_has_terminal_specimens() {
     let result = run_hsp_corpus();
-    assert!(result.terminal_count > 0, "Should have at least one terminal specimen");
+    assert!(
+        result.terminal_count > 0,
+        "Should have at least one terminal specimen"
+    );
 }
 
 #[test]
@@ -1316,7 +1584,11 @@ fn enrichment_trigger_security_degradation_display_includes_reason() {
         reason: "epoch_advanced".into(),
     };
     let s = t.to_string();
-    assert!(s.contains("security_degradation"), "should contain 'security_degradation': {}", s);
+    assert!(
+        s.contains("security_degradation"),
+        "should contain 'security_degradation': {}",
+        s
+    );
     assert!(s.contains("epoch_advanced"), "should contain reason: {}", s);
 }
 
@@ -1326,7 +1598,11 @@ fn enrichment_trigger_session_expired_display_includes_reason() {
         reason: "ttl_exceeded".into(),
     };
     let s = t.to_string();
-    assert!(s.contains("session_expired"), "should contain 'session_expired': {}", s);
+    assert!(
+        s.contains("session_expired"),
+        "should contain 'session_expired': {}",
+        s
+    );
     assert!(s.contains("ttl_exceeded"), "should contain reason: {}", s);
 }
 
@@ -1380,7 +1656,10 @@ fn enrichment_ledger_clone_preserves_state_hash() {
 fn enrichment_phase_transition_valid_transitions_have_distinct_from_to() {
     let table = valid_transitions();
     for pt in &table {
-        assert_ne!(pt.from, pt.to, "Transition table entry should not be a self-loop");
+        assert_ne!(
+            pt.from, pt.to,
+            "Transition table entry should not be a self-loop"
+        );
     }
 }
 
@@ -1388,7 +1667,10 @@ fn enrichment_phase_transition_valid_transitions_have_distinct_from_to() {
 fn enrichment_phase_transition_no_outgoing_from_closed_in_table() {
     let table = valid_transitions();
     for pt in &table {
-        assert_ne!(pt.from, SessionPhaseTag::Closed,
-            "Closed should have no outgoing transitions in the table");
+        assert_ne!(
+            pt.from,
+            SessionPhaseTag::Closed,
+            "Closed should have no outgoing transitions in the table"
+        );
     }
 }

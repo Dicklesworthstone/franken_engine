@@ -399,3 +399,111 @@ fn deterministic_double_parse_all_three() {
     assert_eq!(parse_rollout_guard(), parse_rollout_guard());
     assert_eq!(parse_cache(), parse_cache());
 }
+
+// ===== Cross-schema and structural enrichment =====
+
+#[test]
+fn cross_schema_all_three_bead_ids_are_distinct() {
+    let inv = parse_candidate_inv();
+    let guard = parse_rollout_guard();
+    let cache = parse_cache();
+    let ids: BTreeSet<&str> = [
+        inv.bead_id.as_str(),
+        guard.bead_id.as_str(),
+        cache.bead_id.as_str(),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(ids.len(), 3, "all three bead_ids must be distinct");
+}
+
+#[test]
+fn cross_schema_all_three_schema_versions_are_distinct() {
+    let inv = parse_candidate_inv();
+    let guard = parse_rollout_guard();
+    let cache = parse_cache();
+    let versions: BTreeSet<&str> = [
+        inv.schema_version.as_str(),
+        guard.schema_version.as_str(),
+        cache.schema_version.as_str(),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        versions.len(),
+        3,
+        "all three schema_versions must be distinct"
+    );
+}
+
+#[test]
+fn candidate_inv_top_level_keys_match_expected() {
+    let raw: Value = serde_json::from_str(CANDIDATE_INV_JSON).unwrap();
+    let keys: BTreeSet<&str> = raw
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        BTreeSet::from([
+            "schema_version",
+            "bead_id",
+            "required_artifacts",
+            "candidate_expectations"
+        ])
+    );
+}
+
+#[test]
+fn rollout_guard_top_level_keys_match_expected() {
+    let raw: Value = serde_json::from_str(ROLLOUT_GUARD_JSON).unwrap();
+    let keys: BTreeSet<&str> = raw
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        BTreeSet::from([
+            "schema_version",
+            "bead_id",
+            "default_disabled_candidates",
+            "required_artifacts"
+        ])
+    );
+}
+
+#[test]
+fn rollout_guard_has_at_least_one_disabled_candidate() {
+    let g = parse_rollout_guard();
+    assert!(
+        !g.default_disabled_candidates.is_empty(),
+        "rollout guard must disable at least one candidate"
+    );
+}
+
+#[test]
+fn cache_consumers_follow_snake_case_convention() {
+    let c = parse_cache();
+    for consumer in &c.consumers {
+        assert!(
+            consumer
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch == '_' || ch.is_ascii_digit()),
+            "consumer must be snake_case: {consumer}"
+        );
+    }
+}
+
+#[test]
+fn cache_scenario_ids_include_at_least_three_scenarios() {
+    let c = parse_cache();
+    assert!(
+        c.scenario_ids.len() >= 3,
+        "must have at least 3 scenario_ids, found {}",
+        c.scenario_ids.len()
+    );
+}

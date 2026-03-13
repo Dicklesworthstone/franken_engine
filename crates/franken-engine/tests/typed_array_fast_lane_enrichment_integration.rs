@@ -22,11 +22,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::typed_array_fast_lane::{
     ArrayProfile, ArrayStorageMode, DeoptReason, ElementKind, ElementTransition,
-    FastLaneCertificate, FastLaneConfig, FastLaneDecision, FastLaneError,
-    FastLaneEvidenceManifest, TransitionTrigger, TypedArrayKind, TypedArrayValidation,
-    TYPED_ARRAY_COMPONENT, TYPED_ARRAY_POLICY_ID, TYPED_ARRAY_SCHEMA_VERSION,
-    allowed_transitions, build_transition_graph, certify_fast_lane, compute_element_size,
-    evaluate_fast_lane, is_transition_reversible, run_fast_lane_evidence, validate_typed_array,
+    FastLaneCertificate, FastLaneConfig, FastLaneDecision, FastLaneError, FastLaneEvidenceManifest,
+    TYPED_ARRAY_COMPONENT, TYPED_ARRAY_POLICY_ID, TYPED_ARRAY_SCHEMA_VERSION, TransitionTrigger,
+    TypedArrayKind, TypedArrayValidation, allowed_transitions, build_transition_graph,
+    certify_fast_lane, compute_element_size, evaluate_fast_lane, is_transition_reversible,
+    run_fast_lane_evidence, validate_typed_array,
 };
 
 // ---------------------------------------------------------------------------
@@ -673,7 +673,11 @@ fn enrichment_element_size_all_kinds() {
 fn enrichment_element_size_powers_of_two() {
     for kind in TypedArrayKind::ALL {
         let size = compute_element_size(kind);
-        assert!(size.is_power_of_two(), "Element size {} is not a power of 2", size);
+        assert!(
+            size.is_power_of_two(),
+            "Element size {} is not a power of 2",
+            size
+        );
     }
 }
 
@@ -1009,7 +1013,11 @@ fn enrichment_evaluate_sparse_mode_deopt() {
 
 #[test]
 fn enrichment_evaluate_dictionary_mode_deopt() {
-    let profile = make_profile("dict1", ElementKind::HeapObject, ArrayStorageMode::Dictionary);
+    let profile = make_profile(
+        "dict1",
+        ElementKind::HeapObject,
+        ArrayStorageMode::Dictionary,
+    );
     let decision = evaluate_fast_lane(&profile, &default_config());
     assert!(!decision.is_fast_lane);
 }
@@ -1689,7 +1697,11 @@ fn enrichment_workflow_batch_evaluation() {
     let config = default_config();
     let profiles = vec![
         smi_profile("batch_1"),
-        make_profile("batch_2", ElementKind::HeapNumber, ArrayStorageMode::FastDouble),
+        make_profile(
+            "batch_2",
+            ElementKind::HeapNumber,
+            ArrayStorageMode::FastDouble,
+        ),
         make_profile("batch_3", ElementKind::Hole, ArrayStorageMode::Sparse),
     ];
 
@@ -1788,7 +1800,10 @@ fn enrichment_workflow_reversible_transition_roundtrip() {
         true,
     );
     assert!(is_transition_reversible(forward.from_kind, forward.to_kind));
-    assert!(is_transition_reversible(backward.from_kind, backward.to_kind));
+    assert!(is_transition_reversible(
+        backward.from_kind,
+        backward.to_kind
+    ));
 }
 
 #[test]
@@ -2012,7 +2027,9 @@ fn enrichment_serde_all_typed_array_kinds_json_format() {
         let inner = json.trim_matches('"');
         assert!(!inner.contains('-'));
         assert!(
-            inner.chars().all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit()),
+            inner
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit()),
             "Unexpected char in JSON: {}",
             json
         );

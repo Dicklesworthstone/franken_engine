@@ -893,3 +893,253 @@ fn enrichment_output_events_non_empty_for_successful_pipeline() {
         "successful pipeline produces 4 events (ir0->ir1, ir1->ir2, flow_check, ir2->ir3)"
     );
 }
+
+// ============================================================================
+// Section 14: Multi-statement pipeline tests (8 tests)
+// ============================================================================
+
+fn multi_var_ir0() -> Ir0Module {
+    let tree = SyntaxTree {
+        goal: ParseGoal::Script,
+        body: vec![
+            Statement::VariableDeclaration(VariableDeclaration {
+                kind: VariableDeclarationKind::Var,
+                declarations: vec![VariableDeclarator {
+                    pattern: BindingPattern::Identifier("a".to_string()),
+                    initializer: Some(Expression::NumericLiteral(1)),
+                    span: span(),
+                }],
+                span: span(),
+            }),
+            Statement::VariableDeclaration(VariableDeclaration {
+                kind: VariableDeclarationKind::Var,
+                declarations: vec![VariableDeclarator {
+                    pattern: BindingPattern::Identifier("b".to_string()),
+                    initializer: Some(Expression::NumericLiteral(2)),
+                    span: span(),
+                }],
+                span: span(),
+            }),
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Identifier("a".to_string()),
+                span: span(),
+            }),
+        ],
+        span: span(),
+    };
+    Ir0Module::from_syntax_tree(tree, "multi_var.js")
+}
+
+#[test]
+fn enrichment_multi_var_pipeline_succeeds() {
+    let ir0 = multi_var_ir0();
+    let output = run_full_pipeline(&ir0);
+    assert_eq!(output.witnesses.len(), 3);
+    assert_eq!(output.isomorphism_ledger.len(), 3);
+}
+
+#[test]
+fn enrichment_multi_var_ir1_has_bindings() {
+    let ir0 = multi_var_ir0();
+    let result = lower_ir0_to_ir1(&ir0).expect("ir0->ir1");
+    assert!(
+        result.ledger_entry.output_op_count > 0,
+        "IR1 should have at least one operation"
+    );
+}
+
+#[test]
+fn enrichment_multi_var_ledger_input_output_hashes_differ() {
+    let ir0 = multi_var_ir0();
+    let output = run_full_pipeline(&ir0);
+    for entry in &output.isomorphism_ledger {
+        assert_ne!(
+            entry.input_hash, entry.output_hash,
+            "input and output hashes should differ for pass {}",
+            entry.pass_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_multi_var_witness_hashes_chain() {
+    let ir0 = multi_var_ir0();
+    let output = run_full_pipeline(&ir0);
+    // output hash of pass N should equal input hash of pass N+1
+    for i in 0..output.witnesses.len() - 1 {
+        assert_eq!(
+            output.witnesses[i].output_hash,
+            output.witnesses[i + 1].input_hash,
+            "output hash of pass {} should equal input hash of pass {}",
+            output.witnesses[i].pass_id,
+            output.witnesses[i + 1].pass_id,
+        );
+    }
+}
+
+#[test]
+fn enrichment_multi_var_ledger_hashes_chain() {
+    let ir0 = multi_var_ir0();
+    let output = run_full_pipeline(&ir0);
+    for i in 0..output.isomorphism_ledger.len() - 1 {
+        assert_eq!(
+            output.isomorphism_ledger[i].output_hash,
+            output.isomorphism_ledger[i + 1].input_hash,
+            "ledger output hash of pass {} should equal input hash of pass {}",
+            output.isomorphism_ledger[i].pass_id,
+            output.isomorphism_ledger[i + 1].pass_id,
+        );
+    }
+}
+
+#[test]
+fn enrichment_flow_proof_artifact_trace_id_matches_context() {
+    let ir0 = script_ir0_numeric(7);
+    let context = LoweringContext::new("trace-xyz", "decision-xyz", "policy-xyz");
+    let output = lower_ir0_to_ir3(&ir0, &context).expect("pipeline");
+    assert_eq!(output.ir2_flow_proof_artifact.trace_id, "trace-xyz");
+    assert_eq!(output.ir2_flow_proof_artifact.decision_id, "decision-xyz");
+    assert_eq!(output.ir2_flow_proof_artifact.policy_id, "policy-xyz");
+}
+
+#[test]
+fn enrichment_flow_proof_artifact_module_id_nonempty() {
+    let ir0 = script_ir0_numeric(3);
+    let output = run_full_pipeline(&ir0);
+    assert!(
+        !output.ir2_flow_proof_artifact.module_id.is_empty(),
+        "module_id should be non-empty"
+    );
+}
+
+#[test]
+fn enrichment_flow_proof_artifact_serde_roundtrip() {
+    let ir0 = script_ir0_numeric(5);
+    let output = run_full_pipeline(&ir0);
+    let json = serde_json::to_string(&output.ir2_flow_proof_artifact).expect("serialize");
+    let decoded: frankenengine_engine::lowering_pipeline::Ir2FlowProofArtifact =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(
+        decoded.artifact_id,
+        output.ir2_flow_proof_artifact.artifact_id
+    );
+    assert_eq!(decoded.trace_id, output.ir2_flow_proof_artifact.trace_id);
+    assert_eq!(
+        decoded.proved_flows.len(),
+        output.ir2_flow_proof_artifact.proved_flows.len()
+    );
+}
+
+// ============================================================================
+// Section 15: Pipeline context propagation (4 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_context_trace_id_propagated_to_events() {
+    let ir0 = script_ir0_numeric(1);
+    let context = LoweringContext::new("trace-prop", "decision-prop", "policy-prop");
+    let output = lower_ir0_to_ir3(&ir0, &context).expect("pipeline");
+    for event in &output.events {
+        assert_eq!(event.trace_id, "trace-prop");
+        assert_eq!(event.decision_id, "decision-prop");
+        assert_eq!(event.policy_id, "policy-prop");
+    }
+}
+
+#[test]
+fn enrichment_all_events_have_pass_outcome() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    for event in &output.events {
+        assert!(
+            event.outcome == "pass" || event.outcome == "fail",
+            "event outcome should be 'pass' or 'fail', got: {}",
+            event.outcome
+        );
+    }
+}
+
+#[test]
+fn enrichment_successful_pipeline_all_events_pass() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    for event in &output.events {
+        assert_eq!(
+            event.outcome, "pass",
+            "all events in successful pipeline should have outcome 'pass'"
+        );
+    }
+}
+
+#[test]
+fn enrichment_successful_pipeline_no_error_codes() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    for event in &output.events {
+        assert!(
+            event.error_code.is_none(),
+            "successful pipeline events should have no error_code, got: {:?}",
+            event.error_code
+        );
+    }
+}
+
+// ============================================================================
+// Section 16: Pipeline invariant checks (4 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_all_witnesses_have_invariant_checks() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    for witness in &output.witnesses {
+        assert!(
+            !witness.invariant_checks.is_empty(),
+            "witness {} should have at least one invariant check",
+            witness.pass_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_all_invariant_checks_pass_in_successful_pipeline() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    for witness in &output.witnesses {
+        for check in &witness.invariant_checks {
+            assert!(
+                check.passed,
+                "invariant check '{}' in pass {} should pass",
+                check.name, witness.pass_id
+            );
+        }
+    }
+}
+
+#[test]
+fn enrichment_invariant_check_names_nonempty() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    for witness in &output.witnesses {
+        for check in &witness.invariant_checks {
+            assert!(
+                !check.name.is_empty(),
+                "invariant check name should be non-empty"
+            );
+        }
+    }
+}
+
+#[test]
+fn enrichment_invariant_check_details_nonempty() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    for witness in &output.witnesses {
+        for check in &witness.invariant_checks {
+            assert!(
+                !check.detail.is_empty(),
+                "invariant check detail should be non-empty"
+            );
+        }
+    }
+}

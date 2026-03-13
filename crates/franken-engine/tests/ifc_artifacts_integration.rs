@@ -486,7 +486,7 @@ fn clearance_class_can_receive_sealed_sink() {
 
 #[test]
 fn clearance_class_can_receive_never_sink() {
-    assert!(!ClearanceClass::NeverSink.can_receive(&Label::Public));
+    assert!(ClearanceClass::NeverSink.can_receive(&Label::Public));
     assert!(!ClearanceClass::NeverSink.can_receive(&Label::TopSecret));
 }
 
@@ -508,7 +508,10 @@ fn clearance_class_max_receivable_label_level() {
         ClearanceClass::SealedSink.max_receivable_label_level(),
         Some(3)
     );
-    assert_eq!(ClearanceClass::NeverSink.max_receivable_label_level(), None);
+    assert_eq!(
+        ClearanceClass::NeverSink.max_receivable_label_level(),
+        Some(0)
+    );
 }
 
 #[test]
@@ -1556,7 +1559,9 @@ fn flow_envelope_all_clearance_classes() {
     assert!(env.is_flow_authorized(&Label::Public, &ClearanceClass::OpenSink));
     // Secret -> SealedSink: Secret(3) <= SealedSink max(3), authorized
     assert!(env.is_flow_authorized(&Label::Secret, &ClearanceClass::SealedSink));
-    // TopSecret -> NeverSink: NeverSink cannot receive anything
+    // Public -> NeverSink: NeverSink accepts only Public
+    assert!(env.is_flow_authorized(&Label::Public, &ClearanceClass::NeverSink));
+    // TopSecret -> NeverSink: NeverSink rejects anything above Public
     assert!(!env.is_flow_authorized(&Label::TopSecret, &ClearanceClass::NeverSink));
     // TopSecret -> SealedSink: TopSecret(4) > SealedSink max(3)
     assert!(!env.is_flow_authorized(&Label::TopSecret, &ClearanceClass::SealedSink));

@@ -41,8 +41,16 @@ fn test_engine() -> ProofIngestionEngine {
 }
 
 fn make_proof(proof_type: ProofType, payload: &[u8], policy_id: &str) -> ProofInput {
-    create_proof_input(proof_type, test_epoch(), 0, 0, policy_id, payload, &test_key())
-        .expect("proof creation should succeed")
+    create_proof_input(
+        proof_type,
+        test_epoch(),
+        0,
+        0,
+        policy_id,
+        payload,
+        &test_key(),
+    )
+    .expect("proof creation should succeed")
 }
 
 fn make_default_proof(proof_type: ProofType) -> ProofInput {
@@ -153,9 +161,7 @@ fn enrichment_proof_validation_status_display_uniqueness() {
         ProofValidationStatus::SemanticCheckFailed {
             reason: "bad".to_string(),
         },
-        ProofValidationStatus::Duplicate {
-            existing_id: id,
-        },
+        ProofValidationStatus::Duplicate { existing_id: id },
     ];
     let set: BTreeSet<String> = statuses.iter().map(|s| s.to_string()).collect();
     assert_eq!(set.len(), statuses.len());
@@ -723,7 +729,10 @@ fn enrichment_plas_hypothesis_risk_and_class() {
     let proof = make_default_proof(ProofType::PlasCapabilityWitness);
     let hyps = engine.ingest_proof(proof, 1000).unwrap();
     assert_eq!(hyps[0].risk, RiskLevel::Low);
-    assert_eq!(hyps[0].optimization_class, OptimizationClass::TraceSpecialization);
+    assert_eq!(
+        hyps[0].optimization_class,
+        OptimizationClass::TraceSpecialization
+    );
     assert_eq!(hyps[1].risk, RiskLevel::Medium);
     assert_eq!(
         hyps[1].optimization_class,
@@ -1031,7 +1040,11 @@ fn enrichment_empty_active_policy_accepts_any_proof_policy() {
     let mut config = test_config();
     config.active_policy_id = String::new();
     let mut engine = ProofIngestionEngine::new(test_epoch(), config);
-    let proof = make_proof(ProofType::PlasCapabilityWitness, b"xyz", "any-random-policy");
+    let proof = make_proof(
+        ProofType::PlasCapabilityWitness,
+        b"xyz",
+        "any-random-policy",
+    );
     assert!(engine.ingest_proof(proof, 1000).is_ok());
 }
 
@@ -1342,7 +1355,10 @@ fn enrichment_receipt_optimization_class_from_hypothesis() {
             2000,
         )
         .unwrap();
-    assert_eq!(receipt.optimization_class, OptimizationClass::LayoutSpecialization);
+    assert_eq!(
+        receipt.optimization_class,
+        OptimizationClass::LayoutSpecialization
+    );
 }
 
 // ===========================================================================
@@ -1406,7 +1422,12 @@ fn enrichment_epoch_advance_generates_invalidation_events() {
     let hyp_invalidated: Vec<_> = engine
         .events()
         .iter()
-        .filter(|e| matches!(e.event_type, IngestionEventType::HypothesisInvalidated { .. }))
+        .filter(|e| {
+            matches!(
+                e.event_type,
+                IngestionEventType::HypothesisInvalidated { .. }
+            )
+        })
         .collect();
     let proof_invalidated: Vec<_> = engine
         .events()
@@ -1536,14 +1557,29 @@ fn enrichment_ingestion_error_all_variants_have_source_none() {
 
 #[test]
 fn enrichment_proof_canonical_hash_from_payload() {
-    let proof = make_proof(ProofType::PlasCapabilityWitness, b"specific-payload", "policy-001");
-    assert_eq!(proof.canonical_hash, ContentHash::compute(b"specific-payload"));
+    let proof = make_proof(
+        ProofType::PlasCapabilityWitness,
+        b"specific-payload",
+        "policy-001",
+    );
+    assert_eq!(
+        proof.canonical_hash,
+        ContentHash::compute(b"specific-payload")
+    );
 }
 
 #[test]
 fn enrichment_different_payloads_produce_different_canonical_hashes() {
-    let p1 = make_proof(ProofType::PlasCapabilityWitness, b"payload-one", "policy-001");
-    let p2 = make_proof(ProofType::PlasCapabilityWitness, b"payload-two", "policy-001");
+    let p1 = make_proof(
+        ProofType::PlasCapabilityWitness,
+        b"payload-one",
+        "policy-001",
+    );
+    let p2 = make_proof(
+        ProofType::PlasCapabilityWitness,
+        b"payload-two",
+        "policy-001",
+    );
     assert_ne!(p1.canonical_hash, p2.canonical_hash);
 }
 
@@ -1590,8 +1626,8 @@ fn enrichment_custom_speedup_estimates_reflected_in_hypotheses() {
         signing_key: test_key(),
         churn_threshold: 10,
         churn_window_ns: 60_000_000_000,
-        plas_speedup_estimate: 2_000_000,  // 2.0x
-        ifc_speedup_estimate: 3_000_000,   // 3.0x
+        plas_speedup_estimate: 2_000_000,   // 2.0x
+        ifc_speedup_estimate: 3_000_000,    // 3.0x
         replay_speedup_estimate: 4_000_000, // 4.0x
     };
     let mut engine = ProofIngestionEngine::new(test_epoch(), config);

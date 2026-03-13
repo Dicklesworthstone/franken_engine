@@ -896,7 +896,14 @@ fn enrichment_budget_reserve_zero_bytes_on_zero_capacity_succeeds() {
 fn enrichment_budget_reserve_one_on_zero_capacity_fails() {
     let mut budget = DomainBudget::new(0);
     let err = budget.try_reserve(1).unwrap_err();
-    assert!(matches!(err, AllocDomainError::BudgetExceeded { requested: 1, remaining: 0, .. }));
+    assert!(matches!(
+        err,
+        AllocDomainError::BudgetExceeded {
+            requested: 1,
+            remaining: 0,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -940,7 +947,10 @@ fn enrichment_budget_remaining_invariant() {
     let mut budget = DomainBudget::new(500);
     for step in [0u64, 100, 200, 150, 50] {
         budget.try_reserve(step).unwrap();
-        assert_eq!(budget.remaining(), budget.max_bytes.saturating_sub(budget.used_bytes));
+        assert_eq!(
+            budget.remaining(),
+            budget.max_bytes.saturating_sub(budget.used_bytes)
+        );
     }
 }
 
@@ -1144,7 +1154,10 @@ fn enrichment_error_budget_exceeded_display_format_with_domain() {
         domain: Some(AllocationDomain::RuntimeHeap),
     };
     let s = err.to_string();
-    assert_eq!(s, "budget exceeded in runtime-heap: requested 999 bytes, 1 remaining");
+    assert_eq!(
+        s,
+        "budget exceeded in runtime-heap: requested 999 bytes, 1 remaining"
+    );
 }
 
 #[test]
@@ -1188,7 +1201,9 @@ fn enrichment_error_clone_eq() {
 #[test]
 fn enrichment_error_ne_across_variants() {
     let a = AllocDomainError::BudgetOverflow;
-    let b = AllocDomainError::DomainNotFound { domain: AllocationDomain::IrArena };
+    let b = AllocDomainError::DomainNotFound {
+        domain: AllocationDomain::IrArena,
+    };
     assert_ne!(a, b);
 }
 
@@ -1197,7 +1212,9 @@ fn enrichment_error_debug_contains_variant() {
     let err = AllocDomainError::BudgetOverflow;
     assert!(format!("{:?}", err).contains("BudgetOverflow"));
 
-    let err2 = AllocDomainError::DomainNotFound { domain: AllocationDomain::ScratchBuffer };
+    let err2 = AllocDomainError::DomainNotFound {
+        domain: AllocationDomain::ScratchBuffer,
+    };
     let dbg2 = format!("{:?}", err2);
     assert!(dbg2.contains("DomainNotFound"));
     assert!(dbg2.contains("ScratchBuffer"));
@@ -1287,16 +1304,28 @@ fn enrichment_error_is_std_error_all_variants() {
 #[test]
 fn enrichment_registry_allocate_zero_bytes_succeeds() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100).unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
+        .unwrap();
     let seq = reg.allocate(AllocationDomain::IrArena, 0).unwrap();
     assert_eq!(seq, 1);
-    assert_eq!(reg.get(&AllocationDomain::IrArena).unwrap().budget.used_bytes, 0);
+    assert_eq!(
+        reg.get(&AllocationDomain::IrArena)
+            .unwrap()
+            .budget
+            .used_bytes,
+        0
+    );
 }
 
 #[test]
 fn enrichment_registry_allocate_zero_bytes_still_increments_sequence() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 100).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        100,
+    )
+    .unwrap();
     let s1 = reg.allocate(AllocationDomain::ExtensionHeap, 0).unwrap();
     let s2 = reg.allocate(AllocationDomain::ExtensionHeap, 0).unwrap();
     assert_eq!(s1, 1);
@@ -1306,11 +1335,28 @@ fn enrichment_registry_allocate_zero_bytes_still_increments_sequence() {
 #[test]
 fn enrichment_registry_register_all_five_domains() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 100).unwrap();
-    reg.register(AllocationDomain::RuntimeHeap, LifetimeClass::Global, 200).unwrap();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 300).unwrap();
-    reg.register(AllocationDomain::EvidenceArena, LifetimeClass::SessionScoped, 400).unwrap();
-    reg.register(AllocationDomain::ScratchBuffer, LifetimeClass::RequestScoped, 500).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        100,
+    )
+    .unwrap();
+    reg.register(AllocationDomain::RuntimeHeap, LifetimeClass::Global, 200)
+        .unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 300)
+        .unwrap();
+    reg.register(
+        AllocationDomain::EvidenceArena,
+        LifetimeClass::SessionScoped,
+        400,
+    )
+    .unwrap();
+    reg.register(
+        AllocationDomain::ScratchBuffer,
+        LifetimeClass::RequestScoped,
+        500,
+    )
+    .unwrap();
     assert_eq!(reg.len(), 5);
     assert!(!reg.is_empty());
 }
@@ -1336,28 +1382,47 @@ fn enrichment_registry_iter_empty() {
 #[test]
 fn enrichment_registry_release_more_than_allocated() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ScratchBuffer, LifetimeClass::RequestScoped, 200).unwrap();
+    reg.register(
+        AllocationDomain::ScratchBuffer,
+        LifetimeClass::RequestScoped,
+        200,
+    )
+    .unwrap();
     reg.allocate(AllocationDomain::ScratchBuffer, 50).unwrap();
     // Release more than what was allocated - saturates at zero.
     reg.release(AllocationDomain::ScratchBuffer, 100).unwrap();
-    assert_eq!(reg.get(&AllocationDomain::ScratchBuffer).unwrap().budget.used_bytes, 0);
+    assert_eq!(
+        reg.get(&AllocationDomain::ScratchBuffer)
+            .unwrap()
+            .budget
+            .used_bytes,
+        0
+    );
 }
 
 #[test]
 fn enrichment_registry_reset_allows_full_reallocation() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100).unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
+        .unwrap();
     reg.allocate(AllocationDomain::IrArena, 100).unwrap();
     assert!(reg.allocate(AllocationDomain::IrArena, 1).is_err());
     reg.reset_domain(AllocationDomain::IrArena).unwrap();
     reg.allocate(AllocationDomain::IrArena, 100).unwrap();
-    assert_eq!(reg.get(&AllocationDomain::IrArena).unwrap().budget.used_bytes, 100);
+    assert_eq!(
+        reg.get(&AllocationDomain::IrArena)
+            .unwrap()
+            .budget
+            .used_bytes,
+        100
+    );
 }
 
 #[test]
 fn enrichment_registry_reset_does_not_change_sequence() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1000).unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1000)
+        .unwrap();
     reg.allocate(AllocationDomain::IrArena, 100).unwrap();
     let seq_before = reg.allocation_sequence();
     reg.reset_domain(AllocationDomain::IrArena).unwrap();
@@ -1367,7 +1432,12 @@ fn enrichment_registry_reset_does_not_change_sequence() {
 #[test]
 fn enrichment_registry_release_does_not_change_sequence() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 1000).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        1000,
+    )
+    .unwrap();
     reg.allocate(AllocationDomain::ExtensionHeap, 500).unwrap();
     let seq_before = reg.allocation_sequence();
     reg.release(AllocationDomain::ExtensionHeap, 200).unwrap();
@@ -1377,7 +1447,12 @@ fn enrichment_registry_release_does_not_change_sequence() {
 #[test]
 fn enrichment_registry_failed_allocate_does_not_change_sequence() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 100).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        100,
+    )
+    .unwrap();
     reg.allocate(AllocationDomain::ExtensionHeap, 80).unwrap();
     let seq_before = reg.allocation_sequence();
     let _ = reg.allocate(AllocationDomain::ExtensionHeap, 30); // fails
@@ -1456,18 +1531,39 @@ fn enrichment_standard_domains_with_zero_extension_heap() {
 #[test]
 fn enrichment_registry_clone_independence() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 1000).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        1000,
+    )
+    .unwrap();
     reg.allocate(AllocationDomain::ExtensionHeap, 200).unwrap();
     let mut cloned = reg.clone();
-    cloned.allocate(AllocationDomain::ExtensionHeap, 300).unwrap();
-    assert_eq!(reg.get(&AllocationDomain::ExtensionHeap).unwrap().budget.used_bytes, 200);
-    assert_eq!(cloned.get(&AllocationDomain::ExtensionHeap).unwrap().budget.used_bytes, 500);
+    cloned
+        .allocate(AllocationDomain::ExtensionHeap, 300)
+        .unwrap();
+    assert_eq!(
+        reg.get(&AllocationDomain::ExtensionHeap)
+            .unwrap()
+            .budget
+            .used_bytes,
+        200
+    );
+    assert_eq!(
+        cloned
+            .get(&AllocationDomain::ExtensionHeap)
+            .unwrap()
+            .budget
+            .used_bytes,
+        500
+    );
 }
 
 #[test]
 fn enrichment_registry_clone_preserves_sequence() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 10000).unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 10000)
+        .unwrap();
     reg.allocate(AllocationDomain::IrArena, 100).unwrap();
     reg.allocate(AllocationDomain::IrArena, 200).unwrap();
     let cloned = reg.clone();
@@ -1477,7 +1573,8 @@ fn enrichment_registry_clone_preserves_sequence() {
 #[test]
 fn enrichment_registry_debug_contains_domains() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 512).unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 512)
+        .unwrap();
     let dbg = format!("{:?}", reg);
     assert!(dbg.contains("IrArena"));
     assert!(dbg.contains("512"));
@@ -1512,11 +1609,46 @@ fn enrichment_registry_serde_preserves_all_domains() {
     let restored: DomainRegistry = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.len(), 5);
     assert_eq!(restored.allocation_sequence(), 3);
-    assert_eq!(restored.get(&AllocationDomain::ExtensionHeap).unwrap().budget.used_bytes, 100);
-    assert_eq!(restored.get(&AllocationDomain::IrArena).unwrap().budget.used_bytes, 200);
-    assert_eq!(restored.get(&AllocationDomain::ScratchBuffer).unwrap().budget.used_bytes, 50);
-    assert_eq!(restored.get(&AllocationDomain::RuntimeHeap).unwrap().budget.used_bytes, 0);
-    assert_eq!(restored.get(&AllocationDomain::EvidenceArena).unwrap().budget.used_bytes, 0);
+    assert_eq!(
+        restored
+            .get(&AllocationDomain::ExtensionHeap)
+            .unwrap()
+            .budget
+            .used_bytes,
+        100
+    );
+    assert_eq!(
+        restored
+            .get(&AllocationDomain::IrArena)
+            .unwrap()
+            .budget
+            .used_bytes,
+        200
+    );
+    assert_eq!(
+        restored
+            .get(&AllocationDomain::ScratchBuffer)
+            .unwrap()
+            .budget
+            .used_bytes,
+        50
+    );
+    assert_eq!(
+        restored
+            .get(&AllocationDomain::RuntimeHeap)
+            .unwrap()
+            .budget
+            .used_bytes,
+        0
+    );
+    assert_eq!(
+        restored
+            .get(&AllocationDomain::EvidenceArena)
+            .unwrap()
+            .budget
+            .used_bytes,
+        0
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1544,8 +1676,14 @@ fn enrichment_determinism_budget_operations() {
 fn enrichment_determinism_registry_full_lifecycle() {
     let run = || {
         let mut reg = DomainRegistry::new();
-        reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 5000).unwrap();
-        reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 5000).unwrap();
+        reg.register(
+            AllocationDomain::ExtensionHeap,
+            LifetimeClass::SessionScoped,
+            5000,
+        )
+        .unwrap();
+        reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 5000)
+            .unwrap();
         reg.allocate(AllocationDomain::ExtensionHeap, 300).unwrap();
         reg.allocate(AllocationDomain::IrArena, 100).unwrap();
         reg.release(AllocationDomain::ExtensionHeap, 100).unwrap();
@@ -1555,8 +1693,14 @@ fn enrichment_determinism_registry_full_lifecycle() {
             reg.allocation_sequence(),
             reg.total_used(),
             reg.total_capacity(),
-            reg.get(&AllocationDomain::ExtensionHeap).unwrap().budget.used_bytes,
-            reg.get(&AllocationDomain::IrArena).unwrap().budget.used_bytes,
+            reg.get(&AllocationDomain::ExtensionHeap)
+                .unwrap()
+                .budget
+                .used_bytes,
+            reg.get(&AllocationDomain::IrArena)
+                .unwrap()
+                .budget
+                .used_bytes,
         )
     };
     assert_eq!(run(), run());
@@ -1566,9 +1710,16 @@ fn enrichment_determinism_registry_full_lifecycle() {
 fn enrichment_determinism_allocation_sequence_across_domains() {
     let run = || {
         let mut reg = DomainRegistry::new();
-        reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 10000).unwrap();
-        reg.register(AllocationDomain::RuntimeHeap, LifetimeClass::Global, 10000).unwrap();
-        reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 10000).unwrap();
+        reg.register(
+            AllocationDomain::ExtensionHeap,
+            LifetimeClass::SessionScoped,
+            10000,
+        )
+        .unwrap();
+        reg.register(AllocationDomain::RuntimeHeap, LifetimeClass::Global, 10000)
+            .unwrap();
+        reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 10000)
+            .unwrap();
         let s1 = reg.allocate(AllocationDomain::IrArena, 10).unwrap();
         let s2 = reg.allocate(AllocationDomain::ExtensionHeap, 20).unwrap();
         let s3 = reg.allocate(AllocationDomain::RuntimeHeap, 30).unwrap();
@@ -1582,8 +1733,14 @@ fn enrichment_determinism_allocation_sequence_across_domains() {
 fn enrichment_determinism_serde_json_stable() {
     let make = || {
         let mut reg = DomainRegistry::new();
-        reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 500).unwrap();
-        reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 300).unwrap();
+        reg.register(
+            AllocationDomain::ExtensionHeap,
+            LifetimeClass::SessionScoped,
+            500,
+        )
+        .unwrap();
+        reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 300)
+            .unwrap();
         reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
         serde_json::to_string(&reg).unwrap()
     };
@@ -1597,9 +1754,20 @@ fn enrichment_determinism_serde_json_stable() {
 #[test]
 fn enrichment_registry_exhaustion_one_domain_does_not_affect_others() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 100).unwrap();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 200).unwrap();
-    reg.register(AllocationDomain::ScratchBuffer, LifetimeClass::RequestScoped, 300).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        100,
+    )
+    .unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 200)
+        .unwrap();
+    reg.register(
+        AllocationDomain::ScratchBuffer,
+        LifetimeClass::RequestScoped,
+        300,
+    )
+    .unwrap();
     // Exhaust extension heap.
     reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
     assert!(reg.allocate(AllocationDomain::ExtensionHeap, 1).is_err());
@@ -1611,8 +1779,14 @@ fn enrichment_registry_exhaustion_one_domain_does_not_affect_others() {
 #[test]
 fn enrichment_registry_total_used_tracks_releases() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 1000).unwrap();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1000).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        1000,
+    )
+    .unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1000)
+        .unwrap();
     reg.allocate(AllocationDomain::ExtensionHeap, 400).unwrap();
     reg.allocate(AllocationDomain::IrArena, 300).unwrap();
     assert_eq!(reg.total_used(), 700);
@@ -1625,8 +1799,14 @@ fn enrichment_registry_total_used_tracks_releases() {
 #[test]
 fn enrichment_registry_total_capacity_unchanged_by_allocations() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 500).unwrap();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 300).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        500,
+    )
+    .unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 300)
+        .unwrap();
     let cap_before = reg.total_capacity();
     reg.allocate(AllocationDomain::ExtensionHeap, 200).unwrap();
     reg.allocate(AllocationDomain::IrArena, 100).unwrap();
@@ -1640,7 +1820,12 @@ fn enrichment_registry_total_capacity_unchanged_by_allocations() {
 #[test]
 fn enrichment_lifecycle_allocate_release_repeat() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ScratchBuffer, LifetimeClass::RequestScoped, 100).unwrap();
+    reg.register(
+        AllocationDomain::ScratchBuffer,
+        LifetimeClass::RequestScoped,
+        100,
+    )
+    .unwrap();
     for i in 0..10 {
         let seq = reg.allocate(AllocationDomain::ScratchBuffer, 100).unwrap();
         assert_eq!(seq, (i * 2 + 1) as u64);
@@ -1662,22 +1847,51 @@ fn enrichment_lifecycle_reset_then_reuse() {
     reg.reset_domain(AllocationDomain::ExtensionHeap).unwrap();
     // Can allocate again.
     reg.allocate(AllocationDomain::ExtensionHeap, 256).unwrap();
-    assert_eq!(reg.get(&AllocationDomain::ExtensionHeap).unwrap().budget.used_bytes, 256);
-    assert_eq!(reg.get(&AllocationDomain::ExtensionHeap).unwrap().budget.remaining(), 256);
+    assert_eq!(
+        reg.get(&AllocationDomain::ExtensionHeap)
+            .unwrap()
+            .budget
+            .used_bytes,
+        256
+    );
+    assert_eq!(
+        reg.get(&AllocationDomain::ExtensionHeap)
+            .unwrap()
+            .budget
+            .remaining(),
+        256
+    );
 }
 
 #[test]
 fn enrichment_lifecycle_partial_releases() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::EvidenceArena, LifetimeClass::SessionScoped, 1000).unwrap();
+    reg.register(
+        AllocationDomain::EvidenceArena,
+        LifetimeClass::SessionScoped,
+        1000,
+    )
+    .unwrap();
     reg.allocate(AllocationDomain::EvidenceArena, 500).unwrap();
     reg.release(AllocationDomain::EvidenceArena, 100).unwrap();
     reg.release(AllocationDomain::EvidenceArena, 100).unwrap();
     reg.release(AllocationDomain::EvidenceArena, 100).unwrap();
-    assert_eq!(reg.get(&AllocationDomain::EvidenceArena).unwrap().budget.used_bytes, 200);
+    assert_eq!(
+        reg.get(&AllocationDomain::EvidenceArena)
+            .unwrap()
+            .budget
+            .used_bytes,
+        200
+    );
     // Can allocate up to 800 more.
     reg.allocate(AllocationDomain::EvidenceArena, 800).unwrap();
-    assert_eq!(reg.get(&AllocationDomain::EvidenceArena).unwrap().budget.used_bytes, 1000);
+    assert_eq!(
+        reg.get(&AllocationDomain::EvidenceArena)
+            .unwrap()
+            .budget
+            .used_bytes,
+        1000
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1687,11 +1901,22 @@ fn enrichment_lifecycle_partial_releases() {
 #[test]
 fn enrichment_error_budget_exceeded_remaining_is_exact() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 100).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        100,
+    )
+    .unwrap();
     reg.allocate(AllocationDomain::ExtensionHeap, 73).unwrap();
-    let err = reg.allocate(AllocationDomain::ExtensionHeap, 28).unwrap_err();
+    let err = reg
+        .allocate(AllocationDomain::ExtensionHeap, 28)
+        .unwrap_err();
     match err {
-        AllocDomainError::BudgetExceeded { requested, remaining, domain } => {
+        AllocDomainError::BudgetExceeded {
+            requested,
+            remaining,
+            domain,
+        } => {
             assert_eq!(requested, 28);
             assert_eq!(remaining, 27);
             assert_eq!(domain, Some(AllocationDomain::ExtensionHeap));
@@ -1703,11 +1928,16 @@ fn enrichment_error_budget_exceeded_remaining_is_exact() {
 #[test]
 fn enrichment_error_budget_exceeded_at_exact_boundary() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100).unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
+        .unwrap();
     reg.allocate(AllocationDomain::IrArena, 100).unwrap();
     let err = reg.allocate(AllocationDomain::IrArena, 1).unwrap_err();
     match err {
-        AllocDomainError::BudgetExceeded { requested, remaining, domain } => {
+        AllocDomainError::BudgetExceeded {
+            requested,
+            remaining,
+            domain,
+        } => {
             assert_eq!(requested, 1);
             assert_eq!(remaining, 0);
             assert_eq!(domain, Some(AllocationDomain::IrArena));
@@ -1753,7 +1983,11 @@ fn enrichment_property_utilization_in_range() {
         }
         let u = budget.utilization();
         assert!(u >= 0.0, "utilization should be >= 0.0, got {}", u);
-        assert!(u <= 1.0 || max == 0, "utilization should be <= 1.0 for max > 0, got {}", u);
+        assert!(
+            u <= 1.0 || max == 0,
+            "utilization should be <= 1.0 for max > 0, got {}",
+            u
+        );
     }
 }
 
@@ -1804,7 +2038,14 @@ fn enrichment_budget_reserve_one_above_remaining_fails() {
     let mut budget = DomainBudget::new(100);
     budget.try_reserve(99).unwrap();
     let err = budget.try_reserve(2).unwrap_err();
-    assert!(matches!(err, AllocDomainError::BudgetExceeded { requested: 2, remaining: 1, .. }));
+    assert!(matches!(
+        err,
+        AllocDomainError::BudgetExceeded {
+            requested: 2,
+            remaining: 1,
+            ..
+        }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1817,7 +2058,12 @@ fn enrichment_sequence_strictly_monotonic() {
     let mut prev = 0u64;
     for _ in 0..20 {
         let seq = reg.allocate(AllocationDomain::ExtensionHeap, 1).unwrap();
-        assert!(seq > prev, "sequence must be strictly increasing: {} <= {}", seq, prev);
+        assert!(
+            seq > prev,
+            "sequence must be strictly increasing: {} <= {}",
+            seq,
+            prev
+        );
         prev = seq;
     }
 }
@@ -1829,8 +2075,14 @@ fn enrichment_sequence_strictly_monotonic() {
 #[test]
 fn enrichment_iter_yields_matching_domain_and_config() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::RuntimeHeap, LifetimeClass::Global, 999).unwrap();
-    reg.register(AllocationDomain::ScratchBuffer, LifetimeClass::RequestScoped, 111).unwrap();
+    reg.register(AllocationDomain::RuntimeHeap, LifetimeClass::Global, 999)
+        .unwrap();
+    reg.register(
+        AllocationDomain::ScratchBuffer,
+        LifetimeClass::RequestScoped,
+        111,
+    )
+    .unwrap();
     for (domain, config) in reg.iter() {
         assert_eq!(*domain, config.domain, "iter key must match config.domain");
     }
@@ -1839,8 +2091,19 @@ fn enrichment_iter_yields_matching_domain_and_config() {
 #[test]
 fn enrichment_iter_count_matches_len() {
     let mut reg = DomainRegistry::new();
-    reg.register(AllocationDomain::ExtensionHeap, LifetimeClass::SessionScoped, 100).unwrap();
-    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 200).unwrap();
-    reg.register(AllocationDomain::EvidenceArena, LifetimeClass::SessionScoped, 300).unwrap();
+    reg.register(
+        AllocationDomain::ExtensionHeap,
+        LifetimeClass::SessionScoped,
+        100,
+    )
+    .unwrap();
+    reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 200)
+        .unwrap();
+    reg.register(
+        AllocationDomain::EvidenceArena,
+        LifetimeClass::SessionScoped,
+        300,
+    )
+    .unwrap();
     assert_eq!(reg.iter().count(), reg.len());
 }

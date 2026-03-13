@@ -236,7 +236,10 @@ fn enrichment_proof_verdict_terminal_count_is_two() {
 
 #[test]
 fn enrichment_refutation_reason_display_all_unique() {
-    let strs: BTreeSet<String> = RefutationReason::ALL.iter().map(|r| r.to_string()).collect();
+    let strs: BTreeSet<String> = RefutationReason::ALL
+        .iter()
+        .map(|r| r.to_string())
+        .collect();
     assert_eq!(strs.len(), RefutationReason::ALL.len());
 }
 
@@ -294,7 +297,12 @@ fn enrichment_refutation_reason_serde_scope_invalidation() {
 
 #[test]
 fn enrichment_refutation_witness_serde_roundtrip() {
-    let w = mk_witness("w-enrich-1", "c-enrich-1", RefutationReason::SearchHit, epoch(10));
+    let w = mk_witness(
+        "w-enrich-1",
+        "c-enrich-1",
+        RefutationReason::SearchHit,
+        epoch(10),
+    );
     let json = serde_json::to_string(&w).unwrap();
     let back: RefutationWitness = serde_json::from_str(&json).unwrap();
     assert_eq!(w, back);
@@ -331,7 +339,12 @@ fn enrichment_refutation_witness_different_epochs_not_equal() {
 
 #[test]
 fn enrichment_refutation_witness_clone_equality() {
-    let w = mk_witness("w-clone", "c-clone", RefutationReason::ScopeInvalidation, epoch(5));
+    let w = mk_witness(
+        "w-clone",
+        "c-clone",
+        RefutationReason::ScopeInvalidation,
+        epoch(5),
+    );
     let cloned = w.clone();
     assert_eq!(w, cloned);
 }
@@ -442,7 +455,12 @@ fn enrichment_counterexample_archive_serde_empty() {
 #[test]
 fn enrichment_counterexample_archive_add_one_witness() {
     let mut archive = CounterexampleArchive::new(epoch(10));
-    let w = mk_witness("w-add-1", "c-add-1", RefutationReason::ReplayDivergence, epoch(10));
+    let w = mk_witness(
+        "w-add-1",
+        "c-add-1",
+        RefutationReason::ReplayDivergence,
+        epoch(10),
+    );
     archive.add_witness(w);
     assert_eq!(archive.witnesses.len(), 1);
     assert!(archive.is_refuted("c-add-1"));
@@ -473,9 +491,24 @@ fn enrichment_counterexample_archive_add_multiple_same_candidate() {
 #[test]
 fn enrichment_counterexample_archive_witnesses_sorted_by_id() {
     let mut archive = CounterexampleArchive::new(epoch(10));
-    archive.add_witness(mk_witness("w-z", "c-1", RefutationReason::SearchHit, epoch(10)));
-    archive.add_witness(mk_witness("w-a", "c-2", RefutationReason::SearchHit, epoch(10)));
-    archive.add_witness(mk_witness("w-m", "c-3", RefutationReason::SearchHit, epoch(10)));
+    archive.add_witness(mk_witness(
+        "w-z",
+        "c-1",
+        RefutationReason::SearchHit,
+        epoch(10),
+    ));
+    archive.add_witness(mk_witness(
+        "w-a",
+        "c-2",
+        RefutationReason::SearchHit,
+        epoch(10),
+    ));
+    archive.add_witness(mk_witness(
+        "w-m",
+        "c-3",
+        RefutationReason::SearchHit,
+        epoch(10),
+    ));
     assert_eq!(archive.witnesses[0].witness_id, "w-a");
     assert_eq!(archive.witnesses[1].witness_id, "w-m");
     assert_eq!(archive.witnesses[2].witness_id, "w-z");
@@ -534,9 +567,24 @@ fn enrichment_counterexample_archive_serde_with_witnesses() {
 #[test]
 fn enrichment_counterexample_archive_refuted_candidate_ids_tracked() {
     let mut archive = CounterexampleArchive::new(epoch(10));
-    archive.add_witness(mk_witness("w-t1", "c-x", RefutationReason::SearchHit, epoch(10)));
-    archive.add_witness(mk_witness("w-t2", "c-y", RefutationReason::SearchHit, epoch(10)));
-    archive.add_witness(mk_witness("w-t3", "c-x", RefutationReason::ScopeInvalidation, epoch(10)));
+    archive.add_witness(mk_witness(
+        "w-t1",
+        "c-x",
+        RefutationReason::SearchHit,
+        epoch(10),
+    ));
+    archive.add_witness(mk_witness(
+        "w-t2",
+        "c-y",
+        RefutationReason::SearchHit,
+        epoch(10),
+    ));
+    archive.add_witness(mk_witness(
+        "w-t3",
+        "c-x",
+        RefutationReason::ScopeInvalidation,
+        epoch(10),
+    ));
     assert_eq!(archive.refuted_candidate_ids.len(), 2);
     assert!(archive.refuted_candidate_ids.contains("c-x"));
     assert!(archive.refuted_candidate_ids.contains("c-y"));
@@ -1314,8 +1362,16 @@ fn enrichment_pipeline_deterministic_identical_runs() {
     let mut p1 = ProofRefutationPipeline::new(ProofCampaignConfig::default(), epoch(900));
     let mut p2 = ProofRefutationPipeline::new(ProofCampaignConfig::default(), epoch(900));
     for i in 0..4 {
-        let c1 = mk_candidate(&format!("enrich-det-{i}"), CandidateKind::Invariant, 700_000);
-        let c2 = mk_candidate(&format!("enrich-det-{i}"), CandidateKind::Invariant, 700_000);
+        let c1 = mk_candidate(
+            &format!("enrich-det-{i}"),
+            CandidateKind::Invariant,
+            700_000,
+        );
+        let c2 = mk_candidate(
+            &format!("enrich-det-{i}"),
+            CandidateKind::Invariant,
+            700_000,
+        );
         p1.run_campaign(&c1);
         p2.run_campaign(&c2);
     }

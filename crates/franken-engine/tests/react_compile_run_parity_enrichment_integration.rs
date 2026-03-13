@@ -40,7 +40,14 @@ fn art(
 }
 
 fn pass_cell(surface: Surface, workflow: WorkflowKind, tier: ExampleAppTier) -> MatrixCell {
-    let a = art(ArtifactKind::CompiledOutput, surface, workflow, tier, 500, b"eq");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        surface,
+        workflow,
+        tier,
+        500,
+        b"eq",
+    );
     MatrixCell {
         surface,
         workflow,
@@ -108,7 +115,10 @@ fn enrichment_workflow_kind_display_all_unique() {
     let mut seen = BTreeSet::new();
     for v in WorkflowKind::all() {
         let s = format!("{v}");
-        assert!(seen.insert(s.clone()), "duplicate display for WorkflowKind: {s}");
+        assert!(
+            seen.insert(s.clone()),
+            "duplicate display for WorkflowKind: {s}"
+        );
     }
     assert_eq!(seen.len(), WorkflowKind::all().len());
 }
@@ -128,7 +138,10 @@ fn enrichment_artifact_kind_display_all_unique() {
     let mut seen = BTreeSet::new();
     for v in ArtifactKind::all() {
         let s = format!("{v}");
-        assert!(seen.insert(s.clone()), "duplicate display for ArtifactKind: {s}");
+        assert!(
+            seen.insert(s.clone()),
+            "duplicate display for ArtifactKind: {s}"
+        );
     }
     assert_eq!(seen.len(), ArtifactKind::all().len());
 }
@@ -146,7 +159,10 @@ fn enrichment_mismatch_class_display_all_unique() {
     let mut seen = BTreeSet::new();
     for v in &classes {
         let s = format!("{v}");
-        assert!(seen.insert(s.clone()), "duplicate display for MismatchClass: {s}");
+        assert!(
+            seen.insert(s.clone()),
+            "duplicate display for MismatchClass: {s}"
+        );
     }
     assert_eq!(seen.len(), classes.len());
 }
@@ -162,18 +178,28 @@ fn enrichment_mismatch_severity_display_all_unique() {
     let mut seen = BTreeSet::new();
     for v in &sevs {
         let s = format!("{v}");
-        assert!(seen.insert(s.clone()), "duplicate display for MismatchSeverity: {s}");
+        assert!(
+            seen.insert(s.clone()),
+            "duplicate display for MismatchSeverity: {s}"
+        );
     }
     assert_eq!(seen.len(), sevs.len());
 }
 
 #[test]
 fn enrichment_cell_verdict_display_all_unique() {
-    let verdicts = [CellVerdict::Pass, CellVerdict::Fail, CellVerdict::Inconclusive];
+    let verdicts = [
+        CellVerdict::Pass,
+        CellVerdict::Fail,
+        CellVerdict::Inconclusive,
+    ];
     let mut seen = BTreeSet::new();
     for v in &verdicts {
         let s = format!("{v}");
-        assert!(seen.insert(s.clone()), "duplicate display for CellVerdict: {s}");
+        assert!(
+            seen.insert(s.clone()),
+            "duplicate display for CellVerdict: {s}"
+        );
     }
     assert_eq!(seen.len(), verdicts.len());
 }
@@ -183,7 +209,10 @@ fn enrichment_example_app_tier_display_all_unique() {
     let mut seen = BTreeSet::new();
     for v in ExampleAppTier::all() {
         let s = format!("{v}");
-        assert!(seen.insert(s.clone()), "duplicate display for ExampleAppTier: {s}");
+        assert!(
+            seen.insert(s.clone()),
+            "duplicate display for ExampleAppTier: {s}"
+        );
     }
     assert_eq!(seen.len(), ExampleAppTier::all().len());
 }
@@ -290,7 +319,11 @@ fn enrichment_serde_roundtrip_every_mismatch_severity() {
 
 #[test]
 fn enrichment_serde_roundtrip_every_cell_verdict() {
-    let verdicts = [CellVerdict::Pass, CellVerdict::Fail, CellVerdict::Inconclusive];
+    let verdicts = [
+        CellVerdict::Pass,
+        CellVerdict::Fail,
+        CellVerdict::Inconclusive,
+    ];
     for v in &verdicts {
         let json = serde_json::to_string(v).unwrap();
         let back: CellVerdict = serde_json::from_str(&json).unwrap();
@@ -309,7 +342,11 @@ fn enrichment_serde_roundtrip_every_example_app_tier() {
 
 #[test]
 fn enrichment_serde_roundtrip_matrix_cell() {
-    let cell = pass_cell(Surface::FrankenctlCompile, WorkflowKind::SsrRender, ExampleAppTier::Complex);
+    let cell = pass_cell(
+        Surface::FrankenctlCompile,
+        WorkflowKind::SsrRender,
+        ExampleAppTier::Complex,
+    );
     let json = serde_json::to_string(&cell).unwrap();
     let back: MatrixCell = serde_json::from_str(&json).unwrap();
     assert_eq!(cell, back);
@@ -336,8 +373,16 @@ fn enrichment_serde_roundtrip_classified_mismatch_both_hashes_none() {
 fn enrichment_serde_roundtrip_full_matrix_report() {
     let config = relaxed_config();
     let cells = vec![
-        pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal),
-        fail_cell(Surface::ExampleApp, WorkflowKind::Execute, ExampleAppTier::Typical),
+        pass_cell(
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+        ),
+        fail_cell(
+            Surface::ExampleApp,
+            WorkflowKind::Execute,
+            ExampleAppTier::Typical,
+        ),
     ];
     let report = evaluate_parity_matrix(&config, &cells, ep(100));
     let json = serde_json::to_string(&report).unwrap();
@@ -399,15 +444,36 @@ fn enrichment_severity_at_or_above_full_matrix() {
 
 #[test]
 fn enrichment_classify_both_zero_size_same_hash_no_mismatch() {
-    let a = art(ArtifactKind::Diagnostics, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 0, b"z");
+    let a = art(
+        ArtifactKind::Diagnostics,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        0,
+        b"z",
+    );
     let b = a.clone();
     assert!(classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).is_none());
 }
 
 #[test]
 fn enrichment_classify_zero_vs_nonzero_size_different_hash() {
-    let a = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 0, b"aa");
-    let b = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"bb");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        0,
+        b"aa",
+    );
+    let b = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        100,
+        b"bb",
+    );
     let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE);
     // Size diff is 100/100 = 100% which is > threshold. checked_div(0) for 0-max case would return None.
     // max_size = 100, divergence = 100 * 1_000_000 / 100 = 1_000_000 > 200_000 => Critical
@@ -417,7 +483,14 @@ fn enrichment_classify_zero_vs_nonzero_size_different_hash() {
 #[test]
 fn enrichment_classify_same_hash_different_size_within_tolerance() {
     // Same content hash, sizes differ by 3% (within 5% threshold).
-    let a = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 1000, b"same");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"same",
+    );
     let b = CapturedArtifact {
         kind: ArtifactKind::CompiledOutput,
         surface: Surface::Library,
@@ -436,7 +509,14 @@ fn enrichment_classify_same_hash_different_size_within_tolerance() {
 #[test]
 fn enrichment_classify_same_hash_different_size_exceeds_tolerance() {
     // Same content hash, sizes differ by 8% (above 5% threshold).
-    let a = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 1000, b"same");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"same",
+    );
     let b = CapturedArtifact {
         kind: ArtifactKind::CompiledOutput,
         surface: Surface::Library,
@@ -456,8 +536,22 @@ fn enrichment_classify_same_hash_different_size_exceeds_tolerance() {
 #[test]
 fn enrichment_classify_size_divergence_boundary_at_threshold() {
     // Exactly at threshold should NOT be classified as divergence (> not >=).
-    let a = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 1_000_000, b"aa");
-    let b = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 950_000, b"bb");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1_000_000,
+        b"aa",
+    );
+    let b = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        950_000,
+        b"bb",
+    );
     // divergence = 50_000 * 1_000_000 / 1_000_000 = 50_000 which equals threshold (not >) => no size divergence mismatch
     // But content hashes differ => ContentDivergence
     let mm = classify_mismatch(&a, &b, 50_000);
@@ -468,8 +562,22 @@ fn enrichment_classify_size_divergence_boundary_at_threshold() {
 
 #[test]
 fn enrichment_classify_size_divergence_just_above_threshold() {
-    let a = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 1_000_000, b"xx");
-    let b = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 949_000, b"yy");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1_000_000,
+        b"xx",
+    );
+    let b = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        949_000,
+        b"yy",
+    );
     // divergence = 51_000 * 1_000_000 / 1_000_000 = 51_000 > 50_000 => SizeDivergence
     let mm = classify_mismatch(&a, &b, 50_000);
     assert!(mm.is_some());
@@ -480,8 +588,22 @@ fn enrichment_classify_size_divergence_just_above_threshold() {
 
 #[test]
 fn enrichment_classify_mismatch_populates_hashes() {
-    let a = art(ArtifactKind::SourceMap, Surface::FrankenctlCompile, WorkflowKind::Execute, ExampleAppTier::Typical, 200, b"alpha");
-    let b = art(ArtifactKind::SourceMap, Surface::FrankenctlCompile, WorkflowKind::Execute, ExampleAppTier::Typical, 200, b"beta");
+    let a = art(
+        ArtifactKind::SourceMap,
+        Surface::FrankenctlCompile,
+        WorkflowKind::Execute,
+        ExampleAppTier::Typical,
+        200,
+        b"alpha",
+    );
+    let b = art(
+        ArtifactKind::SourceMap,
+        Surface::FrankenctlCompile,
+        WorkflowKind::Execute,
+        ExampleAppTier::Typical,
+        200,
+        b"beta",
+    );
     let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).unwrap();
     assert_eq!(mm.hash_a, Some(ch(b"alpha")));
     assert_eq!(mm.hash_b, Some(ch(b"beta")));
@@ -489,8 +611,22 @@ fn enrichment_classify_mismatch_populates_hashes() {
 
 #[test]
 fn enrichment_classify_mismatch_preserves_surface_and_workflow() {
-    let a = art(ArtifactKind::RenderOutput, Surface::ExampleApp, WorkflowKind::StreamingRender, ExampleAppTier::HybridIsomorphic, 300, b"p");
-    let b = art(ArtifactKind::RenderOutput, Surface::ExampleApp, WorkflowKind::StreamingRender, ExampleAppTier::HybridIsomorphic, 300, b"q");
+    let a = art(
+        ArtifactKind::RenderOutput,
+        Surface::ExampleApp,
+        WorkflowKind::StreamingRender,
+        ExampleAppTier::HybridIsomorphic,
+        300,
+        b"p",
+    );
+    let b = art(
+        ArtifactKind::RenderOutput,
+        Surface::ExampleApp,
+        WorkflowKind::StreamingRender,
+        ExampleAppTier::HybridIsomorphic,
+        300,
+        b"q",
+    );
     let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).unwrap();
     assert_eq!(mm.surface, Surface::ExampleApp);
     assert_eq!(mm.workflow, WorkflowKind::StreamingRender);
@@ -500,8 +636,22 @@ fn enrichment_classify_mismatch_preserves_surface_and_workflow() {
 #[test]
 fn enrichment_classify_size_divergence_minor_boundary() {
     // Between 5% and 10%: Minor
-    let a = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 1000, b"c1");
-    let b = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 900, b"c2");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"c1",
+    );
+    let b = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        900,
+        b"c2",
+    );
     // divergence = 100 * 1_000_000 / 1000 = 100_000, which equals 10%. Code checks > 100_000 for Major.
     // 100_000 is NOT > 100_000, so this should be Minor.
     let mm = classify_mismatch(&a, &b, 50_000).unwrap();
@@ -512,8 +662,22 @@ fn enrichment_classify_size_divergence_minor_boundary() {
 #[test]
 fn enrichment_classify_size_divergence_major_boundary() {
     // Between 10% and 20%: Major
-    let a = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 1000, b"d1");
-    let b = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 800, b"d2");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"d1",
+    );
+    let b = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        800,
+        b"d2",
+    );
     // divergence = 200 * 1_000_000 / 1000 = 200_000. Code checks > 200_000 for Critical.
     // 200_000 is NOT > 200_000, so this should be Major.
     let mm = classify_mismatch(&a, &b, 50_000).unwrap();
@@ -524,8 +688,22 @@ fn enrichment_classify_size_divergence_major_boundary() {
 #[test]
 fn enrichment_classify_size_divergence_critical_boundary() {
     // Above 20%: Critical
-    let a = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 1000, b"e1");
-    let b = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 790, b"e2");
+    let a = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        1000,
+        b"e1",
+    );
+    let b = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        790,
+        b"e2",
+    );
     // divergence = 210 * 1_000_000 / 1000 = 210_000 > 200_000 => Critical
     let mm = classify_mismatch(&a, &b, 50_000).unwrap();
     assert_eq!(mm.class, MismatchClass::SizeDivergence);
@@ -540,16 +718,65 @@ fn enrichment_classify_size_divergence_critical_boundary() {
 fn enrichment_evaluate_cell_multiple_kinds_matched_by_kind() {
     let config = relaxed_config();
     let ref_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-        art(ArtifactKind::SourceMap, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 50, b"sm"),
-        art(ArtifactKind::Diagnostics, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 30, b"dg"),
+        art(
+            ArtifactKind::CompiledOutput,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            100,
+            b"co",
+        ),
+        art(
+            ArtifactKind::SourceMap,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            50,
+            b"sm",
+        ),
+        art(
+            ArtifactKind::Diagnostics,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            30,
+            b"dg",
+        ),
     ];
     let cand_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-        art(ArtifactKind::SourceMap, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 50, b"sm"),
-        art(ArtifactKind::Diagnostics, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 30, b"dg"),
+        art(
+            ArtifactKind::CompiledOutput,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            100,
+            b"co",
+        ),
+        art(
+            ArtifactKind::SourceMap,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            50,
+            b"sm",
+        ),
+        art(
+            ArtifactKind::Diagnostics,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            30,
+            b"dg",
+        ),
     ];
-    let cell = evaluate_cell(&ref_arts, &cand_arts, &config, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     assert_eq!(cell.verdict, CellVerdict::Pass);
     assert!(cell.mismatches.is_empty());
     assert_eq!(cell.artifacts_reference.len(), 3);
@@ -560,15 +787,45 @@ fn enrichment_evaluate_cell_multiple_kinds_matched_by_kind() {
 fn enrichment_evaluate_cell_missing_reports_critical() {
     let config = relaxed_config();
     let ref_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-        art(ArtifactKind::ModuleGraph, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 80, b"mg"),
+        art(
+            ArtifactKind::CompiledOutput,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            100,
+            b"co",
+        ),
+        art(
+            ArtifactKind::ModuleGraph,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            80,
+            b"mg",
+        ),
     ];
-    let cand_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-    ];
-    let cell = evaluate_cell(&ref_arts, &cand_arts, &config, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let cand_arts = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        100,
+        b"co",
+    )];
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     assert_eq!(cell.verdict, CellVerdict::Fail);
-    let missing = cell.mismatches.iter().find(|m| m.class == MismatchClass::Missing).unwrap();
+    let missing = cell
+        .mismatches
+        .iter()
+        .find(|m| m.class == MismatchClass::Missing)
+        .unwrap();
     assert_eq!(missing.severity, MismatchSeverity::Critical);
     assert_eq!(missing.artifact_kind, ArtifactKind::ModuleGraph);
     assert!(missing.hash_a.is_some());
@@ -578,17 +835,47 @@ fn enrichment_evaluate_cell_missing_reports_critical() {
 #[test]
 fn enrichment_evaluate_cell_extra_reports_minor() {
     let config = relaxed_config();
-    let ref_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-    ];
+    let ref_arts = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        100,
+        b"co",
+    )];
     let cand_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-        art(ArtifactKind::Diagnostics, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 40, b"diag"),
+        art(
+            ArtifactKind::CompiledOutput,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            100,
+            b"co",
+        ),
+        art(
+            ArtifactKind::Diagnostics,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            40,
+            b"diag",
+        ),
     ];
-    let cell = evaluate_cell(&ref_arts, &cand_arts, &config, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     // Extra is Minor, threshold is Major => Pass
     assert_eq!(cell.verdict, CellVerdict::Pass);
-    let extra = cell.mismatches.iter().find(|m| m.class == MismatchClass::Extra).unwrap();
+    let extra = cell
+        .mismatches
+        .iter()
+        .find(|m| m.class == MismatchClass::Extra)
+        .unwrap();
     assert_eq!(extra.severity, MismatchSeverity::Minor);
     assert!(extra.hash_a.is_none());
     assert!(extra.hash_b.is_some());
@@ -599,34 +886,82 @@ fn enrichment_evaluate_cell_source_map_required_ref_has_cand_missing() {
     let mut config = relaxed_config();
     config.require_source_maps = true;
     let ref_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-        art(ArtifactKind::SourceMap, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 50, b"sm"),
+        art(
+            ArtifactKind::CompiledOutput,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            100,
+            b"co",
+        ),
+        art(
+            ArtifactKind::SourceMap,
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+            50,
+            b"sm",
+        ),
     ];
-    let cand_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-    ];
-    let cell = evaluate_cell(&ref_arts, &cand_arts, &config, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let cand_arts = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        100,
+        b"co",
+    )];
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     // SourceMap in ref but not cand => Missing (Critical) from matching logic
     assert_eq!(cell.verdict, CellVerdict::Fail);
-    assert!(cell.mismatches.iter().any(|m| m.artifact_kind == ArtifactKind::SourceMap && m.class == MismatchClass::Missing));
+    assert!(
+        cell.mismatches.iter().any(
+            |m| m.artifact_kind == ArtifactKind::SourceMap && m.class == MismatchClass::Missing
+        )
+    );
 }
 
 #[test]
 fn enrichment_evaluate_cell_source_map_absent_both_sides_major() {
     let mut config = relaxed_config();
     config.require_source_maps = true;
-    let ref_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-    ];
-    let cand_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"co"),
-    ];
-    let cell = evaluate_cell(&ref_arts, &cand_arts, &config, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let ref_arts = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        100,
+        b"co",
+    )];
+    let cand_arts = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        100,
+        b"co",
+    )];
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     // Source maps required but absent from both => Major mismatch => Fail
     assert_eq!(cell.verdict, CellVerdict::Fail);
-    let sm_missing = cell.mismatches.iter().find(|m| {
-        m.artifact_kind == ArtifactKind::SourceMap && m.class == MismatchClass::Missing
-    });
+    let sm_missing = cell
+        .mismatches
+        .iter()
+        .find(|m| m.artifact_kind == ArtifactKind::SourceMap && m.class == MismatchClass::Missing);
     assert!(sm_missing.is_some());
     assert_eq!(sm_missing.unwrap().severity, MismatchSeverity::Major);
 }
@@ -638,13 +973,29 @@ fn enrichment_evaluate_cell_execution_trace_required_for_hydration() {
         require_source_maps: false,
         ..relaxed_config()
     };
-    let ref_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::HydrationRound, ExampleAppTier::Minimal, 100, b"co"),
-    ];
+    let ref_arts = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::HydrationRound,
+        ExampleAppTier::Minimal,
+        100,
+        b"co",
+    )];
     let cand_arts = ref_arts.clone();
-    let cell = evaluate_cell(&ref_arts, &cand_arts, &config, Surface::Library, WorkflowKind::HydrationRound, ExampleAppTier::Minimal);
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::HydrationRound,
+        ExampleAppTier::Minimal,
+    );
     // HydrationRound requires execution trace; absent from both => Major
-    assert!(cell.mismatches.iter().any(|m| m.artifact_kind == ArtifactKind::ExecutionTrace));
+    assert!(
+        cell.mismatches
+            .iter()
+            .any(|m| m.artifact_kind == ArtifactKind::ExecutionTrace)
+    );
 }
 
 #[test]
@@ -654,12 +1005,28 @@ fn enrichment_evaluate_cell_execution_trace_required_for_streaming() {
         require_source_maps: false,
         ..relaxed_config()
     };
-    let ref_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::StreamingRender, ExampleAppTier::Minimal, 100, b"co"),
-    ];
+    let ref_arts = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::StreamingRender,
+        ExampleAppTier::Minimal,
+        100,
+        b"co",
+    )];
     let cand_arts = ref_arts.clone();
-    let cell = evaluate_cell(&ref_arts, &cand_arts, &config, Surface::Library, WorkflowKind::StreamingRender, ExampleAppTier::Minimal);
-    assert!(cell.mismatches.iter().any(|m| m.artifact_kind == ArtifactKind::ExecutionTrace));
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::StreamingRender,
+        ExampleAppTier::Minimal,
+    );
+    assert!(
+        cell.mismatches
+            .iter()
+            .any(|m| m.artifact_kind == ArtifactKind::ExecutionTrace)
+    );
 }
 
 #[test]
@@ -669,13 +1036,30 @@ fn enrichment_evaluate_cell_execution_trace_not_required_for_static_generation()
         require_source_maps: false,
         ..relaxed_config()
     };
-    let ref_arts = vec![
-        art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::StaticGeneration, ExampleAppTier::Minimal, 100, b"co"),
-    ];
+    let ref_arts = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::StaticGeneration,
+        ExampleAppTier::Minimal,
+        100,
+        b"co",
+    )];
     let cand_arts = ref_arts.clone();
-    let cell = evaluate_cell(&ref_arts, &cand_arts, &config, Surface::Library, WorkflowKind::StaticGeneration, ExampleAppTier::Minimal);
+    let cell = evaluate_cell(
+        &ref_arts,
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::StaticGeneration,
+        ExampleAppTier::Minimal,
+    );
     // StaticGeneration is NOT in the list requiring execution traces
-    assert!(!cell.mismatches.iter().any(|m| m.artifact_kind == ArtifactKind::ExecutionTrace));
+    assert!(
+        !cell
+            .mismatches
+            .iter()
+            .any(|m| m.artifact_kind == ArtifactKind::ExecutionTrace)
+    );
     assert_eq!(cell.verdict, CellVerdict::Pass);
 }
 
@@ -687,10 +1071,22 @@ fn enrichment_evaluate_cell_severity_threshold_minor_fails_on_extra() {
         require_execution_traces: false,
         ..relaxed_config()
     };
-    let cand_arts = vec![
-        art(ArtifactKind::Diagnostics, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 40, b"diag"),
-    ];
-    let cell = evaluate_cell(&[], &cand_arts, &config, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let cand_arts = vec![art(
+        ArtifactKind::Diagnostics,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        40,
+        b"diag",
+    )];
+    let cell = evaluate_cell(
+        &[],
+        &cand_arts,
+        &config,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     // Extra = Minor, threshold = Minor => at_or_above => Fail
     assert_eq!(cell.verdict, CellVerdict::Fail);
 }
@@ -702,18 +1098,42 @@ fn enrichment_evaluate_cell_severity_threshold_minor_fails_on_extra() {
 #[test]
 fn enrichment_coverage_single_cell_partial_fractions() {
     let config = relaxed_config();
-    let cells = vec![pass_cell(Surface::Library, WorkflowKind::Execute, ExampleAppTier::Complex)];
+    let cells = vec![pass_cell(
+        Surface::Library,
+        WorkflowKind::Execute,
+        ExampleAppTier::Complex,
+    )];
     let cov = compute_coverage(&cells, &config);
     // Surface: 1/4 = 250_000
-    let lib_cov = cov.surface_coverage.iter().find(|(s, _)| *s == Surface::Library).unwrap().1;
+    let lib_cov = cov
+        .surface_coverage
+        .iter()
+        .find(|(s, _)| *s == Surface::Library)
+        .unwrap()
+        .1;
     assert_eq!(lib_cov, 1_000_000);
-    let fc_cov = cov.surface_coverage.iter().find(|(s, _)| *s == Surface::FrankenctlCompile).unwrap().1;
+    let fc_cov = cov
+        .surface_coverage
+        .iter()
+        .find(|(s, _)| *s == Surface::FrankenctlCompile)
+        .unwrap()
+        .1;
     assert_eq!(fc_cov, 0);
     // Workflow: 1/6
-    let exec_cov = cov.workflow_coverage.iter().find(|(w, _)| *w == WorkflowKind::Execute).unwrap().1;
+    let exec_cov = cov
+        .workflow_coverage
+        .iter()
+        .find(|(w, _)| *w == WorkflowKind::Execute)
+        .unwrap()
+        .1;
     assert_eq!(exec_cov, 1_000_000);
     // Tier: 1/5
-    let complex_cov = cov.app_tier_coverage.iter().find(|(t, _)| *t == ExampleAppTier::Complex).unwrap().1;
+    let complex_cov = cov
+        .app_tier_coverage
+        .iter()
+        .find(|(t, _)| *t == ExampleAppTier::Complex)
+        .unwrap()
+        .1;
     assert_eq!(complex_cov, 1_000_000);
     // Overall = average of 250_000 + 166_666 + 200_000 = 205_555
     assert!(cov.overall_coverage_millionths > 0);
@@ -747,7 +1167,11 @@ fn enrichment_coverage_full_matrix_all_million() {
 #[test]
 fn enrichment_coverage_dimensions_length_matches_all() {
     let config = relaxed_config();
-    let cells = vec![pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal)];
+    let cells = vec![pass_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    )];
     let cov = compute_coverage(&cells, &config);
     assert_eq!(cov.surface_coverage.len(), Surface::all().len());
     assert_eq!(cov.workflow_coverage.len(), WorkflowKind::all().len());
@@ -764,8 +1188,16 @@ fn enrichment_overall_verdict_required_surfaces_met_pass() {
     config.required_surfaces.insert(Surface::Library);
     config.required_surfaces.insert(Surface::ExampleApp);
     let cells = vec![
-        pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal),
-        pass_cell(Surface::ExampleApp, WorkflowKind::Execute, ExampleAppTier::Typical),
+        pass_cell(
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+        ),
+        pass_cell(
+            Surface::ExampleApp,
+            WorkflowKind::Execute,
+            ExampleAppTier::Typical,
+        ),
     ];
     assert_eq!(derive_overall_verdict(&cells, &config), CellVerdict::Pass);
 }
@@ -775,9 +1207,11 @@ fn enrichment_overall_verdict_required_surfaces_not_met_fail() {
     let mut config = relaxed_config();
     config.required_surfaces.insert(Surface::Library);
     config.required_surfaces.insert(Surface::FrankenctlCompile);
-    let cells = vec![
-        pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal),
-    ];
+    let cells = vec![pass_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    )];
     assert_eq!(derive_overall_verdict(&cells, &config), CellVerdict::Fail);
 }
 
@@ -787,8 +1221,16 @@ fn enrichment_overall_verdict_required_workflows_met_pass() {
     config.required_workflows.insert(WorkflowKind::CompileOnly);
     config.required_workflows.insert(WorkflowKind::Execute);
     let cells = vec![
-        pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal),
-        pass_cell(Surface::Library, WorkflowKind::Execute, ExampleAppTier::Typical),
+        pass_cell(
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+        ),
+        pass_cell(
+            Surface::Library,
+            WorkflowKind::Execute,
+            ExampleAppTier::Typical,
+        ),
     ];
     assert_eq!(derive_overall_verdict(&cells, &config), CellVerdict::Pass);
 }
@@ -797,9 +1239,11 @@ fn enrichment_overall_verdict_required_workflows_met_pass() {
 fn enrichment_overall_verdict_required_workflows_not_met_fail() {
     let mut config = relaxed_config();
     config.required_workflows.insert(WorkflowKind::SsrRender);
-    let cells = vec![
-        pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal),
-    ];
+    let cells = vec![pass_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    )];
     assert_eq!(derive_overall_verdict(&cells, &config), CellVerdict::Fail);
 }
 
@@ -836,7 +1280,11 @@ fn enrichment_overall_verdict_require_all_app_tiers_missing_one() {
 fn enrichment_overall_verdict_mix_pass_and_inconclusive() {
     let config = relaxed_config();
     let cells = vec![
-        pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal),
+        pass_cell(
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+        ),
         MatrixCell {
             surface: Surface::ExampleApp,
             workflow: WorkflowKind::Execute,
@@ -847,7 +1295,10 @@ fn enrichment_overall_verdict_mix_pass_and_inconclusive() {
             verdict: CellVerdict::Inconclusive,
         },
     ];
-    assert_eq!(derive_overall_verdict(&cells, &config), CellVerdict::Inconclusive);
+    assert_eq!(
+        derive_overall_verdict(&cells, &config),
+        CellVerdict::Inconclusive
+    );
 }
 
 #[test]
@@ -859,7 +1310,11 @@ fn enrichment_overall_verdict_fail_overrides_everything() {
         .map(|t| pass_cell(Surface::Library, WorkflowKind::CompileOnly, *t))
         .collect();
     // Inject one failing cell
-    cells.push(fail_cell(Surface::FrankenctlRun, WorkflowKind::Execute, ExampleAppTier::Complex));
+    cells.push(fail_cell(
+        Surface::FrankenctlRun,
+        WorkflowKind::Execute,
+        ExampleAppTier::Complex,
+    ));
     assert_eq!(derive_overall_verdict(&cells, &config), CellVerdict::Fail);
 }
 
@@ -927,7 +1382,11 @@ fn enrichment_receipt_field_values() {
 #[test]
 fn enrichment_matrix_counts_informational_not_counted() {
     let config = relaxed_config();
-    let mut cell = pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let mut cell = pass_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     cell.mismatches.push(ClassifiedMismatch {
         class: MismatchClass::OrderDivergence,
         severity: MismatchSeverity::Informational,
@@ -949,31 +1408,51 @@ fn enrichment_matrix_counts_informational_not_counted() {
 #[test]
 fn enrichment_matrix_counts_all_severity_levels() {
     let config = relaxed_config();
-    let mut cell = pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let mut cell = pass_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     cell.verdict = CellVerdict::Fail;
     cell.mismatches.push(ClassifiedMismatch {
-        class: MismatchClass::Missing, severity: MismatchSeverity::Critical,
-        surface: Surface::Library, workflow: WorkflowKind::CompileOnly,
-        artifact_kind: ArtifactKind::CompiledOutput, detail: "crit".into(),
-        hash_a: None, hash_b: None,
+        class: MismatchClass::Missing,
+        severity: MismatchSeverity::Critical,
+        surface: Surface::Library,
+        workflow: WorkflowKind::CompileOnly,
+        artifact_kind: ArtifactKind::CompiledOutput,
+        detail: "crit".into(),
+        hash_a: None,
+        hash_b: None,
     });
     cell.mismatches.push(ClassifiedMismatch {
-        class: MismatchClass::SizeDivergence, severity: MismatchSeverity::Major,
-        surface: Surface::Library, workflow: WorkflowKind::CompileOnly,
-        artifact_kind: ArtifactKind::SourceMap, detail: "maj".into(),
-        hash_a: None, hash_b: None,
+        class: MismatchClass::SizeDivergence,
+        severity: MismatchSeverity::Major,
+        surface: Surface::Library,
+        workflow: WorkflowKind::CompileOnly,
+        artifact_kind: ArtifactKind::SourceMap,
+        detail: "maj".into(),
+        hash_a: None,
+        hash_b: None,
     });
     cell.mismatches.push(ClassifiedMismatch {
-        class: MismatchClass::Extra, severity: MismatchSeverity::Minor,
-        surface: Surface::Library, workflow: WorkflowKind::CompileOnly,
-        artifact_kind: ArtifactKind::Diagnostics, detail: "min".into(),
-        hash_a: None, hash_b: None,
+        class: MismatchClass::Extra,
+        severity: MismatchSeverity::Minor,
+        surface: Surface::Library,
+        workflow: WorkflowKind::CompileOnly,
+        artifact_kind: ArtifactKind::Diagnostics,
+        detail: "min".into(),
+        hash_a: None,
+        hash_b: None,
     });
     cell.mismatches.push(ClassifiedMismatch {
-        class: MismatchClass::OrderDivergence, severity: MismatchSeverity::Informational,
-        surface: Surface::Library, workflow: WorkflowKind::CompileOnly,
-        artifact_kind: ArtifactKind::ModuleGraph, detail: "info".into(),
-        hash_a: None, hash_b: None,
+        class: MismatchClass::OrderDivergence,
+        severity: MismatchSeverity::Informational,
+        surface: Surface::Library,
+        workflow: WorkflowKind::CompileOnly,
+        artifact_kind: ArtifactKind::ModuleGraph,
+        detail: "info".into(),
+        hash_a: None,
+        hash_b: None,
     });
     let report = evaluate_parity_matrix(&config, &[cell], ep(2));
     assert_eq!(report.total_mismatches, 4);
@@ -985,20 +1464,36 @@ fn enrichment_matrix_counts_all_severity_levels() {
 #[test]
 fn enrichment_matrix_multi_cell_aggregation() {
     let config = relaxed_config();
-    let mut c1 = pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal);
+    let mut c1 = pass_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    );
     c1.verdict = CellVerdict::Fail;
     c1.mismatches.push(ClassifiedMismatch {
-        class: MismatchClass::Missing, severity: MismatchSeverity::Critical,
-        surface: Surface::Library, workflow: WorkflowKind::CompileOnly,
-        artifact_kind: ArtifactKind::CompiledOutput, detail: "m1".into(),
-        hash_a: None, hash_b: None,
+        class: MismatchClass::Missing,
+        severity: MismatchSeverity::Critical,
+        surface: Surface::Library,
+        workflow: WorkflowKind::CompileOnly,
+        artifact_kind: ArtifactKind::CompiledOutput,
+        detail: "m1".into(),
+        hash_a: None,
+        hash_b: None,
     });
-    let mut c2 = pass_cell(Surface::ExampleApp, WorkflowKind::Execute, ExampleAppTier::Typical);
+    let mut c2 = pass_cell(
+        Surface::ExampleApp,
+        WorkflowKind::Execute,
+        ExampleAppTier::Typical,
+    );
     c2.mismatches.push(ClassifiedMismatch {
-        class: MismatchClass::Extra, severity: MismatchSeverity::Minor,
-        surface: Surface::ExampleApp, workflow: WorkflowKind::Execute,
-        artifact_kind: ArtifactKind::Diagnostics, detail: "m2".into(),
-        hash_a: None, hash_b: None,
+        class: MismatchClass::Extra,
+        severity: MismatchSeverity::Minor,
+        surface: Surface::ExampleApp,
+        workflow: WorkflowKind::Execute,
+        artifact_kind: ArtifactKind::Diagnostics,
+        detail: "m2".into(),
+        hash_a: None,
+        hash_b: None,
     });
     let report = evaluate_parity_matrix(&config, &[c1, c2], ep(3));
     assert_eq!(report.total_mismatches, 2);
@@ -1013,7 +1508,11 @@ fn enrichment_matrix_multi_cell_aggregation() {
 #[test]
 fn enrichment_matrix_receipt_epoch_propagates() {
     let config = relaxed_config();
-    let cells = vec![pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal)];
+    let cells = vec![pass_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    )];
     let report = evaluate_parity_matrix(&config, &cells, ep(999));
     assert_eq!(report.receipt.epoch, ep(999));
 }
@@ -1022,8 +1521,16 @@ fn enrichment_matrix_receipt_epoch_propagates() {
 fn enrichment_matrix_report_deterministic_across_invocations() {
     let config = relaxed_config();
     let cells = vec![
-        pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal),
-        fail_cell(Surface::FrankenctlRun, WorkflowKind::Execute, ExampleAppTier::Complex),
+        pass_cell(
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+        ),
+        fail_cell(
+            Surface::FrankenctlRun,
+            WorkflowKind::Execute,
+            ExampleAppTier::Complex,
+        ),
     ];
     let r1 = evaluate_parity_matrix(&config, &cells, ep(50));
     let r2 = evaluate_parity_matrix(&config, &cells, ep(50));
@@ -1039,7 +1546,11 @@ fn enrichment_matrix_different_configs_different_input_hash() {
     config_a.max_size_divergence_millionths = 10_000;
     let mut config_b = relaxed_config();
     config_b.max_size_divergence_millionths = 20_000;
-    let cells = vec![pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal)];
+    let cells = vec![pass_cell(
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+    )];
     let r1 = evaluate_parity_matrix(&config_a, &cells, ep(1));
     let r2 = evaluate_parity_matrix(&config_b, &cells, ep(1));
     // Different config.max_size_divergence_millionths is hashed into input_hash
@@ -1100,8 +1611,22 @@ fn enrichment_matrix_config_default_boolean_flags() {
 
 #[test]
 fn enrichment_content_hash_deterministic_for_classify() {
-    let a1 = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"det");
-    let a2 = art(ArtifactKind::CompiledOutput, Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal, 100, b"det");
+    let a1 = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        100,
+        b"det",
+    );
+    let a2 = art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        WorkflowKind::CompileOnly,
+        ExampleAppTier::Minimal,
+        100,
+        b"det",
+    );
     assert!(classify_mismatch(&a1, &a2, DEFAULT_MAX_SIZE_DIVERGENCE).is_none());
 }
 
@@ -1149,7 +1674,7 @@ fn enrichment_example_app_tier_ord_usable_in_btreeset() {
 
 #[test]
 fn enrichment_mismatch_severity_ord_ascending() {
-    let mut sevs = vec![
+    let mut sevs = [
         MismatchSeverity::Critical,
         MismatchSeverity::Informational,
         MismatchSeverity::Major,
@@ -1170,13 +1695,28 @@ fn enrichment_mismatch_severity_ord_ascending() {
 fn enrichment_matrix_report_coverage_included() {
     let config = relaxed_config();
     let cells = vec![
-        pass_cell(Surface::Library, WorkflowKind::CompileOnly, ExampleAppTier::Minimal),
-        pass_cell(Surface::FrankenctlCompile, WorkflowKind::Execute, ExampleAppTier::Typical),
-        pass_cell(Surface::FrankenctlRun, WorkflowKind::SsrRender, ExampleAppTier::Complex),
+        pass_cell(
+            Surface::Library,
+            WorkflowKind::CompileOnly,
+            ExampleAppTier::Minimal,
+        ),
+        pass_cell(
+            Surface::FrankenctlCompile,
+            WorkflowKind::Execute,
+            ExampleAppTier::Typical,
+        ),
+        pass_cell(
+            Surface::FrankenctlRun,
+            WorkflowKind::SsrRender,
+            ExampleAppTier::Complex,
+        ),
     ];
     let report = evaluate_parity_matrix(&config, &cells, ep(7));
     assert_eq!(report.coverage.surface_coverage.len(), Surface::all().len());
-    assert_eq!(report.coverage.workflow_coverage.len(), WorkflowKind::all().len());
+    assert_eq!(
+        report.coverage.workflow_coverage.len(),
+        WorkflowKind::all().len()
+    );
     assert!(report.coverage.overall_coverage_millionths > 0);
 }
 

@@ -190,7 +190,11 @@ fn enrichment_trace_validation_error_display_all_seven_unique() {
         assert!(!s.is_empty(), "Display string must not be empty");
         display_set.insert(s);
     }
-    assert_eq!(display_set.len(), 7, "all 7 variants must produce distinct Display strings");
+    assert_eq!(
+        display_set.len(),
+        7,
+        "all 7 variants must produce distinct Display strings"
+    );
 }
 
 #[test]
@@ -212,7 +216,10 @@ fn enrichment_trace_validation_error_invalid_posterior_display_format() {
     let e = TraceValidationError::InvalidPosterior { step_index: 999 };
     let s = e.to_string();
     assert!(s.contains("999"), "should contain step_index");
-    assert!(s.contains("invalid posterior"), "should mention invalid posterior");
+    assert!(
+        s.contains("invalid posterior"),
+        "should mention invalid posterior"
+    );
 }
 
 #[test]
@@ -242,7 +249,10 @@ fn enrichment_trace_validation_error_telemetry_integrity_display_format() {
     let e = TraceValidationError::TelemetryIntegrityFailure { record_id: 12345 };
     let s = e.to_string();
     assert!(s.contains("12345"), "should contain record_id");
-    assert!(s.contains("telemetry integrity failure"), "should mention telemetry integrity");
+    assert!(
+        s.contains("telemetry integrity failure"),
+        "should mention telemetry integrity"
+    );
 }
 
 #[test]
@@ -251,8 +261,14 @@ fn enrichment_trace_validation_error_receipt_integrity_display_format() {
         receipt_id: "receipt-alpha-bravo".to_string(),
     };
     let s = e.to_string();
-    assert!(s.contains("receipt-alpha-bravo"), "should contain receipt_id");
-    assert!(s.contains("receipt integrity failure"), "should mention receipt integrity");
+    assert!(
+        s.contains("receipt-alpha-bravo"),
+        "should contain receipt_id"
+    );
+    assert!(
+        s.contains("receipt integrity failure"),
+        "should mention receipt integrity"
+    );
 }
 
 // ===========================================================================
@@ -353,7 +369,11 @@ fn enrichment_decision_change_display_all_three_unique() {
     for v in &variants {
         display_set.insert(v.to_string());
     }
-    assert_eq!(display_set.len(), 3, "all 3 DecisionChange variants must have unique Display");
+    assert_eq!(
+        display_set.len(),
+        3,
+        "all 3 DecisionChange variants must have unique Display"
+    );
 }
 
 #[test]
@@ -463,7 +483,11 @@ fn enrichment_replay_error_display_all_three_unique() {
     for v in &variants {
         display_set.insert(v.to_string());
     }
-    assert_eq!(display_set.len(), 3, "all 3 ReplayError variants must have unique Display");
+    assert_eq!(
+        display_set.len(),
+        3,
+        "all 3 ReplayError variants must have unique Display"
+    );
 }
 
 #[test]
@@ -693,10 +717,18 @@ fn enrichment_incident_trace_content_hash_sensitive_to_containment_log_count() {
 
 #[test]
 fn enrichment_incident_trace_content_hash_deterministic_100_calls() {
-    let trace = build_trace(vec![benign_evidence(), suspicious_evidence(), malicious_evidence()]);
+    let trace = build_trace(vec![
+        benign_evidence(),
+        suspicious_evidence(),
+        malicious_evidence(),
+    ]);
     let first = trace.content_hash();
     for _ in 0..100 {
-        assert_eq!(trace.content_hash(), first, "content_hash must be deterministic");
+        assert_eq!(
+            trace.content_hash(),
+            first,
+            "content_hash must be deterministic"
+        );
     }
 }
 
@@ -711,7 +743,11 @@ fn enrichment_incident_trace_content_hash_differs_by_decision_count() {
 fn enrichment_incident_trace_serde_preserves_all_fields() {
     let mut annotations = BTreeMap::new();
     annotations.insert("test-key".to_string(), "test-val".to_string());
-    let evidence = vec![benign_evidence(), suspicious_evidence(), malicious_evidence()];
+    let evidence = vec![
+        benign_evidence(),
+        suspicious_evidence(),
+        malicious_evidence(),
+    ];
     let mut trace = build_trace(evidence);
     trace.metadata.annotations = annotations;
     trace.metadata.trace_id = "preserved-fields".to_string();
@@ -980,7 +1016,10 @@ fn enrichment_replay_result_final_decision_action_matches_last_step() {
     let mut replayer = ForensicReplayer::new();
     let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
     let last = result.steps.last().unwrap();
-    assert_eq!(result.final_decision.as_ref().unwrap().action, last.decision.action);
+    assert_eq!(
+        result.final_decision.as_ref().unwrap().action,
+        last.decision.action
+    );
 }
 
 // ===========================================================================
@@ -1046,16 +1085,22 @@ fn enrichment_replay_diff_clone_equality() {
         first_divergence_step: Some(3),
         step_changes: vec![
             (0, DecisionChange::Identical),
-            (1, DecisionChange::SameActionDifferentMargin {
-                original_margin: 10,
-                counterfactual_margin: 20,
-            }),
-            (2, DecisionChange::DifferentAction {
-                original_action: ContainmentAction::Allow,
-                counterfactual_action: ContainmentAction::Terminate,
-                original_loss: 100,
-                counterfactual_loss: 50,
-            }),
+            (
+                1,
+                DecisionChange::SameActionDifferentMargin {
+                    original_margin: 10,
+                    counterfactual_margin: 20,
+                },
+            ),
+            (
+                2,
+                DecisionChange::DifferentAction {
+                    original_action: ContainmentAction::Allow,
+                    counterfactual_action: ContainmentAction::Terminate,
+                    original_loss: 100,
+                    counterfactual_loss: 50,
+                },
+            ),
         ],
         action_change_count: 1,
         original_final_action: Some(ContainmentAction::Allow),
@@ -1157,7 +1202,11 @@ fn enrichment_validate_trace_evidence_cleared_produces_mismatch() {
     trace.evidence_log.clear();
     let errors = validate_trace(&trace);
     // Empty evidence_log should produce EmptyTrace (early return).
-    assert!(errors.iter().any(|e| matches!(e, TraceValidationError::EmptyTrace)));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, TraceValidationError::EmptyTrace))
+    );
 }
 
 #[test]
@@ -1284,7 +1333,10 @@ fn enrichment_replay_determinism_across_50_runs() {
         assert_eq!(result.content_hash, baseline.content_hash);
         for (a, b) in result.steps.iter().zip(baseline.steps.iter()) {
             assert_eq!(a.decision.action, b.decision.action);
-            assert_eq!(a.decision.expected_loss_millionths, b.decision.expected_loss_millionths);
+            assert_eq!(
+                a.decision.expected_loss_millionths,
+                b.decision.expected_loss_millionths
+            );
         }
     }
 }
@@ -1304,7 +1356,10 @@ fn enrichment_replay_determinism_independent_of_replay_count() {
     let result2 = r2.replay(&trace, &ReplayConfig::default()).unwrap();
 
     assert_eq!(result1.content_hash, result2.content_hash);
-    assert_eq!(result1.steps[0].decision.action, result2.steps[0].decision.action);
+    assert_eq!(
+        result1.steps[0].decision.action,
+        result2.steps[0].decision.action
+    );
 }
 
 #[test]
@@ -1354,7 +1409,10 @@ fn enrichment_replay_escalation_monotonically_increases_severity() {
     let mut prev_severity: u32 = 0;
     for step in &result.steps {
         let sev = step.decision.action.severity();
-        assert!(sev >= prev_severity, "severity should not decrease: {prev_severity} -> {sev}");
+        assert!(
+            sev >= prev_severity,
+            "severity should not decrease: {prev_severity} -> {sev}"
+        );
         prev_severity = sev;
     }
 }
@@ -1381,7 +1439,11 @@ fn enrichment_counterfactual_identity_has_same_step_count() {
     let mut replayer = ForensicReplayer::new();
     let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
     let cf = replayer
-        .counterfactual(&trace, &ReplayConfig::default(), &CounterfactualSpec::identity())
+        .counterfactual(
+            &trace,
+            &ReplayConfig::default(),
+            &CounterfactualSpec::identity(),
+        )
         .unwrap();
     assert_eq!(original.steps.len(), cf.steps.len());
 }
@@ -1396,7 +1458,11 @@ fn enrichment_counterfactual_identity_same_actions() {
     let mut replayer = ForensicReplayer::new();
     let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
     let cf = replayer
-        .counterfactual(&trace, &ReplayConfig::default(), &CounterfactualSpec::identity())
+        .counterfactual(
+            &trace,
+            &ReplayConfig::default(),
+            &CounterfactualSpec::identity(),
+        )
         .unwrap();
     for (i, (o, c)) in original.steps.iter().zip(cf.steps.iter()).enumerate() {
         assert_eq!(o.decision.action, c.decision.action, "step {i} diverged");
@@ -1487,7 +1553,11 @@ fn enrichment_counterfactual_inject_beyond_end() {
 
 #[test]
 fn enrichment_counterfactual_skip_all_fails() {
-    let evidence = vec![benign_evidence(), suspicious_evidence(), malicious_evidence()];
+    let evidence = vec![
+        benign_evidence(),
+        suspicious_evidence(),
+        malicious_evidence(),
+    ];
     let trace = build_trace(evidence);
     let mut replayer = ForensicReplayer::new();
     let spec = CounterfactualSpec {
@@ -1567,7 +1637,11 @@ fn enrichment_counterfactual_increments_replay_count() {
     let mut replayer = ForensicReplayer::new();
     assert_eq!(replayer.replay_count(), 0);
     replayer
-        .counterfactual(&trace, &ReplayConfig::default(), &CounterfactualSpec::identity())
+        .counterfactual(
+            &trace,
+            &ReplayConfig::default(),
+            &CounterfactualSpec::identity(),
+        )
         .unwrap();
     assert_eq!(replayer.replay_count(), 1);
 }
@@ -1626,7 +1700,11 @@ fn enrichment_diff_single_step_identical() {
 #[test]
 fn enrichment_diff_different_lengths_reports_divergence() {
     let t1 = build_trace(vec![benign_evidence()]);
-    let t2 = build_trace(vec![benign_evidence(), benign_evidence(), benign_evidence()]);
+    let t2 = build_trace(vec![
+        benign_evidence(),
+        benign_evidence(),
+        benign_evidence(),
+    ]);
     let mut replayer = ForensicReplayer::new();
     let r1 = replayer.replay(&t1, &ReplayConfig::default()).unwrap();
     let r2 = replayer.replay(&t2, &ReplayConfig::default()).unwrap();
@@ -1728,8 +1806,18 @@ fn enrichment_full_lifecycle_replay_cf_diff_three_matrices() {
     assert_eq!(diff_pc.step_changes.len(), 4);
 
     // Conservative should be at least as severe as permissive.
-    let perm_max = permissive.steps.iter().map(|s| s.decision.action.severity()).max().unwrap_or(0);
-    let cons_max = conservative.steps.iter().map(|s| s.decision.action.severity()).max().unwrap_or(0);
+    let perm_max = permissive
+        .steps
+        .iter()
+        .map(|s| s.decision.action.severity())
+        .max()
+        .unwrap_or(0);
+    let cons_max = conservative
+        .steps
+        .iter()
+        .map(|s| s.decision.action.severity())
+        .max()
+        .unwrap_or(0);
     assert!(cons_max >= perm_max);
 
     assert_eq!(replayer.replay_count(), 3);
@@ -1813,7 +1901,11 @@ fn enrichment_full_lifecycle_replay_count_across_mixed_operations() {
 
     // 1 counterfactual
     replayer
-        .counterfactual(&trace, &ReplayConfig::default(), &CounterfactualSpec::identity())
+        .counterfactual(
+            &trace,
+            &ReplayConfig::default(),
+            &CounterfactualSpec::identity(),
+        )
         .unwrap();
     assert_eq!(replayer.replay_count(), 2);
 
@@ -1911,11 +2003,17 @@ fn enrichment_security_epoch_max_value() {
 fn enrichment_replay_empty_trace_error_is_validation_failed() {
     let trace = empty_trace();
     let mut replayer = ForensicReplayer::new();
-    let err = replayer.replay(&trace, &ReplayConfig::default()).unwrap_err();
+    let err = replayer
+        .replay(&trace, &ReplayConfig::default())
+        .unwrap_err();
     match &err {
         ReplayError::ValidationFailed { errors } => {
             assert!(!errors.is_empty());
-            assert!(errors.iter().any(|e| matches!(e, TraceValidationError::EmptyTrace)));
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| matches!(e, TraceValidationError::EmptyTrace))
+            );
         }
         other => panic!("expected ValidationFailed, got: {other}"),
     }
@@ -1926,7 +2024,9 @@ fn enrichment_replay_mismatched_trace_error_is_validation_failed() {
     let mut trace = build_trace(vec![benign_evidence(), benign_evidence()]);
     trace.evidence_log.pop();
     let mut replayer = ForensicReplayer::new();
-    let err = replayer.replay(&trace, &ReplayConfig::default()).unwrap_err();
+    let err = replayer
+        .replay(&trace, &ReplayConfig::default())
+        .unwrap_err();
     assert!(matches!(err, ReplayError::ValidationFailed { .. }));
 }
 
@@ -2014,7 +2114,11 @@ fn enrichment_replay_trace_id_propagated_in_counterfactual() {
     let trace = build_trace_with_id(vec![benign_evidence()], "cf-trace-id-abc");
     let mut replayer = ForensicReplayer::new();
     let result = replayer
-        .counterfactual(&trace, &ReplayConfig::default(), &CounterfactualSpec::identity())
+        .counterfactual(
+            &trace,
+            &ReplayConfig::default(),
+            &CounterfactualSpec::identity(),
+        )
         .unwrap();
     assert_eq!(result.trace_id, "cf-trace-id-abc");
 }

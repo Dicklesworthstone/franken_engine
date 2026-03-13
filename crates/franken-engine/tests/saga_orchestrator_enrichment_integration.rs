@@ -115,7 +115,11 @@ fn enrichment_saga_type_all_four_display_values_unique() {
     .iter()
     .map(|v| v.to_string())
     .collect();
-    assert_eq!(displays.len(), 4, "all SagaType variants produce distinct display strings");
+    assert_eq!(
+        displays.len(),
+        4,
+        "all SagaType variants produce distinct display strings"
+    );
 }
 
 #[test]
@@ -132,7 +136,11 @@ fn enrichment_saga_state_all_five_display_values_unique() {
     .iter()
     .map(|v| v.to_string())
     .collect();
-    assert_eq!(displays.len(), 5, "all SagaState variants produce distinct display strings");
+    assert_eq!(
+        displays.len(),
+        5,
+        "all SagaState variants produce distinct display strings"
+    );
 }
 
 #[test]
@@ -151,7 +159,11 @@ fn enrichment_step_outcome_all_three_display_values_unique() {
     .iter()
     .map(|v| v.to_string())
     .collect();
-    assert_eq!(displays.len(), 3, "all StepOutcome variants produce distinct display strings");
+    assert_eq!(
+        displays.len(),
+        3,
+        "all StepOutcome variants produce distinct display strings"
+    );
 }
 
 #[test]
@@ -160,7 +172,11 @@ fn enrichment_action_type_two_display_values_unique() {
         .iter()
         .map(|v| v.to_string())
         .collect();
-    assert_eq!(displays.len(), 2, "both ActionType variants produce distinct display strings");
+    assert_eq!(
+        displays.len(),
+        2,
+        "both ActionType variants produce distinct display strings"
+    );
 }
 
 #[test]
@@ -181,10 +197,7 @@ fn enrichment_saga_error_display_exact_format_all_variants() {
         step_index: 5,
         step_count: 3,
     };
-    assert_eq!(
-        err3.to_string(),
-        "saga s3 step 5 out of bounds (3 steps)"
-    );
+    assert_eq!(err3.to_string(), "saga s3 step 5 out of bounds (3 steps)");
 
     let err4 = SagaError::EmptySteps;
     assert_eq!(err4.to_string(), "saga must have at least one step");
@@ -304,11 +317,7 @@ fn enrichment_saga_with_multiple_records_serde_roundtrip() {
 
 #[test]
 fn enrichment_step_record_all_outcome_variants_serde() {
-    let outcomes = vec![
-        success("done"),
-        failure("err"),
-        cancelled("timeout"),
-    ];
+    let outcomes = vec![success("done"), failure("err"), cancelled("timeout")];
     for (i, outcome) in outcomes.into_iter().enumerate() {
         let record = StepRecord {
             step_index: i,
@@ -476,8 +485,14 @@ fn enrichment_compensation_different_key_rejected_after_state_change() {
     // Steps 0,1 succeed, step 2 fails -> compensating at 1.
     for i in 0..2 {
         orch.begin_step("s1").unwrap();
-        orch.complete_step("s1", i, success("ok"), &format!("k{i}"), (i as u64 + 1) * 100)
-            .unwrap();
+        orch.complete_step(
+            "s1",
+            i,
+            success("ok"),
+            &format!("k{i}"),
+            (i as u64 + 1) * 100,
+        )
+        .unwrap();
     }
     orch.begin_step("s1").unwrap();
     orch.complete_step("s1", 2, failure("err"), "k2", 300)
@@ -853,11 +868,23 @@ fn enrichment_interleaved_execution_of_two_sagas() {
     // Interleave: sa step 0, sb step 0, sa step 1, sb step 1, etc.
     for i in 0..3 {
         orch.begin_step("sa").unwrap();
-        orch.complete_step("sa", i, success(&format!("a-{i}")), &format!("ka-{i}"), i as u64 * 10)
-            .unwrap();
+        orch.complete_step(
+            "sa",
+            i,
+            success(&format!("a-{i}")),
+            &format!("ka-{i}"),
+            i as u64 * 10,
+        )
+        .unwrap();
         orch.begin_step("sb").unwrap();
-        orch.complete_step("sb", i, success(&format!("b-{i}")), &format!("kb-{i}"), i as u64 * 10 + 5)
-            .unwrap();
+        orch.complete_step(
+            "sb",
+            i,
+            success(&format!("b-{i}")),
+            &format!("kb-{i}"),
+            i as u64 * 10 + 5,
+        )
+        .unwrap();
     }
 
     assert_eq!(orch.get("sa").unwrap().state, SagaState::Completed);

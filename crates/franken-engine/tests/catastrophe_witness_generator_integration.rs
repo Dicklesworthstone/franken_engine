@@ -17,8 +17,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::catastrophe_witness_generator::{
     self, BEAD_ID, BoundaryKind, BrittlenessReport, COMPONENT, CatastropheWitness, MILLIONTHS,
-    ManifoldCoordinate, POLICY_ID, PhaseBoundary, PhaseRegion, SCHEMA_VERSION,
-    WitnessError, WitnessMinimizationResult,
+    ManifoldCoordinate, POLICY_ID, PhaseBoundary, PhaseRegion, SCHEMA_VERSION, WitnessError,
+    WitnessMinimizationResult,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -955,13 +955,22 @@ fn enrichment_boundary_kind_clone_eq() {
 
 #[test]
 fn enrichment_boundary_kind_serde_snake_case_json() {
-    assert_eq!(serde_json::to_string(&BoundaryKind::Fold).unwrap(), "\"fold\"");
-    assert_eq!(serde_json::to_string(&BoundaryKind::Cusp).unwrap(), "\"cusp\"");
+    assert_eq!(
+        serde_json::to_string(&BoundaryKind::Fold).unwrap(),
+        "\"fold\""
+    );
+    assert_eq!(
+        serde_json::to_string(&BoundaryKind::Cusp).unwrap(),
+        "\"cusp\""
+    );
     assert_eq!(
         serde_json::to_string(&BoundaryKind::Swallowtail).unwrap(),
         "\"swallowtail\""
     );
-    assert_eq!(serde_json::to_string(&BoundaryKind::Jump).unwrap(), "\"jump\"");
+    assert_eq!(
+        serde_json::to_string(&BoundaryKind::Jump).unwrap(),
+        "\"jump\""
+    );
     assert_eq!(
         serde_json::to_string(&BoundaryKind::GradualTransition).unwrap(),
         "\"gradual_transition\""
@@ -1006,7 +1015,11 @@ fn enrichment_boundary_kind_cliff_edge_overrides_dims() {
     // CliffEdge is determined by sharpness alone, regardless of dims
     for dims in 0..5 {
         let k = BoundaryKind::from_sharpness_and_dims(11_000_000, dims);
-        assert_eq!(k, BoundaryKind::CliffEdge, "dims={dims} should still be CliffEdge");
+        assert_eq!(
+            k,
+            BoundaryKind::CliffEdge,
+            "dims={dims} should still be CliffEdge"
+        );
     }
 }
 
@@ -1094,7 +1107,13 @@ fn enrichment_manifold_coordinate_empty_name() {
 
 #[test]
 fn enrichment_phase_boundary_debug() {
-    let b = make_boundary("dbg", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "dbg",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let dbg = format!("{b:?}");
     assert!(dbg.contains("PhaseBoundary"));
     assert!(dbg.contains("dbg"));
@@ -1102,14 +1121,26 @@ fn enrichment_phase_boundary_debug() {
 
 #[test]
 fn enrichment_phase_boundary_clone_eq() {
-    let b = make_boundary("clne", BoundaryKind::Cusp, PhaseRegion::BrittleWin, PhaseRegion::Neutral, 4_000_000);
+    let b = make_boundary(
+        "clne",
+        BoundaryKind::Cusp,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::Neutral,
+        4_000_000,
+    );
     let cloned = b.clone();
     assert_eq!(b, cloned);
 }
 
 #[test]
 fn enrichment_phase_boundary_display_format() {
-    let b = make_boundary("fmt-bnd", BoundaryKind::Jump, PhaseRegion::RobustWin, PhaseRegion::RobustLoss, 8_000_000);
+    let b = make_boundary(
+        "fmt-bnd",
+        BoundaryKind::Jump,
+        PhaseRegion::RobustWin,
+        PhaseRegion::RobustLoss,
+        8_000_000,
+    );
     let s = format!("{b}");
     assert!(s.contains("boundary[fmt-bnd]"));
     assert!(s.contains("robust_win"));
@@ -1121,41 +1152,101 @@ fn enrichment_phase_boundary_display_format() {
 #[test]
 fn enrichment_phase_boundary_is_critical_all_cross_combinations() {
     // Win -> Loss: critical
-    let b1 = make_boundary("c1", BoundaryKind::Fold, PhaseRegion::RobustWin, PhaseRegion::BrittleLoss, 1);
+    let b1 = make_boundary(
+        "c1",
+        BoundaryKind::Fold,
+        PhaseRegion::RobustWin,
+        PhaseRegion::BrittleLoss,
+        1,
+    );
     assert!(b1.is_critical());
-    let b2 = make_boundary("c2", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::RobustLoss, 1);
+    let b2 = make_boundary(
+        "c2",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::RobustLoss,
+        1,
+    );
     assert!(b2.is_critical());
-    let b3 = make_boundary("c3", BoundaryKind::Fold, PhaseRegion::RobustWin, PhaseRegion::Neutral, 1);
+    let b3 = make_boundary(
+        "c3",
+        BoundaryKind::Fold,
+        PhaseRegion::RobustWin,
+        PhaseRegion::Neutral,
+        1,
+    );
     assert!(b3.is_critical()); // Win -> non-win
     // Loss -> Win: also critical
-    let b4 = make_boundary("c4", BoundaryKind::Fold, PhaseRegion::BrittleLoss, PhaseRegion::BrittleWin, 1);
+    let b4 = make_boundary(
+        "c4",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleLoss,
+        PhaseRegion::BrittleWin,
+        1,
+    );
     assert!(b4.is_critical());
     // Win -> Win: not critical
-    let b5 = make_boundary("c5", BoundaryKind::Fold, PhaseRegion::RobustWin, PhaseRegion::BrittleWin, 1);
+    let b5 = make_boundary(
+        "c5",
+        BoundaryKind::Fold,
+        PhaseRegion::RobustWin,
+        PhaseRegion::BrittleWin,
+        1,
+    );
     assert!(!b5.is_critical());
     // Loss -> Loss: not critical
-    let b6 = make_boundary("c6", BoundaryKind::Fold, PhaseRegion::RobustLoss, PhaseRegion::BrittleLoss, 1);
+    let b6 = make_boundary(
+        "c6",
+        BoundaryKind::Fold,
+        PhaseRegion::RobustLoss,
+        PhaseRegion::BrittleLoss,
+        1,
+    );
     assert!(!b6.is_critical());
     // Neutral -> Neutral: not critical
-    let b7 = make_boundary("c7", BoundaryKind::Fold, PhaseRegion::Neutral, PhaseRegion::Neutral, 1);
+    let b7 = make_boundary(
+        "c7",
+        BoundaryKind::Fold,
+        PhaseRegion::Neutral,
+        PhaseRegion::Neutral,
+        1,
+    );
     assert!(!b7.is_critical());
 }
 
 #[test]
 fn enrichment_phase_boundary_involves_brittle_neutral_to_neutral() {
-    let b = make_boundary("nb", BoundaryKind::Fold, PhaseRegion::Neutral, PhaseRegion::Neutral, 1);
+    let b = make_boundary(
+        "nb",
+        BoundaryKind::Fold,
+        PhaseRegion::Neutral,
+        PhaseRegion::Neutral,
+        1,
+    );
     assert!(!b.involves_brittle());
 }
 
 #[test]
 fn enrichment_phase_boundary_involves_brittle_robust_to_robust() {
-    let b = make_boundary("rr", BoundaryKind::Jump, PhaseRegion::RobustWin, PhaseRegion::RobustLoss, 10_000_000);
+    let b = make_boundary(
+        "rr",
+        BoundaryKind::Jump,
+        PhaseRegion::RobustWin,
+        PhaseRegion::RobustLoss,
+        10_000_000,
+    );
     assert!(!b.involves_brittle());
 }
 
 #[test]
 fn enrichment_phase_boundary_compute_hash_deterministic() {
-    let b = make_boundary("det", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "det",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let h1 = b.compute_hash();
     let h2 = b.compute_hash();
     assert_eq!(h1, h2);
@@ -1163,14 +1254,32 @@ fn enrichment_phase_boundary_compute_hash_deterministic() {
 
 #[test]
 fn enrichment_phase_boundary_compute_hash_differs_by_id() {
-    let b1 = make_boundary("id-a", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
-    let b2 = make_boundary("id-b", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b1 = make_boundary(
+        "id-a",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
+    let b2 = make_boundary(
+        "id-b",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     assert_ne!(b1.compute_hash(), b2.compute_hash());
 }
 
 #[test]
 fn enrichment_phase_boundary_serde_roundtrip() {
-    let b = make_boundary("sr", BoundaryKind::Cusp, PhaseRegion::BrittleWin, PhaseRegion::Neutral, 4_000_000);
+    let b = make_boundary(
+        "sr",
+        BoundaryKind::Cusp,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::Neutral,
+        4_000_000,
+    );
     let json = serde_json::to_string(&b).unwrap();
     let back: PhaseBoundary = serde_json::from_str(&json).unwrap();
     assert_eq!(b, back);
@@ -1178,7 +1287,13 @@ fn enrichment_phase_boundary_serde_roundtrip() {
 
 #[test]
 fn enrichment_phase_boundary_serde_json_field_names() {
-    let b = make_boundary("fld", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "fld",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let json = serde_json::to_string(&b).unwrap();
     assert!(json.contains("\"boundary_id\""));
     assert!(json.contains("\"kind\""));
@@ -1195,7 +1310,13 @@ fn enrichment_phase_boundary_serde_json_field_names() {
 
 #[test]
 fn enrichment_catastrophe_witness_debug() {
-    let b = make_boundary("dbg-w", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "dbg-w",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let dbg = format!("{w:?}");
     assert!(dbg.contains("CatastropheWitness"));
@@ -1203,7 +1324,13 @@ fn enrichment_catastrophe_witness_debug() {
 
 #[test]
 fn enrichment_catastrophe_witness_clone_eq() {
-    let b = make_boundary("clne-w", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "clne-w",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let cloned = w.clone();
     assert_eq!(w, cloned);
@@ -1211,7 +1338,13 @@ fn enrichment_catastrophe_witness_clone_eq() {
 
 #[test]
 fn enrichment_catastrophe_witness_display_contains_fields() {
-    let b = make_boundary("dsp-w", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "dsp-w",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let s = format!("{w}");
     assert!(s.contains("witness["));
@@ -1224,7 +1357,13 @@ fn enrichment_catastrophe_witness_display_contains_fields() {
 
 #[test]
 fn enrichment_catastrophe_witness_is_regression_zero_delta() {
-    let b = make_boundary("z", BoundaryKind::Fold, PhaseRegion::Neutral, PhaseRegion::Neutral, 0);
+    let b = make_boundary(
+        "z",
+        BoundaryKind::Fold,
+        PhaseRegion::Neutral,
+        PhaseRegion::Neutral,
+        0,
+    );
     let w = make_witness(&b, 100, 100);
     assert!(!w.is_regression());
     assert_eq!(w.magnitude(), 0);
@@ -1232,7 +1371,13 @@ fn enrichment_catastrophe_witness_is_regression_zero_delta() {
 
 #[test]
 fn enrichment_catastrophe_witness_magnitude_positive_delta() {
-    let b = make_boundary("mp", BoundaryKind::Fold, PhaseRegion::BrittleLoss, PhaseRegion::BrittleWin, 2_000_000);
+    let b = make_boundary(
+        "mp",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleLoss,
+        PhaseRegion::BrittleWin,
+        2_000_000,
+    );
     let w = make_witness(&b, -200_000, 500_000);
     assert_eq!(w.magnitude(), 700_000);
     assert!(!w.is_regression());
@@ -1240,7 +1385,13 @@ fn enrichment_catastrophe_witness_magnitude_positive_delta() {
 
 #[test]
 fn enrichment_catastrophe_witness_compute_hash_deterministic() {
-    let b = make_boundary("hd", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "hd",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let h1 = w.compute_hash();
     let h2 = w.compute_hash();
@@ -1250,7 +1401,13 @@ fn enrichment_catastrophe_witness_compute_hash_deterministic() {
 
 #[test]
 fn enrichment_catastrophe_witness_serde_roundtrip() {
-    let b = make_boundary("wr", BoundaryKind::CliffEdge, PhaseRegion::RobustWin, PhaseRegion::RobustLoss, 15_000_000);
+    let b = make_boundary(
+        "wr",
+        BoundaryKind::CliffEdge,
+        PhaseRegion::RobustWin,
+        PhaseRegion::RobustLoss,
+        15_000_000,
+    );
     let w = make_witness(&b, 2_000_000, -5_000_000);
     let json = serde_json::to_string(&w).unwrap();
     let back: CatastropheWitness = serde_json::from_str(&json).unwrap();
@@ -1259,7 +1416,13 @@ fn enrichment_catastrophe_witness_serde_roundtrip() {
 
 #[test]
 fn enrichment_catastrophe_witness_serde_json_field_names() {
-    let b = make_boundary("fn", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "fn",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 100, -100);
     let json = serde_json::to_string(&w).unwrap();
     assert!(json.contains("\"witness_id\""));
@@ -1280,7 +1443,13 @@ fn enrichment_catastrophe_witness_serde_json_field_names() {
 
 #[test]
 fn enrichment_minimization_result_debug() {
-    let b = make_boundary("mr-dbg", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "mr-dbg",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
     let dbg = format!("{result:?}");
@@ -1289,7 +1458,13 @@ fn enrichment_minimization_result_debug() {
 
 #[test]
 fn enrichment_minimization_result_clone_eq() {
-    let b = make_boundary("mr-cl", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "mr-cl",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
     let cloned = result.clone();
@@ -1298,7 +1473,13 @@ fn enrichment_minimization_result_clone_eq() {
 
 #[test]
 fn enrichment_minimization_result_display_format() {
-    let b = make_boundary("mr-fmt", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "mr-fmt",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
     let s = format!("{result}");
@@ -1308,7 +1489,13 @@ fn enrichment_minimization_result_display_format() {
 
 #[test]
 fn enrichment_minimization_result_serde_roundtrip() {
-    let b = make_boundary("mr-sr", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "mr-sr",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
     let json = serde_json::to_string(&result).unwrap();
@@ -1318,7 +1505,13 @@ fn enrichment_minimization_result_serde_roundtrip() {
 
 #[test]
 fn enrichment_minimization_result_serde_json_field_names() {
-    let b = make_boundary("mr-fn", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "mr-fn",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
     let json = serde_json::to_string(&result).unwrap();
@@ -1330,7 +1523,13 @@ fn enrichment_minimization_result_serde_json_field_names() {
 
 #[test]
 fn enrichment_minimization_compute_certificate_hash_deterministic() {
-    let b = make_boundary("mr-cd", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "mr-cd",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
     let h1 = result.compute_certificate_hash();
@@ -1340,7 +1539,13 @@ fn enrichment_minimization_compute_certificate_hash_deterministic() {
 
 #[test]
 fn enrichment_minimization_reduction_ratio_full_reduction() {
-    let b = make_boundary("rr-full", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "rr-full",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let mut w = make_witness(&b, 500_000, -200_000);
     w.replay_steps = 10_000;
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
@@ -1352,7 +1557,13 @@ fn enrichment_minimization_reduction_ratio_full_reduction() {
 
 #[test]
 fn enrichment_minimization_reduction_ratio_small_input() {
-    let b = make_boundary("rr-sm", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "rr-sm",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let mut w = make_witness(&b, 500_000, -200_000);
     w.replay_steps = 4;
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
@@ -1365,7 +1576,13 @@ fn enrichment_minimization_reduction_ratio_small_input() {
 #[test]
 fn enrichment_minimization_one_step_fails() {
     // 1 step: ceil(sqrt(1)) = 1, steps_removed = 0 => MinimizationFailed
-    let b = make_boundary("rr-1", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "rr-1",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let mut w = make_witness(&b, 500_000, -200_000);
     w.replay_steps = 1;
     let result = catastrophe_witness_generator::minimize_witness(&w);
@@ -1374,15 +1591,30 @@ fn enrichment_minimization_one_step_fails() {
 
 #[test]
 fn enrichment_minimization_preserves_triggering_input() {
-    let b = make_boundary("pi", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "pi",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
-    assert_eq!(result.minimized_witness.triggering_input, w.triggering_input);
+    assert_eq!(
+        result.minimized_witness.triggering_input,
+        w.triggering_input
+    );
 }
 
 #[test]
 fn enrichment_minimization_preserves_metric_name() {
-    let b = make_boundary("pm", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "pm",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
     assert_eq!(result.minimized_witness.metric_name, w.metric_name);
@@ -1390,11 +1622,22 @@ fn enrichment_minimization_preserves_metric_name() {
 
 #[test]
 fn enrichment_minimization_id_has_min_suffix() {
-    let b = make_boundary("mid", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "mid",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let result = catastrophe_witness_generator::minimize_witness(&w).unwrap();
     assert!(result.minimized_witness.witness_id.ends_with("-min"));
-    assert!(result.minimized_witness.witness_id.starts_with(&w.witness_id));
+    assert!(
+        result
+            .minimized_witness
+            .witness_id
+            .starts_with(&w.witness_id)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1403,25 +1646,38 @@ fn enrichment_minimization_id_has_min_suffix() {
 
 #[test]
 fn enrichment_brittleness_report_debug() {
-    let report = catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![]).unwrap();
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![])
+            .unwrap();
     let dbg = format!("{report:?}");
     assert!(dbg.contains("BrittlenessReport"));
 }
 
 #[test]
 fn enrichment_brittleness_report_clone_eq() {
-    let report = catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![]).unwrap();
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![])
+            .unwrap();
     let cloned = report.clone();
     assert_eq!(report, cloned);
 }
 
 #[test]
 fn enrichment_brittleness_report_display_format() {
-    let b = make_boundary("rptd", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "rptd",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
     let report = catastrophe_witness_generator::build_brittleness_report(
-        SecurityEpoch::from_raw(7), vec![b], vec![w],
-    ).unwrap();
+        SecurityEpoch::from_raw(7),
+        vec![b],
+        vec![w],
+    )
+    .unwrap();
     let s = format!("{report}");
     assert!(s.contains("brittleness_report["));
     assert!(s.contains("epoch:7"));
@@ -1431,11 +1687,17 @@ fn enrichment_brittleness_report_display_format() {
 
 #[test]
 fn enrichment_brittleness_report_serde_roundtrip_with_data() {
-    let b = make_boundary("rptsr", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "rptsr",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
-    let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![b], vec![w],
-    ).unwrap();
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![b], vec![w])
+            .unwrap();
     let json = serde_json::to_string(&report).unwrap();
     let back: BrittlenessReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report, back);
@@ -1443,7 +1705,9 @@ fn enrichment_brittleness_report_serde_roundtrip_with_data() {
 
 #[test]
 fn enrichment_brittleness_report_serde_json_field_names() {
-    let report = catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![]).unwrap();
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![])
+            .unwrap();
     let json = serde_json::to_string(&report).unwrap();
     assert!(json.contains("\"report_id\""));
     assert!(json.contains("\"epoch\""));
@@ -1456,11 +1720,17 @@ fn enrichment_brittleness_report_serde_json_field_names() {
 
 #[test]
 fn enrichment_brittleness_report_compute_hash_deterministic() {
-    let b = make_boundary("rptch", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
+    let b = make_boundary(
+        "rptch",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
     let w = make_witness(&b, 500_000, -200_000);
-    let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![b], vec![w],
-    ).unwrap();
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![b], vec![w])
+            .unwrap();
     let h1 = report.compute_hash();
     let h2 = report.compute_hash();
     assert_eq!(h1, h2);
@@ -1469,38 +1739,66 @@ fn enrichment_brittleness_report_compute_hash_deterministic() {
 
 #[test]
 fn enrichment_brittleness_report_max_magnitude_empty() {
-    let report = catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![]).unwrap();
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![])
+            .unwrap();
     assert_eq!(report.max_magnitude(), 0);
 }
 
 #[test]
 fn enrichment_brittleness_report_regression_count_all_positive() {
-    let b = make_boundary("rca", BoundaryKind::Fold, PhaseRegion::BrittleLoss, PhaseRegion::BrittleWin, 2_000_000);
+    let b = make_boundary(
+        "rca",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleLoss,
+        PhaseRegion::BrittleWin,
+        2_000_000,
+    );
     let w1 = make_witness(&b, -200_000, 500_000); // positive delta
     let w2 = make_witness(&b, -100_000, 300_000); // positive delta
     let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![b], vec![w1, w2],
-    ).unwrap();
+        test_epoch(),
+        vec![b],
+        vec![w1, w2],
+    )
+    .unwrap();
     assert_eq!(report.regression_count(), 0);
 }
 
 #[test]
 fn enrichment_brittleness_report_witnesses_by_boundary_empty() {
-    let report = catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![]).unwrap();
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![], vec![])
+            .unwrap();
     let grouped = report.witnesses_by_boundary();
     assert!(grouped.is_empty());
 }
 
 #[test]
 fn enrichment_brittleness_report_witnesses_by_boundary_multiple() {
-    let b1 = make_boundary("grp1", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
-    let b2 = make_boundary("grp2", BoundaryKind::CliffEdge, PhaseRegion::RobustWin, PhaseRegion::RobustLoss, 15_000_000);
+    let b1 = make_boundary(
+        "grp1",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
+    let b2 = make_boundary(
+        "grp2",
+        BoundaryKind::CliffEdge,
+        PhaseRegion::RobustWin,
+        PhaseRegion::RobustLoss,
+        15_000_000,
+    );
     let w1 = make_witness(&b1, 500_000, -200_000);
     let w2 = make_witness(&b1, 400_000, -300_000);
     let w3 = make_witness(&b2, 2_000_000, -5_000_000);
     let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![b1, b2], vec![w1, w2, w3],
-    ).unwrap();
+        test_epoch(),
+        vec![b1, b2],
+        vec![w1, w2, w3],
+    )
+    .unwrap();
     let grouped = report.witnesses_by_boundary();
     assert_eq!(grouped.len(), 2);
     assert_eq!(grouped.get("grp1").map(|v| v.len()), Some(2));
@@ -1510,31 +1808,64 @@ fn enrichment_brittleness_report_witnesses_by_boundary_multiple() {
 #[test]
 fn enrichment_brittleness_report_brittle_region_count_both_sides() {
     // Both source and target are brittle => 2 brittle regions
-    let b = make_boundary("brc", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
-    let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![b], vec![],
-    ).unwrap();
+    let b = make_boundary(
+        "brc",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![b], vec![])
+            .unwrap();
     assert_eq!(report.brittle_region_count, 2);
 }
 
 #[test]
 fn enrichment_brittleness_report_brittle_region_count_one_side() {
     // Only source is brittle
-    let b = make_boundary("brc1", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::RobustLoss, 3_000_000);
-    let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![b], vec![],
-    ).unwrap();
+    let b = make_boundary(
+        "brc1",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::RobustLoss,
+        3_000_000,
+    );
+    let report =
+        catastrophe_witness_generator::build_brittleness_report(test_epoch(), vec![b], vec![])
+            .unwrap();
     assert_eq!(report.brittle_region_count, 1);
 }
 
 #[test]
 fn enrichment_brittleness_report_total_sharpness_sums() {
-    let b1 = make_boundary("ts1", BoundaryKind::Fold, PhaseRegion::BrittleWin, PhaseRegion::BrittleLoss, 3_000_000);
-    let b2 = make_boundary("ts2", BoundaryKind::Jump, PhaseRegion::RobustWin, PhaseRegion::RobustLoss, 7_000_000);
-    let b3 = make_boundary("ts3", BoundaryKind::CliffEdge, PhaseRegion::RobustWin, PhaseRegion::RobustLoss, 15_000_000);
+    let b1 = make_boundary(
+        "ts1",
+        BoundaryKind::Fold,
+        PhaseRegion::BrittleWin,
+        PhaseRegion::BrittleLoss,
+        3_000_000,
+    );
+    let b2 = make_boundary(
+        "ts2",
+        BoundaryKind::Jump,
+        PhaseRegion::RobustWin,
+        PhaseRegion::RobustLoss,
+        7_000_000,
+    );
+    let b3 = make_boundary(
+        "ts3",
+        BoundaryKind::CliffEdge,
+        PhaseRegion::RobustWin,
+        PhaseRegion::RobustLoss,
+        15_000_000,
+    );
     let report = catastrophe_witness_generator::build_brittleness_report(
-        test_epoch(), vec![b1, b2, b3], vec![],
-    ).unwrap();
+        test_epoch(),
+        vec![b1, b2, b3],
+        vec![],
+    )
+    .unwrap();
     assert_eq!(report.total_boundary_sharpness_millionths, 25_000_000);
 }
 
@@ -1667,8 +1998,10 @@ fn enrichment_classify_region_just_beyond_margin_negative() {
 fn enrichment_detect_boundary_deterministic() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let b1 = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
-    let b2 = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let b1 =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let b2 =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     assert_eq!(b1.boundary_id, b2.boundary_id);
     assert_eq!(b1.content_hash, b2.content_hash);
 }
@@ -1689,8 +2022,10 @@ fn enrichment_detect_boundary_empty_coords() {
 fn enrichment_detect_boundary_different_metrics_different_ids() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let b1 = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
-    let b2 = catastrophe_witness_generator::detect_boundary(&src, &tgt, 3_000_000, -3_000_000).unwrap();
+    let b1 =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let b2 =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 3_000_000, -3_000_000).unwrap();
     assert_ne!(b1.boundary_id, b2.boundary_id);
 }
 
@@ -1698,7 +2033,8 @@ fn enrichment_detect_boundary_different_metrics_different_ids() {
 fn enrichment_detect_boundary_boundary_id_starts_with_bnd() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let b = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let b =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     assert!(b.boundary_id.starts_with("bnd-"));
 }
 
@@ -1706,7 +2042,8 @@ fn enrichment_detect_boundary_boundary_id_starts_with_bnd() {
 fn enrichment_detect_boundary_coords_from_source() {
     let src = vec![coord("x", 100), coord("y", 200)];
     let tgt = vec![coord("x", 300), coord("y", 400)];
-    let b = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let b =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     // Coordinates come from source
     assert_eq!(b.coordinates.len(), 2);
     assert_eq!(b.coordinates[0].dimension_name, "x");
@@ -1721,9 +2058,16 @@ fn enrichment_detect_boundary_coords_from_source() {
 fn enrichment_generate_witness_deterministic() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
-    let w1 = catastrophe_witness_generator::generate_witness(&boundary, "data", 1_000_000, -500_000, "metric").unwrap();
-    let w2 = catastrophe_witness_generator::generate_witness(&boundary, "data", 1_000_000, -500_000, "metric").unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let w1 = catastrophe_witness_generator::generate_witness(
+        &boundary, "data", 1_000_000, -500_000, "metric",
+    )
+    .unwrap();
+    let w2 = catastrophe_witness_generator::generate_witness(
+        &boundary, "data", 1_000_000, -500_000, "metric",
+    )
+    .unwrap();
     assert_eq!(w1.witness_id, w2.witness_id);
     assert_eq!(w1.content_hash, w2.content_hash);
 }
@@ -1732,8 +2076,12 @@ fn enrichment_generate_witness_deterministic() {
 fn enrichment_generate_witness_id_starts_with_wit() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
-    let w = catastrophe_witness_generator::generate_witness(&boundary, "data", 1_000_000, -500_000, "metric").unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let w = catastrophe_witness_generator::generate_witness(
+        &boundary, "data", 1_000_000, -500_000, "metric",
+    )
+    .unwrap();
     assert!(w.witness_id.starts_with("wit-"));
 }
 
@@ -1742,9 +2090,12 @@ fn enrichment_generate_witness_at_exact_max_input_size() {
     // Exactly 65536 bytes should succeed
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     let input = "x".repeat(65_536);
-    let result = catastrophe_witness_generator::generate_witness(&boundary, &input, 1_000_000, -500_000, "metric");
+    let result = catastrophe_witness_generator::generate_witness(
+        &boundary, &input, 1_000_000, -500_000, "metric",
+    );
     assert!(result.is_ok());
 }
 
@@ -1752,9 +2103,12 @@ fn enrichment_generate_witness_at_exact_max_input_size() {
 fn enrichment_generate_witness_one_byte_over_max() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
     let input = "x".repeat(65_537);
-    let result = catastrophe_witness_generator::generate_witness(&boundary, &input, 1_000_000, -500_000, "metric");
+    let result = catastrophe_witness_generator::generate_witness(
+        &boundary, &input, 1_000_000, -500_000, "metric",
+    );
     assert_eq!(result, Err(WitnessError::InputTooLarge));
 }
 
@@ -1762,8 +2116,12 @@ fn enrichment_generate_witness_one_byte_over_max() {
 fn enrichment_generate_witness_not_minimal() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
-    let w = catastrophe_witness_generator::generate_witness(&boundary, "data", 1_000_000, -500_000, "metric").unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let w = catastrophe_witness_generator::generate_witness(
+        &boundary, "data", 1_000_000, -500_000, "metric",
+    )
+    .unwrap();
     assert!(!w.minimal);
 }
 
@@ -1771,8 +2129,12 @@ fn enrichment_generate_witness_not_minimal() {
 fn enrichment_generate_witness_delta_is_after_minus_before() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
-    let w = catastrophe_witness_generator::generate_witness(&boundary, "data", 300_000, -700_000, "metric").unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let w = catastrophe_witness_generator::generate_witness(
+        &boundary, "data", 300_000, -700_000, "metric",
+    )
+    .unwrap();
     assert_eq!(w.delta_millionths, -700_000 - 300_000);
     assert_eq!(w.delta_millionths, -1_000_000);
 }
@@ -1781,8 +2143,12 @@ fn enrichment_generate_witness_delta_is_after_minus_before() {
 fn enrichment_generate_witness_replay_steps_positive() {
     let src = vec![coord("x", 0)];
     let tgt = vec![coord("x", 2_000_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
-    let w = catastrophe_witness_generator::generate_witness(&boundary, "data", 1_000_000, -500_000, "metric").unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 2_000_000, -2_000_000).unwrap();
+    let w = catastrophe_witness_generator::generate_witness(
+        &boundary, "data", 1_000_000, -500_000, "metric",
+    )
+    .unwrap();
     assert!(w.replay_steps > 0);
 }
 
@@ -1792,8 +2158,10 @@ fn enrichment_generate_witness_replay_steps_positive() {
 
 #[test]
 fn enrichment_sharpness_symmetric() {
-    let s1 = catastrophe_witness_generator::compute_boundary_sharpness(1_000_000, -1_000_000, 500_000);
-    let s2 = catastrophe_witness_generator::compute_boundary_sharpness(-1_000_000, 1_000_000, 500_000);
+    let s1 =
+        catastrophe_witness_generator::compute_boundary_sharpness(1_000_000, -1_000_000, 500_000);
+    let s2 =
+        catastrophe_witness_generator::compute_boundary_sharpness(-1_000_000, 1_000_000, 500_000);
     assert_eq!(s1, s2);
 }
 
@@ -1817,16 +2185,26 @@ fn enrichment_sharpness_zero_delta_zero_result() {
 #[test]
 fn enrichment_manifest_boundary_kinds_diverse() {
     let manifest = catastrophe_witness_generator::franken_engine_catastrophe_manifest();
-    let kinds: BTreeSet<String> = manifest.boundaries.iter().map(|b| b.kind.label().to_string()).collect();
+    let kinds: BTreeSet<String> = manifest
+        .boundaries
+        .iter()
+        .map(|b| b.kind.label().to_string())
+        .collect();
     // Should have at least 2 distinct kinds
-    assert!(kinds.len() >= 2, "manifest should demonstrate multiple boundary kinds");
+    assert!(
+        kinds.len() >= 2,
+        "manifest should demonstrate multiple boundary kinds"
+    );
 }
 
 #[test]
 fn enrichment_manifest_witnesses_have_negative_deltas() {
     let manifest = catastrophe_witness_generator::franken_engine_catastrophe_manifest();
     for w in &manifest.witnesses {
-        assert!(w.delta_millionths < 0, "manifest witnesses should be regressions");
+        assert!(
+            w.delta_millionths < 0,
+            "manifest witnesses should be regressions"
+        );
     }
 }
 
@@ -1890,12 +2268,14 @@ fn enrichment_end_to_end_detect_generate_minimize_report() {
     // Full workflow: detect boundary, generate witness, minimize, build report
     let src = vec![coord("lr", 100_000)];
     let tgt = vec![coord("lr", 200_000)];
-    let boundary = catastrophe_witness_generator::detect_boundary(&src, &tgt, 500_000, -500_000).unwrap();
+    let boundary =
+        catastrophe_witness_generator::detect_boundary(&src, &tgt, 500_000, -500_000).unwrap();
     assert!(boundary.is_critical());
 
     let witness = catastrophe_witness_generator::generate_witness(
         &boundary, "lr=0.2", 500_000, -500_000, "accuracy",
-    ).unwrap();
+    )
+    .unwrap();
     assert!(witness.is_regression());
     assert!(!witness.minimal);
 
@@ -1907,7 +2287,8 @@ fn enrichment_end_to_end_detect_generate_minimize_report() {
         SecurityEpoch::from_raw(10),
         vec![boundary],
         vec![min_result.minimized_witness],
-    ).unwrap();
+    )
+    .unwrap();
     assert!(report.has_critical_boundaries());
     assert_eq!(report.regression_count(), 1);
     assert_eq!(report.epoch, SecurityEpoch::from_raw(10));
@@ -1917,21 +2298,28 @@ fn enrichment_end_to_end_detect_generate_minimize_report() {
 fn enrichment_end_to_end_multiple_boundaries_and_witnesses() {
     let s1 = vec![coord("x", 0)];
     let t1 = vec![coord("x", 2_000_000)];
-    let b1 = catastrophe_witness_generator::detect_boundary(&s1, &t1, 2_000_000, -2_000_000).unwrap();
+    let b1 =
+        catastrophe_witness_generator::detect_boundary(&s1, &t1, 2_000_000, -2_000_000).unwrap();
 
     let s2 = vec![coord("y", 0)];
     let t2 = vec![coord("y", 500_000)];
     let b2 = catastrophe_witness_generator::detect_boundary(&s2, &t2, 500_000, -500_000).unwrap();
 
-    let w1 = catastrophe_witness_generator::generate_witness(&b1, "in1", 2_000_000, -2_000_000, "m1").unwrap();
-    let w2 = catastrophe_witness_generator::generate_witness(&b2, "in2", 500_000, -500_000, "m2").unwrap();
-    let w3 = catastrophe_witness_generator::generate_witness(&b1, "in3", 1_500_000, -1_500_000, "m1").unwrap();
+    let w1 =
+        catastrophe_witness_generator::generate_witness(&b1, "in1", 2_000_000, -2_000_000, "m1")
+            .unwrap();
+    let w2 = catastrophe_witness_generator::generate_witness(&b2, "in2", 500_000, -500_000, "m2")
+        .unwrap();
+    let w3 =
+        catastrophe_witness_generator::generate_witness(&b1, "in3", 1_500_000, -1_500_000, "m1")
+            .unwrap();
 
     let report = catastrophe_witness_generator::build_brittleness_report(
         SecurityEpoch::from_raw(5),
         vec![b1, b2],
         vec![w1, w2, w3],
-    ).unwrap();
+    )
+    .unwrap();
 
     assert_eq!(report.boundaries.len(), 2);
     assert_eq!(report.witnesses.len(), 3);

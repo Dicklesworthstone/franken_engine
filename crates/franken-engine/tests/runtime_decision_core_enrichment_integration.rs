@@ -8,12 +8,11 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::runtime_decision_core::{
-    default_routing_loss_policy, AdaptiveBudget, AsymmetricLossPolicy, CVaRConstraint, CVaRResult,
-    CalibrationLedgerEntry, ConformalCalibrationLayer, DecisionCoreError, DecisionTraceEntry,
+    AdaptiveBudget, AsymmetricLossPolicy, CVaRConstraint, CVaRResult, CalibrationLedgerEntry,
+    ConformalCalibrationLayer, DECISION_CORE_SCHEMA_VERSION, DecisionCoreError, DecisionTraceEntry,
     DemotionPolicy, FallbackReason, FallbackTriggerEvent, LaneId, LaneRoutingState,
     LossPolicyEntry, PolicyBundle, RegimeEstimate, RiskDimension, RoutingAction,
-    RoutingDecisionInput, RoutingDecisionOutput, RuntimeDecisionCore,
-    DECISION_CORE_SCHEMA_VERSION,
+    RoutingDecisionInput, RoutingDecisionOutput, RuntimeDecisionCore, default_routing_loss_policy,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use std::collections::BTreeMap;
@@ -87,7 +86,11 @@ fn enrichment_risk_dimension_display_uniqueness() {
         assert!(!s.is_empty());
         set.insert(s);
     }
-    assert_eq!(set.len(), 4, "all 4 RiskDimension variants must have unique Display");
+    assert_eq!(
+        set.len(),
+        4,
+        "all 4 RiskDimension variants must have unique Display"
+    );
 }
 
 #[test]
@@ -103,7 +106,11 @@ fn enrichment_regime_estimate_display_uniqueness() {
     for v in &variants {
         set.insert(v.to_string());
     }
-    assert_eq!(set.len(), 5, "all 5 RegimeEstimate variants must have unique Display");
+    assert_eq!(
+        set.len(),
+        5,
+        "all 5 RegimeEstimate variants must have unique Display"
+    );
 }
 
 #[test]
@@ -120,7 +127,11 @@ fn enrichment_routing_action_display_uniqueness() {
     for v in &variants {
         set.insert(v.to_string());
     }
-    assert_eq!(set.len(), variants.len(), "all RoutingAction variants must have unique Display");
+    assert_eq!(
+        set.len(),
+        variants.len(),
+        "all RoutingAction variants must have unique Display"
+    );
 }
 
 #[test]
@@ -139,7 +150,11 @@ fn enrichment_decision_core_error_display_uniqueness() {
     for v in &variants {
         set.insert(v.to_string());
     }
-    assert_eq!(set.len(), 5, "all DecisionCoreError variants must have unique Display");
+    assert_eq!(
+        set.len(),
+        5,
+        "all DecisionCoreError variants must have unique Display"
+    );
 }
 
 #[test]
@@ -169,7 +184,11 @@ fn enrichment_fallback_reason_display_uniqueness_all_7() {
     for v in &variants {
         set.insert(v.to_string());
     }
-    assert_eq!(set.len(), 7, "all 7 FallbackReason variants must have unique Display");
+    assert_eq!(
+        set.len(),
+        7,
+        "all 7 FallbackReason variants must have unique Display"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -527,7 +546,7 @@ fn enrichment_lane_id_ordering_deterministic() {
     let a = LaneId::deterministic_profile();
     let b = LaneId::throughput_profile();
     let c = LaneId::safe_mode();
-    let mut lanes = vec![c.clone(), a.clone(), b.clone()];
+    let mut lanes = [c.clone(), a.clone(), b.clone()];
     lanes.sort();
     // Sorted lexicographically by internal string
     let sorted_strings: Vec<String> = lanes.iter().map(|l| l.0.clone()).collect();
@@ -622,7 +641,11 @@ fn enrichment_loss_policy_select_min_loss_single_candidate() {
     let policy = default_routing_loss_policy();
     let candidates = vec!["hold".to_string()];
     let result = policy
-        .select_min_loss_action(&candidates, &default_risk_posteriors(), RegimeEstimate::Normal)
+        .select_min_loss_action(
+            &candidates,
+            &default_risk_posteriors(),
+            RegimeEstimate::Normal,
+        )
         .unwrap();
     assert_eq!(result.0, "hold");
 }
@@ -718,7 +741,10 @@ fn enrichment_cvar_respects_max_samples_window() {
 #[test]
 fn enrichment_cvar_quantile_clamped_to_million() {
     let cvar = CVaRConstraint::new("clamped", 2_000_000, 10_000);
-    assert_eq!(cvar.quantile_millionths, 1_000_000, "should clamp to MILLION");
+    assert_eq!(
+        cvar.quantile_millionths, 1_000_000,
+        "should clamp to MILLION"
+    );
 }
 
 #[test]
@@ -840,7 +866,11 @@ fn enrichment_demotion_consecutive_adverse_threshold() {
     let mut policy = DemotionPolicy::new("enrich-demo");
     policy.demotion_threshold = 4;
     for _ in 0..3 {
-        assert!(policy.evaluate(RegimeEstimate::Normal, 900_000, true).is_none());
+        assert!(
+            policy
+                .evaluate(RegimeEstimate::Normal, 900_000, true)
+                .is_none()
+        );
     }
     // 4th adverse triggers
     let result = policy.evaluate(RegimeEstimate::Normal, 900_000, true);
@@ -873,14 +903,20 @@ fn enrichment_demotion_reset_clears_counter() {
 fn enrichment_demotion_elevated_regime_no_mandatory_demotion() {
     let mut policy = DemotionPolicy::new("enrich-demo");
     let result = policy.evaluate(RegimeEstimate::Elevated, 900_000, false);
-    assert!(result.is_none(), "Elevated regime has no mandatory demotion");
+    assert!(
+        result.is_none(),
+        "Elevated regime has no mandatory demotion"
+    );
 }
 
 #[test]
 fn enrichment_demotion_recovery_regime_no_mandatory_demotion() {
     let mut policy = DemotionPolicy::new("enrich-demo");
     let result = policy.evaluate(RegimeEstimate::Recovery, 900_000, false);
-    assert!(result.is_none(), "Recovery regime has no mandatory demotion");
+    assert!(
+        result.is_none(),
+        "Recovery regime has no mandatory demotion"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -920,7 +956,10 @@ fn enrichment_budget_peak_memory_tracks_max() {
     budget.record(1, 50);
     budget.record(1, 30);
     budget.record(1, 80);
-    assert_eq!(budget.peak_memory_mb, 80, "peak should track highest observed");
+    assert_eq!(
+        budget.peak_memory_mb, 80,
+        "peak should track highest observed"
+    );
 }
 
 #[test]
@@ -964,7 +1003,11 @@ fn enrichment_lane_routing_state_initial_values() {
 fn enrichment_lane_routing_state_risk_posteriors_initialized_to_10_percent() {
     let state = LaneRoutingState::initial(LaneId::deterministic_profile(), epoch(1));
     for dim in RiskDimension::ALL {
-        let val = state.risk_posteriors.get(&dim.to_string()).copied().unwrap();
+        let val = state
+            .risk_posteriors
+            .get(&dim.to_string())
+            .copied()
+            .unwrap();
         assert_eq!(val, 100_000, "initial risk posterior should be 10%");
     }
 }
@@ -1280,7 +1323,11 @@ fn enrichment_schema_version_constant_format() {
 fn enrichment_loss_policy_canonical_action_labels_normalized() {
     // Legacy QuickJs label should match deterministic profile
     let mut policy = AsymmetricLossPolicy::new("canon-test");
-    policy.add_entry("select:quickjs_inspired_native", RiskDimension::Latency, 100_000);
+    policy.add_entry(
+        "select:quickjs_inspired_native",
+        RiskDimension::Latency,
+        100_000,
+    );
 
     let mut posteriors = BTreeMap::new();
     posteriors.insert("latency".into(), 500_000);

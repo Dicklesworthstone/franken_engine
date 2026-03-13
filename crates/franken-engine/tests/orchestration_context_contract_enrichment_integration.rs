@@ -322,8 +322,13 @@ fn enrichment_derive_child_basic() {
     let mut parent = root("p", 10_000);
     let r = rule();
     let (child, event) = derive_child_context(
-        &mut parent, "c1".into(), 5000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut parent,
+        "c1".into(),
+        5000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     assert_eq!(child.context_id, "c1");
     assert_eq!(child.budget_ms, 5000);
     assert_eq!(child.depth, 1);
@@ -337,8 +342,13 @@ fn enrichment_derive_child_trace_inherited() {
     let mut parent = root("p", 10_000);
     let r = rule();
     let (child, _) = derive_child_context(
-        &mut parent, "c".into(), 1000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut parent,
+        "c".into(),
+        1000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     assert!(child.trace_id.starts_with("trace-p.child."));
 }
 
@@ -347,11 +357,21 @@ fn enrichment_derive_child_depth_increases() {
     let mut parent = root("p", 10_000);
     let r = rule();
     let (mut child, _) = derive_child_context(
-        &mut parent, "c1".into(), 3000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut parent,
+        "c1".into(),
+        3000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     let (grandchild, _) = derive_child_context(
-        &mut child, "gc1".into(), 1000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut child,
+        "gc1".into(),
+        1000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     assert_eq!(grandchild.depth, 2);
 }
 
@@ -360,8 +380,13 @@ fn enrichment_derive_child_insufficient_budget() {
     let mut parent = root("p", 100);
     let r = rule();
     let err = derive_child_context(
-        &mut parent, "c".into(), 200, ContextOrigin::ChildDerivation, &r,
-    ).unwrap_err();
+        &mut parent,
+        "c".into(),
+        200,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap_err();
     assert!(matches!(err, ContextError::InsufficientBudget { .. }));
 }
 
@@ -370,9 +395,17 @@ fn enrichment_derive_child_exceeds_fraction() {
     let mut parent = root("p", 10_000);
     let r = DerivationRule::strict("strict".into()); // 50% max
     let err = derive_child_context(
-        &mut parent, "c".into(), 6000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap_err();
-    assert!(matches!(err, ContextError::ChildExceedsAllowedFraction { .. }));
+        &mut parent,
+        "c".into(),
+        6000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ContextError::ChildExceedsAllowedFraction { .. }
+    ));
 }
 
 #[test]
@@ -382,12 +415,22 @@ fn enrichment_derive_child_depth_exceeded() {
     let mut r = DerivationRule::new("depth-test".into());
     r.max_depth = 1;
     let (mut child, _) = derive_child_context(
-        &mut parent, "c1".into(), 5000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut parent,
+        "c1".into(),
+        5000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     // depth is now 1, max_depth is 1, next would be 2
     let err = derive_child_context(
-        &mut child, "gc".into(), 1000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap_err();
+        &mut child,
+        "gc".into(),
+        1000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap_err();
     assert!(matches!(err, ContextError::DepthExceeded { .. }));
 }
 
@@ -397,8 +440,13 @@ fn enrichment_derive_child_not_consumable() {
     release_context(&mut parent);
     let r = rule();
     let err = derive_child_context(
-        &mut parent, "c".into(), 500, ContextOrigin::ChildDerivation, &r,
-    ).unwrap_err();
+        &mut parent,
+        "c".into(),
+        500,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap_err();
     assert!(matches!(err, ContextError::NotConsumable { .. }));
 }
 
@@ -481,8 +529,13 @@ fn enrichment_derivation_event_display() {
     let mut parent = root("p", 10_000);
     let r = rule();
     let (_, event) = derive_child_context(
-        &mut parent, "c".into(), 1000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut parent,
+        "c".into(),
+        1000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     let s = event.to_string();
     assert!(s.contains("p"));
     assert!(s.contains("c"));
@@ -493,8 +546,13 @@ fn enrichment_derivation_event_serde_roundtrip() {
     let mut parent = root("p", 10_000);
     let r = rule();
     let (_, event) = derive_child_context(
-        &mut parent, "c".into(), 1000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut parent,
+        "c".into(),
+        1000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     let json = serde_json::to_string(&event).unwrap();
     let back: DerivationEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, back);
@@ -629,12 +687,34 @@ fn enrichment_validation_report_hash_deterministic() {
 #[test]
 fn enrichment_context_error_display_unique() {
     let errors: Vec<ContextError> = vec![
-        ContextError::InsufficientBudget { parent_id: "p".into(), remaining_ms: 10, requested_ms: 20 },
-        ContextError::DepthExceeded { parent_id: "p".into(), depth: 65, max_depth: 64 },
-        ContextError::NotConsumable { context_id: "c".into(), state: ContextState::Exhausted },
-        ContextError::ChildExceedsAllowedFraction { parent_id: "p".into(), child_budget_ms: 100, max_allowed_ms: 50 },
-        ContextError::CleanupExceedsMaxFraction { parent_id: "p".into(), cleanup_ms: 100, max_allowed_ms: 50 },
-        ContextError::MockSeamDetected { seam_id: "s".into(), file_path: "f".into() },
+        ContextError::InsufficientBudget {
+            parent_id: "p".into(),
+            remaining_ms: 10,
+            requested_ms: 20,
+        },
+        ContextError::DepthExceeded {
+            parent_id: "p".into(),
+            depth: 65,
+            max_depth: 64,
+        },
+        ContextError::NotConsumable {
+            context_id: "c".into(),
+            state: ContextState::Exhausted,
+        },
+        ContextError::ChildExceedsAllowedFraction {
+            parent_id: "p".into(),
+            child_budget_ms: 100,
+            max_allowed_ms: 50,
+        },
+        ContextError::CleanupExceedsMaxFraction {
+            parent_id: "p".into(),
+            cleanup_ms: 100,
+            max_allowed_ms: 50,
+        },
+        ContextError::MockSeamDetected {
+            seam_id: "s".into(),
+            file_path: "f".into(),
+        },
         ContextError::ContextNotFound("missing".into()),
         ContextError::EmptyInput,
     ];
@@ -645,12 +725,34 @@ fn enrichment_context_error_display_unique() {
 #[test]
 fn enrichment_context_error_serde_all() {
     let errors: Vec<ContextError> = vec![
-        ContextError::InsufficientBudget { parent_id: "p".into(), remaining_ms: 10, requested_ms: 20 },
-        ContextError::DepthExceeded { parent_id: "p".into(), depth: 65, max_depth: 64 },
-        ContextError::NotConsumable { context_id: "c".into(), state: ContextState::Exhausted },
-        ContextError::ChildExceedsAllowedFraction { parent_id: "p".into(), child_budget_ms: 100, max_allowed_ms: 50 },
-        ContextError::CleanupExceedsMaxFraction { parent_id: "p".into(), cleanup_ms: 100, max_allowed_ms: 50 },
-        ContextError::MockSeamDetected { seam_id: "s".into(), file_path: "f".into() },
+        ContextError::InsufficientBudget {
+            parent_id: "p".into(),
+            remaining_ms: 10,
+            requested_ms: 20,
+        },
+        ContextError::DepthExceeded {
+            parent_id: "p".into(),
+            depth: 65,
+            max_depth: 64,
+        },
+        ContextError::NotConsumable {
+            context_id: "c".into(),
+            state: ContextState::Exhausted,
+        },
+        ContextError::ChildExceedsAllowedFraction {
+            parent_id: "p".into(),
+            child_budget_ms: 100,
+            max_allowed_ms: 50,
+        },
+        ContextError::CleanupExceedsMaxFraction {
+            parent_id: "p".into(),
+            cleanup_ms: 100,
+            max_allowed_ms: 50,
+        },
+        ContextError::MockSeamDetected {
+            seam_id: "s".into(),
+            file_path: "f".into(),
+        },
         ContextError::ContextNotFound("missing".into()),
         ContextError::EmptyInput,
     ];
@@ -676,8 +778,13 @@ fn enrichment_full_lifecycle_derive_consume_release() {
 
     // Derive child
     let (mut child, _) = derive_child_context(
-        &mut parent, "c1".into(), 3000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut parent,
+        "c1".into(),
+        3000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     assert_eq!(parent.remaining_ms(), 7000);
 
     // Consume from child
@@ -700,8 +807,13 @@ fn enrichment_derive_multiple_children() {
 
     for i in 0..5 {
         let (_, _) = derive_child_context(
-            &mut parent, format!("c{i}"), 1000, ContextOrigin::ChildDerivation, &r,
-        ).unwrap();
+            &mut parent,
+            format!("c{i}"),
+            1000,
+            ContextOrigin::ChildDerivation,
+            &r,
+        )
+        .unwrap();
     }
     assert_eq!(parent.consumed_ms, 5000);
     assert_eq!(parent.remaining_ms(), 5000);
@@ -720,8 +832,13 @@ fn enrichment_child_inherits_epoch() {
     let mut parent = create_root_context("p".into(), "t".into(), 10_000, epoch(99));
     let r = rule();
     let (child, _) = derive_child_context(
-        &mut parent, "c".into(), 1000, ContextOrigin::ChildDerivation, &r,
-    ).unwrap();
+        &mut parent,
+        "c".into(),
+        1000,
+        ContextOrigin::ChildDerivation,
+        &r,
+    )
+    .unwrap();
     assert_eq!(child.epoch, epoch(99));
 }
 

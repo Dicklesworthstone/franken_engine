@@ -142,13 +142,13 @@ fn enrichment_schema_version_format() {
 
 #[test]
 fn enrichment_default_publisher_bond_positive() {
-    assert!(DEFAULT_PUBLISHER_BOND > 0);
+    const { assert!(DEFAULT_PUBLISHER_BOND > 0) };
     assert_eq!(DEFAULT_PUBLISHER_BOND, 100_000);
 }
 
 #[test]
 fn enrichment_default_challenge_window_positive() {
-    assert!(DEFAULT_CHALLENGE_WINDOW_EPOCHS > 0);
+    const { assert!(DEFAULT_CHALLENGE_WINDOW_EPOCHS > 0) };
     assert_eq!(DEFAULT_CHALLENGE_WINDOW_EPOCHS, 10);
 }
 

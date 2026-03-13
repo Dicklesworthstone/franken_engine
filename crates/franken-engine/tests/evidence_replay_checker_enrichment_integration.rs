@@ -139,11 +139,7 @@ fn diverging_action_replay() -> DecisionReplayFn {
     })
 }
 
-fn make_violation(
-    seq: u64,
-    vtype: ReplayViolationType,
-    ecode: ReplayErrorCode,
-) -> ReplayViolation {
+fn make_violation(seq: u64, vtype: ReplayViolationType, ecode: ReplayErrorCode) -> ReplayViolation {
     ReplayViolation {
         sequence: seq,
         entry_id: format!("ev-{seq}"),
@@ -431,10 +427,7 @@ fn enrichment_violation_type_display_chain_hash_mismatch() {
 
 #[test]
 fn enrichment_violation_type_display_sequence_gap() {
-    assert_eq!(
-        ReplayViolationType::SequenceGap.to_string(),
-        "sequence_gap"
-    );
+    assert_eq!(ReplayViolationType::SequenceGap.to_string(), "sequence_gap");
 }
 
 #[test]
@@ -1182,12 +1175,36 @@ fn enrichment_result_violation_counts_multiple_types() {
         entries_processed: 10,
         entries_skipped: 0,
         violations: vec![
-            make_violation(0, ReplayViolationType::OutcomeDivergence, ReplayErrorCode::OutcomeDivergence),
-            make_violation(1, ReplayViolationType::OutcomeDivergence, ReplayErrorCode::OutcomeDivergence),
-            make_violation(2, ReplayViolationType::SequenceGap, ReplayErrorCode::SequenceGap),
-            make_violation(3, ReplayViolationType::EpochRegression, ReplayErrorCode::EpochRegression),
-            make_violation(4, ReplayViolationType::EpochRegression, ReplayErrorCode::EpochRegression),
-            make_violation(5, ReplayViolationType::EpochRegression, ReplayErrorCode::EpochRegression),
+            make_violation(
+                0,
+                ReplayViolationType::OutcomeDivergence,
+                ReplayErrorCode::OutcomeDivergence,
+            ),
+            make_violation(
+                1,
+                ReplayViolationType::OutcomeDivergence,
+                ReplayErrorCode::OutcomeDivergence,
+            ),
+            make_violation(
+                2,
+                ReplayViolationType::SequenceGap,
+                ReplayErrorCode::SequenceGap,
+            ),
+            make_violation(
+                3,
+                ReplayViolationType::EpochRegression,
+                ReplayErrorCode::EpochRegression,
+            ),
+            make_violation(
+                4,
+                ReplayViolationType::EpochRegression,
+                ReplayErrorCode::EpochRegression,
+            ),
+            make_violation(
+                5,
+                ReplayViolationType::EpochRegression,
+                ReplayErrorCode::EpochRegression,
+            ),
         ],
         passed: false,
         final_rolling_hash: ContentHash::compute(b"m"),
@@ -1244,9 +1261,21 @@ fn enrichment_result_violations_at_multiple_at_same_seq() {
         entries_processed: 3,
         entries_skipped: 0,
         violations: vec![
-            make_violation(1, ReplayViolationType::OutcomeDivergence, ReplayErrorCode::OutcomeDivergence),
-            make_violation(1, ReplayViolationType::CalibrationDivergence, ReplayErrorCode::CalibrationDivergence),
-            make_violation(2, ReplayViolationType::SequenceGap, ReplayErrorCode::SequenceGap),
+            make_violation(
+                1,
+                ReplayViolationType::OutcomeDivergence,
+                ReplayErrorCode::OutcomeDivergence,
+            ),
+            make_violation(
+                1,
+                ReplayViolationType::CalibrationDivergence,
+                ReplayErrorCode::CalibrationDivergence,
+            ),
+            make_violation(
+                2,
+                ReplayViolationType::SequenceGap,
+                ReplayErrorCode::SequenceGap,
+            ),
         ],
         passed: false,
         final_rolling_hash: ContentHash::compute(b"va"),

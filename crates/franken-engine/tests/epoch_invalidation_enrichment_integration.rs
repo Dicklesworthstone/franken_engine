@@ -50,7 +50,13 @@ fn proof_id(suffix: &str) -> EngineObjectId {
     .unwrap()
 }
 
-fn spec(class: OptimizationClass, from: u64, until: u64, policy: &str, tag: &str) -> EpochBoundSpecialization {
+fn spec(
+    class: OptimizationClass,
+    from: u64,
+    until: u64,
+    policy: &str,
+    tag: &str,
+) -> EpochBoundSpecialization {
     let mut proofs = BTreeSet::new();
     proofs.insert(proof_id(tag));
     create_specialization(SpecializationInput {
@@ -68,7 +74,13 @@ fn spec(class: OptimizationClass, from: u64, until: u64, policy: &str, tag: &str
 }
 
 fn default_spec() -> EpochBoundSpecialization {
-    spec(OptimizationClass::TraceSpecialization, 90, 110, "pol-1", "default")
+    spec(
+        OptimizationClass::TraceSpecialization,
+        90,
+        110,
+        "pol-1",
+        "default",
+    )
 }
 
 // ── InvalidationReason Display uniqueness ────────────────────────────────
@@ -76,12 +88,23 @@ fn default_spec() -> EpochBoundSpecialization {
 #[test]
 fn enrichment_invalidation_reason_display_unique() {
     let reasons = [
-        InvalidationReason::EpochTransition { old_epoch: epoch(1), new_epoch: epoch(2) },
-        InvalidationReason::PolicyRotation { policy_id: "p".into() },
+        InvalidationReason::EpochTransition {
+            old_epoch: epoch(1),
+            new_epoch: epoch(2),
+        },
+        InvalidationReason::PolicyRotation {
+            policy_id: "p".into(),
+        },
         InvalidationReason::KeyRotation { key_id: "k".into() },
-        InvalidationReason::CapabilityRevocation { capability_id: "c".into() },
-        InvalidationReason::ProofUpdate { proof_id: proof_id("x") },
-        InvalidationReason::OperatorInvalidation { reason: "op".into() },
+        InvalidationReason::CapabilityRevocation {
+            capability_id: "c".into(),
+        },
+        InvalidationReason::ProofUpdate {
+            proof_id: proof_id("x"),
+        },
+        InvalidationReason::OperatorInvalidation {
+            reason: "op".into(),
+        },
     ];
     let displays: BTreeSet<String> = reasons.iter().map(|r| r.to_string()).collect();
     assert_eq!(displays.len(), reasons.len());
@@ -91,7 +114,10 @@ fn enrichment_invalidation_reason_display_unique() {
 
 #[test]
 fn enrichment_invalidation_reason_serde_epoch_transition() {
-    let r = InvalidationReason::EpochTransition { old_epoch: epoch(5), new_epoch: epoch(10) };
+    let r = InvalidationReason::EpochTransition {
+        old_epoch: epoch(5),
+        new_epoch: epoch(10),
+    };
     let json = serde_json::to_string(&r).unwrap();
     let back: InvalidationReason = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
@@ -99,7 +125,9 @@ fn enrichment_invalidation_reason_serde_epoch_transition() {
 
 #[test]
 fn enrichment_invalidation_reason_serde_policy_rotation() {
-    let r = InvalidationReason::PolicyRotation { policy_id: "pol-42".into() };
+    let r = InvalidationReason::PolicyRotation {
+        policy_id: "pol-42".into(),
+    };
     let json = serde_json::to_string(&r).unwrap();
     let back: InvalidationReason = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
@@ -107,7 +135,9 @@ fn enrichment_invalidation_reason_serde_policy_rotation() {
 
 #[test]
 fn enrichment_invalidation_reason_serde_key_rotation() {
-    let r = InvalidationReason::KeyRotation { key_id: "key-99".into() };
+    let r = InvalidationReason::KeyRotation {
+        key_id: "key-99".into(),
+    };
     let json = serde_json::to_string(&r).unwrap();
     let back: InvalidationReason = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
@@ -115,7 +145,9 @@ fn enrichment_invalidation_reason_serde_key_rotation() {
 
 #[test]
 fn enrichment_invalidation_reason_serde_capability_revocation() {
-    let r = InvalidationReason::CapabilityRevocation { capability_id: "cap-1".into() };
+    let r = InvalidationReason::CapabilityRevocation {
+        capability_id: "cap-1".into(),
+    };
     let json = serde_json::to_string(&r).unwrap();
     let back: InvalidationReason = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
@@ -123,7 +155,9 @@ fn enrichment_invalidation_reason_serde_capability_revocation() {
 
 #[test]
 fn enrichment_invalidation_reason_serde_proof_update() {
-    let r = InvalidationReason::ProofUpdate { proof_id: proof_id("pu") };
+    let r = InvalidationReason::ProofUpdate {
+        proof_id: proof_id("pu"),
+    };
     let json = serde_json::to_string(&r).unwrap();
     let back: InvalidationReason = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
@@ -131,7 +165,9 @@ fn enrichment_invalidation_reason_serde_proof_update() {
 
 #[test]
 fn enrichment_invalidation_reason_serde_operator_invalidation() {
-    let r = InvalidationReason::OperatorInvalidation { reason: "manual teardown".into() };
+    let r = InvalidationReason::OperatorInvalidation {
+        reason: "manual teardown".into(),
+    };
     let json = serde_json::to_string(&r).unwrap();
     let back: InvalidationReason = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
@@ -212,11 +248,21 @@ fn enrichment_invalidation_error_display_unique() {
     let errors: Vec<InvalidationError> = vec![
         InvalidationError::SpecializationNotFound { id: proof_id("x") },
         InvalidationError::AlreadyInFallback { id: proof_id("x") },
-        InvalidationError::InvalidEpochRange { valid_from: epoch(10), valid_until: epoch(5) },
+        InvalidationError::InvalidEpochRange {
+            valid_from: epoch(10),
+            valid_until: epoch(5),
+        },
         InvalidationError::IdDerivation("msg".into()),
-        InvalidationError::ChurnDampeningActive { invalidation_count: 5, window_ns: 1000 },
+        InvalidationError::ChurnDampeningActive {
+            invalidation_count: 5,
+            window_ns: 1000,
+        },
         InvalidationError::DuplicateSpecialization { id: proof_id("x") },
-        InvalidationError::InvalidState { id: proof_id("x"), expected: "a".into(), actual: "b".into() },
+        InvalidationError::InvalidState {
+            id: proof_id("x"),
+            expected: "a".into(),
+            actual: "b".into(),
+        },
     ];
     let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
     assert_eq!(displays.len(), errors.len());
@@ -233,11 +279,21 @@ fn enrichment_invalidation_error_serde_all_variants() {
     let errors: Vec<InvalidationError> = vec![
         InvalidationError::SpecializationNotFound { id: proof_id("a") },
         InvalidationError::AlreadyInFallback { id: proof_id("b") },
-        InvalidationError::InvalidEpochRange { valid_from: epoch(10), valid_until: epoch(5) },
+        InvalidationError::InvalidEpochRange {
+            valid_from: epoch(10),
+            valid_until: epoch(5),
+        },
         InvalidationError::IdDerivation("msg".into()),
-        InvalidationError::ChurnDampeningActive { invalidation_count: 3, window_ns: 500 },
+        InvalidationError::ChurnDampeningActive {
+            invalidation_count: 3,
+            window_ns: 500,
+        },
         InvalidationError::DuplicateSpecialization { id: proof_id("c") },
-        InvalidationError::InvalidState { id: proof_id("d"), expected: "a".into(), actual: "b".into() },
+        InvalidationError::InvalidState {
+            id: proof_id("d"),
+            expected: "a".into(),
+            actual: "b".into(),
+        },
     ];
     for err in &errors {
         let json = serde_json::to_string(err).unwrap();
@@ -304,15 +360,18 @@ fn enrichment_register_multiple_classes() {
     e.register_specialization(
         spec(OptimizationClass::TraceSpecialization, 90, 110, "p", "ts"),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
     e.register_specialization(
         spec(OptimizationClass::Superinstruction, 90, 110, "p", "si"),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
     e.register_specialization(
         spec(OptimizationClass::LayoutSpecialization, 90, 110, "p", "ls"),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(e.active_count(), 3);
     assert_eq!(e.specializations().len(), 3);
 }
@@ -350,9 +409,16 @@ fn enrichment_advance_epoch_all_expired() {
     let mut e = engine_at(100);
     for i in 0..4 {
         e.register_specialization(
-            spec(OptimizationClass::TraceSpecialization, 90, 100, "p", &format!("all-{i}")),
+            spec(
+                OptimizationClass::TraceSpecialization,
+                90,
+                100,
+                "p",
+                &format!("all-{i}"),
+            ),
             1000,
-        ).unwrap();
+        )
+        .unwrap();
     }
     let count = e.advance_epoch(epoch(101), 2000);
     assert_eq!(count, 4);
@@ -384,9 +450,12 @@ fn enrichment_invalidate_specific_preserves_others() {
 
     e.invalidate_specialization(
         &s2_id,
-        InvalidationReason::KeyRotation { key_id: "k1".into() },
+        InvalidationReason::KeyRotation {
+            key_id: "k1".into(),
+        },
         2000,
-    ).unwrap();
+    )
+    .unwrap();
 
     assert_eq!(e.active_count(), 1);
     assert_eq!(e.fallback_count(), 1);
@@ -400,11 +469,15 @@ fn enrichment_invalidate_already_fallback_errors() {
     e.register_specialization(s, 1000).unwrap();
     e.advance_epoch(epoch(111), 2000);
 
-    let err = e.invalidate_specialization(
-        &sid,
-        InvalidationReason::OperatorInvalidation { reason: "dup".into() },
-        3000,
-    ).unwrap_err();
+    let err = e
+        .invalidate_specialization(
+            &sid,
+            InvalidationReason::OperatorInvalidation {
+                reason: "dup".into(),
+            },
+            3000,
+        )
+        .unwrap_err();
     assert!(matches!(err, InvalidationError::AlreadyInFallback { .. }));
 }
 
@@ -427,14 +500,22 @@ fn enrichment_invalidate_by_proof_targets_matching() {
         baseline_ir_hash: ContentHash::compute(b"bl"),
         activated_epoch: epoch(90),
         activated_at_ns: 1000,
-    }).unwrap();
+    })
+    .unwrap();
     e.register_specialization(s, 1000).unwrap();
 
     // Also register one with a different proof
     e.register_specialization(
-        spec(OptimizationClass::TraceSpecialization, 90, 110, "p", "other"),
+        spec(
+            OptimizationClass::TraceSpecialization,
+            90,
+            110,
+            "p",
+            "other",
+        ),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
 
     let count = e.invalidate_by_proof(&pid, 2000);
     assert_eq!(count, 1);
@@ -456,17 +537,32 @@ fn enrichment_invalidate_by_proof_no_match() {
 fn enrichment_invalidate_by_policy_targets_matching() {
     let mut e = engine_at(100);
     e.register_specialization(
-        spec(OptimizationClass::TraceSpecialization, 90, 110, "pol-A", "pa1"),
+        spec(
+            OptimizationClass::TraceSpecialization,
+            90,
+            110,
+            "pol-A",
+            "pa1",
+        ),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
     e.register_specialization(
         spec(OptimizationClass::Superinstruction, 90, 110, "pol-A", "pa2"),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
     e.register_specialization(
-        spec(OptimizationClass::LayoutSpecialization, 90, 110, "pol-B", "pb1"),
+        spec(
+            OptimizationClass::LayoutSpecialization,
+            90,
+            110,
+            "pol-B",
+            "pb1",
+        ),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
 
     let count = e.invalidate_by_policy("pol-A", 2000);
     assert_eq!(count, 2);
@@ -492,11 +588,17 @@ fn enrichment_respecialization_full_lifecycle() {
 
     // Invalidate
     e.advance_epoch(epoch(111), 2000);
-    assert_eq!(e.get_specialization(&sid).unwrap().state, FallbackState::BaselineFallback);
+    assert_eq!(
+        e.get_specialization(&sid).unwrap().state,
+        FallbackState::BaselineFallback
+    );
 
     // Begin respecialization
     e.begin_respecialization(&sid, 3000).unwrap();
-    assert_eq!(e.get_specialization(&sid).unwrap().state, FallbackState::ReSpecializing);
+    assert_eq!(
+        e.get_specialization(&sid).unwrap().state,
+        FallbackState::ReSpecializing
+    );
 
     // Complete respecialization
     let new_proofs = {
@@ -504,7 +606,8 @@ fn enrichment_respecialization_full_lifecycle() {
         s.insert(proof_id("new"));
         s
     };
-    e.complete_respecialization(&sid, epoch(111), epoch(130), new_proofs, 4000).unwrap();
+    e.complete_respecialization(&sid, epoch(111), epoch(130), new_proofs, 4000)
+        .unwrap();
 
     let restored = e.get_specialization(&sid).unwrap();
     assert_eq!(restored.state, FallbackState::Active);
@@ -531,9 +634,9 @@ fn enrichment_complete_respecialization_requires_respecializing_state() {
     e.register_specialization(s, 1000).unwrap();
     e.advance_epoch(epoch(111), 2000);
 
-    let err = e.complete_respecialization(
-        &sid, epoch(111), epoch(130), BTreeSet::new(), 3000,
-    ).unwrap_err();
+    let err = e
+        .complete_respecialization(&sid, epoch(111), epoch(130), BTreeSet::new(), 3000)
+        .unwrap_err();
     assert!(matches!(err, InvalidationError::InvalidState { .. }));
 }
 
@@ -546,9 +649,9 @@ fn enrichment_complete_respecialization_invalid_epoch_range() {
     e.advance_epoch(epoch(111), 2000);
     e.begin_respecialization(&sid, 3000).unwrap();
 
-    let err = e.complete_respecialization(
-        &sid, epoch(130), epoch(111), BTreeSet::new(), 4000,
-    ).unwrap_err();
+    let err = e
+        .complete_respecialization(&sid, epoch(130), epoch(111), BTreeSet::new(), 4000)
+        .unwrap_err();
     assert!(matches!(err, InvalidationError::InvalidEpochRange { .. }));
 }
 
@@ -562,14 +665,21 @@ fn enrichment_churn_dampening_activates_at_threshold() {
     let mut e = EpochInvalidationEngine::new(epoch(100), c);
 
     for i in 0..2 {
-        let s = spec(OptimizationClass::TraceSpecialization, 90, 110, "p", &format!("ch-{i}"));
+        let s = spec(
+            OptimizationClass::TraceSpecialization,
+            90,
+            110,
+            "p",
+            &format!("ch-{i}"),
+        );
         let sid = s.specialization_id.clone();
         e.register_specialization(s, 1000 + i * 100).unwrap();
         e.invalidate_specialization(
             &sid,
             InvalidationReason::OperatorInvalidation { reason: "t".into() },
             1050 + i * 100,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     assert!(e.is_conservative_mode());
@@ -590,7 +700,8 @@ fn enrichment_churn_canary_multiplier_when_active() {
         &sid,
         InvalidationReason::OperatorInvalidation { reason: "t".into() },
         1050,
-    ).unwrap();
+    )
+    .unwrap();
 
     assert_eq!(e.canary_multiplier(), 3_000_000);
 }
@@ -610,16 +721,24 @@ fn enrichment_churn_deactivates_when_window_expires() {
         &s1_id,
         InvalidationReason::OperatorInvalidation { reason: "t".into() },
         200,
-    ).unwrap();
+    )
+    .unwrap();
 
-    let s1b = spec(OptimizationClass::LayoutSpecialization, 90, 110, "p", "cd1b");
+    let s1b = spec(
+        OptimizationClass::LayoutSpecialization,
+        90,
+        110,
+        "p",
+        "cd1b",
+    );
     let s1b_id = s1b.specialization_id.clone();
     e.register_specialization(s1b, 250).unwrap();
     e.invalidate_specialization(
         &s1b_id,
         InvalidationReason::OperatorInvalidation { reason: "t".into() },
         300,
-    ).unwrap();
+    )
+    .unwrap();
     assert!(e.is_conservative_mode());
 
     // New invalidation far outside window — only 1 timestamp remains < threshold of 2
@@ -630,7 +749,8 @@ fn enrichment_churn_deactivates_when_window_expires() {
         &s2_id,
         InvalidationReason::OperatorInvalidation { reason: "t".into() },
         5100,
-    ).unwrap();
+    )
+    .unwrap();
     assert!(!e.is_conservative_mode());
     assert_eq!(e.canary_multiplier(), 1_000_000);
 }
@@ -643,15 +763,29 @@ fn enrichment_specializations_by_class_filters() {
     e.register_specialization(
         spec(OptimizationClass::TraceSpecialization, 90, 110, "p", "qc1"),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
     e.register_specialization(
         spec(OptimizationClass::Superinstruction, 90, 110, "p", "qc2"),
         1000,
-    ).unwrap();
+    )
+    .unwrap();
 
-    assert_eq!(e.specializations_by_class(&OptimizationClass::TraceSpecialization).len(), 1);
-    assert_eq!(e.specializations_by_class(&OptimizationClass::Superinstruction).len(), 1);
-    assert_eq!(e.specializations_by_class(&OptimizationClass::LayoutSpecialization).len(), 0);
+    assert_eq!(
+        e.specializations_by_class(&OptimizationClass::TraceSpecialization)
+            .len(),
+        1
+    );
+    assert_eq!(
+        e.specializations_by_class(&OptimizationClass::Superinstruction)
+            .len(),
+        1
+    );
+    assert_eq!(
+        e.specializations_by_class(&OptimizationClass::LayoutSpecialization)
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -665,8 +799,16 @@ fn enrichment_specializations_by_state_filters() {
     e.advance_epoch(epoch(105), 2000);
 
     assert_eq!(e.specializations_by_state(FallbackState::Active).len(), 1);
-    assert_eq!(e.specializations_by_state(FallbackState::BaselineFallback).len(), 1);
-    assert_eq!(e.specializations_by_state(FallbackState::ReSpecializing).len(), 0);
+    assert_eq!(
+        e.specializations_by_state(FallbackState::BaselineFallback)
+            .len(),
+        1
+    );
+    assert_eq!(
+        e.specializations_by_state(FallbackState::ReSpecializing)
+            .len(),
+        0
+    );
 }
 
 // ── Receipt structure ───────────────────────────────────────────────────
@@ -692,11 +834,15 @@ fn enrichment_receipt_serde_roundtrip() {
     let sid = s.specialization_id.clone();
     e.register_specialization(s, 1000).unwrap();
 
-    let receipt = e.invalidate_specialization(
-        &sid,
-        InvalidationReason::PolicyRotation { policy_id: "pol-X".into() },
-        2000,
-    ).unwrap();
+    let receipt = e
+        .invalidate_specialization(
+            &sid,
+            InvalidationReason::PolicyRotation {
+                policy_id: "pol-X".into(),
+            },
+            2000,
+        )
+        .unwrap();
 
     let json = serde_json::to_string(&receipt).unwrap();
     let back: InvalidationReceipt = serde_json::from_str(&json).unwrap();
@@ -797,7 +943,10 @@ fn enrichment_engine_serde_roundtrip_with_state() {
     let back: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
     assert_eq!(back.current_epoch(), epoch(111));
     assert_eq!(back.specializations().len(), 1);
-    assert_eq!(back.get_specialization(&sid).unwrap().state, FallbackState::ReSpecializing);
+    assert_eq!(
+        back.get_specialization(&sid).unwrap().state,
+        FallbackState::ReSpecializing
+    );
     assert_eq!(back.total_invalidations(), 1);
     assert!(!back.receipts().is_empty());
 }
@@ -820,8 +969,20 @@ fn enrichment_create_specialization_different_class_different_id() {
 
 #[test]
 fn enrichment_create_specialization_different_policy_different_id() {
-    let s1 = spec(OptimizationClass::TraceSpecialization, 90, 110, "pol-A", "same");
-    let s2 = spec(OptimizationClass::TraceSpecialization, 90, 110, "pol-B", "same");
+    let s1 = spec(
+        OptimizationClass::TraceSpecialization,
+        90,
+        110,
+        "pol-A",
+        "same",
+    );
+    let s2 = spec(
+        OptimizationClass::TraceSpecialization,
+        90,
+        110,
+        "pol-B",
+        "same",
+    );
     assert_ne!(s1.specialization_id, s2.specialization_id);
 }
 
@@ -865,9 +1026,16 @@ fn enrichment_total_invalidations_increments() {
     let mut e = engine_at(100);
     for i in 0..5 {
         e.register_specialization(
-            spec(OptimizationClass::TraceSpecialization, 90, 100, "p", &format!("ti-{i}")),
+            spec(
+                OptimizationClass::TraceSpecialization,
+                90,
+                100,
+                "p",
+                &format!("ti-{i}"),
+            ),
             1000,
-        ).unwrap();
+        )
+        .unwrap();
     }
     e.advance_epoch(epoch(101), 2000);
     assert_eq!(e.total_invalidations(), 5);
@@ -880,13 +1048,24 @@ fn enrichment_bulk_invalidation_receipt_order_deterministic() {
     let mut e = engine_at(100);
     for i in 0..8 {
         e.register_specialization(
-            spec(OptimizationClass::TraceSpecialization, 90, 100, "p", &format!("det-{i}")),
+            spec(
+                OptimizationClass::TraceSpecialization,
+                90,
+                100,
+                "p",
+                &format!("det-{i}"),
+            ),
             1000,
-        ).unwrap();
+        )
+        .unwrap();
     }
     e.advance_epoch(epoch(101), 2000);
 
-    let ids: Vec<_> = e.receipts().iter().map(|r| r.specialization_id.clone()).collect();
+    let ids: Vec<_> = e
+        .receipts()
+        .iter()
+        .map(|r| r.specialization_id.clone())
+        .collect();
     let mut sorted = ids.clone();
     sorted.sort();
     assert_eq!(ids, sorted);
@@ -914,14 +1093,19 @@ fn enrichment_fallback_persists_across_serde() {
 
 #[test]
 fn enrichment_reason_display_epoch_transition_format() {
-    let r = InvalidationReason::EpochTransition { old_epoch: epoch(5), new_epoch: epoch(10) };
+    let r = InvalidationReason::EpochTransition {
+        old_epoch: epoch(5),
+        new_epoch: epoch(10),
+    };
     let s = r.to_string();
     assert!(s.contains("epoch-transition"));
 }
 
 #[test]
 fn enrichment_reason_display_policy_rotation_format() {
-    let r = InvalidationReason::PolicyRotation { policy_id: "pol-XYZ".into() };
+    let r = InvalidationReason::PolicyRotation {
+        policy_id: "pol-XYZ".into(),
+    };
     let s = r.to_string();
     assert!(s.contains("policy-rotation"));
     assert!(s.contains("pol-XYZ"));
@@ -929,7 +1113,9 @@ fn enrichment_reason_display_policy_rotation_format() {
 
 #[test]
 fn enrichment_reason_display_capability_revocation_format() {
-    let r = InvalidationReason::CapabilityRevocation { capability_id: "cap-99".into() };
+    let r = InvalidationReason::CapabilityRevocation {
+        capability_id: "cap-99".into(),
+    };
     let s = r.to_string();
     assert!(s.contains("capability-revocation"));
     assert!(s.contains("cap-99"));
@@ -955,30 +1141,45 @@ fn enrichment_get_specialization_not_found() {
 #[test]
 fn enrichment_invalidate_nonexistent_errors() {
     let mut e = engine_at(100);
-    let err = e.invalidate_specialization(
-        &proof_id("nope"),
-        InvalidationReason::OperatorInvalidation { reason: "t".into() },
-        1000,
-    ).unwrap_err();
-    assert!(matches!(err, InvalidationError::SpecializationNotFound { .. }));
+    let err = e
+        .invalidate_specialization(
+            &proof_id("nope"),
+            InvalidationReason::OperatorInvalidation { reason: "t".into() },
+            1000,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvalidationError::SpecializationNotFound { .. }
+    ));
 }
 
 #[test]
 fn enrichment_begin_respecialization_nonexistent_errors() {
     let mut e = engine_at(100);
-    let err = e.begin_respecialization(&proof_id("nope"), 1000).unwrap_err();
-    assert!(matches!(err, InvalidationError::SpecializationNotFound { .. }));
+    let err = e
+        .begin_respecialization(&proof_id("nope"), 1000)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvalidationError::SpecializationNotFound { .. }
+    ));
 }
 
 #[test]
 fn enrichment_complete_respecialization_nonexistent_errors() {
     let mut e = engine_at(100);
-    let err = e.complete_respecialization(
-        &proof_id("nope"),
-        epoch(100),
-        epoch(200),
-        BTreeSet::new(),
-        1000,
-    ).unwrap_err();
-    assert!(matches!(err, InvalidationError::SpecializationNotFound { .. }));
+    let err = e
+        .complete_respecialization(
+            &proof_id("nope"),
+            epoch(100),
+            epoch(200),
+            BTreeSet::new(),
+            1000,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvalidationError::SpecializationNotFound { .. }
+    ));
 }

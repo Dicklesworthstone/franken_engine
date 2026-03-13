@@ -191,7 +191,7 @@ fn enrichment_incentive_compatibility_class_display_uniqueness() {
 
 #[test]
 fn enrichment_mechanism_error_display_uniqueness_all_variants() {
-    let errors = vec![
+    let errors = [
         MechanismError::InvalidInput {
             field: "alpha".into(),
             detail: "bad".into(),

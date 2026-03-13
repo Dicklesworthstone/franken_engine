@@ -327,7 +327,7 @@ fn enrichment_owner_route_serde_roundtrip() {
 fn enrichment_owner_route_ord_deterministic() {
     let a = sample_owner("bd-a", "team-a");
     let b = sample_owner("bd-b", "team-b");
-    assert!(a < b || a > b || a == b, "OwnerRoute should be Ord");
+    assert!(a < b, "OwnerRoute should be Ord: bd-a < bd-b lexicographically");
 }
 
 // ===========================================================================
@@ -1230,12 +1230,12 @@ fn enrichment_failure_symptoms_serde_roundtrip() {
     };
     let json = serde_json::to_string(&s).unwrap();
     let parsed: FailureSymptoms = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed.has_transform_diff, true);
-    assert_eq!(parsed.has_runtime_gap, true);
-    assert_eq!(parsed.has_version_mismatch, true);
-    assert_eq!(parsed.has_hydration_diff, true);
-    assert_eq!(parsed.has_error_boundary_diff, true);
-    assert_eq!(parsed.has_resolver_error, false);
+    assert!(parsed.has_transform_diff);
+    assert!(parsed.has_runtime_gap);
+    assert!(parsed.has_version_mismatch);
+    assert!(parsed.has_hydration_diff);
+    assert!(parsed.has_error_boundary_diff);
+    assert!(!parsed.has_resolver_error);
 }
 
 // ===========================================================================
@@ -1326,7 +1326,7 @@ fn enrichment_full_pipeline_multi_entry_catalog() {
 
 #[test]
 fn enrichment_catalog_all_resolved_no_critical() {
-    let mut entries: Vec<TriageEntry> = FailureClass::all()
+    let entries: Vec<TriageEntry> = FailureClass::all()
         .iter()
         .map(|class| {
             let mut entry = sample_entry_with(*class, FailureSeverity::Critical);

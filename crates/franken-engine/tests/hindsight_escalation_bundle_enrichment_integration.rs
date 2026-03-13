@@ -19,8 +19,8 @@ use frankenengine_engine::hindsight_boundary_capture::{BoundaryClass, RedactionT
 use frankenengine_engine::hindsight_escalation_bundle::{
     BundleContentEntry, BundleContentKind, COMPONENT, ESCALATION_BEAD_ID,
     ESCALATION_SCHEMA_VERSION, EscalationBundle, EscalationDecision, EscalationError,
-    EscalationPipeline, EscalationPolicy, EscalationReceipt, EscalationSummary,
-    EscalationTrigger, EscalationTriggerKind, TriggerSeverity,
+    EscalationPipeline, EscalationPolicy, EscalationReceipt, EscalationSummary, EscalationTrigger,
+    EscalationTriggerKind, TriggerSeverity,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -153,8 +153,7 @@ fn enrichment_trigger_kind_debug_format_differs_from_display() {
 
 #[test]
 fn enrichment_trigger_kind_btreeset_contains_all() {
-    let set: BTreeSet<EscalationTriggerKind> =
-        EscalationTriggerKind::ALL.iter().copied().collect();
+    let set: BTreeSet<EscalationTriggerKind> = EscalationTriggerKind::ALL.iter().copied().collect();
     assert_eq!(set.len(), EscalationTriggerKind::ALL.len());
     for kind in EscalationTriggerKind::ALL {
         assert!(set.contains(kind));
@@ -178,10 +177,22 @@ fn enrichment_severity_all_len_is_four() {
 
 #[test]
 fn enrichment_severity_cost_multiplier_exact_values() {
-    assert_eq!(TriggerSeverity::Advisory.cost_multiplier_millionths(), 250_000);
-    assert_eq!(TriggerSeverity::Warning.cost_multiplier_millionths(), 500_000);
-    assert_eq!(TriggerSeverity::Critical.cost_multiplier_millionths(), 750_000);
-    assert_eq!(TriggerSeverity::Emergency.cost_multiplier_millionths(), 1_000_000);
+    assert_eq!(
+        TriggerSeverity::Advisory.cost_multiplier_millionths(),
+        250_000
+    );
+    assert_eq!(
+        TriggerSeverity::Warning.cost_multiplier_millionths(),
+        500_000
+    );
+    assert_eq!(
+        TriggerSeverity::Critical.cost_multiplier_millionths(),
+        750_000
+    );
+    assert_eq!(
+        TriggerSeverity::Emergency.cost_multiplier_millionths(),
+        1_000_000
+    );
 }
 
 #[test]
@@ -214,13 +225,21 @@ fn enrichment_severity_cost_multiplier_strictly_increasing() {
         .map(|s| s.cost_multiplier_millionths())
         .collect();
     for w in vals.windows(2) {
-        assert!(w[0] < w[1], "Cost not strictly increasing: {} vs {}", w[0], w[1]);
+        assert!(
+            w[0] < w[1],
+            "Cost not strictly increasing: {} vs {}",
+            w[0],
+            w[1]
+        );
     }
 }
 
 #[test]
 fn enrichment_severity_emergency_cost_is_one_million() {
-    assert_eq!(TriggerSeverity::Emergency.cost_multiplier_millionths(), 1_000_000);
+    assert_eq!(
+        TriggerSeverity::Emergency.cost_multiplier_millionths(),
+        1_000_000
+    );
 }
 
 #[test]
@@ -257,13 +276,34 @@ fn enrichment_content_kind_all_len_is_seven() {
 
 #[test]
 fn enrichment_content_kind_exact_base_costs() {
-    assert_eq!(BundleContentKind::FullBoundaryCapture.base_cost_millionths(), 50_000);
-    assert_eq!(BundleContentKind::DecisionReceiptChain.base_cost_millionths(), 30_000);
-    assert_eq!(BundleContentKind::StateSnapshot.base_cost_millionths(), 80_000);
-    assert_eq!(BundleContentKind::ExecutionTrace.base_cost_millionths(), 120_000);
-    assert_eq!(BundleContentKind::HeapProfile.base_cost_millionths(), 100_000);
-    assert_eq!(BundleContentKind::PolicyEvaluationLog.base_cost_millionths(), 40_000);
-    assert_eq!(BundleContentKind::ReplayInputs.base_cost_millionths(), 60_000);
+    assert_eq!(
+        BundleContentKind::FullBoundaryCapture.base_cost_millionths(),
+        50_000
+    );
+    assert_eq!(
+        BundleContentKind::DecisionReceiptChain.base_cost_millionths(),
+        30_000
+    );
+    assert_eq!(
+        BundleContentKind::StateSnapshot.base_cost_millionths(),
+        80_000
+    );
+    assert_eq!(
+        BundleContentKind::ExecutionTrace.base_cost_millionths(),
+        120_000
+    );
+    assert_eq!(
+        BundleContentKind::HeapProfile.base_cost_millionths(),
+        100_000
+    );
+    assert_eq!(
+        BundleContentKind::PolicyEvaluationLog.base_cost_millionths(),
+        40_000
+    );
+    assert_eq!(
+        BundleContentKind::ReplayInputs.base_cost_millionths(),
+        60_000
+    );
 }
 
 #[test]
@@ -415,7 +455,11 @@ fn enrichment_trigger_serde_all_kinds() {
 #[test]
 fn enrichment_trigger_serde_all_severities() {
     for sev in TriggerSeverity::ALL {
-        let t = make_trigger(&format!("serde-{sev}"), EscalationTriggerKind::AnomalyDetected, *sev);
+        let t = make_trigger(
+            &format!("serde-{sev}"),
+            EscalationTriggerKind::AnomalyDetected,
+            *sev,
+        );
         let json = serde_json::to_string(&t).unwrap();
         let back: EscalationTrigger = serde_json::from_str(&json).unwrap();
         assert_eq!(t.severity, back.severity);
@@ -424,7 +468,11 @@ fn enrichment_trigger_serde_all_severities() {
 
 #[test]
 fn enrichment_trigger_clone_modification_independent() {
-    let t = make_trigger("orig", EscalationTriggerKind::PolicyViolation, TriggerSeverity::Critical);
+    let t = make_trigger(
+        "orig",
+        EscalationTriggerKind::PolicyViolation,
+        TriggerSeverity::Critical,
+    );
     let mut cloned = t.clone();
     cloned.trigger_id = "modified".to_string();
     cloned.severity = TriggerSeverity::Advisory;
@@ -712,13 +760,21 @@ fn enrichment_policy_default_cost_budget() {
 #[test]
 fn enrichment_policy_default_always_escalate_contains_user_visible_failure() {
     let policy = EscalationPolicy::default();
-    assert!(policy.always_escalate.contains(&EscalationTriggerKind::UserVisibleFailure));
+    assert!(
+        policy
+            .always_escalate
+            .contains(&EscalationTriggerKind::UserVisibleFailure)
+    );
 }
 
 #[test]
 fn enrichment_policy_default_always_escalate_contains_policy_violation() {
     let policy = EscalationPolicy::default();
-    assert!(policy.always_escalate.contains(&EscalationTriggerKind::PolicyViolation));
+    assert!(
+        policy
+            .always_escalate
+            .contains(&EscalationTriggerKind::PolicyViolation)
+    );
 }
 
 #[test]
@@ -763,7 +819,9 @@ fn enrichment_policy_content_monotonically_increasing_with_severity() {
     let adv = policy.content_for_severity(TriggerSeverity::Advisory).len();
     let warn = policy.content_for_severity(TriggerSeverity::Warning).len();
     let crit = policy.content_for_severity(TriggerSeverity::Critical).len();
-    let emrg = policy.content_for_severity(TriggerSeverity::Emergency).len();
+    let emrg = policy
+        .content_for_severity(TriggerSeverity::Emergency)
+        .len();
     assert!(adv <= warn, "advisory {adv} > warning {warn}");
     assert!(warn <= crit, "warning {warn} > critical {crit}");
     assert!(crit <= emrg, "critical {crit} > emergency {emrg}");
@@ -772,24 +830,42 @@ fn enrichment_policy_content_monotonically_increasing_with_severity() {
 #[test]
 fn enrichment_policy_advisory_subset_of_warning() {
     let policy = EscalationPolicy::default();
-    let adv: BTreeSet<_> = policy.content_for_severity(TriggerSeverity::Advisory).iter().collect();
-    let warn: BTreeSet<_> = policy.content_for_severity(TriggerSeverity::Warning).iter().collect();
+    let adv: BTreeSet<_> = policy
+        .content_for_severity(TriggerSeverity::Advisory)
+        .iter()
+        .collect();
+    let warn: BTreeSet<_> = policy
+        .content_for_severity(TriggerSeverity::Warning)
+        .iter()
+        .collect();
     assert!(adv.is_subset(&warn));
 }
 
 #[test]
 fn enrichment_policy_warning_subset_of_critical() {
     let policy = EscalationPolicy::default();
-    let warn: BTreeSet<_> = policy.content_for_severity(TriggerSeverity::Warning).iter().collect();
-    let crit: BTreeSet<_> = policy.content_for_severity(TriggerSeverity::Critical).iter().collect();
+    let warn: BTreeSet<_> = policy
+        .content_for_severity(TriggerSeverity::Warning)
+        .iter()
+        .collect();
+    let crit: BTreeSet<_> = policy
+        .content_for_severity(TriggerSeverity::Critical)
+        .iter()
+        .collect();
     assert!(warn.is_subset(&crit));
 }
 
 #[test]
 fn enrichment_policy_critical_subset_of_emergency() {
     let policy = EscalationPolicy::default();
-    let crit: BTreeSet<_> = policy.content_for_severity(TriggerSeverity::Critical).iter().collect();
-    let emrg: BTreeSet<_> = policy.content_for_severity(TriggerSeverity::Emergency).iter().collect();
+    let crit: BTreeSet<_> = policy
+        .content_for_severity(TriggerSeverity::Critical)
+        .iter()
+        .collect();
+    let emrg: BTreeSet<_> = policy
+        .content_for_severity(TriggerSeverity::Emergency)
+        .iter()
+        .collect();
     assert!(crit.is_subset(&emrg));
 }
 
@@ -805,7 +881,9 @@ fn enrichment_policy_serde_roundtrip() {
 fn enrichment_policy_custom_serde_roundtrip() {
     let mut policy = EscalationPolicy::default();
     policy.cost_budget_millionths = 500_000;
-    policy.always_suppress.insert(EscalationTriggerKind::OperatorRequest);
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::OperatorRequest);
     policy.auto_escalate_threshold = TriggerSeverity::Emergency;
     let json = serde_json::to_string(&policy).unwrap();
     let back: EscalationPolicy = serde_json::from_str(&json).unwrap();
@@ -931,7 +1009,9 @@ fn enrichment_pipeline_always_escalate_policy_violation() {
 #[test]
 fn enrichment_pipeline_suppress_overrides_always_escalate() {
     let mut policy = EscalationPolicy::default();
-    policy.always_suppress.insert(EscalationTriggerKind::UserVisibleFailure);
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::UserVisibleFailure);
     let mut pipeline = EscalationPipeline::new(policy, epoch(100));
     let receipt = pipeline.process_trigger(make_trigger(
         "suppress-override",
@@ -945,7 +1025,9 @@ fn enrichment_pipeline_suppress_overrides_always_escalate() {
 #[test]
 fn enrichment_pipeline_suppress_overrides_auto_escalate_severity() {
     let mut policy = EscalationPolicy::default();
-    policy.always_suppress.insert(EscalationTriggerKind::ResourceExhaustion);
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::ResourceExhaustion);
     let mut pipeline = EscalationPipeline::new(policy, epoch(100));
     let receipt = pipeline.process_trigger(make_trigger(
         "suppress-sev",
@@ -1016,7 +1098,9 @@ fn enrichment_pipeline_budget_depletes_on_escalation() {
 #[test]
 fn enrichment_pipeline_budget_no_change_on_suppress() {
     let mut policy = EscalationPolicy::default();
-    policy.always_suppress.insert(EscalationTriggerKind::AnomalyDetected);
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::AnomalyDetected);
     let mut pipeline = EscalationPipeline::new(policy, epoch(100));
     let initial = pipeline.remaining_budget_millionths;
     pipeline.process_trigger(make_trigger(
@@ -1093,14 +1177,20 @@ fn enrichment_pipeline_bundle_for_trigger_not_found() {
 #[test]
 fn enrichment_pipeline_bundle_for_suppressed_trigger_is_none() {
     let mut policy = EscalationPolicy::default();
-    policy.always_suppress.insert(EscalationTriggerKind::AnomalyDetected);
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::AnomalyDetected);
     let mut pipeline = EscalationPipeline::new(policy, epoch(100));
     pipeline.process_trigger(make_trigger(
         "suppressed-no-bundle",
         EscalationTriggerKind::AnomalyDetected,
         TriggerSeverity::Emergency,
     ));
-    assert!(pipeline.bundle_for_trigger("suppressed-no-bundle").is_none());
+    assert!(
+        pipeline
+            .bundle_for_trigger("suppressed-no-bundle")
+            .is_none()
+    );
 }
 
 #[test]
@@ -1119,7 +1209,9 @@ fn enrichment_pipeline_escalated_receipts_filter() {
 #[test]
 fn enrichment_pipeline_suppressed_receipts_filter() {
     let mut policy = EscalationPolicy::default();
-    policy.always_suppress.insert(EscalationTriggerKind::OperatorRequest);
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::OperatorRequest);
     let mut pipeline = EscalationPipeline::new(policy, epoch(100));
     pipeline.process_trigger(make_trigger(
         "sup-f1",
@@ -1157,7 +1249,9 @@ fn enrichment_pipeline_deferred_receipts_filter() {
 #[test]
 fn enrichment_pipeline_mixed_decisions() {
     let mut policy = EscalationPolicy::default();
-    policy.always_suppress.insert(EscalationTriggerKind::OperatorRequest);
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::OperatorRequest);
     let mut pipeline = EscalationPipeline::new(policy, epoch(100));
 
     // Escalated (always-escalate)
@@ -1364,9 +1458,21 @@ fn enrichment_pipeline_covered_boundaries_from_trigger() {
         boundaries,
     ));
     let bundle = pipeline.bundle_for_trigger("cov-bounds").unwrap();
-    assert!(bundle.covered_boundaries.contains(&BoundaryClass::FilesystemInput));
-    assert!(bundle.covered_boundaries.contains(&BoundaryClass::ExternalPolicyRead));
-    assert!(bundle.covered_boundaries.contains(&BoundaryClass::ControllerOverride));
+    assert!(
+        bundle
+            .covered_boundaries
+            .contains(&BoundaryClass::FilesystemInput)
+    );
+    assert!(
+        bundle
+            .covered_boundaries
+            .contains(&BoundaryClass::ExternalPolicyRead)
+    );
+    assert!(
+        bundle
+            .covered_boundaries
+            .contains(&BoundaryClass::ControllerOverride)
+    );
     assert_eq!(bundle.covered_boundaries.len(), 3);
 }
 
@@ -1438,9 +1544,21 @@ fn enrichment_pipeline_hash_changes_after_each_trigger() {
 fn enrichment_pipeline_determinism_same_inputs() {
     let policy = EscalationPolicy::default();
     let triggers = vec![
-        make_trigger("det-a", EscalationTriggerKind::AnomalyDetected, TriggerSeverity::Warning),
-        make_trigger("det-b", EscalationTriggerKind::PolicyViolation, TriggerSeverity::Critical),
-        make_trigger("det-c", EscalationTriggerKind::ResourceExhaustion, TriggerSeverity::Emergency),
+        make_trigger(
+            "det-a",
+            EscalationTriggerKind::AnomalyDetected,
+            TriggerSeverity::Warning,
+        ),
+        make_trigger(
+            "det-b",
+            EscalationTriggerKind::PolicyViolation,
+            TriggerSeverity::Critical,
+        ),
+        make_trigger(
+            "det-c",
+            EscalationTriggerKind::ResourceExhaustion,
+            TriggerSeverity::Emergency,
+        ),
     ];
 
     let mut p1 = EscalationPipeline::new(policy.clone(), epoch(100));
@@ -1452,7 +1570,10 @@ fn enrichment_pipeline_determinism_same_inputs() {
         p2.process_trigger(t.clone());
     }
     assert_eq!(p1.pipeline_hash, p2.pipeline_hash);
-    assert_eq!(p1.remaining_budget_millionths, p2.remaining_budget_millionths);
+    assert_eq!(
+        p1.remaining_budget_millionths,
+        p2.remaining_budget_millionths
+    );
     assert_eq!(p1.receipts.len(), p2.receipts.len());
     assert_eq!(p1.bundles.len(), p2.bundles.len());
 }
@@ -1468,8 +1589,16 @@ fn enrichment_pipeline_different_epoch_different_hash() {
 #[test]
 fn enrichment_pipeline_different_trigger_order_different_hash() {
     let policy = EscalationPolicy::default();
-    let t_a = make_trigger("order-a", EscalationTriggerKind::AnomalyDetected, TriggerSeverity::Warning);
-    let t_b = make_trigger("order-b", EscalationTriggerKind::PolicyViolation, TriggerSeverity::Critical);
+    let t_a = make_trigger(
+        "order-a",
+        EscalationTriggerKind::AnomalyDetected,
+        TriggerSeverity::Warning,
+    );
+    let t_b = make_trigger(
+        "order-b",
+        EscalationTriggerKind::PolicyViolation,
+        TriggerSeverity::Critical,
+    );
 
     let mut p1 = EscalationPipeline::new(policy.clone(), epoch(100));
     p1.process_trigger(t_a.clone());
@@ -1498,7 +1627,10 @@ fn enrichment_pipeline_serde_full_roundtrip() {
     assert_eq!(pipeline.receipts.len(), back.receipts.len());
     assert_eq!(pipeline.bundles.len(), back.bundles.len());
     assert_eq!(pipeline.triggers.len(), back.triggers.len());
-    assert_eq!(pipeline.remaining_budget_millionths, back.remaining_budget_millionths);
+    assert_eq!(
+        pipeline.remaining_budget_millionths,
+        back.remaining_budget_millionths
+    );
 }
 
 #[test]
@@ -1656,7 +1788,10 @@ fn enrichment_summary_remaining_budget_consistent() {
         TriggerSeverity::Warning,
     ));
     let summary = pipeline.summary_report();
-    assert_eq!(summary.remaining_budget_millionths, pipeline.remaining_budget_millionths);
+    assert_eq!(
+        summary.remaining_budget_millionths,
+        pipeline.remaining_budget_millionths
+    );
 }
 
 #[test]
@@ -1698,7 +1833,11 @@ fn enrichment_summary_hash_deterministic() {
     let policy = EscalationPolicy::default();
     let mut p1 = EscalationPipeline::new(policy.clone(), epoch(100));
     let mut p2 = EscalationPipeline::new(policy, epoch(100));
-    let t = make_trigger("hash-det", EscalationTriggerKind::PolicyViolation, TriggerSeverity::Critical);
+    let t = make_trigger(
+        "hash-det",
+        EscalationTriggerKind::PolicyViolation,
+        TriggerSeverity::Critical,
+    );
     p1.process_trigger(t.clone());
     p2.process_trigger(t);
     let s1 = p1.summary_report();
@@ -1923,7 +2062,10 @@ fn enrichment_workflow_higher_severity_more_content() {
         counts.push(bundle.entries.len());
     }
     for w in counts.windows(2) {
-        assert!(w[0] <= w[1], "Content count should be monotonically increasing");
+        assert!(
+            w[0] <= w[1],
+            "Content count should be monotonically increasing"
+        );
     }
 }
 
@@ -1938,13 +2080,16 @@ fn enrichment_workflow_higher_severity_higher_cost() {
             EscalationTriggerKind::UserVisibleFailure,
             *sev,
         ));
-        let bundle = pipeline
-            .bundle_for_trigger(&format!("cost-{sev}"))
-            .unwrap();
+        let bundle = pipeline.bundle_for_trigger(&format!("cost-{sev}")).unwrap();
         costs.push(bundle.total_cost_millionths);
     }
     for w in costs.windows(2) {
-        assert!(w[0] <= w[1], "Cost should be monotonically increasing: {} vs {}", w[0], w[1]);
+        assert!(
+            w[0] <= w[1],
+            "Cost should be monotonically increasing: {} vs {}",
+            w[0],
+            w[1]
+        );
     }
 }
 
@@ -2011,11 +2156,15 @@ fn enrichment_workflow_multiple_triggers_budget_accounting() {
 #[test]
 fn enrichment_workflow_receipt_rationale_nonempty_for_all_decisions() {
     let mut policy = EscalationPolicy::default();
-    policy.always_suppress.insert(EscalationTriggerKind::OperatorRequest);
+    policy
+        .always_suppress
+        .insert(EscalationTriggerKind::OperatorRequest);
     policy.cost_budget_millionths = 1;
     policy.always_escalate.clear();
     // Re-add the defaults after clearing
-    policy.always_escalate.insert(EscalationTriggerKind::UserVisibleFailure);
+    policy
+        .always_escalate
+        .insert(EscalationTriggerKind::UserVisibleFailure);
     let mut pipeline = EscalationPipeline::new(policy, epoch(100));
 
     // Escalated via always-escalate
@@ -2071,6 +2220,10 @@ fn enrichment_workflow_size_bytes_proportional_to_cost() {
     let bundle = pipeline.bundle_for_trigger("size-check").unwrap();
     for entry in &bundle.entries {
         // Size is adjusted_cost * 1024 per the source code
-        assert!(entry.size_bytes > 0, "Size should be > 0 for {}", entry.kind);
+        assert!(
+            entry.size_bytes > 0,
+            "Size should be > 0 for {}",
+            entry.kind
+        );
     }
 }

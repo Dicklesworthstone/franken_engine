@@ -101,7 +101,10 @@ fn enrichment_boundary_kind_is_child_derivation_partition() {
         BudgetBoundaryKind::OrchestratorToCellClose,
     ];
     let child_count = all_kinds.iter().filter(|k| k.is_child_derivation()).count();
-    let phase_count = all_kinds.iter().filter(|k| !k.is_child_derivation()).count();
+    let phase_count = all_kinds
+        .iter()
+        .filter(|k| !k.is_child_derivation())
+        .count();
     assert_eq!(child_count, 3, "exactly 3 child derivation boundaries");
     assert_eq!(phase_count, 3, "exactly 3 phase boundaries");
 }
@@ -436,7 +439,11 @@ fn enrichment_error_display_unique_across_variants() {
         },
     ];
     let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
-    assert_eq!(displays.len(), errors.len(), "all error Display messages must be unique");
+    assert_eq!(
+        displays.len(),
+        errors.len(),
+        "all error Display messages must be unique"
+    );
 }
 
 #[test]
@@ -534,7 +541,12 @@ fn enrichment_error_serde_roundtrip_all_variants() {
 fn enrichment_event_fields_populated_on_success() {
     let mut v = default_validator();
     let _ = v
-        .derive_child_budget("parent-1", "child-1", 10_000, BudgetBoundaryKind::ParentToChildExtension)
+        .derive_child_budget(
+            "parent-1",
+            "child-1",
+            10_000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        )
         .unwrap();
     let events = v.events();
     assert_eq!(events.len(), 1);
@@ -552,7 +564,12 @@ fn enrichment_event_fields_populated_on_success() {
 #[test]
 fn enrichment_event_fields_populated_on_failure() {
     let mut v = default_validator();
-    let _ = v.derive_child_budget("parent-1", "child-1", 0, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "parent-1",
+        "child-1",
+        0,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
     let events = v.events();
     assert_eq!(events.len(), 1);
     let e = &events[0];
@@ -630,17 +647,41 @@ fn enrichment_derivation_result_not_carved() {
 fn enrichment_policy_default_has_three_child_rules() {
     let policy = BudgetPropagationPolicy::default();
     assert_eq!(policy.child_rules.len(), 3);
-    assert!(policy.rule_for(BudgetBoundaryKind::ParentToChildExtension).is_some());
-    assert!(policy.rule_for(BudgetBoundaryKind::ParentToChildSession).is_some());
-    assert!(policy.rule_for(BudgetBoundaryKind::ParentToChildDelegate).is_some());
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::ParentToChildExtension)
+            .is_some()
+    );
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::ParentToChildSession)
+            .is_some()
+    );
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::ParentToChildDelegate)
+            .is_some()
+    );
 }
 
 #[test]
 fn enrichment_policy_default_no_phase_rules() {
     let policy = BudgetPropagationPolicy::default();
-    assert!(policy.rule_for(BudgetBoundaryKind::ExecutionToCleanup).is_none());
-    assert!(policy.rule_for(BudgetBoundaryKind::CleanupToFinalize).is_none());
-    assert!(policy.rule_for(BudgetBoundaryKind::OrchestratorToCellClose).is_none());
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::ExecutionToCleanup)
+            .is_none()
+    );
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::CleanupToFinalize)
+            .is_none()
+    );
+    assert!(
+        policy
+            .rule_for(BudgetBoundaryKind::OrchestratorToCellClose)
+            .is_none()
+    );
 }
 
 #[test]
@@ -679,7 +720,9 @@ fn enrichment_policy_serde_roundtrip_custom() {
         carved_from_parent: false,
     };
     rules.insert(
-        BudgetBoundaryKind::ParentToChildExtension.as_str().to_owned(),
+        BudgetBoundaryKind::ParentToChildExtension
+            .as_str()
+            .to_owned(),
         rule,
     );
     let policy = BudgetPropagationPolicy {
@@ -711,7 +754,12 @@ fn enrichment_validator_with_defaults_starts_clean() {
 #[test]
 fn enrichment_validator_sequence_numbers_monotonic() {
     let mut v = default_validator();
-    let _ = v.derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "p",
+        "c1",
+        10_000,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
     let _ = v.derive_child_budget("p", "c2", 8_000, BudgetBoundaryKind::ParentToChildSession);
     let _ = v.derive_child_budget("p", "c3", 6_000, BudgetBoundaryKind::ParentToChildDelegate);
     let _ = v.validate_cleanup("p", 4_000);
@@ -769,7 +817,10 @@ fn enrichment_validator_parent_exhausted_on_zero_budget() {
     let err = v
         .derive_child_budget("p", "c", 0, BudgetBoundaryKind::ParentToChildExtension)
         .unwrap_err();
-    assert!(matches!(err, BudgetPropagationError::ParentExhausted { .. }));
+    assert!(matches!(
+        err,
+        BudgetPropagationError::ParentExhausted { .. }
+    ));
     assert!(v.has_violations());
     assert_eq!(v.violations().len(), 1);
 }
@@ -780,7 +831,10 @@ fn enrichment_validator_no_rule_fail_closed() {
     let err = v
         .derive_child_budget("p", "c", 10_000, BudgetBoundaryKind::ParentToChildDelegate)
         .unwrap_err();
-    assert!(matches!(err, BudgetPropagationError::NoRuleForBoundary { .. }));
+    assert!(matches!(
+        err,
+        BudgetPropagationError::NoRuleForBoundary { .. }
+    ));
 }
 
 #[test]
@@ -825,7 +879,10 @@ fn enrichment_validator_insufficient_budget_below_minimum() {
     let err = v
         .derive_child_budget("p", "c", 1, BudgetBoundaryKind::ParentToChildExtension)
         .unwrap_err();
-    assert!(matches!(err, BudgetPropagationError::InsufficientBudget { .. }));
+    assert!(matches!(
+        err,
+        BudgetPropagationError::InsufficientBudget { .. }
+    ));
 }
 
 #[test]
@@ -866,7 +923,10 @@ fn enrichment_validator_reserve_too_high_fails() {
     let err = v
         .derive_child_budget("p", "c", 10_000, BudgetBoundaryKind::ParentToChildExtension)
         .unwrap_err();
-    assert!(matches!(err, BudgetPropagationError::InsufficientBudget { .. }));
+    assert!(matches!(
+        err,
+        BudgetPropagationError::InsufficientBudget { .. }
+    ));
 }
 
 #[test]
@@ -891,7 +951,12 @@ fn enrichment_validator_cleanup_zero_parent_succeeds() {
 #[test]
 fn enrichment_validator_serde_roundtrip_with_events() {
     let mut v = default_validator();
-    let _ = v.derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "p",
+        "c1",
+        10_000,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
     let _ = v.derive_child_budget("p", "c2", 0, BudgetBoundaryKind::ParentToChildSession);
     let _ = v.validate_cleanup("p", 5_000);
 
@@ -928,7 +993,12 @@ fn enrichment_report_not_clean_when_violations_present() {
 #[test]
 fn enrichment_report_total_events_accurate() {
     let mut v = default_validator();
-    let _ = v.derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "p",
+        "c1",
+        10_000,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
     let _ = v.derive_child_budget("p", "c2", 8_000, BudgetBoundaryKind::ParentToChildSession);
     let _ = v.derive_child_budget("p", "c3", 0, BudgetBoundaryKind::ParentToChildDelegate);
     let _ = v.validate_cleanup("p", 5_000);
@@ -942,18 +1012,29 @@ fn enrichment_report_total_events_accurate() {
 #[test]
 fn enrichment_report_boundary_event_counts_keyed_by_as_str() {
     let mut v = default_validator();
-    let _ = v.derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "p",
+        "c1",
+        10_000,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
     let _ = v.derive_child_budget("p", "c2", 8_000, BudgetBoundaryKind::ParentToChildExtension);
     let _ = v.validate_cleanup("p", 6_000);
 
     let report = v.build_report();
     assert_eq!(
-        *report.boundary_event_counts.get("parent_to_child_extension").unwrap(),
+        *report
+            .boundary_event_counts
+            .get("parent_to_child_extension")
+            .unwrap(),
         2,
         "two extension events expected"
     );
     assert_eq!(
-        *report.boundary_event_counts.get("execution_to_cleanup").unwrap(),
+        *report
+            .boundary_event_counts
+            .get("execution_to_cleanup")
+            .unwrap(),
         1,
         "one cleanup event expected"
     );
@@ -963,7 +1044,12 @@ fn enrichment_report_boundary_event_counts_keyed_by_as_str() {
 fn enrichment_report_total_budget_derived_sums_successes() {
     let mut v = default_validator();
     let r1 = v
-        .derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension)
+        .derive_child_budget(
+            "p",
+            "c1",
+            10_000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        )
         .unwrap();
     let r2 = v
         .derive_child_budget("p", "c2", 5_000, BudgetBoundaryKind::ParentToChildSession)
@@ -1015,7 +1101,12 @@ fn enrichment_report_content_hash_differs_for_different_inputs() {
 #[test]
 fn enrichment_report_serde_roundtrip() {
     let mut v = default_validator();
-    let _ = v.derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "p",
+        "c1",
+        10_000,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
     let _ = v.derive_child_budget("p", "c2", 0, BudgetBoundaryKind::ParentToChildSession);
     let _ = v.validate_cleanup("p", 5_000);
     let report = v.build_report();
@@ -1034,17 +1125,32 @@ fn enrichment_lifecycle_cascading_children_then_cleanup() {
 
     // Cascade: extension -> session -> delegate -> cleanup
     let r1 = v
-        .derive_child_budget("p", "ext-1", remaining, BudgetBoundaryKind::ParentToChildExtension)
+        .derive_child_budget(
+            "p",
+            "ext-1",
+            remaining,
+            BudgetBoundaryKind::ParentToChildExtension,
+        )
         .unwrap();
     remaining = r1.parent_remaining_after_ms;
 
     let r2 = v
-        .derive_child_budget("p", "sess-1", remaining, BudgetBoundaryKind::ParentToChildSession)
+        .derive_child_budget(
+            "p",
+            "sess-1",
+            remaining,
+            BudgetBoundaryKind::ParentToChildSession,
+        )
         .unwrap();
     remaining = r2.parent_remaining_after_ms;
 
     let r3 = v
-        .derive_child_budget("p", "del-1", remaining, BudgetBoundaryKind::ParentToChildDelegate)
+        .derive_child_budget(
+            "p",
+            "del-1",
+            remaining,
+            BudgetBoundaryKind::ParentToChildDelegate,
+        )
         .unwrap();
     remaining = r3.parent_remaining_after_ms;
 
@@ -1068,19 +1174,16 @@ fn enrichment_lifecycle_exhaustion_cascade() {
     let mut derivations = 0u64;
 
     // Keep deriving session children (80%) until budget is exhausted
-    loop {
-        match v.derive_child_budget("p", &format!("c-{}", derivations), remaining, BudgetBoundaryKind::ParentToChildSession) {
-            Ok(r) => {
-                remaining = r.parent_remaining_after_ms;
-                derivations += 1;
-                if remaining == 0 {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-        if derivations > 100 {
-            break; // safety valve
+    while let Ok(r) = v.derive_child_budget(
+        "p",
+        &format!("c-{}", derivations),
+        remaining,
+        BudgetBoundaryKind::ParentToChildSession,
+    ) {
+        remaining = r.parent_remaining_after_ms;
+        derivations += 1;
+        if remaining == 0 || derivations > 100 {
+            break;
         }
     }
 
@@ -1096,7 +1199,12 @@ fn enrichment_lifecycle_mixed_successes_and_failures() {
 
     // Success
     let _ = v
-        .derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension)
+        .derive_child_budget(
+            "p",
+            "c1",
+            10_000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        )
         .unwrap();
 
     // Failure: exhausted parent
@@ -1133,7 +1241,10 @@ fn enrichment_lifecycle_multiple_cleanups_accumulate() {
     assert_eq!(report.successful_derivations, 3);
     // All cleanups should be in the boundary counts
     assert_eq!(
-        *report.boundary_event_counts.get("execution_to_cleanup").unwrap(),
+        *report
+            .boundary_event_counts
+            .get("execution_to_cleanup")
+            .unwrap(),
         3
     );
 }
@@ -1146,9 +1257,7 @@ fn enrichment_invariant_derived_never_exceeds_parent_all_strategies() {
         BudgetDerivationStrategy::FractionOfRemaining {
             fraction_millionths: 1_500_000,
         },
-        BudgetDerivationStrategy::FixedAmount {
-            amount_ms: 999_999,
-        },
+        BudgetDerivationStrategy::FixedAmount { amount_ms: 999_999 },
         BudgetDerivationStrategy::BoundedFraction {
             fraction_millionths: 2_000_000,
             min_ms: 0,
@@ -1265,7 +1374,7 @@ fn enrichment_saturating_fraction_overflow() {
     };
     // Should not panic
     let derived = strat.derive(u64::MAX);
-    assert!(derived <= u64::MAX);
+    let _ = derived; // confirm no panic; any u64 is valid
 }
 
 #[test]
@@ -1277,7 +1386,7 @@ fn enrichment_bounded_fraction_overflow_safety() {
     };
     // Should not panic
     let derived = strat.derive(u64::MAX);
-    assert!(derived <= u64::MAX);
+    let _ = derived; // confirm no panic; any u64 is valid
 }
 
 // ── Determinism ─────────────────────────────────────────────────────────
@@ -1314,7 +1423,12 @@ fn enrichment_determinism_cleanup_allocation() {
 fn enrichment_determinism_report_across_identical_runs() {
     let make = || {
         let mut v = default_validator();
-        let _ = v.derive_child_budget("p", "c1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+        let _ = v.derive_child_budget(
+            "p",
+            "c1",
+            10_000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
         let _ = v.derive_child_budget("p", "c2", 8_000, BudgetBoundaryKind::ParentToChildSession);
         let _ = v.validate_cleanup("p", 6_000);
         v.build_report()
@@ -1330,24 +1444,18 @@ fn enrichment_determinism_report_across_identical_runs() {
 #[test]
 fn enrichment_delegate_and_extension_both_derive_within_parent() {
     let policy = BudgetPropagationPolicy::default();
-    let ext_rule = policy.rule_for(BudgetBoundaryKind::ParentToChildExtension).unwrap();
-    let del_rule = policy.rule_for(BudgetBoundaryKind::ParentToChildDelegate).unwrap();
+    let ext_rule = policy
+        .rule_for(BudgetBoundaryKind::ParentToChildExtension)
+        .unwrap();
+    let del_rule = policy
+        .rule_for(BudgetBoundaryKind::ParentToChildDelegate)
+        .unwrap();
 
     for parent in [100, 500, 1_000, 5_000, 10_000, 50_000, 100_000] {
         let ext = ext_rule.derivation.derive(parent);
         let del = del_rule.derivation.derive(parent);
-        assert!(
-            ext <= parent,
-            "extension {} > parent {}",
-            ext,
-            parent
-        );
-        assert!(
-            del <= parent,
-            "delegate {} > parent {}",
-            del,
-            parent
-        );
+        assert!(ext <= parent, "extension {} > parent {}", ext, parent);
+        assert!(del <= parent, "delegate {} > parent {}", del, parent);
     }
 }
 
@@ -1357,7 +1465,9 @@ fn enrichment_delegate_and_extension_both_derive_within_parent() {
 fn enrichment_custom_policy_not_carved_leaves_parent_intact() {
     let mut rules = BTreeMap::new();
     rules.insert(
-        BudgetBoundaryKind::ParentToChildExtension.as_str().to_owned(),
+        BudgetBoundaryKind::ParentToChildExtension
+            .as_str()
+            .to_owned(),
         ChildBudgetRule {
             boundary_kind: BudgetBoundaryKind::ParentToChildExtension,
             derivation: BudgetDerivationStrategy::FixedAmount { amount_ms: 3_000 },
@@ -1386,7 +1496,9 @@ fn enrichment_custom_policy_not_carved_leaves_parent_intact() {
 fn enrichment_custom_policy_all_remaining_for_child() {
     let mut rules = BTreeMap::new();
     rules.insert(
-        BudgetBoundaryKind::ParentToChildExtension.as_str().to_owned(),
+        BudgetBoundaryKind::ParentToChildExtension
+            .as_str()
+            .to_owned(),
         ChildBudgetRule {
             boundary_kind: BudgetBoundaryKind::ParentToChildExtension,
             derivation: BudgetDerivationStrategy::AllRemaining,
@@ -1414,7 +1526,9 @@ fn enrichment_custom_policy_all_remaining_for_child() {
 fn enrichment_custom_policy_high_minimum_causes_failure() {
     let mut rules = BTreeMap::new();
     rules.insert(
-        BudgetBoundaryKind::ParentToChildExtension.as_str().to_owned(),
+        BudgetBoundaryKind::ParentToChildExtension
+            .as_str()
+            .to_owned(),
         ChildBudgetRule {
             boundary_kind: BudgetBoundaryKind::ParentToChildExtension,
             derivation: BudgetDerivationStrategy::FractionOfRemaining {
@@ -1437,7 +1551,10 @@ fn enrichment_custom_policy_high_minimum_causes_failure() {
     let err = v
         .derive_child_budget("p", "c", 10_000, BudgetBoundaryKind::ParentToChildExtension)
         .unwrap_err();
-    assert!(matches!(err, BudgetPropagationError::InsufficientBudget { .. }));
+    assert!(matches!(
+        err,
+        BudgetPropagationError::InsufficientBudget { .. }
+    ));
 }
 
 // ── Report with no events ───────────────────────────────────────────────
@@ -1459,29 +1576,61 @@ fn enrichment_report_empty_validator() {
 #[test]
 fn enrichment_interleaved_boundary_types_in_report() {
     let mut v = default_validator();
-    let _ = v.derive_child_budget("p", "ext-1", 10_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "p",
+        "ext-1",
+        10_000,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
     let _ = v.validate_cleanup("p", 8_000);
-    let _ = v.derive_child_budget("p", "sess-1", 6_000, BudgetBoundaryKind::ParentToChildSession);
-    let _ = v.derive_child_budget("p", "del-1", 4_000, BudgetBoundaryKind::ParentToChildDelegate);
+    let _ = v.derive_child_budget(
+        "p",
+        "sess-1",
+        6_000,
+        BudgetBoundaryKind::ParentToChildSession,
+    );
+    let _ = v.derive_child_budget(
+        "p",
+        "del-1",
+        4_000,
+        BudgetBoundaryKind::ParentToChildDelegate,
+    );
     let _ = v.validate_cleanup("p2", 3_000);
-    let _ = v.derive_child_budget("p", "ext-2", 2_000, BudgetBoundaryKind::ParentToChildExtension);
+    let _ = v.derive_child_budget(
+        "p",
+        "ext-2",
+        2_000,
+        BudgetBoundaryKind::ParentToChildExtension,
+    );
 
     let report = v.build_report();
     assert_eq!(report.total_events, 6);
     assert_eq!(
-        *report.boundary_event_counts.get("parent_to_child_extension").unwrap(),
+        *report
+            .boundary_event_counts
+            .get("parent_to_child_extension")
+            .unwrap(),
         2
     );
     assert_eq!(
-        *report.boundary_event_counts.get("parent_to_child_session").unwrap(),
+        *report
+            .boundary_event_counts
+            .get("parent_to_child_session")
+            .unwrap(),
         1
     );
     assert_eq!(
-        *report.boundary_event_counts.get("parent_to_child_delegate").unwrap(),
+        *report
+            .boundary_event_counts
+            .get("parent_to_child_delegate")
+            .unwrap(),
         1
     );
     assert_eq!(
-        *report.boundary_event_counts.get("execution_to_cleanup").unwrap(),
+        *report
+            .boundary_event_counts
+            .get("execution_to_cleanup")
+            .unwrap(),
         2
     );
 }

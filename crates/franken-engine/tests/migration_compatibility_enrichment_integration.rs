@@ -158,7 +158,11 @@ fn enrichment_migration_error_code_display_values_all_unique() {
     let original_len = display_strings.len();
     display_strings.sort();
     display_strings.dedup();
-    assert_eq!(display_strings.len(), original_len, "Display values must be unique across all 8 variants");
+    assert_eq!(
+        display_strings.len(),
+        original_len,
+        "Display values must be unique across all 8 variants"
+    );
 }
 
 #[test]
@@ -175,7 +179,10 @@ fn enrichment_migration_error_code_serde_json_roundtrip_deterministic() {
     ] {
         let json1 = serde_json::to_string(&code).unwrap();
         let json2 = serde_json::to_string(&code).unwrap();
-        assert_eq!(json1, json2, "Serialization must be deterministic for {code:?}");
+        assert_eq!(
+            json1, json2,
+            "Serialization must be deterministic for {code:?}"
+        );
         let restored: MigrationErrorCode = serde_json::from_str(&json1).unwrap();
         assert_eq!(code, restored);
     }
@@ -196,7 +203,7 @@ fn enrichment_migration_error_code_ord_total_ordering() {
     // Verify that ordering is total (every pair is comparable)
     for (i, a) in codes.iter().enumerate() {
         for b in &codes[i + 1..] {
-            assert!(a < b || a > b || a == b);
+            assert!(a.partial_cmp(b).is_some());
         }
     }
 }
@@ -220,9 +227,18 @@ fn enrichment_migration_error_display_contains_versions_and_count() {
         to_version: "schema-b".to_string(),
         error_code: MigrationErrorCode::MajorVersionIncompatible,
         incompatible_fields: vec![
-            IncompatibleField { field_path: "f1".to_string(), reason: "r1".to_string() },
-            IncompatibleField { field_path: "f2".to_string(), reason: "r2".to_string() },
-            IncompatibleField { field_path: "f3".to_string(), reason: "r3".to_string() },
+            IncompatibleField {
+                field_path: "f1".to_string(),
+                reason: "r1".to_string(),
+            },
+            IncompatibleField {
+                field_path: "f2".to_string(),
+                reason: "r2".to_string(),
+            },
+            IncompatibleField {
+                field_path: "f3".to_string(),
+                reason: "r3".to_string(),
+            },
         ],
         message: "major version change".to_string(),
     };
@@ -251,12 +267,10 @@ fn enrichment_migration_error_serde_preserves_all_fields() {
         from_version: "evidence-v1".to_string(),
         to_version: "evidence-v3".to_string(),
         error_code: MigrationErrorCode::LossyMigration,
-        incompatible_fields: vec![
-            IncompatibleField {
-                field_path: "calibration.score".to_string(),
-                reason: "precision reduced from f64 to f32".to_string(),
-            },
-        ],
+        incompatible_fields: vec![IncompatibleField {
+            field_path: "calibration.score".to_string(),
+            reason: "precision reduced from f64 to f32".to_string(),
+        }],
         message: "lossy conversion".to_string(),
     };
     let json = serde_json::to_string(&err).unwrap();
@@ -264,9 +278,18 @@ fn enrichment_migration_error_serde_preserves_all_fields() {
     assert_eq!(err.from_version, restored.from_version);
     assert_eq!(err.to_version, restored.to_version);
     assert_eq!(err.error_code, restored.error_code);
-    assert_eq!(err.incompatible_fields.len(), restored.incompatible_fields.len());
-    assert_eq!(err.incompatible_fields[0].field_path, restored.incompatible_fields[0].field_path);
-    assert_eq!(err.incompatible_fields[0].reason, restored.incompatible_fields[0].reason);
+    assert_eq!(
+        err.incompatible_fields.len(),
+        restored.incompatible_fields.len()
+    );
+    assert_eq!(
+        err.incompatible_fields[0].field_path,
+        restored.incompatible_fields[0].field_path
+    );
+    assert_eq!(
+        err.incompatible_fields[0].reason,
+        restored.incompatible_fields[0].reason
+    );
     assert_eq!(err.message, restored.message);
 }
 
@@ -383,8 +406,12 @@ fn enrichment_golden_ledger_verify_integrity_after_tamper() {
 fn enrichment_golden_ledger_metadata_does_not_affect_hash() {
     let mut ledger = build_golden_ledger("test", "v1", 3);
     let hash_before = ledger.corpus_hash;
-    ledger.metadata.insert("author".to_string(), "test-suite".to_string());
-    ledger.metadata.insert("notes".to_string(), "enrichment test".to_string());
+    ledger
+        .metadata
+        .insert("author".to_string(), "test-suite".to_string());
+    ledger
+        .metadata
+        .insert("notes".to_string(), "enrichment test".to_string());
     // Metadata is not part of corpus_hash
     assert_eq!(ledger.corpus_hash, hash_before);
     assert!(ledger.verify_integrity());
@@ -556,9 +583,18 @@ fn enrichment_migration_outcome_serde_roundtrip_all_variants() {
 
 #[test]
 fn enrichment_migration_outcome_display_exact_values() {
-    assert_eq!(MigrationOutcome::BackwardCompatible.to_string(), "backward_compatible");
-    assert_eq!(MigrationOutcome::MigratedSuccessfully.to_string(), "migrated_successfully");
-    assert_eq!(MigrationOutcome::LossyMigration.to_string(), "lossy_migration");
+    assert_eq!(
+        MigrationOutcome::BackwardCompatible.to_string(),
+        "backward_compatible"
+    );
+    assert_eq!(
+        MigrationOutcome::MigratedSuccessfully.to_string(),
+        "migrated_successfully"
+    );
+    assert_eq!(
+        MigrationOutcome::LossyMigration.to_string(),
+        "lossy_migration"
+    );
     assert_eq!(MigrationOutcome::Failed.to_string(), "failed");
 }
 
@@ -646,7 +682,10 @@ fn enrichment_test_result_fails_with_errors_even_if_outcome_ok() {
         schema_migrations_detected: Vec::new(),
         determinism_verified: true,
     };
-    assert!(!result.passed(), "presence of errors should mean not passed");
+    assert!(
+        !result.passed(),
+        "presence of errors should mean not passed"
+    );
 }
 
 #[test]
@@ -817,7 +856,10 @@ fn enrichment_checker_no_migration_path_produces_error() {
     assert!(!results[0].passed());
     assert_eq!(results[0].outcome, MigrationOutcome::Failed);
     assert_eq!(results[0].errors.len(), 1);
-    assert_eq!(results[0].errors[0].error_code, MigrationErrorCode::NoMigrationPath);
+    assert_eq!(
+        results[0].errors[0].error_code,
+        MigrationErrorCode::NoMigrationPath
+    );
     assert!(!results[0].determinism_verified);
 }
 
@@ -1096,7 +1138,11 @@ fn enrichment_manifest_entry_serde_roundtrip() {
 
 #[test]
 fn enrichment_cutover_type_display_all_unique() {
-    let types = [CutoverType::HardCutover, CutoverType::SoftMigration, CutoverType::ParallelRun];
+    let types = [
+        CutoverType::HardCutover,
+        CutoverType::SoftMigration,
+        CutoverType::ParallelRun,
+    ];
     let mut displays: Vec<String> = types.iter().map(|t| t.to_string()).collect();
     let n = displays.len();
     displays.sort();
@@ -1106,7 +1152,11 @@ fn enrichment_cutover_type_display_all_unique() {
 
 #[test]
 fn enrichment_cutover_type_serde_roundtrip_all() {
-    for ct in [CutoverType::HardCutover, CutoverType::SoftMigration, CutoverType::ParallelRun] {
+    for ct in [
+        CutoverType::HardCutover,
+        CutoverType::SoftMigration,
+        CutoverType::ParallelRun,
+    ] {
         let json = serde_json::to_string(&ct).unwrap();
         let restored: CutoverType = serde_json::from_str(&json).unwrap();
         assert_eq!(ct, restored);
@@ -1159,11 +1209,20 @@ fn enrichment_object_class_serde_roundtrip_all() {
 
 #[test]
 fn enrichment_object_class_display_exact_values() {
-    assert_eq!(ObjectClass::SerializationSchema.to_string(), "serialization_schema");
+    assert_eq!(
+        ObjectClass::SerializationSchema.to_string(),
+        "serialization_schema"
+    );
     assert_eq!(ObjectClass::KeyFormat.to_string(), "key_format");
     assert_eq!(ObjectClass::TokenFormat.to_string(), "token_format");
-    assert_eq!(ObjectClass::CheckpointFormat.to_string(), "checkpoint_format");
-    assert_eq!(ObjectClass::RevocationFormat.to_string(), "revocation_format");
+    assert_eq!(
+        ObjectClass::CheckpointFormat.to_string(),
+        "checkpoint_format"
+    );
+    assert_eq!(
+        ObjectClass::RevocationFormat.to_string(),
+        "revocation_format"
+    );
     assert_eq!(ObjectClass::PolicyFormat.to_string(), "policy_format");
 }
 
@@ -1284,7 +1343,11 @@ fn enrichment_migration_phase_display_exact() {
 
 #[test]
 fn enrichment_phase_outcome_display_all_unique() {
-    let outcomes = [PhaseOutcome::Success, PhaseOutcome::Failed, PhaseOutcome::Skipped];
+    let outcomes = [
+        PhaseOutcome::Success,
+        PhaseOutcome::Failed,
+        PhaseOutcome::Skipped,
+    ];
     let mut displays: Vec<String> = outcomes.iter().map(|o| o.to_string()).collect();
     let n = displays.len();
     displays.sort();
@@ -1294,7 +1357,11 @@ fn enrichment_phase_outcome_display_all_unique() {
 
 #[test]
 fn enrichment_phase_outcome_serde_roundtrip_all() {
-    for po in [PhaseOutcome::Success, PhaseOutcome::Failed, PhaseOutcome::Skipped] {
+    for po in [
+        PhaseOutcome::Success,
+        PhaseOutcome::Failed,
+        PhaseOutcome::Skipped,
+    ] {
         let json = serde_json::to_string(&po).unwrap();
         let restored: PhaseOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(po, restored);
@@ -1358,16 +1425,33 @@ fn enrichment_phase_execution_record_all_phases_serializable() {
 #[test]
 fn enrichment_cutover_error_display_all_10_variants_nonempty() {
     let errors: Vec<CutoverError> = vec![
-        CutoverError::InvalidDeclaration { detail: "bad".to_string() },
-        CutoverError::DryRunFailed { unconvertible_count: 42 },
+        CutoverError::InvalidDeclaration {
+            detail: "bad".to_string(),
+        },
+        CutoverError::DryRunFailed {
+            unconvertible_count: 42,
+        },
         CutoverError::VerificationFailed { violations: 7 },
-        CutoverError::ParallelRunDiscrepancy { discrepancy_count: 3 },
-        CutoverError::OldFormatRejected { object_class: ObjectClass::TokenFormat },
-        CutoverError::TransitionWindowExpired { migration_id: "m-old".to_string() },
-        CutoverError::PhaseFailed { phase: MigrationPhase::Checkpoint, detail: "disk full".to_string() },
-        CutoverError::AlreadyCommitted { migration_id: "m-done".to_string() },
+        CutoverError::ParallelRunDiscrepancy {
+            discrepancy_count: 3,
+        },
+        CutoverError::OldFormatRejected {
+            object_class: ObjectClass::TokenFormat,
+        },
+        CutoverError::TransitionWindowExpired {
+            migration_id: "m-old".to_string(),
+        },
+        CutoverError::PhaseFailed {
+            phase: MigrationPhase::Checkpoint,
+            detail: "disk full".to_string(),
+        },
+        CutoverError::AlreadyCommitted {
+            migration_id: "m-done".to_string(),
+        },
         CutoverError::NoMigrationInProgress,
-        CutoverError::MigrationNotFound { migration_id: "m-missing".to_string() },
+        CutoverError::MigrationNotFound {
+            migration_id: "m-missing".to_string(),
+        },
     ];
     for err in &errors {
         let display = err.to_string();
@@ -1377,39 +1461,127 @@ fn enrichment_cutover_error_display_all_10_variants_nonempty() {
 
 #[test]
 fn enrichment_cutover_error_display_contains_inner_values() {
-    assert!(CutoverError::InvalidDeclaration { detail: "BAD_INPUT".to_string() }
-        .to_string().contains("BAD_INPUT"));
-    assert!(CutoverError::DryRunFailed { unconvertible_count: 99 }
-        .to_string().contains("99"));
-    assert!(CutoverError::VerificationFailed { violations: 13 }
-        .to_string().contains("13"));
-    assert!(CutoverError::ParallelRunDiscrepancy { discrepancy_count: 8 }
-        .to_string().contains("8"));
-    assert!(CutoverError::OldFormatRejected { object_class: ObjectClass::CheckpointFormat }
-        .to_string().contains("checkpoint_format"));
-    assert!(CutoverError::TransitionWindowExpired { migration_id: "XYZ".to_string() }
-        .to_string().contains("XYZ"));
-    assert!(CutoverError::PhaseFailed { phase: MigrationPhase::Execute, detail: "boom".to_string() }
-        .to_string().contains("execute"));
-    assert!(CutoverError::AlreadyCommitted { migration_id: "ABC".to_string() }
-        .to_string().contains("ABC"));
-    assert!(CutoverError::MigrationNotFound { migration_id: "QRS".to_string() }
-        .to_string().contains("QRS"));
+    assert!(
+        CutoverError::InvalidDeclaration {
+            detail: "BAD_INPUT".to_string()
+        }
+        .to_string()
+        .contains("BAD_INPUT")
+    );
+    assert!(
+        CutoverError::DryRunFailed {
+            unconvertible_count: 99
+        }
+        .to_string()
+        .contains("99")
+    );
+    assert!(
+        CutoverError::VerificationFailed { violations: 13 }
+            .to_string()
+            .contains("13")
+    );
+    assert!(
+        CutoverError::ParallelRunDiscrepancy {
+            discrepancy_count: 8
+        }
+        .to_string()
+        .contains("8")
+    );
+    assert!(
+        CutoverError::OldFormatRejected {
+            object_class: ObjectClass::CheckpointFormat
+        }
+        .to_string()
+        .contains("checkpoint_format")
+    );
+    assert!(
+        CutoverError::TransitionWindowExpired {
+            migration_id: "XYZ".to_string()
+        }
+        .to_string()
+        .contains("XYZ")
+    );
+    assert!(
+        CutoverError::PhaseFailed {
+            phase: MigrationPhase::Execute,
+            detail: "boom".to_string()
+        }
+        .to_string()
+        .contains("execute")
+    );
+    assert!(
+        CutoverError::AlreadyCommitted {
+            migration_id: "ABC".to_string()
+        }
+        .to_string()
+        .contains("ABC")
+    );
+    assert!(
+        CutoverError::MigrationNotFound {
+            migration_id: "QRS".to_string()
+        }
+        .to_string()
+        .contains("QRS")
+    );
 }
 
 #[test]
 fn enrichment_cutover_error_code_all_10_exact_values() {
     let expected = [
-        (CutoverError::InvalidDeclaration { detail: String::new() }, "MC_INVALID_DECLARATION"),
-        (CutoverError::DryRunFailed { unconvertible_count: 0 }, "MC_DRY_RUN_FAILED"),
-        (CutoverError::VerificationFailed { violations: 0 }, "MC_VERIFICATION_FAILED"),
-        (CutoverError::ParallelRunDiscrepancy { discrepancy_count: 0 }, "MC_PARALLEL_DISCREPANCY"),
-        (CutoverError::OldFormatRejected { object_class: ObjectClass::KeyFormat }, "MC_OLD_FORMAT_REJECTED"),
-        (CutoverError::TransitionWindowExpired { migration_id: String::new() }, "MC_WINDOW_EXPIRED"),
-        (CutoverError::PhaseFailed { phase: MigrationPhase::Execute, detail: String::new() }, "MC_PHASE_FAILED"),
-        (CutoverError::AlreadyCommitted { migration_id: String::new() }, "MC_ALREADY_COMMITTED"),
+        (
+            CutoverError::InvalidDeclaration {
+                detail: String::new(),
+            },
+            "MC_INVALID_DECLARATION",
+        ),
+        (
+            CutoverError::DryRunFailed {
+                unconvertible_count: 0,
+            },
+            "MC_DRY_RUN_FAILED",
+        ),
+        (
+            CutoverError::VerificationFailed { violations: 0 },
+            "MC_VERIFICATION_FAILED",
+        ),
+        (
+            CutoverError::ParallelRunDiscrepancy {
+                discrepancy_count: 0,
+            },
+            "MC_PARALLEL_DISCREPANCY",
+        ),
+        (
+            CutoverError::OldFormatRejected {
+                object_class: ObjectClass::KeyFormat,
+            },
+            "MC_OLD_FORMAT_REJECTED",
+        ),
+        (
+            CutoverError::TransitionWindowExpired {
+                migration_id: String::new(),
+            },
+            "MC_WINDOW_EXPIRED",
+        ),
+        (
+            CutoverError::PhaseFailed {
+                phase: MigrationPhase::Execute,
+                detail: String::new(),
+            },
+            "MC_PHASE_FAILED",
+        ),
+        (
+            CutoverError::AlreadyCommitted {
+                migration_id: String::new(),
+            },
+            "MC_ALREADY_COMMITTED",
+        ),
         (CutoverError::NoMigrationInProgress, "MC_NO_MIGRATION"),
-        (CutoverError::MigrationNotFound { migration_id: String::new() }, "MC_NOT_FOUND"),
+        (
+            CutoverError::MigrationNotFound {
+                migration_id: String::new(),
+            },
+            "MC_NOT_FOUND",
+        ),
     ];
     for (err, code) in &expected {
         assert_eq!(cutover_error_code(err), *code);
@@ -1419,16 +1591,33 @@ fn enrichment_cutover_error_code_all_10_exact_values() {
 #[test]
 fn enrichment_cutover_error_code_all_unique() {
     let errors: Vec<CutoverError> = vec![
-        CutoverError::InvalidDeclaration { detail: String::new() },
-        CutoverError::DryRunFailed { unconvertible_count: 0 },
+        CutoverError::InvalidDeclaration {
+            detail: String::new(),
+        },
+        CutoverError::DryRunFailed {
+            unconvertible_count: 0,
+        },
         CutoverError::VerificationFailed { violations: 0 },
-        CutoverError::ParallelRunDiscrepancy { discrepancy_count: 0 },
-        CutoverError::OldFormatRejected { object_class: ObjectClass::KeyFormat },
-        CutoverError::TransitionWindowExpired { migration_id: String::new() },
-        CutoverError::PhaseFailed { phase: MigrationPhase::Execute, detail: String::new() },
-        CutoverError::AlreadyCommitted { migration_id: String::new() },
+        CutoverError::ParallelRunDiscrepancy {
+            discrepancy_count: 0,
+        },
+        CutoverError::OldFormatRejected {
+            object_class: ObjectClass::KeyFormat,
+        },
+        CutoverError::TransitionWindowExpired {
+            migration_id: String::new(),
+        },
+        CutoverError::PhaseFailed {
+            phase: MigrationPhase::Execute,
+            detail: String::new(),
+        },
+        CutoverError::AlreadyCommitted {
+            migration_id: String::new(),
+        },
         CutoverError::NoMigrationInProgress,
-        CutoverError::MigrationNotFound { migration_id: String::new() },
+        CutoverError::MigrationNotFound {
+            migration_id: String::new(),
+        },
     ];
     let mut codes: Vec<&str> = errors.iter().map(|e| cutover_error_code(e)).collect();
     let n = codes.len();
@@ -1440,16 +1629,33 @@ fn enrichment_cutover_error_code_all_unique() {
 #[test]
 fn enrichment_cutover_error_serde_roundtrip_all_10() {
     let errors: Vec<CutoverError> = vec![
-        CutoverError::InvalidDeclaration { detail: "test-detail".to_string() },
-        CutoverError::DryRunFailed { unconvertible_count: 42 },
+        CutoverError::InvalidDeclaration {
+            detail: "test-detail".to_string(),
+        },
+        CutoverError::DryRunFailed {
+            unconvertible_count: 42,
+        },
         CutoverError::VerificationFailed { violations: 7 },
-        CutoverError::ParallelRunDiscrepancy { discrepancy_count: 3 },
-        CutoverError::OldFormatRejected { object_class: ObjectClass::RevocationFormat },
-        CutoverError::TransitionWindowExpired { migration_id: "m-exp".to_string() },
-        CutoverError::PhaseFailed { phase: MigrationPhase::Rollback, detail: "rollback".to_string() },
-        CutoverError::AlreadyCommitted { migration_id: "m-comm".to_string() },
+        CutoverError::ParallelRunDiscrepancy {
+            discrepancy_count: 3,
+        },
+        CutoverError::OldFormatRejected {
+            object_class: ObjectClass::RevocationFormat,
+        },
+        CutoverError::TransitionWindowExpired {
+            migration_id: "m-exp".to_string(),
+        },
+        CutoverError::PhaseFailed {
+            phase: MigrationPhase::Rollback,
+            detail: "rollback".to_string(),
+        },
+        CutoverError::AlreadyCommitted {
+            migration_id: "m-comm".to_string(),
+        },
         CutoverError::NoMigrationInProgress,
-        CutoverError::MigrationNotFound { migration_id: "m-nf".to_string() },
+        CutoverError::MigrationNotFound {
+            migration_id: "m-nf".to_string(),
+        },
     ];
     for err in &errors {
         let json = serde_json::to_string(err).unwrap();
@@ -1718,14 +1924,22 @@ fn enrichment_runner_new_empty_state() {
 fn enrichment_runner_default_same_as_new() {
     let from_new = CutoverMigrationRunner::new();
     let from_default = CutoverMigrationRunner::default();
-    assert_eq!(from_new.declaration_count(), from_default.declaration_count());
-    assert_eq!(from_new.applied_migrations().len(), from_default.applied_migrations().len());
+    assert_eq!(
+        from_new.declaration_count(),
+        from_default.declaration_count()
+    );
+    assert_eq!(
+        from_new.applied_migrations().len(),
+        from_default.applied_migrations().len()
+    );
 }
 
 #[test]
 fn enrichment_runner_declare_increments_count() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m1", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m1", CutoverType::HardCutover), "t")
+        .unwrap();
     assert_eq!(runner.declaration_count(), 1);
 
     let mut decl2 = test_declaration("m2", CutoverType::SoftMigration);
@@ -1768,8 +1982,12 @@ fn enrichment_runner_declare_rejects_same_from_to() {
 #[test]
 fn enrichment_runner_declare_rejects_duplicate_id() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("dup", CutoverType::HardCutover), "t").unwrap();
-    let err = runner.declare(test_declaration("dup", CutoverType::SoftMigration), "t").unwrap_err();
+    runner
+        .declare(test_declaration("dup", CutoverType::HardCutover), "t")
+        .unwrap();
+    let err = runner
+        .declare(test_declaration("dup", CutoverType::SoftMigration), "t")
+        .unwrap_err();
     assert!(matches!(err, CutoverError::InvalidDeclaration { .. }));
     if let CutoverError::InvalidDeclaration { detail } = &err {
         assert!(detail.contains("duplicate"));
@@ -1779,7 +1997,9 @@ fn enrichment_runner_declare_rejects_duplicate_id() {
 #[test]
 fn enrichment_runner_hard_cutover_full_lifecycle() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-hard", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-hard", CutoverType::HardCutover), "t")
+        .unwrap();
     let entry = run_full_migration(&mut runner, "m-hard");
 
     assert_eq!(entry.state, CutoverState::Committed);
@@ -1792,28 +2012,40 @@ fn enrichment_runner_hard_cutover_full_lifecycle() {
 #[test]
 fn enrichment_runner_hard_cutover_rejects_old_format() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-hard", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-hard", CutoverType::HardCutover), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-hard");
 
-    let err = runner.check_format_acceptance(ObjectClass::SerializationSchema).unwrap_err();
+    let err = runner
+        .check_format_acceptance(ObjectClass::SerializationSchema)
+        .unwrap_err();
     assert!(matches!(err, CutoverError::OldFormatRejected { .. }));
 }
 
 #[test]
 fn enrichment_runner_hard_cutover_accepts_unaffected_class() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-hard", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-hard", CutoverType::HardCutover), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-hard");
 
     // KeyFormat not in affected_objects -> should pass
-    runner.check_format_acceptance(ObjectClass::KeyFormat).unwrap();
-    runner.check_format_acceptance(ObjectClass::PolicyFormat).unwrap();
+    runner
+        .check_format_acceptance(ObjectClass::KeyFormat)
+        .unwrap();
+    runner
+        .check_format_acceptance(ObjectClass::PolicyFormat)
+        .unwrap();
 }
 
 #[test]
 fn enrichment_runner_soft_migration_creates_transition_window() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-soft", CutoverType::SoftMigration), "t").unwrap();
+    runner
+        .declare(test_declaration("m-soft", CutoverType::SoftMigration), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-soft");
 
     let windows = runner.transition_windows();
@@ -1828,39 +2060,53 @@ fn enrichment_runner_soft_migration_creates_transition_window() {
 #[test]
 fn enrichment_runner_soft_migration_accepts_during_window() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-soft", CutoverType::SoftMigration), "t").unwrap();
+    runner
+        .declare(test_declaration("m-soft", CutoverType::SoftMigration), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-soft");
 
     runner.set_tick(500);
-    runner.check_format_acceptance(ObjectClass::SerializationSchema).unwrap();
+    runner
+        .check_format_acceptance(ObjectClass::SerializationSchema)
+        .unwrap();
 }
 
 #[test]
 fn enrichment_runner_soft_migration_rejects_after_window() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-soft", CutoverType::SoftMigration), "t").unwrap();
+    runner
+        .declare(test_declaration("m-soft", CutoverType::SoftMigration), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-soft");
 
     // Window is [40, 1040), so tick 1040 should expire
     runner.set_tick(1040);
-    let err = runner.check_format_acceptance(ObjectClass::SerializationSchema).unwrap_err();
+    let err = runner
+        .check_format_acceptance(ObjectClass::SerializationSchema)
+        .unwrap_err();
     assert!(matches!(err, CutoverError::TransitionWindowExpired { .. }));
 }
 
 #[test]
 fn enrichment_runner_parallel_run_accepts_old_format_after_commit() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-par", CutoverType::ParallelRun), "t").unwrap();
+    runner
+        .declare(test_declaration("m-par", CutoverType::ParallelRun), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-par");
 
     runner.set_tick(999_999);
-    runner.check_format_acceptance(ObjectClass::SerializationSchema).unwrap();
+    runner
+        .check_format_acceptance(ObjectClass::SerializationSchema)
+        .unwrap();
 }
 
 #[test]
 fn enrichment_runner_parallel_discrepancy_aborts() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-par", CutoverType::ParallelRun), "t").unwrap();
+    runner
+        .declare(test_declaration("m-par", CutoverType::ParallelRun), "t")
+        .unwrap();
     runner.begin("m-par", 100, "t").unwrap();
     runner.set_tick(10);
     runner.create_checkpoint(1, "t").unwrap();
@@ -1868,15 +2114,25 @@ fn enrichment_runner_parallel_discrepancy_aborts() {
     runner.execute(100, "t").unwrap();
 
     let err = runner.report_parallel_discrepancies(3, "t").unwrap_err();
-    assert!(matches!(err, CutoverError::ParallelRunDiscrepancy { discrepancy_count: 3 }));
+    assert!(matches!(
+        err,
+        CutoverError::ParallelRunDiscrepancy {
+            discrepancy_count: 3
+        }
+    ));
     assert!(runner.active_migration_id().is_none());
-    assert_eq!(runner.applied_migrations()[0].state, CutoverState::RolledBack);
+    assert_eq!(
+        runner.applied_migrations()[0].state,
+        CutoverState::RolledBack
+    );
 }
 
 #[test]
 fn enrichment_runner_parallel_zero_discrepancies_ok() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-par", CutoverType::ParallelRun), "t").unwrap();
+    runner
+        .declare(test_declaration("m-par", CutoverType::ParallelRun), "t")
+        .unwrap();
     runner.begin("m-par", 100, "t").unwrap();
     runner.set_tick(10);
     runner.create_checkpoint(1, "t").unwrap();
@@ -1891,7 +2147,9 @@ fn enrichment_runner_parallel_zero_discrepancies_ok() {
 #[test]
 fn enrichment_runner_parallel_discrepancy_rejected_for_hard_cutover() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-hard", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-hard", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m-hard", 100, "t").unwrap();
 
     let err = runner.report_parallel_discrepancies(0, "t").unwrap_err();
@@ -1901,38 +2159,58 @@ fn enrichment_runner_parallel_discrepancy_rejected_for_hard_cutover() {
 #[test]
 fn enrichment_runner_verification_failure_auto_rollback() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-vf", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-vf", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m-vf", 100, "t").unwrap();
     runner.create_checkpoint(1, "t").unwrap();
     runner.execute(100, "t").unwrap();
 
     let err = runner.verify(5, "t").unwrap_err();
-    assert!(matches!(err, CutoverError::VerificationFailed { violations: 5 }));
+    assert!(matches!(
+        err,
+        CutoverError::VerificationFailed { violations: 5 }
+    ));
     assert!(runner.active_migration_id().is_none());
-    assert_eq!(runner.applied_migrations()[0].state, CutoverState::RolledBack);
+    assert_eq!(
+        runner.applied_migrations()[0].state,
+        CutoverState::RolledBack
+    );
 }
 
 #[test]
 fn enrichment_runner_dry_run_failure_rollback() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-dr", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-dr", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m-dr", 100, "t").unwrap();
 
     let err = runner.fail_dry_run(15, "t").unwrap_err();
-    assert!(matches!(err, CutoverError::DryRunFailed { unconvertible_count: 15 }));
+    assert!(matches!(
+        err,
+        CutoverError::DryRunFailed {
+            unconvertible_count: 15
+        }
+    ));
     assert!(runner.active_migration_id().is_none());
 }
 
 #[test]
 fn enrichment_runner_manual_rollback_before_commit() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-rb", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-rb", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m-rb", 100, "t").unwrap();
     runner.create_checkpoint(1, "t").unwrap();
 
     runner.rollback("t").unwrap();
     assert!(runner.active_migration_id().is_none());
-    assert_eq!(runner.applied_migrations()[0].state, CutoverState::RolledBack);
+    assert_eq!(
+        runner.applied_migrations()[0].state,
+        CutoverState::RolledBack
+    );
     assert!(runner.applied_migrations()[0].committed_at.is_none());
 }
 
@@ -1953,7 +2231,9 @@ fn enrichment_runner_begin_unknown_migration_fails() {
 #[test]
 fn enrichment_runner_only_one_active_migration() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m1", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m1", CutoverType::HardCutover), "t")
+        .unwrap();
     let mut d2 = test_declaration("m2", CutoverType::SoftMigration);
     d2.from_version = "v2".to_string();
     d2.to_version = "v3".to_string();
@@ -1967,7 +2247,9 @@ fn enrichment_runner_only_one_active_migration() {
 #[test]
 fn enrichment_runner_phase_ordering_checkpoint_before_premigrated() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m", 100, "t").unwrap();
     runner.create_checkpoint(1, "t").unwrap();
     // Already checkpointed, second checkpoint should fail
@@ -1978,7 +2260,9 @@ fn enrichment_runner_phase_ordering_checkpoint_before_premigrated() {
 #[test]
 fn enrichment_runner_phase_ordering_execute_without_checkpoint() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m", 100, "t").unwrap();
     let err = runner.execute(100, "t").unwrap_err();
     assert!(matches!(err, CutoverError::PhaseFailed { .. }));
@@ -1987,7 +2271,9 @@ fn enrichment_runner_phase_ordering_execute_without_checkpoint() {
 #[test]
 fn enrichment_runner_phase_ordering_verify_without_execute() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m", 100, "t").unwrap();
     runner.create_checkpoint(1, "t").unwrap();
     let err = runner.verify(0, "t").unwrap_err();
@@ -1997,7 +2283,9 @@ fn enrichment_runner_phase_ordering_verify_without_execute() {
 #[test]
 fn enrichment_runner_phase_ordering_commit_without_verify() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m", 100, "t").unwrap();
     runner.create_checkpoint(1, "t").unwrap();
     runner.execute(100, "t").unwrap();
@@ -2008,19 +2296,42 @@ fn enrichment_runner_phase_ordering_commit_without_verify() {
 #[test]
 fn enrichment_runner_all_operations_no_active_fail() {
     let mut runner = CutoverMigrationRunner::new();
-    assert!(matches!(runner.create_checkpoint(1, "t"), Err(CutoverError::NoMigrationInProgress)));
-    assert!(matches!(runner.execute(10, "t"), Err(CutoverError::NoMigrationInProgress)));
-    assert!(matches!(runner.verify(0, "t"), Err(CutoverError::NoMigrationInProgress)));
-    assert!(matches!(runner.commit("t"), Err(CutoverError::NoMigrationInProgress)));
-    assert!(matches!(runner.rollback("t"), Err(CutoverError::NoMigrationInProgress)));
-    assert!(matches!(runner.fail_dry_run(1, "t"), Err(CutoverError::NoMigrationInProgress)));
-    assert!(matches!(runner.report_parallel_discrepancies(0, "t"), Err(CutoverError::NoMigrationInProgress)));
+    assert!(matches!(
+        runner.create_checkpoint(1, "t"),
+        Err(CutoverError::NoMigrationInProgress)
+    ));
+    assert!(matches!(
+        runner.execute(10, "t"),
+        Err(CutoverError::NoMigrationInProgress)
+    ));
+    assert!(matches!(
+        runner.verify(0, "t"),
+        Err(CutoverError::NoMigrationInProgress)
+    ));
+    assert!(matches!(
+        runner.commit("t"),
+        Err(CutoverError::NoMigrationInProgress)
+    ));
+    assert!(matches!(
+        runner.rollback("t"),
+        Err(CutoverError::NoMigrationInProgress)
+    ));
+    assert!(matches!(
+        runner.fail_dry_run(1, "t"),
+        Err(CutoverError::NoMigrationInProgress)
+    ));
+    assert!(matches!(
+        runner.report_parallel_discrepancies(0, "t"),
+        Err(CutoverError::NoMigrationInProgress)
+    ));
 }
 
 #[test]
 fn enrichment_runner_active_state_tracks_through_lifecycle() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-track", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-track", CutoverType::HardCutover), "t")
+        .unwrap();
     assert!(runner.active_state().is_none());
 
     runner.begin("m-track", 50, "t").unwrap();
@@ -2043,7 +2354,9 @@ fn enrichment_runner_active_state_tracks_through_lifecycle() {
 #[test]
 fn enrichment_runner_audit_events_emitted_on_lifecycle() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-audit", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-audit", CutoverType::HardCutover), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-audit");
 
     let events = runner.audit_events();
@@ -2062,14 +2375,19 @@ fn enrichment_runner_audit_events_emitted_on_lifecycle() {
 #[test]
 fn enrichment_runner_audit_events_error_code_on_failure() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-fail", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-fail", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m-fail", 100, "t").unwrap();
     runner.create_checkpoint(1, "t").unwrap();
     runner.execute(100, "t").unwrap();
     let _ = runner.verify(3, "t");
 
     let events = runner.audit_events();
-    let fail = events.iter().find(|e| e.event == "verification_failed").unwrap();
+    let fail = events
+        .iter()
+        .find(|e| e.event == "verification_failed")
+        .unwrap();
     assert_eq!(fail.error_code.as_deref(), Some("MC_VERIFICATION_FAILED"));
     assert_eq!(fail.affected_count, Some(3));
 }
@@ -2077,7 +2395,9 @@ fn enrichment_runner_audit_events_error_code_on_failure() {
 #[test]
 fn enrichment_runner_drain_clears_events() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-drain", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-drain", CutoverType::HardCutover), "t")
+        .unwrap();
     assert!(!runner.audit_events().is_empty());
     let drained = runner.drain_audit_events();
     assert!(!drained.is_empty());
@@ -2087,7 +2407,9 @@ fn enrichment_runner_drain_clears_events() {
 #[test]
 fn enrichment_runner_applied_migrations_preserved() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-ap", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-ap", CutoverType::HardCutover), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-ap");
 
     let applied = runner.applied_migrations();
@@ -2101,7 +2423,9 @@ fn enrichment_runner_applied_migrations_preserved() {
 #[test]
 fn enrichment_runner_sequential_migrations() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-seq-1", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-seq-1", CutoverType::HardCutover), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-seq-1");
 
     // Now declare and run a second migration
@@ -2120,7 +2444,9 @@ fn enrichment_runner_sequential_migrations() {
 #[test]
 fn enrichment_runner_hard_cutover_no_transition_window() {
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("m-notw", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-notw", CutoverType::HardCutover), "t")
+        .unwrap();
     run_full_migration(&mut runner, "m-notw");
     assert!(runner.transition_windows().is_empty());
 }
@@ -2129,7 +2455,9 @@ fn enrichment_runner_hard_cutover_no_transition_window() {
 fn enrichment_runner_lifecycle_deterministic() {
     let run = || {
         let mut runner = CutoverMigrationRunner::new();
-        runner.declare(test_declaration("m-det", CutoverType::HardCutover), "t").unwrap();
+        runner
+            .declare(test_declaration("m-det", CutoverType::HardCutover), "t")
+            .unwrap();
         run_full_migration(&mut runner, "m-det");
         serde_json::to_string(runner.audit_events()).unwrap()
     };
@@ -2177,12 +2505,16 @@ fn enrichment_workflow_full_checker_then_cutover() {
 
     // Phase 2: Use cutover runner to execute the migration
     let mut runner = CutoverMigrationRunner::new();
-    runner.declare(test_declaration("cutover-1", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("cutover-1", CutoverType::HardCutover), "t")
+        .unwrap();
     let entry = run_full_migration(&mut runner, "cutover-1");
     assert_eq!(entry.state, CutoverState::Committed);
 
     // Phase 3: Verify old format is rejected
-    let err = runner.check_format_acceptance(ObjectClass::SerializationSchema).unwrap_err();
+    let err = runner
+        .check_format_acceptance(ObjectClass::SerializationSchema)
+        .unwrap_err();
     assert!(matches!(err, CutoverError::OldFormatRejected { .. }));
 }
 
@@ -2354,9 +2686,15 @@ fn enrichment_runner_multiple_object_classes_all_rejected_after_hard_cutover() {
     ));
 
     // Unaffected classes still accepted
-    runner.check_format_acceptance(ObjectClass::CheckpointFormat).unwrap();
-    runner.check_format_acceptance(ObjectClass::RevocationFormat).unwrap();
-    runner.check_format_acceptance(ObjectClass::PolicyFormat).unwrap();
+    runner
+        .check_format_acceptance(ObjectClass::CheckpointFormat)
+        .unwrap();
+    runner
+        .check_format_acceptance(ObjectClass::RevocationFormat)
+        .unwrap();
+    runner
+        .check_format_acceptance(ObjectClass::PolicyFormat)
+        .unwrap();
 }
 
 // ===========================================================================
@@ -2367,14 +2705,19 @@ fn enrichment_runner_multiple_object_classes_all_rejected_after_hard_cutover() {
 fn enrichment_runner_set_tick_persists() {
     let mut runner = CutoverMigrationRunner::new();
     runner.set_tick(12345);
-    runner.declare(test_declaration("m-tick", CutoverType::HardCutover), "t").unwrap();
+    runner
+        .declare(test_declaration("m-tick", CutoverType::HardCutover), "t")
+        .unwrap();
     runner.begin("m-tick", 10, "t").unwrap();
 
     // The pre-migration record should use the tick set before begin
     // (begin calls set_tick internally after begin, but the pre-migration phase
     // records use current_tick at the time of begin)
     let events = runner.audit_events();
-    let pre = events.iter().find(|e| e.event == "pre_migration_complete").unwrap();
+    let pre = events
+        .iter()
+        .find(|e| e.event == "pre_migration_complete")
+        .unwrap();
     assert_eq!(pre.timestamp, DeterministicTimestamp(12345));
 }
 
@@ -2389,8 +2732,14 @@ fn enrichment_migration_error_clone_deep() {
         to_version: "v2".to_string(),
         error_code: MigrationErrorCode::MigrationFunctionFailed,
         incompatible_fields: vec![
-            IncompatibleField { field_path: "a".to_string(), reason: "x".to_string() },
-            IncompatibleField { field_path: "b".to_string(), reason: "y".to_string() },
+            IncompatibleField {
+                field_path: "a".to_string(),
+                reason: "x".to_string(),
+            },
+            IncompatibleField {
+                field_path: "b".to_string(),
+                reason: "y".to_string(),
+            },
         ],
         message: "complex error".to_string(),
     };

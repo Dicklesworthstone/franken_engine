@@ -22,10 +22,9 @@ use std::collections::BTreeSet;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::trace_fusion::{
     FusedInstruction, FusedTrace, FusedTraceSummary, FusionDisableReason, FusionGuard,
-    FusionGuardKind, FusionOutcome, FusionPolicy, FusionProofLineage, FusionRecord,
-    FusionTemplateCatalog, InstructionEntry, MotifKind, MotifRejectionReason, MotifValidation,
-    TraceFusionDiagnostics, TraceFusionEngine, TRACE_FUSION_SCHEMA_VERSION, FusionMotif,
-    MotifRecognizer,
+    FusionGuardKind, FusionMotif, FusionOutcome, FusionPolicy, FusionProofLineage, FusionRecord,
+    FusionTemplateCatalog, InstructionEntry, MotifKind, MotifRecognizer, MotifRejectionReason,
+    MotifValidation, TRACE_FUSION_SCHEMA_VERSION, TraceFusionDiagnostics, TraceFusionEngine,
 };
 
 // ---------------------------------------------------------------------------
@@ -171,7 +170,12 @@ fn enrichment_motif_below_minimum_does_not_meet() {
 
 #[test]
 fn enrichment_motif_record_observation_increments() {
-    let mut motif = FusionMotif::new(MotifKind::PropertyChain, vec!["GetProperty".into(), "GetProperty".into()], 0, 4);
+    let mut motif = FusionMotif::new(
+        MotifKind::PropertyChain,
+        vec!["GetProperty".into(), "GetProperty".into()],
+        0,
+        4,
+    );
     assert_eq!(motif.observation_count, 0);
     motif.record_observation();
     motif.record_observation();
@@ -180,7 +184,12 @@ fn enrichment_motif_record_observation_increments() {
 
 #[test]
 fn enrichment_motif_mark_effectful() {
-    let mut motif = FusionMotif::new(MotifKind::HostcallSequence, vec!["HostCall".into(), "HostCall".into()], 0, 4);
+    let mut motif = FusionMotif::new(
+        MotifKind::HostcallSequence,
+        vec!["HostCall".into(), "HostCall".into()],
+        0,
+        4,
+    );
     assert!(motif.side_effect_free);
     motif.mark_effectful();
     assert!(!motif.side_effect_free);
@@ -188,7 +197,12 @@ fn enrichment_motif_mark_effectful() {
 
 #[test]
 fn enrichment_motif_require_capability() {
-    let mut motif = FusionMotif::new(MotifKind::HostcallSequence, vec!["HostCall".into(), "HostCall".into()], 0, 4);
+    let mut motif = FusionMotif::new(
+        MotifKind::HostcallSequence,
+        vec!["HostCall".into(), "HostCall".into()],
+        0,
+        4,
+    );
     motif.require_capability("fs.read");
     motif.require_capability("net.connect");
     assert_eq!(motif.required_capabilities.len(), 2);
@@ -197,21 +211,46 @@ fn enrichment_motif_require_capability() {
 
 #[test]
 fn enrichment_motif_content_hash_deterministic() {
-    let m1 = FusionMotif::new(MotifKind::ArithmeticChain, vec!["Add".into(), "Sub".into(), "Mul".into()], 0, 8);
-    let m2 = FusionMotif::new(MotifKind::ArithmeticChain, vec!["Add".into(), "Sub".into(), "Mul".into()], 0, 8);
+    let m1 = FusionMotif::new(
+        MotifKind::ArithmeticChain,
+        vec!["Add".into(), "Sub".into(), "Mul".into()],
+        0,
+        8,
+    );
+    let m2 = FusionMotif::new(
+        MotifKind::ArithmeticChain,
+        vec!["Add".into(), "Sub".into(), "Mul".into()],
+        0,
+        8,
+    );
     assert_eq!(m1.content_hash(), m2.content_hash());
 }
 
 #[test]
 fn enrichment_motif_content_hash_varies_with_kind() {
-    let m1 = FusionMotif::new(MotifKind::ArithmeticChain, vec!["Add".into(), "Sub".into(), "Mul".into()], 0, 8);
-    let m2 = FusionMotif::new(MotifKind::PropertyChain, vec!["Add".into(), "Sub".into(), "Mul".into()], 0, 8);
+    let m1 = FusionMotif::new(
+        MotifKind::ArithmeticChain,
+        vec!["Add".into(), "Sub".into(), "Mul".into()],
+        0,
+        8,
+    );
+    let m2 = FusionMotif::new(
+        MotifKind::PropertyChain,
+        vec!["Add".into(), "Sub".into(), "Mul".into()],
+        0,
+        8,
+    );
     assert_ne!(m1.content_hash(), m2.content_hash());
 }
 
 #[test]
 fn enrichment_motif_serde_roundtrip() {
-    let mut motif = FusionMotif::new(MotifKind::StringConcat, vec!["Concat".into(), "Concat".into()], 0, 4);
+    let mut motif = FusionMotif::new(
+        MotifKind::StringConcat,
+        vec!["Concat".into(), "Concat".into()],
+        0,
+        4,
+    );
     motif.record_observation();
     motif.min_stability_millionths = 800_000;
     let json = serde_json::to_string(&motif).unwrap();
@@ -287,7 +326,12 @@ fn enrichment_fused_instruction_super() {
 
 #[test]
 fn enrichment_fused_instruction_with_guard() {
-    let guard = FusionGuard::new(FusionGuardKind::TypeStability { expected_type: "Integer".into() }, 100);
+    let guard = FusionGuard::new(
+        FusionGuardKind::TypeStability {
+            expected_type: "Integer".into(),
+        },
+        100,
+    );
     let instr = FusedInstruction::passthrough(0, 0, "Add").with_guard(guard);
     assert!(instr.guard.is_some());
 }
@@ -308,11 +352,19 @@ fn enrichment_fused_instruction_serde_roundtrip() {
 #[test]
 fn enrichment_guard_kind_serde_roundtrip_all() {
     let all = [
-        FusionGuardKind::TypeStability { expected_type: "Integer".into() },
-        FusionGuardKind::ShapeCheck { expected_shape_id: "shape-001".into() },
-        FusionGuardKind::CapabilityValid { capability_name: "fs.read".into() },
+        FusionGuardKind::TypeStability {
+            expected_type: "Integer".into(),
+        },
+        FusionGuardKind::ShapeCheck {
+            expected_shape_id: "shape-001".into(),
+        },
+        FusionGuardKind::CapabilityValid {
+            capability_name: "fs.read".into(),
+        },
         FusionGuardKind::LevelCheck { min_level: 3 },
-        FusionGuardKind::ProofValid { lineage_id: "lineage-abc".into() },
+        FusionGuardKind::ProofValid {
+            lineage_id: "lineage-abc".into(),
+        },
     ];
     for k in &all {
         let json = serde_json::to_string(k).unwrap();
@@ -331,14 +383,24 @@ fn enrichment_guard_new_has_id() {
 
 #[test]
 fn enrichment_guard_mark_factored() {
-    let mut guard = FusionGuard::new(FusionGuardKind::TypeStability { expected_type: "String".into() }, 0);
+    let mut guard = FusionGuard::new(
+        FusionGuardKind::TypeStability {
+            expected_type: "String".into(),
+        },
+        0,
+    );
     guard.mark_factored();
     assert!(guard.factored);
 }
 
 #[test]
 fn enrichment_guard_serde_roundtrip() {
-    let guard = FusionGuard::new(FusionGuardKind::CapabilityValid { capability_name: "net.connect".into() }, 99);
+    let guard = FusionGuard::new(
+        FusionGuardKind::CapabilityValid {
+            capability_name: "net.connect".into(),
+        },
+        99,
+    );
     let json = serde_json::to_string(&guard).unwrap();
     let back: FusionGuard = serde_json::from_str(&json).unwrap();
     assert_eq!(guard.guard_id, back.guard_id);
@@ -369,7 +431,12 @@ fn enrichment_trace_with_superblock() {
 fn enrichment_trace_add_instruction() {
     let mut trace = FusedTrace::new("fn_main", epoch(1));
     trace.add_instruction(FusedInstruction::passthrough(0, 0, "Add"));
-    trace.add_instruction(FusedInstruction::super_instruction(1, vec![4, 8], "SuperArith", 100_000));
+    trace.add_instruction(FusedInstruction::super_instruction(
+        1,
+        vec![4, 8],
+        "SuperArith",
+        100_000,
+    ));
     assert_eq!(trace.instruction_count(), 2);
     assert_eq!(trace.super_instruction_count(), 1);
     assert_eq!(trace.fused_source_count(), 2);
@@ -378,7 +445,12 @@ fn enrichment_trace_add_instruction() {
 #[test]
 fn enrichment_trace_guard_count() {
     let mut trace = FusedTrace::new("fn_main", epoch(1));
-    let guard = FusionGuard::new(FusionGuardKind::TypeStability { expected_type: "Integer".into() }, 0);
+    let guard = FusionGuard::new(
+        FusionGuardKind::TypeStability {
+            expected_type: "Integer".into(),
+        },
+        0,
+    );
     trace.add_instruction(FusedInstruction::passthrough(0, 0, "Add").with_guard(guard));
     trace.add_instruction(FusedInstruction::passthrough(1, 4, "Sub"));
     assert_eq!(trace.guard_count(), 1);
@@ -388,7 +460,9 @@ fn enrichment_trace_guard_count() {
 fn enrichment_trace_disable_and_enable() {
     let mut trace = FusedTrace::new("fn_main", epoch(1));
     assert!(trace.enabled);
-    trace.disable(FusionDisableReason::OperatorDisabled { reason: "test".into() });
+    trace.disable(FusionDisableReason::OperatorDisabled {
+        reason: "test".into(),
+    });
     assert!(!trace.enabled);
     assert!(trace.disable_reason.is_some());
     trace.enable();
@@ -473,14 +547,32 @@ fn enrichment_trace_serde_roundtrip() {
 #[test]
 fn enrichment_disable_reason_serde_roundtrip_all() {
     let all: Vec<FusionDisableReason> = vec![
-        FusionDisableReason::ProofInvalidated { lineage_id: "l-1".into() },
-        FusionDisableReason::ExcessiveSideExits { ratio_millionths: 300_000, threshold_millionths: 200_000 },
-        FusionDisableReason::EpochAdvanced { formation: 1, current: 5 },
-        FusionDisableReason::OperatorDisabled { reason: "manual".into() },
-        FusionDisableReason::SuperblockInvalidated { superblock_id: "sb-1".into() },
-        FusionDisableReason::TypeAssumptionBroken { detail: "shape changed".into() },
-        FusionDisableReason::NegativeNetGain { net_gain_millionths: -50_000 },
-        FusionDisableReason::InterferenceDetected { other_trace_id: "ft-x".into() },
+        FusionDisableReason::ProofInvalidated {
+            lineage_id: "l-1".into(),
+        },
+        FusionDisableReason::ExcessiveSideExits {
+            ratio_millionths: 300_000,
+            threshold_millionths: 200_000,
+        },
+        FusionDisableReason::EpochAdvanced {
+            formation: 1,
+            current: 5,
+        },
+        FusionDisableReason::OperatorDisabled {
+            reason: "manual".into(),
+        },
+        FusionDisableReason::SuperblockInvalidated {
+            superblock_id: "sb-1".into(),
+        },
+        FusionDisableReason::TypeAssumptionBroken {
+            detail: "shape changed".into(),
+        },
+        FusionDisableReason::NegativeNetGain {
+            net_gain_millionths: -50_000,
+        },
+        FusionDisableReason::InterferenceDetected {
+            other_trace_id: "ft-x".into(),
+        },
     ];
     for r in &all {
         let json = serde_json::to_string(r).unwrap();
@@ -522,7 +614,12 @@ fn enrichment_policy_validate_motif_accepted() {
     let mut policy = FusionPolicy::default();
     policy.min_observation_count = 0;
     policy.min_type_stability_millionths = 0;
-    let motif = FusionMotif::new(MotifKind::ArithmeticChain, vec!["Add".into(), "Sub".into(), "Mul".into()], 0, 8);
+    let motif = FusionMotif::new(
+        MotifKind::ArithmeticChain,
+        vec!["Add".into(), "Sub".into(), "Mul".into()],
+        0,
+        8,
+    );
     assert_eq!(policy.validate_motif(&motif), MotifValidation::Accepted);
 }
 
@@ -539,7 +636,12 @@ fn enrichment_policy_validate_insufficient_instructions() {
 #[test]
 fn enrichment_policy_validate_insufficient_observations() {
     let policy = FusionPolicy::default(); // needs 100 observations
-    let motif = FusionMotif::new(MotifKind::ArithmeticChain, vec!["Add".into(), "Sub".into(), "Mul".into()], 0, 8);
+    let motif = FusionMotif::new(
+        MotifKind::ArithmeticChain,
+        vec!["Add".into(), "Sub".into(), "Mul".into()],
+        0,
+        8,
+    );
     // observation_count = 0 < 100
     assert_eq!(
         policy.validate_motif(&motif),
@@ -553,7 +655,12 @@ fn enrichment_policy_validate_effectful_rejected() {
     policy.min_observation_count = 0;
     policy.min_type_stability_millionths = 0;
     policy.allow_effectful_fusion = false;
-    let mut motif = FusionMotif::new(MotifKind::HostcallSequence, vec!["HostCall".into(), "HostCall".into()], 0, 4);
+    let mut motif = FusionMotif::new(
+        MotifKind::HostcallSequence,
+        vec!["HostCall".into(), "HostCall".into()],
+        0,
+        4,
+    );
     motif.mark_effectful();
     assert_eq!(
         policy.validate_motif(&motif),
@@ -608,10 +715,16 @@ fn enrichment_fusion_outcome_serde_roundtrip_all() {
         FusionOutcome::Formed,
         FusionOutcome::NoFusibleMotifs,
         FusionOutcome::AllMotifsRejected,
-        FusionOutcome::InsufficientSavings { net_millionths: 10_000 },
-        FusionOutcome::TraceLimitExceeded { function_id: "fn_x".into() },
+        FusionOutcome::InsufficientSavings {
+            net_millionths: 10_000,
+        },
+        FusionOutcome::TraceLimitExceeded {
+            function_id: "fn_x".into(),
+        },
         FusionOutcome::MissingProofLineage,
-        FusionOutcome::InterferenceBlocked { existing_trace_id: "ft-y".into() },
+        FusionOutcome::InterferenceBlocked {
+            existing_trace_id: "ft-y".into(),
+        },
     ];
     for o in &all {
         let json = serde_json::to_string(o).unwrap();
@@ -661,8 +774,14 @@ fn enrichment_recognizer_arith_chain() {
         recognizer.add_entry(entry);
     }
     let motifs = recognizer.recognize();
-    let arith_motifs: Vec<_> = motifs.iter().filter(|m| m.kind == MotifKind::ArithmeticChain).collect();
-    assert!(!arith_motifs.is_empty(), "should recognize arithmetic chain of 5 ops");
+    let arith_motifs: Vec<_> = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::ArithmeticChain)
+        .collect();
+    assert!(
+        !arith_motifs.is_empty(),
+        "should recognize arithmetic chain of 5 ops"
+    );
 }
 
 #[test]
@@ -672,7 +791,10 @@ fn enrichment_recognizer_property_chain() {
         recognizer.add_entry(entry);
     }
     let motifs = recognizer.recognize();
-    let prop_motifs: Vec<_> = motifs.iter().filter(|m| m.kind == MotifKind::PropertyChain).collect();
+    let prop_motifs: Vec<_> = motifs
+        .iter()
+        .filter(|m| m.kind == MotifKind::PropertyChain)
+        .collect();
     assert!(!prop_motifs.is_empty(), "should recognize property chain");
 }
 
@@ -683,13 +805,21 @@ fn enrichment_recognizer_property_chain() {
 #[test]
 fn enrichment_catalog_defaults_non_empty() {
     let catalog = FusionTemplateCatalog::new();
-    assert!(catalog.template_count() >= 4, "should have default templates");
+    assert!(
+        catalog.template_count() >= 4,
+        "should have default templates"
+    );
 }
 
 #[test]
 fn enrichment_catalog_find_template_for_arith() {
     let catalog = FusionTemplateCatalog::new();
-    let motif = FusionMotif::new(MotifKind::ArithmeticChain, vec!["Add".into(), "Sub".into(), "Mul".into()], 0, 8);
+    let motif = FusionMotif::new(
+        MotifKind::ArithmeticChain,
+        vec!["Add".into(), "Sub".into(), "Mul".into()],
+        0,
+        8,
+    );
     let template = catalog.find_template(&motif);
     assert!(template.is_some());
     assert_eq!(template.unwrap().opcode, "SuperArithChain");
@@ -770,12 +900,19 @@ fn enrichment_engine_trace_limit_exceeded() {
     policy.max_traces_per_function = 1;
     let mut engine = TraceFusionEngine::with_policy(policy, epoch(1));
     let entries1 = arith_entries(5, 100);
-    assert_eq!(engine.fuse("fn_test", &entries1, None), FusionOutcome::Formed);
+    assert_eq!(
+        engine.fuse("fn_test", &entries1, None),
+        FusionOutcome::Formed
+    );
     // Offset entries to avoid interference
-    let entries2: Vec<_> = arith_entries(5, 100).into_iter().enumerate().map(|(i, mut e)| {
-        e.offset = (i as u32 + 100) * 4;
-        e
-    }).collect();
+    let entries2: Vec<_> = arith_entries(5, 100)
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut e)| {
+            e.offset = (i as u32 + 100) * 4;
+            e
+        })
+        .collect();
     let outcome = engine.fuse("fn_test", &entries2, None);
     assert!(matches!(outcome, FusionOutcome::TraceLimitExceeded { .. }));
 }
@@ -786,7 +923,12 @@ fn enrichment_engine_disable_trace() {
     let entries = arith_entries(5, 100);
     engine.fuse("fn_test", &entries, None);
     let trace_id = engine.active_traces.keys().next().unwrap().clone();
-    assert!(engine.disable_trace(&trace_id, FusionDisableReason::OperatorDisabled { reason: "test".into() }));
+    assert!(engine.disable_trace(
+        &trace_id,
+        FusionDisableReason::OperatorDisabled {
+            reason: "test".into()
+        }
+    ));
     assert_eq!(engine.active_count(), 0);
     assert_eq!(engine.total_count(), 1);
 }
@@ -797,7 +939,12 @@ fn enrichment_engine_enable_trace() {
     let entries = arith_entries(5, 100);
     engine.fuse("fn_test", &entries, None);
     let trace_id = engine.active_traces.keys().next().unwrap().clone();
-    engine.disable_trace(&trace_id, FusionDisableReason::OperatorDisabled { reason: "test".into() });
+    engine.disable_trace(
+        &trace_id,
+        FusionDisableReason::OperatorDisabled {
+            reason: "test".into(),
+        },
+    );
     assert!(engine.enable_trace(&trace_id));
     assert_eq!(engine.active_count(), 1);
 }

@@ -280,7 +280,13 @@ fn enrichment_policy_profile_clone_equals_original() {
 
 #[test]
 fn enrichment_policy_profile_serde_with_regime() {
-    for regime in [Regime::Normal, Regime::Elevated, Regime::Attack, Regime::Degraded, Regime::Recovery] {
+    for regime in [
+        Regime::Normal,
+        Regime::Elevated,
+        Regime::Attack,
+        Regime::Degraded,
+        Regime::Recovery,
+    ] {
         let mut dims = BTreeMap::new();
         dims.insert("dim".into(), 500_000);
         let p = PolicyProfile::for_regime("test", regime, dims);
@@ -639,7 +645,10 @@ fn enrichment_specimen_family_all_unique() {
 
 #[test]
 fn enrichment_specimen_family_all_as_str_unique() {
-    let strs: BTreeSet<&str> = MorphingSpecimenFamily::ALL.iter().map(|f| f.as_str()).collect();
+    let strs: BTreeSet<&str> = MorphingSpecimenFamily::ALL
+        .iter()
+        .map(|f| f.as_str())
+        .collect();
     assert_eq!(strs.len(), MorphingSpecimenFamily::ALL.len());
 }
 
@@ -665,11 +674,23 @@ fn enrichment_specimen_family_serde_all_variants() {
 #[test]
 fn enrichment_specimen_family_specific_values() {
     assert_eq!(MorphingSpecimenFamily::Transition.as_str(), "transition");
-    assert_eq!(MorphingSpecimenFamily::BudgetExhaustion.as_str(), "budget_exhaustion");
-    assert_eq!(MorphingSpecimenFamily::StepDistance.as_str(), "step_distance");
-    assert_eq!(MorphingSpecimenFamily::EntropyBounds.as_str(), "entropy_bounds");
+    assert_eq!(
+        MorphingSpecimenFamily::BudgetExhaustion.as_str(),
+        "budget_exhaustion"
+    );
+    assert_eq!(
+        MorphingSpecimenFamily::StepDistance.as_str(),
+        "step_distance"
+    );
+    assert_eq!(
+        MorphingSpecimenFamily::EntropyBounds.as_str(),
+        "entropy_bounds"
+    );
     assert_eq!(MorphingSpecimenFamily::Cooldown.as_str(), "cooldown");
-    assert_eq!(MorphingSpecimenFamily::Interpolation.as_str(), "interpolation");
+    assert_eq!(
+        MorphingSpecimenFamily::Interpolation.as_str(),
+        "interpolation"
+    );
     assert_eq!(MorphingSpecimenFamily::Fallback.as_str(), "fallback");
     assert_eq!(MorphingSpecimenFamily::NoOp.as_str(), "no_op");
 }
@@ -1073,7 +1094,10 @@ fn enrichment_morpher_reject_increments_fallback_count() {
     m.current_regime = RegimeLabel::Classified(Regime::Normal);
     m.morph(RegimeLabel::Abstention);
     // After first rejected morph, fallback_count should be at least 1.
-    assert!(m.fallback_count >= 1, "first rejection should set fallback_count >= 1");
+    assert!(
+        m.fallback_count >= 1,
+        "first rejection should set fallback_count >= 1"
+    );
 }
 
 #[test]
@@ -1208,9 +1232,15 @@ fn enrichment_morpher_interpolation_with_low_rate_produces_small_step() {
     let mut m = build_morpher_with_config(1, config);
     m.current_regime = RegimeLabel::Classified(Regime::Normal);
     let outcome = m.morph(RegimeLabel::Classified(Regime::Elevated));
-    if let MorphingOutcome::Applied { distance_millionths, .. } = outcome {
-        assert!(distance_millionths <= 100_000,
-            "blended distance {distance_millionths} should be <= 100_000");
+    if let MorphingOutcome::Applied {
+        distance_millionths,
+        ..
+    } = outcome
+    {
+        assert!(
+            distance_millionths <= 100_000,
+            "blended distance {distance_millionths} should be <= 100_000"
+        );
     }
 }
 
@@ -1238,7 +1268,7 @@ fn enrichment_morpher_interpolation_full_rate_applies_target_directly() {
     // With interpolation_rate = 1.0 and large max_step, target should be applied directly
     let config = MorphingConfig {
         max_step_distance_millionths: 10_000_000, // very large
-        interpolation_rate_millionths: 1_000_000,  // 1.0
+        interpolation_rate_millionths: 1_000_000, // 1.0
         ..MorphingConfig::default()
     };
     let mut m = build_morpher_with_config(1, config);
@@ -1308,8 +1338,14 @@ fn enrichment_morpher_history_from_and_to_regime_correct() {
     let mut m = build_morpher(1);
     m.current_regime = RegimeLabel::Classified(Regime::Normal);
     m.morph(RegimeLabel::Classified(Regime::Elevated));
-    assert_eq!(m.history[0].from_regime, RegimeLabel::Classified(Regime::Normal));
-    assert_eq!(m.history[0].to_regime, RegimeLabel::Classified(Regime::Elevated));
+    assert_eq!(
+        m.history[0].from_regime,
+        RegimeLabel::Classified(Regime::Normal)
+    );
+    assert_eq!(
+        m.history[0].to_regime,
+        RegimeLabel::Classified(Regime::Elevated)
+    );
 }
 
 #[test]
@@ -1550,7 +1586,11 @@ fn enrichment_runner_evidence_specimen_ids_match_corpus() {
     let corpus = entropic_policy_morphing::morphing_corpus();
     let inv = entropic_policy_morphing::run_morphing_corpus();
     let corpus_ids: BTreeSet<&str> = corpus.iter().map(|s| s.specimen_id.as_str()).collect();
-    let evidence_ids: BTreeSet<&str> = inv.evidence.iter().map(|e| e.specimen_id.as_str()).collect();
+    let evidence_ids: BTreeSet<&str> = inv
+        .evidence
+        .iter()
+        .map(|e| e.specimen_id.as_str())
+        .collect();
     assert_eq!(corpus_ids, evidence_ids);
 }
 
@@ -1566,14 +1606,22 @@ fn enrichment_runner_evidence_order_matches_corpus() {
 #[test]
 fn enrichment_runner_pass_count_equals_pass_verdicts() {
     let inv = entropic_policy_morphing::run_morphing_corpus();
-    let count = inv.evidence.iter().filter(|e| e.verdict == MorphingVerdict::Pass).count() as u64;
+    let count = inv
+        .evidence
+        .iter()
+        .filter(|e| e.verdict == MorphingVerdict::Pass)
+        .count() as u64;
     assert_eq!(inv.pass_count, count);
 }
 
 #[test]
 fn enrichment_runner_fail_count_equals_fail_verdicts() {
     let inv = entropic_policy_morphing::run_morphing_corpus();
-    let count = inv.evidence.iter().filter(|e| e.verdict == MorphingVerdict::Fail).count() as u64;
+    let count = inv
+        .evidence
+        .iter()
+        .filter(|e| e.verdict == MorphingVerdict::Fail)
+        .count() as u64;
     assert_eq!(inv.fail_count, count);
 }
 
@@ -1708,7 +1756,12 @@ fn enrichment_bundle_writer_inventory_hash_is_64_hex() {
     let _ = std::fs::remove_dir_all(&dir);
     let artifacts = entropic_policy_morphing::write_morphing_evidence_bundle(&dir, &[]).unwrap();
     assert_eq!(artifacts.inventory_hash.len(), 64);
-    assert!(artifacts.inventory_hash.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(
+        artifacts
+            .inventory_hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1844,7 +1897,10 @@ fn enrichment_edge_profile_entropy_with_very_skewed_distribution() {
     let e = p.entropy_millionths();
     // Very concentrated distribution -> low entropy, close to 0
     assert!(e >= 0, "entropy should be non-negative: {e}");
-    assert!(e < 100_000, "expected low entropy for skewed distribution, got {e}");
+    assert!(
+        e < 100_000,
+        "expected low entropy for skewed distribution, got {e}"
+    );
 }
 
 #[test]

@@ -15,9 +15,11 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::compiler_policy::*;
-use frankenengine_engine::engine_object_id::{derive_id, ObjectDomain, SchemaId};
+use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::ifc_artifacts::Label;
-use frankenengine_engine::proof_specialization_receipt::{OptimizationClass, ProofInput, ProofType};
+use frankenengine_engine::proof_specialization_receipt::{
+    OptimizationClass, ProofInput, ProofType,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -259,7 +261,10 @@ fn enrichment_marked_region_field_access() {
         elided_check_description: "elide path check".to_string(),
     };
     assert_eq!(region.region_id, "region-42");
-    assert_eq!(region.optimization_class, OptimizationClass::PathElimination);
+    assert_eq!(
+        region.optimization_class,
+        OptimizationClass::PathElimination
+    );
     assert_eq!(region.proof_refs.len(), 1);
     assert_eq!(region.proof_refs[0], pid);
     assert_eq!(region.elided_check_description, "elide path check");
@@ -323,7 +328,9 @@ fn enrichment_marked_region_json_field_names() {
 
 #[test]
 fn enrichment_marked_region_multiple_proof_refs() {
-    let ids: Vec<_> = (0..5).map(|i| make_proof_id(&format!("multi-{i}"))).collect();
+    let ids: Vec<_> = (0..5)
+        .map(|i| make_proof_id(&format!("multi-{i}")))
+        .collect();
     let region = MarkedRegion {
         region_id: "multi".to_string(),
         optimization_class: OptimizationClass::SuperinstructionFusion,
@@ -1224,10 +1231,7 @@ fn enrichment_engine_epoch_change_emits_event_when_invalidated() {
     assert!(engine.events().len() > events_before);
     let last = engine.events().last().unwrap();
     assert_eq!(last.event, "epoch_change_invalidation");
-    assert_eq!(
-        last.error_code.as_deref(),
-        Some("INVALIDATED_EPOCH_CHANGE")
-    );
+    assert_eq!(last.error_code.as_deref(), Some("INVALIDATED_EPOCH_CHANGE"));
 }
 
 #[test]
@@ -1571,8 +1575,18 @@ fn enrichment_engine_decision_ids_are_monotonic() {
     // decision_ids are "cpe-N" with increasing N
     assert!(d1.decision_id.starts_with("cpe-"));
     assert!(d2.decision_id.starts_with("cpe-"));
-    let n1: u64 = d1.decision_id.strip_prefix("cpe-").unwrap().parse().unwrap();
-    let n2: u64 = d2.decision_id.strip_prefix("cpe-").unwrap().parse().unwrap();
+    let n1: u64 = d1
+        .decision_id
+        .strip_prefix("cpe-")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let n2: u64 = d2
+        .decision_id
+        .strip_prefix("cpe-")
+        .unwrap()
+        .parse()
+        .unwrap();
     assert!(n2 > n1);
 }
 
@@ -2249,12 +2263,7 @@ fn enrichment_large_proof_batch() {
     assert!(d.outcome.is_applied());
 
     // Invalidate all
-    let removed = engine.on_epoch_change(
-        epoch,
-        SecurityEpoch::from_raw(2),
-        "t-batch-ec",
-        1000,
-    );
+    let removed = engine.on_epoch_change(epoch, SecurityEpoch::from_raw(2), "t-batch-ec", 1000);
     assert_eq!(removed.len(), 50);
     assert!(engine.proof_store().is_empty());
 }

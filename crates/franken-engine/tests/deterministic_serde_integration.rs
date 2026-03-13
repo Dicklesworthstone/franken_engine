@@ -633,10 +633,11 @@ fn enrichment_schema_hash_ord_last_byte_differs() {
 
 #[test]
 fn enrichment_schema_hash_display_lowercase_hex() {
-    let hash = SchemaHash([0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89,
-                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    let hash = SchemaHash([
+        0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    ]);
     let s = hash.to_string();
     assert!(s.starts_with("abcdef0123456789"));
     // All lowercase
@@ -811,83 +812,137 @@ fn enrichment_map_single_key_roundtrip() {
 fn enrichment_decode_truncated_i64_error() {
     let mut data = encode_value(&CanonicalValue::I64(99));
     data.truncate(5); // tag + 4 of 8
-    assert!(matches!(decode_value(&data), Err(SerdeError::BufferTooShort { .. })));
+    assert!(matches!(
+        decode_value(&data),
+        Err(SerdeError::BufferTooShort { .. })
+    ));
 }
 
 #[test]
 fn enrichment_decode_truncated_string_length_error() {
     // String tag + only 2 bytes of length prefix (need 4)
     let data = vec![0x05, 0x00, 0x00];
-    assert!(matches!(decode_value(&data), Err(SerdeError::BufferTooShort { .. })));
+    assert!(matches!(
+        decode_value(&data),
+        Err(SerdeError::BufferTooShort { .. })
+    ));
 }
 
 #[test]
 fn enrichment_decode_truncated_string_body_error() {
     // String tag + length=5 + only 2 bytes of body
     let data = vec![0x05, 0x00, 0x00, 0x00, 0x05, b'a', b'b'];
-    assert!(matches!(decode_value(&data), Err(SerdeError::BufferTooShort { .. })));
+    assert!(matches!(
+        decode_value(&data),
+        Err(SerdeError::BufferTooShort { .. })
+    ));
 }
 
 #[test]
 fn enrichment_decode_truncated_bytes_length_error() {
     let data = vec![0x04, 0x00, 0x00];
-    assert!(matches!(decode_value(&data), Err(SerdeError::BufferTooShort { .. })));
+    assert!(matches!(
+        decode_value(&data),
+        Err(SerdeError::BufferTooShort { .. })
+    ));
 }
 
 #[test]
 fn enrichment_decode_truncated_bytes_body_error() {
     let data = vec![0x04, 0x00, 0x00, 0x00, 0x03, 0xAA];
-    assert!(matches!(decode_value(&data), Err(SerdeError::BufferTooShort { .. })));
+    assert!(matches!(
+        decode_value(&data),
+        Err(SerdeError::BufferTooShort { .. })
+    ));
 }
 
 #[test]
 fn enrichment_decode_truncated_array_count_error() {
     let data = vec![0x06, 0x00, 0x00]; // array tag + partial count
-    assert!(matches!(decode_value(&data), Err(SerdeError::BufferTooShort { .. })));
+    assert!(matches!(
+        decode_value(&data),
+        Err(SerdeError::BufferTooShort { .. })
+    ));
 }
 
 #[test]
 fn enrichment_decode_truncated_map_count_error() {
     let data = vec![0x07, 0x00]; // map tag + partial count
-    assert!(matches!(decode_value(&data), Err(SerdeError::BufferTooShort { .. })));
+    assert!(matches!(
+        decode_value(&data),
+        Err(SerdeError::BufferTooShort { .. })
+    ));
 }
 
 #[test]
 fn enrichment_decode_truncated_bool_error() {
     let data = vec![0x03]; // bool tag, no value byte
-    assert!(matches!(decode_value(&data), Err(SerdeError::BufferTooShort { .. })));
+    assert!(matches!(
+        decode_value(&data),
+        Err(SerdeError::BufferTooShort { .. })
+    ));
 }
 
 #[test]
 fn enrichment_decode_invalid_bool_0xff() {
     let data = vec![0x03, 0xFF];
     let err = decode_value(&data).unwrap_err();
-    assert!(matches!(err, SerdeError::InvalidBoolEncoding { value: 0xFF, offset: 1 }));
+    assert!(matches!(
+        err,
+        SerdeError::InvalidBoolEncoding {
+            value: 0xFF,
+            offset: 1
+        }
+    ));
 }
 
 #[test]
 fn enrichment_decode_invalid_bool_0x80() {
     let data = vec![0x03, 0x80];
     let err = decode_value(&data).unwrap_err();
-    assert!(matches!(err, SerdeError::InvalidBoolEncoding { value: 0x80, offset: 1 }));
+    assert!(matches!(
+        err,
+        SerdeError::InvalidBoolEncoding {
+            value: 0x80,
+            offset: 1
+        }
+    ));
 }
 
 #[test]
 fn enrichment_decode_invalid_tag_0x00() {
     let err = decode_value(&[0x00]).unwrap_err();
-    assert!(matches!(err, SerdeError::InvalidTag { tag: 0x00, offset: 0 }));
+    assert!(matches!(
+        err,
+        SerdeError::InvalidTag {
+            tag: 0x00,
+            offset: 0
+        }
+    ));
 }
 
 #[test]
 fn enrichment_decode_invalid_tag_0x09() {
     let err = decode_value(&[0x09]).unwrap_err();
-    assert!(matches!(err, SerdeError::InvalidTag { tag: 0x09, offset: 0 }));
+    assert!(matches!(
+        err,
+        SerdeError::InvalidTag {
+            tag: 0x09,
+            offset: 0
+        }
+    ));
 }
 
 #[test]
 fn enrichment_decode_invalid_tag_0x10() {
     let err = decode_value(&[0x10]).unwrap_err();
-    assert!(matches!(err, SerdeError::InvalidTag { tag: 0x10, offset: 0 }));
+    assert!(matches!(
+        err,
+        SerdeError::InvalidTag {
+            tag: 0x10,
+            offset: 0
+        }
+    ));
 }
 
 #[test]
@@ -915,7 +970,10 @@ fn enrichment_decode_non_lexicographic_keys_ba() {
     bytes.push(0x08); // NULL
     let err = decode_value(&bytes).unwrap_err();
     match err {
-        SerdeError::NonLexicographicKeys { prev_key, current_key } => {
+        SerdeError::NonLexicographicKeys {
+            prev_key,
+            current_key,
+        } => {
             assert_eq!(prev_key, "b");
             assert_eq!(current_key, "a");
         }
@@ -1022,7 +1080,13 @@ fn enrichment_deserialize_with_schema_trailing_bytes_rejected() {
 fn enrichment_deserialize_with_schema_empty_buffer() {
     let schema = test_schema();
     let err = deserialize_with_schema(&schema, &[]).unwrap_err();
-    assert!(matches!(err, SerdeError::BufferTooShort { expected: 32, actual: 0 }));
+    assert!(matches!(
+        err,
+        SerdeError::BufferTooShort {
+            expected: 32,
+            actual: 0
+        }
+    ));
 }
 
 // -- SchemaRegistry edge cases --
@@ -1079,7 +1143,13 @@ fn enrichment_registry_deserialize_checked_returns_correct_definition() {
 fn enrichment_registry_deserialize_checked_empty_buffer() {
     let reg = SchemaRegistry::new();
     let err = reg.deserialize_checked(&[]).unwrap_err();
-    assert!(matches!(err, SerdeError::BufferTooShort { expected: 32, actual: 0 }));
+    assert!(matches!(
+        err,
+        SerdeError::BufferTooShort {
+            expected: 32,
+            actual: 0
+        }
+    ));
 }
 
 #[test]
@@ -1124,25 +1194,31 @@ fn enrichment_canonical_hash_empty_string_vs_empty_bytes() {
 #[test]
 fn enrichment_canonical_hash_array_order_matters() {
     let schema = test_schema();
-    let h1 = canonical_hash(&schema, &CanonicalValue::Array(vec![
-        CanonicalValue::U64(1), CanonicalValue::U64(2),
-    ]));
-    let h2 = canonical_hash(&schema, &CanonicalValue::Array(vec![
-        CanonicalValue::U64(2), CanonicalValue::U64(1),
-    ]));
+    let h1 = canonical_hash(
+        &schema,
+        &CanonicalValue::Array(vec![CanonicalValue::U64(1), CanonicalValue::U64(2)]),
+    );
+    let h2 = canonical_hash(
+        &schema,
+        &CanonicalValue::Array(vec![CanonicalValue::U64(2), CanonicalValue::U64(1)]),
+    );
     assert_ne!(h1, h2);
 }
 
 #[test]
 fn enrichment_canonical_hash_map_vs_array_with_same_content_differ() {
     let schema = test_schema();
-    let h_map = canonical_hash(&schema, &CanonicalValue::Map(BTreeMap::from([
-        ("k".to_string(), CanonicalValue::U64(1)),
-    ])));
-    let h_arr = canonical_hash(&schema, &CanonicalValue::Array(vec![
-        CanonicalValue::String("k".to_string()),
-        CanonicalValue::U64(1),
-    ]));
+    let h_map = canonical_hash(
+        &schema,
+        &CanonicalValue::Map(BTreeMap::from([("k".to_string(), CanonicalValue::U64(1))])),
+    );
+    let h_arr = canonical_hash(
+        &schema,
+        &CanonicalValue::Array(vec![
+            CanonicalValue::String("k".to_string()),
+            CanonicalValue::U64(1),
+        ]),
+    );
     assert_ne!(h_map, h_arr);
 }
 
@@ -1171,8 +1247,14 @@ fn enrichment_canonical_value_ne_different_variants() {
         (CanonicalValue::U64(0), CanonicalValue::I64(0)),
         (CanonicalValue::Bool(true), CanonicalValue::U64(1)),
         (CanonicalValue::Null, CanonicalValue::Bool(false)),
-        (CanonicalValue::Bytes(vec![]), CanonicalValue::String(String::new())),
-        (CanonicalValue::Array(vec![]), CanonicalValue::Map(BTreeMap::new())),
+        (
+            CanonicalValue::Bytes(vec![]),
+            CanonicalValue::String(String::new()),
+        ),
+        (
+            CanonicalValue::Array(vec![]),
+            CanonicalValue::Map(BTreeMap::new()),
+        ),
     ];
     for (a, b) in &pairs {
         assert_ne!(a, b);
@@ -1193,14 +1275,13 @@ fn enrichment_canonical_value_debug_contains_variant_name() {
 
 #[test]
 fn enrichment_canonical_value_clone_deep_nested() {
-    let val = CanonicalValue::Array(vec![
-        CanonicalValue::Map(BTreeMap::from([
-            ("inner".to_string(), CanonicalValue::Array(vec![
-                CanonicalValue::I64(-999),
-                CanonicalValue::Bytes(vec![0xDE, 0xAD]),
-            ])),
-        ])),
-    ]);
+    let val = CanonicalValue::Array(vec![CanonicalValue::Map(BTreeMap::from([(
+        "inner".to_string(),
+        CanonicalValue::Array(vec![
+            CanonicalValue::I64(-999),
+            CanonicalValue::Bytes(vec![0xDE, 0xAD]),
+        ]),
+    )]))]);
     let cloned = val.clone();
     assert_eq!(val, cloned);
 }
@@ -1259,7 +1340,10 @@ fn enrichment_serde_error_json_roundtrip_recursion_limit() {
 
 #[test]
 fn enrichment_display_buffer_too_short_shows_both_sizes() {
-    let err = SerdeError::BufferTooShort { expected: 256, actual: 10 };
+    let err = SerdeError::BufferTooShort {
+        expected: 256,
+        actual: 10,
+    };
     let msg = err.to_string();
     assert!(msg.contains("256"));
     assert!(msg.contains("10"));
@@ -1267,7 +1351,9 @@ fn enrichment_display_buffer_too_short_shows_both_sizes() {
 
 #[test]
 fn enrichment_display_duplicate_key_shows_key_name() {
-    let err = SerdeError::DuplicateKey { key: "my_field".to_string() };
+    let err = SerdeError::DuplicateKey {
+        key: "my_field".to_string(),
+    };
     let msg = err.to_string();
     assert!(msg.contains("my_field"));
 }
@@ -1360,13 +1446,17 @@ fn enrichment_determinism_map_with_many_keys() {
 #[test]
 fn enrichment_determinism_complex_nested_structure() {
     let val = CanonicalValue::Map(BTreeMap::from([
-        ("alpha".to_string(), CanonicalValue::Array(vec![
-            CanonicalValue::U64(1),
-            CanonicalValue::I64(-1),
-            CanonicalValue::Map(BTreeMap::from([
-                ("nested".to_string(), CanonicalValue::Bool(true)),
-            ])),
-        ])),
+        (
+            "alpha".to_string(),
+            CanonicalValue::Array(vec![
+                CanonicalValue::U64(1),
+                CanonicalValue::I64(-1),
+                CanonicalValue::Map(BTreeMap::from([(
+                    "nested".to_string(),
+                    CanonicalValue::Bool(true),
+                )])),
+            ]),
+        ),
         ("beta".to_string(), CanonicalValue::Bytes(vec![0xCA, 0xFE])),
         ("gamma".to_string(), CanonicalValue::Null),
     ]));
@@ -1446,11 +1536,17 @@ fn enrichment_roundtrip_array_of_maps() {
 fn enrichment_roundtrip_map_of_arrays() {
     let val = CanonicalValue::Map(BTreeMap::from([
         ("empty".to_string(), CanonicalValue::Array(vec![])),
-        ("one".to_string(), CanonicalValue::Array(vec![CanonicalValue::Null])),
-        ("two".to_string(), CanonicalValue::Array(vec![
-            CanonicalValue::Bool(true),
-            CanonicalValue::Bool(false),
-        ])),
+        (
+            "one".to_string(),
+            CanonicalValue::Array(vec![CanonicalValue::Null]),
+        ),
+        (
+            "two".to_string(),
+            CanonicalValue::Array(vec![
+                CanonicalValue::Bool(true),
+                CanonicalValue::Bool(false),
+            ]),
+        ),
     ]));
     assert_eq!(decode_value(&encode_value(&val)).unwrap(), val);
 }
@@ -1460,9 +1556,10 @@ fn enrichment_roundtrip_map_of_arrays() {
 #[test]
 fn enrichment_canonical_hash_same_value_same_schema_always_same() {
     let schema = SchemaHash::from_definition(b"stable-schema");
-    let val = CanonicalValue::Map(BTreeMap::from([
-        ("field".to_string(), CanonicalValue::U64(999)),
-    ]));
+    let val = CanonicalValue::Map(BTreeMap::from([(
+        "field".to_string(),
+        CanonicalValue::U64(999),
+    )]));
     let first = canonical_hash(&schema, &val);
     for _ in 0..20 {
         assert_eq!(canonical_hash(&schema, &val), first);
@@ -1481,14 +1578,13 @@ fn enrichment_canonical_hash_single_bit_flip_differs() {
 
 #[test]
 fn enrichment_canonical_value_json_nested_roundtrip() {
-    let val = CanonicalValue::Array(vec![
-        CanonicalValue::Map(BTreeMap::from([
-            ("deep".to_string(), CanonicalValue::Array(vec![
-                CanonicalValue::I64(i64::MIN),
-                CanonicalValue::U64(u64::MAX),
-            ])),
-        ])),
-    ]);
+    let val = CanonicalValue::Array(vec![CanonicalValue::Map(BTreeMap::from([(
+        "deep".to_string(),
+        CanonicalValue::Array(vec![
+            CanonicalValue::I64(i64::MIN),
+            CanonicalValue::U64(u64::MAX),
+        ]),
+    )]))]);
     let json = serde_json::to_string(&val).unwrap();
     let back: CanonicalValue = serde_json::from_str(&json).unwrap();
     assert_eq!(val, back);
@@ -1521,12 +1617,25 @@ fn enrichment_serde_error_source_none_for_all_variants() {
             expected: test_schema(),
             actual: SchemaHash([0; 32]),
         },
-        SerdeError::UnknownSchema { schema_hash: test_schema() },
-        SerdeError::BufferTooShort { expected: 1, actual: 0 },
-        SerdeError::InvalidTag { tag: 0xFF, offset: 0 },
-        SerdeError::InvalidBoolEncoding { value: 0x02, offset: 0 },
+        SerdeError::UnknownSchema {
+            schema_hash: test_schema(),
+        },
+        SerdeError::BufferTooShort {
+            expected: 1,
+            actual: 0,
+        },
+        SerdeError::InvalidTag {
+            tag: 0xFF,
+            offset: 0,
+        },
+        SerdeError::InvalidBoolEncoding {
+            value: 0x02,
+            offset: 0,
+        },
         SerdeError::InvalidUtf8 { offset: 0 },
-        SerdeError::DuplicateKey { key: "k".to_string() },
+        SerdeError::DuplicateKey {
+            key: "k".to_string(),
+        },
         SerdeError::NonLexicographicKeys {
             prev_key: "b".to_string(),
             current_key: "a".to_string(),

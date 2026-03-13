@@ -1984,3 +1984,1005 @@ fn output_witness_normalized_hash_differs_for_different_source() {
     let o2 = normalize("const b = 2;").unwrap();
     assert_ne!(o1.witness.normalized_hash, o2.witness.normalized_hash);
 }
+
+// ===========================================================================
+// Enrichment tests — TypeScript normalization transforms, type erasure,
+// edge cases, determinism, and TS-specific constructs
+// ===========================================================================
+
+#[test]
+fn enrichment_type_annotation_on_let_variable() {
+    let source = "let count: number = 0;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains(": number"));
+    assert!(output.normalized_source.contains("let count"));
+    assert!(output.normalized_source.contains("0"));
+}
+
+#[test]
+fn enrichment_type_annotation_on_var_variable() {
+    let source = "var name: string = 'alice';";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains(": string"));
+    assert!(output.normalized_source.contains("'alice'"));
+}
+
+#[test]
+fn enrichment_multiple_type_annotations_single_line() {
+    let source = "function add(a: number, b: number): number { return a + b; }";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains(": number"));
+    assert!(output.normalized_source.contains("function add"));
+    assert!(output.normalized_source.contains("return a + b"));
+}
+
+#[test]
+fn enrichment_interface_with_multiple_members() {
+    let source = "interface User { name: string; age: number; active: boolean; }\nconst u = {};";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("interface User"));
+    assert!(!output.normalized_source.contains(": string"));
+    assert!(!output.normalized_source.contains(": number"));
+    assert!(!output.normalized_source.contains(": boolean"));
+    assert!(output.normalized_source.contains("const u = {}"));
+}
+
+#[test]
+fn enrichment_type_alias_union() {
+    let source = "type Result = string | number;\nconst r = 'ok';";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("type Result"));
+    assert!(output.normalized_source.contains("const r = 'ok'"));
+}
+
+#[test]
+fn enrichment_type_alias_intersection() {
+    let source = "type Combined = A & B;\nconst c = {};";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("type Combined"));
+    assert!(output.normalized_source.contains("const c = {}"));
+}
+
+#[test]
+fn enrichment_export_interface_stripped() {
+    let source = "export interface Config { debug: boolean; }\nconst val = 10;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("export interface"));
+    assert!(!output.normalized_source.contains("Config"));
+    assert!(output.normalized_source.contains("const val = 10"));
+}
+
+#[test]
+fn enrichment_export_type_alias_stripped() {
+    let source = "export type Id = string;\nconst id = 'abc';";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("export type"));
+    assert!(output.normalized_source.contains("const id = 'abc'"));
+}
+
+#[test]
+fn enrichment_enum_numeric_auto_increment() {
+    let source = "enum Status { Ready, Active, Done }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("Ready: 0"));
+    assert!(output.normalized_source.contains("Active: 1"));
+    assert!(output.normalized_source.contains("Done: 2"));
+    assert!(output.normalized_source.contains("Object.freeze"));
+}
+
+#[test]
+fn enrichment_enum_explicit_numeric_values() {
+    let source = "enum Level { Low = 1, Medium = 5, High = 10 }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("Low: 1"));
+    assert!(output.normalized_source.contains("Medium: 5"));
+    assert!(output.normalized_source.contains("High: 10"));
+}
+
+#[test]
+fn enrichment_enum_mixed_explicit_and_auto() {
+    let source = "enum Priority { Low, Medium = 5, High }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("Low: 0"));
+    assert!(output.normalized_source.contains("Medium: 5"));
+    assert!(output.normalized_source.contains("High: 6"));
+}
+
+#[test]
+fn enrichment_const_assertion_in_array() {
+    let source = "const arr = [1, 2, 3] as const;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("as const"));
+    assert!(output.normalized_source.contains("[1, 2, 3]"));
+}
+
+#[test]
+fn enrichment_const_assertion_in_nested_object() {
+    let source = "const config = { nested: { val: 1 } } as const;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("as const"));
+    assert!(output.normalized_source.contains("nested"));
+}
+
+#[test]
+fn enrichment_definite_assignment_in_class_member() {
+    let source = "class Svc { db!: Database; run() { return 1; } }";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("!:"));
+    assert!(output.normalized_source.contains("run()"));
+}
+
+#[test]
+fn enrichment_implements_multiple_interfaces() {
+    let source = "class Widget implements Serializable, Renderable { render() { return 0; } }";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("implements"));
+    assert!(!output.normalized_source.contains("Serializable"));
+    assert!(!output.normalized_source.contains("Renderable"));
+    assert!(output.normalized_source.contains("class Widget"));
+    assert!(output.normalized_source.contains("render()"));
+}
+
+#[test]
+fn enrichment_abstract_class_with_method() {
+    let source = "abstract class Shape { getArea() { return 0; } }";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("abstract"));
+    assert!(output.normalized_source.contains("class Shape"));
+    assert!(output.normalized_source.contains("getArea()"));
+}
+
+#[test]
+fn enrichment_parameter_property_public() {
+    let source = "constructor(public name: string) { }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("this.name = name;"));
+    assert!(!output.normalized_source.contains("public"));
+}
+
+#[test]
+fn enrichment_parameter_property_protected() {
+    let source = "constructor(protected id: number) { }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("this.id = id;"));
+    assert!(!output.normalized_source.contains("protected"));
+}
+
+#[test]
+fn enrichment_parameter_property_multiple() {
+    let source = "constructor(private a: number, public b: string) { }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("this.a = a;"));
+    assert!(output.normalized_source.contains("this.b = b;"));
+}
+
+#[test]
+fn enrichment_namespace_with_multiple_exports() {
+    let source = "namespace Math { export const PI = 3; export const E = 2; }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("const Math = (() => {"));
+    assert!(output.normalized_source.contains("ns.PI = 3;"));
+    assert!(output.normalized_source.contains("ns.E = 2;"));
+    assert!(output.normalized_source.contains("return ns;"));
+}
+
+#[test]
+fn enrichment_decorator_with_class_body() {
+    let source = "@injectable\nclass Logger { log() { return 'ok'; } }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("__applyClassDecorator"));
+    assert!(output.normalized_source.contains("injectable"));
+    assert!(output.normalized_source.contains("Logger"));
+}
+
+#[test]
+fn enrichment_jsx_element_with_text_content() {
+    let source = "<span>world</span>";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("createElement(\"span\", null, world)"));
+}
+
+#[test]
+fn enrichment_jsx_self_closing_custom_component() {
+    let source = "<MyComponent />";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("createElement(\"MyComponent\", null)"));
+}
+
+#[test]
+fn enrichment_jsx_preserve_mode_keeps_tags() {
+    let cfg = TsNormalizationConfig {
+        compiler_options: TsCompilerOptions {
+            jsx: "preserve".into(),
+            ..TsCompilerOptions::default()
+        },
+    };
+    let source = "<Button />";
+    let output = normalize_typescript_to_es2020(source, &cfg, "t-1", "d-1", "p-1").unwrap();
+    assert!(!output.normalized_source.contains("createElement"));
+}
+
+#[test]
+fn enrichment_type_only_import_default() {
+    let source = "import type { default as Def } from 'mod';\nconst x = 1;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("import type"));
+    assert!(output.normalized_source.contains("const x = 1"));
+}
+
+#[test]
+fn enrichment_type_import_with_multiple_specifiers() {
+    let source = "import type { Foo, Bar, Baz } from './types';\nconst y = 2;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("import type"));
+    assert!(output.normalized_source.contains("const y = 2"));
+}
+
+#[test]
+fn enrichment_mixed_imports_only_type_imports_removed() {
+    let source = "import { useState } from 'react';\nimport type { FC } from 'react';\nconst x = useState;";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("import { useState }"));
+    assert!(!output.normalized_source.contains("import type"));
+}
+
+#[test]
+fn enrichment_empty_source_after_stripping_all_types() {
+    let source = "type A = string;\ntype B = number;";
+    let result = normalize(source);
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), TsNormalizationError::EmptySource));
+}
+
+#[test]
+fn enrichment_only_interface_becomes_empty() {
+    let source = "interface A { x: number; }\ninterface B { y: string; }";
+    let result = normalize(source);
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), TsNormalizationError::EmptySource));
+}
+
+#[test]
+fn enrichment_unsupported_target_es2015() {
+    let cfg = TsNormalizationConfig {
+        compiler_options: TsCompilerOptions {
+            target: "es2015".into(),
+            ..TsCompilerOptions::default()
+        },
+    };
+    let err = normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
+    match err {
+        TsNormalizationError::UnsupportedCompilerOption { option, value } => {
+            assert_eq!(option, "target");
+            assert_eq!(value, "es2015");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn enrichment_unsupported_module_umd() {
+    let cfg = TsNormalizationConfig {
+        compiler_options: TsCompilerOptions {
+            module: "umd".into(),
+            ..TsCompilerOptions::default()
+        },
+    };
+    let err = normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
+    match err {
+        TsNormalizationError::UnsupportedCompilerOption { option, value } => {
+            assert_eq!(option, "module");
+            assert_eq!(value, "umd");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn enrichment_unsupported_jsx_react_native() {
+    let cfg = TsNormalizationConfig {
+        compiler_options: TsCompilerOptions {
+            jsx: "react-native".into(),
+            ..TsCompilerOptions::default()
+        },
+    };
+    let err = normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
+    match err {
+        TsNormalizationError::UnsupportedCompilerOption { option, value } => {
+            assert_eq!(option, "jsx");
+            assert_eq!(value, "react-native");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn enrichment_crlf_normalization_preserves_values() {
+    let source = "const a: number = 1;\r\nconst b: string = 'hi';\r\n";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains('\r'));
+    assert!(output.normalized_source.contains("1"));
+    assert!(output.normalized_source.contains("'hi'"));
+}
+
+#[test]
+fn enrichment_cr_only_newlines_normalized() {
+    let source = "const x = 1;\rconst y = 2;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains('\r'));
+    assert!(output.normalized_source.contains("const x = 1"));
+    assert!(output.normalized_source.contains("const y = 2"));
+}
+
+#[test]
+fn enrichment_determinism_witness_with_complex_source() {
+    let source = r#"
+import type { Config } from './types';
+interface Shape { area(): number; }
+type Id = string;
+enum Color { Red, Green, Blue }
+class Service implements Handler {
+    db!: Database;
+    constructor(public name: string) { }
+}
+const config = { a: 1 } as const;
+const val: number = 42;
+"#;
+    let o1 = normalize(source).unwrap();
+    let o2 = normalize(source).unwrap();
+    assert_eq!(o1.normalized_source, o2.normalized_source);
+    assert_eq!(o1.witness, o2.witness);
+    assert_eq!(o1.events, o2.events);
+    assert_eq!(o1.source_map, o2.source_map);
+    assert_eq!(o1.capability_intents, o2.capability_intents);
+}
+
+#[test]
+fn enrichment_determinism_decisions_count_stable() {
+    let source = "enum E { A }\nconst x: number = 1;";
+    let o1 = normalize(source).unwrap();
+    let o2 = normalize(source).unwrap();
+    assert_eq!(o1.witness.decisions.len(), o2.witness.decisions.len());
+    for (d1, d2) in o1.witness.decisions.iter().zip(o2.witness.decisions.iter()) {
+        assert_eq!(d1.step, d2.step);
+        assert_eq!(d1.changed, d2.changed);
+        assert_eq!(d1.detail, d2.detail);
+    }
+}
+
+#[test]
+fn enrichment_source_map_entries_count_matches_normalized_lines() {
+    let source = "const a = 1;\nconst b = 2;\nconst c = 3;";
+    let output = normalize(source).unwrap();
+    let normalized_line_count = output.normalized_source.lines().count();
+    assert_eq!(output.source_map.len(), normalized_line_count);
+}
+
+#[test]
+fn enrichment_source_map_entries_monotonically_increasing() {
+    let source = "const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;";
+    let output = normalize(source).unwrap();
+    for i in 1..output.source_map.len() {
+        assert!(
+            output.source_map[i].normalized_line > output.source_map[i - 1].normalized_line,
+            "normalized_line should be monotonically increasing"
+        );
+    }
+}
+
+#[test]
+fn enrichment_witness_trace_id_preserved() {
+    let output = normalize_typescript_to_es2020(
+        "const x = 1;",
+        &default_config(),
+        "trace-abc-123",
+        "dec-xyz",
+        "pol-999",
+    )
+    .unwrap();
+    assert_eq!(output.witness.trace_id, "trace-abc-123");
+    assert_eq!(output.witness.decision_id, "dec-xyz");
+    assert_eq!(output.witness.policy_id, "pol-999");
+}
+
+#[test]
+fn enrichment_events_trace_ids_match_input() {
+    let output = normalize_typescript_to_es2020(
+        "const x = 1;",
+        &default_config(),
+        "t-evt",
+        "d-evt",
+        "p-evt",
+    )
+    .unwrap();
+    for evt in &output.events {
+        assert_eq!(evt.trace_id, "t-evt");
+        assert_eq!(evt.decision_id, "d-evt");
+        assert_eq!(evt.policy_id, "p-evt");
+    }
+}
+
+#[test]
+fn enrichment_success_events_outcome_is_pass() {
+    let output = normalize("const x = 1;").unwrap();
+    assert!(output.events.iter().any(|e| e.outcome == "pass"));
+}
+
+#[test]
+fn enrichment_failure_event_on_empty_source() {
+    let source = "";
+    let _err = normalize(source).unwrap_err();
+    // The error itself is EmptySource - we verify the error type
+    assert!(matches!(normalize(source).unwrap_err(), TsNormalizationError::EmptySource));
+}
+
+#[test]
+fn enrichment_decision_type_only_import_changed_true() {
+    let source = "import type { Foo } from 'foo';\nconst x = 1;";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "type_only_import_elision").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_type_only_import_changed_false_when_no_type_imports() {
+    let source = "const x = 1;";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "type_only_import_elision").unwrap();
+    assert!(!decision.changed);
+}
+
+#[test]
+fn enrichment_decision_enum_lowering_changed_true() {
+    let source = "enum Dir { Up, Down }";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "enum_lowering").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_enum_lowering_changed_false_when_no_enums() {
+    let source = "const x = 1;";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "enum_lowering").unwrap();
+    assert!(!decision.changed);
+}
+
+#[test]
+fn enrichment_decision_const_assertion_changed_true() {
+    let source = "const x = {} as const;";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "const_assertion_normalization").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_const_assertion_changed_false() {
+    let source = "const x = {};";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "const_assertion_normalization").unwrap();
+    assert!(!decision.changed);
+}
+
+#[test]
+fn enrichment_decision_type_annotation_stripping_changed_true() {
+    let source = "const x: number = 1;";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "type_annotation_stripping").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_type_annotation_stripping_changed_false() {
+    let source = "const x = 1;";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "type_annotation_stripping").unwrap();
+    assert!(!decision.changed);
+}
+
+#[test]
+fn enrichment_decision_namespace_lowering_changed_true() {
+    let source = "namespace NS { export const x = 1; }";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "namespace_lowering").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_decorator_lowering_changed_true() {
+    let source = "@log\nclass Svc { }";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "decorator_lowering").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_abstract_class_lowering_changed_true() {
+    let source = "abstract class Base { run() { return 0; } }";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "abstract_class_lowering").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_implements_clause_changed_true() {
+    let source = "class A implements B { go() { return 1; } }";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "implements_clause_normalization").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_definite_assignment_changed_true() {
+    let source = "class X { val!: number; run() { return 0; } }";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "definite_assignment_normalization").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_jsx_lowering_changed_true() {
+    let source = "<div>hello</div>";
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "jsx_lowering").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_capability_intent_extraction_changed_true() {
+    let source = r#"const x = hostcall<"fs.read">("path");"#;
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "capability_intent_extraction").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_decision_hostcall_type_param_stripping_changed_true() {
+    let source = r#"const x = hostcall<"net.send">("url");"#;
+    let output = normalize(source).unwrap();
+    let decision = output.witness.decisions.iter().find(|d| d.step == "hostcall_type_param_stripping").unwrap();
+    assert!(decision.changed);
+}
+
+#[test]
+fn enrichment_capability_intents_sorted_by_capability() {
+    let source = r#"const a = hostcall<"z.last">("url");
+const b = hostcall<"a.first">("path");"#;
+    let output = normalize(source).unwrap();
+    assert_eq!(output.capability_intents.len(), 2);
+    assert_eq!(output.capability_intents[0].capability, "a.first");
+    assert_eq!(output.capability_intents[1].capability, "z.last");
+}
+
+#[test]
+fn enrichment_capability_intents_deduped() {
+    let source = r#"const a = hostcall<"fs.read">("p1");
+const b = hostcall<"fs.read">("p2");
+const c = hostcall<"fs.read">("p3");"#;
+    let output = normalize(source).unwrap();
+    assert_eq!(output.capability_intents.len(), 1);
+    assert_eq!(output.capability_intents[0].capability, "fs.read");
+}
+
+#[test]
+fn enrichment_capability_intents_symbol_is_hostcall() {
+    let source = r#"const x = hostcall<"db.query">("sql");"#;
+    let output = normalize(source).unwrap();
+    assert_eq!(output.capability_intents.len(), 1);
+    assert_eq!(output.capability_intents[0].symbol, "hostcall");
+}
+
+#[test]
+fn enrichment_no_capability_intents_for_plain_source() {
+    let source = "const x = 1;";
+    let output = normalize(source).unwrap();
+    assert!(output.capability_intents.is_empty());
+}
+
+#[test]
+fn enrichment_classify_dts_extension_as_typescript() {
+    assert_eq!(
+        classify_source_language(Some("types.d.ts"), "const x = 1;"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn enrichment_classify_uppercase_tsx_extension() {
+    assert_eq!(
+        classify_source_language(Some("App.TSX"), "const x = 1;"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn enrichment_classify_content_with_type_alias() {
+    assert_eq!(
+        classify_source_language(None, "type Alias = string | number;"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn enrichment_classify_content_with_export_type() {
+    assert_eq!(
+        classify_source_language(None, "export type Config = { key: string; };"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn enrichment_classify_content_with_export_interface() {
+    assert_eq!(
+        classify_source_language(None, "export interface Props { name: string; }"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn enrichment_classify_plain_js_no_markers() {
+    assert_eq!(
+        classify_source_language(None, "function hello() { return 42; }"),
+        SourceLanguage::JavaScript
+    );
+}
+
+#[test]
+fn enrichment_classify_label_overrides_content() {
+    // Even though content has no TS markers, a .ts extension classifies as TypeScript
+    assert_eq!(
+        classify_source_language(Some("file.ts"), "function hello() { return 42; }"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn enrichment_prepare_source_entry_js_no_normalization() {
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        "function run() { return 1; }",
+        "app.js",
+        "t-1",
+        "d-1",
+        "p-1",
+    )
+    .unwrap();
+    assert!(!prepared.source_ingestion.normalization_applied);
+    assert!(prepared.normalization_output.is_none());
+    assert_eq!(prepared.source_ingestion.source_language, SourceLanguage::JavaScript);
+    assert_eq!(prepared.source_ingestion.ts_decision_count, 0);
+    assert_eq!(prepared.source_ingestion.ts_capability_intent_count, 0);
+}
+
+#[test]
+fn enrichment_prepare_source_entry_ts_has_normalization_output() {
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        "const x: number = 1;",
+        "module.ts",
+        "t-2",
+        "d-2",
+        "p-2",
+    )
+    .unwrap();
+    assert!(prepared.source_ingestion.normalization_applied);
+    assert!(prepared.normalization_output.is_some());
+    assert_eq!(prepared.source_ingestion.source_language, SourceLanguage::TypeScript);
+    assert!(prepared.source_ingestion.ts_decision_count > 0);
+}
+
+#[test]
+fn enrichment_prepare_source_entry_js_prepared_source_equals_original() {
+    let original = "const a = 42;";
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        original,
+        "script.js",
+        "t-3",
+        "d-3",
+        "p-3",
+    )
+    .unwrap();
+    assert_eq!(prepared.prepared_source, original);
+}
+
+#[test]
+fn enrichment_prepare_source_entry_ts_prepared_source_differs() {
+    let original = "const a: number = 42;";
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        original,
+        "script.ts",
+        "t-4",
+        "d-4",
+        "p-4",
+    )
+    .unwrap();
+    assert_ne!(prepared.prepared_source, original);
+    assert!(!prepared.prepared_source.contains(": number"));
+}
+
+#[test]
+fn enrichment_witness_hashes_are_hex_encoded() {
+    let output = normalize("const x = 1;").unwrap();
+    // After "sha256:" prefix, the rest should be hex characters
+    let source_hex = output.witness.source_hash.strip_prefix("sha256:").unwrap();
+    assert!(source_hex.chars().all(|ch| ch.is_ascii_hexdigit()));
+    let normalized_hex = output.witness.normalized_hash.strip_prefix("sha256:").unwrap();
+    assert!(normalized_hex.chars().all(|ch| ch.is_ascii_hexdigit()));
+    let opts_hex = output.witness.compiler_options_hash.strip_prefix("sha256:").unwrap();
+    assert!(opts_hex.chars().all(|ch| ch.is_ascii_hexdigit()));
+}
+
+#[test]
+fn enrichment_witness_hash_length_is_sha256() {
+    let output = normalize("const x = 1;").unwrap();
+    // SHA256 produces 64 hex chars
+    let source_hex = output.witness.source_hash.strip_prefix("sha256:").unwrap();
+    assert_eq!(source_hex.len(), 64);
+    let normalized_hex = output.witness.normalized_hash.strip_prefix("sha256:").unwrap();
+    assert_eq!(normalized_hex.len(), 64);
+}
+
+#[test]
+fn enrichment_compiler_options_hash_same_for_default_config() {
+    let o1 = normalize("const a = 1;").unwrap();
+    let o2 = normalize("const b = 2;").unwrap();
+    let o3 = normalize("const c = 3;").unwrap();
+    assert_eq!(o1.witness.compiler_options_hash, o2.witness.compiler_options_hash);
+    assert_eq!(o2.witness.compiler_options_hash, o3.witness.compiler_options_hash);
+}
+
+#[test]
+fn enrichment_compiler_options_hash_differs_for_different_config() {
+    let cfg1 = TsNormalizationConfig {
+        compiler_options: TsCompilerOptions {
+            jsx: "react-jsx".into(),
+            ..TsCompilerOptions::default()
+        },
+    };
+    let cfg2 = TsNormalizationConfig {
+        compiler_options: TsCompilerOptions {
+            jsx: "preserve".into(),
+            ..TsCompilerOptions::default()
+        },
+    };
+    let o1 = normalize_typescript_to_es2020("const x = 1;", &cfg1, "t", "d", "p").unwrap();
+    let o2 = normalize_typescript_to_es2020("const x = 1;", &cfg2, "t", "d", "p").unwrap();
+    assert_ne!(o1.witness.compiler_options_hash, o2.witness.compiler_options_hash);
+}
+
+#[test]
+fn enrichment_ingestion_error_code_copy_clone() {
+    let code = TsIngestionErrorCode::ParseFailed;
+    let copied = code;
+    let cloned = code.clone();
+    assert_eq!(code, copied);
+    assert_eq!(code, cloned);
+}
+
+#[test]
+fn enrichment_ingestion_provenance_serde_roundtrip() {
+    let prov = TsIngestionProvenance::new("t-serde", "d-serde", "p-serde");
+    let json = serde_json::to_string(&prov).unwrap();
+    let back: TsIngestionProvenance = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, prov);
+}
+
+#[test]
+fn enrichment_source_language_serde_rename_snake_case() {
+    let js_json = serde_json::to_string(&SourceLanguage::JavaScript).unwrap();
+    assert_eq!(js_json, "\"java_script\"");
+    let ts_json = serde_json::to_string(&SourceLanguage::TypeScript).unwrap();
+    assert_eq!(ts_json, "\"type_script\"");
+}
+
+#[test]
+fn enrichment_normalization_output_clone_eq() {
+    let output = normalize("const x = 1;").unwrap();
+    let cloned = output.clone();
+    assert_eq!(output, cloned);
+}
+
+#[test]
+fn enrichment_normalization_witness_clone_eq() {
+    let output = normalize("const x = 1;").unwrap();
+    let cloned = output.witness.clone();
+    assert_eq!(output.witness, cloned);
+}
+
+#[test]
+fn enrichment_ingestion_default_uses_script_parse_goal() {
+    let artifacts = ingest_typescript_to_pipeline_artifacts_default(
+        "const x: number = 1;",
+        &default_config(),
+        "test.ts",
+        "t-goal",
+        "d-goal",
+        "p-goal",
+    )
+    .unwrap();
+    assert_eq!(artifacts.parse_goal, ParseGoal::Script);
+}
+
+#[test]
+fn enrichment_ingestion_error_display_format() {
+    let err = TsIngestionError {
+        code: TsIngestionErrorCode::ParseFailed,
+        stage: "parse_normalized_source".into(),
+        message: "unexpected token at line 3".into(),
+        events: vec![],
+    };
+    let display = err.to_string();
+    assert!(display.contains("FE-TSINGEST-0002"));
+    assert!(display.contains("parse_normalized_source"));
+    assert!(display.contains("unexpected token at line 3"));
+}
+
+#[test]
+fn enrichment_ts_normalization_error_is_std_error() {
+    let err = TsNormalizationError::EmptySource;
+    let as_error: &dyn std::error::Error = &err;
+    assert!(!as_error.to_string().is_empty());
+}
+
+#[test]
+fn enrichment_whitespace_trimming_all_lines() {
+    let source = "  const x: number = 1;  \n  const y = 2;  ";
+    let output = normalize(source).unwrap();
+    for line in output.normalized_source.lines() {
+        assert_eq!(line, line.trim());
+    }
+}
+
+#[test]
+fn enrichment_empty_lines_removed() {
+    let source = "const x = 1;\n\n\n\nconst y = 2;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.contains("\n\n"));
+}
+
+#[test]
+fn enrichment_normalize_preserves_string_literals_with_colon() {
+    let source = "const x = 'hello: world';";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("'hello: world'"));
+}
+
+#[test]
+fn enrichment_normalize_preserves_double_quote_string_with_colon() {
+    let source = r#"const x = "key: value";"#;
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("\"key: value\""));
+}
+
+#[test]
+fn enrichment_comments_preserved_after_normalization() {
+    let source = "// a comment\nconst x = 1;\n/* block comment */\nconst y = 2;";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("// a comment"));
+    assert!(output.normalized_source.contains("/* block comment */"));
+}
+
+#[test]
+fn enrichment_serde_roundtrip_normalization_event_with_all_fields() {
+    let evt = NormalizationEvent {
+        trace_id: "trace-full".into(),
+        decision_id: "dec-full".into(),
+        policy_id: "pol-full".into(),
+        component: "ts_normalization".into(),
+        event: "normalize".into(),
+        outcome: "pass".into(),
+        error_code: Some("FE-TSNORM-0001".into()),
+    };
+    let json = serde_json::to_string(&evt).unwrap();
+    assert!(json.contains("trace-full"));
+    assert!(json.contains("FE-TSNORM-0001"));
+    let back: NormalizationEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, evt);
+}
+
+#[test]
+fn enrichment_serde_roundtrip_full_output_with_intents() {
+    let source = r#"const x = hostcall<"fs.read">("path");"#;
+    let output = normalize(source).unwrap();
+    assert!(!output.capability_intents.is_empty());
+    let json = serde_json::to_string(&output).unwrap();
+    let back: TsNormalizationOutput = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.capability_intents, output.capability_intents);
+    assert_eq!(back.normalized_source, output.normalized_source);
+    assert_eq!(back.witness, output.witness);
+}
+
+#[test]
+fn enrichment_ingestion_artifacts_source_label_preserved() {
+    let artifacts = ingest_typescript_to_pipeline_artifacts(
+        "const x: number = 1;",
+        &default_config(),
+        "my-module.ts",
+        ParseGoal::Script,
+        &ParserOptions::default(),
+        TsIngestionProvenance::new("t-label", "d-label", "p-label"),
+    )
+    .unwrap();
+    assert_eq!(artifacts.source_label, "my-module.ts");
+}
+
+#[test]
+fn enrichment_ingestion_with_commonjs_module() {
+    let cfg = TsNormalizationConfig {
+        compiler_options: TsCompilerOptions {
+            module: "commonjs".into(),
+            ..TsCompilerOptions::default()
+        },
+    };
+    let artifacts = ingest_typescript_to_pipeline_artifacts(
+        "const x: number = 1;",
+        &cfg,
+        "cjs.ts",
+        ParseGoal::Script,
+        &ParserOptions::default(),
+        TsIngestionProvenance::new("t-cjs", "d-cjs", "p-cjs"),
+    )
+    .unwrap();
+    assert!(!artifacts.normalization_output.normalized_source.contains(": number"));
+}
+
+#[test]
+fn enrichment_all_fourteen_decision_steps_present() {
+    let output = normalize("const x = 1;").unwrap();
+    assert_eq!(output.witness.decisions.len(), 14);
+    let steps: Vec<&str> = output.witness.decisions.iter().map(|d| d.step.as_str()).collect();
+    assert_eq!(steps[0], "type_only_import_elision");
+    assert_eq!(steps[1], "type_space_declaration_elision");
+    assert_eq!(steps[2], "namespace_lowering");
+    assert_eq!(steps[3], "decorator_lowering");
+    assert_eq!(steps[4], "definite_assignment_normalization");
+    assert_eq!(steps[5], "const_assertion_normalization");
+    assert_eq!(steps[6], "type_annotation_stripping");
+    assert_eq!(steps[7], "enum_lowering");
+    assert_eq!(steps[8], "parameter_property_lowering");
+    assert_eq!(steps[9], "abstract_class_lowering");
+    assert_eq!(steps[10], "implements_clause_normalization");
+    assert_eq!(steps[11], "jsx_lowering");
+    assert_eq!(steps[12], "capability_intent_extraction");
+    assert_eq!(steps[13], "hostcall_type_param_stripping");
+}
+
+#[test]
+fn enrichment_normalized_source_not_empty_for_valid_input() {
+    let source = "const x = 1;";
+    let output = normalize(source).unwrap();
+    assert!(!output.normalized_source.is_empty());
+    assert!(!output.normalized_source.trim().is_empty());
+}
+
+#[test]
+fn enrichment_config_clone_eq() {
+    let cfg = TsNormalizationConfig::default();
+    let cloned = cfg.clone();
+    assert_eq!(cfg, cloned);
+}
+
+#[test]
+fn enrichment_compiler_options_clone_eq() {
+    let opts = TsCompilerOptions::default();
+    let cloned = opts.clone();
+    assert_eq!(opts, cloned);
+}
+
+#[test]
+fn enrichment_ingestion_error_code_debug_nonempty() {
+    let code = TsIngestionErrorCode::NormalizationFailed;
+    assert!(!format!("{code:?}").is_empty());
+}
+
+#[test]
+fn enrichment_source_ingestion_summary_clone_eq() {
+    let summary = SourceIngestionSummary {
+        source_language: SourceLanguage::TypeScript,
+        normalization_applied: true,
+        original_source_hash: "sha256:aaa".into(),
+        normalized_source_hash: "sha256:bbb".into(),
+        ts_decision_count: 3,
+        ts_capability_intent_count: 1,
+    };
+    let cloned = summary.clone();
+    assert_eq!(summary, cloned);
+}

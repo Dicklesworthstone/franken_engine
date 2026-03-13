@@ -1172,12 +1172,18 @@ fn enrichment_scm_error_display_duplicate_node() {
 
 #[test]
 fn enrichment_scm_error_display_no_treatment() {
-    assert_eq!(ScmError::NoTreatmentNode.to_string(), "no treatment node in DAG");
+    assert_eq!(
+        ScmError::NoTreatmentNode.to_string(),
+        "no treatment node in DAG"
+    );
 }
 
 #[test]
 fn enrichment_scm_error_display_no_outcome() {
-    assert_eq!(ScmError::NoOutcomeNode.to_string(), "no outcome node in DAG");
+    assert_eq!(
+        ScmError::NoOutcomeNode.to_string(),
+        "no outcome node in DAG"
+    );
 }
 
 #[test]
@@ -1243,11 +1249,10 @@ fn enrichment_scm_error_serde_all_variants_roundtrip() {
 
 #[test]
 fn enrichment_scm_error_is_std_error() {
-    let e: Box<dyn std::error::Error> =
-        Box::new(ScmError::InsufficientObservations {
-            required: 100,
-            available: 0,
-        });
+    let e: Box<dyn std::error::Error> = Box::new(ScmError::InsufficientObservations {
+        required: 100,
+        available: 0,
+    });
     assert!(!e.to_string().is_empty());
 }
 
@@ -1772,7 +1777,11 @@ fn enrichment_record_many_observations() {
 #[test]
 fn enrichment_observation_values_preserved() {
     let mut scm = confounded_dag();
-    scm.record_observation(observation(42, 99, &[("C", -500_000), ("T", 0), ("Y", 1_000_000)]));
+    scm.record_observation(observation(
+        42,
+        99,
+        &[("C", -500_000), ("T", 0), ("Y", 1_000_000)],
+    ));
     let obs = &scm.observations()[0];
     assert_eq!(obs.epoch, 42);
     assert_eq!(obs.tick, 99);
@@ -1786,8 +1795,12 @@ fn enrichment_observation_values_preserved() {
 #[test]
 fn enrichment_classify_confounders_missing_treatment() {
     let mut scm = StructuralCausalModel::new();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     let result = scm.classify_confounders("T", "Y");
     assert!(matches!(result, Err(ScmError::NodeNotFound(_))));
 }
@@ -1806,8 +1819,12 @@ fn enrichment_classify_confounders_no_confounders() {
     let mut scm = StructuralCausalModel::new();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     scm.add_edge(edge("T", "Y", EdgeSign::Positive, 800_000))
         .unwrap();
     let confounders = scm.classify_confounders("T", "Y").unwrap();
@@ -1828,8 +1845,12 @@ fn enrichment_classify_confounders_environment_is_time_varying() {
     .unwrap();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     scm.add_edge(edge("E", "T", EdgeSign::Positive, 500_000))
         .unwrap();
     scm.add_edge(edge("E", "Y", EdgeSign::Positive, 300_000))
@@ -1855,8 +1876,12 @@ fn enrichment_classify_confounders_workload_is_observable() {
     .unwrap();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     scm.add_edge(edge("W", "T", EdgeSign::Positive, 500_000))
         .unwrap();
     scm.add_edge(edge("W", "Y", EdgeSign::Positive, 300_000))
@@ -1885,8 +1910,12 @@ fn enrichment_classify_confounders_sorted_by_node_id() {
     }
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     for id in ["Z_conf", "A_conf"] {
         scm.add_edge(edge(id, "T", EdgeSign::Positive, 500_000))
             .unwrap();
@@ -1925,8 +1954,12 @@ fn enrichment_backdoor_latent_confounder_not_identified() {
     .unwrap();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     scm.add_edge(edge("U", "T", EdgeSign::Positive, 500_000))
         .unwrap();
     scm.add_edge(edge("U", "Y", EdgeSign::Positive, 300_000))
@@ -1954,8 +1987,12 @@ fn enrichment_backdoor_multiple_confounders_all_in_set() {
     }
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     for id in ["C1", "C2", "C3"] {
         scm.add_edge(edge(id, "T", EdgeSign::Positive, 400_000))
             .unwrap();
@@ -1982,7 +2019,10 @@ fn enrichment_do_intervention_zero_value() {
         description: "set to zero".to_string(),
     };
     let intervened = scm.do_intervention(&intervention).unwrap();
-    assert_eq!(intervened.node("T").unwrap().fixed_value_millionths, Some(0));
+    assert_eq!(
+        intervened.node("T").unwrap().fixed_value_millionths,
+        Some(0)
+    );
 }
 
 #[test]
@@ -2043,8 +2083,12 @@ fn enrichment_do_intervention_does_not_mutate_original() {
 #[test]
 fn enrichment_intervention_surfaces_missing_treatment() {
     let mut scm = StructuralCausalModel::new();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     let result = scm.compute_intervention_surfaces("T", "Y");
     assert!(matches!(result, Err(ScmError::NodeNotFound(_))));
 }
@@ -2072,12 +2116,20 @@ fn enrichment_intervention_surfaces_always_has_direct() {
 #[test]
 fn enrichment_intervention_surfaces_with_instrument() {
     let mut scm = StructuralCausalModel::new();
-    scm.add_node(node("Z", NodeRole::Instrument, VariableDomain::PolicySetting))
-        .unwrap();
+    scm.add_node(node(
+        "Z",
+        NodeRole::Instrument,
+        VariableDomain::PolicySetting,
+    ))
+    .unwrap();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     scm.add_edge(edge("Z", "T", EdgeSign::Positive, 500_000))
         .unwrap();
     scm.add_edge(edge("T", "Y", EdgeSign::Positive, 800_000))
@@ -2113,8 +2165,12 @@ fn enrichment_estimate_ate_zero_effect() {
     let mut scm = StructuralCausalModel::new();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     scm.add_edge(edge("T", "Y", EdgeSign::Positive, 500_000))
         .unwrap();
     // Same outcome regardless of treatment
@@ -2133,8 +2189,12 @@ fn enrichment_estimate_ate_deterministic() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
             .unwrap();
-        scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-            .unwrap();
+        scm.add_node(node(
+            "Y",
+            NodeRole::Outcome,
+            VariableDomain::ObservedOutcome,
+        ))
+        .unwrap();
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
             .unwrap();
         for i in 0..20 {
@@ -2172,8 +2232,12 @@ fn enrichment_decompose_attribution_no_path_full_residual() {
     let mut scm = StructuralCausalModel::new();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     let decomp = scm.decompose_attribution("T", "Y", 750_000).unwrap();
     assert!(decomp.pathways.is_empty());
     assert_eq!(decomp.residual_millionths, 750_000);
@@ -2389,16 +2453,28 @@ fn enrichment_diamond_dag_two_paths() {
     let mut scm = StructuralCausalModel::new();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("A", NodeRole::Mediator, VariableDomain::CalibrationMetric))
-        .unwrap();
+    scm.add_node(node(
+        "A",
+        NodeRole::Mediator,
+        VariableDomain::CalibrationMetric,
+    ))
+    .unwrap();
     scm.add_node(node("B", NodeRole::Mediator, VariableDomain::RiskBelief))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
+    scm.add_edge(edge("T", "A", EdgeSign::Positive, 600_000))
         .unwrap();
-    scm.add_edge(edge("T", "A", EdgeSign::Positive, 600_000)).unwrap();
-    scm.add_edge(edge("T", "B", EdgeSign::Negative, 400_000)).unwrap();
-    scm.add_edge(edge("A", "Y", EdgeSign::Positive, 800_000)).unwrap();
-    scm.add_edge(edge("B", "Y", EdgeSign::Positive, 700_000)).unwrap();
+    scm.add_edge(edge("T", "B", EdgeSign::Negative, 400_000))
+        .unwrap();
+    scm.add_edge(edge("A", "Y", EdgeSign::Positive, 800_000))
+        .unwrap();
+    scm.add_edge(edge("B", "Y", EdgeSign::Positive, 700_000))
+        .unwrap();
 
     let paths = scm.all_directed_paths("T", "Y");
     assert_eq!(paths.len(), 2);
@@ -2423,8 +2499,12 @@ fn enrichment_wide_dag_many_roots() {
         ))
         .unwrap();
     }
-    scm.add_node(node("sink", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
+    scm.add_node(node(
+        "sink",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
     for i in 0..10 {
         scm.add_edge(edge(
             &format!("root_{i}"),
@@ -2448,10 +2528,18 @@ fn enrichment_collider_detection_basic() {
     let mut scm = StructuralCausalModel::new();
     scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
         .unwrap();
-    scm.add_node(node("Y", NodeRole::Outcome, VariableDomain::ObservedOutcome))
-        .unwrap();
-    scm.add_node(node("M", NodeRole::Endogenous, VariableDomain::CalibrationMetric))
-        .unwrap();
+    scm.add_node(node(
+        "Y",
+        NodeRole::Outcome,
+        VariableDomain::ObservedOutcome,
+    ))
+    .unwrap();
+    scm.add_node(node(
+        "M",
+        NodeRole::Endogenous,
+        VariableDomain::CalibrationMetric,
+    ))
+    .unwrap();
     scm.add_edge(edge("T", "M", EdgeSign::Positive, 500_000))
         .unwrap();
     scm.add_edge(edge("Y", "M", EdgeSign::Positive, 500_000))

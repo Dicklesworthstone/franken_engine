@@ -22,8 +22,8 @@ use std::collections::BTreeSet;
 use frankenengine_engine::frankenlab_bridge_contract::{
     BridgeContractPolicy, BridgeContractReport, BridgeContractValidator, BridgeMode, BridgeSeam,
     BridgeSeamConfig, BridgeTypeMappingRegistry, BridgeViolationKind, EvidenceCategory,
-    FaultCategory, FaultInjectionSpec, FaultTarget, OracleResult,
-    ReplayVerdict, ScenarioManifest, SeamStatus, TraceCertificate,
+    FaultCategory, FaultInjectionSpec, FaultTarget, OracleResult, ReplayVerdict, ScenarioManifest,
+    SeamStatus, TraceCertificate,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -72,10 +72,7 @@ fn enrichment_bridge_mode_display_all_unique() {
 
 #[test]
 fn enrichment_fault_target_display_formats_correct() {
-    assert_eq!(
-        FaultTarget::Task { task_id: 7 }.to_string(),
-        "task:7"
-    );
+    assert_eq!(FaultTarget::Task { task_id: 7 }.to_string(), "task:7");
     assert_eq!(
         FaultTarget::Region {
             region_id: "us-east".to_owned()
@@ -111,7 +108,11 @@ fn enrichment_bridge_violation_kind_display_all_unique() {
 
 #[test]
 fn enrichment_seam_status_display_all_unique() {
-    let statuses = [SeamStatus::Clean, SeamStatus::Warning, SeamStatus::ReleaseBlocked];
+    let statuses = [
+        SeamStatus::Clean,
+        SeamStatus::Warning,
+        SeamStatus::ReleaseBlocked,
+    ];
     let set: BTreeSet<String> = statuses.iter().map(|s| s.to_string()).collect();
     assert_eq!(set.len(), 3);
     assert!(set.contains("clean"));
@@ -134,7 +135,10 @@ fn enrichment_fault_category_display_all_unique() {
 
 #[test]
 fn enrichment_evidence_category_display_all_unique() {
-    let set: BTreeSet<String> = EvidenceCategory::ALL.iter().map(|c| c.to_string()).collect();
+    let set: BTreeSet<String> = EvidenceCategory::ALL
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
     assert_eq!(set.len(), 6);
     assert!(set.contains("scenario_result"));
     assert!(set.contains("replay_certificate"));
@@ -513,8 +517,7 @@ fn enrichment_seam_config_fail_closed_constructor() {
 
 #[test]
 fn enrichment_seam_config_lenient_constructor() {
-    let config =
-        BridgeSeamConfig::lenient(BridgeSeam::EvidenceLinkage, BridgeMode::LocalOnly);
+    let config = BridgeSeamConfig::lenient(BridgeSeam::EvidenceLinkage, BridgeMode::LocalOnly);
     assert!(!config.fail_closed);
     assert_eq!(config.max_latency_ms, 30_000);
     assert!(!config.emit_evidence);

@@ -238,7 +238,9 @@ fn rgc_406a_contract_schema_and_required_fields_are_present() {
         "top-level required_artifacts should mirror artifact_contract.required_paths"
     );
 
-    let gate_runner = contract.get("gate_runner").expect("gate_runner should exist");
+    let gate_runner = contract
+        .get("gate_runner")
+        .expect("gate_runner should exist");
     assert_eq!(
         gate_runner
             .get("script")
@@ -299,7 +301,8 @@ fn rgc_406a_contract_schema_and_required_fields_are_present() {
         "operator verification should use a portable repo-local rch target dir"
     );
     assert!(
-        !operator_verification.contains("/data/projects/franken_engine/target_rch_module_resolution_index"),
+        !operator_verification
+            .contains("/data/projects/franken_engine/target_rch_module_resolution_index"),
         "operator verification should not hard-code a repo-specific absolute target dir"
     );
 }

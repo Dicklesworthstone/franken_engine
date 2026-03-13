@@ -870,18 +870,14 @@ fn enrichment_error_serde_snake_case_empty_graph() {
 
 #[test]
 fn enrichment_error_serde_snake_case_disconnected() {
-    let json =
-        serde_json::to_string(&SpectralError::Disconnected { components: 1 }).unwrap();
+    let json = serde_json::to_string(&SpectralError::Disconnected { components: 1 }).unwrap();
     assert!(json.contains("disconnected"), "got: {json}");
 }
 
 #[test]
 fn enrichment_error_serde_snake_case_node_oob() {
-    let json = serde_json::to_string(&SpectralError::NodeOutOfBounds {
-        index: 0,
-        size: 0,
-    })
-    .unwrap();
+    let json =
+        serde_json::to_string(&SpectralError::NodeOutOfBounds { index: 0, size: 0 }).unwrap();
     assert!(json.contains("node_out_of_bounds"), "got: {json}");
 }
 
@@ -896,18 +892,14 @@ fn enrichment_error_serde_snake_case_invalid_weight() {
 
 #[test]
 fn enrichment_error_serde_snake_case_convergence() {
-    let json =
-        serde_json::to_string(&SpectralError::ConvergenceFailure { iterations: 1 }).unwrap();
+    let json = serde_json::to_string(&SpectralError::ConvergenceFailure { iterations: 1 }).unwrap();
     assert!(json.contains("convergence_failure"), "got: {json}");
 }
 
 #[test]
 fn enrichment_error_serde_snake_case_degenerate() {
     let json = serde_json::to_string(&SpectralError::DegenerateSpectralGap).unwrap();
-    assert!(
-        json.contains("degenerate_spectral_gap"),
-        "got: {json}"
-    );
+    assert!(json.contains("degenerate_spectral_gap"), "got: {json}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1071,11 +1063,7 @@ fn enrichment_laplacian_symmetric_path() {
     let lap = LaplacianMatrix::from_topology(&topo).unwrap();
     for i in 0..4 {
         for j in 0..4 {
-            assert_eq!(
-                lap.get(i, j),
-                lap.get(j, i),
-                "L[{i},{j}] != L[{j},{i}]"
-            );
+            assert_eq!(lap.get(i, j), lap.get(j, i), "L[{i},{j}] != L[{j},{i}]");
         }
     }
 }
@@ -1463,9 +1451,7 @@ fn enrichment_cycle_lower_connectivity_than_complete() {
     let analyzer = SpectralAnalyzer::default();
     let rc = analyzer.analyze(&complete_graph(6)).unwrap();
     let ry = analyzer.analyze(&cycle_graph(6)).unwrap();
-    assert!(
-        ry.algebraic_connectivity_millionths < rc.algebraic_connectivity_millionths
-    );
+    assert!(ry.algebraic_connectivity_millionths < rc.algebraic_connectivity_millionths);
 }
 
 // ---------------------------------------------------------------------------
@@ -1589,10 +1575,7 @@ fn enrichment_certificate_fields_from_analysis() {
         cert.cheeger_upper_millionths,
         analysis.cheeger_upper_bound_millionths
     );
-    assert_eq!(
-        cert.lambda_max_millionths,
-        analysis.lambda_max_millionths
-    );
+    assert_eq!(cert.lambda_max_millionths, analysis.lambda_max_millionths);
     assert_eq!(cert.fiedler_iterations, analysis.fiedler_iterations);
     assert_eq!(
         cert.fiedler_residual_millionths,
@@ -1651,8 +1634,7 @@ fn enrichment_certificate_hash_varies_by_epoch_five() {
     let analysis = analyzer.analyze(&topo).unwrap();
     let hashes: std::collections::BTreeSet<_> = (0..5u64)
         .map(|e| {
-            let cert =
-                ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(e));
+            let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(e));
             cert.certificate_hash
         })
         .collect();
@@ -1746,12 +1728,7 @@ fn enrichment_lifecycle_ring_with_chords() {
 
 #[test]
 fn enrichment_topology_serde_preserves_node_ids() {
-    let topo = GossipTopology::new(vec![
-        "alpha".into(),
-        "bravo".into(),
-        "charlie".into(),
-    ])
-    .unwrap();
+    let topo = GossipTopology::new(vec!["alpha".into(), "bravo".into(), "charlie".into()]).unwrap();
     let json = serde_json::to_string(&topo).unwrap();
     let back: GossipTopology = serde_json::from_str(&json).unwrap();
     assert_eq!(back.node_ids, vec!["alpha", "bravo", "charlie"]);
@@ -1903,10 +1880,7 @@ fn enrichment_certificate_epoch_large() {
     let topo = path_graph(3);
     let analyzer = SpectralAnalyzer::default();
     let analysis = analyzer.analyze(&topo).unwrap();
-    let cert = ConvergenceCertificate::from_analysis(
-        &analysis,
-        SecurityEpoch::from_raw(u64::MAX),
-    );
+    let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(u64::MAX));
     assert_eq!(cert.epoch, SecurityEpoch::from_raw(u64::MAX));
 }
 

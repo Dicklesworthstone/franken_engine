@@ -21,9 +21,9 @@
 )]
 
 use frankenengine_engine::baseline_interpreter::{
-    HeapObject, InterpreterConfig, InterpreterError, LaneChoice, LaneReason, LaneRouter, ObjectId,
-    QuickJsLane, V8Lane, Value, DETERMINISTIC_PROFILE_LABEL, LEGACY_QUICKJS_PROFILE_LABEL,
-    LEGACY_V8_PROFILE_LABEL, THROUGHPUT_PROFILE_LABEL,
+    DETERMINISTIC_PROFILE_LABEL, HeapObject, InterpreterConfig, InterpreterError,
+    LEGACY_QUICKJS_PROFILE_LABEL, LEGACY_V8_PROFILE_LABEL, LaneChoice, LaneReason, LaneRouter,
+    ObjectId, QuickJsLane, THROUGHPUT_PROFILE_LABEL, V8Lane, Value,
 };
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion,

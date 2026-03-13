@@ -1378,3 +1378,1412 @@ fn lineage_chain_entry_serde_round_trip() {
     let back: LineageChainEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(back, entry);
 }
+
+// ===========================================================================
+// Enrichment tests
+// ===========================================================================
+
+// --- helpers for enrichment tests ---
+
+fn make_receipt_for_slot(slot_name: &str, old: &str, new: &str, ts_ns: u64) -> ReplacementReceipt {
+    let arts = test_validation_artifacts();
+    let sid = SlotId::new(slot_name).unwrap();
+    let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
+        slot_id: &sid,
+        old_cell_digest: old,
+        new_cell_digest: new,
+        validation_artifacts: &arts,
+        rollback_token: "rollback-token",
+        promotion_rationale: "Testing lineage log",
+        timestamp_ns: ts_ns,
+        epoch: test_epoch(),
+        zone: "zone-a",
+        required_signatures: 1,
+    })
+    .unwrap();
+    receipt
+        .add_signature(&test_signing_key(), "gate-runner")
+        .unwrap();
+    receipt
+}
+
+// --- 1. Empty log edge cases ---
+
+#[test]
+fn enrichment_empty_log_merkle_root_is_deterministic() {
+    let log1 = ReplacementLineageLog::new(default_config());
+    let log2 = ReplacementLineageLog::new(default_config());
+    assert_eq!(log1.merkle_root(), log2.merkle_root());
+}
+
+#[test]
+fn enrichment_empty_log_query_all_returns_empty() {
+    let log = ReplacementLineageLog::new(default_config());
+    let results = log.query(&LineageQuery::all());
+    assert!(results.is_empty());
+}
+
+#[test]
+fn enrichment_empty_log_slot_ids_returns_empty() {
+    let log = ReplacementLineageLog::new(default_config());
+    assert!(log.slot_ids().is_empty());
+}
+
+#[test]
+fn enrichment_empty_log_entries_returns_empty_slice() {
+    let log = ReplacementLineageLog::new(default_config());
+    assert_eq!(log.entries().len(), 0);
+}
+
+#[test]
+fn enrichment_empty_log_checkpoints_returns_empty_slice() {
+    let log = ReplacementLineageLog::new(default_config());
+    assert!(log.checkpoints().is_empty());
+}
+
+#[test]
+fn enrichment_empty_log_events_returns_empty() {
+    let log = ReplacementLineageLog::new(default_config());
+    assert!(log.events().is_empty());
+}
+
+#[test]
+fn enrichment_empty_log_audit_has_zero_slots() {
+    let log = ReplacementLineageLog::new(default_config());
+    let audit = log.audit();
+    assert_eq!(audit.total_slots, 0);
+    assert_eq!(audit.checkpoint_count, 0);
+    assert!(audit.latest_checkpoint_seq.is_none());
+}
+
+// --- 2. Single-entry log properties ---
+
+#[test]
+fn enrichment_single_entry_has_genesis_predecessor() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(receipt, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let entry = &log.entries()[0];
+    assert_eq!(entry.sequence, 0);
+    // Predecessor for first entry is hash of "genesis"
+    let genesis = frankenengine_engine::hash_tiers::ContentHash::compute(b"genesis");
+    assert_eq!(entry.predecessor_hash, genesis);
+}
+
+#[test]
+fn enrichment_single_entry_inclusion_proof_has_empty_path() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(receipt, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let proof = log.inclusion_proof(0).unwrap();
+    assert!(proof.path.is_empty());
+    assert!(verify_inclusion_proof(&proof));
+}
+
+#[test]
+fn enrichment_single_entry_slot_lineage_has_one_step() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(receipt, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let lineage = log.slot_lineage(&test_slot_id());
+    assert_eq!(lineage.len(), 1);
+    assert_eq!(lineage[0].old_cell_digest, "old-a");
+    assert_eq!(lineage[0].new_cell_digest, "new-a");
+    assert_eq!(lineage[0].kind, ReplacementKind::DelegateToNative);
+}
+
+#[test]
+fn enrichment_single_entry_audit_chain_valid() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(receipt, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let audit = log.audit();
+    assert!(audit.chain_valid);
+    assert!(audit.merkle_valid);
+    assert_eq!(audit.total_entries, 1);
+    assert_eq!(audit.total_slots, 1);
+}
+
+// --- 3. Hash chain integrity ---
+
+#[test]
+fn enrichment_hash_chain_ten_entries() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..10 {
+        let receipt = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        log.append(
+            receipt,
+            ReplacementKind::DelegateToNative,
+            (i + 1) * 1_000_000,
+        )
+        .unwrap();
+    }
+    let entries = log.entries();
+    for i in 1..entries.len() {
+        assert_eq!(
+            entries[i].predecessor_hash, entries[i - 1].entry_hash,
+            "chain break at index {i}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_entry_hash_differs_by_kind() {
+    let mut log1 = ReplacementLineageLog::new(default_config());
+    let mut log2 = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt("old-a", "new-a", 1_000_000);
+    let r2 = make_receipt("old-a", "new-a", 1_000_000);
+    log1.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log2.append(r2, ReplacementKind::Demotion, 1_000_000)
+        .unwrap();
+    // Different kinds produce different entry hashes even with same receipt data
+    assert_ne!(log1.entries()[0].entry_hash, log2.entries()[0].entry_hash);
+}
+
+#[test]
+fn enrichment_entry_hash_differs_by_sequence() {
+    // Two entries with different sequence numbers produce different hashes.
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt("old-a", "new-a", 1_000_000);
+    let r2 = make_receipt("old-b", "new-b", 2_000_000);
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.append(r2, ReplacementKind::DelegateToNative, 2_000_000)
+        .unwrap();
+    assert_ne!(log.entries()[0].entry_hash, log.entries()[1].entry_hash);
+}
+
+// --- 4. Merkle proofs for various sizes ---
+
+#[test]
+fn enrichment_inclusion_proof_two_entries() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..2 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    for i in 0u64..2 {
+        let proof = log.inclusion_proof(i).unwrap();
+        assert!(verify_inclusion_proof(&proof), "proof failed for entry {i}");
+    }
+}
+
+#[test]
+fn enrichment_inclusion_proof_three_entries_odd_tree() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..3 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    for i in 0u64..3 {
+        let proof = log.inclusion_proof(i).unwrap();
+        assert!(verify_inclusion_proof(&proof), "proof failed for entry {i}");
+    }
+}
+
+#[test]
+fn enrichment_inclusion_proof_power_of_two_eight_entries() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..8 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    for i in 0u64..8 {
+        let proof = log.inclusion_proof(i).unwrap();
+        assert!(verify_inclusion_proof(&proof), "proof failed for entry {i}");
+    }
+}
+
+#[test]
+fn enrichment_inclusion_proof_fifteen_entries() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..15 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    for i in 0u64..15 {
+        let proof = log.inclusion_proof(i).unwrap();
+        assert!(verify_inclusion_proof(&proof), "proof failed for entry {i}");
+    }
+}
+
+#[test]
+fn enrichment_inclusion_proof_root_matches_log_merkle_root() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..5 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let root = log.merkle_root();
+    for i in 0u64..5 {
+        let proof = log.inclusion_proof(i).unwrap();
+        assert_eq!(proof.root, root, "proof root mismatch for entry {i}");
+    }
+}
+
+#[test]
+fn enrichment_tampered_inclusion_proof_wrong_sibling() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let mut proof = log.inclusion_proof(1).unwrap();
+    if !proof.path.is_empty() {
+        proof.path[0].sibling_hash =
+            frankenengine_engine::hash_tiers::ContentHash::compute(b"tampered-sibling");
+        assert!(!verify_inclusion_proof(&proof));
+    }
+}
+
+// --- 5. Checkpoint behavior ---
+
+#[test]
+fn enrichment_checkpoint_log_length_matches_entries() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..5 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    log.create_checkpoint(6_000_000, test_epoch()).unwrap();
+    assert_eq!(log.checkpoints()[0].log_length, 5);
+}
+
+#[test]
+fn enrichment_checkpoint_merkle_root_matches_log_root() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    log.create_checkpoint(5_000_000, test_epoch()).unwrap();
+    assert_eq!(log.checkpoints()[0].merkle_root, log.merkle_root());
+}
+
+#[test]
+fn enrichment_multiple_checkpoints_increasing_seq() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..3 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+        log.create_checkpoint((i + 1) * 1_000_000 + 500, test_epoch())
+            .unwrap();
+    }
+    let cps = log.checkpoints();
+    assert_eq!(cps.len(), 3);
+    for i in 1..cps.len() {
+        assert!(cps[i].checkpoint_seq > cps[i - 1].checkpoint_seq);
+        assert!(cps[i].log_length >= cps[i - 1].log_length);
+    }
+}
+
+#[test]
+fn enrichment_checkpoint_preserves_epoch() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old", "new", 1_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let ep = SecurityEpoch::from_raw(7);
+    log.create_checkpoint(2_000_000, ep).unwrap();
+    assert_eq!(log.checkpoints()[0].epoch, ep);
+}
+
+#[test]
+fn enrichment_checkpoint_hash_is_deterministic() {
+    let mut log1 = ReplacementLineageLog::new(default_config());
+    let mut log2 = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt("old-a", "new-a", 1_000_000);
+    let r2 = make_receipt("old-a", "new-a", 1_000_000);
+    log1.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log2.append(r2, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log1.create_checkpoint(2_000_000, test_epoch()).unwrap();
+    log2.create_checkpoint(2_000_000, test_epoch()).unwrap();
+    assert_eq!(
+        log1.checkpoints()[0].checkpoint_hash,
+        log2.checkpoints()[0].checkpoint_hash
+    );
+}
+
+// --- 6. Auto-checkpoint ---
+
+#[test]
+fn enrichment_auto_checkpoint_fires_at_interval() {
+    let config = LineageLogConfig {
+        checkpoint_interval: 3,
+        max_entries_in_memory: 0,
+    };
+    let mut log = ReplacementLineageLog::new(config);
+    for i in 0u64..6 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    // After 3 entries and 6 entries, auto-checkpoints should fire
+    assert_eq!(log.checkpoints().len(), 2);
+}
+
+#[test]
+fn enrichment_auto_checkpoint_disabled_when_interval_zero() {
+    let config = LineageLogConfig {
+        checkpoint_interval: 0,
+        max_entries_in_memory: 0,
+    };
+    let mut log = ReplacementLineageLog::new(config);
+    for i in 0u64..10 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    // No auto-checkpoints when interval is 0
+    assert!(log.checkpoints().is_empty());
+}
+
+// --- 7. Consistency proofs ---
+
+#[test]
+fn enrichment_consistency_proof_three_checkpoints() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for phase in 0u64..3 {
+        for i in 0u64..2 {
+            let seq = phase * 2 + i;
+            let r = make_receipt(
+                &format!("old-{seq}"),
+                &format!("new-{seq}"),
+                (seq + 1) * 1_000_000,
+            );
+            log.append(r, ReplacementKind::DelegateToNative, (seq + 1) * 1_000_000)
+                .unwrap();
+        }
+        log.create_checkpoint((phase + 1) * 10_000_000, test_epoch())
+            .unwrap();
+    }
+    // Check consistency between checkpoint 0 and 1
+    let proof01 = log.consistency_proof(0, 1).unwrap();
+    assert!(verify_consistency_proof(&proof01));
+    // Check consistency between checkpoint 1 and 2
+    let proof12 = log.consistency_proof(1, 2).unwrap();
+    assert!(verify_consistency_proof(&proof12));
+    // Check consistency between checkpoint 0 and 2
+    let proof02 = log.consistency_proof(0, 2).unwrap();
+    assert!(verify_consistency_proof(&proof02));
+}
+
+#[test]
+fn enrichment_consistency_proof_older_newer_mismatch() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+        if i == 1 || i == 3 {
+            log.create_checkpoint((i + 1) * 1_000_000, test_epoch())
+                .unwrap();
+        }
+    }
+    // Reversed order should fail
+    match log.consistency_proof(1, 0) {
+        Err(LineageLogError::InvalidCheckpointOrder { older, newer }) => {
+            assert_eq!(older, 1);
+            assert_eq!(newer, 0);
+        }
+        other => panic!("expected InvalidCheckpointOrder, got {other:?}"),
+    }
+}
+
+#[test]
+fn enrichment_tampered_consistency_proof_detected() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+        if i == 1 || i == 3 {
+            log.create_checkpoint((i + 1) * 1_000_000, test_epoch())
+                .unwrap();
+        }
+    }
+    let mut proof = log.consistency_proof(0, 1).unwrap();
+    // Tamper with the older entry hashes
+    if !proof.older_entry_hashes.is_empty() {
+        proof.older_entry_hashes[0] =
+            frankenengine_engine::hash_tiers::ContentHash::compute(b"tampered");
+    }
+    assert!(!verify_consistency_proof(&proof));
+}
+
+// --- 8. Query filtering ---
+
+#[test]
+fn enrichment_query_by_multiple_kinds() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let r2 = make_receipt("new-a", "old-a", 2_000_000);
+    log.append(r2, ReplacementKind::Demotion, 2_000_000)
+        .unwrap();
+    let r3 = make_receipt("old-a", "new-b", 3_000_000);
+    log.append(r3, ReplacementKind::Rollback, 3_000_000)
+        .unwrap();
+    let r4 = make_receipt("new-b", "new-c", 4_000_000);
+    log.append(r4, ReplacementKind::RePromotion, 4_000_000)
+        .unwrap();
+
+    let query = LineageQuery {
+        slot_id: None,
+        kinds: Some(BTreeSet::from([
+            ReplacementKind::Demotion,
+            ReplacementKind::Rollback,
+        ])),
+        min_timestamp_ns: None,
+        max_timestamp_ns: None,
+    };
+    let results = log.query(&query);
+    assert_eq!(results.len(), 2);
+}
+
+#[test]
+fn enrichment_query_combined_slot_and_kind() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let r2 = make_receipt("new-a", "old-a", 2_000_000);
+    log.append(r2, ReplacementKind::Demotion, 2_000_000)
+        .unwrap();
+
+    let query = LineageQuery {
+        slot_id: Some(test_slot_id()),
+        kinds: Some(BTreeSet::from([ReplacementKind::Demotion])),
+        min_timestamp_ns: None,
+        max_timestamp_ns: None,
+    };
+    let results = log.query(&query);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].kind, ReplacementKind::Demotion);
+}
+
+#[test]
+fn enrichment_query_combined_slot_kind_and_timestamp() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..6 {
+        let kind = if i < 3 {
+            ReplacementKind::DelegateToNative
+        } else {
+            ReplacementKind::Demotion
+        };
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, kind, (i + 1) * 1_000_000).unwrap();
+    }
+
+    let query = LineageQuery {
+        slot_id: Some(test_slot_id()),
+        kinds: Some(BTreeSet::from([ReplacementKind::Demotion])),
+        min_timestamp_ns: Some(4_000_000),
+        max_timestamp_ns: Some(6_000_000),
+    };
+    let results = log.query(&query);
+    assert_eq!(results.len(), 3);
+    for entry in &results {
+        assert_eq!(entry.kind, ReplacementKind::Demotion);
+        assert!(entry.receipt.timestamp_ns >= 4_000_000);
+        assert!(entry.receipt.timestamp_ns <= 6_000_000);
+    }
+}
+
+#[test]
+fn enrichment_query_with_only_max_timestamp() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..5 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let query = LineageQuery {
+        slot_id: None,
+        kinds: None,
+        min_timestamp_ns: None,
+        max_timestamp_ns: Some(2_000_000),
+    };
+    let results = log.query(&query);
+    assert_eq!(results.len(), 2);
+}
+
+#[test]
+fn enrichment_query_no_match_returns_empty() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+
+    let query = LineageQuery {
+        slot_id: None,
+        kinds: Some(BTreeSet::from([ReplacementKind::Rollback])),
+        min_timestamp_ns: None,
+        max_timestamp_ns: None,
+    };
+    let results = log.query(&query);
+    assert!(results.is_empty());
+}
+
+#[test]
+fn enrichment_query_timestamp_exact_boundary_inclusive() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..3 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    // Exact min and max boundary = second entry
+    let query = LineageQuery {
+        slot_id: None,
+        kinds: None,
+        min_timestamp_ns: Some(2_000_000),
+        max_timestamp_ns: Some(2_000_000),
+    };
+    let results = log.query(&query);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].receipt.timestamp_ns, 2_000_000);
+}
+
+// --- 9. Multi-slot log ---
+
+#[test]
+fn enrichment_multi_slot_lineages_independent() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt_for_slot("slot-alpha", "old-a", "new-a", 1_000_000);
+    let r2 = make_receipt_for_slot("slot-beta", "old-b", "new-b", 2_000_000);
+    let r3 = make_receipt_for_slot("slot-alpha", "new-a", "newer-a", 3_000_000);
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.append(r2, ReplacementKind::DelegateToNative, 2_000_000)
+        .unwrap();
+    log.append(r3, ReplacementKind::RePromotion, 3_000_000)
+        .unwrap();
+
+    let alpha = SlotId::new("slot-alpha").unwrap();
+    let beta = SlotId::new("slot-beta").unwrap();
+    let lineage_alpha = log.slot_lineage(&alpha);
+    let lineage_beta = log.slot_lineage(&beta);
+    assert_eq!(lineage_alpha.len(), 2);
+    assert_eq!(lineage_beta.len(), 1);
+}
+
+#[test]
+fn enrichment_multi_slot_slot_ids_sorted() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt_for_slot("slot-z", "old-z", "new-z", 1_000_000);
+    let r2 = make_receipt_for_slot("slot-a", "old-a", "new-a", 2_000_000);
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.append(r2, ReplacementKind::DelegateToNative, 2_000_000)
+        .unwrap();
+
+    let ids = log.slot_ids();
+    assert_eq!(ids.len(), 2);
+    // BTreeSet yields sorted order
+    assert!(ids[0].as_str() < ids[1].as_str());
+}
+
+#[test]
+fn enrichment_multi_slot_audit_counts_unique_slots() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let names = ["slot-1", "slot-2", "slot-3", "slot-1"];
+    for (i, name) in names.iter().enumerate() {
+        let r = make_receipt_for_slot(
+            name,
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i as u64 + 1) * 1_000_000,
+        );
+        log.append(r, ReplacementKind::DelegateToNative, (i as u64 + 1) * 1_000_000)
+            .unwrap();
+    }
+    let audit = log.audit();
+    assert_eq!(audit.total_slots, 3);
+}
+
+#[test]
+fn enrichment_multi_slot_query_filters_slot() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt_for_slot("slot-alpha", "old-a", "new-a", 1_000_000);
+    let r2 = make_receipt_for_slot("slot-beta", "old-b", "new-b", 2_000_000);
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.append(r2, ReplacementKind::DelegateToNative, 2_000_000)
+        .unwrap();
+
+    let beta = SlotId::new("slot-beta").unwrap();
+    let results = log.query(&LineageQuery::for_slot(beta));
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].receipt.slot_id.as_str(), "slot-beta");
+}
+
+// --- 10. Slot lineage verification ---
+
+#[test]
+fn enrichment_verify_slot_lineage_multi_entry() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..5 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let v = log.verify_slot_lineage(&test_slot_id());
+    assert!(v.chain_valid);
+    assert_eq!(v.total_entries, 5);
+    assert!(v.all_receipts_present);
+}
+
+#[test]
+fn enrichment_verify_slot_lineage_different_slot_empty() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let other = SlotId::new("other-slot").unwrap();
+    let v = log.verify_slot_lineage(&other);
+    assert_eq!(v.total_entries, 0);
+    assert!(v.chain_valid);
+    assert!(!v.issues.is_empty());
+}
+
+// --- 11. Audit with checkpoints ---
+
+#[test]
+fn enrichment_audit_with_multiple_checkpoints() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..6 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+        if i == 2 || i == 5 {
+            log.create_checkpoint((i + 1) * 1_000_000 + 500, test_epoch())
+                .unwrap();
+        }
+    }
+    let audit = log.audit();
+    assert_eq!(audit.total_entries, 6);
+    assert!(audit.chain_valid);
+    assert!(audit.merkle_valid);
+    assert_eq!(audit.checkpoint_count, 2);
+    assert_eq!(audit.latest_checkpoint_seq, Some(1));
+}
+
+#[test]
+fn enrichment_audit_after_checkpoint_then_append() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..3 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    log.create_checkpoint(4_000_000, test_epoch()).unwrap();
+
+    // Append more after checkpoint
+    for i in 3u64..5 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let audit = log.audit();
+    assert!(audit.chain_valid);
+    // Checkpoint covers prefix, audit should still be valid
+    assert!(audit.merkle_valid);
+    assert_eq!(audit.total_entries, 5);
+}
+
+// --- 12. Events ---
+
+#[test]
+fn enrichment_events_count_matches_operations() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..3 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    log.create_checkpoint(4_000_000, test_epoch()).unwrap();
+    // 3 append events + 1 checkpoint event = 4 events minimum
+    assert!(log.events().len() >= 4);
+}
+
+#[test]
+fn enrichment_events_all_have_ok_outcome() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.create_checkpoint(2_000_000, test_epoch()).unwrap();
+    for event in log.events() {
+        assert_eq!(event.outcome, "ok");
+        assert!(event.error_code.is_none());
+    }
+}
+
+#[test]
+fn enrichment_events_have_distinct_trace_ids() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..3 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let events = log.events();
+    let trace_ids: BTreeSet<&str> = events.iter().map(|e| e.trace_id.as_str()).collect();
+    // Each event should have a unique trace_id
+    assert_eq!(trace_ids.len(), events.len());
+}
+
+#[test]
+fn enrichment_events_component_is_replacement_lineage_log() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    for event in log.events() {
+        assert_eq!(event.component, "replacement_lineage_log");
+    }
+}
+
+#[test]
+fn enrichment_events_policy_id_is_consistent() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.create_checkpoint(2_000_000, test_epoch()).unwrap();
+    for event in log.events() {
+        assert_eq!(event.policy_id, "replacement-lineage-policy");
+    }
+}
+
+// --- 13. Serialization round-trips ---
+
+#[test]
+fn enrichment_serde_roundtrip_populated_log() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..5 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    log.create_checkpoint(6_000_000, test_epoch()).unwrap();
+
+    let json = serde_json::to_string(&log).unwrap();
+    let back: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.len(), log.len());
+    assert_eq!(back.merkle_root(), log.merkle_root());
+    assert_eq!(back.checkpoints().len(), log.checkpoints().len());
+}
+
+#[test]
+fn enrichment_serde_roundtrip_preserves_entries() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+
+    let json = serde_json::to_string(&log).unwrap();
+    let back: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.entries()[0].kind, ReplacementKind::DelegateToNative);
+    assert_eq!(back.entries()[0].sequence, 0);
+    assert_eq!(back.entries()[0].entry_hash, log.entries()[0].entry_hash);
+}
+
+#[test]
+fn enrichment_serde_roundtrip_preserves_hash_chain() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let json = serde_json::to_string(&log).unwrap();
+    let back: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
+    let entries = back.entries();
+    for i in 1..entries.len() {
+        assert_eq!(entries[i].predecessor_hash, entries[i - 1].entry_hash);
+    }
+}
+
+#[test]
+fn enrichment_serde_roundtrip_audit_still_valid() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    log.create_checkpoint(5_000_000, test_epoch()).unwrap();
+
+    let json = serde_json::to_string(&log).unwrap();
+    let back: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
+    let audit = back.audit();
+    assert!(audit.chain_valid);
+    assert!(audit.merkle_valid);
+}
+
+#[test]
+fn enrichment_serde_roundtrip_inclusion_proofs_still_verify() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let json = serde_json::to_string(&log).unwrap();
+    let back: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
+    for i in 0u64..4 {
+        let proof = back.inclusion_proof(i).unwrap();
+        assert!(verify_inclusion_proof(&proof));
+    }
+}
+
+#[test]
+fn enrichment_serde_roundtrip_consistency_proof_verifies() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+        if i == 1 || i == 3 {
+            log.create_checkpoint((i + 1) * 1_000_000, test_epoch())
+                .unwrap();
+        }
+    }
+    let json = serde_json::to_string(&log).unwrap();
+    let back: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
+    let proof = back.consistency_proof(0, 1).unwrap();
+    assert!(verify_consistency_proof(&proof));
+}
+
+// --- 14. ReplacementKind coverage ---
+
+#[test]
+fn enrichment_all_replacement_kinds_appendable() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let kinds = [
+        ReplacementKind::DelegateToNative,
+        ReplacementKind::Demotion,
+        ReplacementKind::Rollback,
+        ReplacementKind::RePromotion,
+    ];
+    for (i, kind) in kinds.iter().enumerate() {
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i as u64 + 1) * 1_000_000,
+        );
+        log.append(r, *kind, (i as u64 + 1) * 1_000_000).unwrap();
+    }
+    assert_eq!(log.len(), 4);
+    for (i, kind) in kinds.iter().enumerate() {
+        assert_eq!(log.entries()[i].kind, *kind);
+    }
+}
+
+#[test]
+fn enrichment_replacement_kind_as_str_nonempty() {
+    for kind in [
+        ReplacementKind::DelegateToNative,
+        ReplacementKind::Demotion,
+        ReplacementKind::Rollback,
+        ReplacementKind::RePromotion,
+    ] {
+        assert!(!kind.as_str().is_empty());
+    }
+}
+
+#[test]
+fn enrichment_replacement_kind_display_matches_as_str() {
+    for kind in [
+        ReplacementKind::DelegateToNative,
+        ReplacementKind::Demotion,
+        ReplacementKind::Rollback,
+        ReplacementKind::RePromotion,
+    ] {
+        assert_eq!(kind.to_string(), kind.as_str());
+    }
+}
+
+#[test]
+fn enrichment_replacement_kind_btreeset_deduplicates() {
+    let mut set = BTreeSet::new();
+    set.insert(ReplacementKind::DelegateToNative);
+    set.insert(ReplacementKind::DelegateToNative);
+    set.insert(ReplacementKind::Rollback);
+    assert_eq!(set.len(), 2);
+}
+
+// --- 15. Error edge cases ---
+
+#[test]
+fn enrichment_error_chain_break_serde_roundtrip() {
+    let err = LineageLogError::ChainBreak { sequence: 42 };
+    let json = serde_json::to_string(&err).unwrap();
+    let back: LineageLogError = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, err);
+}
+
+#[test]
+fn enrichment_error_checkpoint_beyond_log_serde_roundtrip() {
+    let err = LineageLogError::CheckpointBeyondLog {
+        checkpoint_length: 100,
+        log_length: 50,
+    };
+    let json = serde_json::to_string(&err).unwrap();
+    let back: LineageLogError = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, err);
+}
+
+#[test]
+fn enrichment_error_display_chain_break() {
+    let err = LineageLogError::ChainBreak { sequence: 7 };
+    let msg = err.to_string();
+    assert!(msg.contains("chain break"));
+    assert!(msg.contains("7"));
+}
+
+#[test]
+fn enrichment_error_display_checkpoint_beyond_log() {
+    let err = LineageLogError::CheckpointBeyondLog {
+        checkpoint_length: 100,
+        log_length: 50,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("100"));
+    assert!(msg.contains("50"));
+}
+
+// --- 16. LineageLogEvent ---
+
+#[test]
+fn enrichment_lineage_log_event_with_error_code_roundtrip() {
+    let event = LineageLogEvent {
+        trace_id: "trace-err".into(),
+        decision_id: "dec-err".into(),
+        policy_id: "pol-err".into(),
+        component: "lineage-log".into(),
+        event: "append_failed".into(),
+        outcome: "error".into(),
+        error_code: Some("FE-LIN-001".into()),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: LineageLogEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, event);
+    assert_eq!(back.error_code, Some("FE-LIN-001".into()));
+}
+
+// --- 17. LineageQuery factories ---
+
+#[test]
+fn enrichment_lineage_query_for_slot_has_none_kinds() {
+    let q = LineageQuery::for_slot(test_slot_id());
+    assert!(q.slot_id.is_some());
+    assert!(q.kinds.is_none());
+    assert!(q.min_timestamp_ns.is_none());
+    assert!(q.max_timestamp_ns.is_none());
+}
+
+#[test]
+fn enrichment_lineage_query_all_has_all_none() {
+    let q = LineageQuery::all();
+    assert!(q.slot_id.is_none());
+    assert!(q.kinds.is_none());
+    assert!(q.min_timestamp_ns.is_none());
+    assert!(q.max_timestamp_ns.is_none());
+}
+
+// --- 18. EvidenceCategory ---
+
+#[test]
+fn enrichment_evidence_category_all_variants_as_str() {
+    let cats = [
+        EvidenceCategory::GateResult,
+        EvidenceCategory::PerformanceBenchmark,
+        EvidenceCategory::SentinelRiskScore,
+        EvidenceCategory::DifferentialExecutionLog,
+        EvidenceCategory::Additional,
+    ];
+    let strs: BTreeSet<&str> = cats.iter().map(|c| c.as_str()).collect();
+    assert_eq!(strs.len(), 5, "all evidence categories must have distinct as_str");
+}
+
+#[test]
+fn enrichment_evidence_category_display_matches_as_str() {
+    for cat in [
+        EvidenceCategory::GateResult,
+        EvidenceCategory::PerformanceBenchmark,
+        EvidenceCategory::SentinelRiskScore,
+        EvidenceCategory::DifferentialExecutionLog,
+        EvidenceCategory::Additional,
+    ] {
+        assert_eq!(cat.to_string(), cat.as_str());
+    }
+}
+
+// --- 19. ProofDirection ---
+
+#[test]
+fn enrichment_proof_direction_clone_eq() {
+    let left = ProofDirection::Left;
+    let right = ProofDirection::Right;
+    assert_eq!(left.clone(), ProofDirection::Left);
+    assert_eq!(right.clone(), ProofDirection::Right);
+    assert_ne!(left, right);
+}
+
+// --- 20. Determinism tests ---
+
+#[test]
+fn enrichment_deterministic_append_produces_same_log() {
+    let mut log1 = ReplacementLineageLog::new(default_config());
+    let mut log2 = ReplacementLineageLog::new(default_config());
+    for i in 0u64..5 {
+        let r1 = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r2 = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log1.append(r1, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+        log2.append(r2, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    assert_eq!(log1.merkle_root(), log2.merkle_root());
+    assert_eq!(log1.len(), log2.len());
+    for i in 0..log1.entries().len() {
+        assert_eq!(log1.entries()[i].entry_hash, log2.entries()[i].entry_hash);
+    }
+}
+
+#[test]
+fn enrichment_deterministic_audit_results_match() {
+    let mut log1 = ReplacementLineageLog::new(default_config());
+    let mut log2 = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r1 = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r2 = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log1.append(r1, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+        log2.append(r2, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    log1.create_checkpoint(5_000_000, test_epoch()).unwrap();
+    log2.create_checkpoint(5_000_000, test_epoch()).unwrap();
+    assert_eq!(log1.audit(), log2.audit());
+}
+
+// --- 21. Slot lineage step fields ---
+
+#[test]
+fn enrichment_slot_lineage_step_has_correct_fields() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old-cell", "new-cell", 5_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 5_000_000)
+        .unwrap();
+    let lineage = log.slot_lineage(&test_slot_id());
+    assert_eq!(lineage.len(), 1);
+    let step = &lineage[0];
+    assert_eq!(step.old_cell_digest, "old-cell");
+    assert_eq!(step.new_cell_digest, "new-cell");
+    assert_eq!(step.kind, ReplacementKind::DelegateToNative);
+    assert_eq!(step.timestamp_ns, 5_000_000);
+    assert_eq!(step.epoch, test_epoch());
+    assert!(step.validation_artifact_count > 0);
+    assert!(!step.receipt_id.is_empty());
+}
+
+#[test]
+fn enrichment_slot_lineage_ordering_follows_sequence() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..4 {
+        let r = make_receipt(&format!("v{i}"), &format!("v{}", i + 1), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let lineage = log.slot_lineage(&test_slot_id());
+    for i in 1..lineage.len() {
+        assert!(lineage[i].sequence > lineage[i - 1].sequence);
+    }
+}
+
+// --- 22. Duplicate receipt edge case ---
+
+#[test]
+fn enrichment_duplicate_receipt_preserves_original() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let receipt = make_receipt("old-a", "new-a", 1_000_000);
+    log.append(
+        receipt.clone(),
+        ReplacementKind::DelegateToNative,
+        1_000_000,
+    )
+    .unwrap();
+    let original_entry = log.entries()[0].clone();
+
+    // Attempt duplicate
+    let _ = log.append(receipt, ReplacementKind::Demotion, 2_000_000);
+    // Original should be preserved
+    assert_eq!(log.len(), 1);
+    assert_eq!(log.entries()[0], original_entry);
+}
+
+// --- 23. Large log ---
+
+#[test]
+fn enrichment_twenty_entries_all_proofs_verify() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..20 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    assert_eq!(log.len(), 20);
+    for i in 0u64..20 {
+        let proof = log.inclusion_proof(i).unwrap();
+        assert!(verify_inclusion_proof(&proof), "proof failed for entry {i}");
+    }
+}
+
+#[test]
+fn enrichment_twenty_entries_audit_chain_valid() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..20 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    let audit = log.audit();
+    assert!(audit.chain_valid);
+    assert_eq!(audit.total_entries, 20);
+}
+
+// --- 24. Mixed replacement kinds in lineage ---
+
+#[test]
+fn enrichment_mixed_kinds_lineage_preserves_order() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let kinds = [
+        ReplacementKind::DelegateToNative,
+        ReplacementKind::Demotion,
+        ReplacementKind::Rollback,
+        ReplacementKind::RePromotion,
+        ReplacementKind::DelegateToNative,
+    ];
+    for (i, kind) in kinds.iter().enumerate() {
+        let r = make_receipt(
+            &format!("v{i}"),
+            &format!("v{}", i + 1),
+            (i as u64 + 1) * 1_000_000,
+        );
+        log.append(r, *kind, (i as u64 + 1) * 1_000_000).unwrap();
+    }
+    let lineage = log.slot_lineage(&test_slot_id());
+    assert_eq!(lineage.len(), 5);
+    for (i, kind) in kinds.iter().enumerate() {
+        assert_eq!(lineage[i].kind, *kind);
+    }
+}
+
+// --- 25. Audit result serde ---
+
+#[test]
+fn enrichment_audit_result_serde_with_issues() {
+    let result = AuditResult {
+        total_entries: 10,
+        total_slots: 2,
+        chain_valid: false,
+        merkle_valid: false,
+        checkpoint_count: 1,
+        latest_checkpoint_seq: Some(0),
+        issues: vec![
+            "chain break at sequence 5".into(),
+            "merkle root mismatch".into(),
+        ],
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let back: AuditResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, result);
+    assert_eq!(back.issues.len(), 2);
+}
+
+#[test]
+fn enrichment_audit_result_serde_no_checkpoint() {
+    let result = AuditResult {
+        total_entries: 5,
+        total_slots: 1,
+        chain_valid: true,
+        merkle_valid: true,
+        checkpoint_count: 0,
+        latest_checkpoint_seq: None,
+        issues: vec![],
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let back: AuditResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.latest_checkpoint_seq, None);
+}
+
+// --- 26. LineageLogConfig edge cases ---
+
+#[test]
+fn enrichment_config_serde_custom_values() {
+    let config = LineageLogConfig {
+        checkpoint_interval: 42,
+        max_entries_in_memory: 999,
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let back: LineageLogConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.checkpoint_interval, 42);
+    assert_eq!(back.max_entries_in_memory, 999);
+}
+
+#[test]
+fn enrichment_config_default_interval_positive() {
+    let config = LineageLogConfig::default();
+    assert!(config.checkpoint_interval > 0);
+}
+
+// --- 27. Full lifecycle with all 4 kinds ---
+
+#[test]
+fn enrichment_full_lifecycle_promote_demote_rollback_repromote() {
+    let mut log = ReplacementLineageLog::new(default_config());
+
+    // 1. Promote
+    let r1 = make_receipt("delegate-v1", "native-v1", 1_000_000);
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+
+    // 2. Demote
+    let r2 = make_receipt("native-v1", "delegate-v1", 2_000_000);
+    log.append(r2, ReplacementKind::Demotion, 2_000_000)
+        .unwrap();
+
+    // 3. Rollback
+    let r3 = make_receipt("delegate-v1", "delegate-v0", 3_000_000);
+    log.append(r3, ReplacementKind::Rollback, 3_000_000)
+        .unwrap();
+
+    // 4. Re-promote
+    let r4 = make_receipt("delegate-v0", "native-v2", 4_000_000);
+    log.append(r4, ReplacementKind::RePromotion, 4_000_000)
+        .unwrap();
+
+    log.create_checkpoint(5_000_000, test_epoch()).unwrap();
+
+    // Verify
+    assert_eq!(log.len(), 4);
+    let audit = log.audit();
+    assert!(audit.chain_valid);
+    assert!(audit.merkle_valid);
+    assert_eq!(audit.total_entries, 4);
+    assert_eq!(audit.checkpoint_count, 1);
+
+    let lineage = log.slot_lineage(&test_slot_id());
+    assert_eq!(lineage.len(), 4);
+    assert_eq!(lineage[0].kind, ReplacementKind::DelegateToNative);
+    assert_eq!(lineage[1].kind, ReplacementKind::Demotion);
+    assert_eq!(lineage[2].kind, ReplacementKind::Rollback);
+    assert_eq!(lineage[3].kind, ReplacementKind::RePromotion);
+
+    // Inclusion proofs all verify
+    for i in 0u64..4 {
+        let proof = log.inclusion_proof(i).unwrap();
+        assert!(verify_inclusion_proof(&proof));
+    }
+
+    // Serde round-trip
+    let json = serde_json::to_string(&log).unwrap();
+    let back: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.merkle_root(), log.merkle_root());
+}
+
+// --- 28. Entry sequence is monotonic ---
+
+#[test]
+fn enrichment_entry_sequences_are_monotonic() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    for i in 0u64..10 {
+        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
+            .unwrap();
+    }
+    for (i, entry) in log.entries().iter().enumerate() {
+        assert_eq!(entry.sequence, i as u64);
+    }
+}
+
+// --- 29. Checkpoint timestamp ---
+
+#[test]
+fn enrichment_checkpoint_timestamp_preserved() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old", "new", 1_000_000);
+    log.append(r, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    log.create_checkpoint(42_000_000, test_epoch()).unwrap();
+    assert_eq!(log.checkpoints()[0].timestamp_ns, 42_000_000);
+}
+
+// --- 30. Query for_slot factory returns correct slot ---
+
+#[test]
+fn enrichment_query_for_slot_matches_correct_slot() {
+    let q = LineageQuery::for_slot(test_slot_id());
+    assert_eq!(q.slot_id.unwrap(), test_slot_id());
+}
+
+// --- 31. Zero-timestamp entry ---
+
+#[test]
+fn enrichment_zero_timestamp_entry_is_valid() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r = make_receipt("old-a", "new-a", 0);
+    log.append(r, ReplacementKind::DelegateToNative, 0).unwrap();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log.entries()[0].receipt.timestamp_ns, 0);
+}
+
+// --- 32. Merkle root differs between different entry counts ---
+
+#[test]
+fn enrichment_merkle_root_differs_for_different_lengths() {
+    let mut log = ReplacementLineageLog::new(default_config());
+    let r1 = make_receipt("old-0", "new-0", 1_000_000);
+    log.append(r1, ReplacementKind::DelegateToNative, 1_000_000)
+        .unwrap();
+    let root_one = log.merkle_root();
+
+    let r2 = make_receipt("old-1", "new-1", 2_000_000);
+    log.append(r2, ReplacementKind::DelegateToNative, 2_000_000)
+        .unwrap();
+    let root_two = log.merkle_root();
+
+    let r3 = make_receipt("old-2", "new-2", 3_000_000);
+    log.append(r3, ReplacementKind::DelegateToNative, 3_000_000)
+        .unwrap();
+    let root_three = log.merkle_root();
+
+    assert_ne!(root_one, root_two);
+    assert_ne!(root_two, root_three);
+    assert_ne!(root_one, root_three);
+}

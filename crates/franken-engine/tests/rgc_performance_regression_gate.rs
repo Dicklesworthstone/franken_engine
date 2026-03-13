@@ -41,6 +41,11 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+fn read_to_string(path: &std::path::Path) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 #[test]
 fn rgc_703_contract_is_parseable_and_points_to_expected_surfaces() {
     let contract: Contract = serde_json::from_str(CONTRACT_JSON).expect("contract must parse");
@@ -144,8 +149,7 @@ fn valid_waiver_clears_blocking_outcome() {
 #[test]
 fn readme_mentions_rgc_703_gate_commands() {
     let readme_path = repo_root().join("README.md");
-    let readme = fs::read_to_string(&readme_path)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", readme_path.display()));
+    let readme = read_to_string(&readme_path);
 
     for fragment in [
         "## RGC Performance Regression Gate",
@@ -155,6 +159,35 @@ fn readme_mentions_rgc_703_gate_commands() {
         assert!(
             readme.contains(fragment),
             "missing README fragment: {fragment}"
+        );
+    }
+}
+
+#[test]
+fn rgc_703_lane_script_preserves_failure_classification() {
+    let path = repo_root().join("scripts/run_rgc_performance_regression_gate.sh");
+    let script = read_to_string(&path);
+
+    for required_fragment in [
+        "rch_build_timeout_sec=\"${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-${rch_timeout_seconds}}}\"",
+        "RCH_BUILD_TIMEOUT_SECONDS=\"${rch_build_timeout_sec}\"",
+        "timeout --kill-after=30 \"${rch_timeout_seconds}\"",
+        "kill_process_tree()",
+        "rch reported timeout_secs=${reported_timeout} but requested build timeout is ${rch_build_timeout_sec}",
+        "(rch-timeout-mismatch-${reported_timeout}-lt-${rch_build_timeout_sec})",
+        "rch_progress_stall_seconds=\"${RCH_PROGRESS_STALL_SECONDS:-0}\"",
+        "no remote progress for ${stall_seconds}s after remote execution started",
+        "(rch-stalled-no-progress-${rch_progress_stall_seconds}s)",
+        "(timeout-${rch_timeout_seconds}s)",
+        "(rch-exit=${status}; remote-exit=${remote_exit_code})",
+        "(rch-exit=${status}; missing-remote-exit-marker)",
+        "(rch-local-fallback-detected)",
+        "rgc-performance-regression-gate.run-manifest.v1",
+    ] {
+        assert!(
+            script.contains(required_fragment),
+            "missing script fragment in {}: {required_fragment}",
+            path.display()
         );
     }
 }

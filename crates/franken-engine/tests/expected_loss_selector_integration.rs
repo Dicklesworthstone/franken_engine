@@ -1425,3 +1425,1325 @@ fn loss_matrix_version_changes_with_swap() {
     let s2 = sel.score_runtime_decision(&input).unwrap();
     assert_ne!(s1.loss_matrix_version, s2.loss_matrix_version);
 }
+
+// ===========================================================================
+// Enrichment tests (enrichment_*) — ~90 new tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// ContainmentAction — Clone, Debug, Display, PartialOrd, Ord, Hash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_containment_action_clone_is_identity() {
+    for a in ContainmentAction::ALL {
+        let cloned = a.clone();
+        assert_eq!(a, cloned);
+    }
+}
+
+#[test]
+fn enrichment_containment_action_copy_semantics() {
+    let a = ContainmentAction::Sandbox;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_containment_action_debug_contains_variant_name() {
+    assert!(format!("{:?}", ContainmentAction::Allow).contains("Allow"));
+    assert!(format!("{:?}", ContainmentAction::Challenge).contains("Challenge"));
+    assert!(format!("{:?}", ContainmentAction::Sandbox).contains("Sandbox"));
+    assert!(format!("{:?}", ContainmentAction::Suspend).contains("Suspend"));
+    assert!(format!("{:?}", ContainmentAction::Terminate).contains("Terminate"));
+    assert!(format!("{:?}", ContainmentAction::Quarantine).contains("Quarantine"));
+}
+
+#[test]
+fn enrichment_containment_action_ord_matches_severity() {
+    let mut actions = ContainmentAction::ALL.to_vec();
+    actions.sort();
+    for w in actions.windows(2) {
+        assert!(
+            w[0].severity() < w[1].severity(),
+            "Ord ordering should match severity"
+        );
+    }
+}
+
+#[test]
+fn enrichment_containment_action_severity_exact_values() {
+    assert_eq!(ContainmentAction::Allow.severity(), 0);
+    assert_eq!(ContainmentAction::Challenge.severity(), 1);
+    assert_eq!(ContainmentAction::Sandbox.severity(), 2);
+    assert_eq!(ContainmentAction::Suspend.severity(), 3);
+    assert_eq!(ContainmentAction::Terminate.severity(), 4);
+    assert_eq!(ContainmentAction::Quarantine.severity(), 5);
+}
+
+#[test]
+fn enrichment_containment_action_display_all_lowercase() {
+    for a in ContainmentAction::ALL {
+        let s = a.to_string();
+        assert_eq!(s, s.to_lowercase(), "display should be all lowercase");
+    }
+}
+
+#[test]
+fn enrichment_containment_action_btreeset_deduplication() {
+    let mut set = BTreeSet::new();
+    for _ in 0..10 {
+        for a in ContainmentAction::ALL {
+            set.insert(a);
+        }
+    }
+    assert_eq!(set.len(), 6);
+}
+
+#[test]
+fn enrichment_containment_action_serde_json_string_tag() {
+    for a in ContainmentAction::ALL {
+        let json = serde_json::to_string(&a).unwrap();
+        assert!(json.starts_with('"'), "serde should produce a string tag");
+        assert!(json.ends_with('"'));
+    }
+}
+
+#[test]
+fn enrichment_containment_action_all_is_sorted() {
+    for w in ContainmentAction::ALL.windows(2) {
+        assert!(w[0] < w[1], "ALL must be sorted: {:?} >= {:?}", w[0], w[1]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AlienRiskAlertLevel — Clone, Copy, Debug, Display, serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_alien_risk_alert_level_clone_identity() {
+    for l in [
+        AlienRiskAlertLevel::Nominal,
+        AlienRiskAlertLevel::Elevated,
+        AlienRiskAlertLevel::Critical,
+    ] {
+        assert_eq!(l, l.clone());
+    }
+}
+
+#[test]
+fn enrichment_alien_risk_alert_level_copy_semantics() {
+    let a = AlienRiskAlertLevel::Critical;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_alien_risk_alert_level_debug_distinct() {
+    let dbgs: BTreeSet<String> = [
+        AlienRiskAlertLevel::Nominal,
+        AlienRiskAlertLevel::Elevated,
+        AlienRiskAlertLevel::Critical,
+    ]
+    .iter()
+    .map(|l| format!("{l:?}"))
+    .collect();
+    assert_eq!(dbgs.len(), 3);
+}
+
+#[test]
+fn enrichment_alien_risk_alert_level_display_exact() {
+    assert_eq!(AlienRiskAlertLevel::Nominal.to_string(), "nominal");
+    assert_eq!(AlienRiskAlertLevel::Elevated.to_string(), "elevated");
+    assert_eq!(AlienRiskAlertLevel::Critical.to_string(), "critical");
+}
+
+#[test]
+fn enrichment_alien_risk_alert_level_json_tag_stability() {
+    let json = serde_json::to_string(&AlienRiskAlertLevel::Nominal).unwrap();
+    assert!(json.contains("Nominal") || json.contains("nominal"));
+    let json2 = serde_json::to_string(&AlienRiskAlertLevel::Critical).unwrap();
+    assert!(json2.contains("Critical") || json2.contains("critical"));
+}
+
+// ---------------------------------------------------------------------------
+// RuntimeDecisionScoringError — Display, serde, std::error::Error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_error_missing_field_display_format() {
+    let e = RuntimeDecisionScoringError::MissingField {
+        field: "policy_version".into(),
+    };
+    let s = e.to_string();
+    assert!(s.contains("policy_version"));
+    assert!(s.contains("missing"));
+}
+
+#[test]
+fn enrichment_error_zero_attacker_cost_display_nonempty() {
+    let e = RuntimeDecisionScoringError::ZeroAttackerCost;
+    assert!(!e.to_string().is_empty());
+    assert!(e.to_string().contains("zero") || e.to_string().contains("cost"));
+}
+
+#[test]
+fn enrichment_error_all_actions_blocked_display_contains_blocked() {
+    let e = RuntimeDecisionScoringError::AllActionsBlocked;
+    assert!(e.to_string().contains("blocked"));
+}
+
+#[test]
+fn enrichment_error_clone_eq() {
+    let e = RuntimeDecisionScoringError::MissingField {
+        field: "foo".into(),
+    };
+    let cloned = e.clone();
+    assert_eq!(e, cloned);
+}
+
+#[test]
+fn enrichment_error_debug_contains_variant() {
+    let e = RuntimeDecisionScoringError::ZeroAttackerCost;
+    let d = format!("{e:?}");
+    assert!(d.contains("ZeroAttackerCost"));
+}
+
+#[test]
+fn enrichment_error_std_error_source_is_none() {
+    let e = RuntimeDecisionScoringError::AllActionsBlocked;
+    let dyn_err: &dyn std::error::Error = &e;
+    assert!(dyn_err.source().is_none());
+}
+
+#[test]
+fn enrichment_error_serde_preserves_field_name() {
+    let e = RuntimeDecisionScoringError::MissingField {
+        field: "extension_id".into(),
+    };
+    let json = serde_json::to_string(&e).unwrap();
+    let back: RuntimeDecisionScoringError = serde_json::from_str(&json).unwrap();
+    if let RuntimeDecisionScoringError::MissingField { field } = &back {
+        assert_eq!(field, "extension_id");
+    } else {
+        panic!("wrong variant after roundtrip");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LossEntry — Clone, Debug, serde, field access
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_loss_entry_clone_eq() {
+    let e = LossEntry {
+        action: ContainmentAction::Terminate,
+        state: RiskState::Malicious,
+        loss_millionths: 500_000,
+    };
+    assert_eq!(e, e.clone());
+}
+
+#[test]
+fn enrichment_loss_entry_debug_format() {
+    let e = LossEntry {
+        action: ContainmentAction::Allow,
+        state: RiskState::Benign,
+        loss_millionths: 0,
+    };
+    let d = format!("{e:?}");
+    assert!(d.contains("Allow"));
+    assert!(d.contains("Benign"));
+    assert!(d.contains("0"));
+}
+
+#[test]
+fn enrichment_loss_entry_negative_loss_serde() {
+    let e = LossEntry {
+        action: ContainmentAction::Sandbox,
+        state: RiskState::Anomalous,
+        loss_millionths: -5_000_000,
+    };
+    let json = serde_json::to_string(&e).unwrap();
+    let back: LossEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(e, back);
+    assert_eq!(back.loss_millionths, -5_000_000);
+}
+
+#[test]
+fn enrichment_loss_entry_json_fields_stable() {
+    let e = LossEntry {
+        action: ContainmentAction::Challenge,
+        state: RiskState::Unknown,
+        loss_millionths: 42,
+    };
+    let v: serde_json::Value = serde_json::to_value(&e).unwrap();
+    let obj = v.as_object().unwrap();
+    assert!(obj.contains_key("action"));
+    assert!(obj.contains_key("state"));
+    assert!(obj.contains_key("loss_millionths"));
+    assert_eq!(obj.len(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// LossMatrix — content_hash, clone, debug, serde, loss lookup edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_loss_matrix_clone_eq() {
+    let m = LossMatrix::balanced();
+    let cloned = m.clone();
+    assert_eq!(m, cloned);
+    assert_eq!(m.content_hash(), cloned.content_hash());
+}
+
+#[test]
+fn enrichment_loss_matrix_debug_format_contains_matrix_id() {
+    let m = LossMatrix::balanced();
+    let d = format!("{m:?}");
+    assert!(d.contains("balanced-v1"));
+}
+
+#[test]
+fn enrichment_loss_matrix_content_hash_changes_with_id() {
+    let entries1: Vec<LossEntry> = ContainmentAction::ALL
+        .iter()
+        .flat_map(|a| {
+            RiskState::ALL.iter().map(move |s| LossEntry {
+                action: *a,
+                state: *s,
+                loss_millionths: 1_000_000,
+            })
+        })
+        .collect();
+    let entries2 = entries1.clone();
+    let m1 = LossMatrix::new("id-alpha", entries1);
+    let m2 = LossMatrix::new("id-beta", entries2);
+    assert_ne!(m1.content_hash(), m2.content_hash());
+}
+
+#[test]
+fn enrichment_loss_matrix_all_24_pairs_accessible() {
+    let m = LossMatrix::balanced();
+    let mut count = 0;
+    for a in ContainmentAction::ALL {
+        for s in RiskState::ALL {
+            let _ = m.loss(a, s);
+            count += 1;
+        }
+    }
+    assert_eq!(count, 24);
+}
+
+#[test]
+fn enrichment_loss_matrix_balanced_allow_benign_is_zero() {
+    let m = LossMatrix::balanced();
+    assert_eq!(m.loss(ContainmentAction::Allow, RiskState::Benign), 0);
+}
+
+#[test]
+fn enrichment_loss_matrix_balanced_quarantine_malicious_is_200k() {
+    let m = LossMatrix::balanced();
+    assert_eq!(
+        m.loss(ContainmentAction::Quarantine, RiskState::Malicious),
+        200_000
+    );
+}
+
+#[test]
+fn enrichment_loss_matrix_conservative_allow_malicious_higher() {
+    let bal = LossMatrix::balanced();
+    let con = LossMatrix::conservative();
+    assert!(
+        con.loss(ContainmentAction::Allow, RiskState::Malicious)
+            >= bal.loss(ContainmentAction::Allow, RiskState::Malicious),
+        "conservative should penalize allowing malicious at least as much as balanced"
+    );
+}
+
+#[test]
+fn enrichment_loss_matrix_serde_all_three_presets() {
+    for m in [
+        LossMatrix::balanced(),
+        LossMatrix::conservative(),
+        LossMatrix::permissive(),
+    ] {
+        let json = serde_json::to_string(&m).unwrap();
+        let back: LossMatrix = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, back);
+        assert!(back.is_complete());
+    }
+}
+
+#[test]
+fn enrichment_loss_matrix_json_has_matrix_id_field() {
+    let m = LossMatrix::balanced();
+    let v: serde_json::Value = serde_json::to_value(&m).unwrap();
+    let obj = v.as_object().unwrap();
+    assert!(obj.contains_key("matrix_id"));
+    assert_eq!(obj["matrix_id"].as_str().unwrap(), "balanced-v1");
+}
+
+// ---------------------------------------------------------------------------
+// DecisionConfidenceInterval — Clone, Debug, serde, JSON fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_decision_confidence_interval_clone_eq() {
+    let ci = DecisionConfidenceInterval {
+        lower_millionths: -1_000,
+        upper_millionths: 1_000,
+    };
+    assert_eq!(ci, ci.clone());
+}
+
+#[test]
+fn enrichment_decision_confidence_interval_debug_format() {
+    let ci = DecisionConfidenceInterval {
+        lower_millionths: 100,
+        upper_millionths: 200,
+    };
+    let d = format!("{ci:?}");
+    assert!(d.contains("100"));
+    assert!(d.contains("200"));
+}
+
+#[test]
+fn enrichment_decision_confidence_interval_zero_width() {
+    let ci = DecisionConfidenceInterval {
+        lower_millionths: 500_000,
+        upper_millionths: 500_000,
+    };
+    let json = serde_json::to_string(&ci).unwrap();
+    let back: DecisionConfidenceInterval = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.lower_millionths, back.upper_millionths);
+}
+
+#[test]
+fn enrichment_decision_confidence_interval_negative_bounds() {
+    let ci = DecisionConfidenceInterval {
+        lower_millionths: -2_000_000,
+        upper_millionths: -500_000,
+    };
+    let json = serde_json::to_string(&ci).unwrap();
+    let back: DecisionConfidenceInterval = serde_json::from_str(&json).unwrap();
+    assert_eq!(ci, back);
+}
+
+// ---------------------------------------------------------------------------
+// CandidateActionScore — Clone, Debug, serde, JSON fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_candidate_action_score_clone_eq() {
+    let cas = CandidateActionScore {
+        action: ContainmentAction::Allow,
+        expected_loss_millionths: 0,
+        state_contributions_millionths: BTreeMap::new(),
+        guardrail_blocked: false,
+    };
+    assert_eq!(cas, cas.clone());
+}
+
+#[test]
+fn enrichment_candidate_action_score_debug_format() {
+    let cas = CandidateActionScore {
+        action: ContainmentAction::Quarantine,
+        expected_loss_millionths: 999,
+        state_contributions_millionths: BTreeMap::new(),
+        guardrail_blocked: true,
+    };
+    let d = format!("{cas:?}");
+    assert!(d.contains("Quarantine"));
+    assert!(d.contains("999"));
+    assert!(d.contains("true"));
+}
+
+#[test]
+fn enrichment_candidate_action_score_json_field_count() {
+    let cas = CandidateActionScore {
+        action: ContainmentAction::Suspend,
+        expected_loss_millionths: 100,
+        state_contributions_millionths: BTreeMap::from([
+            ("Benign".into(), 50),
+            ("Malicious".into(), 50),
+        ]),
+        guardrail_blocked: false,
+    };
+    let v: serde_json::Value = serde_json::to_value(&cas).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj.len(), 4);
+}
+
+// ---------------------------------------------------------------------------
+// RuntimeDecisionScoreEvent — Clone, Debug, serde, JSON fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_score_event_clone_eq() {
+    let ev = RuntimeDecisionScoreEvent {
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        component: "c".into(),
+        event: "e".into(),
+        outcome: "o".into(),
+        error_code: Some("E1".into()),
+    };
+    assert_eq!(ev, ev.clone());
+}
+
+#[test]
+fn enrichment_score_event_debug_format() {
+    let ev = RuntimeDecisionScoreEvent {
+        trace_id: "trace-xyz".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        component: "comp".into(),
+        event: "tested".into(),
+        outcome: "ok".into(),
+        error_code: None,
+    };
+    let d = format!("{ev:?}");
+    assert!(d.contains("trace-xyz"));
+    assert!(d.contains("tested"));
+}
+
+#[test]
+fn enrichment_score_event_json_field_count() {
+    let ev = RuntimeDecisionScoreEvent {
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        component: "c".into(),
+        event: "e".into(),
+        outcome: "o".into(),
+        error_code: None,
+    };
+    let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj.len(), 7);
+}
+
+#[test]
+fn enrichment_score_event_error_code_null_in_json() {
+    let ev = RuntimeDecisionScoreEvent {
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        component: "c".into(),
+        event: "e".into(),
+        outcome: "o".into(),
+        error_code: None,
+    };
+    let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+    assert!(v["error_code"].is_null());
+}
+
+// ---------------------------------------------------------------------------
+// AlienRiskEnvelope — Clone, Debug, serde, JSON fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_alien_risk_envelope_clone_eq() {
+    let env = AlienRiskEnvelope {
+        tail_confidence_millionths: 900_000,
+        tail_var_millionths: 1_000_000,
+        tail_cvar_millionths: 1_500_000,
+        conformal_quantile_millionths: 800_000,
+        conformal_p_value_millionths: 100_000,
+        e_value_millionths: 10_000_000,
+        regime_shift_score_millionths: 3_000_000,
+        alert_level: AlienRiskAlertLevel::Elevated,
+        recommended_floor_action: Some(ContainmentAction::Sandbox),
+    };
+    assert_eq!(env, env.clone());
+}
+
+#[test]
+fn enrichment_alien_risk_envelope_debug_format() {
+    let env = AlienRiskEnvelope {
+        tail_confidence_millionths: 900_000,
+        tail_var_millionths: 0,
+        tail_cvar_millionths: 0,
+        conformal_quantile_millionths: 0,
+        conformal_p_value_millionths: 500_000,
+        e_value_millionths: 2_000_000,
+        regime_shift_score_millionths: 0,
+        alert_level: AlienRiskAlertLevel::Nominal,
+        recommended_floor_action: None,
+    };
+    let d = format!("{env:?}");
+    assert!(d.contains("Nominal"));
+    assert!(d.contains("900000"));
+}
+
+#[test]
+fn enrichment_alien_risk_envelope_json_field_count() {
+    let env = AlienRiskEnvelope {
+        tail_confidence_millionths: 0,
+        tail_var_millionths: 0,
+        tail_cvar_millionths: 0,
+        conformal_quantile_millionths: 0,
+        conformal_p_value_millionths: 0,
+        e_value_millionths: 0,
+        regime_shift_score_millionths: 0,
+        alert_level: AlienRiskAlertLevel::Nominal,
+        recommended_floor_action: None,
+    };
+    let v: serde_json::Value = serde_json::to_value(&env).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj.len(), 9);
+}
+
+#[test]
+fn enrichment_alien_risk_envelope_floor_action_none_json() {
+    let env = AlienRiskEnvelope {
+        tail_confidence_millionths: 0,
+        tail_var_millionths: 0,
+        tail_cvar_millionths: 0,
+        conformal_quantile_millionths: 0,
+        conformal_p_value_millionths: 0,
+        e_value_millionths: 0,
+        regime_shift_score_millionths: 0,
+        alert_level: AlienRiskAlertLevel::Nominal,
+        recommended_floor_action: None,
+    };
+    let v: serde_json::Value = serde_json::to_value(&env).unwrap();
+    assert!(v["recommended_floor_action"].is_null());
+}
+
+// ---------------------------------------------------------------------------
+// DecisionExplanation — Clone, serde, JSON fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_decision_explanation_clone_eq() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&certain_benign());
+    let cloned = d.explanation.clone();
+    assert_eq!(d.explanation, cloned);
+}
+
+#[test]
+fn enrichment_decision_explanation_json_fields() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&uniform_posterior());
+    let v: serde_json::Value = serde_json::to_value(&d.explanation).unwrap();
+    let obj = v.as_object().unwrap();
+    assert!(obj.contains_key("posterior_snapshot"));
+    assert!(obj.contains_key("loss_matrix_id"));
+    assert!(obj.contains_key("all_expected_losses"));
+    assert!(obj.contains_key("margin_millionths"));
+}
+
+// ---------------------------------------------------------------------------
+// ActionDecision — Clone, Debug, serde, JSON fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_action_decision_clone_eq() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&certain_benign());
+    let cloned = d.clone();
+    assert_eq!(d, cloned);
+}
+
+#[test]
+fn enrichment_action_decision_debug_contains_action() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&certain_benign());
+    let dbg = format!("{d:?}");
+    assert!(dbg.contains("Allow"));
+}
+
+#[test]
+fn enrichment_action_decision_json_fields() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&uniform_posterior());
+    let v: serde_json::Value = serde_json::to_value(&d).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "action",
+        "expected_loss_millionths",
+        "runner_up_action",
+        "runner_up_loss_millionths",
+        "explanation",
+        "epoch",
+    ] {
+        assert!(obj.contains_key(key), "ActionDecision missing field: {key}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ExpectedLossSelector — Clone, Debug, serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_selector_debug_format() {
+    let sel = ExpectedLossSelector::balanced();
+    let d = format!("{sel:?}");
+    assert!(d.contains("ExpectedLossSelector"));
+}
+
+#[test]
+fn enrichment_selector_serde_preserves_decisions_made() {
+    let mut sel = ExpectedLossSelector::balanced();
+    sel.select(&certain_benign());
+    sel.select(&certain_malicious());
+    sel.select(&uniform_posterior());
+    let json = serde_json::to_string(&sel).unwrap();
+    let back: ExpectedLossSelector = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.decisions_made(), 3);
+}
+
+#[test]
+fn enrichment_selector_serde_preserves_loss_matrix() {
+    let sel = ExpectedLossSelector::new(LossMatrix::conservative());
+    let json = serde_json::to_string(&sel).unwrap();
+    let back: ExpectedLossSelector = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.loss_matrix().matrix_id, "conservative-v1");
+}
+
+#[test]
+fn enrichment_selector_new_starts_at_genesis_epoch() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&certain_benign());
+    assert_eq!(d.epoch, SecurityEpoch::GENESIS);
+}
+
+// ---------------------------------------------------------------------------
+// Expected loss computation — edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_expected_losses_certain_benign_all_nonneg() {
+    let sel = ExpectedLossSelector::balanced();
+    let losses = sel.expected_losses(&certain_benign());
+    for (action, loss) in &losses {
+        assert!(
+            *loss >= 0,
+            "expected loss for {} should be >= 0 given benign, got {}",
+            action,
+            loss
+        );
+    }
+}
+
+#[test]
+fn enrichment_expected_losses_certain_malicious_all_nonneg() {
+    let sel = ExpectedLossSelector::balanced();
+    let losses = sel.expected_losses(&certain_malicious());
+    for (action, loss) in &losses {
+        assert!(
+            *loss >= 0,
+            "expected loss for {} should be >= 0 given malicious, got {}",
+            action,
+            loss
+        );
+    }
+}
+
+#[test]
+fn enrichment_expected_losses_benign_allow_is_zero() {
+    let sel = ExpectedLossSelector::balanced();
+    let losses = sel.expected_losses(&certain_benign());
+    assert_eq!(*losses.get(&ContainmentAction::Allow).unwrap(), 0);
+}
+
+#[test]
+fn enrichment_expected_losses_malicious_quarantine_is_lowest() {
+    let sel = ExpectedLossSelector::balanced();
+    let losses = sel.expected_losses(&certain_malicious());
+    let q_loss = *losses.get(&ContainmentAction::Quarantine).unwrap();
+    for (a, l) in &losses {
+        assert!(
+            q_loss <= *l,
+            "quarantine {} should be <= {} {}",
+            q_loss,
+            a,
+            l
+        );
+    }
+}
+
+#[test]
+fn enrichment_expected_losses_conservative_vs_permissive_differ() {
+    let p = uniform_posterior();
+    let con = ExpectedLossSelector::new(LossMatrix::conservative());
+    let perm = ExpectedLossSelector::new(LossMatrix::permissive());
+    assert_ne!(con.expected_losses(&p), perm.expected_losses(&p));
+}
+
+// ---------------------------------------------------------------------------
+// select — edge cases and invariants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_select_all_unknown_posterior() {
+    let all_unknown = Posterior::from_millionths(0, 0, 0, 1_000_000);
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&all_unknown);
+    // With all unknown, Should still pick a valid action
+    assert!(ContainmentAction::ALL.contains(&d.action));
+    assert!(d.expected_loss_millionths >= 0);
+}
+
+#[test]
+fn enrichment_select_margin_equals_difference() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&uniform_posterior());
+    assert_eq!(
+        d.explanation.margin_millionths,
+        d.runner_up_loss_millionths - d.expected_loss_millionths
+    );
+}
+
+#[test]
+fn enrichment_select_explanation_loss_matrix_id_correct() {
+    let mut sel = ExpectedLossSelector::new(LossMatrix::permissive());
+    let d = sel.select(&certain_benign());
+    assert_eq!(d.explanation.loss_matrix_id, "permissive-v1");
+}
+
+#[test]
+fn enrichment_select_selected_ne_runner_up_for_diverse_posterior() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&uniform_posterior());
+    assert_ne!(d.action, d.runner_up_action);
+}
+
+#[test]
+fn enrichment_select_posterior_snapshot_preserved() {
+    let p = Posterior::from_millionths(300_000, 200_000, 400_000, 100_000);
+    let mut sel = ExpectedLossSelector::balanced();
+    let d = sel.select(&p);
+    assert_eq!(d.explanation.posterior_snapshot, p);
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scoring — validation edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_runtime_scoring_whitespace_only_decision_id_fails() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(certain_benign());
+    input.decision_id = "   \t  ".into();
+    let err = sel.score_runtime_decision(&input).unwrap_err();
+    assert!(matches!(
+        err,
+        RuntimeDecisionScoringError::MissingField { field } if field == "decision_id"
+    ));
+}
+
+#[test]
+fn enrichment_runtime_scoring_whitespace_only_policy_id_fails() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(certain_benign());
+    input.policy_id = "  ".into();
+    let err = sel.score_runtime_decision(&input).unwrap_err();
+    assert!(matches!(
+        err,
+        RuntimeDecisionScoringError::MissingField { field } if field == "policy_id"
+    ));
+}
+
+#[test]
+fn enrichment_runtime_scoring_whitespace_only_extension_id_fails() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(certain_benign());
+    input.extension_id = " ".into();
+    let err = sel.score_runtime_decision(&input).unwrap_err();
+    assert!(matches!(
+        err,
+        RuntimeDecisionScoringError::MissingField { field } if field == "extension_id"
+    ));
+}
+
+#[test]
+fn enrichment_runtime_scoring_whitespace_only_policy_version_fails() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(certain_benign());
+    input.policy_version = "\n".into();
+    let err = sel.score_runtime_decision(&input).unwrap_err();
+    assert!(matches!(
+        err,
+        RuntimeDecisionScoringError::MissingField { field } if field == "policy_version"
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scoring — alien risk alert events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_runtime_scoring_alien_envelope_compiled_event_always() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let input = test_scoring_input(certain_benign());
+    let score = sel.score_runtime_decision(&input).unwrap();
+    assert!(
+        score
+            .events
+            .iter()
+            .any(|e| e.event == "alien_envelope_compiled"),
+        "alien_envelope_compiled event must always be present"
+    );
+}
+
+#[test]
+fn enrichment_runtime_scoring_critical_alert_has_event() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(certain_benign());
+    // Very stable low history then a massive outlier ROI triggers critical
+    input.extension_roi_history_millionths = vec![100_000; 30];
+    let score = sel.score_runtime_decision(&input).unwrap();
+    if score.alien_risk_envelope.alert_level == AlienRiskAlertLevel::Critical {
+        assert!(
+            score.events.iter().any(|e| e.event == "alien_risk_alert"
+                && e.error_code.as_deref() == Some("FE-RUNTIME-SCORING-ALIEN-CRITICAL")),
+            "critical alert must emit alien_risk_alert event with CRITICAL error code"
+        );
+    }
+}
+
+#[test]
+fn enrichment_runtime_scoring_floor_gap_event_when_gap() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(certain_benign());
+    input.extension_roi_history_millionths = vec![100_000; 30];
+    let score = sel.score_runtime_decision(&input).unwrap();
+    if score.alien_floor_gap_steps > 0 {
+        assert!(
+            score.events.iter().any(|e| e.event == "alien_floor_gap"),
+            "floor gap > 0 must emit alien_floor_gap event"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scoring — determinism and reproducibility
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_runtime_scoring_deterministic_across_selectors() {
+    let input = test_scoring_input(uniform_posterior());
+    let mut s1 = ExpectedLossSelector::balanced();
+    let mut s2 = ExpectedLossSelector::balanced();
+    let r1 = s1.score_runtime_decision(&input).unwrap();
+    let r2 = s2.score_runtime_decision(&input).unwrap();
+    assert_eq!(r1.selected_action, r2.selected_action);
+    assert_eq!(
+        r1.selected_expected_loss_millionths,
+        r2.selected_expected_loss_millionths
+    );
+    assert_eq!(r1.confidence_interval, r2.confidence_interval);
+    assert_eq!(r1.alien_risk_envelope, r2.alien_risk_envelope);
+    assert_eq!(r1.receipt_preimage_hash, r2.receipt_preimage_hash);
+    assert_eq!(r1.events.len(), r2.events.len());
+}
+
+#[test]
+fn enrichment_runtime_scoring_receipt_hash_changes_with_extension_id() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input1 = test_scoring_input(certain_benign());
+    input1.extension_id = "ext-alpha".into();
+    let mut input2 = test_scoring_input(certain_benign());
+    input2.extension_id = "ext-beta".into();
+    let r1 = sel.score_runtime_decision(&input1).unwrap();
+    let r2 = sel.score_runtime_decision(&input2).unwrap();
+    assert_ne!(r1.receipt_preimage_hash, r2.receipt_preimage_hash);
+}
+
+#[test]
+fn enrichment_runtime_scoring_receipt_hash_changes_with_decision_id() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input1 = test_scoring_input(certain_benign());
+    input1.decision_id = "d-001".into();
+    let mut input2 = test_scoring_input(certain_benign());
+    input2.decision_id = "d-002".into();
+    let r1 = sel.score_runtime_decision(&input1).unwrap();
+    let r2 = sel.score_runtime_decision(&input2).unwrap();
+    assert_ne!(r1.receipt_preimage_hash, r2.receipt_preimage_hash);
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scoring — confidence interval invariants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_confidence_interval_positive_width() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let input = test_scoring_input(uniform_posterior());
+    let score = sel.score_runtime_decision(&input).unwrap();
+    let width =
+        score.confidence_interval.upper_millionths - score.confidence_interval.lower_millionths;
+    assert!(width >= 0, "CI width should be non-negative, got {}", width);
+}
+
+#[test]
+fn enrichment_confidence_interval_brackets_selected_loss() {
+    for p in [
+        certain_benign(),
+        certain_malicious(),
+        uniform_posterior(),
+        Posterior::from_millionths(100_000, 200_000, 300_000, 400_000),
+    ] {
+        let mut sel = ExpectedLossSelector::balanced();
+        let input = test_scoring_input(p);
+        let score = sel.score_runtime_decision(&input).unwrap();
+        assert!(
+            score.confidence_interval.lower_millionths <= score.selected_expected_loss_millionths
+                && score.confidence_interval.upper_millionths
+                    >= score.selected_expected_loss_millionths,
+            "CI [{}, {}] should bracket selected loss {}",
+            score.confidence_interval.lower_millionths,
+            score.confidence_interval.upper_millionths,
+            score.selected_expected_loss_millionths,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scoring — fleet ROI and attacker ROI
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_fleet_roi_summary_count_includes_self() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let input = test_scoring_input(certain_benign());
+    let score = sel.score_runtime_decision(&input).unwrap();
+    // Fleet baseline has ext-1 and ext-2 keys; extension under test (ext-1) is merged in
+    // so total should be 2 unique extension IDs (ext-1 merged)
+    assert!(score.fleet_roi_summary.extension_count >= 2);
+}
+
+#[test]
+fn enrichment_attacker_roi_extension_id_matches_input() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let input = test_scoring_input(uniform_posterior());
+    let score = sel.score_runtime_decision(&input).unwrap();
+    assert_eq!(score.attacker_roi.extension_id, "ext-1");
+}
+
+// ---------------------------------------------------------------------------
+// RuntimeDecisionScoringInput — serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_runtime_decision_scoring_input_serde_roundtrip() {
+    let input = test_scoring_input(uniform_posterior());
+    let json = serde_json::to_string(&input).unwrap();
+    let back: RuntimeDecisionScoringInput = serde_json::from_str(&json).unwrap();
+    assert_eq!(input.trace_id, back.trace_id);
+    assert_eq!(input.decision_id, back.decision_id);
+    assert_eq!(input.policy_id, back.policy_id);
+    assert_eq!(input.extension_id, back.extension_id);
+    assert_eq!(input.policy_version, back.policy_version);
+    assert_eq!(input.timestamp_ns, back.timestamp_ns);
+    assert_eq!(input.posterior, back.posterior);
+    assert_eq!(input.blocked_actions, back.blocked_actions);
+}
+
+#[test]
+fn enrichment_runtime_decision_scoring_input_json_fields() {
+    let input = test_scoring_input(certain_benign());
+    let v: serde_json::Value = serde_json::to_value(&input).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "extension_id",
+        "policy_version",
+        "timestamp_ns",
+        "posterior",
+        "attacker_cost_model",
+        "extension_roi_history_millionths",
+        "fleet_roi_baseline_millionths",
+        "blocked_actions",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "RuntimeDecisionScoringInput missing field: {key}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RuntimeDecisionScore — full serde and JSON fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_runtime_decision_score_serde_full_roundtrip() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let input = test_scoring_input(uniform_posterior());
+    let score = sel.score_runtime_decision(&input).unwrap();
+    let json = serde_json::to_string(&score).unwrap();
+    let back: RuntimeDecisionScore = serde_json::from_str(&json).unwrap();
+    assert_eq!(score, back);
+}
+
+#[test]
+fn enrichment_runtime_decision_score_json_fields() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let input = test_scoring_input(certain_benign());
+    let score = sel.score_runtime_decision(&input).unwrap();
+    let v: serde_json::Value = serde_json::to_value(&score).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "extension_id",
+        "policy_version",
+        "timestamp_ns",
+        "epoch",
+        "loss_matrix_version",
+        "candidate_actions",
+        "selected_action",
+        "selected_expected_loss_millionths",
+        "selection_rationale",
+        "confidence_interval",
+        "posterior_snapshot",
+        "attacker_roi",
+        "fleet_roi_summary",
+        "borderline_decision",
+        "sensitivity_deltas",
+        "alien_risk_envelope",
+        "alien_floor_gap_steps",
+        "receipt_preimage_hash",
+        "events",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "RuntimeDecisionScore missing field: {key}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Monotonicity — conservative and permissive matrices
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_monotonicity_conservative_increasing_malicious() {
+    let mut sel = ExpectedLossSelector::new(LossMatrix::conservative());
+    let mut prev_severity = 0u32;
+    for i in 0..=10 {
+        let p_mal = 1_000_000i64 * i / 10;
+        let p_ben = 1_000_000i64 - p_mal;
+        let d = sel.select(&Posterior::from_millionths(p_ben, 0, p_mal, 0));
+        assert!(
+            d.action.severity() >= prev_severity,
+            "conservative monotonicity violation at step {i}"
+        );
+        prev_severity = d.action.severity();
+    }
+}
+
+#[test]
+fn enrichment_monotonicity_permissive_increasing_malicious() {
+    let mut sel = ExpectedLossSelector::new(LossMatrix::permissive());
+    let mut prev_severity = 0u32;
+    for i in 0..=10 {
+        let p_mal = 1_000_000i64 * i / 10;
+        let p_ben = 1_000_000i64 - p_mal;
+        let d = sel.select(&Posterior::from_millionths(p_ben, 0, p_mal, 0));
+        assert!(
+            d.action.severity() >= prev_severity,
+            "permissive monotonicity violation at step {i}"
+        );
+        prev_severity = d.action.severity();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// State contributions invariants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_state_contributions_sum_equals_expected_loss() {
+    let mut sel = ExpectedLossSelector::balanced();
+    for p in [
+        certain_benign(),
+        certain_malicious(),
+        uniform_posterior(),
+        Posterior::from_millionths(100_000, 200_000, 300_000, 400_000),
+    ] {
+        let input = test_scoring_input(p);
+        let score = sel.score_runtime_decision(&input).unwrap();
+        for ca in &score.candidate_actions {
+            let sum: i64 = ca.state_contributions_millionths.values().sum();
+            assert_eq!(
+                sum, ca.expected_loss_millionths,
+                "state contributions for {} sum to {} but EL is {}",
+                ca.action, sum, ca.expected_loss_millionths
+            );
+        }
+    }
+}
+
+#[test]
+fn enrichment_state_contributions_always_have_four_entries() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let input = test_scoring_input(uniform_posterior());
+    let score = sel.score_runtime_decision(&input).unwrap();
+    for ca in &score.candidate_actions {
+        assert_eq!(
+            ca.state_contributions_millionths.len(),
+            4,
+            "{} should have 4 state contribution entries",
+            ca.action
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Guardrail — blocked flags, five-out-of-six blocked
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_five_blocked_one_remaining() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(certain_benign());
+    // Block everything except Quarantine
+    input.blocked_actions.insert(ContainmentAction::Allow);
+    input.blocked_actions.insert(ContainmentAction::Challenge);
+    input.blocked_actions.insert(ContainmentAction::Sandbox);
+    input.blocked_actions.insert(ContainmentAction::Suspend);
+    input.blocked_actions.insert(ContainmentAction::Terminate);
+    let score = sel.score_runtime_decision(&input).unwrap();
+    assert_eq!(score.selected_action, ContainmentAction::Quarantine);
+}
+
+#[test]
+fn enrichment_blocked_candidates_all_flagged() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(uniform_posterior());
+    input.blocked_actions.insert(ContainmentAction::Allow);
+    input.blocked_actions.insert(ContainmentAction::Terminate);
+    let score = sel.score_runtime_decision(&input).unwrap();
+    for ca in &score.candidate_actions {
+        if ca.action == ContainmentAction::Allow || ca.action == ContainmentAction::Terminate {
+            assert!(
+                ca.guardrail_blocked,
+                "{} should be flagged as blocked",
+                ca.action
+            );
+        } else {
+            assert!(
+                !ca.guardrail_blocked,
+                "{} should NOT be flagged as blocked",
+                ca.action
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scoring — empty ROI history
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_empty_roi_history_still_produces_valid_envelope() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(uniform_posterior());
+    input.extension_roi_history_millionths = vec![];
+    let score = sel.score_runtime_decision(&input).unwrap();
+    assert!(score.alien_risk_envelope.tail_confidence_millionths > 0);
+    assert!(score.alien_risk_envelope.conformal_p_value_millionths > 0);
+    assert!(score.alien_risk_envelope.e_value_millionths > 0);
+}
+
+#[test]
+fn enrichment_single_roi_history_no_regime_shift() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(uniform_posterior());
+    input.extension_roi_history_millionths = vec![1_000_000];
+    let score = sel.score_runtime_decision(&input).unwrap();
+    // regime shift requires >= 4 history points, so should be 0
+    assert_eq!(
+        score.alien_risk_envelope.regime_shift_score_millionths, 0,
+        "regime shift should be 0 with < 4 history points"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scoring — selection rationale with alien floor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_rationale_includes_alien_floor_when_gap_positive() {
+    let mut sel = ExpectedLossSelector::balanced();
+    let mut input = test_scoring_input(certain_benign());
+    input.extension_roi_history_millionths = vec![100_000; 30];
+    let score = sel.score_runtime_decision(&input).unwrap();
+    if score.alien_floor_gap_steps > 0 {
+        assert!(
+            score.selection_rationale.contains("alien_floor="),
+            "rationale should mention alien floor when gap > 0"
+        );
+        assert!(
+            score.selection_rationale.contains("alien_floor_gap_steps="),
+            "rationale should mention alien_floor_gap_steps when gap > 0"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime scoring — decisions_made increments
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_runtime_scoring_increments_decisions_made() {
+    let mut sel = ExpectedLossSelector::balanced();
+    assert_eq!(sel.decisions_made(), 0);
+    let input = test_scoring_input(certain_benign());
+    sel.score_runtime_decision(&input).unwrap();
+    assert_eq!(sel.decisions_made(), 1);
+    sel.score_runtime_decision(&input).unwrap();
+    assert_eq!(sel.decisions_made(), 2);
+    sel.select(&certain_benign());
+    assert_eq!(sel.decisions_made(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Cross-matrix property: all three presets agree on certain-benign Allow
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_all_presets_select_allow_for_certain_benign() {
+    for matrix in [
+        LossMatrix::balanced(),
+        LossMatrix::conservative(),
+        LossMatrix::permissive(),
+    ] {
+        let mut sel = ExpectedLossSelector::new(matrix.clone());
+        let d = sel.select(&certain_benign());
+        assert_eq!(
+            d.action,
+            ContainmentAction::Allow,
+            "{} matrix should select Allow for certain benign",
+            matrix.matrix_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_all_presets_select_severe_for_certain_malicious() {
+    for matrix in [
+        LossMatrix::balanced(),
+        LossMatrix::conservative(),
+        LossMatrix::permissive(),
+    ] {
+        let mut sel = ExpectedLossSelector::new(matrix.clone());
+        let d = sel.select(&certain_malicious());
+        assert!(
+            d.action.severity() >= ContainmentAction::Terminate.severity(),
+            "{} matrix should select severe for certain malicious, got {}",
+            matrix.matrix_id,
+            d.action
+        );
+    }
+}

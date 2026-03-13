@@ -379,8 +379,10 @@ fn enrichment_quickening_policy_hash_deterministic() {
 #[test]
 fn enrichment_quickening_policy_hash_changes_with_field() {
     let p1 = QuickeningPolicy::default();
-    let mut p2 = QuickeningPolicy::default();
-    p2.warm_threshold = 999;
+    let p2 = QuickeningPolicy {
+        warm_threshold: 999,
+        ..Default::default()
+    };
     assert_ne!(p1.policy_hash(), p2.policy_hash());
 }
 

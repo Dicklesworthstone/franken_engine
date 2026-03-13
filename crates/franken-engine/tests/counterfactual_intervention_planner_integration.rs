@@ -15,8 +15,8 @@
 
 use frankenengine_engine::counterfactual_intervention_planner::{
     self, BEAD_ID, COMPONENT, CounterfactualScenario, InterventionKind, MILLIONTHS,
-    OptimizationPass, POLICY_ID, PlannerError, PlanningDecision, SCHEMA_VERSION,
-    UpliftCertificate, WaveDefinition,
+    OptimizationPass, POLICY_ID, PlannerError, PlanningDecision, SCHEMA_VERSION, UpliftCertificate,
+    WaveDefinition,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -769,7 +769,13 @@ fn enrichment_optimization_pass_prerequisites_empty() {
 
 #[test]
 fn enrichment_optimization_pass_with_prereqs_serde() {
-    let p = make_pass_with_prereqs("dep", 200_000, 50_000, 10_000, vec!["a".to_string(), "b".to_string()]);
+    let p = make_pass_with_prereqs(
+        "dep",
+        200_000,
+        50_000,
+        10_000,
+        vec!["a".to_string(), "b".to_string()],
+    );
     let json = serde_json::to_string(&p).unwrap();
     let back: OptimizationPass = serde_json::from_str(&json).unwrap();
     assert_eq!(p, back);
@@ -1361,7 +1367,13 @@ fn enrichment_validate_ordering_diamond_dag() {
         make_pass("a", 100_000, 10_000, 0),
         make_pass_with_prereqs("b", 200_000, 20_000, 0, vec!["a".to_string()]),
         make_pass_with_prereqs("c", 300_000, 30_000, 0, vec!["a".to_string()]),
-        make_pass_with_prereqs("d", 400_000, 40_000, 0, vec!["b".to_string(), "c".to_string()]),
+        make_pass_with_prereqs(
+            "d",
+            400_000,
+            40_000,
+            0,
+            vec!["b".to_string(), "c".to_string()],
+        ),
     ];
     let order = counterfactual_intervention_planner::validate_pass_ordering(&passes).unwrap();
     assert_eq!(order.len(), 4);
@@ -1485,14 +1497,8 @@ fn enrichment_plan_wave_with_prerequisites_chain() {
     let wave = counterfactual_intervention_planner::plan_wave(passes, 500_000).unwrap();
     // Check topological order is respected
     if wave.passes.len() >= 2 {
-        let has_base = wave
-            .priority_order
-            .iter()
-            .position(|x| x == "base");
-        let has_mid = wave
-            .priority_order
-            .iter()
-            .position(|x| x == "mid");
+        let has_base = wave.priority_order.iter().position(|x| x == "base");
+        let has_mid = wave.priority_order.iter().position(|x| x == "mid");
         if let (Some(pb), Some(pm)) = (has_base, has_mid) {
             assert!(pb < pm);
         }
@@ -1574,8 +1580,7 @@ fn enrichment_build_counterfactual_scenario_id_nonempty() {
     let passes = vec![make_pass("a", 200_000, 50_000, 10_000)];
     let wave = counterfactual_intervention_planner::plan_wave(passes, 500_000).unwrap();
     for kind in InterventionKind::ALL {
-        let scenario =
-            counterfactual_intervention_planner::build_counterfactual(&wave, *kind, "a");
+        let scenario = counterfactual_intervention_planner::build_counterfactual(&wave, *kind, "a");
         assert!(!scenario.scenario_id.is_empty());
         assert!(scenario.scenario_id.starts_with("scenario-"));
     }
@@ -1622,7 +1627,8 @@ fn enrichment_estimate_causal_effect_zero_delta() {
         InterventionKind::EnablePass,
         "a",
     );
-    let cert = counterfactual_intervention_planner::estimate_causal_effect(&scenario, 100_000, 100_000);
+    let cert =
+        counterfactual_intervention_planner::estimate_causal_effect(&scenario, 100_000, 100_000);
     assert_eq!(cert.causal_effect_millionths, 0);
 }
 
@@ -1649,7 +1655,8 @@ fn enrichment_estimate_causal_effect_ci_contains_effect() {
         InterventionKind::EnablePass,
         "a",
     );
-    let cert = counterfactual_intervention_planner::estimate_causal_effect(&scenario, 50_000, 250_000);
+    let cert =
+        counterfactual_intervention_planner::estimate_causal_effect(&scenario, 50_000, 250_000);
     assert!(cert.confidence_interval_low_millionths <= cert.causal_effect_millionths);
     assert!(cert.confidence_interval_high_millionths >= cert.causal_effect_millionths);
 }

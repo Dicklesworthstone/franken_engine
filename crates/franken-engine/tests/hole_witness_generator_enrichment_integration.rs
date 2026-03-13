@@ -2,7 +2,7 @@
 
 //! Enrichment integration tests for the `hole_witness_generator` module.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hole_witness_generator::*;
@@ -34,6 +34,7 @@ fn high_dim_hole(id: &str, surface: HoleSurface) -> HoleReference {
     }
 }
 
+#[allow(dead_code)]
 fn low_persist_hole(id: &str, surface: HoleSurface) -> HoleReference {
     HoleReference {
         hole_id: id.to_string(),
@@ -451,10 +452,19 @@ fn enrichment_generator_config_default_allows_all_kinds() {
     assert_eq!(c.allowed_kinds.len(), 6);
     assert!(c.allowed_kinds.contains(&WitnessProgramKind::JavaScript));
     assert!(c.allowed_kinds.contains(&WitnessProgramKind::TypeScript));
-    assert!(c.allowed_kinds.contains(&WitnessProgramKind::PackageManifest));
+    assert!(
+        c.allowed_kinds
+            .contains(&WitnessProgramKind::PackageManifest)
+    );
     assert!(c.allowed_kinds.contains(&WitnessProgramKind::ReactApp));
-    assert!(c.allowed_kinds.contains(&WitnessProgramKind::ModuleResolution));
-    assert!(c.allowed_kinds.contains(&WitnessProgramKind::AsyncGenerator));
+    assert!(
+        c.allowed_kinds
+            .contains(&WitnessProgramKind::ModuleResolution)
+    );
+    assert!(
+        c.allowed_kinds
+            .contains(&WitnessProgramKind::AsyncGenerator)
+    );
 }
 
 #[test]
@@ -870,8 +880,7 @@ fn enrichment_low_persistence_reduces_confidence() {
     let b_norm = generate_for_hole(&normal, &cfg()).unwrap();
     if !b_low.witnesses.is_empty() && !b_norm.witnesses.is_empty() {
         assert!(
-            b_low.witnesses[0].confidence_millionths
-                < b_norm.witnesses[0].confidence_millionths,
+            b_low.witnesses[0].confidence_millionths < b_norm.witnesses[0].confidence_millionths,
         );
     }
 }

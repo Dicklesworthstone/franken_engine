@@ -86,7 +86,7 @@ fn ir3(source_hash: ContentHash) -> Ir3Module {
 }
 
 fn ir4(ir3_hash: ContentHash) -> Ir4Module {
-    let mut m = Ir4Module::new(ir3_hash.clone(), "test.js");
+    let mut m = Ir4Module::new(ir3_hash, "test.js");
     m.events.push(WitnessEvent {
         seq: 0,
         kind: WitnessEventKind::ExecutionCompleted,
@@ -108,19 +108,19 @@ fn enrichment_full_ir_pipeline_hash_chain() {
     let m0 = ir0();
     let h0 = m0.content_hash();
 
-    let m1 = ir1(h0.clone());
+    let m1 = ir1(h0);
     assert_eq!(m1.header.source_hash.as_ref(), Some(&h0));
     let h1 = m1.content_hash();
 
-    let m2 = ir2(h1.clone());
+    let m2 = ir2(h1);
     assert_eq!(m2.header.source_hash.as_ref(), Some(&h1));
     let h2 = m2.content_hash();
 
-    let m3 = ir3(h2.clone());
+    let m3 = ir3(h2);
     assert_eq!(m3.header.source_hash.as_ref(), Some(&h2));
     let h3 = m3.content_hash();
 
-    let m4 = ir4(h3.clone());
+    let m4 = ir4(h3);
     assert_eq!(m4.executed_ir3_hash, h3);
     assert_eq!(m4.header.source_hash.as_ref(), Some(&h3));
 }
@@ -130,13 +130,13 @@ fn enrichment_full_pipeline_verification_passes() {
     let m0 = ir0();
     let h0 = m0.content_hash();
 
-    let m1 = ir1(h0.clone());
+    let m1 = ir1(h0);
     let h1 = m1.content_hash();
 
-    let m3 = ir3(h1.clone());
+    let m3 = ir3(h1);
     let h3 = m3.content_hash();
 
-    let m4 = ir4(h3.clone());
+    let m4 = ir4(h3);
 
     assert!(verify_ir0_hash(&m0, &h0).is_ok());
     assert!(verify_ir1_source(&m1, &h0).is_ok());
@@ -148,10 +148,10 @@ fn enrichment_full_pipeline_verification_passes() {
 fn enrichment_verifier_emits_events_on_success() {
     let m0 = ir0();
     let h0 = m0.content_hash();
-    let m1 = ir1(h0.clone());
+    let m1 = ir1(h0);
     let m3 = ir3(m1.content_hash());
     let h3 = m3.content_hash();
-    let m4 = ir4(h3.clone());
+    let m4 = ir4(h3);
 
     let mut v = IrVerifier::new();
     v.verify_ir0(&m0, &h0, "t1").unwrap();
@@ -265,7 +265,13 @@ fn enrichment_ir_level_as_str_all() {
 
 #[test]
 fn enrichment_ir_level_serde_roundtrip() {
-    for level in [IrLevel::Ir0, IrLevel::Ir1, IrLevel::Ir2, IrLevel::Ir3, IrLevel::Ir4] {
+    for level in [
+        IrLevel::Ir0,
+        IrLevel::Ir1,
+        IrLevel::Ir2,
+        IrLevel::Ir3,
+        IrLevel::Ir4,
+    ] {
         let json = serde_json::to_string(&level).unwrap();
         let restored: IrLevel = serde_json::from_str(&json).unwrap();
         assert_eq!(level, restored);
@@ -571,7 +577,7 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
 #[test]
 fn enrichment_ir1_module_new_sets_header() {
     let h = ContentHash::compute(b"ir0");
-    let m = Ir1Module::new(h.clone(), "src.js");
+    let m = Ir1Module::new(h, "src.js");
     assert_eq!(m.header.level, IrLevel::Ir1);
     assert_eq!(m.header.source_hash, Some(h));
     assert!(m.scopes.is_empty());
@@ -581,7 +587,7 @@ fn enrichment_ir1_module_new_sets_header() {
 #[test]
 fn enrichment_ir1_module_content_hash_deterministic() {
     let h = ContentHash::compute(b"ir0");
-    let m1 = ir1(h.clone());
+    let m1 = ir1(h);
     let m2 = ir1(h);
     assert_eq!(m1.content_hash(), m2.content_hash());
 }
@@ -593,7 +599,7 @@ fn enrichment_ir1_module_content_hash_deterministic() {
 #[test]
 fn enrichment_verify_ir1_source_ok() {
     let h0 = ContentHash::compute(b"ir0_content");
-    let m = Ir1Module::new(h0.clone(), "test.js");
+    let m = Ir1Module::new(h0, "test.js");
     assert!(verify_ir1_source(&m, &h0).is_ok());
 }
 
@@ -660,7 +666,7 @@ fn enrichment_ir2_module_with_capability_and_flow() {
 #[test]
 fn enrichment_ir3_module_new_sets_header() {
     let h = ContentHash::compute(b"ir2");
-    let m = Ir3Module::new(h.clone(), "test.js");
+    let m = Ir3Module::new(h, "test.js");
     assert_eq!(m.header.level, IrLevel::Ir3);
     assert_eq!(m.header.source_hash, Some(h));
     assert!(m.instructions.is_empty());
@@ -787,7 +793,7 @@ fn enrichment_execution_outcome_as_str_all() {
 #[test]
 fn enrichment_ir4_module_new_sets_defaults() {
     let h = ContentHash::compute(b"ir3");
-    let m = Ir4Module::new(h.clone(), "test.js");
+    let m = Ir4Module::new(h, "test.js");
     assert_eq!(m.header.level, IrLevel::Ir4);
     assert_eq!(m.executed_ir3_hash, h);
     assert_eq!(m.outcome, ExecutionOutcome::Completed);
@@ -837,7 +843,7 @@ fn enrichment_ir4_with_events_serde() {
 #[test]
 fn enrichment_verify_ir4_linkage_ok() {
     let h3 = ContentHash::compute(b"ir3");
-    let m = ir4(h3.clone());
+    let m = ir4(h3);
     assert!(verify_ir4_linkage(&m, &h3).is_ok());
 }
 
@@ -853,7 +859,7 @@ fn enrichment_verify_ir4_hash_mismatch() {
 #[test]
 fn enrichment_verify_ir4_non_monotonic_events() {
     let h3 = ContentHash::compute(b"ir3");
-    let mut m = Ir4Module::new(h3.clone(), "test.js");
+    let mut m = Ir4Module::new(h3, "test.js");
     m.events.push(WitnessEvent {
         seq: 5,
         kind: WitnessEventKind::ExecutionCompleted,
@@ -916,7 +922,11 @@ fn enrichment_ir_error_code_as_str_all_unique() {
 
 #[test]
 fn enrichment_error_code_helper() {
-    let err = IrError::new(IrErrorCode::HashVerificationFailed, "bad hash", IrLevel::Ir0);
+    let err = IrError::new(
+        IrErrorCode::HashVerificationFailed,
+        "bad hash",
+        IrLevel::Ir0,
+    );
     assert_eq!(error_code(&err), "IR_HASH_VERIFICATION_FAILED");
 }
 
@@ -973,7 +983,10 @@ fn enrichment_ir3_instruction_sample_variants_serde() {
             dst: 1,
             pool_index: 0,
         },
-        Ir3Instruction::LoadBool { dst: 2, value: true },
+        Ir3Instruction::LoadBool {
+            dst: 2,
+            value: true,
+        },
         Ir3Instruction::LoadNull { dst: 3 },
         Ir3Instruction::LoadUndefined { dst: 4 },
         Ir3Instruction::Add {
@@ -1101,7 +1114,7 @@ fn enrichment_all_module_canonical_bytes_deterministic() {
     assert_eq!(m0.canonical_bytes(), m0.canonical_bytes());
 
     let h0 = m0.content_hash();
-    let m1 = ir1(h0.clone());
+    let m1 = ir1(h0);
     assert_eq!(m1.canonical_bytes(), m1.canonical_bytes());
 
     let m2 = ir2(m1.content_hash());

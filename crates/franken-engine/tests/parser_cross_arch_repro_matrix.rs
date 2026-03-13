@@ -256,6 +256,7 @@ fn parser_cross_arch_repro_matrix_contract_doc_has_required_sections() {
         "incomplete_matrix",
         "latest complete run directory",
         "scratch-only partial directories",
+        "fail non-zero",
     ] {
         assert!(
             doc.contains(marker),
@@ -515,7 +516,9 @@ fn replay_wrapper_surfaces_latest_artifacts_after_run() {
     for marker in [
         "mode=\"${1:-matrix}\"",
         "main_exit=0",
+        "latest_artifact_dir()",
         "latest_complete_run_dir()",
+        "missing_bundle_exit_code()",
         "latest manifest:",
         "latest matrix summary:",
         "latest events:",
@@ -523,6 +526,8 @@ fn replay_wrapper_surfaces_latest_artifacts_after_run() {
         "[[ -f \"${candidate}/matrix_summary.json\" ]]",
         "[[ -f \"${candidate}/events.jsonl\" ]]",
         "could not locate a complete run directory under ${artifact_root}",
+        "exit \"$(missing_bundle_exit_code \"${main_exit:-1}\")\"",
+        "newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}",
     ] {
         assert!(
             wrapper.contains(marker),

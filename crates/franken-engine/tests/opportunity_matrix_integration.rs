@@ -1070,3 +1070,1134 @@ fn end_to_end_derive_then_score() {
         d.ranked_opportunities[0].score_millionths >= d.ranked_opportunities[1].score_millionths
     );
 }
+
+// ── Enrichment: hotspot_profile_from_flamegraphs deep coverage ───────
+
+#[test]
+fn enrichment_hotspot_profile_single_stack_frame_uses_same_module_and_function() {
+    let fg = make_flamegraph(FlamegraphKind::Cpu, vec![("runtime", 200)]);
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile.len(), 1);
+    assert_eq!(profile[0].module, "runtime");
+    assert_eq!(profile[0].function, "runtime");
+    assert_eq!(profile[0].sample_count, 200);
+}
+
+#[test]
+fn enrichment_hotspot_profile_three_level_stack_uses_leaf_function() {
+    let fg = make_flamegraph(FlamegraphKind::Cpu, vec![("vm;compiler;optimize", 150)]);
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile.len(), 1);
+    assert_eq!(profile[0].module, "vm");
+    assert_eq!(profile[0].function, "optimize");
+}
+
+#[test]
+fn enrichment_hotspot_profile_deeply_nested_stack() {
+    let fg = make_flamegraph(
+        FlamegraphKind::Cpu,
+        vec![("a;b;c;d;e;f;leaf_fn", 75)],
+    );
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile[0].module, "a");
+    assert_eq!(profile[0].function, "leaf_fn");
+    assert_eq!(profile[0].sample_count, 75);
+}
+
+#[test]
+fn enrichment_hotspot_profile_multiple_modules_sorted_descending() {
+    let fg = make_flamegraph(
+        FlamegraphKind::Cpu,
+        vec![
+            ("alpha;run", 10),
+            ("beta;exec", 50),
+            ("gamma;init", 30),
+        ],
+    );
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile.len(), 3);
+    assert_eq!(profile[0].function, "exec");
+    assert_eq!(profile[0].sample_count, 50);
+    assert_eq!(profile[1].function, "init");
+    assert_eq!(profile[1].sample_count, 30);
+    assert_eq!(profile[2].function, "run");
+    assert_eq!(profile[2].sample_count, 10);
+}
+
+#[test]
+fn enrichment_hotspot_profile_zero_sample_count_included() {
+    let fg = make_flamegraph(FlamegraphKind::Cpu, vec![("vm;dispatch", 0)]);
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile.len(), 1);
+    assert_eq!(profile[0].sample_count, 0);
+}
+
+#[test]
+fn enrichment_hotspot_profile_whitespace_only_stack_skipped() {
+    let fg = make_flamegraph(FlamegraphKind::Cpu, vec![("   \t  ", 100), ("vm;run", 50)]);
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile.len(), 1);
+    assert_eq!(profile[0].function, "run");
+}
+
+#[test]
+fn enrichment_hotspot_profile_aggregation_preserves_total_across_three_artifacts() {
+    let fg1 = make_flamegraph(FlamegraphKind::Cpu, vec![("vm;dispatch", 100)]);
+    let fg2 = make_flamegraph(FlamegraphKind::Allocation, vec![("vm;dispatch", 200)]);
+    let fg3 = make_flamegraph(FlamegraphKind::DiffCpu, vec![("vm;dispatch", 300)]);
+    let profile = hotspot_profile_from_flamegraphs(&[fg1, fg2, fg3]);
+    let dispatch = profile.iter().find(|e| e.function == "dispatch").unwrap();
+    assert_eq!(dispatch.sample_count, 600);
+}
+
+#[test]
+fn enrichment_hotspot_profile_tiebreak_by_module_name() {
+    let fg = make_flamegraph(
+        FlamegraphKind::Cpu,
+        vec![("beta;fn1", 50), ("alpha;fn2", 50)],
+    );
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile.len(), 2);
+    // Both have same count, so BTreeMap ordering by module name applies then sort is stable
+    // After sort_by sample_count desc, tiebreak is by module asc then function asc
+    assert_eq!(profile[0].module, "alpha");
+    assert_eq!(profile[1].module, "beta");
+}
+
+#[test]
+fn enrichment_hotspot_profile_large_sample_counts() {
+    let fg = make_flamegraph(
+        FlamegraphKind::Cpu,
+        vec![("vm;dispatch", u64::MAX / 2)],
+    );
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile[0].sample_count, u64::MAX / 2);
+}
+
+// ── Enrichment: benchmark_pressure_from_cases deep coverage ──────────
+
+#[test]
+fn enrichment_benchmark_pressure_exactly_at_3x_returns_neutral() {
+    let case = make_benchmark_case("w1", 300.0, 100.0);
+    let pressure = benchmark_pressure_from_cases(&[case], &[]);
+    assert_eq!(pressure, 1_000_000);
+}
+
+#[test]
+fn enrichment_benchmark_pressure_above_3x_returns_neutral() {
+    let case = make_benchmark_case("w1", 500.0, 100.0);
+    let pressure = benchmark_pressure_from_cases(&[case], &[]);
+    assert_eq!(pressure, 1_000_000);
+}
+
+#[test]
+fn enrichment_benchmark_pressure_at_1x_computes_shortfall() {
+    let case = make_benchmark_case("w1", 100.0, 100.0);
+    let pressure = benchmark_pressure_from_cases(&[case], &[]);
+    // shortfall = 3_000_000 - 1_000_000 = 2_000_000
+    // pressure = 1_000_000 + 2_000_000 * 1_000_000 / 3_000_000 = 1_666_666
+    assert!(pressure > 1_600_000);
+    assert!(pressure < 1_700_000);
+}
+
+#[test]
+fn enrichment_benchmark_pressure_at_2x() {
+    let case = make_benchmark_case("w1", 200.0, 100.0);
+    let pressure = benchmark_pressure_from_cases(&[case], &[]);
+    // shortfall = 3_000_000 - 2_000_000 = 1_000_000
+    // pressure = 1_000_000 + 1_000_000 * 1_000_000 / 3_000_000 = 1_333_333
+    assert!(pressure > 1_300_000);
+    assert!(pressure < 1_400_000);
+}
+
+#[test]
+fn enrichment_benchmark_pressure_both_node_and_bun_combined() {
+    let node = make_benchmark_case("w1", 200.0, 100.0);
+    let bun = make_benchmark_case("w2", 400.0, 100.0);
+    // average speedup = (2.0 + 4.0) / 2 = 3.0 => neutral
+    let pressure = benchmark_pressure_from_cases(&[node], &[bun]);
+    assert_eq!(pressure, 1_000_000);
+}
+
+#[test]
+fn enrichment_benchmark_pressure_very_fast_returns_neutral() {
+    let case = make_benchmark_case("w1", 10000.0, 100.0);
+    let pressure = benchmark_pressure_from_cases(&[case], &[]);
+    assert_eq!(pressure, 1_000_000);
+}
+
+#[test]
+fn enrichment_benchmark_pressure_nan_throughput_skipped() {
+    let mut case = make_benchmark_case("w1", 100.0, 100.0);
+    case.throughput_franken_tps = f64::NAN;
+    let pressure = benchmark_pressure_from_cases(&[case], &[]);
+    assert_eq!(pressure, 1_000_000);
+}
+
+#[test]
+fn enrichment_benchmark_pressure_infinity_skipped() {
+    let case = make_benchmark_case("w1", f64::INFINITY, 100.0);
+    let pressure = benchmark_pressure_from_cases(&[case], &[]);
+    // infinity / 100.0 = infinity, which is not finite => skipped
+    assert_eq!(pressure, 1_000_000);
+}
+
+#[test]
+fn enrichment_benchmark_pressure_multiple_slow_cases_stack() {
+    let c1 = make_benchmark_case("w1", 100.0, 100.0);
+    let c2 = make_benchmark_case("w2", 100.0, 100.0);
+    let c3 = make_benchmark_case("w3", 100.0, 100.0);
+    let pressure = benchmark_pressure_from_cases(&[c1, c2, c3], &[]);
+    // All are 1x, shortfall = 2_000_000, pressure = 1_666_666
+    assert!(pressure > 1_600_000);
+    assert!(pressure <= 2_000_000);
+}
+
+// ── Enrichment: derive_candidates_from_hotspots deep coverage ────────
+
+#[test]
+fn enrichment_derive_candidates_weight_proportional_to_samples() {
+    let hotspots = vec![
+        HotspotProfileEntry { module: "a".into(), function: "f".into(), sample_count: 75 },
+        HotspotProfileEntry { module: "b".into(), function: "g".into(), sample_count: 25 },
+    ];
+    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
+    assert_eq!(derived[0].hotpath_weight_override_millionths, Some(750_000));
+    assert_eq!(derived[1].hotpath_weight_override_millionths, Some(250_000));
+}
+
+#[test]
+fn enrichment_derive_candidates_estimated_speedup_formula() {
+    let hotspots = vec![
+        HotspotProfileEntry { module: "x".into(), function: "y".into(), sample_count: 100 },
+    ];
+    let pressure = 1_500_000;
+    let derived = derive_candidates_from_hotspots(&hotspots, pressure, 1, 100_000, 1_000_000, 1_000_000, 10);
+    // weight = 1_000_000 (sole hotspot), speedup = 1_000_000 + (1_500_000 * 1_000_000) / 1_000_000 = 2_500_000
+    assert_eq!(derived[0].estimated_speedup_millionths, 2_500_000);
+}
+
+#[test]
+fn enrichment_derive_candidates_max_candidates_zero_returns_empty() {
+    let hotspots = vec![
+        HotspotProfileEntry { module: "a".into(), function: "f".into(), sample_count: 100 },
+    ];
+    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 0);
+    assert!(derived.is_empty());
+}
+
+#[test]
+fn enrichment_derive_candidates_sanitizes_special_chars() {
+    let hotspots = vec![
+        HotspotProfileEntry { module: "my.module".into(), function: "fn@2!".into(), sample_count: 10 },
+    ];
+    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
+    assert_eq!(derived[0].opportunity_id, "opp:my_module:fn_2_");
+}
+
+#[test]
+fn enrichment_derive_candidates_preserves_target_module_and_function() {
+    let hotspots = vec![
+        HotspotProfileEntry { module: "parser".into(), function: "tokenize".into(), sample_count: 50 },
+    ];
+    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 2, 200_000, 800_000, 3_000_000, 10);
+    assert_eq!(derived[0].target_module, "parser");
+    assert_eq!(derived[0].target_function, "tokenize");
+}
+
+#[test]
+fn enrichment_derive_candidates_many_hotspots_capped() {
+    let hotspots: Vec<HotspotProfileEntry> = (0..100)
+        .map(|i| HotspotProfileEntry {
+            module: format!("m{i}"),
+            function: format!("f{i}"),
+            sample_count: 1000 - i as u64,
+        })
+        .collect();
+    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 5);
+    assert_eq!(derived.len(), 5);
+    // First candidate should have highest weight
+    assert!(derived[0].hotpath_weight_override_millionths.unwrap() >= derived[4].hotpath_weight_override_millionths.unwrap());
+}
+
+#[test]
+fn enrichment_derive_candidates_equal_samples_equal_weight() {
+    let hotspots = vec![
+        HotspotProfileEntry { module: "a".into(), function: "f".into(), sample_count: 50 },
+        HotspotProfileEntry { module: "b".into(), function: "g".into(), sample_count: 50 },
+    ];
+    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
+    assert_eq!(derived[0].hotpath_weight_override_millionths, derived[1].hotpath_weight_override_millionths);
+    assert_eq!(derived[0].hotpath_weight_override_millionths, Some(500_000));
+}
+
+// ── Enrichment: scoring formula edge cases ───────────────────────────
+
+#[test]
+fn enrichment_score_increases_with_higher_speedup() {
+    let mut req = base_request();
+    req.candidates = vec![make_candidate("opp-low", "vm", "dispatch")];
+    req.candidates[0].estimated_speedup_millionths = 2_000_000;
+    let d_low = run_opportunity_matrix_scoring(&req);
+
+    req.candidates[0].estimated_speedup_millionths = 5_000_000;
+    let d_high = run_opportunity_matrix_scoring(&req);
+
+    assert!(d_high.ranked_opportunities[0].score_millionths > d_low.ranked_opportunities[0].score_millionths);
+}
+
+#[test]
+fn enrichment_score_decreases_with_higher_effort() {
+    let mut req = base_request();
+    req.candidates = vec![make_candidate("opp-a", "vm", "dispatch")];
+    req.candidates[0].engineering_effort_hours_millionths = 1_000_000;
+    let d_low_effort = run_opportunity_matrix_scoring(&req);
+
+    req.candidates[0].engineering_effort_hours_millionths = 10_000_000;
+    let d_high_effort = run_opportunity_matrix_scoring(&req);
+
+    assert!(d_low_effort.ranked_opportunities[0].score_millionths > d_high_effort.ranked_opportunities[0].score_millionths);
+}
+
+#[test]
+fn enrichment_score_decreases_with_higher_risk() {
+    let mut req = base_request();
+    req.candidates = vec![make_candidate("opp-a", "vm", "dispatch")];
+    req.candidates[0].regression_risk_millionths = 100_000;
+    let d_low_risk = run_opportunity_matrix_scoring(&req);
+
+    req.candidates[0].regression_risk_millionths = 900_000;
+    let d_high_risk = run_opportunity_matrix_scoring(&req);
+
+    assert!(d_low_risk.ranked_opportunities[0].score_millionths > d_high_risk.ranked_opportunities[0].score_millionths);
+}
+
+#[test]
+fn enrichment_score_decreases_with_higher_complexity() {
+    let mut req = base_request();
+    req.candidates = vec![make_candidate("opp-a", "vm", "dispatch")];
+    req.candidates[0].implementation_complexity = 1;
+    let d_simple = run_opportunity_matrix_scoring(&req);
+
+    req.candidates[0].implementation_complexity = 5;
+    let d_complex = run_opportunity_matrix_scoring(&req);
+
+    assert!(d_simple.ranked_opportunities[0].score_millionths > d_complex.ranked_opportunities[0].score_millionths);
+}
+
+#[test]
+fn enrichment_score_increases_with_higher_benchmark_pressure() {
+    let mut req = base_request();
+    req.candidates = vec![make_candidate("opp-a", "vm", "dispatch")];
+    req.benchmark_pressure_millionths = 1_000_000;
+    let d_low_pressure = run_opportunity_matrix_scoring(&req);
+
+    req.benchmark_pressure_millionths = 2_000_000;
+    let d_high_pressure = run_opportunity_matrix_scoring(&req);
+
+    assert!(d_high_pressure.ranked_opportunities[0].score_millionths > d_low_pressure.ranked_opportunities[0].score_millionths);
+}
+
+#[test]
+fn enrichment_score_increases_with_higher_security_clearance() {
+    let mut req = base_request();
+    req.candidates = vec![make_candidate("opp-a", "vm", "dispatch")];
+    req.candidates[0].security_clearance_millionths = 200_000;
+    let d_low_sec = run_opportunity_matrix_scoring(&req);
+
+    req.candidates[0].security_clearance_millionths = 1_000_000;
+    let d_high_sec = run_opportunity_matrix_scoring(&req);
+
+    assert!(d_high_sec.ranked_opportunities[0].score_millionths > d_low_sec.ranked_opportunities[0].score_millionths);
+}
+
+#[test]
+fn enrichment_voi_nonnegative_for_valid_inputs() {
+    let req = base_request();
+    let d = run_opportunity_matrix_scoring(&req);
+    for opp in &d.ranked_opportunities {
+        assert!(opp.voi_millionths >= 0, "VOI should be non-negative for standard inputs");
+    }
+}
+
+#[test]
+fn enrichment_score_nonnegative_when_all_inputs_positive() {
+    let req = base_request();
+    let d = run_opportunity_matrix_scoring(&req);
+    for opp in &d.ranked_opportunities {
+        assert!(opp.score_millionths >= 0);
+    }
+}
+
+// ── Enrichment: validation error exhaustive ──────────────────────────
+
+#[test]
+fn enrichment_validation_whitespace_only_trace_id_rejected() {
+    let mut req = base_request();
+    req.trace_id = "   \n\t  ".into();
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.outcome, "fail");
+    assert_eq!(d.error_code.as_deref(), Some("FE-OPPM-1001"));
+}
+
+#[test]
+fn enrichment_validation_whitespace_only_optimization_run_id_rejected() {
+    let mut req = base_request();
+    req.optimization_run_id = "  \t ".into();
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.outcome, "fail");
+    assert_eq!(d.error_code.as_deref(), Some("FE-OPPM-1001"));
+}
+
+#[test]
+fn enrichment_validation_candidate_empty_target_module_still_valid() {
+    // Target module/function are not currently validated as non-empty
+    let mut req = base_request();
+    req.candidates[0].target_module = "".into();
+    let d = run_opportunity_matrix_scoring(&req);
+    // Should still process (no validation on target_module emptiness)
+    assert!(d.outcome == "allow" || d.outcome == "deny");
+}
+
+#[test]
+fn enrichment_validation_multiple_duplicates_first_detected() {
+    let mut req = base_request();
+    req.candidates.push(make_candidate("opp-vm-dispatch", "vm", "dispatch"));
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.outcome, "fail");
+    assert_eq!(d.error_code.as_deref(), Some("FE-OPPM-1002"));
+}
+
+#[test]
+fn enrichment_validation_historical_valid_timestamps_pass() {
+    let mut req = base_request();
+    req.historical_outcomes = vec![
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-1".into(),
+            predicted_gain_millionths: 100_000,
+            actual_gain_millionths: 200_000,
+            completed_at_utc: "2026-01-15T08:30:00Z".into(),
+        },
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-2".into(),
+            predicted_gain_millionths: 300_000,
+            actual_gain_millionths: 250_000,
+            completed_at_utc: "2026-02-20T16:45:00+00:00".into(),
+        },
+    ];
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_ne!(d.outcome, "fail");
+}
+
+#[test]
+fn enrichment_validation_historical_partial_date_rejected() {
+    let mut req = base_request();
+    req.historical_outcomes = vec![OpportunityOutcomeObservation {
+        opportunity_id: "opp-1".into(),
+        predicted_gain_millionths: 100_000,
+        actual_gain_millionths: 200_000,
+        completed_at_utc: "2026-01-15".into(),
+    }];
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.outcome, "fail");
+    assert_eq!(d.error_code.as_deref(), Some("FE-OPPM-1003"));
+}
+
+#[test]
+fn enrichment_validation_benchmark_pressure_one_is_valid() {
+    let mut req = base_request();
+    req.benchmark_pressure_millionths = 1;
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_ne!(d.outcome, "fail");
+}
+
+// ── Enrichment: decision metadata ────────────────────────────────────
+
+#[test]
+fn enrichment_decision_matrix_id_deterministic() {
+    let req = base_request();
+    let d1 = run_opportunity_matrix_scoring(&req);
+    let d2 = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d1.matrix_id, d2.matrix_id);
+}
+
+#[test]
+fn enrichment_decision_matrix_id_differs_for_different_candidates() {
+    let req1 = base_request();
+    let d1 = run_opportunity_matrix_scoring(&req1);
+
+    let mut req2 = base_request();
+    req2.candidates[0].estimated_speedup_millionths = 9_000_000;
+    let d2 = run_opportunity_matrix_scoring(&req2);
+    assert_ne!(d1.matrix_id, d2.matrix_id);
+}
+
+#[test]
+fn enrichment_decision_matrix_id_differs_for_different_hotspots() {
+    let req1 = base_request();
+    let d1 = run_opportunity_matrix_scoring(&req1);
+
+    let mut req2 = base_request();
+    req2.hotspots[0].sample_count = 999;
+    let d2 = run_opportunity_matrix_scoring(&req2);
+    assert_ne!(d1.matrix_id, d2.matrix_id);
+}
+
+#[test]
+fn enrichment_decision_matrix_id_differs_for_different_pressure() {
+    let req1 = base_request();
+    let d1 = run_opportunity_matrix_scoring(&req1);
+
+    let mut req2 = base_request();
+    req2.benchmark_pressure_millionths = 1_999_999;
+    let d2 = run_opportunity_matrix_scoring(&req2);
+    assert_ne!(d1.matrix_id, d2.matrix_id);
+}
+
+#[test]
+fn enrichment_decision_error_code_none_on_allow() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    assert_eq!(d.outcome, "allow");
+    assert!(d.error_code.is_none());
+}
+
+#[test]
+fn enrichment_decision_error_code_present_on_fail() {
+    let mut req = base_request();
+    req.trace_id = "".into();
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.outcome, "fail");
+    assert!(d.error_code.is_some());
+}
+
+// ── Enrichment: events ───────────────────────────────────────────────
+
+#[test]
+fn enrichment_events_started_is_first() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    assert_eq!(d.events[0].event, "opportunity_matrix_started");
+}
+
+#[test]
+fn enrichment_events_completed_is_last() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    assert_eq!(d.events.last().unwrap().event, "opportunity_matrix_completed");
+}
+
+#[test]
+fn enrichment_events_scored_between_start_and_end() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    let first_scored = d.events.iter().position(|e| e.event == "opportunity_scored").unwrap();
+    let completed = d.events.iter().position(|e| e.event == "opportunity_matrix_completed").unwrap();
+    assert!(first_scored > 0);
+    assert!(first_scored < completed);
+}
+
+#[test]
+fn enrichment_events_scored_carry_opportunity_id() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    for event in d.events.iter().filter(|e| e.event == "opportunity_scored") {
+        assert!(event.opportunity_id.is_some());
+    }
+}
+
+#[test]
+fn enrichment_events_start_and_complete_have_no_opportunity_id() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    let start = d.events.iter().find(|e| e.event == "opportunity_matrix_started").unwrap();
+    assert!(start.opportunity_id.is_none());
+    let complete = d.events.iter().find(|e| e.event == "opportunity_matrix_completed").unwrap();
+    assert!(complete.opportunity_id.is_none());
+}
+
+#[test]
+fn enrichment_events_successful_completion_outcome_is_allow_or_deny() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    let complete = d.events.iter().find(|e| e.event == "opportunity_matrix_completed").unwrap();
+    assert!(complete.outcome == "allow" || complete.outcome == "deny");
+    assert!(complete.error_code.is_none());
+}
+
+#[test]
+fn enrichment_events_count_equals_2_plus_candidates() {
+    let req = base_request();
+    let n_candidates = req.candidates.len();
+    let d = run_opportunity_matrix_scoring(&req);
+    // start + n_candidates scored + completed = 2 + n_candidates
+    assert_eq!(d.events.len(), 2 + n_candidates);
+}
+
+#[test]
+fn enrichment_events_on_failure_only_start_and_complete() {
+    let mut req = base_request();
+    req.trace_id = "".into();
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.events.len(), 2);
+    assert_eq!(d.events[0].event, "opportunity_matrix_started");
+    assert_eq!(d.events[1].event, "opportunity_matrix_completed");
+}
+
+// ── Enrichment: historical tracking edge cases ───────────────────────
+
+#[test]
+fn enrichment_historical_tracking_zero_error_when_predicted_equals_actual() {
+    let mut req = base_request();
+    req.historical_outcomes = vec![OpportunityOutcomeObservation {
+        opportunity_id: "opp-exact".into(),
+        predicted_gain_millionths: 500_000,
+        actual_gain_millionths: 500_000,
+        completed_at_utc: "2026-03-01T00:00:00Z".into(),
+    }];
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.historical_tracking[0].signed_error_millionths, 0);
+    assert_eq!(d.historical_tracking[0].absolute_error_millionths, 0);
+}
+
+#[test]
+fn enrichment_historical_tracking_negative_gains_handled() {
+    let mut req = base_request();
+    req.historical_outcomes = vec![OpportunityOutcomeObservation {
+        opportunity_id: "opp-neg".into(),
+        predicted_gain_millionths: -100_000,
+        actual_gain_millionths: -200_000,
+        completed_at_utc: "2026-03-01T00:00:00Z".into(),
+    }];
+    let d = run_opportunity_matrix_scoring(&req);
+    let h = &d.historical_tracking[0];
+    assert_eq!(h.signed_error_millionths, -100_000);
+    assert_eq!(h.absolute_error_millionths, 100_000);
+}
+
+#[test]
+fn enrichment_historical_tracking_large_overperformance() {
+    let mut req = base_request();
+    req.historical_outcomes = vec![OpportunityOutcomeObservation {
+        opportunity_id: "opp-wow".into(),
+        predicted_gain_millionths: 100_000,
+        actual_gain_millionths: 10_000_000,
+        completed_at_utc: "2026-03-01T00:00:00Z".into(),
+    }];
+    let d = run_opportunity_matrix_scoring(&req);
+    let h = &d.historical_tracking[0];
+    assert_eq!(h.signed_error_millionths, 9_900_000);
+    assert_eq!(h.absolute_error_millionths, 9_900_000);
+}
+
+#[test]
+fn enrichment_historical_tracking_sorted_by_timestamp() {
+    let mut req = base_request();
+    req.historical_outcomes = vec![
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-late".into(),
+            predicted_gain_millionths: 100_000,
+            actual_gain_millionths: 200_000,
+            completed_at_utc: "2026-03-10T00:00:00Z".into(),
+        },
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-early".into(),
+            predicted_gain_millionths: 50_000,
+            actual_gain_millionths: 60_000,
+            completed_at_utc: "2026-01-05T00:00:00Z".into(),
+        },
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-mid".into(),
+            predicted_gain_millionths: 200_000,
+            actual_gain_millionths: 180_000,
+            completed_at_utc: "2026-02-15T00:00:00Z".into(),
+        },
+    ];
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.historical_tracking.len(), 3);
+    assert_eq!(d.historical_tracking[0].opportunity_id, "opp-early");
+    assert_eq!(d.historical_tracking[1].opportunity_id, "opp-mid");
+    assert_eq!(d.historical_tracking[2].opportunity_id, "opp-late");
+}
+
+#[test]
+fn enrichment_historical_tracking_same_timestamp_sorted_by_id() {
+    let mut req = base_request();
+    req.historical_outcomes = vec![
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-z".into(),
+            predicted_gain_millionths: 100_000,
+            actual_gain_millionths: 200_000,
+            completed_at_utc: "2026-03-01T00:00:00Z".into(),
+        },
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-a".into(),
+            predicted_gain_millionths: 50_000,
+            actual_gain_millionths: 60_000,
+            completed_at_utc: "2026-03-01T00:00:00Z".into(),
+        },
+    ];
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.historical_tracking[0].opportunity_id, "opp-a");
+    assert_eq!(d.historical_tracking[1].opportunity_id, "opp-z");
+}
+
+#[test]
+fn enrichment_historical_tracking_preserves_opportunity_id() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    assert_eq!(d.historical_tracking[0].opportunity_id, "opp-vm-dispatch");
+}
+
+// ── Enrichment: multi-candidate scoring scenarios ────────────────────
+
+#[test]
+fn enrichment_three_candidates_ranked_correctly() {
+    let mut req = base_request();
+    req.hotspots = vec![
+        HotspotProfileEntry { module: "vm".into(), function: "dispatch".into(), sample_count: 70 },
+        HotspotProfileEntry { module: "gc".into(), function: "sweep".into(), sample_count: 20 },
+        HotspotProfileEntry { module: "net".into(), function: "poll".into(), sample_count: 10 },
+    ];
+    req.candidates = vec![
+        make_candidate("opp-vm", "vm", "dispatch"),
+        make_candidate("opp-gc", "gc", "sweep"),
+        make_candidate("opp-net", "net", "poll"),
+    ];
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.ranked_opportunities.len(), 3);
+    // Higher hotpath weight => higher score (other params equal)
+    assert!(d.ranked_opportunities[0].score_millionths >= d.ranked_opportunities[1].score_millionths);
+    assert!(d.ranked_opportunities[1].score_millionths >= d.ranked_opportunities[2].score_millionths);
+}
+
+#[test]
+fn enrichment_candidate_with_no_matching_hotspot_rejected() {
+    let mut req = base_request();
+    req.hotspots = vec![
+        HotspotProfileEntry { module: "vm".into(), function: "dispatch".into(), sample_count: 100 },
+    ];
+    req.candidates = vec![
+        make_candidate("opp-missing", "nonexistent", "module"),
+    ];
+    req.candidates[0].hotpath_weight_override_millionths = None;
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.ranked_opportunities[0].status, OpportunityStatus::RejectedMissingHotspot);
+}
+
+#[test]
+fn enrichment_all_candidates_security_rejected_means_deny() {
+    let mut req = base_request();
+    for c in &mut req.candidates {
+        c.security_clearance_millionths = 0;
+    }
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.outcome, "deny");
+    assert!(!d.has_selected_opportunities());
+}
+
+#[test]
+fn enrichment_mixed_statuses_in_ranked_output() {
+    let mut req = base_request();
+    // Candidate 0: security rejected
+    req.candidates[0].security_clearance_millionths = 0;
+    // Candidate 1: should be selected (high score)
+    req.candidates[1].estimated_speedup_millionths = 5_000_000;
+    let d = run_opportunity_matrix_scoring(&req);
+    let statuses: Vec<OpportunityStatus> = d.ranked_opportunities.iter().map(|o| o.status.clone()).collect();
+    assert!(statuses.contains(&OpportunityStatus::RejectedSecurityClearance));
+    assert!(statuses.contains(&OpportunityStatus::Selected) || statuses.contains(&OpportunityStatus::RejectedLowScore));
+}
+
+#[test]
+fn enrichment_selected_ids_only_contain_selected_candidates() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    let selected_set: BTreeSet<&str> = d.selected_opportunity_ids.iter().map(|s| s.as_str()).collect();
+    for opp in &d.ranked_opportunities {
+        if opp.status == OpportunityStatus::Selected {
+            assert!(selected_set.contains(opp.opportunity_id.as_str()));
+        } else {
+            assert!(!selected_set.contains(opp.opportunity_id.as_str()));
+        }
+    }
+}
+
+// ── Enrichment: hotpath weight override interaction ──────────────────
+
+#[test]
+fn enrichment_override_weight_negative_clamped_to_zero() {
+    let mut req = base_request();
+    req.candidates[0].hotpath_weight_override_millionths = Some(-500_000);
+    let d = run_opportunity_matrix_scoring(&req);
+    let opp = d.ranked_opportunities.iter().find(|o| o.opportunity_id == "opp-vm-dispatch").unwrap();
+    assert_eq!(opp.hotpath_weight_millionths, 0);
+}
+
+#[test]
+fn enrichment_override_weight_exactly_one_million() {
+    let mut req = base_request();
+    req.candidates[0].hotpath_weight_override_millionths = Some(1_000_000);
+    let d = run_opportunity_matrix_scoring(&req);
+    let opp = d.ranked_opportunities.iter().find(|o| o.opportunity_id == "opp-vm-dispatch").unwrap();
+    assert_eq!(opp.hotpath_weight_millionths, 1_000_000);
+}
+
+#[test]
+fn enrichment_override_weight_zero_means_missing_hotspot() {
+    let mut req = base_request();
+    req.candidates[0].hotpath_weight_override_millionths = Some(0);
+    let d = run_opportunity_matrix_scoring(&req);
+    let opp = d.ranked_opportunities.iter().find(|o| o.opportunity_id == "opp-vm-dispatch").unwrap();
+    assert_eq!(opp.status, OpportunityStatus::RejectedMissingHotspot);
+}
+
+// ── Enrichment: serde stability and roundtrips ───────────────────────
+
+#[test]
+fn enrichment_scored_opportunity_json_deterministic() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    let json1 = serde_json::to_string(&d.ranked_opportunities).unwrap();
+    let json2 = serde_json::to_string(&d.ranked_opportunities).unwrap();
+    assert_eq!(json1, json2);
+}
+
+#[test]
+fn enrichment_decision_json_contains_schema_version() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    let json = serde_json::to_string(&d).unwrap();
+    assert!(json.contains(OPPORTUNITY_MATRIX_SCHEMA_VERSION));
+}
+
+#[test]
+fn enrichment_decision_json_contains_matrix_id() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    let json = serde_json::to_string(&d).unwrap();
+    assert!(json.contains(&d.matrix_id));
+}
+
+#[test]
+fn enrichment_error_serde_roundtrip_invalid_request() {
+    let err = OpportunityMatrixError::InvalidRequest {
+        field: "benchmark_pressure_millionths".into(),
+        detail: "must be positive".into(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("benchmark_pressure_millionths"));
+    assert!(msg.contains("must be positive"));
+    let clone = err.clone();
+    assert_eq!(err, clone);
+}
+
+#[test]
+fn enrichment_error_serde_roundtrip_duplicate_id() {
+    let err = OpportunityMatrixError::DuplicateOpportunityId {
+        opportunity_id: "opp-dup-test".into(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("opp-dup-test"));
+    let clone = err.clone();
+    assert_eq!(err, clone);
+}
+
+#[test]
+fn enrichment_error_serde_roundtrip_invalid_timestamp() {
+    let err = OpportunityMatrixError::InvalidTimestamp {
+        value: "20260301".into(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("20260301"));
+    let clone = err.clone();
+    assert_eq!(err, clone);
+}
+
+#[test]
+fn enrichment_hotspot_profile_entry_clone_eq() {
+    let entry = HotspotProfileEntry {
+        module: "vm".into(),
+        function: "dispatch".into(),
+        sample_count: 42,
+    };
+    let cloned = entry.clone();
+    assert_eq!(entry, cloned);
+}
+
+#[test]
+fn enrichment_optimization_candidate_input_clone_eq() {
+    let c = make_candidate("opp-clone", "vm", "dispatch");
+    let cloned = c.clone();
+    assert_eq!(c, cloned);
+}
+
+#[test]
+fn enrichment_opportunity_outcome_observation_clone_eq() {
+    let obs = OpportunityOutcomeObservation {
+        opportunity_id: "opp-clone-obs".into(),
+        predicted_gain_millionths: 500_000,
+        actual_gain_millionths: 400_000,
+        completed_at_utc: "2026-03-01T00:00:00Z".into(),
+    };
+    let cloned = obs.clone();
+    assert_eq!(obs, cloned);
+}
+
+// ── Enrichment: end-to-end pipeline variants ─────────────────────────
+
+#[test]
+fn enrichment_e2e_flamegraph_to_scoring_pipeline() {
+    let fg = make_flamegraph(
+        FlamegraphKind::Cpu,
+        vec![
+            ("compiler;optimize", 60),
+            ("compiler;parse", 30),
+            ("io;read", 10),
+        ],
+    );
+    let profile = hotspot_profile_from_flamegraphs(&[fg]);
+    assert_eq!(profile.len(), 3);
+
+    let pressure = benchmark_pressure_from_cases(
+        &[make_benchmark_case("w1", 200.0, 100.0)],
+        &[make_benchmark_case("w2", 250.0, 100.0)],
+    );
+    assert!(pressure > 1_000_000);
+
+    let candidates = derive_candidates_from_hotspots(&profile, pressure, 2, 200_000, 1_000_000, 2_000_000, 10);
+    assert_eq!(candidates.len(), 3);
+
+    let req = OpportunityMatrixRequest {
+        trace_id: "trace-e2e-full".into(),
+        decision_id: "decision-e2e-full".into(),
+        policy_id: "policy-e2e-full".into(),
+        optimization_run_id: "run-e2e-full".into(),
+        benchmark_pressure_millionths: pressure,
+        hotspots: profile,
+        candidates,
+        historical_outcomes: Vec::new(),
+    };
+
+    let d = run_opportunity_matrix_scoring(&req);
+    assert!(d.outcome == "allow" || d.outcome == "deny");
+    assert_eq!(d.ranked_opportunities.len(), 3);
+    assert_eq!(d.schema_version, OPPORTUNITY_MATRIX_SCHEMA_VERSION);
+    assert!(d.matrix_id.starts_with("opm-"));
+}
+
+#[test]
+fn enrichment_e2e_single_candidate_selected() {
+    let mut req = base_request();
+    req.candidates = vec![make_candidate("opp-solo", "vm", "dispatch")];
+    req.candidates[0].estimated_speedup_millionths = 5_000_000;
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.outcome, "allow");
+    assert_eq!(d.selected_opportunity_ids.len(), 1);
+    assert_eq!(d.selected_opportunity_ids[0], "opp-solo");
+}
+
+#[test]
+fn enrichment_e2e_ten_candidates_all_scored() {
+    let mut req = base_request();
+    req.hotspots = (0..10)
+        .map(|i| HotspotProfileEntry {
+            module: format!("mod{i}"),
+            function: format!("fn{i}"),
+            sample_count: 100 - i as u64,
+        })
+        .collect();
+    req.candidates = (0..10)
+        .map(|i| make_candidate(&format!("opp-{i}"), &format!("mod{i}"), &format!("fn{i}")))
+        .collect();
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.ranked_opportunities.len(), 10);
+    // Verify descending score order
+    for w in d.ranked_opportunities.windows(2) {
+        assert!(w[0].score_millionths >= w[1].score_millionths);
+    }
+}
+
+#[test]
+fn enrichment_e2e_deny_outcome_with_historical_tracking() {
+    let mut req = base_request();
+    for c in &mut req.candidates {
+        c.estimated_speedup_millionths = 1_050_000;
+        c.engineering_effort_hours_millionths = 20_000_000;
+        c.regression_risk_millionths = 900_000;
+        c.implementation_complexity = 5;
+    }
+    let d = run_opportunity_matrix_scoring(&req);
+    assert_eq!(d.outcome, "deny");
+    // Historical tracking is still computed even for deny
+    assert_eq!(d.historical_tracking.len(), 1);
+}
+
+// ── Enrichment: HotspotProfileEntry key edge cases ───────────────────
+
+#[test]
+fn enrichment_hotspot_key_empty_module_and_function() {
+    let entry = HotspotProfileEntry {
+        module: "".into(),
+        function: "".into(),
+        sample_count: 0,
+    };
+    assert_eq!(entry.key(), "::");
+}
+
+#[test]
+fn enrichment_hotspot_key_special_chars() {
+    let entry = HotspotProfileEntry {
+        module: "my.mod".into(),
+        function: "fn<T>".into(),
+        sample_count: 1,
+    };
+    assert_eq!(entry.key(), "my.mod::fn<T>");
+}
+
+// ── Enrichment: OptimizationCandidateInput target_key edge cases ─────
+
+#[test]
+fn enrichment_candidate_target_key_empty_module() {
+    let c = make_candidate("opp-1", "", "func");
+    assert_eq!(c.target_key(), "::func");
+}
+
+#[test]
+fn enrichment_candidate_target_key_empty_function() {
+    let c = make_candidate("opp-2", "mod", "");
+    assert_eq!(c.target_key(), "mod::");
+}
+
+// ── Enrichment: OpportunityStatus exhaustive ─────────────────────────
+
+#[test]
+fn enrichment_opportunity_status_debug_not_empty() {
+    for status in [
+        OpportunityStatus::Selected,
+        OpportunityStatus::RejectedLowScore,
+        OpportunityStatus::RejectedSecurityClearance,
+        OpportunityStatus::RejectedMissingHotspot,
+    ] {
+        let debug = format!("{status:?}");
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_opportunity_status_clone_eq() {
+    let s = OpportunityStatus::RejectedSecurityClearance;
+    let s2 = s.clone();
+    assert_eq!(s, s2);
+}
+
+// ── Enrichment: ScoredOpportunity fields ─────────────────────────────
+
+#[test]
+fn enrichment_scored_opportunity_carries_benchmark_pressure() {
+    let req = base_request();
+    let d = run_opportunity_matrix_scoring(&req);
+    for opp in &d.ranked_opportunities {
+        assert_eq!(opp.benchmark_pressure_millionths, req.benchmark_pressure_millionths);
+    }
+}
+
+#[test]
+fn enrichment_scored_opportunity_target_fields_match_candidate() {
+    let req = base_request();
+    let d = run_opportunity_matrix_scoring(&req);
+    for opp in &d.ranked_opportunities {
+        let candidate = req.candidates.iter().find(|c| c.opportunity_id == opp.opportunity_id).unwrap();
+        assert_eq!(opp.target_module, candidate.target_module);
+        assert_eq!(opp.target_function, candidate.target_function);
+    }
+}
+
+#[test]
+fn enrichment_scored_opportunity_speedup_clamped_at_zero() {
+    let mut req = base_request();
+    req.candidates[0].estimated_speedup_millionths = -5_000_000;
+    let d = run_opportunity_matrix_scoring(&req);
+    let opp = d.ranked_opportunities.iter().find(|o| o.opportunity_id == "opp-vm-dispatch").unwrap();
+    assert_eq!(opp.estimated_speedup_millionths, 0);
+}
+
+// ── Enrichment: OpportunityHistoryRecord fields ──────────────────────
+
+#[test]
+fn enrichment_history_record_debug_not_empty() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    for h in &d.historical_tracking {
+        let debug = format!("{h:?}");
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_history_record_clone_eq() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    for h in &d.historical_tracking {
+        let cloned = h.clone();
+        assert_eq!(h, &cloned);
+    }
+}
+
+// ── Enrichment: OpportunityMatrixEvent fields ────────────────────────
+
+#[test]
+fn enrichment_event_component_always_opportunity_matrix() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    for event in &d.events {
+        assert_eq!(event.component, "opportunity_matrix");
+    }
+}
+
+#[test]
+fn enrichment_event_debug_not_empty() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    for event in &d.events {
+        let debug = format!("{event:?}");
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_event_clone_eq() {
+    let d = run_opportunity_matrix_scoring(&base_request());
+    for event in &d.events {
+        let cloned = event.clone();
+        assert_eq!(event, &cloned);
+    }
+}
+
+// ── Enrichment: Decision serde with all fields ───────────────────────
+
+#[test]
+fn enrichment_full_decision_serde_roundtrip_with_history() {
+    let mut req = base_request();
+    req.historical_outcomes = vec![
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-h1".into(),
+            predicted_gain_millionths: 100_000,
+            actual_gain_millionths: 150_000,
+            completed_at_utc: "2026-01-01T00:00:00Z".into(),
+        },
+        OpportunityOutcomeObservation {
+            opportunity_id: "opp-h2".into(),
+            predicted_gain_millionths: 200_000,
+            actual_gain_millionths: 180_000,
+            completed_at_utc: "2026-02-01T00:00:00Z".into(),
+        },
+    ];
+    let d = run_opportunity_matrix_scoring(&req);
+    let json = serde_json::to_string(&d).unwrap();
+    let back: OpportunityMatrixDecision = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.outcome, d.outcome);
+    assert_eq!(back.matrix_id, d.matrix_id);
+    assert_eq!(back.ranked_opportunities.len(), d.ranked_opportunities.len());
+    assert_eq!(back.historical_tracking.len(), d.historical_tracking.len());
+    assert_eq!(back.events.len(), d.events.len());
+    assert_eq!(back.selected_opportunity_ids, d.selected_opportunity_ids);
+}
+
+#[test]
+fn enrichment_fail_decision_serde_roundtrip() {
+    let mut req = base_request();
+    req.trace_id = "".into();
+    let d = run_opportunity_matrix_scoring(&req);
+    let json = serde_json::to_string(&d).unwrap();
+    let back: OpportunityMatrixDecision = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.outcome, "fail");
+    assert_eq!(back.error_code, d.error_code);
+    assert!(back.ranked_opportunities.is_empty());
+    assert!(back.selected_opportunity_ids.is_empty());
+    assert!(back.historical_tracking.is_empty());
+}

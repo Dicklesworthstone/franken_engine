@@ -980,8 +980,8 @@ fn receipt_deterministic_across_50_iterations() {
 // Enrichment tests (~90 new tests)
 // ===========================================================================
 
-use std::collections::BTreeSet;
 use frankenengine_engine::proof_specialization_receipt::ProofInput;
+use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
 // E1. ReceiptSchemaVersion enrichment
@@ -1008,7 +1008,10 @@ fn enrichment_schema_version_debug_contains_fields() {
 
 #[test]
 fn enrichment_schema_version_serde_roundtrip_nondefault() {
-    let v = ReceiptSchemaVersion { major: 99, minor: 77 };
+    let v = ReceiptSchemaVersion {
+        major: 99,
+        minor: 77,
+    };
     let json = serde_json::to_string(&v).unwrap();
     let back: ReceiptSchemaVersion = serde_json::from_str(&json).unwrap();
     assert_eq!(v, back);
@@ -1028,7 +1031,10 @@ fn enrichment_schema_version_compatible_self() {
     for major in 0..3 {
         for minor in 0..3 {
             let v = ReceiptSchemaVersion { major, minor };
-            assert!(v.is_compatible_with(&v), "version {v} not compatible with itself");
+            assert!(
+                v.is_compatible_with(&v),
+                "version {v} not compatible with itself"
+            );
         }
     }
 }
@@ -1114,7 +1120,10 @@ fn enrichment_optimization_class_ord_total_sort() {
         OptimizationClass::IfcCheckElision,
     ];
     classes.sort();
-    assert_eq!(classes[0], OptimizationClass::HostcallDispatchSpecialization);
+    assert_eq!(
+        classes[0],
+        OptimizationClass::HostcallDispatchSpecialization
+    );
     assert_eq!(classes[3], OptimizationClass::PathElimination);
 }
 
@@ -1219,7 +1228,12 @@ fn enrichment_proof_input_different_epochs_differ() {
 fn enrichment_proof_input_json_field_names() {
     let pi = test_proof_input(ProofType::FlowProof, epoch());
     let json = serde_json::to_string(&pi).unwrap();
-    for key in ["proof_type", "proof_id", "proof_epoch", "validity_window_ticks"] {
+    for key in [
+        "proof_type",
+        "proof_id",
+        "proof_epoch",
+        "validity_window_ticks",
+    ] {
         assert!(json.contains(key), "ProofInput JSON missing field: {key}");
     }
 }
@@ -1277,7 +1291,10 @@ fn enrichment_equivalence_evidence_clone_deep() {
     let ee = test_equivalence_evidence();
     let c = ee.clone();
     assert_eq!(ee.method, c.method);
-    assert_eq!(ee.differential_test_hashes.len(), c.differential_test_hashes.len());
+    assert_eq!(
+        ee.differential_test_hashes.len(),
+        c.differential_test_hashes.len()
+    );
     assert_eq!(ee.test_count, c.test_count);
     assert_eq!(ee.pass_rate_millionths, c.pass_rate_millionths);
 }
@@ -1409,8 +1426,14 @@ fn enrichment_rollback_token_different_hashes_not_equal() {
 fn enrichment_performance_delta_clone_deep() {
     let pd = test_performance_delta();
     let c = pd.clone();
-    assert_eq!(pd.latency_reduction_millionths, c.latency_reduction_millionths);
-    assert_eq!(pd.throughput_increase_millionths, c.throughput_increase_millionths);
+    assert_eq!(
+        pd.latency_reduction_millionths,
+        c.latency_reduction_millionths
+    );
+    assert_eq!(
+        pd.throughput_increase_millionths,
+        c.throughput_increase_millionths
+    );
     assert_eq!(pd.sample_count, c.sample_count);
 }
 
@@ -1503,7 +1526,10 @@ fn enrichment_receipt_error_clone_all_variants() {
 #[test]
 fn enrichment_receipt_error_display_empty_transformation_description() {
     let err = ReceiptError::EmptyTransformationDescription;
-    assert_eq!(err.to_string(), "transformation_witness description is empty");
+    assert_eq!(
+        err.to_string(),
+        "transformation_witness description is empty"
+    );
 }
 
 #[test]
@@ -1657,7 +1683,10 @@ fn enrichment_receipt_event_kind_debug_format() {
     assert_eq!(format!("{:?}", ReceiptEventKind::Signed), "Signed");
     assert_eq!(format!("{:?}", ReceiptEventKind::Validated), "Validated");
     assert_eq!(format!("{:?}", ReceiptEventKind::Indexed), "Indexed");
-    assert_eq!(format!("{:?}", ReceiptEventKind::Invalidated), "Invalidated");
+    assert_eq!(
+        format!("{:?}", ReceiptEventKind::Invalidated),
+        "Invalidated"
+    );
     assert_eq!(format!("{:?}", ReceiptEventKind::Queried), "Queried");
 }
 
@@ -1739,7 +1768,9 @@ fn enrichment_receipt_event_all_kinds_round_trip() {
 fn enrichment_receipt_clone_deep_independence() {
     let original = test_receipt(epoch());
     let mut cloned = original.clone();
-    cloned.metadata.insert("new-key".to_string(), "val".to_string());
+    cloned
+        .metadata
+        .insert("new-key".to_string(), "val".to_string());
     assert!(original.metadata.get("new-key").is_none());
     assert!(cloned.metadata.get("new-key").is_some());
 }
@@ -2107,16 +2138,10 @@ fn enrichment_index_invalidate_stale_mixed_epochs() {
         e10,
     ))
     .unwrap();
-    idx.insert(build_valid_receipt(
-        OptimizationClass::IfcCheckElision,
-        e20,
-    ))
-    .unwrap();
-    idx.insert(build_valid_receipt(
-        OptimizationClass::PathElimination,
-        e20,
-    ))
-    .unwrap();
+    idx.insert(build_valid_receipt(OptimizationClass::IfcCheckElision, e20))
+        .unwrap();
+    idx.insert(build_valid_receipt(OptimizationClass::PathElimination, e20))
+        .unwrap();
     assert_eq!(idx.len(), 3);
     let stale = idx.invalidate_stale(e20);
     assert_eq!(stale.len(), 1); // only e10 receipt

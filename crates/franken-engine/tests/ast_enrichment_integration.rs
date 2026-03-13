@@ -1313,10 +1313,10 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
     ];
     let mut kinds = BTreeSet::new();
     for stmt in &stmts {
-        if let CanonicalValue::Map(map) = stmt.canonical_value() {
-            if let Some(CanonicalValue::String(k)) = map.get("kind") {
-                assert!(kinds.insert(k.clone()), "duplicate: {k}");
-            }
+        if let CanonicalValue::Map(map) = stmt.canonical_value()
+            && let Some(CanonicalValue::String(k)) = map.get("kind")
+        {
+            assert!(kinds.insert(k.clone()), "duplicate: {k}");
         }
     }
     assert_eq!(kinds.len(), 18);
@@ -1619,10 +1619,10 @@ fn enrichment_all_expression_canonical_kinds_unique() {
     ];
     let mut kinds = BTreeSet::new();
     for expr in &exprs {
-        if let CanonicalValue::Map(map) = expr.canonical_value() {
-            if let Some(CanonicalValue::String(k)) = map.get("kind") {
-                assert!(kinds.insert(k.clone()), "duplicate kind: {k}");
-            }
+        if let CanonicalValue::Map(map) = expr.canonical_value()
+            && let Some(CanonicalValue::String(k)) = map.get("kind")
+        {
+            assert!(kinds.insert(k.clone()), "duplicate kind: {k}");
         }
     }
     assert_eq!(kinds.len(), 22);

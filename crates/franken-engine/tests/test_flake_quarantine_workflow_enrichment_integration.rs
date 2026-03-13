@@ -46,6 +46,7 @@ fn make_run(
     }
 }
 
+#[allow(dead_code)]
 fn make_run_bare(
     run_id: &str,
     epoch: u32,
@@ -197,8 +198,14 @@ fn enrichment_flake_severity_serde_roundtrip_all_variants() {
 
 #[test]
 fn enrichment_flake_severity_serde_json_values() {
-    assert_eq!(serde_json::to_string(&FlakeSeverity::Warning).unwrap(), "\"warning\"");
-    assert_eq!(serde_json::to_string(&FlakeSeverity::High).unwrap(), "\"high\"");
+    assert_eq!(
+        serde_json::to_string(&FlakeSeverity::Warning).unwrap(),
+        "\"warning\""
+    );
+    assert_eq!(
+        serde_json::to_string(&FlakeSeverity::High).unwrap(),
+        "\"high\""
+    );
 }
 
 #[test]
@@ -214,7 +221,10 @@ fn enrichment_flake_severity_display_matches_as_str() {
 
 #[test]
 fn enrichment_quarantine_action_serde_roundtrip() {
-    for action in [QuarantineAction::Observe, QuarantineAction::QuarantineImmediate] {
+    for action in [
+        QuarantineAction::Observe,
+        QuarantineAction::QuarantineImmediate,
+    ] {
         let json = serde_json::to_string(&action).unwrap();
         let back: QuarantineAction = serde_json::from_str(&json).unwrap();
         assert_eq!(action, back);
@@ -231,7 +241,10 @@ fn enrichment_quarantine_action_kebab_case_serialization() {
 
 #[test]
 fn enrichment_quarantine_action_display_as_str_consistency() {
-    for action in [QuarantineAction::Observe, QuarantineAction::QuarantineImmediate] {
+    for action in [
+        QuarantineAction::Observe,
+        QuarantineAction::QuarantineImmediate,
+    ] {
         assert_eq!(action.to_string(), action.as_str());
     }
 }
@@ -248,7 +261,11 @@ fn enrichment_quarantine_action_debug_contains_variant_name() {
 
 #[test]
 fn enrichment_quarantine_status_all_variants_roundtrip() {
-    for status in [QuarantineStatus::Active, QuarantineStatus::Expired, QuarantineStatus::Lifted] {
+    for status in [
+        QuarantineStatus::Active,
+        QuarantineStatus::Expired,
+        QuarantineStatus::Lifted,
+    ] {
         let json = serde_json::to_string(&status).unwrap();
         let back: QuarantineStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, back);
@@ -257,9 +274,18 @@ fn enrichment_quarantine_status_all_variants_roundtrip() {
 
 #[test]
 fn enrichment_quarantine_status_snake_case_values() {
-    assert_eq!(serde_json::to_string(&QuarantineStatus::Active).unwrap(), "\"active\"");
-    assert_eq!(serde_json::to_string(&QuarantineStatus::Expired).unwrap(), "\"expired\"");
-    assert_eq!(serde_json::to_string(&QuarantineStatus::Lifted).unwrap(), "\"lifted\"");
+    assert_eq!(
+        serde_json::to_string(&QuarantineStatus::Active).unwrap(),
+        "\"active\""
+    );
+    assert_eq!(
+        serde_json::to_string(&QuarantineStatus::Expired).unwrap(),
+        "\"expired\""
+    );
+    assert_eq!(
+        serde_json::to_string(&QuarantineStatus::Lifted).unwrap(),
+        "\"lifted\""
+    );
 }
 
 // ===========================================================================
@@ -268,7 +294,11 @@ fn enrichment_quarantine_status_snake_case_values() {
 
 #[test]
 fn enrichment_trend_direction_all_variants_roundtrip() {
-    for td in [TrendDirection::Improving, TrendDirection::Stable, TrendDirection::Degrading] {
+    for td in [
+        TrendDirection::Improving,
+        TrendDirection::Stable,
+        TrendDirection::Degrading,
+    ] {
         let json = serde_json::to_string(&td).unwrap();
         let back: TrendDirection = serde_json::from_str(&json).unwrap();
         assert_eq!(td, back);
@@ -277,9 +307,18 @@ fn enrichment_trend_direction_all_variants_roundtrip() {
 
 #[test]
 fn enrichment_trend_direction_snake_case_values() {
-    assert_eq!(serde_json::to_string(&TrendDirection::Improving).unwrap(), "\"improving\"");
-    assert_eq!(serde_json::to_string(&TrendDirection::Stable).unwrap(), "\"stable\"");
-    assert_eq!(serde_json::to_string(&TrendDirection::Degrading).unwrap(), "\"degrading\"");
+    assert_eq!(
+        serde_json::to_string(&TrendDirection::Improving).unwrap(),
+        "\"improving\""
+    );
+    assert_eq!(
+        serde_json::to_string(&TrendDirection::Stable).unwrap(),
+        "\"stable\""
+    );
+    assert_eq!(
+        serde_json::to_string(&TrendDirection::Degrading).unwrap(),
+        "\"degrading\""
+    );
 }
 
 // ===========================================================================
@@ -346,7 +385,15 @@ fn enrichment_flake_run_record_serde_roundtrip() {
 
 #[test]
 fn enrichment_flake_run_record_with_error_sig_serde() {
-    let rec = make_run("run-err", 2, "unit", "sc-err", "fail", Some("panic:oops"), 42);
+    let rec = make_run(
+        "run-err",
+        2,
+        "unit",
+        "sc-err",
+        "fail",
+        Some("panic:oops"),
+        42,
+    );
     let json = serde_json::to_string(&rec).unwrap();
     let back: FlakeRunRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(rec.error_signature, back.error_signature);
@@ -421,10 +468,17 @@ fn enrichment_flake_classification_contains_all_fields_in_json() {
     let classifications = classify_flakes(&runs, &sensitive_policy());
     let json = serde_json::to_string(&classifications[0]).unwrap();
     for field in [
-        "suite_kind", "scenario_id", "pass_count", "fail_count",
-        "flake_rate_millionths", "severity", "quarantine_action",
-        "dominant_error_signature", "impacted_unit_suites",
-        "root_cause_hypothesis_artifacts", "reproducer_bundle",
+        "suite_kind",
+        "scenario_id",
+        "pass_count",
+        "fail_count",
+        "flake_rate_millionths",
+        "severity",
+        "quarantine_action",
+        "dominant_error_signature",
+        "impacted_unit_suites",
+        "root_cause_hypothesis_artifacts",
+        "reproducer_bundle",
     ] {
         assert!(json.contains(field), "missing field {field} in JSON");
     }
@@ -655,7 +709,15 @@ fn enrichment_classify_flakes_single_pass_no_flake() {
 
 #[test]
 fn enrichment_classify_flakes_single_fail_no_flake() {
-    let runs = vec![make_run("f1", 1, "e2e", "sc-only-fail", "fail", Some("err"), 1)];
+    let runs = vec![make_run(
+        "f1",
+        1,
+        "e2e",
+        "sc-only-fail",
+        "fail",
+        Some("err"),
+        1,
+    )];
     let result = classify_flakes(&runs, &sensitive_policy());
     assert!(result.is_empty());
 }
@@ -752,7 +814,10 @@ fn enrichment_classify_flakes_high_severity_quarantine_immediate() {
     let runs = scenario_runs("e2e", "sc-high", 1, 1, 1, 10);
     let result = classify_flakes(&runs, &policy);
     assert_eq!(result[0].severity, FlakeSeverity::High);
-    assert_eq!(result[0].quarantine_action, QuarantineAction::QuarantineImmediate);
+    assert_eq!(
+        result[0].quarantine_action,
+        QuarantineAction::QuarantineImmediate
+    );
 }
 
 #[test]
@@ -773,7 +838,10 @@ fn enrichment_classify_flakes_reproducer_bundle_id_deterministic() {
     let runs = scenario_runs("e2e", "sc-det-id", 1, 2, 2, 55);
     let r1 = classify_flakes(&runs, &sensitive_policy());
     let r2 = classify_flakes(&runs, &sensitive_policy());
-    assert_eq!(r1[0].reproducer_bundle.bundle_id, r2[0].reproducer_bundle.bundle_id);
+    assert_eq!(
+        r1[0].reproducer_bundle.bundle_id,
+        r2[0].reproducer_bundle.bundle_id
+    );
 }
 
 #[test]
@@ -805,7 +873,10 @@ fn enrichment_classify_flakes_impacted_suites_deduped_sorted() {
     let mut r2 = make_run("f1", 1, "e2e", "sc-dup-imp", "fail", Some("e"), 1);
     r2.related_unit_suites = vec!["unit-a".to_string(), "unit-m".to_string()];
     let result = classify_flakes(&[r1, r2], &sensitive_policy());
-    assert_eq!(result[0].impacted_unit_suites, vec!["unit-a", "unit-m", "unit-z"]);
+    assert_eq!(
+        result[0].impacted_unit_suites,
+        vec!["unit-a", "unit-m", "unit-z"]
+    );
 }
 
 #[test]
@@ -815,7 +886,10 @@ fn enrichment_classify_flakes_root_cause_artifacts_deduped() {
     let mut r2 = make_run("f1", 1, "e2e", "sc-rc-dup", "fail", Some("e"), 1);
     r2.root_cause_hypothesis_artifacts = vec!["hyp-x".to_string(), "hyp-y".to_string()];
     let result = classify_flakes(&[r1, r2], &sensitive_policy());
-    assert_eq!(result[0].root_cause_hypothesis_artifacts, vec!["hyp-x", "hyp-y"]);
+    assert_eq!(
+        result[0].root_cause_hypothesis_artifacts,
+        vec!["hyp-x", "hyp-y"]
+    );
 }
 
 #[test]
@@ -944,7 +1018,11 @@ fn enrichment_build_quarantine_linked_reproducer_bundle_id() {
     let runs = scenario_runs("e2e", "sc-link", 1, 1, 1, 10);
     let classifications = classify_flakes(&runs, &policy);
     let quarantines = build_quarantine_records(&classifications, &BTreeMap::new(), 5, &policy);
-    assert!(quarantines[0].linked_reproducer_bundle_id.starts_with("flake-repro-"));
+    assert!(
+        quarantines[0]
+            .linked_reproducer_bundle_id
+            .starts_with("flake-repro-")
+    );
     assert_eq!(
         quarantines[0].linked_reproducer_bundle_id,
         classifications[0].reproducer_bundle.bundle_id
@@ -997,7 +1075,11 @@ fn enrichment_validate_quarantine_missing_owner_binding() {
         linked_reproducer_bundle_id: "b1".to_string(),
     }];
     let violations = validate_quarantine_records(&records, 6);
-    assert!(violations.iter().any(|v| v.contains("missing_owner_binding")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("missing_owner_binding"))
+    );
 }
 
 #[test]
@@ -1014,7 +1096,11 @@ fn enrichment_validate_quarantine_non_expiring() {
         linked_reproducer_bundle_id: "b1".to_string(),
     }];
     let violations = validate_quarantine_records(&records, 3);
-    assert!(violations.iter().any(|v| v.contains("non_expiring_quarantine")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("non_expiring_quarantine"))
+    );
 }
 
 #[test]
@@ -1032,7 +1118,11 @@ fn enrichment_validate_quarantine_expired_active() {
     }];
     // current_epoch 10 > expires_epoch 8, but status is Active
     let violations = validate_quarantine_records(&records, 10);
-    assert!(violations.iter().any(|v| v.contains("expired_active_quarantine")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("expired_active_quarantine"))
+    );
 }
 
 #[test]
@@ -1049,7 +1139,11 @@ fn enrichment_validate_quarantine_expired_status_no_expired_active_violation() {
         linked_reproducer_bundle_id: "b1".to_string(),
     }];
     let violations = validate_quarantine_records(&records, 10);
-    assert!(!violations.iter().any(|v| v.contains("expired_active_quarantine")));
+    assert!(
+        !violations
+            .iter()
+            .any(|v| v.contains("expired_active_quarantine"))
+    );
 }
 
 #[test]
@@ -1106,7 +1200,11 @@ fn enrichment_validate_reproducer_missing_ci_command() {
     let mut classifications = classify_flakes(&runs, &sensitive_policy());
     classifications[0].reproducer_bundle.replay_command_ci = String::new();
     let violations = validate_reproducer_replay_commands(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("missing_ci_replay_command:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("missing_ci_replay_command:"))
+    );
 }
 
 #[test]
@@ -1115,7 +1213,11 @@ fn enrichment_validate_reproducer_missing_local_command() {
     let mut classifications = classify_flakes(&runs, &sensitive_policy());
     classifications[0].reproducer_bundle.replay_command_local = String::new();
     let violations = validate_reproducer_replay_commands(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("missing_local_replay_command:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("missing_local_replay_command:"))
+    );
 }
 
 #[test]
@@ -1125,7 +1227,11 @@ fn enrichment_validate_reproducer_invalid_ci_no_rch_exec() {
     classifications[0].reproducer_bundle.replay_command_ci =
         "cargo test --test frx_bad_ci".to_string();
     let violations = validate_reproducer_replay_commands(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("invalid_ci_replay_command:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("invalid_ci_replay_command:"))
+    );
 }
 
 #[test]
@@ -1135,7 +1241,11 @@ fn enrichment_validate_reproducer_invalid_local_has_rch_exec() {
     classifications[0].reproducer_bundle.replay_command_local =
         "rch exec -- cargo test --test frx_bad_local".to_string();
     let violations = validate_reproducer_replay_commands(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("invalid_local_replay_command:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("invalid_local_replay_command:"))
+    );
 }
 
 #[test]
@@ -1144,16 +1254,27 @@ fn enrichment_validate_reproducer_missing_run_ids() {
     let mut classifications = classify_flakes(&runs, &sensitive_policy());
     classifications[0].reproducer_bundle.run_ids.clear();
     let violations = validate_reproducer_replay_commands(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("missing_reproducer_run_ids:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("missing_reproducer_run_ids:"))
+    );
 }
 
 #[test]
 fn enrichment_validate_reproducer_missing_artifact_ids() {
     let runs = scenario_runs("e2e", "sc-no-aids", 1, 1, 1, 42);
     let mut classifications = classify_flakes(&runs, &sensitive_policy());
-    classifications[0].reproducer_bundle.artifact_bundle_ids.clear();
+    classifications[0]
+        .reproducer_bundle
+        .artifact_bundle_ids
+        .clear();
     let violations = validate_reproducer_replay_commands(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("missing_reproducer_artifact_ids:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("missing_reproducer_artifact_ids:"))
+    );
 }
 
 #[test]
@@ -1180,7 +1301,11 @@ fn enrichment_validate_linkage_missing_impacted_suites() {
     let mut classifications = classify_flakes(&runs, &sensitive_policy());
     classifications[0].impacted_unit_suites.clear();
     let violations = validate_flake_linkage(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("missing_impacted_unit_suite_links:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("missing_impacted_unit_suite_links:"))
+    );
 }
 
 #[test]
@@ -1189,17 +1314,24 @@ fn enrichment_validate_linkage_missing_root_cause_artifacts() {
     let mut classifications = classify_flakes(&runs, &sensitive_policy());
     classifications[0].root_cause_hypothesis_artifacts.clear();
     let violations = validate_flake_linkage(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("missing_root_cause_hypothesis_artifacts:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("missing_root_cause_hypothesis_artifacts:"))
+    );
 }
 
 #[test]
 fn enrichment_validate_linkage_duplicate_impacted_suites() {
     let runs = scenario_runs("e2e", "sc-dup-imp", 1, 1, 1, 42);
     let mut classifications = classify_flakes(&runs, &sensitive_policy());
-    classifications[0].impacted_unit_suites =
-        vec!["unit-a".to_string(), "unit-a".to_string()];
+    classifications[0].impacted_unit_suites = vec!["unit-a".to_string(), "unit-a".to_string()];
     let violations = validate_flake_linkage(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("duplicate_impacted_unit_suite_links:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("duplicate_impacted_unit_suite_links:"))
+    );
 }
 
 #[test]
@@ -1209,7 +1341,11 @@ fn enrichment_validate_linkage_duplicate_root_cause_artifacts() {
     classifications[0].root_cause_hypothesis_artifacts =
         vec!["hyp-x".to_string(), "hyp-x".to_string()];
     let violations = validate_flake_linkage(&classifications);
-    assert!(violations.iter().any(|v| v.starts_with("duplicate_root_cause_hypothesis_artifacts:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("duplicate_root_cause_hypothesis_artifacts:"))
+    );
 }
 
 #[test]
@@ -1232,8 +1368,12 @@ fn enrichment_validate_event_contract_well_formed_pass() {
     let quarantines = build_quarantine_records(&classifications, &owners, 5, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace-evt", "decision-evt", "policy-evt-v1",
-        &classifications, &quarantines, &report,
+        "trace-evt",
+        "decision-evt",
+        "policy-evt-v1",
+        &classifications,
+        &quarantines,
+        &report,
     );
     let violations = validate_structured_event_contract(&events);
     assert!(violations.is_empty(), "violations: {violations:?}");
@@ -1323,7 +1463,11 @@ fn enrichment_validate_event_contract_wrong_schema_version() {
         root_cause_hypothesis_artifacts: vec![],
     };
     let violations = validate_structured_event_contract(&[evt]);
-    assert!(violations.iter().any(|v| v.contains("invalid_event_schema_version")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("invalid_event_schema_version"))
+    );
 }
 
 #[test]
@@ -1332,13 +1476,24 @@ fn enrichment_validate_event_contract_invalid_ci_replay() {
     let classifications = classify_flakes(&runs, &sensitive_policy());
     let report = evaluate_gate_confidence(&runs, &classifications, &sensitive_policy());
     let mut events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let evt = events.iter_mut().find(|e| e.event == "flake_classified").unwrap();
+    let evt = events
+        .iter_mut()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
     evt.replay_command_ci = "cargo test --test frx_bad".to_string();
     let violations = validate_structured_event_contract(&events);
-    assert!(violations.iter().any(|v| v.starts_with("invalid_event_replay_command_ci:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("invalid_event_replay_command_ci:"))
+    );
 }
 
 #[test]
@@ -1347,13 +1502,24 @@ fn enrichment_validate_event_contract_invalid_local_replay() {
     let classifications = classify_flakes(&runs, &sensitive_policy());
     let report = evaluate_gate_confidence(&runs, &classifications, &sensitive_policy());
     let mut events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let evt = events.iter_mut().find(|e| e.event == "flake_classified").unwrap();
+    let evt = events
+        .iter_mut()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
     evt.replay_command_local = "rch exec -- cargo test --test frx_bad_local".to_string();
     let violations = validate_structured_event_contract(&events);
-    assert!(violations.iter().any(|v| v.starts_with("invalid_event_replay_command_local:")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.starts_with("invalid_event_replay_command_local:"))
+    );
 }
 
 #[test]
@@ -1362,15 +1528,30 @@ fn enrichment_validate_event_contract_flake_classified_missing_linkage() {
     let classifications = classify_flakes(&runs, &sensitive_policy());
     let report = evaluate_gate_confidence(&runs, &classifications, &sensitive_policy());
     let mut events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let evt = events.iter_mut().find(|e| e.event == "flake_classified").unwrap();
+    let evt = events
+        .iter_mut()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
     evt.impacted_unit_suites.clear();
     evt.root_cause_hypothesis_artifacts.clear();
     let violations = validate_structured_event_contract(&events);
-    assert!(violations.iter().any(|v| v.contains("missing_event_impacted_unit_suite_links")));
-    assert!(violations.iter().any(|v| v.contains("missing_event_root_cause_hypothesis_artifacts")));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("missing_event_impacted_unit_suite_links"))
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("missing_event_root_cause_hypothesis_artifacts"))
+    );
 }
 
 #[test]
@@ -1406,7 +1587,12 @@ fn enrichment_gate_confidence_high_severity_blocks() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     assert_eq!(report.promotion_outcome, "hold");
-    assert!(report.blockers.iter().any(|b| b.contains("high_flake_rate")));
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|b| b.contains("high_flake_rate"))
+    );
 }
 
 #[test]
@@ -1414,7 +1600,7 @@ fn enrichment_gate_confidence_burden_exceeds_budget_blocks() {
     let policy = FlakePolicy {
         warning_flake_threshold_millionths: 1,
         high_flake_threshold_millionths: 900_000, // high threshold so nothing is "High"
-        max_flake_burden_millionths: 1, // very low budget
+        max_flake_burden_millionths: 1,           // very low budget
         ..FlakePolicy::default()
     };
     // 5 pass + 5 fail => rate = 500_000 => Warning (< 900_000)
@@ -1423,7 +1609,12 @@ fn enrichment_gate_confidence_burden_exceeds_budget_blocks() {
     assert_eq!(classifications[0].severity, FlakeSeverity::Warning);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     assert_eq!(report.promotion_outcome, "hold");
-    assert!(report.blockers.iter().any(|b| b.contains("flake_burden_exceeds_budget")));
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|b| b.contains("flake_burden_exceeds_budget"))
+    );
 }
 
 #[test]
@@ -1518,8 +1709,12 @@ fn enrichment_emit_events_includes_flake_classified_and_gate_event() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
     let event_names: BTreeSet<&str> = events.iter().map(|e| e.event.as_str()).collect();
     assert!(event_names.contains("flake_classified"));
@@ -1533,8 +1728,12 @@ fn enrichment_emit_events_gate_event_always_last() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
     assert_eq!(events.last().unwrap().event, "gate_confidence_evaluated");
 }
@@ -1546,10 +1745,17 @@ fn enrichment_emit_events_gate_suite_kind_is_gate() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let gate_evt = events.iter().find(|e| e.event == "gate_confidence_evaluated").unwrap();
+    let gate_evt = events
+        .iter()
+        .find(|e| e.event == "gate_confidence_evaluated")
+        .unwrap();
     assert_eq!(gate_evt.suite_kind, "gate");
     assert_eq!(gate_evt.scenario_id, "__gate__");
 }
@@ -1561,8 +1767,12 @@ fn enrichment_emit_events_schema_version_set() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
     for evt in &events {
         assert_eq!(evt.schema_version, FLAKE_WORKFLOW_EVENT_SCHEMA_VERSION);
@@ -1576,8 +1786,12 @@ fn enrichment_emit_events_component_set() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
     for evt in &events {
         assert_eq!(evt.component, FLAKE_WORKFLOW_COMPONENT);
@@ -1591,8 +1805,12 @@ fn enrichment_emit_events_trace_id_propagated() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace-unique-42", "decision", "policy",
-        &classifications, &[], &report,
+        "trace-unique-42",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
     for evt in &events {
         assert_eq!(evt.trace_id, "trace-unique-42");
@@ -1606,8 +1824,12 @@ fn enrichment_emit_events_policy_id_propagated() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy-xyz-99",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy-xyz-99",
+        &classifications,
+        &[],
+        &report,
     );
     for evt in &events {
         assert_eq!(evt.policy_id, "policy-xyz-99");
@@ -1622,11 +1844,21 @@ fn enrichment_emit_events_high_severity_has_error_code() {
     assert_eq!(classifications[0].severity, FlakeSeverity::High);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let flake_evt = events.iter().find(|e| e.event == "flake_classified").unwrap();
-    assert_eq!(flake_evt.error_code.as_deref(), Some(FLAKE_WORKFLOW_FAILURE_CODE));
+    let flake_evt = events
+        .iter()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
+    assert_eq!(
+        flake_evt.error_code.as_deref(),
+        Some(FLAKE_WORKFLOW_FAILURE_CODE)
+    );
 }
 
 #[test]
@@ -1641,10 +1873,17 @@ fn enrichment_emit_events_warning_severity_no_error_code() {
     assert_eq!(classifications[0].severity, FlakeSeverity::Warning);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let flake_evt = events.iter().find(|e| e.event == "flake_classified").unwrap();
+    let flake_evt = events
+        .iter()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
     assert_eq!(flake_evt.error_code, None);
 }
 
@@ -1658,11 +1897,21 @@ fn enrichment_emit_events_quarantine_owner_populated_when_present() {
     let quarantines = build_quarantine_records(&classifications, &owners, 5, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &quarantines, &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &quarantines,
+        &report,
     );
-    let flake_evt = events.iter().find(|e| e.event == "flake_classified").unwrap();
-    assert_eq!(flake_evt.quarantine_owner.as_deref(), Some("team-quarantine"));
+    let flake_evt = events
+        .iter()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
+    assert_eq!(
+        flake_evt.quarantine_owner.as_deref(),
+        Some("team-quarantine")
+    );
     assert!(flake_evt.quarantine_expires_epoch.is_some());
 }
 
@@ -1673,10 +1922,17 @@ fn enrichment_emit_events_quarantine_none_when_no_quarantine() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let flake_evt = events.iter().find(|e| e.event == "flake_classified").unwrap();
+    let flake_evt = events
+        .iter()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
     assert_eq!(flake_evt.quarantine_owner, None);
     assert_eq!(flake_evt.quarantine_expires_epoch, None);
 }
@@ -1689,22 +1945,32 @@ fn enrichment_emit_events_hold_gate_has_error_code() {
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     assert_eq!(report.promotion_outcome, "hold");
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let gate_evt = events.iter().find(|e| e.event == "gate_confidence_evaluated").unwrap();
-    assert_eq!(gate_evt.error_code.as_deref(), Some(FLAKE_WORKFLOW_FAILURE_CODE));
+    let gate_evt = events
+        .iter()
+        .find(|e| e.event == "gate_confidence_evaluated")
+        .unwrap();
+    assert_eq!(
+        gate_evt.error_code.as_deref(),
+        Some(FLAKE_WORKFLOW_FAILURE_CODE)
+    );
 }
 
 #[test]
 fn enrichment_emit_events_promote_gate_no_error_code() {
     let report = evaluate_gate_confidence(&[], &[], &FlakePolicy::default());
     assert_eq!(report.promotion_outcome, "promote");
-    let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &[], &[], &report,
-    );
-    let gate_evt = events.iter().find(|e| e.event == "gate_confidence_evaluated").unwrap();
+    let events = emit_structured_events("trace", "decision", "policy", &[], &[], &report);
+    let gate_evt = events
+        .iter()
+        .find(|e| e.event == "gate_confidence_evaluated")
+        .unwrap();
     assert_eq!(gate_evt.error_code, None);
 }
 
@@ -1716,10 +1982,17 @@ fn enrichment_emit_events_gate_blockers_in_root_cause_artifacts() {
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     assert!(!report.blockers.is_empty());
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let gate_evt = events.iter().find(|e| e.event == "gate_confidence_evaluated").unwrap();
+    let gate_evt = events
+        .iter()
+        .find(|e| e.event == "gate_confidence_evaluated")
+        .unwrap();
     assert_eq!(gate_evt.root_cause_hypothesis_artifacts, report.blockers);
 }
 
@@ -1794,8 +2067,10 @@ fn enrichment_full_pipeline_decision_id_per_flake_unique() {
     let mut runs = scenario_runs("e2e", "sc-d1", 1, 1, 1, 10);
     runs.extend(scenario_runs("e2e", "sc-d2", 1, 1, 1, 11));
     let (_, _, _, evts) = full_pipeline(&runs, &policy, &BTreeMap::new(), 5);
-    let flake_evts: Vec<&FlakeWorkflowEvent> =
-        evts.iter().filter(|e| e.event == "flake_classified").collect();
+    let flake_evts: Vec<&FlakeWorkflowEvent> = evts
+        .iter()
+        .filter(|e| e.event == "flake_classified")
+        .collect();
     assert_eq!(flake_evts.len(), 2);
     assert_ne!(flake_evts[0].decision_id, flake_evts[1].decision_id);
 }
@@ -1862,7 +2137,10 @@ fn enrichment_flake_rate_calculation_symmetry() {
     let policy = sensitive_policy();
     let cls_a = classify_flakes(&runs_a, &policy);
     let cls_b = classify_flakes(&runs_b, &policy);
-    assert_eq!(cls_a[0].flake_rate_millionths, cls_b[0].flake_rate_millionths);
+    assert_eq!(
+        cls_a[0].flake_rate_millionths,
+        cls_b[0].flake_rate_millionths
+    );
 }
 
 #[test]
@@ -1933,7 +2211,11 @@ fn enrichment_gate_confidence_epoch_burden_total_cases_counts_unique_scenarios()
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     assert!(!report.per_epoch_burden.is_empty());
-    let epoch_1 = report.per_epoch_burden.iter().find(|p| p.epoch == 1).unwrap();
+    let epoch_1 = report
+        .per_epoch_burden
+        .iter()
+        .find(|p| p.epoch == 1)
+        .unwrap();
     assert_eq!(epoch_1.total_cases, 2);
 }
 
@@ -1960,7 +2242,11 @@ fn enrichment_gate_confidence_burden_millionths_fixed_point_scale() {
     let runs = scenario_runs("e2e", "sc-fp", 1, 1, 1, 42);
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
-    let epoch_1 = report.per_epoch_burden.iter().find(|p| p.epoch == 1).unwrap();
+    let epoch_1 = report
+        .per_epoch_burden
+        .iter()
+        .find(|p| p.epoch == 1)
+        .unwrap();
     assert_eq!(epoch_1.flake_burden_millionths, 1_000_000);
 }
 
@@ -1971,10 +2257,17 @@ fn enrichment_emit_events_flake_rate_in_event_matches_classification() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let flake_evt = events.iter().find(|e| e.event == "flake_classified").unwrap();
+    let flake_evt = events
+        .iter()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
     assert_eq!(
         flake_evt.flake_rate_millionths,
         Some(classifications[0].flake_rate_millionths)
@@ -1988,10 +2281,17 @@ fn enrichment_emit_events_gate_flake_rate_matches_report_burden() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let gate_evt = events.iter().find(|e| e.event == "gate_confidence_evaluated").unwrap();
+    let gate_evt = events
+        .iter()
+        .find(|e| e.event == "gate_confidence_evaluated")
+        .unwrap();
     assert_eq!(
         gate_evt.flake_rate_millionths,
         Some(report.flake_burden_millionths)
@@ -2005,10 +2305,17 @@ fn enrichment_emit_events_flake_outcome_matches_severity_str() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let flake_evt = events.iter().find(|e| e.event == "flake_classified").unwrap();
+    let flake_evt = events
+        .iter()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
     assert_eq!(flake_evt.outcome, classifications[0].severity.as_str());
 }
 
@@ -2019,42 +2326,46 @@ fn enrichment_emit_events_gate_outcome_matches_report() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let gate_evt = events.iter().find(|e| e.event == "gate_confidence_evaluated").unwrap();
+    let gate_evt = events
+        .iter()
+        .find(|e| e.event == "gate_confidence_evaluated")
+        .unwrap();
     assert_eq!(gate_evt.outcome, report.promotion_outcome);
 }
 
 #[test]
 fn enrichment_emit_events_gate_replay_ci_is_script() {
     let report = evaluate_gate_confidence(&[], &[], &FlakePolicy::default());
-    let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &[], &[], &report,
-    );
-    let gate_evt = events.iter().find(|e| e.event == "gate_confidence_evaluated").unwrap();
+    let events = emit_structured_events("trace", "decision", "policy", &[], &[], &report);
+    let gate_evt = events
+        .iter()
+        .find(|e| e.event == "gate_confidence_evaluated")
+        .unwrap();
     assert!(gate_evt.replay_command_ci.ends_with(".sh ci"));
 }
 
 #[test]
 fn enrichment_emit_events_gate_replay_local_is_script() {
     let report = evaluate_gate_confidence(&[], &[], &FlakePolicy::default());
-    let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &[], &[], &report,
-    );
-    let gate_evt = events.iter().find(|e| e.event == "gate_confidence_evaluated").unwrap();
+    let events = emit_structured_events("trace", "decision", "policy", &[], &[], &report);
+    let gate_evt = events
+        .iter()
+        .find(|e| e.event == "gate_confidence_evaluated")
+        .unwrap();
     assert!(gate_evt.replay_command_local.ends_with(".sh"));
 }
 
 #[test]
 fn enrichment_emit_events_no_classifications_still_has_gate() {
     let report = evaluate_gate_confidence(&[], &[], &FlakePolicy::default());
-    let events = emit_structured_events(
-        "trace", "decision", "policy",
-        &[], &[], &report,
-    );
+    let events = emit_structured_events("trace", "decision", "policy", &[], &[], &report);
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event, "gate_confidence_evaluated");
 }
@@ -2062,10 +2373,7 @@ fn enrichment_emit_events_no_classifications_still_has_gate() {
 #[test]
 fn enrichment_emit_events_decision_id_for_gate_is_base_id() {
     let report = evaluate_gate_confidence(&[], &[], &FlakePolicy::default());
-    let events = emit_structured_events(
-        "trace", "my-decision", "policy",
-        &[], &[], &report,
-    );
+    let events = emit_structured_events("trace", "my-decision", "policy", &[], &[], &report);
     assert_eq!(events[0].decision_id, "my-decision");
 }
 
@@ -2076,10 +2384,17 @@ fn enrichment_emit_events_decision_id_for_flake_includes_case_key() {
     let classifications = classify_flakes(&runs, &policy);
     let report = evaluate_gate_confidence(&runs, &classifications, &policy);
     let events = emit_structured_events(
-        "trace", "base-decision", "policy",
-        &classifications, &[], &report,
+        "trace",
+        "base-decision",
+        "policy",
+        &classifications,
+        &[],
+        &report,
     );
-    let flake_evt = events.iter().find(|e| e.event == "flake_classified").unwrap();
+    let flake_evt = events
+        .iter()
+        .find(|e| e.event == "flake_classified")
+        .unwrap();
     assert!(flake_evt.decision_id.starts_with("base-decision-"));
     assert!(flake_evt.decision_id.contains("e2e::sc-did"));
 }
@@ -2106,7 +2421,10 @@ fn enrichment_bundle_id_deterministic_across_calls() {
     let runs = scenario_runs("e2e", "sc-bid", 1, 2, 2, 42);
     let r1 = classify_flakes(&runs, &sensitive_policy());
     let r2 = classify_flakes(&runs, &sensitive_policy());
-    assert_eq!(r1[0].reproducer_bundle.bundle_id, r2[0].reproducer_bundle.bundle_id);
+    assert_eq!(
+        r1[0].reproducer_bundle.bundle_id,
+        r2[0].reproducer_bundle.bundle_id
+    );
 }
 
 #[test]
@@ -2115,5 +2433,8 @@ fn enrichment_bundle_id_changes_with_different_runs() {
     let runs_b = scenario_runs("e2e", "sc-diff-b", 1, 2, 2, 42);
     let r_a = classify_flakes(&runs_a, &sensitive_policy());
     let r_b = classify_flakes(&runs_b, &sensitive_policy());
-    assert_ne!(r_a[0].reproducer_bundle.bundle_id, r_b[0].reproducer_bundle.bundle_id);
+    assert_ne!(
+        r_a[0].reproducer_bundle.bundle_id,
+        r_b[0].reproducer_bundle.bundle_id
+    );
 }

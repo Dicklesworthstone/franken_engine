@@ -79,7 +79,7 @@ fn enrichment_artifact_domain_serde_roundtrip_all() {
 #[test]
 fn enrichment_artifact_domain_ordering() {
     // Derive Ord should give a consistent ordering
-    let mut domains = vec![
+    let mut domains = [
         ArtifactDomain::Evidence,
         ArtifactDomain::Cache,
         ArtifactDomain::Aot,
@@ -687,10 +687,7 @@ fn enrichment_compression_summary_serde_roundtrip() {
                 compressed_bytes: 10_000,
             },
         ],
-        by_domain: vec![
-            (ArtifactDomain::Cache, 6),
-            (ArtifactDomain::Aot, 4),
-        ],
+        by_domain: vec![(ArtifactDomain::Cache, 6), (ArtifactDomain::Aot, 4)],
         pipeline_epoch: epoch(100),
         summary_hash: ContentHash::compute(b"summary-hash"),
     };
@@ -986,10 +983,7 @@ fn enrichment_pipeline_dedup_second_references_first() {
     p.process_artifact(&d2);
     let r2 = p.result_for("dup").unwrap();
     assert_eq!(r2.compressed_size_bytes, 0);
-    assert_eq!(
-        r2.dedup_representative_id.as_deref(),
-        Some("rep")
-    );
+    assert_eq!(r2.dedup_representative_id.as_deref(), Some("rep"));
 }
 
 #[test]
@@ -1140,9 +1134,27 @@ fn enrichment_pipeline_batch_empty_descriptors() {
 fn enrichment_pipeline_batch_mixed_domains() {
     let mut p = CompressionPipeline::new(epoch(10));
     let descriptors = vec![
-        make_descriptor("m-cache", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 1000, None),
-        make_descriptor("m-aot", ArtifactDomain::Aot, ArtifactFamily::BytecodeArtifact, 1000, None),
-        make_descriptor("m-ev", ArtifactDomain::Evidence, ArtifactFamily::EvidenceRecord, 1000, None),
+        make_descriptor(
+            "m-cache",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            None,
+        ),
+        make_descriptor(
+            "m-aot",
+            ArtifactDomain::Aot,
+            ArtifactFamily::BytecodeArtifact,
+            1000,
+            None,
+        ),
+        make_descriptor(
+            "m-ev",
+            ArtifactDomain::Evidence,
+            ArtifactFamily::EvidenceRecord,
+            1000,
+            None,
+        ),
     ];
     p.process_batch(&descriptors);
     assert_eq!(p.results.len(), 3);
@@ -1328,21 +1340,39 @@ fn enrichment_pipeline_summary_by_strategy_breakdown() {
     let mut p = CompressionPipeline::new(epoch(10));
     // Add cache (dictionary) and aot (delta) artifacts
     p.process_artifact(&make_descriptor(
-        "strat-c1", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 2000, None,
+        "strat-c1",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        2000,
+        None,
     ));
     p.process_artifact(&make_descriptor(
-        "strat-c2", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 3000, None,
+        "strat-c2",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        3000,
+        None,
     ));
     p.process_artifact(&make_descriptor(
-        "strat-a1", ArtifactDomain::Aot, ArtifactFamily::BytecodeArtifact, 4000, None,
+        "strat-a1",
+        ArtifactDomain::Aot,
+        ArtifactFamily::BytecodeArtifact,
+        4000,
+        None,
     ));
     let s = p.summary_report();
     // Should have 2 strategies in breakdown
     assert_eq!(s.by_strategy.len(), 2);
-    let dict_bd = s.by_strategy.iter().find(|b| b.strategy == CompressionStrategy::DictionaryCompression);
+    let dict_bd = s
+        .by_strategy
+        .iter()
+        .find(|b| b.strategy == CompressionStrategy::DictionaryCompression);
     assert!(dict_bd.is_some());
     assert_eq!(dict_bd.unwrap().artifact_count, 2);
-    let delta_bd = s.by_strategy.iter().find(|b| b.strategy == CompressionStrategy::DeltaEncoding);
+    let delta_bd = s
+        .by_strategy
+        .iter()
+        .find(|b| b.strategy == CompressionStrategy::DeltaEncoding);
     assert!(delta_bd.is_some());
     assert_eq!(delta_bd.unwrap().artifact_count, 1);
 }
@@ -1351,13 +1381,25 @@ fn enrichment_pipeline_summary_by_strategy_breakdown() {
 fn enrichment_pipeline_summary_by_domain_counts() {
     let mut p = CompressionPipeline::new(epoch(10));
     p.process_artifact(&make_descriptor(
-        "dom-c", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 500, None,
+        "dom-c",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        500,
+        None,
     ));
     p.process_artifact(&make_descriptor(
-        "dom-a", ArtifactDomain::Aot, ArtifactFamily::BytecodeArtifact, 500, None,
+        "dom-a",
+        ArtifactDomain::Aot,
+        ArtifactFamily::BytecodeArtifact,
+        500,
+        None,
     ));
     p.process_artifact(&make_descriptor(
-        "dom-e", ArtifactDomain::Evidence, ArtifactFamily::EvidenceRecord, 500, None,
+        "dom-e",
+        ArtifactDomain::Evidence,
+        ArtifactFamily::EvidenceRecord,
+        500,
+        None,
     ));
     let s = p.summary_report();
     assert_eq!(s.by_domain.len(), 3);
@@ -1386,13 +1428,25 @@ fn enrichment_pipeline_summary_refusal_count() {
     let mut p = CompressionPipeline::new(epoch(10));
     // Add a few too-small artifacts and a few valid ones
     p.process_artifact(&make_descriptor(
-        "small-1", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 10, None,
+        "small-1",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        10,
+        None,
     ));
     p.process_artifact(&make_descriptor(
-        "small-2", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 30, None,
+        "small-2",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        30,
+        None,
     ));
     p.process_artifact(&make_descriptor(
-        "valid-1", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 1000, None,
+        "valid-1",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        1000,
+        None,
     ));
     let s = p.summary_report();
     assert_eq!(s.refusal_count, 2);
@@ -1428,19 +1482,35 @@ fn enrichment_pipeline_serde_roundtrip_with_refusals_and_dedup() {
     let mut p = CompressionPipeline::new(epoch(15));
     // Add a refused artifact
     p.process_artifact(&make_descriptor(
-        "refused-1", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 5, None,
+        "refused-1",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        5,
+        None,
     ));
     // Add dedup artifacts
     let canonical = b"complex-canon";
     p.process_artifact(&make_descriptor(
-        "dup-a", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 3000, Some(canonical),
+        "dup-a",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        3000,
+        Some(canonical),
     ));
     p.process_artifact(&make_descriptor(
-        "dup-b", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 3000, Some(canonical),
+        "dup-b",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        3000,
+        Some(canonical),
     ));
     // Add non-dedup artifact
     p.process_artifact(&make_descriptor(
-        "plain", ArtifactDomain::Aot, ArtifactFamily::BytecodeArtifact, 5000, None,
+        "plain",
+        ArtifactDomain::Aot,
+        ArtifactFamily::BytecodeArtifact,
+        5000,
+        None,
     ));
 
     let json = serde_json::to_string(&p).unwrap();
@@ -1507,10 +1577,18 @@ fn enrichment_pipeline_dedup_across_different_domains() {
     let mut p = CompressionPipeline::new(epoch(10));
     let canonical = b"cross-domain-canon";
     p.process_artifact(&make_descriptor(
-        "cd-cache", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 1000, Some(canonical),
+        "cd-cache",
+        ArtifactDomain::Cache,
+        ArtifactFamily::CacheEntry,
+        1000,
+        Some(canonical),
     ));
     p.process_artifact(&make_descriptor(
-        "cd-aot", ArtifactDomain::Aot, ArtifactFamily::BytecodeArtifact, 1000, Some(canonical),
+        "cd-aot",
+        ArtifactDomain::Aot,
+        ArtifactFamily::BytecodeArtifact,
+        1000,
+        Some(canonical),
     ));
     // Second should be deduped because canonical_id matches
     assert_eq!(p.dedup_entries.len(), 1);
@@ -1554,7 +1632,11 @@ fn enrichment_pipeline_summary_hash_deterministic() {
     let build = || {
         let mut p = CompressionPipeline::new(epoch(10));
         p.process_artifact(&make_descriptor(
-            "sh-det", ArtifactDomain::Cache, ArtifactFamily::CacheEntry, 1000, None,
+            "sh-det",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            None,
         ));
         p.summary_report().summary_hash
     };

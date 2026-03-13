@@ -370,3 +370,117 @@ fn seqlock_has_at_least_three_candidates() {
         s.candidate_policies.len()
     );
 }
+
+// ===== Cross-schema and structural enrichment =====
+
+#[test]
+fn cross_schema_all_bead_ids_are_distinct() {
+    let st = parse_stitching();
+    let lm = parse_law_mining();
+    let sq = parse_seqlock();
+    let ids: BTreeSet<&str> = [
+        st.bead_id.as_str(),
+        lm.bead_id.as_str(),
+        sq.bead_id.as_str(),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        ids.len(),
+        3,
+        "all three schemas must have distinct bead_ids"
+    );
+}
+
+#[test]
+fn cross_schema_all_schema_versions_are_distinct_and_prefixed() {
+    let st = parse_stitching();
+    let lm = parse_law_mining();
+    let sq = parse_seqlock();
+    let versions = [
+        st.schema_version.as_str(),
+        lm.schema_version.as_str(),
+        sq.schema_version.as_str(),
+    ];
+    for v in &versions {
+        assert!(
+            v.starts_with("franken-engine."),
+            "schema_version must start with franken-engine. prefix, got: {v}"
+        );
+    }
+    let unique: BTreeSet<&str> = versions.into_iter().collect();
+    assert_eq!(
+        unique.len(),
+        3,
+        "all three schemas must have distinct schema_versions"
+    );
+}
+
+#[test]
+fn stitching_artifact_kinds_are_unique() {
+    let s = parse_stitching();
+    let mut seen = BTreeSet::new();
+    for kind in &s.artifact_kinds {
+        assert!(seen.insert(kind.clone()), "duplicate artifact_kind: {kind}");
+    }
+}
+
+#[test]
+fn law_mining_top_level_keys_match_schema() {
+    let raw: Value = serde_json::from_str(LAW_MINING_JSON).unwrap();
+    let keys: BTreeSet<&str> = raw
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        BTreeSet::from([
+            "schema_version",
+            "bead_id",
+            "component",
+            "required_artifacts",
+            "runner_script",
+            "replay_script",
+            "binary",
+            "default_artifact_root"
+        ])
+    );
+}
+
+#[test]
+fn seqlock_top_level_keys_match_schema() {
+    let raw: Value = serde_json::from_str(SEQLOCK_JSON).unwrap();
+    let keys: BTreeSet<&str> = raw
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        BTreeSet::from([
+            "schema_version",
+            "bead_id",
+            "required_artifacts",
+            "candidate_policies"
+        ])
+    );
+}
+
+#[test]
+fn seqlock_candidates_are_sorted_by_id() {
+    let s = parse_seqlock();
+    let ids: Vec<&str> = s
+        .candidate_policies
+        .iter()
+        .map(|p| p.candidate_id.as_str())
+        .collect();
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(
+        ids, sorted,
+        "candidate_policies must be sorted by candidate_id"
+    );
+}

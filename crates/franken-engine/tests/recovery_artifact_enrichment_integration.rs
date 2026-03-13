@@ -147,7 +147,11 @@ fn enrichment_artifact_type_display_uniqueness_all_seven() {
         .into_iter()
         .map(|t| t.to_string())
         .collect();
-    assert_eq!(displays.len(), 7, "all 7 ArtifactType variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        7,
+        "all 7 ArtifactType variants must have unique Display"
+    );
 }
 
 #[test]
@@ -236,11 +240,12 @@ fn enrichment_artifact_type_ordering_is_declaration_order() {
 
 #[test]
 fn enrichment_recovery_trigger_display_uniqueness_all_six() {
-    let displays: BTreeSet<String> = all_triggers()
-        .into_iter()
-        .map(|t| t.to_string())
-        .collect();
-    assert_eq!(displays.len(), 6, "all 6 RecoveryTrigger variants must have unique Display");
+    let displays: BTreeSet<String> = all_triggers().into_iter().map(|t| t.to_string()).collect();
+    assert_eq!(
+        displays.len(),
+        6,
+        "all 6 RecoveryTrigger variants must have unique Display"
+    );
 }
 
 #[test]
@@ -350,7 +355,11 @@ fn enrichment_proof_element_display_uniqueness_all_four() {
         },
     ];
     let displays: BTreeSet<String> = elements.into_iter().map(|p| p.to_string()).collect();
-    assert_eq!(displays.len(), 4, "all 4 ProofElement variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        4,
+        "all 4 ProofElement variants must have unique Display"
+    );
 }
 
 #[test]
@@ -482,7 +491,11 @@ fn enrichment_recovery_verdict_display_uniqueness() {
         },
     ];
     let displays: BTreeSet<String> = verdicts.into_iter().map(|v| v.to_string()).collect();
-    assert_eq!(displays.len(), 2, "both RecoveryVerdict variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        2,
+        "both RecoveryVerdict variants must have unique Display"
+    );
 }
 
 #[test]
@@ -559,7 +572,11 @@ fn enrichment_verification_error_display_uniqueness_all_four() {
         },
     ];
     let displays: BTreeSet<String> = errors.into_iter().map(|e| e.to_string()).collect();
-    assert_eq!(displays.len(), 4, "all 4 VerificationError variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        4,
+        "all 4 VerificationError variants must have unique Display"
+    );
 }
 
 #[test]
@@ -777,9 +794,21 @@ fn enrichment_builder_multiple_proof_elements_preserved_in_order() {
     .build();
 
     assert_eq!(artifact.proof_bundle.len(), 3);
-    assert!(artifact.proof_bundle[0].to_string().contains("mmr_consistency"));
-    assert!(artifact.proof_bundle[1].to_string().contains("chain_verification"));
-    assert!(artifact.proof_bundle[2].to_string().contains("evidence_link"));
+    assert!(
+        artifact.proof_bundle[0]
+            .to_string()
+            .contains("mmr_consistency")
+    );
+    assert!(
+        artifact.proof_bundle[1]
+            .to_string()
+            .contains("chain_verification")
+    );
+    assert!(
+        artifact.proof_bundle[2]
+            .to_string()
+            .contains("evidence_link")
+    );
 }
 
 #[test]
@@ -1009,7 +1038,10 @@ fn enrichment_artifact_id_sensitive_to_trace_id() {
         })
         .build()
     };
-    assert_ne!(make("trace-alpha").artifact_id, make("trace-beta").artifact_id);
+    assert_ne!(
+        make("trace-alpha").artifact_id,
+        make("trace-beta").artifact_id
+    );
 }
 
 #[test]
@@ -1407,7 +1439,10 @@ fn enrichment_recovery_artifact_clone_preserves_all_fields() {
     assert_eq!(artifact.artifact_id, cloned.artifact_id);
     assert_eq!(artifact.signature, cloned.signature);
     assert_eq!(artifact.proof_bundle.len(), cloned.proof_bundle.len());
-    assert_eq!(artifact.operator_actions.len(), cloned.operator_actions.len());
+    assert_eq!(
+        artifact.operator_actions.len(),
+        cloned.operator_actions.len()
+    );
     assert_eq!(artifact.trace_id, cloned.trace_id);
     assert_eq!(artifact.epoch_id, cloned.epoch_id);
     assert_eq!(artifact.timestamp_ticks, cloned.timestamp_ticks);

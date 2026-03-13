@@ -22,14 +22,12 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::object_model::{JsValue, ObjectHeap, PropertyKey, SymbolId};
 use frankenengine_engine::stdlib::{
-    ArrayMethodResult, BuiltinId, CollectionKind, GlobalEnvironment, StdlibError,
-    StringFastPathConsumer, StringFastPathGateError, StringObservationMode,
-    StringRepresentationKind, alloc_array_instance, alloc_map_instance, alloc_set_instance,
-    derive_string_fast_path_eligibility, exec_array_method, exec_boolean_method,
-    exec_error_constructor, exec_global_function, exec_heap_collection_method, exec_math,
-    exec_number_method, exec_object_static, exec_string_method, exec_string_method_with_receipt,
-    exec_string_static, exec_symbol_static, install_stdlib, json_parse, json_stringify,
-    read_array_elements, read_map_entries, read_set_values,
+    ArrayMethodResult, BuiltinId, CollectionKind, StdlibError, StringFastPathConsumer,
+    StringFastPathGateError, StringObservationMode, StringRepresentationKind, alloc_array_instance,
+    alloc_map_instance, alloc_set_instance, derive_string_fast_path_eligibility, exec_array_method,
+    exec_boolean_method, exec_error_constructor, exec_global_function, exec_heap_collection_method,
+    exec_math, exec_number_method, exec_string_method, exec_string_method_with_receipt,
+    install_stdlib, json_parse, json_stringify, read_array_elements,
     require_string_fast_path_eligibility,
 };
 
@@ -41,7 +39,11 @@ const FP_SCALE: i64 = 1_000_000;
 
 #[test]
 fn enrichment_serde_roundtrip_collection_kind_all_variants() {
-    let variants = [CollectionKind::Array, CollectionKind::Map, CollectionKind::Set];
+    let variants = [
+        CollectionKind::Array,
+        CollectionKind::Map,
+        CollectionKind::Set,
+    ];
     for kind in &variants {
         let json = serde_json::to_string(kind).unwrap();
         let back: CollectionKind = serde_json::from_str(&json).unwrap();
@@ -60,7 +62,10 @@ fn enrichment_serde_roundtrip_string_representation_kind_all_variants() {
     for kind in &variants {
         let json = serde_json::to_string(kind).unwrap();
         let back: StringRepresentationKind = serde_json::from_str(&json).unwrap();
-        assert_eq!(*kind, back, "StringRepresentationKind roundtrip failed for {kind:?}");
+        assert_eq!(
+            *kind, back,
+            "StringRepresentationKind roundtrip failed for {kind:?}"
+        );
     }
 }
 
@@ -73,7 +78,10 @@ fn enrichment_serde_roundtrip_string_observation_mode_all_variants() {
     for mode in &variants {
         let json = serde_json::to_string(mode).unwrap();
         let back: StringObservationMode = serde_json::from_str(&json).unwrap();
-        assert_eq!(*mode, back, "StringObservationMode roundtrip failed for {mode:?}");
+        assert_eq!(
+            *mode, back,
+            "StringObservationMode roundtrip failed for {mode:?}"
+        );
     }
 }
 
@@ -87,7 +95,10 @@ fn enrichment_serde_roundtrip_string_fast_path_consumer_all_variants() {
     for consumer in &variants {
         let json = serde_json::to_string(consumer).unwrap();
         let back: StringFastPathConsumer = serde_json::from_str(&json).unwrap();
-        assert_eq!(*consumer, back, "StringFastPathConsumer roundtrip failed for {consumer:?}");
+        assert_eq!(
+            *consumer, back,
+            "StringFastPathConsumer roundtrip failed for {consumer:?}"
+        );
     }
 }
 
@@ -98,10 +109,8 @@ fn enrichment_serde_roundtrip_array_method_result_both_variants() {
     let back_v: ArrayMethodResult = serde_json::from_str(&json_v).unwrap();
     assert_eq!(value_variant, back_v);
 
-    let array_variant = ArrayMethodResult::NewArray(vec![
-        JsValue::Int(FP_SCALE),
-        JsValue::Str("hello".into()),
-    ]);
+    let array_variant =
+        ArrayMethodResult::NewArray(vec![JsValue::Int(FP_SCALE), JsValue::Str("hello".into())]);
     let json_a = serde_json::to_string(&array_variant).unwrap();
     let back_a: ArrayMethodResult = serde_json::from_str(&json_a).unwrap();
     assert_eq!(array_variant, back_a);
@@ -125,7 +134,11 @@ fn enrichment_serde_roundtrip_stdlib_error_all_variants() {
     for err in &errors {
         let json = serde_json::to_string(err).unwrap();
         let back: StdlibError = serde_json::from_str(&json).unwrap();
-        assert_eq!(format!("{err}"), format!("{back}"), "StdlibError roundtrip for {err:?}");
+        assert_eq!(
+            format!("{err}"),
+            format!("{back}"),
+            "StdlibError roundtrip for {err:?}"
+        );
     }
 }
 
@@ -228,8 +241,8 @@ fn enrichment_string_fast_path_gate_error_display_all_four() {
 
 #[test]
 fn enrichment_string_fast_path_missing_receipt_rejects() {
-    let err = require_string_fast_path_eligibility(StringFastPathConsumer::Runtime, None)
-        .unwrap_err();
+    let err =
+        require_string_fast_path_eligibility(StringFastPathConsumer::Runtime, None).unwrap_err();
     assert!(
         matches!(err, StringFastPathGateError::MissingReceipt { .. }),
         "expected MissingReceipt, got {err:?}"
@@ -312,12 +325,9 @@ fn enrichment_string_fast_path_boundary_sensitive_allows_runtime() {
 #[test]
 fn enrichment_derive_eligibility_inline_string() {
     // Short ASCII string results in Inline kind.
-    let traced = exec_string_method_with_receipt(
-        BuiltinId::StringPrototypeToUpperCase,
-        "hello",
-        &[],
-    )
-    .unwrap();
+    let traced =
+        exec_string_method_with_receipt(BuiltinId::StringPrototypeToUpperCase, "hello", &[])
+            .unwrap();
     let receipt = traced.receipt.as_ref().expect("toUpperCase receipt");
     let eligibility = derive_string_fast_path_eligibility(receipt);
     assert!(eligibility.runtime_eligible);
@@ -381,12 +391,16 @@ fn enrichment_eligibility_cache_key_format() {
     let receipt = traced.receipt.as_ref().expect("slice receipt");
     let eligibility = derive_string_fast_path_eligibility(receipt);
     assert!(
-        eligibility.stable_cache_key.starts_with("string-fast-path:"),
+        eligibility
+            .stable_cache_key
+            .starts_with("string-fast-path:"),
         "cache key should start with 'string-fast-path:', got {}",
         eligibility.stable_cache_key
     );
     assert!(
-        eligibility.stable_cache_key.contains(receipt.builtin.as_str()),
+        eligibility
+            .stable_cache_key
+            .contains(receipt.builtin.as_str()),
         "cache key should contain builtin name"
     );
 }
@@ -444,7 +458,10 @@ fn enrichment_math_sqrt_negative_returns_range_error() {
     let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(-4 * FP_SCALE)]);
     assert!(result.is_err());
     if let Err(StdlibError::RangeError(msg)) = &result {
-        assert!(msg.contains("negative"), "message should mention negative: {msg}");
+        assert!(
+            msg.contains("negative"),
+            "message should mention negative: {msg}"
+        );
     } else {
         panic!("expected RangeError, got {result:?}");
     }
@@ -454,7 +471,7 @@ fn enrichment_math_sqrt_negative_returns_range_error() {
 fn enrichment_math_pow_negative_exponent_returns_range_error() {
     let result = exec_math(
         BuiltinId::MathPow,
-        &[JsValue::Int(2 * FP_SCALE), JsValue::Int(-1 * FP_SCALE)],
+        &[JsValue::Int(2 * FP_SCALE), JsValue::Int(-FP_SCALE)],
     );
     assert!(result.is_err());
     if let Err(StdlibError::RangeError(msg)) = &result {
@@ -521,7 +538,7 @@ fn enrichment_string_repeat_negative_count_returns_range_error() {
     let result = exec_string_method(
         BuiltinId::StringPrototypeRepeat,
         "x",
-        &[JsValue::Int(-1 * FP_SCALE)],
+        &[JsValue::Int(-FP_SCALE)],
     );
     assert!(result.is_err());
     if let Err(StdlibError::RangeError(msg)) = &result {
@@ -704,7 +721,11 @@ fn enrichment_array_last_index_of_negative_from_index() {
     )
     .unwrap();
     if let ArrayMethodResult::Value(JsValue::Int(idx)) = result {
-        assert_eq!(idx, 2 * FP_SCALE, "lastIndexOf(1, -2) should find at index 2");
+        assert_eq!(
+            idx,
+            2 * FP_SCALE,
+            "lastIndexOf(1, -2) should find at index 2"
+        );
     } else {
         panic!("expected Value result, got {result:?}");
     }
@@ -713,10 +734,7 @@ fn enrichment_array_last_index_of_negative_from_index() {
 #[test]
 fn enrichment_array_flat_returns_copy_of_elements() {
     // Without heap access, flat returns the elements unchanged.
-    let elements = vec![
-        JsValue::Int(FP_SCALE),
-        JsValue::Int(2 * FP_SCALE),
-    ];
+    let elements = vec![JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)];
     let result = exec_array_method(BuiltinId::ArrayPrototypeFlat, &elements, &[]).unwrap();
     if let ArrayMethodResult::NewArray(arr) = result {
         assert_eq!(arr, elements);
@@ -785,8 +803,7 @@ fn enrichment_heap_array_shift_empty_returns_undefined() {
     let array = alloc_array_instance(&mut heap, env.prototypes.array_prototype, &[]).unwrap();
 
     let result =
-        exec_heap_collection_method(&mut heap, BuiltinId::ArrayPrototypeShift, array, &[])
-            .unwrap();
+        exec_heap_collection_method(&mut heap, BuiltinId::ArrayPrototypeShift, array, &[]).unwrap();
     assert_eq!(result.value, JsValue::Undefined);
     assert_eq!(result.trace.before_size, 0);
     assert_eq!(result.trace.after_size, 0);
@@ -829,7 +846,10 @@ fn enrichment_registry_entries_count_matches_len() {
         "entries().len() should match len()"
     );
     // There should be a substantial number of entries (all installed builtins).
-    assert!(env.registry.len() >= 100, "registry should have >= 100 entries");
+    assert!(
+        env.registry.len() >= 100,
+        "registry should have >= 100 entries"
+    );
 }
 
 #[test]
@@ -853,8 +873,20 @@ fn enrichment_install_stdlib_constructors_accessible() {
 
     // All constructors should be accessible as properties on the global object.
     let constructor_names = [
-        "Array", "Object", "String", "Number", "Boolean", "Error", "TypeError",
-        "RangeError", "ReferenceError", "SyntaxError", "Map", "Set", "Date", "Symbol",
+        "Array",
+        "Object",
+        "String",
+        "Number",
+        "Boolean",
+        "Error",
+        "TypeError",
+        "RangeError",
+        "ReferenceError",
+        "SyntaxError",
+        "Map",
+        "Set",
+        "Date",
+        "Symbol",
     ];
     for name in &constructor_names {
         let prop = heap.get_property(env.global_object, &PropertyKey::from(*name));
@@ -877,14 +909,385 @@ fn enrichment_install_stdlib_math_constants_present() {
 
     // Math methods should be functions.
     let abs_prop = heap.get_property(math_ns, &PropertyKey::from("abs"));
-    assert!(
-        abs_prop.is_ok(),
-        "Math.abs should be installed"
-    );
+    assert!(abs_prop.is_ok(), "Math.abs should be installed");
     if let Ok(JsValue::Function(slot)) = abs_prop {
         let id = env.registry.lookup(slot);
         assert_eq!(id, Some(BuiltinId::MathAbs));
     }
+}
+
+// ===========================================================================
+// M. Additional Math exec paths (6 tests)
+// ===========================================================================
+
+#[test]
+fn enrichment_math_abs_negative() {
+    let result = exec_math(BuiltinId::MathAbs, &[JsValue::Int(-5 * FP_SCALE)]).unwrap();
+    assert_eq!(result, JsValue::Int(5 * FP_SCALE));
+}
+
+#[test]
+fn enrichment_math_abs_zero() {
+    let result = exec_math(BuiltinId::MathAbs, &[JsValue::Int(0)]).unwrap();
+    assert_eq!(result, JsValue::Int(0));
+}
+
+#[test]
+fn enrichment_math_max_multiple_args() {
+    let result = exec_math(
+        BuiltinId::MathMax,
+        &[
+            JsValue::Int(3 * FP_SCALE),
+            JsValue::Int(7 * FP_SCALE),
+            JsValue::Int(1 * FP_SCALE),
+        ],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Int(7 * FP_SCALE));
+}
+
+#[test]
+fn enrichment_math_min_multiple_args() {
+    let result = exec_math(
+        BuiltinId::MathMin,
+        &[
+            JsValue::Int(3 * FP_SCALE),
+            JsValue::Int(7 * FP_SCALE),
+            JsValue::Int(1 * FP_SCALE),
+        ],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Int(1 * FP_SCALE));
+}
+
+#[test]
+fn enrichment_math_floor_positive() {
+    let result = exec_math(
+        BuiltinId::MathFloor,
+        &[JsValue::Int(3_500_000)], // 3.5
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Int(3 * FP_SCALE));
+}
+
+#[test]
+fn enrichment_math_ceil_positive() {
+    let result = exec_math(
+        BuiltinId::MathCeil,
+        &[JsValue::Int(3_500_000)], // 3.5
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Int(4 * FP_SCALE));
+}
+
+// ===========================================================================
+// N. Additional String method exec paths (6 tests)
+// ===========================================================================
+
+#[test]
+fn enrichment_string_char_at_index_zero() {
+    let result = exec_string_method(
+        BuiltinId::StringPrototypeCharAt,
+        "hello",
+        &[JsValue::Int(0)],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Str("h".into()));
+}
+
+#[test]
+fn enrichment_string_char_at_last_index() {
+    let result = exec_string_method(
+        BuiltinId::StringPrototypeCharAt,
+        "hello",
+        &[JsValue::Int(4 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Str("o".into()));
+}
+
+#[test]
+fn enrichment_string_to_upper_case() {
+    let result = exec_string_method(BuiltinId::StringPrototypeToUpperCase, "hello", &[]).unwrap();
+    assert_eq!(result, JsValue::Str("HELLO".into()));
+}
+
+#[test]
+fn enrichment_string_to_lower_case() {
+    let result = exec_string_method(BuiltinId::StringPrototypeToLowerCase, "HELLO", &[]).unwrap();
+    assert_eq!(result, JsValue::Str("hello".into()));
+}
+
+#[test]
+fn enrichment_string_trim() {
+    let result = exec_string_method(BuiltinId::StringPrototypeTrim, "  hello  ", &[]).unwrap();
+    assert_eq!(result, JsValue::Str("hello".into()));
+}
+
+#[test]
+fn enrichment_string_repeat() {
+    let result = exec_string_method(
+        BuiltinId::StringPrototypeRepeat,
+        "ab",
+        &[JsValue::Int(3 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Str("ababab".into()));
+}
+
+// ===========================================================================
+// O. Additional JSON paths (4 tests)
+// ===========================================================================
+
+#[test]
+fn enrichment_json_parse_object() {
+    let result = json_parse(r#"{"a":1,"b":"hello"}"#).unwrap();
+    // Objects starting with '{' are returned as json-compound descriptors.
+    if let JsValue::Str(s) = &result {
+        assert!(
+            s.contains("json-compound"),
+            "expected compound descriptor, got: {s}"
+        );
+    } else {
+        panic!("expected Str(json-compound:...), got: {result:?}");
+    }
+}
+
+#[test]
+fn enrichment_json_parse_array() {
+    let result = json_parse("[1,2,3]").unwrap();
+    // Arrays are returned as json-compound descriptors (no JsValue::Array variant).
+    if let JsValue::Str(s) = &result {
+        assert!(
+            s.contains("json-compound"),
+            "expected json-compound descriptor, got: {s}"
+        );
+    } else {
+        panic!("expected Str(json-compound:...), got: {result:?}");
+    }
+}
+
+#[test]
+fn enrichment_json_parse_invalid_returns_error() {
+    // json_parse treats anything starting with '{' as a compound and returns a descriptor,
+    // so use a truly unparseable prefix to trigger an error.
+    let result = json_parse("<<<not valid>>>");
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_json_stringify_null() {
+    let result = json_stringify(&JsValue::Null).unwrap();
+    assert_eq!(result, JsValue::Str("null".into()));
+}
+
+// ===========================================================================
+// P. Global function exec (4 tests)
+// ===========================================================================
+
+#[test]
+fn enrichment_global_parse_int_decimal() {
+    let result =
+        exec_global_function(BuiltinId::GlobalParseInt, &[JsValue::Str("42".into())]).unwrap();
+    assert_eq!(result, JsValue::Int(42 * FP_SCALE));
+}
+
+#[test]
+fn enrichment_global_is_nan_with_nan() {
+    let result = exec_global_function(
+        BuiltinId::GlobalIsNaN,
+        &[JsValue::Str("not_a_number".into())],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Bool(true));
+}
+
+#[test]
+fn enrichment_global_is_finite_with_number() {
+    let result =
+        exec_global_function(BuiltinId::GlobalIsFinite, &[JsValue::Int(42 * FP_SCALE)]).unwrap();
+    assert_eq!(result, JsValue::Bool(true));
+}
+
+#[test]
+fn enrichment_global_parse_float_decimal() {
+    let result =
+        exec_global_function(BuiltinId::GlobalParseFloat, &[JsValue::Str("3.14".into())]).unwrap();
+    // parseFloat may truncate to integer portion in fixed-point — just verify it returns Int.
+    assert!(
+        matches!(result, JsValue::Int(_)),
+        "parseFloat should return Int"
+    );
+}
+
+// ===========================================================================
+// Q. Boolean exec (2 tests)
+// ===========================================================================
+
+#[test]
+fn enrichment_boolean_to_string_true() {
+    let result = exec_boolean_method(BuiltinId::BooleanPrototypeToString, true).unwrap();
+    assert_eq!(result, JsValue::Str("true".into()));
+}
+
+#[test]
+fn enrichment_boolean_to_string_false() {
+    let result = exec_boolean_method(BuiltinId::BooleanPrototypeToString, false).unwrap();
+    assert_eq!(result, JsValue::Str("false".into()));
+}
+
+// ===========================================================================
+// R. Error constructor (2 tests)
+// ===========================================================================
+
+#[test]
+fn enrichment_error_constructor_creates_error() {
+    let result =
+        exec_error_constructor(BuiltinId::ErrorConstructor, &[JsValue::Str("oops".into())])
+            .unwrap();
+    if let JsValue::Str(s) = result {
+        assert!(s.contains("oops"), "error message should contain 'oops'");
+    }
+}
+
+#[test]
+fn enrichment_type_error_constructor() {
+    let result = exec_error_constructor(
+        BuiltinId::TypeErrorConstructor,
+        &[JsValue::Str("bad type".into())],
+    )
+    .unwrap();
+    if let JsValue::Str(s) = result {
+        assert!(s.contains("bad type"));
+    }
+}
+
+// ===========================================================================
+// S. Heap collection operations (4 tests)
+// ===========================================================================
+
+#[test]
+fn enrichment_heap_set_add_and_has() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let set = alloc_set_instance(&mut heap, env.prototypes.set_prototype, &[]).unwrap();
+
+    exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::SetPrototypeAdd,
+        set,
+        &[JsValue::Int(42 * FP_SCALE)],
+    )
+    .unwrap();
+
+    let result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::SetPrototypeHas,
+        set,
+        &[JsValue::Int(42 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(result.value, JsValue::Bool(true));
+}
+
+#[test]
+fn enrichment_heap_set_has_missing() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let set = alloc_set_instance(&mut heap, env.prototypes.set_prototype, &[]).unwrap();
+
+    let result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::SetPrototypeHas,
+        set,
+        &[JsValue::Int(99 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(result.value, JsValue::Bool(false));
+}
+
+#[test]
+fn enrichment_heap_map_set_and_get() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let map = alloc_map_instance(&mut heap, env.prototypes.map_prototype, &[]).unwrap();
+
+    exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::MapPrototypeSet,
+        map,
+        &[JsValue::Str("key".into()), JsValue::Int(7 * FP_SCALE)],
+    )
+    .unwrap();
+
+    let result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::MapPrototypeGet,
+        map,
+        &[JsValue::Str("key".into())],
+    )
+    .unwrap();
+    assert_eq!(result.value, JsValue::Int(7 * FP_SCALE));
+}
+
+#[test]
+fn enrichment_heap_array_push_and_read() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let array = alloc_array_instance(&mut heap, env.prototypes.array_prototype, &[]).unwrap();
+
+    exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypePush,
+        array,
+        &[JsValue::Int(10 * FP_SCALE)],
+    )
+    .unwrap();
+    exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypePush,
+        array,
+        &[JsValue::Int(20 * FP_SCALE)],
+    )
+    .unwrap();
+
+    let elements = read_array_elements(&heap, array).unwrap();
+    assert_eq!(elements.len(), 2);
+    assert_eq!(elements[0], JsValue::Int(10 * FP_SCALE));
+    assert_eq!(elements[1], JsValue::Int(20 * FP_SCALE));
+}
+
+// ===========================================================================
+// T. BuiltinRegistry register and lookup (3 tests)
+// ===========================================================================
+
+#[test]
+fn enrichment_registry_register_and_lookup() {
+    use frankenengine_engine::stdlib::BuiltinRegistry;
+    let mut registry = BuiltinRegistry::new(100);
+    let slot = registry.register(BuiltinId::MathAbs);
+    assert_eq!(slot, 100);
+    assert_eq!(registry.lookup(100), Some(BuiltinId::MathAbs));
+}
+
+#[test]
+fn enrichment_registry_sequential_slots() {
+    use frankenengine_engine::stdlib::BuiltinRegistry;
+    let mut registry = BuiltinRegistry::new(0);
+    let s1 = registry.register(BuiltinId::MathAbs);
+    let s2 = registry.register(BuiltinId::MathCeil);
+    let s3 = registry.register(BuiltinId::MathFloor);
+    assert_eq!(s1, 0);
+    assert_eq!(s2, 1);
+    assert_eq!(s3, 2);
+    assert_eq!(registry.len(), 3);
+}
+
+#[test]
+fn enrichment_registry_lookup_missing_returns_none() {
+    use frankenengine_engine::stdlib::BuiltinRegistry;
+    let registry = BuiltinRegistry::new(0);
+    assert_eq!(registry.lookup(999), None);
 }
 
 // ===========================================================================

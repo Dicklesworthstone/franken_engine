@@ -21,17 +21,14 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::adversarial_campaign::{
-    AdversarialCampaign, AttackDimension, AttackGrammar, AttackStep, AttackStepKind,
-    AutoMinimizer, CalibrationReceipt, CampaignAttackCategory, CampaignComplexity,
-    CampaignExecutionResult, CampaignGenerator, CampaignGeneratorConfig,
-    CampaignOutcomeRecord, CampaignRuntime, CampaignSuppressionEvent,
-    CampaignSuppressionSample, CampaignTrendPoint,
-    ExploitObjectiveScore, GuardplaneCalibrationState,
-    MutationEngine, MutationOperator, MutationRequest,
-    RedBlueCalibrationConfig, RedBlueLoopIntegrator, RegressionGateDecision,
-    RegressionReplayResult, PolicyRegressionSuite, SuppressionGateConfig,
-    SuppressionGateFailure, SuppressionGateInput, SuppressionGateResult,
-    evaluate_compromise_suppression_gate,
+    AdversarialCampaign, AttackDimension, AttackGrammar, AttackStep, AttackStepKind, AutoMinimizer,
+    CalibrationReceipt, CampaignAttackCategory, CampaignComplexity, CampaignExecutionResult,
+    CampaignGenerator, CampaignGeneratorConfig, CampaignOutcomeRecord, CampaignRuntime,
+    CampaignSuppressionEvent, CampaignSuppressionSample, CampaignTrendPoint, ExploitObjectiveScore,
+    GuardplaneCalibrationState, MutationEngine, MutationOperator, MutationRequest,
+    PolicyRegressionSuite, RedBlueCalibrationConfig, RedBlueLoopIntegrator, RegressionGateDecision,
+    RegressionReplayResult, SuppressionGateConfig, SuppressionGateFailure, SuppressionGateInput,
+    SuppressionGateResult, evaluate_compromise_suppression_gate,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,7 +156,11 @@ fn enrichment_campaign_complexity_display_strings_are_all_unique() {
     .map(|v| v.to_string())
     .collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "all CampaignComplexity Display strings must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "all CampaignComplexity Display strings must be unique"
+    );
 }
 
 #[test]
@@ -175,7 +176,11 @@ fn enrichment_attack_dimension_display_strings_are_all_unique() {
     .map(|v| v.to_string())
     .collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "all AttackDimension Display strings must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "all AttackDimension Display strings must be unique"
+    );
 }
 
 #[test]
@@ -189,7 +194,11 @@ fn enrichment_campaign_runtime_display_strings_are_all_unique() {
     .map(|v| v.to_string())
     .collect();
     let unique: BTreeSet<&str> = displays.iter().map(|s| s.as_str()).collect();
-    assert_eq!(displays.len(), unique.len(), "all CampaignRuntime Display strings must be unique");
+    assert_eq!(
+        displays.len(),
+        unique.len(),
+        "all CampaignRuntime Display strings must be unique"
+    );
 }
 
 #[test]
@@ -241,7 +250,13 @@ fn enrichment_calibration_receipt_serde_roundtrip() {
             novel_technique: false,
         };
         integrator
-            .ingest_outcome(make_outcome(camp, result, false, false, 1_700_000_000_000 + idx))
+            .ingest_outcome(make_outcome(
+                camp,
+                result,
+                false,
+                false,
+                1_700_000_000_000 + idx,
+            ))
             .unwrap();
     }
 
@@ -364,7 +379,13 @@ fn enrichment_technique_effectiveness_multi_dimension_campaign() {
         novel_technique: false,
     };
     integrator
-        .ingest_outcome(make_outcome(camp.clone(), result, false, false, 1_700_000_000_100))
+        .ingest_outcome(make_outcome(
+            camp.clone(),
+            result,
+            false,
+            false,
+            1_700_000_000_100,
+        ))
         .unwrap();
 
     let effectiveness = integrator.technique_effectiveness();
@@ -399,7 +420,13 @@ fn enrichment_calibration_evidence_weights_adjust_on_escapes() {
             novel_technique: false,
         };
         integrator
-            .ingest_outcome(make_outcome(camp, result, false, false, 1_700_000_000_200 + idx))
+            .ingest_outcome(make_outcome(
+                camp,
+                result,
+                false,
+                false,
+                1_700_000_000_200 + idx,
+            ))
             .unwrap();
     }
 
@@ -414,7 +441,10 @@ fn enrichment_calibration_evidence_weights_adjust_on_escapes() {
 
     let new_weights = &integrator.calibration_state().evidence_weights_millionths;
     // At least one weight should have changed.
-    assert_ne!(&old_weights, new_weights, "evidence weights should adjust after escapes");
+    assert_ne!(
+        &old_weights, new_weights,
+        "evidence weights should adjust after escapes"
+    );
 }
 
 #[test]
@@ -446,9 +476,9 @@ fn enrichment_calibration_loss_matrix_updates_on_critical_severity() {
 
     let new_loss = &integrator.calibration_state().loss_matrix_millionths;
     // Loss matrix should have at least one updated entry.
-    let any_raised = old_loss.iter().any(|(k, v)| {
-        new_loss.get(k).map(|nv| *nv > *v).unwrap_or(false)
-    });
+    let any_raised = old_loss
+        .iter()
+        .any(|(k, v)| new_loss.get(k).map(|nv| *nv > *v).unwrap_or(false));
     assert!(
         any_raised || old_loss == *new_loss,
         "loss matrix should adjust or remain unchanged if already at max"
@@ -458,8 +488,13 @@ fn enrichment_calibration_loss_matrix_updates_on_critical_severity() {
 #[test]
 fn enrichment_calibrate_returns_none_when_no_outcomes() {
     let mut integrator = make_integrator();
-    let receipt = integrator.calibrate(&[77u8; 32], 1_700_000_000_000).unwrap();
-    assert!(receipt.is_none(), "calibrate with no outcomes should return None");
+    let receipt = integrator
+        .calibrate(&[77u8; 32], 1_700_000_000_000)
+        .unwrap();
+    assert!(
+        receipt.is_none(),
+        "calibrate with no outcomes should return None"
+    );
 }
 
 #[test]
@@ -484,7 +519,13 @@ fn enrichment_calibration_epoch_increments_on_adjustment() {
             novel_technique: false,
         };
         integrator
-            .ingest_outcome(make_outcome(camp, result, false, false, 1_700_000_000_400 + idx))
+            .ingest_outcome(make_outcome(
+                camp,
+                result,
+                false,
+                false,
+                1_700_000_000_400 + idx,
+            ))
             .unwrap();
     }
 
@@ -494,7 +535,11 @@ fn enrichment_calibration_epoch_increments_on_adjustment() {
         .unwrap();
     if receipt.is_some() {
         let epoch_after = integrator.calibration_state().calibration_epoch;
-        assert_eq!(epoch_after, epoch_before + 1, "calibration_epoch should increment by 1");
+        assert_eq!(
+            epoch_after,
+            epoch_before + 1,
+            "calibration_epoch should increment by 1"
+        );
     }
 }
 
@@ -517,12 +562,8 @@ fn enrichment_promote_unclassified_campaign_returns_error() {
     // Since ingest_outcome also classifies, an unclassified campaign means
     // one that was never ingested. We test via the "unknown" path.
     let mut integrator = make_integrator();
-    let result = integrator.promote_regression_fixture(
-        "never-ingested",
-        "expected",
-        "actual",
-        None,
-    );
+    let result =
+        integrator.promote_regression_fixture("never-ingested", "expected", "actual", None);
     assert!(result.is_err());
 }
 
@@ -582,11 +623,20 @@ fn enrichment_counterfactual_hints_only_for_critical_or_blocking() {
         novel_technique: false,
     };
     integrator
-        .ingest_outcome(make_outcome(camp_low, result_low, false, false, 1_700_000_000_600))
+        .ingest_outcome(make_outcome(
+            camp_low,
+            result_low,
+            false,
+            false,
+            1_700_000_000_600,
+        ))
         .unwrap();
 
     let hints = integrator.critical_counterfactual_hints();
-    assert!(hints.is_empty(), "advisory outcomes should not produce counterfactual hints");
+    assert!(
+        hints.is_empty(),
+        "advisory outcomes should not produce counterfactual hints"
+    );
 
     // Now ingest a blocking-level outcome.
     let camp_high = gen_campaign(CampaignComplexity::Apt, 0xC601);
@@ -600,11 +650,20 @@ fn enrichment_counterfactual_hints_only_for_critical_or_blocking() {
     };
     let camp_high_id = camp_high.campaign_id.clone();
     integrator
-        .ingest_outcome(make_outcome(camp_high, result_high, false, false, 1_700_000_000_601))
+        .ingest_outcome(make_outcome(
+            camp_high,
+            result_high,
+            false,
+            false,
+            1_700_000_000_601,
+        ))
         .unwrap();
 
     let hints = integrator.critical_counterfactual_hints();
-    assert!(!hints.is_empty(), "blocking outcomes should produce counterfactual hints");
+    assert!(
+        !hints.is_empty(),
+        "blocking outcomes should produce counterfactual hints"
+    );
     assert!(hints.iter().any(|h| h.campaign_id == camp_high_id));
 }
 
@@ -731,7 +790,12 @@ fn enrichment_suppression_gate_fails_on_insufficient_baselines() {
     let result =
         evaluate_compromise_suppression_gate(&input, &SuppressionGateConfig::default()).unwrap();
     assert!(!result.passed);
-    assert!(result.failures.iter().any(|f| f.error_code == "FE-ADV-GATE-0002"));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| f.error_code == "FE-ADV-GATE-0002")
+    );
 }
 
 #[test]
@@ -763,7 +827,12 @@ fn enrichment_suppression_gate_over_threshold_fe_rate_fails() {
     let result =
         evaluate_compromise_suppression_gate(&input, &SuppressionGateConfig::default()).unwrap();
     assert!(!result.passed);
-    assert!(result.failures.iter().any(|f| f.error_code == "FE-ADV-GATE-0003"));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| f.error_code == "FE-ADV-GATE-0003")
+    );
 }
 
 #[test]
@@ -789,7 +858,12 @@ fn enrichment_suppression_gate_missing_escalation_record_fails() {
     let result =
         evaluate_compromise_suppression_gate(&input, &SuppressionGateConfig::default()).unwrap();
     assert!(!result.passed);
-    assert!(result.failures.iter().any(|f| f.error_code == "FE-ADV-GATE-0005"));
+    assert!(
+        result
+            .failures
+            .iter()
+            .any(|f| f.error_code == "FE-ADV-GATE-0005")
+    );
 }
 
 #[test]
@@ -897,17 +971,18 @@ fn enrichment_suppression_gate_zero_fe_successes_always_passes_significance() {
 #[test]
 fn enrichment_crossover_single_step_base_and_donor() {
     let grammar = AttackGrammar::default();
-    let mut generator = CampaignGenerator::new(
-        grammar.clone(),
-        CampaignGeneratorConfig::default(),
-        0xE100,
-    )
-    .unwrap();
+    let mut generator =
+        CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xE100)
+            .unwrap();
 
     // Create a multi-step campaign for crossover (single-step base could
     // result in empty merge, so use multi-step to exercise the split logic).
-    let base = generator.generate_campaign(CampaignComplexity::MultiStage).unwrap();
-    let donor = generator.generate_campaign(CampaignComplexity::Probe).unwrap();
+    let base = generator
+        .generate_campaign(CampaignComplexity::MultiStage)
+        .unwrap();
+    let donor = generator
+        .generate_campaign(CampaignComplexity::Probe)
+        .unwrap();
 
     let mutated = MutationEngine::mutate(
         &base,
@@ -951,7 +1026,9 @@ fn enrichment_temporal_shift_saturate_preserves_valid_delay() {
             0xE300 + seed_offset,
         )
         .unwrap();
-        let base = generator.generate_campaign(CampaignComplexity::Apt).unwrap();
+        let base = generator
+            .generate_campaign(CampaignComplexity::Apt)
+            .unwrap();
         let has_temporal = base
             .steps
             .iter()
@@ -983,13 +1060,12 @@ fn enrichment_temporal_shift_saturate_preserves_valid_delay() {
 #[test]
 fn enrichment_point_mutation_single_step_campaign() {
     let grammar = AttackGrammar::default();
-    let mut generator = CampaignGenerator::new(
-        grammar.clone(),
-        CampaignGeneratorConfig::default(),
-        0xE400,
-    )
-    .unwrap();
-    let mut base = generator.generate_campaign(CampaignComplexity::Probe).unwrap();
+    let mut generator =
+        CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xE400)
+            .unwrap();
+    let mut base = generator
+        .generate_campaign(CampaignComplexity::Probe)
+        .unwrap();
     // Truncate to single step.
     base.steps.truncate(1);
     base.steps[0].step_id = 0;
@@ -1011,13 +1087,12 @@ fn enrichment_point_mutation_single_step_campaign() {
 #[test]
 fn enrichment_successive_mutations_produce_valid_campaigns() {
     let grammar = AttackGrammar::default();
-    let mut generator = CampaignGenerator::new(
-        grammar.clone(),
-        CampaignGeneratorConfig::default(),
-        0xE500,
-    )
-    .unwrap();
-    let mut current = generator.generate_campaign(CampaignComplexity::MultiStage).unwrap();
+    let mut generator =
+        CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xE500)
+            .unwrap();
+    let mut current = generator
+        .generate_campaign(CampaignComplexity::MultiStage)
+        .unwrap();
 
     // Apply insertion 3 times, then point mutation 2 times.
     for i in 0..3u64 {
@@ -1128,7 +1203,10 @@ fn enrichment_grammar_feedback_amplifies_high_evasion_labels() {
 
     let weight_after = find_weight_for_label(&grammar, &label);
     if let (Some(before), Some(after)) = (weight_before, weight_after) {
-        assert!(after > before, "high evasion should amplify weight: {before} -> {after}");
+        assert!(
+            after > before,
+            "high evasion should amplify weight: {before} -> {after}"
+        );
     }
 }
 
@@ -1156,7 +1234,10 @@ fn enrichment_grammar_feedback_decays_low_evasion_labels() {
 
     let weight_after = find_weight_for_label(&grammar, &label);
     if let (Some(before), Some(after)) = (weight_before, weight_after) {
-        assert!(after < before, "low evasion should decay weight: {before} -> {after}");
+        assert!(
+            after < before,
+            "low evasion should decay weight: {before} -> {after}"
+        );
     }
 }
 
@@ -1188,7 +1269,10 @@ fn enrichment_grammar_feedback_neutral_midrange_evasion() {
     let before = find_weight_for_label(&grammar_before, &label);
     let after = find_weight_for_label(&grammar, &label);
     if let (Some(b), Some(a)) = (before, after) {
-        assert!(a >= b, "midrange evasion with amplification=1 should not decrease weight");
+        assert!(
+            a >= b,
+            "midrange evasion with amplification=1 should not decrease weight"
+        );
     }
 }
 
@@ -1278,7 +1362,10 @@ fn enrichment_grammar_feedback_nonexistent_label_is_noop() {
     grammar.apply_campaign_feedback(&camp, &score);
 
     // Grammar should be unchanged because the label doesn't match any production.
-    assert_eq!(grammar, grammar_before, "nonexistent label should leave grammar unchanged");
+    assert_eq!(
+        grammar, grammar_before,
+        "nonexistent label should leave grammar unchanged"
+    );
 }
 
 fn find_weight_for_label(grammar: &AttackGrammar, label: &str) -> Option<u32> {
@@ -1308,8 +1395,7 @@ fn enrichment_minimizer_two_step_reduces_to_target() {
     let camp = gen_campaign(CampaignComplexity::Apt, 0xAA10);
     assert_eq!(camp.steps.len(), 12);
 
-    let (minimized, proof) =
-        AutoMinimizer::minimize_with(&camp, |c| c.steps.len() >= 3).unwrap();
+    let (minimized, proof) = AutoMinimizer::minimize_with(&camp, |c| c.steps.len() >= 3).unwrap();
 
     assert!(minimized.steps.len() >= 3);
     assert!(minimized.steps.len() < 12);
@@ -1330,7 +1416,10 @@ fn enrichment_minimizer_targeted_removal_preserves_failing_predicate() {
 
     if has_hostcall(&camp) {
         let (minimized, _proof) = AutoMinimizer::minimize_with(&camp, has_hostcall).unwrap();
-        assert!(has_hostcall(&minimized), "minimized campaign should still satisfy predicate");
+        assert!(
+            has_hostcall(&minimized),
+            "minimized campaign should still satisfy predicate"
+        );
     }
 }
 
@@ -1338,9 +1427,11 @@ fn enrichment_minimizer_targeted_removal_preserves_failing_predicate() {
 fn enrichment_minimizer_proof_always_marks_fixed_point() {
     let camp = gen_campaign(CampaignComplexity::Probe, 0xAA30);
 
-    let (_minimized, proof) =
-        AutoMinimizer::minimize_with(&camp, |c| !c.steps.is_empty()).unwrap();
-    assert!(proof.is_fixed_point, "minimizer proof should always mark is_fixed_point=true");
+    let (_minimized, proof) = AutoMinimizer::minimize_with(&camp, |c| !c.steps.is_empty()).unwrap();
+    assert!(
+        proof.is_fixed_point,
+        "minimizer proof should always mark is_fixed_point=true"
+    );
 }
 
 #[test]
@@ -1410,7 +1501,10 @@ fn enrichment_no_promotion_when_score_below_threshold() {
         .unwrap();
 
     assert_eq!(outputs.len(), 2);
-    assert!(generator.regression_corpus().is_empty(), "no promotions should occur for low scores");
+    assert!(
+        generator.regression_corpus().is_empty(),
+        "no promotions should occur for low scores"
+    );
 }
 
 #[test]
@@ -1450,14 +1544,24 @@ fn enrichment_multiple_cycles_accumulate_scores_and_events() {
     assert_eq!(all_campaign_ids.len(), 3);
     // All campaign IDs should be unique.
     let unique_ids: BTreeSet<&str> = all_campaign_ids.iter().map(|s| s.as_str()).collect();
-    assert_eq!(unique_ids.len(), 3, "each cycle should produce a unique campaign ID");
+    assert_eq!(
+        unique_ids.len(),
+        3,
+        "each cycle should produce a unique campaign ID"
+    );
 
     // All campaigns should be in the scorebook.
     for id in &all_campaign_ids {
-        assert!(generator.score(id).is_some(), "campaign {id} should have a score");
+        assert!(
+            generator.score(id).is_some(),
+            "campaign {id} should have a score"
+        );
     }
 
     // Events should have accumulated (drain returns them all).
     let events = generator.drain_events();
-    assert!(events.len() >= 3, "should have at least one event per campaign");
+    assert!(
+        events.len() >= 3,
+        "should have at least one event per campaign"
+    );
 }

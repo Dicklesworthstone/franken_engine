@@ -255,11 +255,18 @@ impl ReplayDropEntry {
         total_replays: u64,
         max_rate: u64,
     ) -> Self {
-        let drop_rate_millionths = drop_count
-            .saturating_mul(1_000_000)
-            .checked_div(total_replays)
-            .unwrap_or(0);
-        let within_budget = drop_rate_millionths <= max_rate;
+        let drop_rate_millionths = match total_replays {
+            0 if drop_count == 0 => 0,
+            0 => 1_000_000,
+            _ => drop_count
+                .saturating_mul(1_000_000)
+                .checked_div(total_replays)
+                .unwrap_or(1_000_000),
+        };
+        let within_budget = match total_replays {
+            0 => drop_count == 0,
+            _ => drop_rate_millionths <= max_rate,
+        };
         Self {
             category,
             drop_count,
@@ -494,6 +501,13 @@ impl ObservabilityClaimDelta {
 
     /// Relative drift as a fraction of the baseline (millionths).
     pub fn relative_drift_millionths(&self) -> u64 {
+        if self.baseline_millionths == 0 {
+            return if self.delta_millionths == 0 {
+                0
+            } else {
+                1_000_000
+            };
+        }
         self.delta_millionths
             .saturating_mul(1_000_000)
             .checked_div(self.baseline_millionths)
@@ -1206,6 +1220,13 @@ mod tests {
     }
 
     #[test]
+    fn drop_entry_nonzero_drop_zero_total_fails_closed() {
+        let e = ReplayDropEntry::new(ReplayDropCategory::ProtocolMismatch, 1, 0, 50_000);
+        assert_eq!(e.drop_rate_millionths, 1_000_000);
+        assert!(!e.within_budget);
+    }
+
+    #[test]
     fn drop_entry_display() {
         let e = ReplayDropEntry::new(ReplayDropCategory::PolicyViolation, 5, 100, 50_000);
         let s = e.to_string();
@@ -1347,7 +1368,13 @@ mod tests {
     #[test]
     fn claim_delta_zero_baseline() {
         let d = ObservabilityClaimDelta::new("claim-6", 0, 100_000, 50_000);
-        assert_eq!(d.relative_drift_millionths(), 0); // div by zero guard
+        assert_eq!(d.relative_drift_millionths(), 1_000_000);
+    }
+
+    #[test]
+    fn claim_delta_zero_baseline_zero_delta() {
+        let d = ObservabilityClaimDelta::new("claim-6b", 0, 0, 50_000);
+        assert_eq!(d.relative_drift_millionths(), 0);
     }
 
     #[test]

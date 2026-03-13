@@ -199,6 +199,13 @@ fn test_replay_drop_entry_zero_total() {
 }
 
 #[test]
+fn test_replay_drop_entry_nonzero_drop_zero_total_fails_closed() {
+    let e = ReplayDropEntry::new(ReplayDropCategory::EncodingError, 5, 0, 50_000);
+    assert_eq!(e.drop_rate_millionths, 1_000_000);
+    assert!(!e.within_budget);
+}
+
+#[test]
 fn test_replay_drop_entry_display() {
     let e = ReplayDropEntry::new(ReplayDropCategory::PolicyViolation, 5, 100, 50_000);
     let s = format!("{e}");
@@ -1204,6 +1211,12 @@ fn enrichment_claim_delta_one_over_tolerance() {
 #[test]
 fn enrichment_claim_delta_zero_baseline_relative_drift_zero() {
     let d = ObservabilityClaimDelta::new("zero_base", 0, 100_000, 50_000);
+    assert_eq!(d.relative_drift_millionths(), 1_000_000);
+}
+
+#[test]
+fn enrichment_claim_delta_zero_baseline_zero_delta() {
+    let d = ObservabilityClaimDelta::new("zero_base_same", 0, 0, 50_000);
     assert_eq!(d.relative_drift_millionths(), 0);
 }
 

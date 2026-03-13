@@ -344,6 +344,12 @@ fn test_replay_drop_record_new() {
 #[test]
 fn test_replay_drop_record_zero_total() {
     let r = ReplayDropRecord::new("s", ReplayDropKind::Timeout, 5, 0, epoch());
+    assert_eq!(r.drop_rate, 1_000_000);
+}
+
+#[test]
+fn test_replay_drop_record_zero_total_zero_drops() {
+    let r = ReplayDropRecord::new("s", ReplayDropKind::Timeout, 0, 0, epoch());
     assert_eq!(r.drop_rate, 0);
 }
 
@@ -427,7 +433,15 @@ fn test_observability_delta_high_overhead() {
 #[test]
 fn test_observability_delta_zero_uninstrumented() {
     let d = ObservabilityDelta::new(100, 0);
+    assert_eq!(d.overhead_fraction, 1_000_000);
+    assert!(!d.acceptable);
+}
+
+#[test]
+fn test_observability_delta_zero_uninstrumented_zero_instrumented() {
+    let d = ObservabilityDelta::new(0, 0);
     assert_eq!(d.overhead_fraction, 0);
+    assert!(d.acceptable);
 }
 
 #[test]

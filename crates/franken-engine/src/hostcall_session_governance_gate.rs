@@ -354,10 +354,14 @@ impl ReplayDropRecord {
         total_count: u64,
         epoch: SecurityEpoch,
     ) -> Self {
-        let drop_rate = dropped_count
-            .saturating_mul(1_000_000)
-            .checked_div(total_count)
-            .unwrap_or(0);
+        let drop_rate = match total_count {
+            0 if dropped_count == 0 => 0,
+            0 => 1_000_000,
+            _ => dropped_count
+                .saturating_mul(1_000_000)
+                .checked_div(total_count)
+                .unwrap_or(1_000_000),
+        };
         Self {
             session_id: session_id.into(),
             drop_kind,
@@ -462,10 +466,14 @@ impl ObservabilityDelta {
     pub fn new(instrumented_throughput: u64, uninstrumented_throughput: u64) -> Self {
         // overhead = (uninstrumented - instrumented) / uninstrumented
         let diff = uninstrumented_throughput.saturating_sub(instrumented_throughput);
-        let overhead_fraction = diff
-            .saturating_mul(1_000_000)
-            .checked_div(uninstrumented_throughput)
-            .unwrap_or(0);
+        let overhead_fraction = match uninstrumented_throughput {
+            0 if instrumented_throughput == 0 => 0,
+            0 => 1_000_000,
+            _ => diff
+                .saturating_mul(1_000_000)
+                .checked_div(uninstrumented_throughput)
+                .unwrap_or(1_000_000),
+        };
         Self {
             instrumented_throughput,
             uninstrumented_throughput,
@@ -481,10 +489,14 @@ impl ObservabilityDelta {
         max_overhead: u64,
     ) -> Self {
         let diff = uninstrumented_throughput.saturating_sub(instrumented_throughput);
-        let overhead_fraction = diff
-            .saturating_mul(1_000_000)
-            .checked_div(uninstrumented_throughput)
-            .unwrap_or(0);
+        let overhead_fraction = match uninstrumented_throughput {
+            0 if instrumented_throughput == 0 => 0,
+            0 => 1_000_000,
+            _ => diff
+                .saturating_mul(1_000_000)
+                .checked_div(uninstrumented_throughput)
+                .unwrap_or(1_000_000),
+        };
         Self {
             instrumented_throughput,
             uninstrumented_throughput,
@@ -1203,6 +1215,12 @@ mod tests {
     }
 
     #[test]
+    fn replay_drop_nonzero_zero_total_fails_closed() {
+        let r = ReplayDropRecord::new("s1", ReplayDropKind::Timeout, 1, 0, epoch());
+        assert_eq!(r.drop_rate, 1_000_000);
+    }
+
+    #[test]
     fn replay_drop_display() {
         let r = good_drop_record();
         let s = r.to_string();
@@ -1267,7 +1285,15 @@ mod tests {
     #[test]
     fn observability_delta_zero_uninstrumented() {
         let d = ObservabilityDelta::new(100, 0);
+        assert_eq!(d.overhead_fraction, 1_000_000);
+        assert!(!d.acceptable);
+    }
+
+    #[test]
+    fn observability_delta_zero_uninstrumented_zero_instrumented() {
+        let d = ObservabilityDelta::new(0, 0);
         assert_eq!(d.overhead_fraction, 0);
+        assert!(d.acceptable);
     }
 
     #[test]

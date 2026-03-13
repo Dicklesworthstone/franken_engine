@@ -1529,7 +1529,8 @@ fn enrichment_hash_chain_ten_entries() {
     let entries = log.entries();
     for i in 1..entries.len() {
         assert_eq!(
-            entries[i].predecessor_hash, entries[i - 1].entry_hash,
+            entries[i].predecessor_hash,
+            entries[i - 1].entry_hash,
             "chain break at index {i}"
         );
     }
@@ -1568,7 +1569,11 @@ fn enrichment_entry_hash_differs_by_sequence() {
 fn enrichment_inclusion_proof_two_entries() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..2 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1582,7 +1587,11 @@ fn enrichment_inclusion_proof_two_entries() {
 fn enrichment_inclusion_proof_three_entries_odd_tree() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..3 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1596,7 +1605,11 @@ fn enrichment_inclusion_proof_three_entries_odd_tree() {
 fn enrichment_inclusion_proof_power_of_two_eight_entries() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..8 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1610,7 +1623,11 @@ fn enrichment_inclusion_proof_power_of_two_eight_entries() {
 fn enrichment_inclusion_proof_fifteen_entries() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..15 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1624,7 +1641,11 @@ fn enrichment_inclusion_proof_fifteen_entries() {
 fn enrichment_inclusion_proof_root_matches_log_merkle_root() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..5 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1639,7 +1660,11 @@ fn enrichment_inclusion_proof_root_matches_log_merkle_root() {
 fn enrichment_tampered_inclusion_proof_wrong_sibling() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1657,7 +1682,11 @@ fn enrichment_tampered_inclusion_proof_wrong_sibling() {
 fn enrichment_checkpoint_log_length_matches_entries() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..5 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1669,7 +1698,11 @@ fn enrichment_checkpoint_log_length_matches_entries() {
 fn enrichment_checkpoint_merkle_root_matches_log_root() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1681,7 +1714,11 @@ fn enrichment_checkpoint_merkle_root_matches_log_root() {
 fn enrichment_multiple_checkpoints_increasing_seq() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..3 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
         log.create_checkpoint((i + 1) * 1_000_000 + 500, test_epoch())
@@ -1734,7 +1771,11 @@ fn enrichment_auto_checkpoint_fires_at_interval() {
     };
     let mut log = ReplacementLineageLog::new(config);
     for i in 0u64..6 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1750,7 +1791,11 @@ fn enrichment_auto_checkpoint_disabled_when_interval_zero() {
     };
     let mut log = ReplacementLineageLog::new(config);
     for i in 0u64..10 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1792,7 +1837,11 @@ fn enrichment_consistency_proof_three_checkpoints() {
 fn enrichment_consistency_proof_older_newer_mismatch() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
         if i == 1 || i == 3 {
@@ -1814,7 +1863,11 @@ fn enrichment_consistency_proof_older_newer_mismatch() {
 fn enrichment_tampered_consistency_proof_detected() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
         if i == 1 || i == 3 {
@@ -1892,7 +1945,11 @@ fn enrichment_query_combined_slot_kind_and_timestamp() {
         } else {
             ReplacementKind::Demotion
         };
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, kind, (i + 1) * 1_000_000).unwrap();
     }
 
@@ -1915,7 +1972,11 @@ fn enrichment_query_combined_slot_kind_and_timestamp() {
 fn enrichment_query_with_only_max_timestamp() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..5 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -1950,7 +2011,11 @@ fn enrichment_query_no_match_returns_empty() {
 fn enrichment_query_timestamp_exact_boundary_inclusive() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..3 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2016,8 +2081,12 @@ fn enrichment_multi_slot_audit_counts_unique_slots() {
             &format!("new-{i}"),
             (i as u64 + 1) * 1_000_000,
         );
-        log.append(r, ReplacementKind::DelegateToNative, (i as u64 + 1) * 1_000_000)
-            .unwrap();
+        log.append(
+            r,
+            ReplacementKind::DelegateToNative,
+            (i as u64 + 1) * 1_000_000,
+        )
+        .unwrap();
     }
     let audit = log.audit();
     assert_eq!(audit.total_slots, 3);
@@ -2045,7 +2114,11 @@ fn enrichment_multi_slot_query_filters_slot() {
 fn enrichment_verify_slot_lineage_multi_entry() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..5 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2074,7 +2147,11 @@ fn enrichment_verify_slot_lineage_different_slot_empty() {
 fn enrichment_audit_with_multiple_checkpoints() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..6 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
         if i == 2 || i == 5 {
@@ -2094,7 +2171,11 @@ fn enrichment_audit_with_multiple_checkpoints() {
 fn enrichment_audit_after_checkpoint_then_append() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..3 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2102,7 +2183,11 @@ fn enrichment_audit_after_checkpoint_then_append() {
 
     // Append more after checkpoint
     for i in 3u64..5 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2119,7 +2204,11 @@ fn enrichment_audit_after_checkpoint_then_append() {
 fn enrichment_events_count_matches_operations() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..3 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2145,7 +2234,11 @@ fn enrichment_events_all_have_ok_outcome() {
 fn enrichment_events_have_distinct_trace_ids() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..3 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2184,7 +2277,11 @@ fn enrichment_events_policy_id_is_consistent() {
 fn enrichment_serde_roundtrip_populated_log() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..5 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2215,7 +2312,11 @@ fn enrichment_serde_roundtrip_preserves_entries() {
 fn enrichment_serde_roundtrip_preserves_hash_chain() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2231,7 +2332,11 @@ fn enrichment_serde_roundtrip_preserves_hash_chain() {
 fn enrichment_serde_roundtrip_audit_still_valid() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2248,7 +2353,11 @@ fn enrichment_serde_roundtrip_audit_still_valid() {
 fn enrichment_serde_roundtrip_inclusion_proofs_still_verify() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2264,7 +2373,11 @@ fn enrichment_serde_roundtrip_inclusion_proofs_still_verify() {
 fn enrichment_serde_roundtrip_consistency_proof_verifies() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
         if i == 1 || i == 3 {
@@ -2427,7 +2540,11 @@ fn enrichment_evidence_category_all_variants_as_str() {
         EvidenceCategory::Additional,
     ];
     let strs: BTreeSet<&str> = cats.iter().map(|c| c.as_str()).collect();
-    assert_eq!(strs.len(), 5, "all evidence categories must have distinct as_str");
+    assert_eq!(
+        strs.len(),
+        5,
+        "all evidence categories must have distinct as_str"
+    );
 }
 
 #[test]
@@ -2461,8 +2578,16 @@ fn enrichment_deterministic_append_produces_same_log() {
     let mut log1 = ReplacementLineageLog::new(default_config());
     let mut log2 = ReplacementLineageLog::new(default_config());
     for i in 0u64..5 {
-        let r1 = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
-        let r2 = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r1 = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        let r2 = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log1.append(r1, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
         log2.append(r2, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
@@ -2480,8 +2605,16 @@ fn enrichment_deterministic_audit_results_match() {
     let mut log1 = ReplacementLineageLog::new(default_config());
     let mut log2 = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r1 = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
-        let r2 = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r1 = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
+        let r2 = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log1.append(r1, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
         log2.append(r2, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
@@ -2516,7 +2649,11 @@ fn enrichment_slot_lineage_step_has_correct_fields() {
 fn enrichment_slot_lineage_ordering_follows_sequence() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..4 {
-        let r = make_receipt(&format!("v{i}"), &format!("v{}", i + 1), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("v{i}"),
+            &format!("v{}", i + 1),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2553,7 +2690,11 @@ fn enrichment_duplicate_receipt_preserves_original() {
 fn enrichment_twenty_entries_all_proofs_verify() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..20 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2568,7 +2709,11 @@ fn enrichment_twenty_entries_all_proofs_verify() {
 fn enrichment_twenty_entries_audit_chain_valid() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..20 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }
@@ -2723,7 +2868,11 @@ fn enrichment_full_lifecycle_promote_demote_rollback_repromote() {
 fn enrichment_entry_sequences_are_monotonic() {
     let mut log = ReplacementLineageLog::new(default_config());
     for i in 0u64..10 {
-        let r = make_receipt(&format!("old-{i}"), &format!("new-{i}"), (i + 1) * 1_000_000);
+        let r = make_receipt(
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 1_000_000,
+        );
         log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 1_000_000)
             .unwrap();
     }

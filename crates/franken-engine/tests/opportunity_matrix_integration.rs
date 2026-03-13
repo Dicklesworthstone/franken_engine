@@ -1094,10 +1094,7 @@ fn enrichment_hotspot_profile_three_level_stack_uses_leaf_function() {
 
 #[test]
 fn enrichment_hotspot_profile_deeply_nested_stack() {
-    let fg = make_flamegraph(
-        FlamegraphKind::Cpu,
-        vec![("a;b;c;d;e;f;leaf_fn", 75)],
-    );
+    let fg = make_flamegraph(FlamegraphKind::Cpu, vec![("a;b;c;d;e;f;leaf_fn", 75)]);
     let profile = hotspot_profile_from_flamegraphs(&[fg]);
     assert_eq!(profile[0].module, "a");
     assert_eq!(profile[0].function, "leaf_fn");
@@ -1108,11 +1105,7 @@ fn enrichment_hotspot_profile_deeply_nested_stack() {
 fn enrichment_hotspot_profile_multiple_modules_sorted_descending() {
     let fg = make_flamegraph(
         FlamegraphKind::Cpu,
-        vec![
-            ("alpha;run", 10),
-            ("beta;exec", 50),
-            ("gamma;init", 30),
-        ],
+        vec![("alpha;run", 10), ("beta;exec", 50), ("gamma;init", 30)],
     );
     let profile = hotspot_profile_from_flamegraphs(&[fg]);
     assert_eq!(profile.len(), 3);
@@ -1166,10 +1159,7 @@ fn enrichment_hotspot_profile_tiebreak_by_module_name() {
 
 #[test]
 fn enrichment_hotspot_profile_large_sample_counts() {
-    let fg = make_flamegraph(
-        FlamegraphKind::Cpu,
-        vec![("vm;dispatch", u64::MAX / 2)],
-    );
+    let fg = make_flamegraph(FlamegraphKind::Cpu, vec![("vm;dispatch", u64::MAX / 2)]);
     let profile = hotspot_profile_from_flamegraphs(&[fg]);
     assert_eq!(profile[0].sample_count, u64::MAX / 2);
 }
@@ -1258,49 +1248,70 @@ fn enrichment_benchmark_pressure_multiple_slow_cases_stack() {
 #[test]
 fn enrichment_derive_candidates_weight_proportional_to_samples() {
     let hotspots = vec![
-        HotspotProfileEntry { module: "a".into(), function: "f".into(), sample_count: 75 },
-        HotspotProfileEntry { module: "b".into(), function: "g".into(), sample_count: 25 },
+        HotspotProfileEntry {
+            module: "a".into(),
+            function: "f".into(),
+            sample_count: 75,
+        },
+        HotspotProfileEntry {
+            module: "b".into(),
+            function: "g".into(),
+            sample_count: 25,
+        },
     ];
-    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
     assert_eq!(derived[0].hotpath_weight_override_millionths, Some(750_000));
     assert_eq!(derived[1].hotpath_weight_override_millionths, Some(250_000));
 }
 
 #[test]
 fn enrichment_derive_candidates_estimated_speedup_formula() {
-    let hotspots = vec![
-        HotspotProfileEntry { module: "x".into(), function: "y".into(), sample_count: 100 },
-    ];
+    let hotspots = vec![HotspotProfileEntry {
+        module: "x".into(),
+        function: "y".into(),
+        sample_count: 100,
+    }];
     let pressure = 1_500_000;
-    let derived = derive_candidates_from_hotspots(&hotspots, pressure, 1, 100_000, 1_000_000, 1_000_000, 10);
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, pressure, 1, 100_000, 1_000_000, 1_000_000, 10);
     // weight = 1_000_000 (sole hotspot), speedup = 1_000_000 + (1_500_000 * 1_000_000) / 1_000_000 = 2_500_000
     assert_eq!(derived[0].estimated_speedup_millionths, 2_500_000);
 }
 
 #[test]
 fn enrichment_derive_candidates_max_candidates_zero_returns_empty() {
-    let hotspots = vec![
-        HotspotProfileEntry { module: "a".into(), function: "f".into(), sample_count: 100 },
-    ];
-    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 0);
+    let hotspots = vec![HotspotProfileEntry {
+        module: "a".into(),
+        function: "f".into(),
+        sample_count: 100,
+    }];
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 0);
     assert!(derived.is_empty());
 }
 
 #[test]
 fn enrichment_derive_candidates_sanitizes_special_chars() {
-    let hotspots = vec![
-        HotspotProfileEntry { module: "my.module".into(), function: "fn@2!".into(), sample_count: 10 },
-    ];
-    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
+    let hotspots = vec![HotspotProfileEntry {
+        module: "my.module".into(),
+        function: "fn@2!".into(),
+        sample_count: 10,
+    }];
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
     assert_eq!(derived[0].opportunity_id, "opp:my_module:fn_2_");
 }
 
 #[test]
 fn enrichment_derive_candidates_preserves_target_module_and_function() {
-    let hotspots = vec![
-        HotspotProfileEntry { module: "parser".into(), function: "tokenize".into(), sample_count: 50 },
-    ];
-    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 2, 200_000, 800_000, 3_000_000, 10);
+    let hotspots = vec![HotspotProfileEntry {
+        module: "parser".into(),
+        function: "tokenize".into(),
+        sample_count: 50,
+    }];
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, 1_000_000, 2, 200_000, 800_000, 3_000_000, 10);
     assert_eq!(derived[0].target_module, "parser");
     assert_eq!(derived[0].target_function, "tokenize");
 }
@@ -1314,20 +1325,36 @@ fn enrichment_derive_candidates_many_hotspots_capped() {
             sample_count: 1000 - i as u64,
         })
         .collect();
-    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 5);
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 5);
     assert_eq!(derived.len(), 5);
     // First candidate should have highest weight
-    assert!(derived[0].hotpath_weight_override_millionths.unwrap() >= derived[4].hotpath_weight_override_millionths.unwrap());
+    assert!(
+        derived[0].hotpath_weight_override_millionths.unwrap()
+            >= derived[4].hotpath_weight_override_millionths.unwrap()
+    );
 }
 
 #[test]
 fn enrichment_derive_candidates_equal_samples_equal_weight() {
     let hotspots = vec![
-        HotspotProfileEntry { module: "a".into(), function: "f".into(), sample_count: 50 },
-        HotspotProfileEntry { module: "b".into(), function: "g".into(), sample_count: 50 },
+        HotspotProfileEntry {
+            module: "a".into(),
+            function: "f".into(),
+            sample_count: 50,
+        },
+        HotspotProfileEntry {
+            module: "b".into(),
+            function: "g".into(),
+            sample_count: 50,
+        },
     ];
-    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
-    assert_eq!(derived[0].hotpath_weight_override_millionths, derived[1].hotpath_weight_override_millionths);
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
+    assert_eq!(
+        derived[0].hotpath_weight_override_millionths,
+        derived[1].hotpath_weight_override_millionths
+    );
     assert_eq!(derived[0].hotpath_weight_override_millionths, Some(500_000));
 }
 
@@ -1343,7 +1370,10 @@ fn enrichment_score_increases_with_higher_speedup() {
     req.candidates[0].estimated_speedup_millionths = 5_000_000;
     let d_high = run_opportunity_matrix_scoring(&req);
 
-    assert!(d_high.ranked_opportunities[0].score_millionths > d_low.ranked_opportunities[0].score_millionths);
+    assert!(
+        d_high.ranked_opportunities[0].score_millionths
+            > d_low.ranked_opportunities[0].score_millionths
+    );
 }
 
 #[test]
@@ -1356,7 +1386,10 @@ fn enrichment_score_decreases_with_higher_effort() {
     req.candidates[0].engineering_effort_hours_millionths = 10_000_000;
     let d_high_effort = run_opportunity_matrix_scoring(&req);
 
-    assert!(d_low_effort.ranked_opportunities[0].score_millionths > d_high_effort.ranked_opportunities[0].score_millionths);
+    assert!(
+        d_low_effort.ranked_opportunities[0].score_millionths
+            > d_high_effort.ranked_opportunities[0].score_millionths
+    );
 }
 
 #[test]
@@ -1369,7 +1402,10 @@ fn enrichment_score_decreases_with_higher_risk() {
     req.candidates[0].regression_risk_millionths = 900_000;
     let d_high_risk = run_opportunity_matrix_scoring(&req);
 
-    assert!(d_low_risk.ranked_opportunities[0].score_millionths > d_high_risk.ranked_opportunities[0].score_millionths);
+    assert!(
+        d_low_risk.ranked_opportunities[0].score_millionths
+            > d_high_risk.ranked_opportunities[0].score_millionths
+    );
 }
 
 #[test]
@@ -1382,7 +1418,10 @@ fn enrichment_score_decreases_with_higher_complexity() {
     req.candidates[0].implementation_complexity = 5;
     let d_complex = run_opportunity_matrix_scoring(&req);
 
-    assert!(d_simple.ranked_opportunities[0].score_millionths > d_complex.ranked_opportunities[0].score_millionths);
+    assert!(
+        d_simple.ranked_opportunities[0].score_millionths
+            > d_complex.ranked_opportunities[0].score_millionths
+    );
 }
 
 #[test]
@@ -1395,7 +1434,10 @@ fn enrichment_score_increases_with_higher_benchmark_pressure() {
     req.benchmark_pressure_millionths = 2_000_000;
     let d_high_pressure = run_opportunity_matrix_scoring(&req);
 
-    assert!(d_high_pressure.ranked_opportunities[0].score_millionths > d_low_pressure.ranked_opportunities[0].score_millionths);
+    assert!(
+        d_high_pressure.ranked_opportunities[0].score_millionths
+            > d_low_pressure.ranked_opportunities[0].score_millionths
+    );
 }
 
 #[test]
@@ -1408,7 +1450,10 @@ fn enrichment_score_increases_with_higher_security_clearance() {
     req.candidates[0].security_clearance_millionths = 1_000_000;
     let d_high_sec = run_opportunity_matrix_scoring(&req);
 
-    assert!(d_high_sec.ranked_opportunities[0].score_millionths > d_low_sec.ranked_opportunities[0].score_millionths);
+    assert!(
+        d_high_sec.ranked_opportunities[0].score_millionths
+            > d_low_sec.ranked_opportunities[0].score_millionths
+    );
 }
 
 #[test]
@@ -1416,7 +1461,10 @@ fn enrichment_voi_nonnegative_for_valid_inputs() {
     let req = base_request();
     let d = run_opportunity_matrix_scoring(&req);
     for opp in &d.ranked_opportunities {
-        assert!(opp.voi_millionths >= 0, "VOI should be non-negative for standard inputs");
+        assert!(
+            opp.voi_millionths >= 0,
+            "VOI should be non-negative for standard inputs"
+        );
     }
 }
 
@@ -1462,7 +1510,8 @@ fn enrichment_validation_candidate_empty_target_module_still_valid() {
 #[test]
 fn enrichment_validation_multiple_duplicates_first_detected() {
     let mut req = base_request();
-    req.candidates.push(make_candidate("opp-vm-dispatch", "vm", "dispatch"));
+    req.candidates
+        .push(make_candidate("opp-vm-dispatch", "vm", "dispatch"));
     let d = run_opportunity_matrix_scoring(&req);
     assert_eq!(d.outcome, "fail");
     assert_eq!(d.error_code.as_deref(), Some("FE-OPPM-1002"));
@@ -1581,14 +1630,25 @@ fn enrichment_events_started_is_first() {
 #[test]
 fn enrichment_events_completed_is_last() {
     let d = run_opportunity_matrix_scoring(&base_request());
-    assert_eq!(d.events.last().unwrap().event, "opportunity_matrix_completed");
+    assert_eq!(
+        d.events.last().unwrap().event,
+        "opportunity_matrix_completed"
+    );
 }
 
 #[test]
 fn enrichment_events_scored_between_start_and_end() {
     let d = run_opportunity_matrix_scoring(&base_request());
-    let first_scored = d.events.iter().position(|e| e.event == "opportunity_scored").unwrap();
-    let completed = d.events.iter().position(|e| e.event == "opportunity_matrix_completed").unwrap();
+    let first_scored = d
+        .events
+        .iter()
+        .position(|e| e.event == "opportunity_scored")
+        .unwrap();
+    let completed = d
+        .events
+        .iter()
+        .position(|e| e.event == "opportunity_matrix_completed")
+        .unwrap();
     assert!(first_scored > 0);
     assert!(first_scored < completed);
 }
@@ -1604,16 +1664,28 @@ fn enrichment_events_scored_carry_opportunity_id() {
 #[test]
 fn enrichment_events_start_and_complete_have_no_opportunity_id() {
     let d = run_opportunity_matrix_scoring(&base_request());
-    let start = d.events.iter().find(|e| e.event == "opportunity_matrix_started").unwrap();
+    let start = d
+        .events
+        .iter()
+        .find(|e| e.event == "opportunity_matrix_started")
+        .unwrap();
     assert!(start.opportunity_id.is_none());
-    let complete = d.events.iter().find(|e| e.event == "opportunity_matrix_completed").unwrap();
+    let complete = d
+        .events
+        .iter()
+        .find(|e| e.event == "opportunity_matrix_completed")
+        .unwrap();
     assert!(complete.opportunity_id.is_none());
 }
 
 #[test]
 fn enrichment_events_successful_completion_outcome_is_allow_or_deny() {
     let d = run_opportunity_matrix_scoring(&base_request());
-    let complete = d.events.iter().find(|e| e.event == "opportunity_matrix_completed").unwrap();
+    let complete = d
+        .events
+        .iter()
+        .find(|e| e.event == "opportunity_matrix_completed")
+        .unwrap();
     assert!(complete.outcome == "allow" || complete.outcome == "deny");
     assert!(complete.error_code.is_none());
 }
@@ -1747,9 +1819,21 @@ fn enrichment_historical_tracking_preserves_opportunity_id() {
 fn enrichment_three_candidates_ranked_correctly() {
     let mut req = base_request();
     req.hotspots = vec![
-        HotspotProfileEntry { module: "vm".into(), function: "dispatch".into(), sample_count: 70 },
-        HotspotProfileEntry { module: "gc".into(), function: "sweep".into(), sample_count: 20 },
-        HotspotProfileEntry { module: "net".into(), function: "poll".into(), sample_count: 10 },
+        HotspotProfileEntry {
+            module: "vm".into(),
+            function: "dispatch".into(),
+            sample_count: 70,
+        },
+        HotspotProfileEntry {
+            module: "gc".into(),
+            function: "sweep".into(),
+            sample_count: 20,
+        },
+        HotspotProfileEntry {
+            module: "net".into(),
+            function: "poll".into(),
+            sample_count: 10,
+        },
     ];
     req.candidates = vec![
         make_candidate("opp-vm", "vm", "dispatch"),
@@ -1759,22 +1843,29 @@ fn enrichment_three_candidates_ranked_correctly() {
     let d = run_opportunity_matrix_scoring(&req);
     assert_eq!(d.ranked_opportunities.len(), 3);
     // Higher hotpath weight => higher score (other params equal)
-    assert!(d.ranked_opportunities[0].score_millionths >= d.ranked_opportunities[1].score_millionths);
-    assert!(d.ranked_opportunities[1].score_millionths >= d.ranked_opportunities[2].score_millionths);
+    assert!(
+        d.ranked_opportunities[0].score_millionths >= d.ranked_opportunities[1].score_millionths
+    );
+    assert!(
+        d.ranked_opportunities[1].score_millionths >= d.ranked_opportunities[2].score_millionths
+    );
 }
 
 #[test]
 fn enrichment_candidate_with_no_matching_hotspot_rejected() {
     let mut req = base_request();
-    req.hotspots = vec![
-        HotspotProfileEntry { module: "vm".into(), function: "dispatch".into(), sample_count: 100 },
-    ];
-    req.candidates = vec![
-        make_candidate("opp-missing", "nonexistent", "module"),
-    ];
+    req.hotspots = vec![HotspotProfileEntry {
+        module: "vm".into(),
+        function: "dispatch".into(),
+        sample_count: 100,
+    }];
+    req.candidates = vec![make_candidate("opp-missing", "nonexistent", "module")];
     req.candidates[0].hotpath_weight_override_millionths = None;
     let d = run_opportunity_matrix_scoring(&req);
-    assert_eq!(d.ranked_opportunities[0].status, OpportunityStatus::RejectedMissingHotspot);
+    assert_eq!(
+        d.ranked_opportunities[0].status,
+        OpportunityStatus::RejectedMissingHotspot
+    );
 }
 
 #[test]
@@ -1796,15 +1887,26 @@ fn enrichment_mixed_statuses_in_ranked_output() {
     // Candidate 1: should be selected (high score)
     req.candidates[1].estimated_speedup_millionths = 5_000_000;
     let d = run_opportunity_matrix_scoring(&req);
-    let statuses: Vec<OpportunityStatus> = d.ranked_opportunities.iter().map(|o| o.status.clone()).collect();
+    let statuses: Vec<OpportunityStatus> = d
+        .ranked_opportunities
+        .iter()
+        .map(|o| o.status.clone())
+        .collect();
     assert!(statuses.contains(&OpportunityStatus::RejectedSecurityClearance));
-    assert!(statuses.contains(&OpportunityStatus::Selected) || statuses.contains(&OpportunityStatus::RejectedLowScore));
+    assert!(
+        statuses.contains(&OpportunityStatus::Selected)
+            || statuses.contains(&OpportunityStatus::RejectedLowScore)
+    );
 }
 
 #[test]
 fn enrichment_selected_ids_only_contain_selected_candidates() {
     let d = run_opportunity_matrix_scoring(&base_request());
-    let selected_set: BTreeSet<&str> = d.selected_opportunity_ids.iter().map(|s| s.as_str()).collect();
+    let selected_set: BTreeSet<&str> = d
+        .selected_opportunity_ids
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
     for opp in &d.ranked_opportunities {
         if opp.status == OpportunityStatus::Selected {
             assert!(selected_set.contains(opp.opportunity_id.as_str()));
@@ -1821,7 +1923,11 @@ fn enrichment_override_weight_negative_clamped_to_zero() {
     let mut req = base_request();
     req.candidates[0].hotpath_weight_override_millionths = Some(-500_000);
     let d = run_opportunity_matrix_scoring(&req);
-    let opp = d.ranked_opportunities.iter().find(|o| o.opportunity_id == "opp-vm-dispatch").unwrap();
+    let opp = d
+        .ranked_opportunities
+        .iter()
+        .find(|o| o.opportunity_id == "opp-vm-dispatch")
+        .unwrap();
     assert_eq!(opp.hotpath_weight_millionths, 0);
 }
 
@@ -1830,7 +1936,11 @@ fn enrichment_override_weight_exactly_one_million() {
     let mut req = base_request();
     req.candidates[0].hotpath_weight_override_millionths = Some(1_000_000);
     let d = run_opportunity_matrix_scoring(&req);
-    let opp = d.ranked_opportunities.iter().find(|o| o.opportunity_id == "opp-vm-dispatch").unwrap();
+    let opp = d
+        .ranked_opportunities
+        .iter()
+        .find(|o| o.opportunity_id == "opp-vm-dispatch")
+        .unwrap();
     assert_eq!(opp.hotpath_weight_millionths, 1_000_000);
 }
 
@@ -1839,7 +1949,11 @@ fn enrichment_override_weight_zero_means_missing_hotspot() {
     let mut req = base_request();
     req.candidates[0].hotpath_weight_override_millionths = Some(0);
     let d = run_opportunity_matrix_scoring(&req);
-    let opp = d.ranked_opportunities.iter().find(|o| o.opportunity_id == "opp-vm-dispatch").unwrap();
+    let opp = d
+        .ranked_opportunities
+        .iter()
+        .find(|o| o.opportunity_id == "opp-vm-dispatch")
+        .unwrap();
     assert_eq!(opp.status, OpportunityStatus::RejectedMissingHotspot);
 }
 
@@ -1953,7 +2067,8 @@ fn enrichment_e2e_flamegraph_to_scoring_pipeline() {
     );
     assert!(pressure > 1_000_000);
 
-    let candidates = derive_candidates_from_hotspots(&profile, pressure, 2, 200_000, 1_000_000, 2_000_000, 10);
+    let candidates =
+        derive_candidates_from_hotspots(&profile, pressure, 2, 200_000, 1_000_000, 2_000_000, 10);
     assert_eq!(candidates.len(), 3);
 
     let req = OpportunityMatrixRequest {
@@ -2086,7 +2201,10 @@ fn enrichment_scored_opportunity_carries_benchmark_pressure() {
     let req = base_request();
     let d = run_opportunity_matrix_scoring(&req);
     for opp in &d.ranked_opportunities {
-        assert_eq!(opp.benchmark_pressure_millionths, req.benchmark_pressure_millionths);
+        assert_eq!(
+            opp.benchmark_pressure_millionths,
+            req.benchmark_pressure_millionths
+        );
     }
 }
 
@@ -2095,7 +2213,11 @@ fn enrichment_scored_opportunity_target_fields_match_candidate() {
     let req = base_request();
     let d = run_opportunity_matrix_scoring(&req);
     for opp in &d.ranked_opportunities {
-        let candidate = req.candidates.iter().find(|c| c.opportunity_id == opp.opportunity_id).unwrap();
+        let candidate = req
+            .candidates
+            .iter()
+            .find(|c| c.opportunity_id == opp.opportunity_id)
+            .unwrap();
         assert_eq!(opp.target_module, candidate.target_module);
         assert_eq!(opp.target_function, candidate.target_function);
     }
@@ -2106,7 +2228,11 @@ fn enrichment_scored_opportunity_speedup_clamped_at_zero() {
     let mut req = base_request();
     req.candidates[0].estimated_speedup_millionths = -5_000_000;
     let d = run_opportunity_matrix_scoring(&req);
-    let opp = d.ranked_opportunities.iter().find(|o| o.opportunity_id == "opp-vm-dispatch").unwrap();
+    let opp = d
+        .ranked_opportunities
+        .iter()
+        .find(|o| o.opportunity_id == "opp-vm-dispatch")
+        .unwrap();
     assert_eq!(opp.estimated_speedup_millionths, 0);
 }
 
@@ -2182,7 +2308,10 @@ fn enrichment_full_decision_serde_roundtrip_with_history() {
     let back: OpportunityMatrixDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(back.outcome, d.outcome);
     assert_eq!(back.matrix_id, d.matrix_id);
-    assert_eq!(back.ranked_opportunities.len(), d.ranked_opportunities.len());
+    assert_eq!(
+        back.ranked_opportunities.len(),
+        d.ranked_opportunities.len()
+    );
     assert_eq!(back.historical_tracking.len(), d.historical_tracking.len());
     assert_eq!(back.events.len(), d.events.len());
     assert_eq!(back.selected_opportunity_ids, d.selected_opportunity_ids);

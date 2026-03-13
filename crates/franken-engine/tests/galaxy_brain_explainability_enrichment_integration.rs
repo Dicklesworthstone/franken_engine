@@ -31,12 +31,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::galaxy_brain_explainability::{
     ConstraintInteraction, CounterfactualOutcome, DecisionDomain, DecisionExplanation,
     ExplainabilityReport, ExplainedAlternative, ExplanationBuilder, ExplanationIndex,
-    GoverningEquation, RejectionReason, RiskBreakdown, VerbosityLevel,
-    generate_report, SCHEMA_VERSION,
+    GoverningEquation, RejectionReason, RiskBreakdown, SCHEMA_VERSION, VerbosityLevel,
+    generate_report,
 };
-use frankenengine_engine::runtime_decision_theory::{
-    LaneAction, LaneId, RegimeLabel,
-};
+use frankenengine_engine::runtime_decision_theory::{LaneAction, LaneId, RegimeLabel};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -51,7 +49,12 @@ fn lane(name: &str) -> LaneId {
     LaneId(name.to_string())
 }
 
-fn simple_equation(name: &str, result: i64, threshold: Option<i64>, exceeded: bool) -> GoverningEquation {
+fn simple_equation(
+    name: &str,
+    result: i64,
+    threshold: Option<i64>,
+    exceeded: bool,
+) -> GoverningEquation {
     GoverningEquation {
         name: name.to_string(),
         formula: format!("{name}(x)"),
@@ -246,18 +249,20 @@ fn enrichment_governing_equation_plain_language_no_threshold() {
 
 #[test]
 fn enrichment_builder_without_chosen_returns_none() {
-    let result = ExplanationBuilder::new("dec-1".to_string(), epoch(1), DecisionDomain::LaneRouting)
-        .rationale("test".to_string())
-        .build();
+    let result =
+        ExplanationBuilder::new("dec-1".to_string(), epoch(1), DecisionDomain::LaneRouting)
+            .rationale("test".to_string())
+            .build();
     assert!(result.is_none());
 }
 
 #[test]
 fn enrichment_builder_with_chosen_returns_some() {
-    let result = ExplanationBuilder::new("dec-1".to_string(), epoch(1), DecisionDomain::LaneRouting)
-        .chosen(LaneAction::FallbackSafe, 0)
-        .rationale("safe fallback".to_string())
-        .build();
+    let result =
+        ExplanationBuilder::new("dec-1".to_string(), epoch(1), DecisionDomain::LaneRouting)
+            .chosen(LaneAction::FallbackSafe, 0)
+            .rationale("safe fallback".to_string())
+            .build();
     assert!(result.is_some());
     let expl = result.unwrap();
     assert_eq!(expl.chosen_action, LaneAction::FallbackSafe);
@@ -450,9 +455,15 @@ fn enrichment_index_insert_and_retrieve() {
 #[test]
 fn enrichment_index_by_domain() {
     let mut idx = ExplanationIndex::new();
-    idx.insert(build_minimal_explanation("dec-1", DecisionDomain::LaneRouting));
+    idx.insert(build_minimal_explanation(
+        "dec-1",
+        DecisionDomain::LaneRouting,
+    ));
     idx.insert(build_minimal_explanation("dec-2", DecisionDomain::Security));
-    idx.insert(build_minimal_explanation("dec-3", DecisionDomain::LaneRouting));
+    idx.insert(build_minimal_explanation(
+        "dec-3",
+        DecisionDomain::LaneRouting,
+    ));
 
     let lane_routing = idx.by_domain(DecisionDomain::LaneRouting);
     assert_eq!(lane_routing.len(), 2);
@@ -468,7 +479,10 @@ fn enrichment_index_by_domain() {
 fn enrichment_index_by_epoch() {
     let mut idx = ExplanationIndex::new();
     // All built with epoch(1)
-    idx.insert(build_minimal_explanation("dec-1", DecisionDomain::LaneRouting));
+    idx.insert(build_minimal_explanation(
+        "dec-1",
+        DecisionDomain::LaneRouting,
+    ));
     idx.insert(build_minimal_explanation("dec-2", DecisionDomain::Security));
 
     let e1 = idx.by_epoch(&epoch(1));
@@ -481,22 +495,22 @@ fn enrichment_index_by_epoch() {
 #[test]
 fn enrichment_index_with_binding_constraints() {
     let mut idx = ExplanationIndex::new();
-    idx.insert(build_minimal_explanation("dec-1", DecisionDomain::LaneRouting));
+    idx.insert(build_minimal_explanation(
+        "dec-1",
+        DecisionDomain::LaneRouting,
+    ));
 
-    let expl_with_binding = ExplanationBuilder::new(
-        "dec-2".to_string(),
-        epoch(1),
-        DecisionDomain::Security,
-    )
-    .chosen(LaneAction::FallbackSafe, 0)
-    .constraint(ConstraintInteraction {
-        constraint_id: "c1".to_string(),
-        description: "binding constraint".to_string(),
-        binding: true,
-        slack_millionths: 0,
-    })
-    .build()
-    .unwrap();
+    let expl_with_binding =
+        ExplanationBuilder::new("dec-2".to_string(), epoch(1), DecisionDomain::Security)
+            .chosen(LaneAction::FallbackSafe, 0)
+            .constraint(ConstraintInteraction {
+                constraint_id: "c1".to_string(),
+                description: "binding constraint".to_string(),
+                binding: true,
+                slack_millionths: 0,
+            })
+            .build()
+            .unwrap();
     idx.insert(expl_with_binding);
 
     let binding = idx.with_binding_constraints();
@@ -508,17 +522,17 @@ fn enrichment_index_with_binding_constraints() {
 fn enrichment_index_in_regime() {
     let mut idx = ExplanationIndex::new();
     // Default builder uses Normal regime
-    idx.insert(build_minimal_explanation("dec-1", DecisionDomain::LaneRouting));
+    idx.insert(build_minimal_explanation(
+        "dec-1",
+        DecisionDomain::LaneRouting,
+    ));
 
-    let expl_elevated = ExplanationBuilder::new(
-        "dec-2".to_string(),
-        epoch(1),
-        DecisionDomain::Fallback,
-    )
-    .regime(RegimeLabel::Elevated)
-    .chosen(LaneAction::FallbackSafe, 0)
-    .build()
-    .unwrap();
+    let expl_elevated =
+        ExplanationBuilder::new("dec-2".to_string(), epoch(1), DecisionDomain::Fallback)
+            .regime(RegimeLabel::Elevated)
+            .chosen(LaneAction::FallbackSafe, 0)
+            .build()
+            .unwrap();
     idx.insert(expl_elevated);
 
     let normal = idx.in_regime(RegimeLabel::Normal);
@@ -547,7 +561,10 @@ fn enrichment_generate_report_empty_index() {
 #[test]
 fn enrichment_generate_report_with_entries() {
     let mut idx = ExplanationIndex::new();
-    idx.insert(build_minimal_explanation("dec-1", DecisionDomain::LaneRouting));
+    idx.insert(build_minimal_explanation(
+        "dec-1",
+        DecisionDomain::LaneRouting,
+    ));
     idx.insert(build_minimal_explanation("dec-2", DecisionDomain::Security));
 
     let report = generate_report(&idx, &epoch(1));
@@ -615,7 +632,10 @@ fn enrichment_decision_explanation_serde() {
 #[test]
 fn enrichment_explainability_report_serde() {
     let mut idx = ExplanationIndex::new();
-    idx.insert(build_minimal_explanation("dec-1", DecisionDomain::LaneRouting));
+    idx.insert(build_minimal_explanation(
+        "dec-1",
+        DecisionDomain::LaneRouting,
+    ));
     let report = generate_report(&idx, &epoch(1));
     let json = serde_json::to_string(&report).unwrap();
     let restored: ExplainabilityReport = serde_json::from_str(&json).unwrap();

@@ -15,11 +15,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use frankenengine_engine::frx_lockstep_oracle::{
-    FRX_LOCKSTEP_COMPONENT, FRX_LOCKSTEP_REPORT_SCHEMA_VERSION,
-    FRX_LOCKSTEP_TRACE_SCHEMA_VERSION, FrxDivergenceClass, FrxDivergenceDetail,
-    FrxLockstepCaseInput, FrxLockstepCaseResult, FrxLockstepOracleError, FrxLockstepReport,
-    FrxLockstepRunContext, FrxLockstepSummary, FrxObservableTrace, FrxTraceEvent,
-    FrxTraceEventSignature, evaluate_case, load_trace_file, run_lockstep_oracle,
+    FRX_LOCKSTEP_COMPONENT, FRX_LOCKSTEP_REPORT_SCHEMA_VERSION, FRX_LOCKSTEP_TRACE_SCHEMA_VERSION,
+    FrxDivergenceClass, FrxDivergenceDetail, FrxLockstepCaseInput, FrxLockstepCaseResult,
+    FrxLockstepOracleError, FrxLockstepReport, FrxLockstepRunContext, FrxLockstepSummary,
+    FrxObservableTrace, FrxTraceEvent, FrxTraceEventSignature, evaluate_case, load_trace_file,
+    run_lockstep_oracle,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -405,8 +405,7 @@ fn enrichment_run_lockstep_oracle_fixture_ref_filter() {
     write_trace_file(&franken_dir, "beta", &f2);
 
     let ctx = FrxLockstepRunContext::deterministic("t1", "d1", "p1");
-    let report =
-        run_lockstep_oracle(&react_dir, &franken_dir, ctx, Some("alpha")).unwrap();
+    let report = run_lockstep_oracle(&react_dir, &franken_dir, ctx, Some("alpha")).unwrap();
 
     assert_eq!(report.summary.total_cases, 1);
     assert_eq!(report.case_results[0].fixture_ref, "alpha");
@@ -426,8 +425,7 @@ fn enrichment_run_lockstep_oracle_filter_excludes_all_errors() {
     write_trace_file(&franken_dir, "only-fix", &f);
 
     let ctx = FrxLockstepRunContext::deterministic("t1", "d1", "p1");
-    let err = run_lockstep_oracle(&react_dir, &franken_dir, ctx, Some("nonexistent"))
-        .unwrap_err();
+    let err = run_lockstep_oracle(&react_dir, &franken_dir, ctx, Some("nonexistent")).unwrap_err();
     assert!(err.to_string().contains("filter excluded all traces"));
 
     let _ = std::fs::remove_dir_all(&react_dir);
@@ -758,13 +756,7 @@ fn enrichment_debug_all_types_nonempty() {
     assert!(!format!("{:?}", FrxDivergenceClass::SchemaViolation).is_empty());
     assert!(!format!("{:?}", mk_event(1, 0)).is_empty());
     assert!(!format!("{:?}", mk_trace("t", vec![mk_event(1, 0)])).is_empty());
-    assert!(
-        !format!(
-            "{:?}",
-            FrxLockstepRunContext::deterministic("t", "d", "p")
-        )
-        .is_empty()
-    );
+    assert!(!format!("{:?}", FrxLockstepRunContext::deterministic("t", "d", "p")).is_empty());
     assert!(
         !format!(
             "{:?}",
@@ -826,10 +818,7 @@ fn enrichment_schema_version_constants_distinct() {
         FRX_LOCKSTEP_REPORT_SCHEMA_VERSION
     );
     assert_ne!(FRX_LOCKSTEP_TRACE_SCHEMA_VERSION, FRX_LOCKSTEP_COMPONENT);
-    assert_ne!(
-        FRX_LOCKSTEP_REPORT_SCHEMA_VERSION,
-        FRX_LOCKSTEP_COMPONENT
-    );
+    assert_ne!(FRX_LOCKSTEP_REPORT_SCHEMA_VERSION, FRX_LOCKSTEP_COMPONENT);
 }
 
 // =========================================================================

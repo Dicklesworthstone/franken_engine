@@ -30,7 +30,12 @@ use frankenengine_engine::flow_lattice::{
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn make_obligation(id: &str, source: LabelClass, target: Clearance, max_uses: u64) -> DeclassificationObligation {
+fn make_obligation(
+    id: &str,
+    source: LabelClass,
+    target: Clearance,
+    max_uses: u64,
+) -> DeclassificationObligation {
     DeclassificationObligation {
         obligation_id: id.to_string(),
         source_label: source,
@@ -270,10 +275,7 @@ fn enrichment_flow_matrix_public_flows_everywhere() {
         Clearance::SealedSink,
         Clearance::NeverSink,
     ] {
-        assert!(
-            pub_label.can_flow_to(&c),
-            "Public should flow to {c}"
-        );
+        assert!(pub_label.can_flow_to(&c), "Public should flow to {c}");
     }
 }
 
@@ -321,11 +323,7 @@ fn enrichment_assign_label_hostcall_return_all_clearances() {
 #[test]
 fn enrichment_assign_label_computed_joins_all_inputs() {
     let source = DataSource::Computed {
-        input_labels: vec![
-            LabelClass::Public,
-            LabelClass::Internal,
-            LabelClass::Secret,
-        ],
+        input_labels: vec![LabelClass::Public, LabelClass::Internal, LabelClass::Secret],
     };
     assert_eq!(assign_label(&source), LabelClass::Secret);
 }
@@ -360,12 +358,30 @@ fn enrichment_assign_label_policy_protected() {
 
 #[test]
 fn enrichment_sink_clearance_all_kinds() {
-    assert_eq!(sink_clearance(&SinkKind::NetworkEgress), Clearance::NeverSink);
-    assert_eq!(sink_clearance(&SinkKind::SubprocessIpc), Clearance::NeverSink);
-    assert_eq!(sink_clearance(&SinkKind::PersistenceExport), Clearance::SealedSink);
-    assert_eq!(sink_clearance(&SinkKind::DeclassificationEndpoint), Clearance::SealedSink);
-    assert_eq!(sink_clearance(&SinkKind::LoggingRedacted), Clearance::OpenSink);
-    assert_eq!(sink_clearance(&SinkKind::MetricsExport), Clearance::RestrictedSink);
+    assert_eq!(
+        sink_clearance(&SinkKind::NetworkEgress),
+        Clearance::NeverSink
+    );
+    assert_eq!(
+        sink_clearance(&SinkKind::SubprocessIpc),
+        Clearance::NeverSink
+    );
+    assert_eq!(
+        sink_clearance(&SinkKind::PersistenceExport),
+        Clearance::SealedSink
+    );
+    assert_eq!(
+        sink_clearance(&SinkKind::DeclassificationEndpoint),
+        Clearance::SealedSink
+    );
+    assert_eq!(
+        sink_clearance(&SinkKind::LoggingRedacted),
+        Clearance::OpenSink
+    );
+    assert_eq!(
+        sink_clearance(&SinkKind::MetricsExport),
+        Clearance::RestrictedSink
+    );
 }
 
 #[test]
@@ -586,9 +602,7 @@ fn enrichment_error_display_all_variants_distinct() {
         FlowLatticeError::DuplicateObligation {
             obligation_id: "c".into(),
         },
-        FlowLatticeError::FlowBlocked {
-            detail: "d".into(),
-        },
+        FlowLatticeError::FlowBlocked { detail: "d".into() },
     ];
     let strings: BTreeSet<_> = variants.iter().map(|e| e.to_string()).collect();
     assert_eq!(strings.len(), 4);
@@ -737,13 +751,5 @@ fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", SinkKind::NetworkEgress).is_empty());
     assert!(!format!("{:?}", DataSource::Literal).is_empty());
     assert!(!format!("{:?}", FlowCheckResult::LegalByLattice).is_empty());
-    assert!(
-        !format!(
-            "{:?}",
-            FlowLatticeError::FlowBlocked {
-                detail: "x".into()
-            }
-        )
-        .is_empty()
-    );
+    assert!(!format!("{:?}", FlowLatticeError::FlowBlocked { detail: "x".into() }).is_empty());
 }

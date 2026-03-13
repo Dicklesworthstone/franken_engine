@@ -23,14 +23,13 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::capability_token::PrincipalId;
+use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::SigningKey;
-use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::threshold_signing::{
     CreateThresholdPolicyInput, ShareHolderId, ShareRefreshResult, ThresholdCeremony,
-    ThresholdError, ThresholdEventType, ThresholdScope,
-    ThresholdSigningPolicy, threshold_ceremony_schema_id, threshold_policy_schema,
-    threshold_policy_schema_id,
+    ThresholdError, ThresholdEventType, ThresholdScope, ThresholdSigningPolicy,
+    threshold_ceremony_schema_id, threshold_policy_schema, threshold_policy_schema_id,
 };
 
 // ---------------------------------------------------------------------------
@@ -324,8 +323,12 @@ fn enrichment_ceremony_participants_deterministic_order() {
     .unwrap();
 
     // Submit in reverse order
-    ceremony.submit_partial(&k[2], b"data", DeterministicTimestamp(1)).unwrap();
-    ceremony.submit_partial(&k[0], b"data", DeterministicTimestamp(2)).unwrap();
+    ceremony
+        .submit_partial(&k[2], b"data", DeterministicTimestamp(1))
+        .unwrap();
+    ceremony
+        .submit_partial(&k[0], b"data", DeterministicTimestamp(2))
+        .unwrap();
 
     let participants = ceremony.participants();
     // BTreeMap keys are sorted
@@ -507,13 +510,7 @@ fn enrichment_error_display_all_nonempty() {
 fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", ThresholdScope::EmergencyRevocation).is_empty());
     assert!(!format!("{:?}", ShareHolderId([0; 32])).is_empty());
-    assert!(
-        !format!(
-            "{:?}",
-            ThresholdError::CeremonyAlreadyFinalized
-        )
-        .is_empty()
-    );
+    assert!(!format!("{:?}", ThresholdError::CeremonyAlreadyFinalized).is_empty());
     assert!(
         !format!(
             "{:?}",

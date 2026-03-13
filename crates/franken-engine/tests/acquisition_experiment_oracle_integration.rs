@@ -1061,7 +1061,7 @@ fn staleness_penalty_increases_with_age() {
 fn enrichment_experiment_kind_clone_eq() {
     for kind in ExperimentKind::ALL {
         let cloned = kind.clone();
-        assert_eq!(*kind, *cloned);
+        assert_eq!(*kind, cloned);
     }
 }
 
@@ -1121,7 +1121,7 @@ fn enrichment_experiment_kind_all_length_matches_serde_variants() {
 fn enrichment_acquisition_signal_clone_eq() {
     for sig in AcquisitionSignal::ALL {
         let cloned = sig.clone();
-        assert_eq!(*sig, *cloned);
+        assert_eq!(*sig, cloned);
     }
 }
 
@@ -1365,7 +1365,10 @@ fn enrichment_proposal_with_multiple_signals() {
         "multiple signals test".to_string(),
     );
     assert_eq!(p.signals.len(), 3);
-    assert_ne!(p.content_hash, frankenengine_engine::hash_tiers::ContentHash::compute(b""));
+    assert_ne!(
+        p.content_hash,
+        frankenengine_engine::hash_tiers::ContentHash::compute(b"")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1452,10 +1455,7 @@ fn enrichment_score_proposal_signal_weights_recorded() {
         Some(&2_000_000)
     );
     // coverage_debt not in custom weights -> default MILLIONTHS
-    assert_eq!(
-        score.signal_weights.get("coverage_debt"),
-        Some(&MILLIONTHS)
-    );
+    assert_eq!(score.signal_weights.get("coverage_debt"), Some(&MILLIONTHS));
 }
 
 #[test]
@@ -1590,12 +1590,9 @@ fn enrichment_select_experiments_plan_id_format() {
         400_000,
         100_000,
     );
-    let plan = acquisition_experiment_oracle::select_experiments(
-        vec![p],
-        1_000_000,
-        &default_weights(),
-    )
-    .unwrap();
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p], 1_000_000, &default_weights())
+            .unwrap();
     assert!(
         plan.plan_id.starts_with("plan-"),
         "plan_id should start with 'plan-': {}",
@@ -1622,12 +1619,9 @@ fn enrichment_select_experiments_budget_accounting() {
         200_000,
     );
     let budget = 1_000_000;
-    let plan = acquisition_experiment_oracle::select_experiments(
-        vec![p1, p2],
-        budget,
-        &default_weights(),
-    )
-    .unwrap();
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p1, p2], budget, &default_weights())
+            .unwrap();
     let total_cost: u64 = plan
         .proposals
         .iter()
@@ -1672,26 +1666,37 @@ fn enrichment_select_experiments_greedy_skips_too_expensive() {
 #[test]
 fn enrichment_select_experiments_all_seven_kinds() {
     let kinds_signals = vec![
-        (ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure),
-        (ExperimentKind::CorpusAddition, AcquisitionSignal::CoverageDebt),
-        (ExperimentKind::AdversarialProbe, AcquisitionSignal::AdversarialOpportunity),
-        (ExperimentKind::ShiftValidation, AcquisitionSignal::StalenessAlarm),
-        (ExperimentKind::CoverageRecovery, AcquisitionSignal::PersistentHole),
+        (
+            ExperimentKind::BoardCellProbe,
+            AcquisitionSignal::LiveShiftPressure,
+        ),
+        (
+            ExperimentKind::CorpusAddition,
+            AcquisitionSignal::CoverageDebt,
+        ),
+        (
+            ExperimentKind::AdversarialProbe,
+            AcquisitionSignal::AdversarialOpportunity,
+        ),
+        (
+            ExperimentKind::ShiftValidation,
+            AcquisitionSignal::StalenessAlarm,
+        ),
+        (
+            ExperimentKind::CoverageRecovery,
+            AcquisitionSignal::PersistentHole,
+        ),
         (ExperimentKind::HoleFilling, AcquisitionSignal::RatchetGap),
-        (ExperimentKind::DarkMatterExploration, AcquisitionSignal::SemanticDarkMatter),
+        (
+            ExperimentKind::DarkMatterExploration,
+            AcquisitionSignal::SemanticDarkMatter,
+        ),
     ];
     let proposals: Vec<ExperimentProposal> = kinds_signals
         .into_iter()
         .enumerate()
         .map(|(i, (kind, sig))| {
-            make_proposal(
-                &format!("k{i}"),
-                kind,
-                sig,
-                500_000,
-                400_000,
-                100_000,
-            )
+            make_proposal(&format!("k{i}"), kind, sig, 500_000, 400_000, 100_000)
         })
         .collect();
     let plan = acquisition_experiment_oracle::select_experiments(
@@ -1715,12 +1720,9 @@ fn enrichment_select_experiments_exact_budget() {
         400_000,
         500_000,
     );
-    let plan = acquisition_experiment_oracle::select_experiments(
-        vec![p],
-        500_000,
-        &default_weights(),
-    )
-    .unwrap();
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p], 500_000, &default_weights())
+            .unwrap();
     assert_eq!(plan.proposals.len(), 1);
     assert_eq!(plan.budget_remaining_millionths, 0);
 }
@@ -1735,12 +1737,9 @@ fn enrichment_select_experiments_plan_hash_not_empty() {
         400_000,
         100_000,
     );
-    let plan = acquisition_experiment_oracle::select_experiments(
-        vec![p],
-        1_000_000,
-        &default_weights(),
-    )
-    .unwrap();
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p], 1_000_000, &default_weights())
+            .unwrap();
     assert_ne!(
         plan.content_hash,
         frankenengine_engine::hash_tiers::ContentHash::compute(b"")
@@ -2125,9 +2124,7 @@ fn enrichment_is_justified_high_threshold() {
     );
     // threshold = 10.0 => min_gain = 100_000 * 10M / 1M = 1_000_000
     // gain(500_000) < 1_000_000 => not justified
-    assert!(!acquisition_experiment_oracle::is_justified(
-        &p, 10_000_000
-    ));
+    assert!(!acquisition_experiment_oracle::is_justified(&p, 10_000_000));
 }
 
 // ---------------------------------------------------------------------------
@@ -2200,7 +2197,7 @@ fn enrichment_diversity_bonus_duplicates_dont_increase() {
         400_000,
         100_000,
     );
-    let single_bonus = acquisition_experiment_oracle::diversity_bonus(&[p1.clone()]);
+    let single_bonus = acquisition_experiment_oracle::diversity_bonus(std::slice::from_ref(&p1));
     let double_bonus = acquisition_experiment_oracle::diversity_bonus(&[p1, p2]);
     assert_eq!(
         single_bonus, double_bonus,
@@ -2243,16 +2240,16 @@ fn enrichment_staleness_penalty_max_fresh_zero() {
 #[test]
 fn enrichment_staleness_penalty_zero_age_zero_max() {
     // age=0, max=0 => 0 <= 0, no penalty
-    assert_eq!(
-        acquisition_experiment_oracle::staleness_penalty(0, 0),
-        0
-    );
+    assert_eq!(acquisition_experiment_oracle::staleness_penalty(0, 0), 0);
 }
 
 #[test]
 fn enrichment_staleness_penalty_capped_at_millionths() {
     let penalty = acquisition_experiment_oracle::staleness_penalty(1_000_000, 1);
-    assert_eq!(penalty, MILLIONTHS, "penalty should be capped at MILLIONTHS");
+    assert_eq!(
+        penalty, MILLIONTHS,
+        "penalty should be capped at MILLIONTHS"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2281,10 +2278,7 @@ fn enrichment_partition_by_kind_single_kind() {
         .collect();
     let partitioned = acquisition_experiment_oracle::partition_by_kind(&proposals);
     assert_eq!(partitioned.len(), 1);
-    assert_eq!(
-        partitioned[&ExperimentKind::BoardCellProbe].len(),
-        3
-    );
+    assert_eq!(partitioned[&ExperimentKind::BoardCellProbe].len(), 3);
 }
 
 #[test]
@@ -2365,7 +2359,10 @@ fn enrichment_find_dominant_signal_no_signals_on_proposals() {
         100_000,
         "no signals".to_string(),
     );
-    assert_eq!(acquisition_experiment_oracle::find_dominant_signal(&[p]), None);
+    assert_eq!(
+        acquisition_experiment_oracle::find_dominant_signal(&[p]),
+        None
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2419,8 +2416,7 @@ fn enrichment_allocate_budget_sums_to_total() {
         100_000,
     );
     let total_budget = 1_000_000;
-    let alloc =
-        acquisition_experiment_oracle::allocate_budget_by_kind(&[p1, p2, p3], total_budget);
+    let alloc = acquisition_experiment_oracle::allocate_budget_by_kind(&[p1, p2, p3], total_budget);
     let sum: u64 = alloc.values().sum();
     assert_eq!(
         sum, total_budget,
@@ -2513,7 +2509,7 @@ fn enrichment_exploration_ratio_proportional_to_cost() {
 
 #[test]
 fn enrichment_validate_plan_detects_id_mismatch() {
-    use frankenengine_engine::acquisition_experiment_oracle::{AcquisitionScore, ExperimentPlan};
+    use frankenengine_engine::acquisition_experiment_oracle::ExperimentPlan;
     use frankenengine_engine::security_epoch::SecurityEpoch;
     let p = make_proposal(
         "valid-id",
@@ -2560,12 +2556,9 @@ fn enrichment_summarise_plan_includes_all_experiments() {
             )
         })
         .collect();
-    let plan = acquisition_experiment_oracle::select_experiments(
-        proposals,
-        1_000_000,
-        &default_weights(),
-    )
-    .unwrap();
+    let plan =
+        acquisition_experiment_oracle::select_experiments(proposals, 1_000_000, &default_weights())
+            .unwrap();
     let summary = acquisition_experiment_oracle::summarise_plan(&plan);
     assert!(summary.contains("[0]"));
     assert!(summary.contains("[1]"));
@@ -2584,12 +2577,9 @@ fn enrichment_summarise_plan_includes_justification() {
         100_000,
         "this is the justification text".to_string(),
     );
-    let plan = acquisition_experiment_oracle::select_experiments(
-        vec![p],
-        1_000_000,
-        &default_weights(),
-    )
-    .unwrap();
+    let plan =
+        acquisition_experiment_oracle::select_experiments(vec![p], 1_000_000, &default_weights())
+            .unwrap();
     let summary = acquisition_experiment_oracle::summarise_plan(&plan);
     assert!(summary.contains("this is the justification text"));
 }

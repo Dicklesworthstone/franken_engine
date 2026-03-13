@@ -1254,15 +1254,39 @@ fn enrichment_storage_event_without_error_code_roundtrip() {
 #[test]
 fn enrichment_storage_error_all_codes_start_with_fe_stor() {
     let errors: Vec<StorageError> = vec![
-        StorageError::InvalidContext { field: "f".to_string() },
-        StorageError::InvalidKey { key: "k".to_string() },
-        StorageError::InvalidQuery { detail: "d".to_string() },
-        StorageError::NotFound { store: StoreKind::ReplayIndex, key: "k".to_string() },
-        StorageError::SchemaVersionMismatch { expected: 1, actual: 2 },
-        StorageError::MigrationFailed { from: 1, to: 3, reason: "r".to_string() },
-        StorageError::IntegrityViolation { store: StoreKind::PlasWitness, detail: "d".to_string() },
-        StorageError::BackendUnavailable { backend: "b".to_string(), detail: "d".to_string() },
-        StorageError::WriteRejected { detail: "d".to_string() },
+        StorageError::InvalidContext {
+            field: "f".to_string(),
+        },
+        StorageError::InvalidKey {
+            key: "k".to_string(),
+        },
+        StorageError::InvalidQuery {
+            detail: "d".to_string(),
+        },
+        StorageError::NotFound {
+            store: StoreKind::ReplayIndex,
+            key: "k".to_string(),
+        },
+        StorageError::SchemaVersionMismatch {
+            expected: 1,
+            actual: 2,
+        },
+        StorageError::MigrationFailed {
+            from: 1,
+            to: 3,
+            reason: "r".to_string(),
+        },
+        StorageError::IntegrityViolation {
+            store: StoreKind::PlasWitness,
+            detail: "d".to_string(),
+        },
+        StorageError::BackendUnavailable {
+            backend: "b".to_string(),
+            detail: "d".to_string(),
+        },
+        StorageError::WriteRejected {
+            detail: "d".to_string(),
+        },
     ];
     for err in &errors {
         assert!(
@@ -1276,15 +1300,39 @@ fn enrichment_storage_error_all_codes_start_with_fe_stor() {
 #[test]
 fn enrichment_storage_error_codes_are_sequential() {
     let errors: Vec<StorageError> = vec![
-        StorageError::InvalidContext { field: "f".to_string() },
-        StorageError::InvalidKey { key: "k".to_string() },
-        StorageError::InvalidQuery { detail: "d".to_string() },
-        StorageError::NotFound { store: StoreKind::ReplayIndex, key: "k".to_string() },
-        StorageError::SchemaVersionMismatch { expected: 1, actual: 2 },
-        StorageError::MigrationFailed { from: 1, to: 3, reason: "r".to_string() },
-        StorageError::IntegrityViolation { store: StoreKind::PlasWitness, detail: "d".to_string() },
-        StorageError::BackendUnavailable { backend: "b".to_string(), detail: "d".to_string() },
-        StorageError::WriteRejected { detail: "d".to_string() },
+        StorageError::InvalidContext {
+            field: "f".to_string(),
+        },
+        StorageError::InvalidKey {
+            key: "k".to_string(),
+        },
+        StorageError::InvalidQuery {
+            detail: "d".to_string(),
+        },
+        StorageError::NotFound {
+            store: StoreKind::ReplayIndex,
+            key: "k".to_string(),
+        },
+        StorageError::SchemaVersionMismatch {
+            expected: 1,
+            actual: 2,
+        },
+        StorageError::MigrationFailed {
+            from: 1,
+            to: 3,
+            reason: "r".to_string(),
+        },
+        StorageError::IntegrityViolation {
+            store: StoreKind::PlasWitness,
+            detail: "d".to_string(),
+        },
+        StorageError::BackendUnavailable {
+            backend: "b".to_string(),
+            detail: "d".to_string(),
+        },
+        StorageError::WriteRejected {
+            detail: "d".to_string(),
+        },
     ];
     for (i, err) in errors.iter().enumerate() {
         let expected_code = format!("FE-STOR-{:04}", i + 1);
@@ -1565,8 +1613,16 @@ fn enrichment_in_memory_delete_idempotent() {
             &ctx,
         )
         .expect("put");
-    assert!(adapter.delete(StoreKind::ReplayIndex, "k", &ctx).expect("delete 1"));
-    assert!(!adapter.delete(StoreKind::ReplayIndex, "k", &ctx).expect("delete 2"));
+    assert!(
+        adapter
+            .delete(StoreKind::ReplayIndex, "k", &ctx)
+            .expect("delete 1")
+    );
+    assert!(
+        !adapter
+            .delete(StoreKind::ReplayIndex, "k", &ctx)
+            .expect("delete 2")
+    );
 }
 
 #[test]
@@ -1574,15 +1630,39 @@ fn enrichment_in_memory_delete_does_not_affect_other_keys() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
     adapter
-        .put(StoreKind::ReplayIndex, "a".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "a".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put a");
     adapter
-        .put(StoreKind::ReplayIndex, "b".to_string(), vec![2], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "b".to_string(),
+            vec![2],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put b");
-    adapter.delete(StoreKind::ReplayIndex, "a", &ctx).expect("delete a");
+    adapter
+        .delete(StoreKind::ReplayIndex, "a", &ctx)
+        .expect("delete a");
 
-    assert!(adapter.get(StoreKind::ReplayIndex, "a", &ctx).expect("get a").is_none());
-    assert!(adapter.get(StoreKind::ReplayIndex, "b", &ctx).expect("get b").is_some());
+    assert!(
+        adapter
+            .get(StoreKind::ReplayIndex, "a", &ctx)
+            .expect("get a")
+            .is_none()
+    );
+    assert!(
+        adapter
+            .get(StoreKind::ReplayIndex, "b", &ctx)
+            .expect("get b")
+            .is_some()
+    );
 }
 
 // --- 12. InMemoryStorageAdapter query edge cases ---
@@ -1613,7 +1693,13 @@ fn enrichment_in_memory_query_prefix_no_match_returns_empty() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
     adapter
-        .put(StoreKind::ReplayIndex, "run/1".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "run/1".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put");
     let rows = adapter
         .query(
@@ -1636,7 +1722,13 @@ fn enrichment_in_memory_query_metadata_filter_no_match_returns_empty() {
     let mut meta = BTreeMap::new();
     meta.insert("env".to_string(), "prod".to_string());
     adapter
-        .put(StoreKind::PolicyCache, "p/1".to_string(), vec![1], meta, &ctx)
+        .put(
+            StoreKind::PolicyCache,
+            "p/1".to_string(),
+            vec![1],
+            meta,
+            &ctx,
+        )
         .expect("put");
 
     let mut filters = BTreeMap::new();
@@ -1664,13 +1756,25 @@ fn enrichment_in_memory_query_multiple_metadata_filters_intersect() {
     meta_both.insert("env".to_string(), "prod".to_string());
     meta_both.insert("region".to_string(), "us-east".to_string());
     adapter
-        .put(StoreKind::PolicyCache, "p/a".to_string(), vec![1], meta_both, &ctx)
+        .put(
+            StoreKind::PolicyCache,
+            "p/a".to_string(),
+            vec![1],
+            meta_both,
+            &ctx,
+        )
         .expect("put a");
 
     let mut meta_partial = BTreeMap::new();
     meta_partial.insert("env".to_string(), "prod".to_string());
     adapter
-        .put(StoreKind::PolicyCache, "p/b".to_string(), vec![2], meta_partial, &ctx)
+        .put(
+            StoreKind::PolicyCache,
+            "p/b".to_string(),
+            vec![2],
+            meta_partial,
+            &ctx,
+        )
         .expect("put b");
 
     let mut filters = BTreeMap::new();
@@ -1696,7 +1800,13 @@ fn enrichment_in_memory_query_limit_larger_than_result_set() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
     adapter
-        .put(StoreKind::ReplayIndex, "k/1".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "k/1".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put");
     let rows = adapter
         .query(
@@ -1717,13 +1827,31 @@ fn enrichment_in_memory_query_limit_one_returns_lexicographically_first() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
     adapter
-        .put(StoreKind::BenchmarkLedger, "z/key".to_string(), vec![3], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::BenchmarkLedger,
+            "z/key".to_string(),
+            vec![3],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put z");
     adapter
-        .put(StoreKind::BenchmarkLedger, "a/key".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::BenchmarkLedger,
+            "a/key".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put a");
     adapter
-        .put(StoreKind::BenchmarkLedger, "m/key".to_string(), vec![2], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::BenchmarkLedger,
+            "m/key".to_string(),
+            vec![2],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put m");
 
     let rows = adapter
@@ -1757,7 +1885,13 @@ fn enrichment_in_memory_query_with_prefix_and_limit() {
             .expect("put");
     }
     adapter
-        .put(StoreKind::ReplayIndex, "other/x".to_string(), vec![99], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "other/x".to_string(),
+            vec![99],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put other");
 
     let rows = adapter
@@ -1809,7 +1943,13 @@ fn enrichment_in_memory_batch_atomicity_on_second_invalid_key() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
     adapter
-        .put(StoreKind::ReplayIndex, "seed".to_string(), vec![0], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "seed".to_string(),
+            vec![0],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("seed");
 
     let entries = vec![
@@ -1829,7 +1969,9 @@ fn enrichment_in_memory_batch_atomicity_on_second_invalid_key() {
             metadata: BTreeMap::new(),
         },
     ];
-    let err = adapter.put_batch(StoreKind::ReplayIndex, entries, &ctx).expect_err("should fail");
+    let err = adapter
+        .put_batch(StoreKind::ReplayIndex, entries, &ctx)
+        .expect_err("should fail");
     assert_eq!(err.code(), "FE-STOR-0002");
 
     let rows = adapter
@@ -1844,7 +1986,13 @@ fn enrichment_in_memory_batch_overwrites_existing_keys() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
     adapter
-        .put(StoreKind::EvidenceIndex, "k".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::EvidenceIndex,
+            "k".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("initial put");
 
     let entries = vec![BatchPutEntry {
@@ -1852,7 +2000,9 @@ fn enrichment_in_memory_batch_overwrites_existing_keys() {
         value: vec![99],
         metadata: BTreeMap::new(),
     }];
-    adapter.put_batch(StoreKind::EvidenceIndex, entries, &ctx).expect("batch overwrite");
+    adapter
+        .put_batch(StoreKind::EvidenceIndex, entries, &ctx)
+        .expect("batch overwrite");
 
     let loaded = adapter
         .get(StoreKind::EvidenceIndex, "k", &ctx)
@@ -1866,7 +2016,9 @@ fn enrichment_in_memory_batch_overwrites_existing_keys() {
 #[test]
 fn enrichment_in_memory_migrate_same_version_is_noop() {
     let mut adapter = InMemoryStorageAdapter::new();
-    let receipt = adapter.migrate_to(STORAGE_SCHEMA_VERSION).expect("same-version migration");
+    let receipt = adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION)
+        .expect("same-version migration");
     assert_eq!(receipt.from_version, receipt.to_version);
     assert_eq!(receipt.from_version, STORAGE_SCHEMA_VERSION);
 }
@@ -1874,7 +2026,9 @@ fn enrichment_in_memory_migrate_same_version_is_noop() {
 #[test]
 fn enrichment_in_memory_migrate_downgrade_rejected() {
     let mut adapter = InMemoryStorageAdapter::new();
-    adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).expect("upgrade");
+    adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION + 1)
+        .expect("upgrade");
     let err = adapter
         .migrate_to(STORAGE_SCHEMA_VERSION)
         .expect_err("downgrade should fail");
@@ -1886,21 +2040,27 @@ fn enrichment_in_memory_migrate_downgrade_rejected() {
 #[test]
 fn enrichment_in_memory_migration_receipt_includes_backend_name() {
     let mut adapter = InMemoryStorageAdapter::new();
-    let receipt = adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).expect("migrate");
+    let receipt = adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION + 1)
+        .expect("migrate");
     assert_eq!(receipt.backend, "in_memory");
 }
 
 #[test]
 fn enrichment_in_memory_migration_state_hash_changes_on_version_bump() {
     let mut adapter = InMemoryStorageAdapter::new();
-    let receipt = adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).expect("migrate");
+    let receipt = adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION + 1)
+        .expect("migrate");
     assert_ne!(receipt.state_hash_before, receipt.state_hash_after);
 }
 
 #[test]
 fn enrichment_in_memory_ensure_schema_version_after_migration() {
     let mut adapter = InMemoryStorageAdapter::new();
-    adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).expect("migrate");
+    adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION + 1)
+        .expect("migrate");
 
     adapter
         .ensure_schema_version(STORAGE_SCHEMA_VERSION + 1)
@@ -1918,7 +2078,13 @@ fn enrichment_in_memory_ensure_schema_version_after_migration() {
 fn enrichment_in_memory_fail_writes_put_emits_error_event() {
     let mut adapter = InMemoryStorageAdapter::new().with_fail_writes(true);
     let ctx = context();
-    let _ = adapter.put(StoreKind::ReplayIndex, "k".to_string(), vec![1], BTreeMap::new(), &ctx);
+    let _ = adapter.put(
+        StoreKind::ReplayIndex,
+        "k".to_string(),
+        vec![1],
+        BTreeMap::new(),
+        &ctx,
+    );
     let events = adapter.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].outcome, "error");
@@ -1993,10 +2159,22 @@ fn enrichment_in_memory_events_carry_distinct_contexts() {
     let ctx2 = EventContext::new("trace-B", "dec-B", "pol-B").expect("ctx2");
 
     adapter
-        .put(StoreKind::ReplayIndex, "k1".to_string(), vec![1], BTreeMap::new(), &ctx1)
+        .put(
+            StoreKind::ReplayIndex,
+            "k1".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx1,
+        )
         .expect("put 1");
     adapter
-        .put(StoreKind::ReplayIndex, "k2".to_string(), vec![2], BTreeMap::new(), &ctx2)
+        .put(
+            StoreKind::ReplayIndex,
+            "k2".to_string(),
+            vec![2],
+            BTreeMap::new(),
+            &ctx2,
+        )
         .expect("put 2");
 
     let events = adapter.events();
@@ -2060,7 +2238,12 @@ fn enrichment_in_memory_stores_are_fully_isolated() {
         let rows = adapter
             .query(kind, &StoreQuery::default(), &ctx)
             .expect("query");
-        assert_eq!(rows.len(), 1, "store {:?} should have exactly 1 record", kind);
+        assert_eq!(
+            rows.len(),
+            1,
+            "store {:?} should have exactly 1 record",
+            kind
+        );
         assert_eq!(rows[0].store, kind);
     }
 }
@@ -2071,15 +2254,39 @@ fn enrichment_in_memory_delete_in_one_store_does_not_affect_another() {
     let ctx = context();
 
     adapter
-        .put(StoreKind::ReplayIndex, "shared".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "shared".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put replay");
     adapter
-        .put(StoreKind::EvidenceIndex, "shared".to_string(), vec![2], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::EvidenceIndex,
+            "shared".to_string(),
+            vec![2],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put evidence");
 
-    adapter.delete(StoreKind::ReplayIndex, "shared", &ctx).expect("delete");
-    assert!(adapter.get(StoreKind::ReplayIndex, "shared", &ctx).expect("get").is_none());
-    assert!(adapter.get(StoreKind::EvidenceIndex, "shared", &ctx).expect("get").is_some());
+    adapter
+        .delete(StoreKind::ReplayIndex, "shared", &ctx)
+        .expect("delete");
+    assert!(
+        adapter
+            .get(StoreKind::ReplayIndex, "shared", &ctx)
+            .expect("get")
+            .is_none()
+    );
+    assert!(
+        adapter
+            .get(StoreKind::EvidenceIndex, "shared", &ctx)
+            .expect("get")
+            .is_some()
+    );
 }
 
 // --- 18. FrankensqliteStorageAdapter edge cases ---
@@ -2090,7 +2297,13 @@ fn enrichment_frankensqlite_put_empty_value_succeeds() {
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
     let ctx = context();
     let record = adapter
-        .put(StoreKind::PolicyCache, "empty".to_string(), vec![], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::PolicyCache,
+            "empty".to_string(),
+            vec![],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("empty value put");
     assert!(record.value.is_empty());
 }
@@ -2134,7 +2347,13 @@ fn enrichment_frankensqlite_put_rejects_whitespace_only_key() {
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
     let ctx = context();
     let err = adapter
-        .put(StoreKind::ReplayIndex, "\t".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "\t".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect_err("tab-only key should fail");
     assert_eq!(err.code(), "FE-STOR-0002");
 }
@@ -2167,7 +2386,9 @@ fn enrichment_frankensqlite_batch_rejects_invalid_key_in_entries() {
             metadata: BTreeMap::new(),
         },
     ];
-    let err = adapter.put_batch(StoreKind::ReplayIndex, entries, &ctx).expect_err("should fail");
+    let err = adapter
+        .put_batch(StoreKind::ReplayIndex, entries, &ctx)
+        .expect_err("should fail");
     assert_eq!(err.code(), "FE-STOR-0002");
 }
 
@@ -2181,7 +2402,13 @@ fn enrichment_frankensqlite_put_error_records_event_with_code() {
     };
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
     let ctx = context();
-    let _ = adapter.put(StoreKind::ReplayIndex, "k".to_string(), vec![1], BTreeMap::new(), &ctx);
+    let _ = adapter.put(
+        StoreKind::ReplayIndex,
+        "k".to_string(),
+        vec![1],
+        BTreeMap::new(),
+        &ctx,
+    );
     let events = adapter.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].outcome, "error");
@@ -2205,7 +2432,9 @@ fn enrichment_frankensqlite_delete_records_ok_event() {
     let backend = MockFrankensqlite::default();
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
     let ctx = context();
-    adapter.delete(StoreKind::ReplayIndex, "k", &ctx).expect("delete");
+    adapter
+        .delete(StoreKind::ReplayIndex, "k", &ctx)
+        .expect("delete");
     let events = adapter.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event, "delete");
@@ -2217,7 +2446,9 @@ fn enrichment_frankensqlite_batch_records_ok_event() {
     let backend = MockFrankensqlite::default();
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
     let ctx = context();
-    adapter.put_batch(StoreKind::ReplayIndex, vec![], &ctx).expect("batch");
+    adapter
+        .put_batch(StoreKind::ReplayIndex, vec![], &ctx)
+        .expect("batch");
     let events = adapter.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event, "put_batch");
@@ -2230,7 +2461,9 @@ fn enrichment_frankensqlite_batch_records_ok_event() {
 fn enrichment_frankensqlite_migrate_same_version_succeeds() {
     let backend = MockFrankensqlite::default();
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
-    let receipt = adapter.migrate_to(STORAGE_SCHEMA_VERSION).expect("same-version");
+    let receipt = adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION)
+        .expect("same-version");
     assert_eq!(receipt.from_version, receipt.to_version);
 }
 
@@ -2238,7 +2471,9 @@ fn enrichment_frankensqlite_migrate_same_version_succeeds() {
 fn enrichment_frankensqlite_migrate_downgrade_rejected() {
     let backend = MockFrankensqlite::default();
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
-    adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).expect("upgrade");
+    adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION + 1)
+        .expect("upgrade");
     let err = adapter
         .migrate_to(STORAGE_SCHEMA_VERSION)
         .expect_err("downgrade should fail");
@@ -2249,7 +2484,9 @@ fn enrichment_frankensqlite_migrate_downgrade_rejected() {
 fn enrichment_frankensqlite_ensure_schema_version_after_migration() {
     let backend = MockFrankensqlite::default();
     let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("init");
-    adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).expect("migrate");
+    adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION + 1)
+        .expect("migrate");
     adapter
         .ensure_schema_version(STORAGE_SCHEMA_VERSION + 1)
         .expect("should match");
@@ -2268,7 +2505,13 @@ fn enrichment_determinism_query_order_stable_after_mixed_inserts() {
     let keys = ["z/3", "a/1", "m/2", "d/4", "b/5"];
     for key in &keys {
         adapter
-            .put(StoreKind::BenchmarkLedger, key.to_string(), vec![1], BTreeMap::new(), &ctx)
+            .put(
+                StoreKind::BenchmarkLedger,
+                key.to_string(),
+                vec![1],
+                BTreeMap::new(),
+                &ctx,
+            )
             .expect("put");
     }
     let rows = adapter
@@ -2286,7 +2529,13 @@ fn enrichment_determinism_repeated_put_get_cycle_is_consistent() {
         let mut adapter = InMemoryStorageAdapter::new();
         let ctx = context();
         adapter
-            .put(StoreKind::ReplayIndex, "key".to_string(), vec![42, 43], BTreeMap::new(), &ctx)
+            .put(
+                StoreKind::ReplayIndex,
+                "key".to_string(),
+                vec![42, 43],
+                BTreeMap::new(),
+                &ctx,
+            )
             .expect("put");
         let loaded = adapter
             .get(StoreKind::ReplayIndex, "key", &ctx)
@@ -2330,10 +2579,21 @@ fn enrichment_determinism_migration_receipt_hashes_stable_across_runs() {
         let mut adapter = InMemoryStorageAdapter::new();
         let ctx = context();
         adapter
-            .put(StoreKind::EvidenceIndex, "d/1".to_string(), vec![7], BTreeMap::new(), &ctx)
+            .put(
+                StoreKind::EvidenceIndex,
+                "d/1".to_string(),
+                vec![7],
+                BTreeMap::new(),
+                &ctx,
+            )
             .expect("put");
-        let receipt = adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).expect("migrate");
-        hashes.push((receipt.state_hash_before.clone(), receipt.state_hash_after.clone()));
+        let receipt = adapter
+            .migrate_to(STORAGE_SCHEMA_VERSION + 1)
+            .expect("migrate");
+        hashes.push((
+            receipt.state_hash_before.clone(),
+            receipt.state_hash_after.clone(),
+        ));
     }
     assert_eq!(hashes[0], hashes[1]);
     assert_eq!(hashes[1], hashes[2]);
@@ -2346,11 +2606,25 @@ fn enrichment_cross_concern_put_delete_put_same_key() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
     adapter
-        .put(StoreKind::ReplayIndex, "recycle".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "recycle".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put 1");
-    adapter.delete(StoreKind::ReplayIndex, "recycle", &ctx).expect("delete");
     adapter
-        .put(StoreKind::ReplayIndex, "recycle".to_string(), vec![2], BTreeMap::new(), &ctx)
+        .delete(StoreKind::ReplayIndex, "recycle", &ctx)
+        .expect("delete");
+    adapter
+        .put(
+            StoreKind::ReplayIndex,
+            "recycle".to_string(),
+            vec![2],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put 2");
 
     let loaded = adapter
@@ -2377,10 +2651,18 @@ fn enrichment_cross_concern_batch_then_individual_overwrites() {
             metadata: BTreeMap::new(),
         },
     ];
-    adapter.put_batch(StoreKind::PlasWitness, entries, &ctx).expect("batch");
+    adapter
+        .put_batch(StoreKind::PlasWitness, entries, &ctx)
+        .expect("batch");
 
     adapter
-        .put(StoreKind::PlasWitness, "batch/a".to_string(), vec![99], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::PlasWitness,
+            "batch/a".to_string(),
+            vec![99],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("overwrite");
 
     let loaded = adapter
@@ -2401,13 +2683,27 @@ fn enrichment_cross_concern_migration_preserves_existing_data() {
     let mut adapter = InMemoryStorageAdapter::new();
     let ctx = context();
     adapter
-        .put(StoreKind::SpecializationIndex, "spec/1".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::SpecializationIndex,
+            "spec/1".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put");
     adapter
-        .put(StoreKind::ReplacementLineage, "rep/1".to_string(), vec![2], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplacementLineage,
+            "rep/1".to_string(),
+            vec![2],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put");
 
-    adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).expect("migrate");
+    adapter
+        .migrate_to(STORAGE_SCHEMA_VERSION + 1)
+        .expect("migrate");
 
     let s = adapter
         .get(StoreKind::SpecializationIndex, "spec/1", &ctx)
@@ -2454,19 +2750,32 @@ fn enrichment_cross_concern_events_track_mixed_operations() {
     let ctx = context();
 
     adapter
-        .put(StoreKind::ReplayIndex, "k".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "k".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put");
     adapter.get(StoreKind::ReplayIndex, "k", &ctx).expect("get");
     adapter
         .query(StoreKind::ReplayIndex, &StoreQuery::default(), &ctx)
         .expect("query");
-    adapter.delete(StoreKind::ReplayIndex, "k", &ctx).expect("delete");
-    adapter.put_batch(StoreKind::ReplayIndex, vec![], &ctx).expect("batch");
+    adapter
+        .delete(StoreKind::ReplayIndex, "k", &ctx)
+        .expect("delete");
+    adapter
+        .put_batch(StoreKind::ReplayIndex, vec![], &ctx)
+        .expect("batch");
 
     let events = adapter.events();
     assert_eq!(events.len(), 5);
     let event_names: Vec<&str> = events.iter().map(|e| e.event.as_str()).collect();
-    assert_eq!(event_names, vec!["put", "get", "query", "delete", "put_batch"]);
+    assert_eq!(
+        event_names,
+        vec!["put", "get", "query", "delete", "put_batch"]
+    );
     for e in events {
         assert_eq!(e.outcome, "ok");
         assert!(e.error_code.is_none());
@@ -2513,7 +2822,11 @@ fn enrichment_cross_concern_frankensqlite_full_lifecycle() {
     assert_eq!(limited.len(), 2);
 
     // Delete one
-    assert!(adapter.delete(StoreKind::EvidenceIndex, "ev/002", &ctx).expect("delete"));
+    assert!(
+        adapter
+            .delete(StoreKind::EvidenceIndex, "ev/002", &ctx)
+            .expect("delete")
+    );
 
     // Verify deletion
     let after_delete = adapter
@@ -2532,10 +2845,22 @@ fn enrichment_cross_concern_frankensqlite_stores_isolated() {
     let ctx = context();
 
     adapter
-        .put(StoreKind::ReplayIndex, "shared".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "shared".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put replay");
     adapter
-        .put(StoreKind::PolicyCache, "shared".to_string(), vec![2], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::PolicyCache,
+            "shared".to_string(),
+            vec![2],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put policy");
 
     let replay = adapter
@@ -2549,9 +2874,21 @@ fn enrichment_cross_concern_frankensqlite_stores_isolated() {
     assert_eq!(replay.value, vec![1]);
     assert_eq!(policy.value, vec![2]);
 
-    adapter.delete(StoreKind::ReplayIndex, "shared", &ctx).expect("delete");
-    assert!(adapter.get(StoreKind::ReplayIndex, "shared", &ctx).expect("get").is_none());
-    assert!(adapter.get(StoreKind::PolicyCache, "shared", &ctx).expect("get").is_some());
+    adapter
+        .delete(StoreKind::ReplayIndex, "shared", &ctx)
+        .expect("delete");
+    assert!(
+        adapter
+            .get(StoreKind::ReplayIndex, "shared", &ctx)
+            .expect("get")
+            .is_none()
+    );
+    assert!(
+        adapter
+            .get(StoreKind::PolicyCache, "shared", &ctx)
+            .expect("get")
+            .is_some()
+    );
 }
 
 #[test]
@@ -2615,13 +2952,31 @@ fn enrichment_frankensqlite_query_canonicalizes_reverse_order_backend() {
     let ctx = context();
 
     adapter
-        .put(StoreKind::ReplayIndex, "c".to_string(), vec![3], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "c".to_string(),
+            vec![3],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put c");
     adapter
-        .put(StoreKind::ReplayIndex, "a".to_string(), vec![1], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "a".to_string(),
+            vec![1],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put a");
     adapter
-        .put(StoreKind::ReplayIndex, "b".to_string(), vec![2], BTreeMap::new(), &ctx)
+        .put(
+            StoreKind::ReplayIndex,
+            "b".to_string(),
+            vec![2],
+            BTreeMap::new(),
+            &ctx,
+        )
         .expect("put b");
 
     let rows = adapter

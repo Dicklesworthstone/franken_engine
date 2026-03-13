@@ -1298,7 +1298,9 @@ fn enrichment_many_publishers_each_with_own_scope() {
         let sk = enrichment_signing_key(i.wrapping_add(10));
         let vk = enrichment_vk_from(&sk);
         let scope = format!("org-{i}");
-        let pub_id = reg.register_publisher(&format!("Org{i}"), vk.clone()).unwrap();
+        let pub_id = reg
+            .register_publisher(&format!("Org{i}"), vk.clone())
+            .unwrap();
         reg.claim_scope(pub_id.clone(), &scope).unwrap();
         let v = PackageVersion::new(1, 0, 0);
         let m = enrichment_manifest(&scope, "ext", v, &pub_id, &vk);
@@ -1346,7 +1348,13 @@ fn enrichment_one_over_max_artifacts_rejected() {
     }
     m.artifacts_root_hash = ContentHash::compute(&buf);
     let result = enrichment_publish(&mut reg, &m, &sk);
-    assert!(matches!(result, Err(RegistryError::TooManyArtifacts { count: 1025, max: 1024 })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::TooManyArtifacts {
+            count: 1025,
+            max: 1024
+        })
+    ));
 }
 
 #[test]
@@ -1370,7 +1378,13 @@ fn enrichment_one_over_max_capabilities_rejected() {
         .map(|i| enrichment_capability(&format!("cap:{i}")))
         .collect();
     let result = enrichment_publish(&mut reg, &m, &sk);
-    assert!(matches!(result, Err(RegistryError::TooManyCapabilities { count: 257, max: 256 })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::TooManyCapabilities {
+            count: 257,
+            max: 256
+        })
+    ));
 }
 
 #[test]
@@ -1425,7 +1439,8 @@ fn enrichment_revoke_old_version_keeps_newer_active() {
     enrichment_publish(&mut reg, &m1, &sk).unwrap();
     enrichment_publish(&mut reg, &m2, &sk).unwrap();
 
-    reg.revoke_package("testorg", "ext", v1, "deprecated").unwrap();
+    reg.revoke_package("testorg", "ext", v1, "deprecated")
+        .unwrap();
     assert!(reg.is_package_revoked("testorg", "ext", v1));
     assert!(!reg.is_package_revoked("testorg", "ext", v2));
 }
@@ -1581,17 +1596,24 @@ fn enrichment_publish_from_unknown_publisher_rejected() {
     let v = PackageVersion::new(1, 0, 0);
     let m = enrichment_manifest("testorg", "ext", v, &fake_pub, &fake_vk);
     let result = enrichment_publish(&mut reg, &m, &sk);
-    assert!(matches!(result, Err(RegistryError::PublisherNotFound { .. })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::PublisherNotFound { .. })
+    ));
 }
 
 #[test]
 fn enrichment_publish_from_revoked_publisher_rejected() {
     let (mut reg, pub_id, sk, vk) = enrichment_setup();
-    reg.revoke_publisher(pub_id.clone(), "compromised key").unwrap();
+    reg.revoke_publisher(pub_id.clone(), "compromised key")
+        .unwrap();
     let v = PackageVersion::new(1, 0, 0);
     let m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
     let result = enrichment_publish(&mut reg, &m, &sk);
-    assert!(matches!(result, Err(RegistryError::PublisherRevoked { .. })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::PublisherRevoked { .. })
+    ));
 }
 
 #[test]
@@ -1601,7 +1623,10 @@ fn enrichment_publish_with_wrong_key_rejected() {
     let v = PackageVersion::new(1, 0, 0);
     let m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
     let result = enrichment_publish(&mut reg, &m, &wrong_sk);
-    assert!(matches!(result, Err(RegistryError::SignatureInvalid { .. })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::SignatureInvalid { .. })
+    ));
 }
 
 #[test]
@@ -1611,7 +1636,10 @@ fn enrichment_publish_with_artifacts_root_mismatch_rejected() {
     let mut m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
     m.artifacts_root_hash = ContentHash::compute(b"wrong-hash");
     let result = enrichment_publish(&mut reg, &m, &sk);
-    assert!(matches!(result, Err(RegistryError::ContentHashMismatch { .. })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::ContentHashMismatch { .. })
+    ));
 }
 
 #[test]
@@ -1621,7 +1649,10 @@ fn enrichment_publish_with_empty_toolchain_version_rejected() {
     let mut m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
     m.build.toolchain_version = String::new();
     let result = enrichment_publish(&mut reg, &m, &sk);
-    assert!(matches!(result, Err(RegistryError::BuildDescriptorIncomplete { .. })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::BuildDescriptorIncomplete { .. })
+    ));
 }
 
 #[test]
@@ -1650,7 +1681,10 @@ fn enrichment_revoke_by_id_unknown_errors() {
     let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
     let fake_id = EngineObjectId([42; 32]);
     let result = reg.revoke_package_by_id(fake_id, "test");
-    assert!(matches!(result, Err(RegistryError::RevocationTargetUnknown { .. })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::RevocationTargetUnknown { .. })
+    ));
 }
 
 #[test]
@@ -1821,8 +1855,18 @@ fn enrichment_search_by_publisher_id_filters_correctly() {
     reg.claim_scope(pub_b.clone(), "orgb").unwrap();
 
     let v = PackageVersion::new(1, 0, 0);
-    enrichment_publish(&mut reg, &enrichment_manifest("orga", "ext", v, &pub_a, &vk_a), &sk_a).unwrap();
-    enrichment_publish(&mut reg, &enrichment_manifest("orgb", "ext", v, &pub_b, &vk_b), &sk_b).unwrap();
+    enrichment_publish(
+        &mut reg,
+        &enrichment_manifest("orga", "ext", v, &pub_a, &vk_a),
+        &sk_a,
+    )
+    .unwrap();
+    enrichment_publish(
+        &mut reg,
+        &enrichment_manifest("orgb", "ext", v, &pub_b, &vk_b),
+        &sk_b,
+    )
+    .unwrap();
 
     let results = reg.search(&PackageQuery {
         publisher_id: Some(pub_a.clone()),
@@ -1840,8 +1884,10 @@ fn enrichment_search_include_revoked_true_shows_all() {
         let m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
         enrichment_publish(&mut reg, &m, &sk).unwrap();
     }
-    reg.revoke_package("testorg", "ext", PackageVersion::new(1, 0, 0), "old").unwrap();
-    reg.revoke_package("testorg", "ext", PackageVersion::new(1, 0, 1), "old").unwrap();
+    reg.revoke_package("testorg", "ext", PackageVersion::new(1, 0, 0), "old")
+        .unwrap();
+    reg.revoke_package("testorg", "ext", PackageVersion::new(1, 0, 1), "old")
+        .unwrap();
 
     let default_results = reg.search(&PackageQuery::default());
     assert_eq!(default_results.len(), 1);
@@ -1857,8 +1903,18 @@ fn enrichment_search_include_revoked_true_shows_all() {
 fn enrichment_search_combined_scope_and_name() {
     let (mut reg, pub_id, sk, vk) = enrichment_setup();
     let v = PackageVersion::new(1, 0, 0);
-    enrichment_publish(&mut reg, &enrichment_manifest("testorg", "alpha", v, &pub_id, &vk), &sk).unwrap();
-    enrichment_publish(&mut reg, &enrichment_manifest("testorg", "beta", v, &pub_id, &vk), &sk).unwrap();
+    enrichment_publish(
+        &mut reg,
+        &enrichment_manifest("testorg", "alpha", v, &pub_id, &vk),
+        &sk,
+    )
+    .unwrap();
+    enrichment_publish(
+        &mut reg,
+        &enrichment_manifest("testorg", "beta", v, &pub_id, &vk),
+        &sk,
+    )
+    .unwrap();
 
     let results = reg.search(&PackageQuery {
         scope: Some("testorg".to_string()),
@@ -1918,7 +1974,8 @@ fn enrichment_verify_publisher_revoked_reports_not_valid() {
     let v = PackageVersion::new(1, 0, 0);
     let m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
     enrichment_publish(&mut reg, &m, &sk).unwrap();
-    reg.revoke_publisher(pub_id.clone(), "key compromise").unwrap();
+    reg.revoke_publisher(pub_id.clone(), "key compromise")
+        .unwrap();
 
     let vr = reg.verify_package("testorg", "ext", v).unwrap();
     assert!(!vr.valid);
@@ -1999,7 +2056,8 @@ fn enrichment_audit_trail_revocation_event() {
     let v = PackageVersion::new(1, 0, 0);
     let m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
     enrichment_publish(&mut reg, &m, &sk).unwrap();
-    reg.revoke_package("testorg", "ext", v, "CVE-2026-001").unwrap();
+    reg.revoke_package("testorg", "ext", v, "CVE-2026-001")
+        .unwrap();
 
     let events = reg.export_audit_log();
     let revoke_events: Vec<_> = events
@@ -2068,7 +2126,8 @@ fn enrichment_full_registry_serde_preserves_packages() {
         let m = enrichment_manifest("testorg", &format!("ext-{i}"), v, &pub_id, &vk);
         enrichment_publish(&mut reg, &m, &sk).unwrap();
     }
-    reg.revoke_package("testorg", "ext-0", PackageVersion::new(1, 0, 0), "old").unwrap();
+    reg.revoke_package("testorg", "ext-0", PackageVersion::new(1, 0, 0), "old")
+        .unwrap();
 
     let json = serde_json::to_string(&reg).unwrap();
     let restored: ExtensionRegistry = serde_json::from_str(&json).unwrap();
@@ -2200,7 +2259,10 @@ fn enrichment_manifest_validate_structure_rejects_empty_scope() {
     let v = PackageVersion::new(1, 0, 0);
     let mut m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
     m.scope = String::new();
-    assert!(matches!(m.validate_structure(), Err(RegistryError::InvalidScope { .. })));
+    assert!(matches!(
+        m.validate_structure(),
+        Err(RegistryError::InvalidScope { .. })
+    ));
 }
 
 #[test]
@@ -2209,7 +2271,10 @@ fn enrichment_manifest_validate_structure_rejects_empty_name() {
     let v = PackageVersion::new(1, 0, 0);
     let mut m = enrichment_manifest("testorg", "ext", v, &pub_id, &vk);
     m.name = String::new();
-    assert!(matches!(m.validate_structure(), Err(RegistryError::InvalidName { .. })));
+    assert!(matches!(
+        m.validate_structure(),
+        Err(RegistryError::InvalidName { .. })
+    ));
 }
 
 #[test]
@@ -2328,7 +2393,10 @@ fn enrichment_scope_claim_for_revoked_publisher_rejected() {
     let (mut reg, pub_id, _, _) = enrichment_setup();
     reg.revoke_publisher(pub_id.clone(), "test").unwrap();
     let result = reg.claim_scope(pub_id, "newscope");
-    assert!(matches!(result, Err(RegistryError::PublisherRevoked { .. })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::PublisherRevoked { .. })
+    ));
 }
 
 #[test]
@@ -2336,7 +2404,10 @@ fn enrichment_scope_claim_for_unknown_publisher_rejected() {
     let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
     let fake = EngineObjectId([42; 32]);
     let result = reg.claim_scope(fake, "scope");
-    assert!(matches!(result, Err(RegistryError::PublisherNotFound { .. })));
+    assert!(matches!(
+        result,
+        Err(RegistryError::PublisherNotFound { .. })
+    ));
 }
 
 // ---------------------------------------------------------------------------

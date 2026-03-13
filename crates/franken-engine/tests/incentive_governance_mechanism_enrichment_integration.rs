@@ -77,10 +77,7 @@ fn make_enforcement_rule(
     }
 }
 
-fn make_verification(
-    prop: IncentiveProperty,
-    status: VerificationStatus,
-) -> PropertyVerification {
+fn make_verification(prop: IncentiveProperty, status: VerificationStatus) -> PropertyVerification {
     PropertyVerification {
         property: prop,
         status,
@@ -337,7 +334,10 @@ fn enrichment_strategic_behavior_display_all_unique() {
 
 #[test]
 fn enrichment_strategic_behavior_display_exact_strings() {
-    assert_eq!(StrategicBehavior::TruthfulReport.to_string(), "truthful_report");
+    assert_eq!(
+        StrategicBehavior::TruthfulReport.to_string(),
+        "truthful_report"
+    );
     assert_eq!(StrategicBehavior::FalseReport.to_string(), "false_report");
     assert_eq!(
         StrategicBehavior::DelayedRemediation.to_string(),
@@ -527,8 +527,18 @@ fn enrichment_payoff_table_total_payoff_for_role_single_role() {
     let table = PayoffTable {
         table_id: "t".into(),
         entries: vec![
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Reward, "a", 50_000),
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Slash, "b", -200_000),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Reward,
+                "a",
+                50_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                "b",
+                -200_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -560,10 +570,7 @@ fn enrichment_payoff_table_total_payoff_for_role_empty() {
         entries: vec![],
         epoch: test_epoch(),
     };
-    assert_eq!(
-        table.total_payoff_for_role(GovernanceRole::Publisher),
-        0
-    );
+    assert_eq!(table.total_payoff_for_role(GovernanceRole::Publisher), 0);
 }
 
 #[test]
@@ -571,8 +578,18 @@ fn enrichment_payoff_table_budget_balanced_equal() {
     let table = PayoffTable {
         table_id: "t".into(),
         entries: vec![
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Reward, "a", 100_000),
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Slash, "b", -100_000),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Reward,
+                "a",
+                100_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                "b",
+                -100_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -584,8 +601,18 @@ fn enrichment_payoff_table_budget_balanced_penalties_exceed_rewards() {
     let table = PayoffTable {
         table_id: "t".into(),
         entries: vec![
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Reward, "a", 50_000),
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Slash, "b", -200_000),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Reward,
+                "a",
+                50_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                "b",
+                -200_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -597,8 +624,18 @@ fn enrichment_payoff_table_not_budget_balanced_rewards_exceed() {
     let table = PayoffTable {
         table_id: "t".into(),
         entries: vec![
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Reward, "a", 300_000),
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Slash, "b", -100_000),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Reward,
+                "a",
+                300_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                "b",
+                -100_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -620,8 +657,18 @@ fn enrichment_payoff_table_budget_balanced_all_negative() {
     let table = PayoffTable {
         table_id: "t".into(),
         entries: vec![
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Slash, "a", -50_000),
-            make_payoff_entry(GovernanceRole::Operator, GovernanceAction::Slash, "b", -30_000),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                "a",
+                -50_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Operator,
+                GovernanceAction::Slash,
+                "b",
+                -30_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -633,15 +680,36 @@ fn enrichment_payoff_table_entries_for_action_match() {
     let table = PayoffTable {
         table_id: "t".into(),
         entries: vec![
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Report, "a", 50_000),
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Report, "b", -200_000),
-            make_payoff_entry(GovernanceRole::Challenger, GovernanceAction::Challenge, "c", 100_000),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Report,
+                "a",
+                50_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Report,
+                "b",
+                -200_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Challenger,
+                GovernanceAction::Challenge,
+                "c",
+                100_000,
+            ),
         ],
         epoch: test_epoch(),
     };
     assert_eq!(table.entries_for_action(GovernanceAction::Report).len(), 2);
-    assert_eq!(table.entries_for_action(GovernanceAction::Challenge).len(), 1);
-    assert_eq!(table.entries_for_action(GovernanceAction::Quarantine).len(), 0);
+    assert_eq!(
+        table.entries_for_action(GovernanceAction::Challenge).len(),
+        1
+    );
+    assert_eq!(
+        table.entries_for_action(GovernanceAction::Quarantine).len(),
+        0
+    );
 }
 
 #[test]
@@ -649,8 +717,18 @@ fn enrichment_payoff_table_serde_roundtrip() {
     let table = PayoffTable {
         table_id: "pt-test".into(),
         entries: vec![
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Report, "a", 50_000),
-            make_payoff_entry(GovernanceRole::Challenger, GovernanceAction::Slash, "b", -100_000),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Report,
+                "a",
+                50_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Challenger,
+                GovernanceAction::Slash,
+                "b",
+                -100_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -811,8 +889,20 @@ fn enrichment_stress_test_all_honest_is_million() {
     let sst = StrategicStressTest {
         test_id: "t".into(),
         scenarios: vec![
-            make_scenario("s1", StrategicBehavior::FalseReport, GovernanceRole::Publisher, -100_000, 50_000),
-            make_scenario("s2", StrategicBehavior::FrivolousChallenge, GovernanceRole::Challenger, -50_000, 20_000),
+            make_scenario(
+                "s1",
+                StrategicBehavior::FalseReport,
+                GovernanceRole::Publisher,
+                -100_000,
+                50_000,
+            ),
+            make_scenario(
+                "s2",
+                StrategicBehavior::FrivolousChallenge,
+                GovernanceRole::Challenger,
+                -50_000,
+                20_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -825,8 +915,20 @@ fn enrichment_stress_test_half_honest_rate() {
     let sst = StrategicStressTest {
         test_id: "t".into(),
         scenarios: vec![
-            make_scenario("s1", StrategicBehavior::FalseReport, GovernanceRole::Publisher, -100_000, 50_000),
-            make_scenario("s2", StrategicBehavior::CollaborativeAttack, GovernanceRole::Publisher, 200_000, 50_000),
+            make_scenario(
+                "s1",
+                StrategicBehavior::FalseReport,
+                GovernanceRole::Publisher,
+                -100_000,
+                50_000,
+            ),
+            make_scenario(
+                "s2",
+                StrategicBehavior::CollaborativeAttack,
+                GovernanceRole::Publisher,
+                200_000,
+                50_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -839,8 +941,20 @@ fn enrichment_stress_test_all_exploitable() {
     let sst = StrategicStressTest {
         test_id: "t".into(),
         scenarios: vec![
-            make_scenario("s1", StrategicBehavior::CollaborativeAttack, GovernanceRole::Publisher, 200_000, 50_000),
-            make_scenario("s2", StrategicBehavior::SybilAttack, GovernanceRole::Challenger, 300_000, 0),
+            make_scenario(
+                "s1",
+                StrategicBehavior::CollaborativeAttack,
+                GovernanceRole::Publisher,
+                200_000,
+                50_000,
+            ),
+            make_scenario(
+                "s2",
+                StrategicBehavior::SybilAttack,
+                GovernanceRole::Challenger,
+                300_000,
+                0,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -853,9 +967,27 @@ fn enrichment_stress_test_one_of_three_exploitable() {
     let sst = StrategicStressTest {
         test_id: "t".into(),
         scenarios: vec![
-            make_scenario("s1", StrategicBehavior::FalseReport, GovernanceRole::Publisher, -100_000, 50_000),
-            make_scenario("s2", StrategicBehavior::FrivolousChallenge, GovernanceRole::Challenger, -50_000, 20_000),
-            make_scenario("s3", StrategicBehavior::SybilAttack, GovernanceRole::Challenger, 300_000, 0),
+            make_scenario(
+                "s1",
+                StrategicBehavior::FalseReport,
+                GovernanceRole::Publisher,
+                -100_000,
+                50_000,
+            ),
+            make_scenario(
+                "s2",
+                StrategicBehavior::FrivolousChallenge,
+                GovernanceRole::Challenger,
+                -50_000,
+                20_000,
+            ),
+            make_scenario(
+                "s3",
+                StrategicBehavior::SybilAttack,
+                GovernanceRole::Challenger,
+                300_000,
+                0,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -1028,17 +1160,47 @@ fn enrichment_enforcement_policy_rules_for_trigger_filters() {
     let policy = EnforcementPolicy {
         policy_id: "p".into(),
         rules: vec![
-            make_enforcement_rule("r1", GovernanceAction::Report, GovernanceRole::Publisher, GovernanceAction::Quarantine, 0, 50_000, 0),
-            make_enforcement_rule("r2", GovernanceAction::Report, GovernanceRole::Publisher, GovernanceAction::Slash, 200_000, 0, 5),
-            make_enforcement_rule("r3", GovernanceAction::Challenge, GovernanceRole::Challenger, GovernanceAction::Reward, 0, 100_000, 0),
+            make_enforcement_rule(
+                "r1",
+                GovernanceAction::Report,
+                GovernanceRole::Publisher,
+                GovernanceAction::Quarantine,
+                0,
+                50_000,
+                0,
+            ),
+            make_enforcement_rule(
+                "r2",
+                GovernanceAction::Report,
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                200_000,
+                0,
+                5,
+            ),
+            make_enforcement_rule(
+                "r3",
+                GovernanceAction::Challenge,
+                GovernanceRole::Challenger,
+                GovernanceAction::Reward,
+                0,
+                100_000,
+                0,
+            ),
         ],
         challenge_window_epochs: 10,
         publisher_bond_millionths: 100_000,
         epoch: test_epoch(),
     };
     assert_eq!(policy.rules_for_trigger(GovernanceAction::Report).len(), 2);
-    assert_eq!(policy.rules_for_trigger(GovernanceAction::Challenge).len(), 1);
-    assert_eq!(policy.rules_for_trigger(GovernanceAction::Quarantine).len(), 0);
+    assert_eq!(
+        policy.rules_for_trigger(GovernanceAction::Challenge).len(),
+        1
+    );
+    assert_eq!(
+        policy.rules_for_trigger(GovernanceAction::Quarantine).len(),
+        0
+    );
 }
 
 #[test]
@@ -1046,8 +1208,24 @@ fn enrichment_enforcement_policy_max_total_penalty_sums_all() {
     let policy = EnforcementPolicy {
         policy_id: "p".into(),
         rules: vec![
-            make_enforcement_rule("r1", GovernanceAction::Report, GovernanceRole::Publisher, GovernanceAction::Slash, 200_000, 0, 5),
-            make_enforcement_rule("r2", GovernanceAction::Challenge, GovernanceRole::Challenger, GovernanceAction::Slash, 150_000, 0, 3),
+            make_enforcement_rule(
+                "r1",
+                GovernanceAction::Report,
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                200_000,
+                0,
+                5,
+            ),
+            make_enforcement_rule(
+                "r2",
+                GovernanceAction::Challenge,
+                GovernanceRole::Challenger,
+                GovernanceAction::Slash,
+                150_000,
+                0,
+                3,
+            ),
         ],
         challenge_window_epochs: 10,
         publisher_bond_millionths: 100_000,
@@ -1104,7 +1282,13 @@ fn enrichment_mechanism_spec_compute_id_prefix() {
 fn enrichment_mechanism_spec_compute_id_deterministic() {
     let mk = || {
         MechanismBuilder::new("test")
-            .payoff(GovernanceRole::Publisher, GovernanceAction::Report, "c", 10_000, "r")
+            .payoff(
+                GovernanceRole::Publisher,
+                GovernanceAction::Report,
+                "c",
+                10_000,
+                "r",
+            )
             .build(test_epoch())
     };
     assert_eq!(mk().spec_id, mk().spec_id);
@@ -1114,7 +1298,13 @@ fn enrichment_mechanism_spec_compute_id_deterministic() {
 fn enrichment_mechanism_spec_compute_id_changes_with_name() {
     let mk = |name| {
         MechanismBuilder::new(name)
-            .payoff(GovernanceRole::Publisher, GovernanceAction::Slash, "c", -100_000, "r")
+            .payoff(
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                "c",
+                -100_000,
+                "r",
+            )
             .build(test_epoch())
     };
     assert_ne!(mk("alpha").spec_id, mk("beta").spec_id);
@@ -1148,7 +1338,13 @@ fn enrichment_mechanism_spec_verified_property_count_partial() {
 #[test]
 fn enrichment_mechanism_spec_is_sound_requires_all_verified() {
     let spec = MechanismBuilder::new("mixed")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Slash, "bad", -100_000, "r")
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Slash,
+            "bad",
+            -100_000,
+            "r",
+        )
         .verify_property(make_verification(
             IncentiveProperty::TruthfulReporting,
             VerificationStatus::Verified,
@@ -1157,7 +1353,13 @@ fn enrichment_mechanism_spec_is_sound_requires_all_verified() {
             IncentiveProperty::BudgetBalance,
             VerificationStatus::Falsified,
         ))
-        .scenario(make_scenario("s1", StrategicBehavior::FalseReport, GovernanceRole::Publisher, -100_000, 50_000))
+        .scenario(make_scenario(
+            "s1",
+            StrategicBehavior::FalseReport,
+            GovernanceRole::Publisher,
+            -100_000,
+            50_000,
+        ))
         .build(test_epoch());
     assert!(!spec.is_sound());
 }
@@ -1165,13 +1367,31 @@ fn enrichment_mechanism_spec_is_sound_requires_all_verified() {
 #[test]
 fn enrichment_mechanism_spec_is_sound_requires_budget_balance() {
     let spec = MechanismBuilder::new("unbalanced")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Reward, "good", 500_000, "r")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Slash, "bad", -100_000, "r")
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Reward,
+            "good",
+            500_000,
+            "r",
+        )
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Slash,
+            "bad",
+            -100_000,
+            "r",
+        )
         .verify_property(make_verification(
             IncentiveProperty::TruthfulReporting,
             VerificationStatus::Verified,
         ))
-        .scenario(make_scenario("s1", StrategicBehavior::FalseReport, GovernanceRole::Publisher, -100_000, 50_000))
+        .scenario(make_scenario(
+            "s1",
+            StrategicBehavior::FalseReport,
+            GovernanceRole::Publisher,
+            -100_000,
+            50_000,
+        ))
         .build(test_epoch());
     assert!(!spec.is_sound());
 }
@@ -1179,12 +1399,24 @@ fn enrichment_mechanism_spec_is_sound_requires_budget_balance() {
 #[test]
 fn enrichment_mechanism_spec_is_sound_requires_all_honest_dominate() {
     let spec = MechanismBuilder::new("exploit")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Slash, "bad", -100_000, "r")
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Slash,
+            "bad",
+            -100_000,
+            "r",
+        )
         .verify_property(make_verification(
             IncentiveProperty::TruthfulReporting,
             VerificationStatus::Verified,
         ))
-        .scenario(make_scenario("s1", StrategicBehavior::CollaborativeAttack, GovernanceRole::Publisher, 200_000, 50_000))
+        .scenario(make_scenario(
+            "s1",
+            StrategicBehavior::CollaborativeAttack,
+            GovernanceRole::Publisher,
+            200_000,
+            50_000,
+        ))
         .build(test_epoch());
     assert!(!spec.is_sound());
 }
@@ -1219,8 +1451,14 @@ fn enrichment_mechanism_spec_serde_roundtrip() {
 #[test]
 fn enrichment_builder_defaults_match_constants() {
     let spec = MechanismBuilder::new("defaults").build(test_epoch());
-    assert_eq!(spec.enforcement_policy.publisher_bond_millionths, DEFAULT_PUBLISHER_BOND);
-    assert_eq!(spec.enforcement_policy.challenge_window_epochs, DEFAULT_CHALLENGE_WINDOW_EPOCHS);
+    assert_eq!(
+        spec.enforcement_policy.publisher_bond_millionths,
+        DEFAULT_PUBLISHER_BOND
+    );
+    assert_eq!(
+        spec.enforcement_policy.challenge_window_epochs,
+        DEFAULT_CHALLENGE_WINDOW_EPOCHS
+    );
 }
 
 #[test]
@@ -1242,9 +1480,27 @@ fn enrichment_builder_custom_challenge_window() {
 #[test]
 fn enrichment_builder_multiple_payoffs() {
     let spec = MechanismBuilder::new("multi-payoff")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Report, "truth", 50_000, "r")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Report, "false", -200_000, "p")
-        .payoff(GovernanceRole::Challenger, GovernanceAction::Challenge, "legit", 100_000, "r")
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Report,
+            "truth",
+            50_000,
+            "r",
+        )
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Report,
+            "false",
+            -200_000,
+            "p",
+        )
+        .payoff(
+            GovernanceRole::Challenger,
+            GovernanceAction::Challenge,
+            "legit",
+            100_000,
+            "r",
+        )
         .build(test_epoch());
     assert_eq!(spec.payoff_table.entries.len(), 3);
 }
@@ -1252,8 +1508,24 @@ fn enrichment_builder_multiple_payoffs() {
 #[test]
 fn enrichment_builder_multiple_rules() {
     let spec = MechanismBuilder::new("multi-rule")
-        .enforcement_rule(make_enforcement_rule("r1", GovernanceAction::Report, GovernanceRole::Publisher, GovernanceAction::Quarantine, 0, 50_000, 0))
-        .enforcement_rule(make_enforcement_rule("r2", GovernanceAction::Challenge, GovernanceRole::Challenger, GovernanceAction::Slash, 150_000, 0, 3))
+        .enforcement_rule(make_enforcement_rule(
+            "r1",
+            GovernanceAction::Report,
+            GovernanceRole::Publisher,
+            GovernanceAction::Quarantine,
+            0,
+            50_000,
+            0,
+        ))
+        .enforcement_rule(make_enforcement_rule(
+            "r2",
+            GovernanceAction::Challenge,
+            GovernanceRole::Challenger,
+            GovernanceAction::Slash,
+            150_000,
+            0,
+            3,
+        ))
         .build(test_epoch());
     assert_eq!(spec.enforcement_policy.rules.len(), 2);
 }
@@ -1261,9 +1533,18 @@ fn enrichment_builder_multiple_rules() {
 #[test]
 fn enrichment_builder_multiple_properties() {
     let spec = MechanismBuilder::new("multi-prop")
-        .verify_property(make_verification(IncentiveProperty::TruthfulReporting, VerificationStatus::Verified))
-        .verify_property(make_verification(IncentiveProperty::BudgetBalance, VerificationStatus::Verified))
-        .verify_property(make_verification(IncentiveProperty::TimelyRemediation, VerificationStatus::Inconclusive))
+        .verify_property(make_verification(
+            IncentiveProperty::TruthfulReporting,
+            VerificationStatus::Verified,
+        ))
+        .verify_property(make_verification(
+            IncentiveProperty::BudgetBalance,
+            VerificationStatus::Verified,
+        ))
+        .verify_property(make_verification(
+            IncentiveProperty::TimelyRemediation,
+            VerificationStatus::Inconclusive,
+        ))
         .build(test_epoch());
     assert_eq!(spec.property_verifications.len(), 3);
     assert_eq!(spec.verified_property_count(), 2);
@@ -1272,8 +1553,20 @@ fn enrichment_builder_multiple_properties() {
 #[test]
 fn enrichment_builder_multiple_scenarios() {
     let spec = MechanismBuilder::new("multi-scenario")
-        .scenario(make_scenario("s1", StrategicBehavior::FalseReport, GovernanceRole::Publisher, -200_000, 50_000))
-        .scenario(make_scenario("s2", StrategicBehavior::SybilAttack, GovernanceRole::Challenger, -300_000, 0))
+        .scenario(make_scenario(
+            "s1",
+            StrategicBehavior::FalseReport,
+            GovernanceRole::Publisher,
+            -200_000,
+            50_000,
+        ))
+        .scenario(make_scenario(
+            "s2",
+            StrategicBehavior::SybilAttack,
+            GovernanceRole::Challenger,
+            -300_000,
+            0,
+        ))
         .build(test_epoch());
     assert_eq!(spec.stress_test.scenarios.len(), 2);
 }
@@ -1281,9 +1574,29 @@ fn enrichment_builder_multiple_scenarios() {
 #[test]
 fn enrichment_builder_sets_computed_ids() {
     let spec = MechanismBuilder::new("check-ids")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Report, "c", 10_000, "r")
-        .enforcement_rule(make_enforcement_rule("r1", GovernanceAction::Report, GovernanceRole::Publisher, GovernanceAction::Quarantine, 0, 0, 0))
-        .scenario(make_scenario("s1", StrategicBehavior::FalseReport, GovernanceRole::Publisher, -100_000, 50_000))
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Report,
+            "c",
+            10_000,
+            "r",
+        )
+        .enforcement_rule(make_enforcement_rule(
+            "r1",
+            GovernanceAction::Report,
+            GovernanceRole::Publisher,
+            GovernanceAction::Quarantine,
+            0,
+            0,
+            0,
+        ))
+        .scenario(make_scenario(
+            "s1",
+            StrategicBehavior::FalseReport,
+            GovernanceRole::Publisher,
+            -100_000,
+            50_000,
+        ))
         .build(test_epoch());
     assert!(spec.spec_id.starts_with("ms-"));
     assert!(spec.payoff_table.table_id.starts_with("pt-"));
@@ -1351,23 +1664,61 @@ fn enrichment_report_id_derived_from_hash() {
 #[test]
 fn enrichment_report_with_exploitable_scenarios() {
     let spec = MechanismBuilder::new("exploit-report")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Slash, "bad", -100_000, "r")
-        .verify_property(make_verification(IncentiveProperty::TruthfulReporting, VerificationStatus::Verified))
-        .scenario(make_scenario("exploit-1", StrategicBehavior::SybilAttack, GovernanceRole::Challenger, 300_000, 0))
-        .scenario(make_scenario("exploit-2", StrategicBehavior::CollaborativeAttack, GovernanceRole::Publisher, 200_000, 50_000))
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Slash,
+            "bad",
+            -100_000,
+            "r",
+        )
+        .verify_property(make_verification(
+            IncentiveProperty::TruthfulReporting,
+            VerificationStatus::Verified,
+        ))
+        .scenario(make_scenario(
+            "exploit-1",
+            StrategicBehavior::SybilAttack,
+            GovernanceRole::Challenger,
+            300_000,
+            0,
+        ))
+        .scenario(make_scenario(
+            "exploit-2",
+            StrategicBehavior::CollaborativeAttack,
+            GovernanceRole::Publisher,
+            200_000,
+            50_000,
+        ))
         .build(test_epoch());
     let report = generate_report(&spec);
     assert!(!report.is_sound);
     assert_eq!(report.exploitable_scenarios.len(), 2);
-    assert!(report.exploitable_scenarios.contains(&"exploit-1".to_string()));
-    assert!(report.exploitable_scenarios.contains(&"exploit-2".to_string()));
+    assert!(
+        report
+            .exploitable_scenarios
+            .contains(&"exploit-1".to_string())
+    );
+    assert!(
+        report
+            .exploitable_scenarios
+            .contains(&"exploit-2".to_string())
+    );
 }
 
 #[test]
 fn enrichment_report_not_sound_falsified() {
     let spec = MechanismBuilder::new("falsified-report")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Slash, "bad", -100_000, "r")
-        .verify_property(make_verification(IncentiveProperty::TruthfulReporting, VerificationStatus::Falsified))
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Slash,
+            "bad",
+            -100_000,
+            "r",
+        )
+        .verify_property(make_verification(
+            IncentiveProperty::TruthfulReporting,
+            VerificationStatus::Falsified,
+        ))
         .build(test_epoch());
     let report = generate_report(&spec);
     assert!(!report.is_sound);
@@ -1426,7 +1777,10 @@ fn enrichment_canonical_mechanism_four_scenarios() {
 fn enrichment_canonical_mechanism_no_exploitable_scenarios() {
     let spec = canonical_governance_mechanism(test_epoch());
     assert!(spec.stress_test.exploitable_scenarios().is_empty());
-    assert_eq!(spec.stress_test.honest_dominance_rate_millionths(), 1_000_000);
+    assert_eq!(
+        spec.stress_test.honest_dominance_rate_millionths(),
+        1_000_000
+    );
 }
 
 #[test]
@@ -1444,15 +1798,25 @@ fn enrichment_canonical_mechanism_four_enforcement_rules() {
 #[test]
 fn enrichment_canonical_mechanism_report_entries_by_action() {
     let spec = canonical_governance_mechanism(test_epoch());
-    let report_entries = spec.payoff_table.entries_for_action(GovernanceAction::Report);
+    let report_entries = spec
+        .payoff_table
+        .entries_for_action(GovernanceAction::Report);
     assert_eq!(report_entries.len(), 2);
-    let challenge_entries = spec.payoff_table.entries_for_action(GovernanceAction::Challenge);
+    let challenge_entries = spec
+        .payoff_table
+        .entries_for_action(GovernanceAction::Challenge);
     assert_eq!(challenge_entries.len(), 2);
-    let reinstate_entries = spec.payoff_table.entries_for_action(GovernanceAction::Reinstate);
+    let reinstate_entries = spec
+        .payoff_table
+        .entries_for_action(GovernanceAction::Reinstate);
     assert_eq!(reinstate_entries.len(), 2);
-    let quarantine_entries = spec.payoff_table.entries_for_action(GovernanceAction::Quarantine);
+    let quarantine_entries = spec
+        .payoff_table
+        .entries_for_action(GovernanceAction::Quarantine);
     assert_eq!(quarantine_entries.len(), 1);
-    let slash_entries = spec.payoff_table.entries_for_action(GovernanceAction::Slash);
+    let slash_entries = spec
+        .payoff_table
+        .entries_for_action(GovernanceAction::Slash);
     assert_eq!(slash_entries.len(), 1);
 }
 
@@ -1465,7 +1829,9 @@ fn enrichment_canonical_mechanism_max_total_penalty_positive() {
 #[test]
 fn enrichment_canonical_mechanism_publisher_role_payoff() {
     let spec = canonical_governance_mechanism(test_epoch());
-    let pub_payoff = spec.payoff_table.total_payoff_for_role(GovernanceRole::Publisher);
+    let pub_payoff = spec
+        .payoff_table
+        .total_payoff_for_role(GovernanceRole::Publisher);
     // truthful (50k) + false (-200k) = -150k
     assert_eq!(pub_payoff, -150_000);
 }
@@ -1473,7 +1839,9 @@ fn enrichment_canonical_mechanism_publisher_role_payoff() {
 #[test]
 fn enrichment_canonical_mechanism_challenger_role_payoff() {
     let spec = canonical_governance_mechanism(test_epoch());
-    let ch_payoff = spec.payoff_table.total_payoff_for_role(GovernanceRole::Challenger);
+    let ch_payoff = spec
+        .payoff_table
+        .total_payoff_for_role(GovernanceRole::Challenger);
     // legitimate (100k) + frivolous (-150k) = -50k
     assert_eq!(ch_payoff, -50_000);
 }
@@ -1481,7 +1849,9 @@ fn enrichment_canonical_mechanism_challenger_role_payoff() {
 #[test]
 fn enrichment_canonical_mechanism_operator_role_payoff() {
     let spec = canonical_governance_mechanism(test_epoch());
-    let op_payoff = spec.payoff_table.total_payoff_for_role(GovernanceRole::Operator);
+    let op_payoff = spec
+        .payoff_table
+        .total_payoff_for_role(GovernanceRole::Operator);
     // immediate (30k) + delayed (-80k) = -50k
     assert_eq!(op_payoff, -50_000);
 }
@@ -1489,7 +1859,9 @@ fn enrichment_canonical_mechanism_operator_role_payoff() {
 #[test]
 fn enrichment_canonical_mechanism_control_plane_payoff() {
     let spec = canonical_governance_mechanism(test_epoch());
-    let cp_payoff = spec.payoff_table.total_payoff_for_role(GovernanceRole::ControlPlane);
+    let cp_payoff = spec
+        .payoff_table
+        .total_payoff_for_role(GovernanceRole::ControlPlane);
     // quarantine (0) + slash (-500k) = -500k
     assert_eq!(cp_payoff, -500_000);
 }
@@ -1497,7 +1869,9 @@ fn enrichment_canonical_mechanism_control_plane_payoff() {
 #[test]
 fn enrichment_canonical_mechanism_arbitrator_payoff_zero() {
     let spec = canonical_governance_mechanism(test_epoch());
-    let arb_payoff = spec.payoff_table.total_payoff_for_role(GovernanceRole::Arbitrator);
+    let arb_payoff = spec
+        .payoff_table
+        .total_payoff_for_role(GovernanceRole::Arbitrator);
     assert_eq!(arb_payoff, 0);
 }
 
@@ -1533,8 +1907,18 @@ fn enrichment_payoff_table_all_positive_not_budget_balanced() {
     let table = PayoffTable {
         table_id: "all-pos".into(),
         entries: vec![
-            make_payoff_entry(GovernanceRole::Publisher, GovernanceAction::Reward, "a", 50_000),
-            make_payoff_entry(GovernanceRole::Challenger, GovernanceAction::Reward, "b", 30_000),
+            make_payoff_entry(
+                GovernanceRole::Publisher,
+                GovernanceAction::Reward,
+                "a",
+                50_000,
+            ),
+            make_payoff_entry(
+                GovernanceRole::Challenger,
+                GovernanceAction::Reward,
+                "b",
+                30_000,
+            ),
         ],
         epoch: test_epoch(),
     };
@@ -1563,8 +1947,24 @@ fn enrichment_enforcement_policy_max_penalty_includes_zero_penalty_rules() {
     let policy = EnforcementPolicy {
         policy_id: "p".into(),
         rules: vec![
-            make_enforcement_rule("r1", GovernanceAction::Report, GovernanceRole::Publisher, GovernanceAction::Quarantine, 0, 50_000, 0),
-            make_enforcement_rule("r2", GovernanceAction::Report, GovernanceRole::Publisher, GovernanceAction::Slash, 200_000, 0, 5),
+            make_enforcement_rule(
+                "r1",
+                GovernanceAction::Report,
+                GovernanceRole::Publisher,
+                GovernanceAction::Quarantine,
+                0,
+                50_000,
+                0,
+            ),
+            make_enforcement_rule(
+                "r2",
+                GovernanceAction::Report,
+                GovernanceRole::Publisher,
+                GovernanceAction::Slash,
+                200_000,
+                0,
+                5,
+            ),
         ],
         challenge_window_epochs: 10,
         publisher_bond_millionths: 100_000,
@@ -1591,8 +1991,20 @@ fn enrichment_governance_report_compute_hash_not_empty() {
 #[test]
 fn enrichment_governance_report_budget_balanced_propagated() {
     let spec = MechanismBuilder::new("unbalanced-report")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Reward, "good", 500_000, "r")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Slash, "bad", -100_000, "r")
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Reward,
+            "good",
+            500_000,
+            "r",
+        )
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Slash,
+            "bad",
+            -100_000,
+            "r",
+        )
         .build(test_epoch());
     let report = generate_report(&spec);
     assert!(!report.budget_balanced);
@@ -1601,9 +2013,27 @@ fn enrichment_governance_report_budget_balanced_propagated() {
 #[test]
 fn enrichment_governance_report_honest_dominance_propagated() {
     let spec = MechanismBuilder::new("partial-honest")
-        .payoff(GovernanceRole::Publisher, GovernanceAction::Slash, "bad", -100_000, "r")
-        .scenario(make_scenario("s1", StrategicBehavior::FalseReport, GovernanceRole::Publisher, -100_000, 50_000))
-        .scenario(make_scenario("s2", StrategicBehavior::CollaborativeAttack, GovernanceRole::Publisher, 200_000, 50_000))
+        .payoff(
+            GovernanceRole::Publisher,
+            GovernanceAction::Slash,
+            "bad",
+            -100_000,
+            "r",
+        )
+        .scenario(make_scenario(
+            "s1",
+            StrategicBehavior::FalseReport,
+            GovernanceRole::Publisher,
+            -100_000,
+            50_000,
+        ))
+        .scenario(make_scenario(
+            "s2",
+            StrategicBehavior::CollaborativeAttack,
+            GovernanceRole::Publisher,
+            200_000,
+            50_000,
+        ))
         .build(test_epoch());
     let report = generate_report(&spec);
     assert_eq!(report.honest_dominance_rate_millionths, 500_000);

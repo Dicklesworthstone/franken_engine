@@ -77,7 +77,9 @@ fn make_reinstate(req_id: &str, quarantine_id: &str) -> ReinstateRequest {
     }
 }
 
-fn make_game_model(subsystem: Subsystem) -> frankenengine_engine::attack_surface_game_model::GameModel {
+fn make_game_model(
+    subsystem: Subsystem,
+) -> frankenengine_engine::attack_surface_game_model::GameModel {
     let ep = epoch(100);
     let atk = StrategicAction {
         action_id: ActionId("atk_inject".into()),
@@ -108,7 +110,10 @@ fn make_game_model(subsystem: Subsystem) -> frankenengine_engine::attack_surface
         .build()
 }
 
-fn make_game_model_with_loss(subsystem: Subsystem, loss_value: i64) -> frankenengine_engine::attack_surface_game_model::GameModel {
+fn make_game_model_with_loss(
+    subsystem: Subsystem,
+    loss_value: i64,
+) -> frankenengine_engine::attack_surface_game_model::GameModel {
     let ep = epoch(100);
     let atk = StrategicAction {
         action_id: ActionId("atk_probe".into()),
@@ -152,7 +157,11 @@ fn enrichment_report_phase_display_uniqueness() {
         ReportPhase::Dismissed,
     ];
     let displays: BTreeSet<String> = phases.iter().map(|p| p.to_string()).collect();
-    assert_eq!(displays.len(), 4, "all ReportPhase variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        4,
+        "all ReportPhase variants must have unique Display"
+    );
 }
 
 #[test]
@@ -163,7 +172,11 @@ fn enrichment_challenge_outcome_display_uniqueness() {
         ChallengeOutcome::Escalated,
     ];
     let displays: BTreeSet<String> = outcomes.iter().map(|o| o.to_string()).collect();
-    assert_eq!(displays.len(), 3, "all ChallengeOutcome variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        3,
+        "all ChallengeOutcome variants must have unique Display"
+    );
 }
 
 #[test]
@@ -174,7 +187,11 @@ fn enrichment_quarantine_status_display_uniqueness() {
         QuarantineStatus::Expired,
     ];
     let displays: BTreeSet<String> = statuses.iter().map(|s| s.to_string()).collect();
-    assert_eq!(displays.len(), 3, "all QuarantineStatus variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        3,
+        "all QuarantineStatus variants must have unique Display"
+    );
 }
 
 #[test]
@@ -186,7 +203,11 @@ fn enrichment_incentive_compatibility_class_display_uniqueness() {
         IncentiveCompatibilityClass::NonCompliant,
     ];
     let displays: BTreeSet<String> = classes.iter().map(|c| c.to_string()).collect();
-    assert_eq!(displays.len(), 4, "all IncentiveCompatibilityClass variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        4,
+        "all IncentiveCompatibilityClass variants must have unique Display"
+    );
 }
 
 #[test]
@@ -212,7 +233,11 @@ fn enrichment_mechanism_error_display_uniqueness_all_variants() {
         },
     ];
     let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
-    assert_eq!(displays.len(), 5, "all 5 MechanismError variants must have unique Display");
+    assert_eq!(
+        displays.len(),
+        5,
+        "all 5 MechanismError variants must have unique Display"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -287,9 +312,7 @@ fn enrichment_mechanism_error_serde_roundtrip_all_variants() {
         MechanismError::GameModelMissing {
             subsystem: "s".into(),
         },
-        MechanismError::IncentiveViolation {
-            reason: "r".into(),
-        },
+        MechanismError::IncentiveViolation { reason: "r".into() },
         MechanismError::QuarantineConstraintViolated {
             package_id: "p".into(),
             reason: "q".into(),
@@ -516,7 +539,9 @@ fn enrichment_submit_report_severity_negative_rejected() {
     let mut mech = GovernanceMechanism::new(epoch(10));
     let report = make_report("r-neg", "pkg-neg", -1);
     let err = mech.submit_report(report).unwrap_err();
-    assert!(matches!(err, MechanismError::InvalidInput { field, .. } if field == "severity_millionths"));
+    assert!(
+        matches!(err, MechanismError::InvalidInput { field, .. } if field == "severity_millionths")
+    );
 }
 
 #[test]
@@ -524,7 +549,9 @@ fn enrichment_submit_report_severity_exceeds_max_rejected() {
     let mut mech = GovernanceMechanism::new(epoch(10));
     let report = make_report("r-max", "pkg-max", 1_000_001);
     let err = mech.submit_report(report).unwrap_err();
-    assert!(matches!(err, MechanismError::InvalidInput { field, .. } if field == "severity_millionths"));
+    assert!(
+        matches!(err, MechanismError::InvalidInput { field, .. } if field == "severity_millionths")
+    );
 }
 
 #[test]
@@ -575,7 +602,9 @@ fn enrichment_advance_report_all_phases() {
 fn enrichment_advance_report_not_found_returns_error() {
     let mut mech = GovernanceMechanism::new(epoch(10));
     let result = mech.advance_report("nonexistent", ReportPhase::Resolved, None);
-    assert!(matches!(result, Err(MechanismError::InvalidInput { field, .. }) if field == "report_id"));
+    assert!(
+        matches!(result, Err(MechanismError::InvalidInput { field, .. }) if field == "report_id")
+    );
 }
 
 #[test]
@@ -1046,7 +1075,11 @@ fn enrichment_generate_report_empty_mechanism() {
 #[test]
 fn enrichment_generate_report_with_multiple_analyses() {
     let mut mech = GovernanceMechanism::new(epoch(100));
-    for sub in [Subsystem::Compiler, Subsystem::Runtime, Subsystem::ExtensionHost] {
+    for sub in [
+        Subsystem::Compiler,
+        Subsystem::Runtime,
+        Subsystem::ExtensionHost,
+    ] {
         let model = make_game_model(sub);
         mech.analyze_incentive_compatibility(&model, ts(1000));
     }
@@ -1187,7 +1220,10 @@ fn enrichment_error_display_invalid_input_format() {
         field: "package_id".into(),
         detail: "must not be empty".into(),
     };
-    assert_eq!(e.to_string(), "invalid input: package_id: must not be empty");
+    assert_eq!(
+        e.to_string(),
+        "invalid input: package_id: must not be empty"
+    );
 }
 
 #[test]
@@ -1203,7 +1239,10 @@ fn enrichment_error_display_incentive_violation_format() {
     let e = MechanismError::IncentiveViolation {
         reason: "payoff structure invalid".into(),
     };
-    assert_eq!(e.to_string(), "incentive violation: payoff structure invalid");
+    assert_eq!(
+        e.to_string(),
+        "incentive violation: payoff structure invalid"
+    );
 }
 
 #[test]
@@ -1253,9 +1292,7 @@ fn enrichment_mechanism_error_source_is_none_all_variants() {
         MechanismError::GameModelMissing {
             subsystem: "s".into(),
         },
-        MechanismError::IncentiveViolation {
-            reason: "r".into(),
-        },
+        MechanismError::IncentiveViolation { reason: "r".into() },
         MechanismError::QuarantineConstraintViolated {
             package_id: "p".into(),
             reason: "d".into(),
@@ -1296,13 +1333,9 @@ fn enrichment_challenge_outcome_ordering() {
 #[test]
 fn enrichment_incentive_compatibility_class_ordering() {
     assert!(IncentiveCompatibilityClass::DominantStrategy < IncentiveCompatibilityClass::BayesNash);
+    assert!(IncentiveCompatibilityClass::BayesNash < IncentiveCompatibilityClass::ExPostRational);
     assert!(
-        IncentiveCompatibilityClass::BayesNash
-            < IncentiveCompatibilityClass::ExPostRational
-    );
-    assert!(
-        IncentiveCompatibilityClass::ExPostRational
-            < IncentiveCompatibilityClass::NonCompliant
+        IncentiveCompatibilityClass::ExPostRational < IncentiveCompatibilityClass::NonCompliant
     );
 }
 

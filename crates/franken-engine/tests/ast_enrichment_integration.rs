@@ -324,10 +324,7 @@ fn enrichment_binding_pattern_display_array() {
 #[test]
 fn enrichment_binding_pattern_canonical_value_all_kinds() {
     let patterns: Vec<(BindingPattern, &str)> = vec![
-        (
-            BindingPattern::Identifier("x".to_string()),
-            "identifier",
-        ),
+        (BindingPattern::Identifier("x".to_string()), "identifier"),
         (BindingPattern::ObjectPattern(vec![]), "object_pattern"),
         (BindingPattern::ArrayPattern(vec![]), "array_pattern"),
         (
@@ -400,10 +397,7 @@ fn enrichment_expression_display_all_simple_variants() {
     assert_eq!(Expression::NullLiteral.to_string(), "null");
     assert_eq!(Expression::UndefinedLiteral.to_string(), "undefined");
     assert_eq!(Expression::This.to_string(), "this");
-    assert_eq!(
-        Expression::Raw("a + b".to_string()).to_string(),
-        "a + b"
-    );
+    assert_eq!(Expression::Raw("a + b".to_string()).to_string(), "a + b");
 }
 
 #[test]
@@ -582,10 +576,7 @@ fn enrichment_variable_declaration_with_destructuring_serde() {
                 Some(BindingPattern::Identifier("x".to_string())),
                 Some(BindingPattern::Identifier("y".to_string())),
             ]),
-            initializer: Some(Expression::ArrayLiteral(vec![
-                Some(num(1)),
-                Some(num(2)),
-            ])),
+            initializer: Some(Expression::ArrayLiteral(vec![Some(num(1)), Some(num(2))])),
             span: s0(),
         }],
         span: s0(),
@@ -1469,7 +1460,8 @@ fn enrichment_conditional_with_call_chains() {
                 argument: Box::new(id("x")),
             }),
             right: Box::new(str_lit("function")),
-        }.into(),
+        }
+        .into(),
         consequent: Box::new(Expression::Call {
             callee: Box::new(id("x")),
             arguments: vec![],

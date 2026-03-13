@@ -287,21 +287,25 @@ fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", RiskTrend::Improving).is_empty());
     assert!(!format!("{:?}", RecommendedAction::Restrict).is_empty());
     assert!(!format!("{:?}", CardFormat::Text).is_empty());
-    assert!(!format!(
-        "{:?}",
-        TrustCardError::ExtensionNotFound {
-            extension_id: "x".into()
-        }
-    )
-    .is_empty());
-    assert!(!format!(
-        "{:?}",
-        RiskDriver {
-            description: "d".into(),
-            contribution: 5
-        }
-    )
-    .is_empty());
+    assert!(
+        !format!(
+            "{:?}",
+            TrustCardError::ExtensionNotFound {
+                extension_id: "x".into()
+            }
+        )
+        .is_empty()
+    );
+    assert!(
+        !format!(
+            "{:?}",
+            RiskDriver {
+                description: "d".into(),
+                contribution: 5
+            }
+        )
+        .is_empty()
+    );
     assert!(!format!("{:?}", GeneratorConfig::default()).is_empty());
     assert!(!format!("{:?}", TrustCardGenerator::new()).is_empty());
     assert!(!format!("{:?}", TrustCardCache::new()).is_empty());

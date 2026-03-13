@@ -710,3 +710,384 @@ fn enrichment_simulate_adaptive_deterministic() {
     let m2 = simulate_s3fifo_adaptive(&annotated, &config);
     assert_eq!(m1, m2);
 }
+
+// =========================================================================
+// ModuleVersionFingerprint — serde, ordering, Clone independence
+// =========================================================================
+
+#[test]
+fn enrichment_module_version_fingerprint_serde_roundtrip() {
+    let fp = ModuleVersionFingerprint::new(ContentHash::compute(b"src"), 5, 3);
+    let json = serde_json::to_string(&fp).unwrap();
+    let restored: ModuleVersionFingerprint = serde_json::from_str(&json).unwrap();
+    assert_eq!(fp, restored);
+}
+
+#[test]
+fn enrichment_module_version_fingerprint_ordering() {
+    let a = ModuleVersionFingerprint::new(ContentHash::compute(b"a"), 1, 1);
+    let b = ModuleVersionFingerprint::new(ContentHash::compute(b"a"), 2, 1);
+    // Ordering includes policy_version
+    assert!(a.partial_cmp(&b).is_some()); // at least comparable
+    // Same fingerprint should be equal
+    let c = ModuleVersionFingerprint::new(ContentHash::compute(b"a"), 1, 1);
+    assert_eq!(a, c);
+}
+
+#[test]
+fn enrichment_module_version_fingerprint_clone_independence() {
+    let original = ModuleVersionFingerprint::new(ContentHash::compute(b"src"), 1, 1);
+    let mut cloned = original.clone();
+    cloned.policy_version = 99;
+    assert_eq!(original.policy_version, 1);
+    assert_eq!(cloned.policy_version, 99);
+}
+
+// =========================================================================
+// ModuleCacheKey — serde, ordering
+// =========================================================================
+
+#[test]
+fn enrichment_module_cache_key_serde_roundtrip() {
+    let key = ModuleCacheKey::new(
+        "my-module",
+        ModuleVersionFingerprint::new(ContentHash::compute(b"src"), 1, 1),
+    );
+    let json = serde_json::to_string(&key).unwrap();
+    let restored: ModuleCacheKey = serde_json::from_str(&json).unwrap();
+    assert_eq!(key, restored);
+}
+
+#[test]
+fn enrichment_module_cache_key_ordering_by_module_id() {
+    let key_a = ModuleCacheKey::new(
+        "alpha",
+        ModuleVersionFingerprint::new(ContentHash::compute(b"s"), 1, 1),
+    );
+    let key_b = ModuleCacheKey::new(
+        "beta",
+        ModuleVersionFingerprint::new(ContentHash::compute(b"s"), 1, 1),
+    );
+    assert!(key_a < key_b);
+}
+
+// =========================================================================
+// ModuleCacheEntry — serde
+// =========================================================================
+
+#[test]
+fn enrichment_module_cache_entry_serde_roundtrip() {
+    let entry = ModuleCacheEntry {
+        key: ModuleCacheKey::new(
+            "my-mod",
+            ModuleVersionFingerprint::new(ContentHash::compute(b"s"), 1, 1),
+        ),
+        artifact_hash: ContentHash::compute(b"artifact"),
+        resolved_specifier: "./resolved/my-mod.js".to_string(),
+        inserted_seq: 42,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: ModuleCacheEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, restored);
+}
+
+// =========================================================================
+// CacheInsertRequest — serde
+// =========================================================================
+
+#[test]
+fn enrichment_cache_insert_request_serde_roundtrip() {
+    let req = CacheInsertRequest::new(
+        "mod-x",
+        ModuleVersionFingerprint::new(ContentHash::compute(b"s"), 2, 1),
+        ContentHash::compute(b"art"),
+        "./mod-x.js",
+    );
+    let json = serde_json::to_string(&req).unwrap();
+    let restored: CacheInsertRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(req, restored);
+}
+
+// =========================================================================
+// CacheContext — serde
+// =========================================================================
+
+#[test]
+fn enrichment_cache_context_serde_roundtrip() {
+    let ctx = CacheContext::new("trace-123", "decision-456", "policy-789");
+    let json = serde_json::to_string(&ctx).unwrap();
+    let restored: CacheContext = serde_json::from_str(&json).unwrap();
+    assert_eq!(ctx, restored);
+}
+
+// =========================================================================
+// CacheEvent — serde
+// =========================================================================
+
+#[test]
+fn enrichment_cache_event_serde_roundtrip() {
+    let event = CacheEvent {
+        seq: 0,
+        trace_id: "trace-1".to_string(),
+        decision_id: "dec-1".to_string(),
+        policy_id: "pol-1".to_string(),
+        component: "module_cache".to_string(),
+        event: "cache_insert".to_string(),
+        outcome: "allow".to_string(),
+        error_code: "none".to_string(),
+        module_id: "mod-a".to_string(),
+        detail: "inserted".to_string(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: CacheEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, restored);
+}
+
+// =========================================================================
+// CacheError — Display, std::error::Error, serde
+// =========================================================================
+
+#[test]
+fn enrichment_cache_error_display_contains_stable_code() {
+    let error = CacheError {
+        code: CacheErrorCode::ModuleRevoked,
+        message: "module revoked".to_string(),
+        event: CacheEvent {
+            seq: 0,
+            trace_id: "t".into(),
+            decision_id: "d".into(),
+            policy_id: "p".into(),
+            component: "module_cache".into(),
+            event: "cache_insert".into(),
+            outcome: "deny".into(),
+            error_code: "FE-MODCACHE-0001".into(),
+            module_id: "mod-z".into(),
+            detail: "module revoked".into(),
+        },
+    };
+    let display = error.to_string();
+    assert!(display.contains("FE-MODCACHE-0001"));
+    assert!(display.contains("module revoked"));
+}
+
+#[test]
+fn enrichment_cache_error_is_std_error() {
+    let error = CacheError {
+        code: CacheErrorCode::EmptyModuleId,
+        message: "empty".to_string(),
+        event: CacheEvent {
+            seq: 0,
+            trace_id: "t".into(),
+            decision_id: "d".into(),
+            policy_id: "p".into(),
+            component: "module_cache".into(),
+            event: "cache_insert".into(),
+            outcome: "deny".into(),
+            error_code: "FE-MODCACHE-0003".into(),
+            module_id: "".into(),
+            detail: "empty".into(),
+        },
+    };
+    let err: &dyn std::error::Error = &error;
+    assert!(!err.to_string().is_empty());
+    assert!(err.source().is_none());
+}
+
+#[test]
+fn enrichment_cache_error_serde_roundtrip() {
+    let error = CacheError {
+        code: CacheErrorCode::VersionRegression,
+        message: "regression detected".to_string(),
+        event: CacheEvent {
+            seq: 5,
+            trace_id: "t".into(),
+            decision_id: "d".into(),
+            policy_id: "p".into(),
+            component: "module_cache".into(),
+            event: "cache_insert".into(),
+            outcome: "deny".into(),
+            error_code: "FE-MODCACHE-0002".into(),
+            module_id: "mod-q".into(),
+            detail: "regression".into(),
+        },
+    };
+    let json = serde_json::to_string(&error).unwrap();
+    let restored: CacheError = serde_json::from_str(&json).unwrap();
+    assert_eq!(error, restored);
+}
+
+// =========================================================================
+// CacheErrorCode — serde, Copy
+// =========================================================================
+
+#[test]
+fn enrichment_cache_error_code_serde_roundtrip_all() {
+    let codes = [
+        CacheErrorCode::ModuleRevoked,
+        CacheErrorCode::VersionRegression,
+        CacheErrorCode::EmptyModuleId,
+    ];
+    for code in &codes {
+        let json = serde_json::to_string(code).unwrap();
+        let restored: CacheErrorCode = serde_json::from_str(&json).unwrap();
+        assert_eq!(*code, restored);
+    }
+}
+
+#[test]
+fn enrichment_cache_error_code_copy_semantics() {
+    let a = CacheErrorCode::ModuleRevoked;
+    let b = a;
+    assert_eq!(a, b);
+    assert_eq!(a.stable_code(), b.stable_code());
+}
+
+// =========================================================================
+// CacheSnapshot — serde
+// =========================================================================
+
+#[test]
+fn enrichment_cache_snapshot_serde_roundtrip() {
+    let mut cache = ModuleCache::new();
+    let ctx = test_context();
+    cache
+        .insert(test_insert_request("snap-mod", 1), &ctx)
+        .unwrap();
+    let snap = cache.snapshot();
+    let json = serde_json::to_string(&snap).unwrap();
+    let restored: CacheSnapshot = serde_json::from_str(&json).unwrap();
+    assert_eq!(snap, restored);
+}
+
+// =========================================================================
+// ModuleCache — error paths
+// =========================================================================
+
+#[test]
+fn enrichment_cache_insert_empty_module_id_error() {
+    let mut cache = ModuleCache::new();
+    let ctx = test_context();
+    let req = CacheInsertRequest::new(
+        "",
+        ModuleVersionFingerprint::new(ContentHash::compute(b"s"), 1, 1),
+        ContentHash::compute(b"a"),
+        "./empty.js",
+    );
+    let err = cache.insert(req, &ctx).unwrap_err();
+    assert_eq!(err.code, CacheErrorCode::EmptyModuleId);
+    assert!(err.to_string().contains("FE-MODCACHE-0003"));
+}
+
+#[test]
+fn enrichment_cache_insert_whitespace_module_id_error() {
+    let mut cache = ModuleCache::new();
+    let ctx = test_context();
+    let req = CacheInsertRequest::new(
+        "   ",
+        ModuleVersionFingerprint::new(ContentHash::compute(b"s"), 1, 1),
+        ContentHash::compute(b"a"),
+        "./ws.js",
+    );
+    let err = cache.insert(req, &ctx).unwrap_err();
+    assert_eq!(err.code, CacheErrorCode::EmptyModuleId);
+}
+
+#[test]
+fn enrichment_cache_insert_version_regression_error() {
+    let mut cache = ModuleCache::new();
+    let ctx = test_context();
+    // Insert version 5
+    let req = CacheInsertRequest::new(
+        "mod-regress",
+        ModuleVersionFingerprint::new(ContentHash::compute(b"s"), 5, 1),
+        ContentHash::compute(b"a"),
+        "./mod.js",
+    );
+    cache.insert(req, &ctx).unwrap();
+    // Try to insert version 3 (regression)
+    let req2 = CacheInsertRequest::new(
+        "mod-regress",
+        ModuleVersionFingerprint::new(ContentHash::compute(b"s"), 3, 1),
+        ContentHash::compute(b"a2"),
+        "./mod2.js",
+    );
+    let err = cache.insert(req2, &ctx).unwrap_err();
+    assert_eq!(err.code, CacheErrorCode::VersionRegression);
+    assert!(err.to_string().contains("FE-MODCACHE-0002"));
+}
+
+// =========================================================================
+// ModuleCache — policy change invalidation
+// =========================================================================
+
+#[test]
+fn enrichment_cache_invalidate_policy_change() {
+    let mut cache = ModuleCache::new();
+    let ctx = test_context();
+    let req = test_insert_request("mod-pol", 1);
+    cache.insert(req, &ctx).unwrap();
+    let v1 = test_version(1);
+    assert!(cache.get("mod-pol", &v1).is_some());
+
+    cache.invalidate_policy_change("mod-pol", 2, &ctx);
+    // Old version should be gone
+    assert!(cache.get("mod-pol", &v1).is_none());
+}
+
+// =========================================================================
+// ModuleCache — get nonexistent
+// =========================================================================
+
+#[test]
+fn enrichment_cache_get_nonexistent_returns_none() {
+    let cache = ModuleCache::new();
+    let version = test_version(1);
+    assert!(cache.get("nonexistent", &version).is_none());
+}
+
+// =========================================================================
+// ModuleCache — state_hash changes with mutations
+// =========================================================================
+
+#[test]
+fn enrichment_cache_state_hash_changes_on_insert() {
+    let mut cache = ModuleCache::new();
+    let ctx = test_context();
+    let hash_empty = cache.state_hash();
+    cache.insert(test_insert_request("mod-h", 1), &ctx).unwrap();
+    let hash_after = cache.state_hash();
+    assert_ne!(hash_empty, hash_after);
+}
+
+// =========================================================================
+// Clone independence for key types
+// =========================================================================
+
+#[test]
+fn enrichment_clone_independence_cache_context() {
+    let original = CacheContext::new("trace-1", "dec-1", "pol-1");
+    let mut cloned = original.clone();
+    cloned.trace_id = "modified".to_string();
+    assert_eq!(original.trace_id, "trace-1");
+    assert_eq!(cloned.trace_id, "modified");
+}
+
+#[test]
+fn enrichment_clone_independence_cache_event() {
+    let original = CacheEvent {
+        seq: 0,
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        component: "module_cache".into(),
+        event: "cache_insert".into(),
+        outcome: "allow".into(),
+        error_code: "none".into(),
+        module_id: "mod-a".into(),
+        detail: "inserted".into(),
+    };
+    let mut cloned = original.clone();
+    cloned.seq = 99;
+    assert_eq!(original.seq, 0);
+    assert_eq!(cloned.seq, 99);
+}

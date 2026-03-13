@@ -104,7 +104,10 @@ fn enrichment_failure_class_display_all_unique() {
     let mut seen = BTreeSet::new();
     for v in FailureClass::all() {
         let s = format!("{v}");
-        assert!(seen.insert(s.clone()), "duplicate display for FailureClass: {s}");
+        assert!(
+            seen.insert(s.clone()),
+            "duplicate display for FailureClass: {s}"
+        );
     }
     assert_eq!(seen.len(), FailureClass::all().len());
 }
@@ -129,7 +132,11 @@ fn enrichment_failure_class_as_str_all_snake_case() {
 
 #[test]
 fn enrichment_failure_class_all_count() {
-    assert_eq!(FailureClass::all().len(), 10, "there should be 10 failure classes");
+    assert_eq!(
+        FailureClass::all().len(),
+        10,
+        "there should be 10 failure classes"
+    );
 }
 
 #[test]
@@ -327,7 +334,10 @@ fn enrichment_owner_route_serde_roundtrip() {
 fn enrichment_owner_route_ord_deterministic() {
     let a = sample_owner("bd-a", "team-a");
     let b = sample_owner("bd-b", "team-b");
-    assert!(a < b, "OwnerRoute should be Ord: bd-a < bd-b lexicographically");
+    assert!(
+        a < b,
+        "OwnerRoute should be Ord: bd-a < bd-b lexicographically"
+    );
 }
 
 // ===========================================================================
@@ -365,26 +375,14 @@ fn enrichment_minimized_repro_different_source_different_hash() {
 #[test]
 fn enrichment_minimized_repro_truncates_long_source() {
     let long_source = "a".repeat(70_000);
-    let repro = MinimizedRepro::build(
-        &long_source,
-        "expected",
-        "actual",
-        BTreeSet::new(),
-        "cmd",
-    );
+    let repro = MinimizedRepro::build(&long_source, "expected", "actual", BTreeSet::new(), "cmd");
     assert_eq!(repro.source.len(), 65_536);
 }
 
 #[test]
 fn enrichment_minimized_repro_exact_limit_not_truncated() {
     let exact_source = "b".repeat(65_536);
-    let repro = MinimizedRepro::build(
-        &exact_source,
-        "expected",
-        "actual",
-        BTreeSet::new(),
-        "cmd",
-    );
+    let repro = MinimizedRepro::build(&exact_source, "expected", "actual", BTreeSet::new(), "cmd");
     assert_eq!(repro.source.len(), 65_536);
 }
 
@@ -600,7 +598,11 @@ fn enrichment_catalog_sorted_by_severity_desc() {
         sample_entry_with(FailureClass::ResolverBug, FailureSeverity::Medium),
     ];
     let catalog = ReproCatalog::build(entries, ep(1));
-    let weights: Vec<u32> = catalog.entries.iter().map(|e| e.severity.weight()).collect();
+    let weights: Vec<u32> = catalog
+        .entries
+        .iter()
+        .map(|e| e.severity.weight())
+        .collect();
     for i in 0..weights.len() - 1 {
         assert!(
             weights[i] >= weights[i + 1],
@@ -617,14 +619,8 @@ fn enrichment_catalog_summary_by_class() {
         sample_entry_with(FailureClass::ResolverBug, FailureSeverity::Low),
     ];
     let catalog = ReproCatalog::build(entries, ep(1));
-    assert_eq!(
-        catalog.summary.by_class.get("transform_bug"),
-        Some(&2)
-    );
-    assert_eq!(
-        catalog.summary.by_class.get("resolver_bug"),
-        Some(&1)
-    );
+    assert_eq!(catalog.summary.by_class.get("transform_bug"), Some(&2));
+    assert_eq!(catalog.summary.by_class.get("resolver_bug"), Some(&1));
 }
 
 #[test]
@@ -680,9 +676,15 @@ fn enrichment_catalog_entries_by_class_filter() {
         sample_entry_with(FailureClass::TransformBug, FailureSeverity::Low),
     ];
     let catalog = ReproCatalog::build(entries, ep(1));
-    assert_eq!(catalog.entries_by_class(FailureClass::TransformBug).len(), 2);
+    assert_eq!(
+        catalog.entries_by_class(FailureClass::TransformBug).len(),
+        2
+    );
     assert_eq!(catalog.entries_by_class(FailureClass::ResolverBug).len(), 1);
-    assert_eq!(catalog.entries_by_class(FailureClass::Unclassified).len(), 0);
+    assert_eq!(
+        catalog.entries_by_class(FailureClass::Unclassified).len(),
+        0
+    );
 }
 
 #[test]
@@ -693,7 +695,10 @@ fn enrichment_catalog_entries_by_severity_filter() {
         sample_entry_with(FailureClass::PackageMisuse, FailureSeverity::Low),
     ];
     let catalog = ReproCatalog::build(entries, ep(1));
-    assert_eq!(catalog.entries_by_severity(FailureSeverity::Critical).len(), 2);
+    assert_eq!(
+        catalog.entries_by_severity(FailureSeverity::Critical).len(),
+        2
+    );
     assert_eq!(catalog.entries_by_severity(FailureSeverity::Low).len(), 1);
     assert_eq!(catalog.entries_by_severity(FailureSeverity::Info).len(), 0);
 }
@@ -723,9 +728,10 @@ fn enrichment_catalog_engine_bugs_filter() {
 
 #[test]
 fn enrichment_catalog_has_critical_engine_bugs_true() {
-    let entries = vec![
-        sample_entry_with(FailureClass::TransformBug, FailureSeverity::Critical),
-    ];
+    let entries = vec![sample_entry_with(
+        FailureClass::TransformBug,
+        FailureSeverity::Critical,
+    )];
     let catalog = ReproCatalog::build(entries, ep(1));
     assert!(catalog.has_critical_engine_bugs());
 }
@@ -733,9 +739,10 @@ fn enrichment_catalog_has_critical_engine_bugs_true() {
 #[test]
 fn enrichment_catalog_has_critical_engine_bugs_false_non_engine() {
     // PackageMisuse is not an engine bug, even if Critical severity
-    let entries = vec![
-        sample_entry_with(FailureClass::PackageMisuse, FailureSeverity::Critical),
-    ];
+    let entries = vec![sample_entry_with(
+        FailureClass::PackageMisuse,
+        FailureSeverity::Critical,
+    )];
     let catalog = ReproCatalog::build(entries, ep(1));
     assert!(!catalog.has_critical_engine_bugs());
 }
@@ -750,9 +757,10 @@ fn enrichment_catalog_has_critical_engine_bugs_false_resolved() {
 
 #[test]
 fn enrichment_catalog_has_critical_engine_bugs_false_high_only() {
-    let entries = vec![
-        sample_entry_with(FailureClass::TransformBug, FailureSeverity::High),
-    ];
+    let entries = vec![sample_entry_with(
+        FailureClass::TransformBug,
+        FailureSeverity::High,
+    )];
     let catalog = ReproCatalog::build(entries, ep(1));
     assert!(!catalog.has_critical_engine_bugs());
 }
@@ -818,7 +826,10 @@ fn enrichment_classify_hook_violation_highest_priority() {
         has_transform_diff: true,
         ..FailureSymptoms::default()
     };
-    assert_eq!(classify_failure(&symptoms), FailureClass::HookInvariantViolation);
+    assert_eq!(
+        classify_failure(&symptoms),
+        FailureClass::HookInvariantViolation
+    );
 }
 
 #[test]
@@ -840,7 +851,10 @@ fn enrichment_classify_suspense_third_priority() {
         has_transform_diff: true,
         ..FailureSymptoms::default()
     };
-    assert_eq!(classify_failure(&symptoms), FailureClass::SuspenseDivergence);
+    assert_eq!(
+        classify_failure(&symptoms),
+        FailureClass::SuspenseDivergence
+    );
 }
 
 #[test]
@@ -850,7 +864,10 @@ fn enrichment_classify_error_boundary_fourth_priority() {
         has_transform_diff: true,
         ..FailureSymptoms::default()
     };
-    assert_eq!(classify_failure(&symptoms), FailureClass::ErrorBoundaryFailure);
+    assert_eq!(
+        classify_failure(&symptoms),
+        FailureClass::ErrorBoundaryFailure
+    );
 }
 
 #[test]
@@ -877,7 +894,10 @@ fn enrichment_classify_runtime_gap() {
         has_runtime_gap: true,
         ..FailureSymptoms::default()
     };
-    assert_eq!(classify_failure(&symptoms), FailureClass::RuntimeSemanticGap);
+    assert_eq!(
+        classify_failure(&symptoms),
+        FailureClass::RuntimeSemanticGap
+    );
 }
 
 #[test]
@@ -886,7 +906,10 @@ fn enrichment_classify_unsupported_environment() {
         has_env_boundary: true,
         ..FailureSymptoms::default()
     };
-    assert_eq!(classify_failure(&symptoms), FailureClass::UnsupportedEnvironment);
+    assert_eq!(
+        classify_failure(&symptoms),
+        FailureClass::UnsupportedEnvironment
+    );
 }
 
 #[test]
@@ -1026,7 +1049,11 @@ fn enrichment_default_owner_route_all_classes_valid() {
             "bead_id should start with bd- for {}",
             class.as_str()
         );
-        assert!(!owner.team.is_empty(), "team should not be empty for {}", class.as_str());
+        assert!(
+            !owner.team.is_empty(),
+            "team should not be empty for {}",
+            class.as_str()
+        );
         assert!(
             !owner.rationale.is_empty(),
             "rationale should not be empty for {}",
@@ -1051,8 +1078,14 @@ fn enrichment_default_owner_route_resolver_specific() {
 fn enrichment_default_owner_route_suspense_and_error_boundary_share_team() {
     let s = default_owner_route(FailureClass::SuspenseDivergence);
     let e = default_owner_route(FailureClass::ErrorBoundaryFailure);
-    assert_eq!(s.team, e.team, "suspense and error boundary should share team");
-    assert_eq!(s.bead_id, e.bead_id, "suspense and error boundary should share bead");
+    assert_eq!(
+        s.team, e.team,
+        "suspense and error boundary should share team"
+    );
+    assert_eq!(
+        s.bead_id, e.bead_id,
+        "suspense and error boundary should share bead"
+    );
 }
 
 #[test]
@@ -1109,14 +1142,20 @@ fn enrichment_generate_advisory_info_mentions_no_impact() {
 fn enrichment_generate_advisory_different_classes_different_text() {
     let a1 = generate_advisory(FailureClass::TransformBug, FailureSeverity::High);
     let a2 = generate_advisory(FailureClass::ResolverBug, FailureSeverity::High);
-    assert_ne!(a1, a2, "different classes should produce different advisories");
+    assert_ne!(
+        a1, a2,
+        "different classes should produce different advisories"
+    );
 }
 
 #[test]
 fn enrichment_generate_advisory_different_severity_different_text() {
     let a1 = generate_advisory(FailureClass::TransformBug, FailureSeverity::Critical);
     let a2 = generate_advisory(FailureClass::TransformBug, FailureSeverity::Low);
-    assert_ne!(a1, a2, "different severities should produce different advisories");
+    assert_ne!(
+        a1, a2,
+        "different severities should produce different advisories"
+    );
 }
 
 // ===========================================================================
@@ -1350,7 +1389,10 @@ fn enrichment_catalog_engine_bug_count_matches_filter() {
         sample_entry_with(FailureClass::UnsupportedEnvironment, FailureSeverity::Low),
     ];
     let catalog = ReproCatalog::build(entries, ep(1));
-    assert_eq!(catalog.summary.engine_bug_count, catalog.engine_bugs().len());
+    assert_eq!(
+        catalog.summary.engine_bug_count,
+        catalog.engine_bugs().len()
+    );
 }
 
 #[test]

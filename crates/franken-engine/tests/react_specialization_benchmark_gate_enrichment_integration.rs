@@ -27,12 +27,11 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::react_specialization_benchmark_gate::{
-    BenchmarkClass, BenchmarkConfig, BenchmarkSample, DecisionReceipt, GateVerdict,
-    GovernanceAction, ParityDimension, ParityFinding,
-    RegressionSeverity, SpecializationDomain,
-    BEAD_ID, COMPONENT, POLICY_ID, SCHEMA_VERSION,
-    build_parity_report, classify_regression, compute_receipt, compute_regression,
-    derive_governance_action, evaluate_benchmark_matrix, evaluate_cell,
+    BEAD_ID, BenchmarkClass, BenchmarkConfig, BenchmarkSample, COMPONENT, DecisionReceipt,
+    GateVerdict, GovernanceAction, POLICY_ID, ParityDimension, ParityFinding, RegressionSeverity,
+    SCHEMA_VERSION, SpecializationDomain, build_parity_report, classify_regression,
+    compute_receipt, compute_regression, derive_governance_action, evaluate_benchmark_matrix,
+    evaluate_cell,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -124,7 +123,10 @@ fn enrichment_specialization_domain_display_matches_as_str() {
 
 #[test]
 fn enrichment_specialization_domain_as_str_all_distinct() {
-    let strings: BTreeSet<&str> = SpecializationDomain::ALL.iter().map(|d| d.as_str()).collect();
+    let strings: BTreeSet<&str> = SpecializationDomain::ALL
+        .iter()
+        .map(|d| d.as_str())
+        .collect();
     assert_eq!(strings.len(), 6);
 }
 
@@ -356,10 +358,7 @@ fn enrichment_classify_regression_zero_is_none() {
 #[test]
 fn enrichment_classify_regression_below_minor_threshold() {
     let cfg = BenchmarkConfig::default(); // minor=50_000
-    assert_eq!(
-        classify_regression(49_999, &cfg),
-        RegressionSeverity::Minor
-    );
+    assert_eq!(classify_regression(49_999, &cfg), RegressionSeverity::Minor);
 }
 
 #[test]

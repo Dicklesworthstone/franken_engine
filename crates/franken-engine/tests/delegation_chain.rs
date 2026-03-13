@@ -956,11 +956,7 @@ fn make_bound_token_timed(
     builder.build().expect("token should build")
 }
 
-fn valid_chain_fixture() -> (
-    DelegationChain,
-    SigningKey,
-    PrincipalId,
-) {
+fn valid_chain_fixture() -> (DelegationChain, SigningKey, PrincipalId) {
     let root_sk = make_sk(1);
     let issuer_sk = make_sk(2);
     let delegate_sk = make_sk(3);
@@ -1005,11 +1001,7 @@ fn enrichment_chain_new_preserves_link_order() {
         principal_id_from_verification_key(&issuer_sk.verification_key()),
         &[RuntimeCapability::VmDispatch],
     );
-    let link1 = make_bound_token(
-        &issuer_sk,
-        leaf.clone(),
-        &[RuntimeCapability::VmDispatch],
-    );
+    let link1 = make_bound_token(&issuer_sk, leaf.clone(), &[RuntimeCapability::VmDispatch]);
 
     let jti0 = link0.jti.clone();
     let jti1 = link1.jti.clone();
@@ -1042,7 +1034,11 @@ fn enrichment_chain_links_field_accessible() {
     let link = make_bound_token(&root_sk, leaf.clone(), &[RuntimeCapability::VmDispatch]);
     let chain = DelegationChain::new(vec![link]);
     assert_eq!(chain.links.len(), 1);
-    assert!(chain.links[0].capabilities.contains(&RuntimeCapability::VmDispatch));
+    assert!(
+        chain.links[0]
+            .capabilities
+            .contains(&RuntimeCapability::VmDispatch)
+    );
 }
 
 // --- 2. Chain traversal ---
@@ -1291,7 +1287,11 @@ fn enrichment_chain_one_over_default_depth_fails() {
         } else {
             leaf.clone()
         };
-        links.push(make_bound_token(&sks[i], delegate, &[RuntimeCapability::VmDispatch]));
+        links.push(make_bound_token(
+            &sks[i],
+            delegate,
+            &[RuntimeCapability::VmDispatch],
+        ));
     }
 
     let chain = DelegationChain::new(links);
@@ -1387,11 +1387,7 @@ fn enrichment_attenuation_drops_two_capabilities() {
             RuntimeCapability::GcInvoke,
         ],
     );
-    let link1 = make_bound_token(
-        &issuer_sk,
-        leaf.clone(),
-        &[RuntimeCapability::VmDispatch],
-    );
+    let link1 = make_bound_token(&issuer_sk, leaf.clone(), &[RuntimeCapability::VmDispatch]);
 
     let chain = DelegationChain::new(vec![link0, link1]);
     let ctx = make_ctx(&root_sk);
@@ -1447,11 +1443,7 @@ fn enrichment_attenuation_disjoint_capabilities_rejected() {
         &[RuntimeCapability::VmDispatch],
     );
     // Completely disjoint set
-    let link1 = make_bound_token(
-        &issuer_sk,
-        leaf.clone(),
-        &[RuntimeCapability::GcInvoke],
-    );
+    let link1 = make_bound_token(&issuer_sk, leaf.clone(), &[RuntimeCapability::GcInvoke]);
 
     let chain = DelegationChain::new(vec![link0, link1]);
     let ctx = make_ctx(&root_sk);
@@ -1464,7 +1456,10 @@ fn enrichment_attenuation_disjoint_capabilities_rejected() {
         &NoRevocationOracle,
     )
     .expect_err("disjoint caps must fail attenuation");
-    assert!(matches!(err, ChainError::AttenuationViolation { index: 1, .. }));
+    assert!(matches!(
+        err,
+        ChainError::AttenuationViolation { index: 1, .. }
+    ));
 }
 
 #[test]
@@ -1482,7 +1477,10 @@ fn enrichment_attenuation_partial_overlap_rejected() {
     let link1 = make_bound_token(
         &issuer_sk,
         leaf.clone(),
-        &[RuntimeCapability::VmDispatch, RuntimeCapability::NetworkEgress],
+        &[
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::NetworkEgress,
+        ],
     );
 
     let chain = DelegationChain::new(vec![link0, link1]);
@@ -1529,11 +1527,7 @@ fn enrichment_multiple_attenuation_steps() {
         principal_id_from_verification_key(&sk3.verification_key()),
         &[RuntimeCapability::VmDispatch, RuntimeCapability::GcInvoke],
     );
-    let link2 = make_bound_token(
-        &sk3,
-        leaf.clone(),
-        &[RuntimeCapability::VmDispatch],
-    );
+    let link2 = make_bound_token(&sk3, leaf.clone(), &[RuntimeCapability::VmDispatch]);
 
     let chain = DelegationChain::new(vec![link0, link1, link2]);
     let ctx = make_ctx(&root_sk);
@@ -1692,7 +1686,10 @@ fn enrichment_chain_error_revoked_link_serde() {
 fn enrichment_chain_error_missing_capability_serde() {
     let err = ChainError::MissingCapabilityAtLeaf {
         required: RuntimeCapability::FsWrite,
-        leaf_capabilities: BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::GcInvoke]),
+        leaf_capabilities: BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::GcInvoke,
+        ]),
     };
     let json = serde_json::to_string(&err).expect("serialize");
     let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
@@ -1789,13 +1786,7 @@ fn enrichment_zone_mismatch_first_link_rejected() {
         &NoRevocationOracle,
     )
     .expect_err("zone mismatch at root must fail");
-    assert!(matches!(
-        err,
-        ChainError::ZoneMismatch {
-            index: 0,
-            ..
-        }
-    ));
+    assert!(matches!(err, ChainError::ZoneMismatch { index: 0, .. }));
 }
 
 #[test]
@@ -1835,13 +1826,7 @@ fn enrichment_zone_mismatch_middle_link_rejected() {
         &NoRevocationOracle,
     )
     .expect_err("zone mismatch at middle link");
-    assert!(matches!(
-        err,
-        ChainError::ZoneMismatch {
-            index: 1,
-            ..
-        }
-    ));
+    assert!(matches!(err, ChainError::ZoneMismatch { index: 1, .. }));
 }
 
 #[test]
@@ -1914,14 +1899,8 @@ fn enrichment_revoke_last_link_only() {
     revoked.insert(chain.links[2].jti.clone());
     let oracle = SetRevocationOracle { revoked };
 
-    let err = verify_chain(
-        &chain,
-        RuntimeCapability::VmDispatch,
-        &leaf,
-        &ctx,
-        &oracle,
-    )
-    .expect_err("revoking leaf must fail");
+    let err = verify_chain(&chain, RuntimeCapability::VmDispatch, &leaf, &ctx, &oracle)
+        .expect_err("revoking leaf must fail");
     assert!(matches!(err, ChainError::RevokedLink { index: 2, .. }));
 }
 
@@ -1935,14 +1914,8 @@ fn enrichment_revoke_all_links_reports_first() {
     }
     let oracle = SetRevocationOracle { revoked };
 
-    let err = verify_chain(
-        &chain,
-        RuntimeCapability::VmDispatch,
-        &leaf,
-        &ctx,
-        &oracle,
-    )
-    .expect_err("all revoked must fail");
+    let err = verify_chain(&chain, RuntimeCapability::VmDispatch, &leaf, &ctx, &oracle)
+        .expect_err("all revoked must fail");
     assert!(matches!(err, ChainError::RevokedLink { index: 0, .. }));
 }
 
@@ -1985,11 +1958,7 @@ fn enrichment_multiple_roots_accept_first() {
     let root_sk_2 = make_sk(2);
     let leaf = make_principal(50);
 
-    let link = make_bound_token(
-        &root_sk_1,
-        leaf.clone(),
-        &[RuntimeCapability::VmDispatch],
-    );
+    let link = make_bound_token(&root_sk_1, leaf.clone(), &[RuntimeCapability::VmDispatch]);
     let chain = DelegationChain::new(vec![link]);
 
     let mut roots = BTreeSet::new();
@@ -2020,11 +1989,7 @@ fn enrichment_multiple_roots_accept_second() {
     let root_sk_2 = make_sk(2);
     let leaf = make_principal(50);
 
-    let link = make_bound_token(
-        &root_sk_2,
-        leaf.clone(),
-        &[RuntimeCapability::VmDispatch],
-    );
+    let link = make_bound_token(&root_sk_2, leaf.clone(), &[RuntimeCapability::VmDispatch]);
     let chain = DelegationChain::new(vec![link]);
 
     let mut roots = BTreeSet::new();
@@ -2098,7 +2063,10 @@ fn enrichment_display_depth_exceeded_contains_counts() {
 #[test]
 fn enrichment_display_unauthorized_root_contains_issuer() {
     let vk = make_sk(42).verification_key();
-    let msg = ChainError::UnauthorizedRoot { root_issuer: vk.clone() }.to_string();
+    let msg = ChainError::UnauthorizedRoot {
+        root_issuer: vk.clone(),
+    }
+    .to_string();
     assert!(msg.contains("unauthorized root"));
 }
 
@@ -2206,7 +2174,9 @@ fn enrichment_context_clone_independence() {
 fn enrichment_principal_id_from_vk_is_pure_function() {
     let sk = make_sk(100);
     let vk = sk.verification_key();
-    let results: Vec<_> = (0..10).map(|_| principal_id_from_verification_key(&vk)).collect();
+    let results: Vec<_> = (0..10)
+        .map(|_| principal_id_from_verification_key(&vk))
+        .collect();
     for r in &results {
         assert_eq!(*r, results[0]);
     }
@@ -2220,7 +2190,11 @@ fn enrichment_principal_id_different_for_each_seed() {
             principal_id_from_verification_key(&sk.verification_key())
         })
         .collect();
-    assert_eq!(ids.len(), 20, "all 20 seeds must produce distinct principals");
+    assert_eq!(
+        ids.len(),
+        20,
+        "all 20 seeds must produce distinct principals"
+    );
 }
 
 // --- 13. Chain verify method vs free function ---
@@ -2233,7 +2207,12 @@ fn enrichment_verify_method_error_matches_free_function() {
     let ctx = make_ctx(&root_sk);
 
     let err_method = chain
-        .verify(RuntimeCapability::VmDispatch, &leaf, &ctx, &NoRevocationOracle)
+        .verify(
+            RuntimeCapability::VmDispatch,
+            &leaf,
+            &ctx,
+            &NoRevocationOracle,
+        )
         .expect_err("method");
     let err_fn = verify_chain(
         &chain,
@@ -2256,7 +2235,12 @@ fn enrichment_verify_method_proof_hash_matches_free_function() {
     let ctx = make_ctx(&root_sk);
 
     let p1 = chain
-        .verify(RuntimeCapability::VmDispatch, &leaf, &ctx, &NoRevocationOracle)
+        .verify(
+            RuntimeCapability::VmDispatch,
+            &leaf,
+            &ctx,
+            &NoRevocationOracle,
+        )
         .unwrap();
     let p2 = verify_chain(
         &chain,
@@ -2304,12 +2288,16 @@ fn enrichment_chain_partial_eq_different_chains() {
     let leaf_a = make_principal(10);
     let leaf_b = make_principal(20);
 
-    let chain_a = DelegationChain::new(vec![
-        make_bound_token(&root_sk, leaf_a, &[RuntimeCapability::VmDispatch]),
-    ]);
-    let chain_b = DelegationChain::new(vec![
-        make_bound_token(&root_sk, leaf_b, &[RuntimeCapability::VmDispatch]),
-    ]);
+    let chain_a = DelegationChain::new(vec![make_bound_token(
+        &root_sk,
+        leaf_a,
+        &[RuntimeCapability::VmDispatch],
+    )]);
+    let chain_b = DelegationChain::new(vec![make_bound_token(
+        &root_sk,
+        leaf_b,
+        &[RuntimeCapability::VmDispatch],
+    )]);
     assert_ne!(chain_a, chain_b);
 }
 
@@ -2352,7 +2340,10 @@ fn enrichment_proof_capability_matches_request() {
         &NoRevocationOracle,
     )
     .unwrap();
-    assert_eq!(proof_vm.authorized_capability, RuntimeCapability::VmDispatch);
+    assert_eq!(
+        proof_vm.authorized_capability,
+        RuntimeCapability::VmDispatch
+    );
 
     let proof_gc = verify_chain(
         &chain,
@@ -2472,7 +2463,11 @@ fn enrichment_all_chain_error_variants_have_distinct_debug() {
     ];
 
     let debugs: BTreeSet<String> = errors.iter().map(|e| format!("{e:?}")).collect();
-    assert_eq!(debugs.len(), errors.len(), "all error Debug must be distinct");
+    assert_eq!(
+        debugs.len(),
+        errors.len(),
+        "all error Debug must be distinct"
+    );
 }
 
 // --- 18. Deterministic replay ---

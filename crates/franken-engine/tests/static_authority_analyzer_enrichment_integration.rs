@@ -1074,7 +1074,9 @@ fn enrichment_multiple_entries_union_capabilities() {
 
     let m = ManifestIntents {
         extension_id: "ext-multi-entry".to_string(),
-        declared_capabilities: vec![cap("cap:alpha"), cap("cap:beta")].into_iter().collect(),
+        declared_capabilities: vec![cap("cap:alpha"), cap("cap:beta")]
+            .into_iter()
+            .collect(),
         optional_capabilities: BTreeSet::new(),
     };
 
@@ -1254,9 +1256,7 @@ fn enrichment_unreachable_hostcall_included_if_manifest_declared() {
 
     let m = ManifestIntents {
         extension_id: "ext-unr2".to_string(),
-        declared_capabilities: vec![cap("cap:ok"), cap("cap:hidden")]
-            .into_iter()
-            .collect(),
+        declared_capabilities: vec![cap("cap:ok"), cap("cap:hidden")].into_iter().collect(),
         optional_capabilities: BTreeSet::new(),
     };
 
@@ -1435,9 +1435,7 @@ fn enrichment_precision_ratio_manifest_larger_than_upper_bound() {
 
     let m = ManifestIntents {
         extension_id: "ext-prec".to_string(),
-        declared_capabilities: vec![cap("c1"), cap("c2"), cap("c3")]
-            .into_iter()
-            .collect(),
+        declared_capabilities: vec![cap("c1"), cap("c2"), cap("c3")].into_iter().collect(),
         optional_capabilities: BTreeSet::new(),
     };
 
@@ -1549,9 +1547,7 @@ fn enrichment_unused_declared_always_empty_due_to_fallback() {
 
     let m = ManifestIntents {
         extension_id: "ext-unu".to_string(),
-        declared_capabilities: vec![cap("phantom1"), cap("phantom2")]
-            .into_iter()
-            .collect(),
+        declared_capabilities: vec![cap("phantom1"), cap("phantom2")].into_iter().collect(),
         optional_capabilities: BTreeSet::new(),
     };
 
@@ -1799,9 +1795,7 @@ fn enrichment_effect_graph_serde_complex() {
 fn enrichment_manifest_intents_serde_with_optional() {
     let m = ManifestIntents {
         extension_id: "ext-opt".to_string(),
-        declared_capabilities: vec![cap("fs:read"), cap("fs:write")]
-            .into_iter()
-            .collect(),
+        declared_capabilities: vec![cap("fs:read"), cap("fs:write")].into_iter().collect(),
         optional_capabilities: vec![cap("net:connect"), cap("db:query")]
             .into_iter()
             .collect(),

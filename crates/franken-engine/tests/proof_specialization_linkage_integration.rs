@@ -1567,9 +1567,11 @@ fn enrichment_register_at_epoch_zero() {
 #[test]
 fn enrichment_attach_to_ir3_sets_validity_epoch() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-ve", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-ve", 5, &["p1"]), "t")
+        .unwrap();
     let mut m = ir3();
-    eng.attach_to_ir3(&LinkageId::new("lnk-ve"), &mut m, "t").unwrap();
+    eng.attach_to_ir3(&LinkageId::new("lnk-ve"), &mut m, "t")
+        .unwrap();
     let spec = m.specialization.as_ref().unwrap();
     assert_eq!(spec.validity_epoch, 5);
 }
@@ -1626,11 +1628,14 @@ fn enrichment_attach_to_ir3_at_tick_not_found() {
 #[test]
 fn enrichment_attach_to_ir3_at_tick_already_specialized() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-as1", 5, &["p1"]), "t").unwrap();
-    eng.register(linkage_record("lnk-as2", 5, &["p2"]), "t").unwrap();
+    eng.register(linkage_record("lnk-as1", 5, &["p1"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-as2", 5, &["p2"]), "t")
+        .unwrap();
 
     let mut m = ir3();
-    eng.attach_to_ir3(&LinkageId::new("lnk-as1"), &mut m, "t").unwrap();
+    eng.attach_to_ir3(&LinkageId::new("lnk-as1"), &mut m, "t")
+        .unwrap();
 
     let err = eng
         .attach_to_ir3_at_tick(&LinkageId::new("lnk-as2"), &mut m, 0, "t")
@@ -1686,7 +1691,8 @@ fn enrichment_attach_to_ir3_at_tick_inactive_linkage() {
 #[test]
 fn enrichment_record_execution_updates_performance_delta() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-pd", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-pd", 5, &["p1"]), "t")
+        .unwrap();
 
     let lid = LinkageId::new("lnk-pd");
     let perf1 = PerformanceDelta {
@@ -1701,14 +1707,22 @@ fn enrichment_record_execution_updates_performance_delta() {
     let mut m = ir4();
     eng.record_execution(&lid, &mut m, perf1, "t").unwrap();
     assert_eq!(
-        eng.get(&lid).unwrap().performance_delta.unwrap().speedup_millionths,
+        eng.get(&lid)
+            .unwrap()
+            .performance_delta
+            .unwrap()
+            .speedup_millionths,
         1_200_000
     );
 
     eng.record_execution(&lid, &mut m, perf2, "t").unwrap();
     // Latest performance delta should overwrite
     assert_eq!(
-        eng.get(&lid).unwrap().performance_delta.unwrap().speedup_millionths,
+        eng.get(&lid)
+            .unwrap()
+            .performance_delta
+            .unwrap()
+            .speedup_millionths,
         2_000_000
     );
     assert_eq!(eng.get(&lid).unwrap().execution_count, 2);
@@ -1722,7 +1736,12 @@ fn enrichment_record_execution_epoch_mismatch() {
 
     let mut m = ir4();
     let err = eng
-        .record_execution(&LinkageId::new("lnk-em-exec"), &mut m, PerformanceDelta::NEUTRAL, "t")
+        .record_execution(
+            &LinkageId::new("lnk-em-exec"),
+            &mut m,
+            PerformanceDelta::NEUTRAL,
+            "t",
+        )
         .unwrap_err();
     match &err {
         LinkageError::EpochMismatch { .. } => {}
@@ -1801,20 +1820,26 @@ fn enrichment_record_execution_at_tick_inactive() {
 #[test]
 fn enrichment_record_execution_witness_hash_deterministic() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-det", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-det", 5, &["p1"]), "t")
+        .unwrap();
 
     let lid = LinkageId::new("lnk-det");
     let mut m1 = ir4();
     m1.instructions_executed = 100;
     m1.duration_ticks = 50;
-    let exec1 = eng.record_execution(&lid, &mut m1, PerformanceDelta::NEUTRAL, "t").unwrap();
+    let exec1 = eng
+        .record_execution(&lid, &mut m1, PerformanceDelta::NEUTRAL, "t")
+        .unwrap();
 
     let mut eng2 = engine(5);
-    eng2.register(linkage_record("lnk-det", 5, &["p1"]), "t").unwrap();
+    eng2.register(linkage_record("lnk-det", 5, &["p1"]), "t")
+        .unwrap();
     let mut m2 = ir4();
     m2.instructions_executed = 100;
     m2.duration_ticks = 50;
-    let exec2 = eng2.record_execution(&lid, &mut m2, PerformanceDelta::NEUTRAL, "t").unwrap();
+    let exec2 = eng2
+        .record_execution(&lid, &mut m2, PerformanceDelta::NEUTRAL, "t")
+        .unwrap();
 
     assert_eq!(exec1.witness_hash, exec2.witness_hash);
 }
@@ -1826,7 +1851,8 @@ fn enrichment_record_execution_witness_hash_deterministic() {
 #[test]
 fn enrichment_on_epoch_change_same_epoch_no_invalidation() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-same", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-same", 5, &["p1"]), "t")
+        .unwrap();
 
     let rollbacks = eng.on_epoch_change(epoch(5), "t");
     assert!(rollbacks.is_empty());
@@ -1836,7 +1862,8 @@ fn enrichment_on_epoch_change_same_epoch_no_invalidation() {
 #[test]
 fn enrichment_on_epoch_change_multiple_times() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-1", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-1", 5, &["p1"]), "t")
+        .unwrap();
 
     eng.on_epoch_change(epoch(6), "t");
     assert_eq!(eng.current_epoch(), epoch(6));
@@ -1874,8 +1901,8 @@ fn enrichment_on_epoch_change_invalidation_order_deterministic() {
 
     let rollbacks = eng.on_epoch_change(epoch(6), "t");
     // BTreeMap gives deterministic sorted order
-    for i in 0..10 {
-        assert_eq!(rollbacks[i].0, LinkageId::new(format!("lnk-{i:03}")));
+    for (i, rb) in rollbacks.iter().enumerate().take(10) {
+        assert_eq!(rb.0, LinkageId::new(format!("lnk-{i:03}")));
     }
 }
 
@@ -2079,9 +2106,12 @@ fn enrichment_rollback_plan_empty_engine() {
 #[test]
 fn enrichment_rollback_plan_multiple_active() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-a", 5, &["pa"]), "t").unwrap();
-    eng.register(linkage_record("lnk-b", 5, &["pb"]), "t").unwrap();
-    eng.register(linkage_record("lnk-c", 5, &["pc"]), "t").unwrap();
+    eng.register(linkage_record("lnk-a", 5, &["pa"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-b", 5, &["pb"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-c", 5, &["pc"]), "t")
+        .unwrap();
 
     let plan = eng.rollback_plan();
     assert_eq!(plan.len(), 3);
@@ -2100,10 +2130,13 @@ fn enrichment_active_linkages_empty_engine() {
 #[test]
 fn enrichment_active_linkages_after_invalidation() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-a", 5, &["p1"]), "t").unwrap();
-    eng.register(linkage_record("lnk-b", 5, &["p2"]), "t").unwrap();
+    eng.register(linkage_record("lnk-a", 5, &["p1"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-b", 5, &["p2"]), "t")
+        .unwrap();
 
-    eng.invalidate_manual(&LinkageId::new("lnk-a"), "op", "t").unwrap();
+    eng.invalidate_manual(&LinkageId::new("lnk-a"), "op", "t")
+        .unwrap();
 
     let active = eng.active_linkages();
     assert_eq!(active.len(), 1);
@@ -2134,10 +2167,13 @@ fn enrichment_produce_witness_events_sequence_numbers() {
 #[test]
 fn enrichment_produce_witness_events_after_partial_invalidation() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-stay", 5, &["p1"]), "t").unwrap();
-    eng.register(linkage_record("lnk-go", 5, &["p2"]), "t").unwrap();
+    eng.register(linkage_record("lnk-stay", 5, &["p1"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-go", 5, &["p2"]), "t")
+        .unwrap();
 
-    eng.invalidate_manual(&LinkageId::new("lnk-go"), "op", "t").unwrap();
+    eng.invalidate_manual(&LinkageId::new("lnk-go"), "op", "t")
+        .unwrap();
 
     let events = eng.produce_witness_events(0, 99);
     assert_eq!(events.len(), 1);
@@ -2175,7 +2211,8 @@ fn enrichment_events_error_code_for_not_found() {
 #[test]
 fn enrichment_events_error_code_for_epoch_mismatch() {
     let mut eng = engine(10);
-    eng.register(linkage_record("lnk-em", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-em", 5, &["p1"]), "t")
+        .unwrap();
 
     let mut m = ir3();
     let _ = eng.attach_to_ir3(&LinkageId::new("lnk-em"), &mut m, "t");
@@ -2192,7 +2229,12 @@ fn enrichment_events_error_code_for_epoch_mismatch() {
 fn enrichment_events_record_execution_error_logged() {
     let mut eng = engine(5);
     let mut m = ir4();
-    let _ = eng.record_execution(&LinkageId::new("missing"), &mut m, PerformanceDelta::NEUTRAL, "t");
+    let _ = eng.record_execution(
+        &LinkageId::new("missing"),
+        &mut m,
+        PerformanceDelta::NEUTRAL,
+        "t",
+    );
 
     let error_events: Vec<_> = eng
         .events()
@@ -2205,16 +2247,24 @@ fn enrichment_events_record_execution_error_logged() {
 #[test]
 fn enrichment_events_count_after_full_lifecycle() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-1", 5, &["p1"]), "t").unwrap();
-
-    let mut m3 = ir3();
-    eng.attach_to_ir3(&LinkageId::new("lnk-1"), &mut m3, "t").unwrap();
-
-    let mut m4 = ir4();
-    eng.record_execution(&LinkageId::new("lnk-1"), &mut m4, PerformanceDelta::NEUTRAL, "t")
+    eng.register(linkage_record("lnk-1", 5, &["p1"]), "t")
         .unwrap();
 
-    eng.invalidate_manual(&LinkageId::new("lnk-1"), "op", "t").unwrap();
+    let mut m3 = ir3();
+    eng.attach_to_ir3(&LinkageId::new("lnk-1"), &mut m3, "t")
+        .unwrap();
+
+    let mut m4 = ir4();
+    eng.record_execution(
+        &LinkageId::new("lnk-1"),
+        &mut m4,
+        PerformanceDelta::NEUTRAL,
+        "t",
+    )
+    .unwrap();
+
+    eng.invalidate_manual(&LinkageId::new("lnk-1"), "op", "t")
+        .unwrap();
 
     // Should have at least 4 events: register, attach, record_execution, invalidate_manual
     assert!(eng.events().len() >= 4);
@@ -2347,10 +2397,12 @@ fn enrichment_invalidation_cause_display_contains_reason() {
 #[test]
 fn enrichment_register_attach_revoke_reattach_fails() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-1", 5, &["revokable"]), "t").unwrap();
+    eng.register(linkage_record("lnk-1", 5, &["revokable"]), "t")
+        .unwrap();
 
     let mut m = ir3();
-    eng.attach_to_ir3(&LinkageId::new("lnk-1"), &mut m, "t").unwrap();
+    eng.attach_to_ir3(&LinkageId::new("lnk-1"), &mut m, "t")
+        .unwrap();
     assert!(m.specialization.is_some());
 
     // Revoke the proof
@@ -2373,10 +2425,12 @@ fn enrichment_register_attach_revoke_reattach_fails() {
 #[test]
 fn enrichment_manual_invalidation_then_epoch_change_no_double_rollback() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-1", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-1", 5, &["p1"]), "t")
+        .unwrap();
 
     // Manual invalidation first
-    eng.invalidate_manual(&LinkageId::new("lnk-1"), "op", "t").unwrap();
+    eng.invalidate_manual(&LinkageId::new("lnk-1"), "op", "t")
+        .unwrap();
     assert_eq!(eng.invalidations().len(), 1);
 
     // Epoch change should not re-invalidate the already-inactive linkage
@@ -2388,7 +2442,8 @@ fn enrichment_manual_invalidation_then_epoch_change_no_double_rollback() {
 #[test]
 fn enrichment_epoch_change_then_manual_fails() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-1", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-1", 5, &["p1"]), "t")
+        .unwrap();
 
     eng.on_epoch_change(epoch(6), "t");
     assert!(!eng.get(&LinkageId::new("lnk-1")).unwrap().active);
@@ -2407,11 +2462,15 @@ fn enrichment_epoch_change_then_manual_fails() {
 #[test]
 fn enrichment_mixed_invalidation_causes_accumulate() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-manual", 5, &["p1"]), "t").unwrap();
-    eng.register(linkage_record("lnk-proof", 5, &["revoke-me"]), "t").unwrap();
-    eng.register(linkage_record("lnk-epoch", 5, &["p3"]), "t").unwrap();
+    eng.register(linkage_record("lnk-manual", 5, &["p1"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-proof", 5, &["revoke-me"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-epoch", 5, &["p3"]), "t")
+        .unwrap();
 
-    eng.invalidate_manual(&LinkageId::new("lnk-manual"), "op", "t").unwrap();
+    eng.invalidate_manual(&LinkageId::new("lnk-manual"), "op", "t")
+        .unwrap();
     eng.invalidate_by_proof("revoke-me", "t");
     eng.on_epoch_change(epoch(6), "t");
 
@@ -2431,22 +2490,39 @@ fn enrichment_mixed_invalidation_causes_accumulate() {
 #[test]
 fn enrichment_execution_after_attach_then_revoke_fails() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-exec-rev", 5, &["p1"]), "t").unwrap();
+    eng.register(linkage_record("lnk-exec-rev", 5, &["p1"]), "t")
+        .unwrap();
 
     let mut m3 = ir3();
-    eng.attach_to_ir3(&LinkageId::new("lnk-exec-rev"), &mut m3, "t").unwrap();
+    eng.attach_to_ir3(&LinkageId::new("lnk-exec-rev"), &mut m3, "t")
+        .unwrap();
 
     let mut m4 = ir4();
-    eng.record_execution(&LinkageId::new("lnk-exec-rev"), &mut m4, PerformanceDelta::NEUTRAL, "t")
-        .unwrap();
-    assert_eq!(eng.get(&LinkageId::new("lnk-exec-rev")).unwrap().execution_count, 1);
+    eng.record_execution(
+        &LinkageId::new("lnk-exec-rev"),
+        &mut m4,
+        PerformanceDelta::NEUTRAL,
+        "t",
+    )
+    .unwrap();
+    assert_eq!(
+        eng.get(&LinkageId::new("lnk-exec-rev"))
+            .unwrap()
+            .execution_count,
+        1
+    );
 
     // Revoke
     eng.invalidate_by_proof("p1", "t");
 
     // Subsequent execution should fail
     let err = eng
-        .record_execution(&LinkageId::new("lnk-exec-rev"), &mut m4, PerformanceDelta::NEUTRAL, "t")
+        .record_execution(
+            &LinkageId::new("lnk-exec-rev"),
+            &mut m4,
+            PerformanceDelta::NEUTRAL,
+            "t",
+        )
         .unwrap_err();
     assert_eq!(
         err,
@@ -2459,34 +2535,72 @@ fn enrichment_execution_after_attach_then_revoke_fails() {
 #[test]
 fn enrichment_multiple_ir4_modules_separate_specialization_ids() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-a", 5, &["pa"]), "t").unwrap();
-    eng.register(linkage_record("lnk-b", 5, &["pb"]), "t").unwrap();
+    eng.register(linkage_record("lnk-a", 5, &["pa"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-b", 5, &["pb"]), "t")
+        .unwrap();
 
     let mut m4_a = ir4();
-    eng.record_execution(&LinkageId::new("lnk-a"), &mut m4_a, PerformanceDelta::NEUTRAL, "t")
-        .unwrap();
+    eng.record_execution(
+        &LinkageId::new("lnk-a"),
+        &mut m4_a,
+        PerformanceDelta::NEUTRAL,
+        "t",
+    )
+    .unwrap();
 
     let mut m4_b = ir4();
-    eng.record_execution(&LinkageId::new("lnk-b"), &mut m4_b, PerformanceDelta::NEUTRAL, "t")
-        .unwrap();
+    eng.record_execution(
+        &LinkageId::new("lnk-b"),
+        &mut m4_b,
+        PerformanceDelta::NEUTRAL,
+        "t",
+    )
+    .unwrap();
 
-    assert!(m4_a.active_specialization_ids.contains(&"lnk-a".to_string()));
-    assert!(!m4_a.active_specialization_ids.contains(&"lnk-b".to_string()));
-    assert!(m4_b.active_specialization_ids.contains(&"lnk-b".to_string()));
-    assert!(!m4_b.active_specialization_ids.contains(&"lnk-a".to_string()));
+    assert!(
+        m4_a.active_specialization_ids
+            .contains(&"lnk-a".to_string())
+    );
+    assert!(
+        !m4_a
+            .active_specialization_ids
+            .contains(&"lnk-b".to_string())
+    );
+    assert!(
+        m4_b.active_specialization_ids
+            .contains(&"lnk-b".to_string())
+    );
+    assert!(
+        !m4_b
+            .active_specialization_ids
+            .contains(&"lnk-a".to_string())
+    );
 }
 
 #[test]
 fn enrichment_shared_ir4_accumulates_specialization_ids() {
     let mut eng = engine(5);
-    eng.register(linkage_record("lnk-a", 5, &["pa"]), "t").unwrap();
-    eng.register(linkage_record("lnk-b", 5, &["pb"]), "t").unwrap();
+    eng.register(linkage_record("lnk-a", 5, &["pa"]), "t")
+        .unwrap();
+    eng.register(linkage_record("lnk-b", 5, &["pb"]), "t")
+        .unwrap();
 
     let mut m4 = ir4();
-    eng.record_execution(&LinkageId::new("lnk-a"), &mut m4, PerformanceDelta::NEUTRAL, "t")
-        .unwrap();
-    eng.record_execution(&LinkageId::new("lnk-b"), &mut m4, PerformanceDelta::NEUTRAL, "t")
-        .unwrap();
+    eng.record_execution(
+        &LinkageId::new("lnk-a"),
+        &mut m4,
+        PerformanceDelta::NEUTRAL,
+        "t",
+    )
+    .unwrap();
+    eng.record_execution(
+        &LinkageId::new("lnk-b"),
+        &mut m4,
+        PerformanceDelta::NEUTRAL,
+        "t",
+    )
+    .unwrap();
 
     assert!(m4.active_specialization_ids.contains(&"lnk-a".to_string()));
     assert!(m4.active_specialization_ids.contains(&"lnk-b".to_string()));
@@ -2524,7 +2638,10 @@ fn enrichment_register_with_ifc_check_elision_optimization() {
     rec.optimization_class = OptimizationClass::IfcCheckElision;
     eng.register(rec, "t").unwrap();
     let stored = eng.get(&LinkageId::new("lnk-ifc")).unwrap();
-    assert_eq!(stored.optimization_class, OptimizationClass::IfcCheckElision);
+    assert_eq!(
+        stored.optimization_class,
+        OptimizationClass::IfcCheckElision
+    );
     let spec = stored.to_ir3_linkage();
     assert_eq!(spec.optimization_class, "ifc_check_elision");
 }
@@ -2535,7 +2652,10 @@ fn enrichment_register_with_superinstruction_fusion_optimization() {
     let mut rec = linkage_record("lnk-super", 5, &["p1"]);
     rec.optimization_class = OptimizationClass::SuperinstructionFusion;
     eng.register(rec, "t").unwrap();
-    let spec = eng.get(&LinkageId::new("lnk-super")).unwrap().to_ir3_linkage();
+    let spec = eng
+        .get(&LinkageId::new("lnk-super"))
+        .unwrap()
+        .to_ir3_linkage();
     assert_eq!(spec.optimization_class, "superinstruction_fusion");
 }
 
@@ -2545,7 +2665,10 @@ fn enrichment_register_with_path_elimination_optimization() {
     let mut rec = linkage_record("lnk-path", 5, &["p1"]);
     rec.optimization_class = OptimizationClass::PathElimination;
     eng.register(rec, "t").unwrap();
-    let spec = eng.get(&LinkageId::new("lnk-path")).unwrap().to_ir3_linkage();
+    let spec = eng
+        .get(&LinkageId::new("lnk-path"))
+        .unwrap()
+        .to_ir3_linkage();
     assert_eq!(spec.optimization_class, "path_elimination");
 }
 
@@ -2563,7 +2686,8 @@ fn enrichment_total_equals_active_plus_inactive() {
     eng.register(inactive, "t").unwrap();
     eng.register(linkage_record("d", 5, &["p"]), "t").unwrap();
 
-    eng.invalidate_manual(&LinkageId::new("a"), "op", "t").unwrap();
+    eng.invalidate_manual(&LinkageId::new("a"), "op", "t")
+        .unwrap();
 
     assert_eq!(eng.total_count(), eng.active_count() + eng.inactive_count());
     assert_eq!(eng.active_count(), 2);
@@ -2580,8 +2704,10 @@ fn enrichment_counts_after_epoch_change_and_manual_invalidation() {
     }
     assert_eq!(eng.active_count(), 10);
 
-    eng.invalidate_manual(&LinkageId::new("lnk-0"), "op", "t").unwrap();
-    eng.invalidate_manual(&LinkageId::new("lnk-1"), "op", "t").unwrap();
+    eng.invalidate_manual(&LinkageId::new("lnk-0"), "op", "t")
+        .unwrap();
+    eng.invalidate_manual(&LinkageId::new("lnk-1"), "op", "t")
+        .unwrap();
     assert_eq!(eng.active_count(), 8);
     assert_eq!(eng.inactive_count(), 2);
 

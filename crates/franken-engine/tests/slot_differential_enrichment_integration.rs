@@ -26,11 +26,10 @@ use std::collections::BTreeMap;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::slot_differential::{
-    CellOutput, DifferentialConfig, DifferentialOutcome, DivergenceClass,
-    EvaluateSlotInput, PromotionReadiness, ReplacementReceiptFragment, SlotDifferentialError,
-    SlotDifferentialEvidence, SlotDifferentialGate, SlotInventoryEntry, Workload,
-    WorkloadCategory, WorkloadLogEntry, WorkloadResult, build_repro, classify_divergence,
-    evaluate_slot,
+    CellOutput, DifferentialConfig, DifferentialOutcome, DivergenceClass, EvaluateSlotInput,
+    PromotionReadiness, ReplacementReceiptFragment, SlotDifferentialError,
+    SlotDifferentialEvidence, SlotDifferentialGate, SlotInventoryEntry, Workload, WorkloadCategory,
+    WorkloadLogEntry, WorkloadResult, build_repro, classify_divergence, evaluate_slot,
 };
 use frankenengine_engine::slot_registry::{AuthorityEnvelope, SlotCapability, SlotId, SlotKind};
 
@@ -307,7 +306,12 @@ fn enrichment_classify_zero_memory_delegate_no_resource_divergence() {
 #[test]
 fn enrichment_classify_capability_precedes_performance() {
     // Native exercises broader capabilities AND is slower
-    let native = cell("ok", 200, 100, &[SlotCapability::ReadSource, SlotCapability::InvokeHostcall]);
+    let native = cell(
+        "ok",
+        200,
+        100,
+        &[SlotCapability::ReadSource, SlotCapability::InvokeHostcall],
+    );
     let delegate = cell("ok", 100, 100, &[SlotCapability::ReadSource]);
     let class = classify_divergence(&native, &delegate, &cfg());
     // Capability check should fire first (P0 > P1)
@@ -316,7 +320,12 @@ fn enrichment_classify_capability_precedes_performance() {
 
 #[test]
 fn enrichment_classify_semantic_precedes_capability() {
-    let native = cell("wrong", 100, 100, &[SlotCapability::ReadSource, SlotCapability::InvokeHostcall]);
+    let native = cell(
+        "wrong",
+        100,
+        100,
+        &[SlotCapability::ReadSource, SlotCapability::InvokeHostcall],
+    );
     let delegate = cell("right", 100, 100, &[SlotCapability::ReadSource]);
     let class = classify_divergence(&native, &delegate, &cfg());
     assert_eq!(class, Some(DivergenceClass::SemanticDivergence));
@@ -426,8 +435,18 @@ fn enrichment_evaluate_slot_mixed_divergences_most_severe_still_blocks() {
 
 #[test]
 fn enrichment_cell_output_capability_partial_overlap() {
-    let native = cell("ok", 100, 100, &[SlotCapability::ReadSource, SlotCapability::EmitIr]);
-    let delegate = cell("ok", 100, 100, &[SlotCapability::ReadSource, SlotCapability::InvokeHostcall]);
+    let native = cell(
+        "ok",
+        100,
+        100,
+        &[SlotCapability::ReadSource, SlotCapability::EmitIr],
+    );
+    let delegate = cell(
+        "ok",
+        100,
+        100,
+        &[SlotCapability::ReadSource, SlotCapability::InvokeHostcall],
+    );
     // Native has Timer not in delegate => not capability equivalent
     assert!(!native.capability_equivalent(&delegate));
 }
@@ -677,7 +696,11 @@ fn enrichment_build_repro_capability_divergence_captures_diff() {
         "ok",
         100,
         100,
-        &[SlotCapability::ReadSource, SlotCapability::InvokeHostcall, SlotCapability::EmitIr],
+        &[
+            SlotCapability::ReadSource,
+            SlotCapability::InvokeHostcall,
+            SlotCapability::EmitIr,
+        ],
     );
     let delegate = cell("ok", 100, 100, &[SlotCapability::ReadSource]);
     let workload = wl("wl-cap", WorkloadCategory::Adversarial);

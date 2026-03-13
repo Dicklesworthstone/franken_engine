@@ -1143,3 +1143,254 @@ fn enrichment_invariant_check_details_nonempty() {
         }
     }
 }
+
+// ============================================================================
+// Section 17: Clone independence (4 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_lowering_context_clone_independence() {
+    let original = ctx();
+    let mut cloned = original.clone();
+    cloned.trace_id = "modified".to_string();
+    assert_eq!(original.trace_id, "trace-enrich");
+    assert_eq!(cloned.trace_id, "modified");
+}
+
+#[test]
+fn enrichment_lowering_event_clone_independence() {
+    let original = LoweringEvent {
+        trace_id: "t1".to_string(),
+        decision_id: "d1".to_string(),
+        policy_id: "p1".to_string(),
+        component: "lowering_pipeline".to_string(),
+        event: "ir0_to_ir1".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+    };
+    let mut cloned = original.clone();
+    cloned.outcome = "fail".to_string();
+    assert_eq!(original.outcome, "pass");
+    assert_eq!(cloned.outcome, "fail");
+}
+
+#[test]
+fn enrichment_invariant_check_clone_independence() {
+    let original = InvariantCheck {
+        name: "original".to_string(),
+        passed: true,
+        detail: "ok".to_string(),
+    };
+    let mut cloned = original.clone();
+    cloned.passed = false;
+    assert!(original.passed);
+    assert!(!cloned.passed);
+}
+
+#[test]
+fn enrichment_pass_witness_clone_independence() {
+    let original = PassWitness {
+        pass_id: "ir0_to_ir1".to_string(),
+        input_hash: "abc".to_string(),
+        output_hash: "def".to_string(),
+        rollback_token: "abc".to_string(),
+        invariant_checks: vec![InvariantCheck {
+            name: "check1".to_string(),
+            passed: true,
+            detail: "ok".to_string(),
+        }],
+    };
+    let mut cloned = original.clone();
+    cloned.invariant_checks.push(InvariantCheck {
+        name: "injected".to_string(),
+        passed: false,
+        detail: "bad".to_string(),
+    });
+    assert_eq!(original.invariant_checks.len(), 1);
+    assert_eq!(cloned.invariant_checks.len(), 2);
+}
+
+// ============================================================================
+// Section 18: LoweringPipelineError std::error::Error trait (2 tests)
+// ============================================================================
+
+#[test]
+fn enrichment_pipeline_error_std_error_trait() {
+    let err = LoweringPipelineError::EmptyIr0Body;
+    let dyn_err: &dyn std::error::Error = &err;
+    assert!(!dyn_err.to_string().is_empty());
+}
+
+#[test]
+fn enrichment_pipeline_error_display_invariant_violation() {
+    let err = LoweringPipelineError::InvariantViolation {
+        detail: "hash mismatch",
+    };
+    let display = err.to_string();
+    assert!(display.contains("hash mismatch"));
+}
+
+// ============================================================================
+// Section 19: Debug nonempty for key types (1 test)
+// ============================================================================
+
+#[test]
+fn enrichment_debug_nonempty_key_types() {
+    let ctx_val = ctx();
+    assert!(!format!("{ctx_val:?}").is_empty());
+
+    let err = LoweringPipelineError::EmptyIr0Body;
+    assert!(!format!("{err:?}").is_empty());
+
+    let check = InvariantCheck {
+        name: "c".to_string(),
+        passed: true,
+        detail: "d".to_string(),
+    };
+    assert!(!format!("{check:?}").is_empty());
+
+    let witness = PassWitness {
+        pass_id: "p".to_string(),
+        input_hash: "i".to_string(),
+        output_hash: "o".to_string(),
+        rollback_token: "r".to_string(),
+        invariant_checks: vec![],
+    };
+    assert!(!format!("{witness:?}").is_empty());
+
+    let ledger = IsomorphismLedgerEntry {
+        pass_id: "p".to_string(),
+        input_hash: "i".to_string(),
+        output_hash: "o".to_string(),
+        input_op_count: 0,
+        output_op_count: 0,
+    };
+    assert!(!format!("{ledger:?}").is_empty());
+}
+
+// ============================================================================
+// Section 20: FlowProofArtifactEntry BTreeSet ordering (1 test)
+// ============================================================================
+
+#[test]
+fn enrichment_flow_proof_entry_btreeset_ordering() {
+    let mut set = BTreeSet::new();
+    set.insert(FlowProofArtifactEntry {
+        op_index: 2,
+        source_label: Label::Public,
+        sink_clearance: Label::Public,
+        capability: None,
+        proof_method: ProofMethod::StaticAnalysis,
+    });
+    set.insert(FlowProofArtifactEntry {
+        op_index: 1,
+        source_label: Label::Public,
+        sink_clearance: Label::Public,
+        capability: None,
+        proof_method: ProofMethod::StaticAnalysis,
+    });
+    set.insert(FlowProofArtifactEntry {
+        op_index: 2,
+        source_label: Label::Public,
+        sink_clearance: Label::Public,
+        capability: None,
+        proof_method: ProofMethod::StaticAnalysis,
+    }); // dup
+    assert_eq!(set.len(), 2);
+    let ordered: Vec<_> = set.into_iter().collect();
+    assert!(ordered[0].op_index < ordered[1].op_index);
+}
+
+// ============================================================================
+// Section 21: RequiredDeclassificationArtifactEntry serde with non-default fields
+// ============================================================================
+
+#[test]
+fn enrichment_required_declass_nondefault_serde_roundtrip() {
+    let entry = RequiredDeclassificationArtifactEntry {
+        op_index: 5,
+        source_label: Label::Secret,
+        sink_clearance: Label::Public,
+        capability: Some("ifc.declassify".to_string()),
+        obligation_id: "oblig-1".to_string(),
+        decision_contract_id: "contract-42".to_string(),
+        requires_operator_approval: true,
+        receipt_linkage_required: true,
+        replay_command_hint: "frankenctl replay --id oblig-1".to_string(),
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: RequiredDeclassificationArtifactEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, back);
+    assert!(back.requires_operator_approval);
+    assert!(back.receipt_linkage_required);
+    assert!(!back.replay_command_hint.is_empty());
+}
+
+// ============================================================================
+// Section 22: RuntimeCheckpointArtifactEntry serde roundtrip
+// ============================================================================
+
+#[test]
+fn enrichment_runtime_checkpoint_serde_roundtrip() {
+    let entry = RuntimeCheckpointArtifactEntry {
+        op_index: 3,
+        source_label: Label::Secret,
+        sink_clearance: Label::Internal,
+        capability: Some("ifc.check_flow".to_string()),
+        reason: "dynamic check required".to_string(),
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, back);
+}
+
+// ============================================================================
+// Section 23: DeniedFlowArtifactEntry serde roundtrip
+// ============================================================================
+
+#[test]
+fn enrichment_denied_flow_entry_serde_roundtrip() {
+    let entry = DeniedFlowArtifactEntry {
+        op_index: 7,
+        source_label: Label::Secret,
+        sink_clearance: Label::Public,
+        capability: None,
+        reason: "flow blocked by policy".to_string(),
+        error_code: "FE-LOWER-IFC-0001".to_string(),
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: DeniedFlowArtifactEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, back);
+}
+
+// ============================================================================
+// Section 24: Pipeline output witnesses and ledger correspond
+// ============================================================================
+
+#[test]
+fn enrichment_witnesses_and_ledger_same_count() {
+    let ir0 = script_ir0_numeric(42);
+    let output = run_full_pipeline(&ir0);
+    assert_eq!(
+        output.witnesses.len(),
+        output.isomorphism_ledger.len(),
+        "witnesses and ledger entries should have same count"
+    );
+}
+
+// ============================================================================
+// Section 25: Pipeline output ir2_flow_proof_artifact schema version
+// ============================================================================
+
+#[test]
+fn enrichment_flow_proof_artifact_schema_version_prefix() {
+    let ir0 = script_ir0_numeric(1);
+    let output = run_full_pipeline(&ir0);
+    assert!(
+        output
+            .ir2_flow_proof_artifact
+            .schema_version
+            .starts_with("frankenengine."),
+        "schema_version should start with frankenengine."
+    );
+}

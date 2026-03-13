@@ -154,9 +154,7 @@ fn enrichment_error_display_all_variants_distinct() {
         BulkheadError::BulkheadNotFound {
             bulkhead_id: "b".into(),
         },
-        BulkheadError::InvalidConfig {
-            reason: "c".into(),
-        },
+        BulkheadError::InvalidConfig { reason: "c".into() },
     ];
     let strings: BTreeSet<_> = variants.iter().map(|e| e.to_string()).collect();
     assert_eq!(strings.len(), 4);
@@ -192,9 +190,7 @@ fn enrichment_error_serde_all_variants_roundtrip() {
         BulkheadError::BulkheadNotFound {
             bulkhead_id: "y".into(),
         },
-        BulkheadError::InvalidConfig {
-            reason: "z".into(),
-        },
+        BulkheadError::InvalidConfig { reason: "z".into() },
     ] {
         let json = serde_json::to_string(&err).unwrap();
         let restored: BulkheadError = serde_json::from_str(&json).unwrap();
@@ -543,13 +539,7 @@ fn enrichment_defaults_evidence_flush_config() {
 fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", BulkheadClass::RemoteInFlight).is_empty());
     assert!(!format!("{:?}", PermitId(1)).is_empty());
-    assert!(
-        !format!(
-            "{:?}",
-            BulkheadError::PermitNotFound { permit_id: 1 }
-        )
-        .is_empty()
-    );
+    assert!(!format!("{:?}", BulkheadError::PermitNotFound { permit_id: 1 }).is_empty());
     let reg = BulkheadRegistry::with_defaults();
     assert!(!format!("{:?}", reg).is_empty());
 }
@@ -575,7 +565,10 @@ fn enrichment_pressure_event_emitted_at_threshold() {
         reg.acquire("test", &format!("t{i}")).unwrap();
     }
     let events = reg.drain_events();
-    let pressure_events: Vec<_> = events.iter().filter(|e| e.event == "bulkhead_pressure").collect();
+    let pressure_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.event == "bulkhead_pressure")
+        .collect();
     assert!(
         !pressure_events.is_empty(),
         "pressure event should be emitted at threshold"

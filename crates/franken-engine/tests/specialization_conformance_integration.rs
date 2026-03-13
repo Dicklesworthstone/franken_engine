@@ -1289,7 +1289,10 @@ fn enrichment_divergence_kind_as_str_return_value() {
 
 #[test]
 fn enrichment_divergence_kind_as_str_side_effect_trace() {
-    assert_eq!(DivergenceKind::SideEffectTrace.as_str(), "side_effect_trace");
+    assert_eq!(
+        DivergenceKind::SideEffectTrace.as_str(),
+        "side_effect_trace"
+    );
 }
 
 #[test]
@@ -1557,7 +1560,11 @@ fn enrichment_full_corpus_unique_workload_ids() {
     let corpus = full_corpus("uniq");
     let mut ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for w in &corpus {
-        assert!(ids.insert(w.workload_id.clone()), "duplicate: {}", w.workload_id);
+        assert!(
+            ids.insert(w.workload_id.clone()),
+            "duplicate: {}",
+            w.workload_id
+        );
     }
 }
 
@@ -1598,8 +1605,7 @@ fn enrichment_engine_empty_corpus_validation() {
 
 #[test]
 fn enrichment_engine_policy_id_preserved() {
-    let engine =
-        SpecializationConformanceEngine::new("my-special-policy-123", epoch(42));
+    let engine = SpecializationConformanceEngine::new("my-special-policy-123", epoch(42));
     assert_eq!(engine.policy_id(), "my-special-policy-123");
 }
 
@@ -1885,8 +1891,7 @@ fn enrichment_performance_delta_symmetric_behavior() {
 
 #[test]
 fn enrichment_performance_delta_large_values() {
-    let delta =
-        SpecializationConformanceEngine::compute_performance_delta(1_000_000, 2_000_000);
+    let delta = SpecializationConformanceEngine::compute_performance_delta(1_000_000, 2_000_000);
     assert_eq!(delta.speedup_millionths, 500_000);
 }
 
@@ -1913,33 +1918,43 @@ fn enrichment_performance_delta_struct_fields() {
 #[test]
 fn enrichment_determinism_check_two_identical() {
     let outcomes = vec![ok_outcome("x"), ok_outcome("x")];
-    assert!(SpecializationConformanceEngine::check_determinism(&outcomes));
+    assert!(SpecializationConformanceEngine::check_determinism(
+        &outcomes
+    ));
 }
 
 #[test]
 fn enrichment_determinism_check_many_identical() {
     let outcomes: Vec<_> = (0..20).map(|_| ok_outcome("deterministic")).collect();
-    assert!(SpecializationConformanceEngine::check_determinism(&outcomes));
+    assert!(SpecializationConformanceEngine::check_determinism(
+        &outcomes
+    ));
 }
 
 #[test]
 fn enrichment_determinism_check_last_differs() {
     let mut outcomes: Vec<_> = (0..9).map(|_| ok_outcome("same")).collect();
     outcomes.push(ok_outcome("different"));
-    assert!(!SpecializationConformanceEngine::check_determinism(&outcomes));
+    assert!(!SpecializationConformanceEngine::check_determinism(
+        &outcomes
+    ));
 }
 
 #[test]
 fn enrichment_determinism_check_first_differs() {
     let mut outcomes: Vec<_> = (0..9).map(|_| ok_outcome("same")).collect();
     outcomes.insert(0, ok_outcome("different"));
-    assert!(!SpecializationConformanceEngine::check_determinism(&outcomes));
+    assert!(!SpecializationConformanceEngine::check_determinism(
+        &outcomes
+    ));
 }
 
 #[test]
 fn enrichment_determinism_check_all_different() {
     let outcomes: Vec<_> = (0..5).map(|i| ok_outcome(&format!("val-{i}"))).collect();
-    assert!(!SpecializationConformanceEngine::check_determinism(&outcomes));
+    assert!(!SpecializationConformanceEngine::check_determinism(
+        &outcomes
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -2033,8 +2048,7 @@ fn enrichment_epoch_transition_unknown_spec_produces_failure() {
 #[test]
 fn enrichment_evidence_artifact_empty_engine_passes_gate() {
     let engine = SpecializationConformanceEngine::new("p", epoch(5));
-    let artifact =
-        engine.produce_evidence("empty-run", ContentHash::compute(b"r"), "env", 0);
+    let artifact = engine.produce_evidence("empty-run", ContentHash::compute(b"r"), "env", 0);
     assert!(artifact.ci_gate_passed);
     assert_eq!(artifact.total_specializations, 0);
     assert_eq!(artifact.total_workloads, 0);
@@ -2043,8 +2057,7 @@ fn enrichment_evidence_artifact_empty_engine_passes_gate() {
 #[test]
 fn enrichment_evidence_artifact_captures_policy_and_epoch() {
     let engine = SpecializationConformanceEngine::new("pol-42", epoch(7));
-    let artifact =
-        engine.produce_evidence("run-x", ContentHash::compute(b"r"), "env-x", 999);
+    let artifact = engine.produce_evidence("run-x", ContentHash::compute(b"r"), "env-x", 999);
     assert_eq!(artifact.policy_id, "pol-42");
     assert_eq!(artifact.epoch, epoch(7));
     assert_eq!(artifact.environment_fingerprint, "env-x");
@@ -2077,8 +2090,7 @@ fn enrichment_evidence_artifact_failed_count_with_multiple_failures() {
             receipt_valid: true,
         });
     }
-    let artifact =
-        engine.produce_evidence("fail-run", ContentHash::compute(b"r"), "env", 0);
+    let artifact = engine.produce_evidence("fail-run", ContentHash::compute(b"r"), "env", 0);
     assert!(!artifact.ci_gate_passed);
     assert_eq!(artifact.failed_specialization_count(), 3);
     assert_eq!(artifact.total_divergences, 3);
@@ -2103,8 +2115,7 @@ fn enrichment_evidence_artifact_receipt_failure_blocks_gate() {
         fallback_outcome: None,
         receipt_valid: false,
     });
-    let artifact =
-        engine.produce_evidence("rcpt-run", ContentHash::compute(b"r"), "env", 0);
+    let artifact = engine.produce_evidence("rcpt-run", ContentHash::compute(b"r"), "env", 0);
     assert!(!artifact.ci_gate_passed);
     assert_eq!(artifact.total_receipt_failures, 1);
 }
@@ -2128,8 +2139,7 @@ fn enrichment_evidence_artifact_to_jsonl_round_trips() {
         fallback_outcome: None,
         receipt_valid: true,
     });
-    let artifact =
-        engine.produce_evidence("jrt-run", ContentHash::compute(b"r"), "env", 123);
+    let artifact = engine.produce_evidence("jrt-run", ContentHash::compute(b"r"), "env", 123);
     let jsonl = artifact.to_jsonl();
     let back: ConformanceEvidenceArtifact = serde_json::from_str(&jsonl).unwrap();
     assert_eq!(back.run_id, "jrt-run");

@@ -419,9 +419,11 @@ fn enrichment_active_transfer_worst_drift_no_signals() {
 #[test]
 fn enrichment_active_transfer_worst_drift_only_non_confident() {
     let mut transfer = make_active_transfer("a2", TransferableKind::RewritePack);
-    transfer
-        .drift_signals
-        .push(specimen_drift_signal(DriftKind::CachePollution, 500_000, false));
+    transfer.drift_signals.push(specimen_drift_signal(
+        DriftKind::CachePollution,
+        500_000,
+        false,
+    ));
     transfer
         .drift_signals
         .push(specimen_drift_signal(DriftKind::EpochDrift, 300_000, false));
@@ -489,9 +491,11 @@ fn enrichment_active_transfer_confident_drift_kind_count_deduplicates() {
         true,
     ));
     // Different kind, confident
-    transfer
-        .drift_signals
-        .push(specimen_drift_signal(DriftKind::CachePollution, 80_000, true));
+    transfer.drift_signals.push(specimen_drift_signal(
+        DriftKind::CachePollution,
+        80_000,
+        true,
+    ));
     // Different kind, not confident (should not count)
     transfer
         .drift_signals
@@ -706,10 +710,17 @@ fn enrichment_evaluate_accepts_good_candidate_and_adds_active() {
 #[test]
 fn enrichment_evaluate_rejects_proximity_too_low() {
     let mut session = make_session();
-    let c = specimen_candidate("low", TransferableKind::RewritePack, MIN_PROXIMITY_SCORE - 1);
+    let c = specimen_candidate(
+        "low",
+        TransferableKind::RewritePack,
+        MIN_PROXIMITY_SCORE - 1,
+    );
     let decision = session.evaluate_candidate(&c);
     assert_eq!(decision.verdict, TransferVerdict::Rejected);
-    assert_eq!(decision.reason, Some(TransferRejectionReason::ProximityTooLow));
+    assert_eq!(
+        decision.reason,
+        Some(TransferRejectionReason::ProximityTooLow)
+    );
     assert!(session.active_transfers.is_empty());
 }
 
@@ -742,7 +753,10 @@ fn enrichment_evaluate_rejects_already_present_prior() {
     session.local_prior_hashes.insert(c.prior_hash);
     let decision = session.evaluate_candidate(&c);
     assert_eq!(decision.verdict, TransferVerdict::Rejected);
-    assert_eq!(decision.reason, Some(TransferRejectionReason::AlreadyPresent));
+    assert_eq!(
+        decision.reason,
+        Some(TransferRejectionReason::AlreadyPresent)
+    );
 }
 
 #[test]
@@ -752,7 +766,10 @@ fn enrichment_evaluate_defers_budget_exhausted() {
     let c = make_candidate("budgeted", TransferableKind::RewritePack);
     let decision = session.evaluate_candidate(&c);
     assert_eq!(decision.verdict, TransferVerdict::Deferred);
-    assert_eq!(decision.reason, Some(TransferRejectionReason::BudgetExhausted));
+    assert_eq!(
+        decision.reason,
+        Some(TransferRejectionReason::BudgetExhausted)
+    );
 }
 
 #[test]
@@ -789,7 +806,10 @@ fn enrichment_evaluate_defers_rollback_cooldown() {
     let c = make_candidate("cooled", TransferableKind::CacheHint);
     let decision = session.evaluate_candidate(&c);
     assert_eq!(decision.verdict, TransferVerdict::Deferred);
-    assert_eq!(decision.reason, Some(TransferRejectionReason::RecentRollback));
+    assert_eq!(
+        decision.reason,
+        Some(TransferRejectionReason::RecentRollback)
+    );
 }
 
 #[test]
@@ -934,7 +954,9 @@ fn enrichment_enforce_drift_rollback_sets_kind_epoch() {
     session.enforce_drift_guards();
 
     assert_eq!(
-        session.kind_rollback_epochs.get(&TransferableKind::AotArtifact),
+        session
+            .kind_rollback_epochs
+            .get(&TransferableKind::AotArtifact),
         Some(&SecurityEpoch::from_raw(5))
     );
 }

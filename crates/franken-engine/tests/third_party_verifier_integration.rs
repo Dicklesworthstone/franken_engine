@@ -1309,10 +1309,7 @@ fn enrichment_benchmark_empty_blockers_match_when_both_empty() {
 #[test]
 fn enrichment_benchmark_extra_blocker_in_claim_fails() {
     let mut bundle = make_valid_benchmark_bundle();
-    bundle
-        .claimed
-        .blockers
-        .push("phantom-blocker".to_string());
+    bundle.claimed.blockers.push("phantom-blocker".to_string());
     let report = verify_benchmark_claim(&bundle);
     let check = report
         .checks
@@ -1422,18 +1419,29 @@ fn enrichment_containment_mixed_pass_fail_reports_failed() {
     let bundle = make_containment_bundle(result);
     let report = verify_containment_claim(&bundle);
     // overall_pass_flag should reflect partial failure
-    assert!(report.checks.iter().any(|c| c.name == "overall_pass_flag_matches" && c.passed));
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name == "overall_pass_flag_matches" && c.passed)
+    );
     // criteria consistency for the failed scenario should still pass (criteria match scenario.passed)
-    assert!(report
-        .checks
-        .iter()
-        .any(|c| c.name == "criteria_consistency:fail-1" && c.passed));
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name == "criteria_consistency:fail-1" && c.passed)
+    );
 }
 
 #[test]
 fn enrichment_containment_sla_at_exact_boundary_passes() {
     // Latency exactly equals SLA
-    let scenarios = vec![make_scenario("exact-sla", true, DEFAULT_CONTAINMENT_LATENCY_SLA_NS)];
+    let scenarios = vec![make_scenario(
+        "exact-sla",
+        true,
+        DEFAULT_CONTAINMENT_LATENCY_SLA_NS,
+    )];
     let result = make_gate_result(scenarios);
     let bundle = make_containment_bundle(result);
     let report = verify_containment_claim(&bundle);
@@ -1782,10 +1790,12 @@ fn enrichment_attestation_scope_limitations_propagated() {
     ];
     let attestation = generate_attestation(&input).unwrap();
     assert_eq!(attestation.scope_limitations.len(), 2);
-    assert!(attestation
-        .scope_limitations
-        .iter()
-        .any(|l| l == "no-hardware-attestation"));
+    assert!(
+        attestation
+            .scope_limitations
+            .iter()
+            .any(|l| l == "no-hardware-attestation")
+    );
 }
 
 #[test]
@@ -2120,14 +2130,18 @@ fn enrichment_verify_attestation_has_started_and_completed_events() {
     ))
     .unwrap();
     let verification = verify_attestation(&attestation);
-    assert!(verification
-        .events
-        .iter()
-        .any(|e| e.event == "attestation_verification_started"));
-    assert!(verification
-        .events
-        .iter()
-        .any(|e| e.event == "attestation_verification_completed"));
+    assert!(
+        verification
+            .events
+            .iter()
+            .any(|e| e.event == "attestation_verification_started")
+    );
+    assert!(
+        verification
+            .events
+            .iter()
+            .any(|e| e.event == "attestation_verification_completed")
+    );
 }
 
 #[test]
@@ -2188,10 +2202,7 @@ fn enrichment_render_report_summary_failed_has_nonzero_failed() {
 fn enrichment_render_report_summary_contains_confidence() {
     let report = make_report(VerificationVerdict::Verified);
     let summary = render_report_summary(&report);
-    assert!(
-        summary.contains("confidence="),
-        "summary: {summary}"
-    );
+    assert!(summary.contains("confidence="), "summary: {summary}");
 }
 
 #[test]
@@ -2216,10 +2227,7 @@ fn enrichment_render_attestation_summary_contains_issued_at() {
     ))
     .unwrap();
     let summary = render_attestation_summary(&attestation);
-    assert!(
-        summary.contains("issued_at="),
-        "summary: {summary}"
-    );
+    assert!(summary.contains("issued_at="), "summary: {summary}");
 }
 
 #[test]
@@ -2277,10 +2285,7 @@ fn enrichment_containment_claim_bundle_explicit_sla_serde() {
 #[test]
 fn enrichment_verification_report_with_scope_limitations_serde() {
     let mut report = make_report(VerificationVerdict::PartiallyVerified);
-    report.scope_limitations = vec![
-        "unsigned attestation".to_string(),
-        "sandbox".to_string(),
-    ];
+    report.scope_limitations = vec!["unsigned attestation".to_string(), "sandbox".to_string()];
     report.confidence_statement = "partial confidence".to_string();
     let json = serde_json::to_string(&report).unwrap();
     let back: ThirdPartyVerificationReport = serde_json::from_str(&json).unwrap();
@@ -2402,7 +2407,11 @@ fn enrichment_verdict_all_exit_codes_are_non_negative() {
         VerificationVerdict::Failed,
         VerificationVerdict::Inconclusive,
     ] {
-        assert!(verdict.exit_code() >= 0, "verdict {:?} has negative exit code", verdict);
+        assert!(
+            verdict.exit_code() >= 0,
+            "verdict {:?} has negative exit code",
+            verdict
+        );
     }
 }
 
@@ -2517,18 +2526,24 @@ fn enrichment_containment_report_has_scenario_count_and_passed_count_checks() {
     let result = make_gate_result(vec![make_scenario("s1", true, 100)]);
     let bundle = make_containment_bundle(result);
     let report = verify_containment_claim(&bundle);
-    assert!(report
-        .checks
-        .iter()
-        .any(|c| c.name == "scenario_count_matches"));
-    assert!(report
-        .checks
-        .iter()
-        .any(|c| c.name == "passed_count_matches"));
-    assert!(report
-        .checks
-        .iter()
-        .any(|c| c.name == "overall_pass_flag_matches"));
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name == "scenario_count_matches")
+    );
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name == "passed_count_matches")
+    );
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name == "overall_pass_flag_matches")
+    );
 }
 
 // ---------- Additional edge case enrichment ----------

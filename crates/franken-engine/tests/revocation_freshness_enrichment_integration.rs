@@ -37,9 +37,9 @@ use frankenengine_engine::signature_preimage::SigningKey;
 
 fn operator_key() -> SigningKey {
     SigningKey::from_bytes([
-        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE,
-        0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC,
-        0xBD, 0xBE, 0xBF, 0xC0,
+        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
+        0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
+        0xBF, 0xC0,
     ])
 }
 
@@ -89,7 +89,12 @@ fn enrichment_freshness_state_ordering_all_pairs() {
     ];
     for i in 0..states.len() {
         for j in (i + 1)..states.len() {
-            assert!(states[i] < states[j], "{:?} should be < {:?}", states[i], states[j]);
+            assert!(
+                states[i] < states[j],
+                "{:?} should be < {:?}",
+                states[i],
+                states[j]
+            );
         }
     }
 }
@@ -379,8 +384,14 @@ fn enrichment_recovering_allows_safe_and_health() {
     ctrl.update_local_head(10, "t-recover");
     assert_eq!(ctrl.state(), FreshnessState::Recovering);
 
-    assert!(ctrl.evaluate(OperationType::SafeOperation, "t-rec-safe").is_ok());
-    assert!(ctrl.evaluate(OperationType::HealthCheck, "t-rec-hc").is_ok());
+    assert!(
+        ctrl.evaluate(OperationType::SafeOperation, "t-rec-safe")
+            .is_ok()
+    );
+    assert!(
+        ctrl.evaluate(OperationType::HealthCheck, "t-rec-hc")
+            .is_ok()
+    );
 }
 
 // =========================================================================

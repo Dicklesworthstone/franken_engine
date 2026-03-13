@@ -30,11 +30,10 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::novelty_synthesis_engine::{
-    ProgramKind, SynthesisConstraint, SynthesisDenialReason, SynthesisError,
-    SynthesisReceipt, SynthesisStrategy,
-    build_constraints, synthesize_candidate,
-    BEAD_ID, COMPONENT, DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, DEFAULT_MIN_NOVELTY,
-    KIND_COUNT, MAX_BATCH_SIZE, POLICY_ID, SCHEMA_VERSION, STRATEGY_COUNT,
+    BEAD_ID, COMPONENT, DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, DEFAULT_MIN_NOVELTY, KIND_COUNT,
+    MAX_BATCH_SIZE, POLICY_ID, ProgramKind, SCHEMA_VERSION, STRATEGY_COUNT, SynthesisConstraint,
+    SynthesisDenialReason, SynthesisError, SynthesisReceipt, SynthesisStrategy, build_constraints,
+    synthesize_candidate,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -166,7 +165,10 @@ fn enrichment_denial_reason_display_matches_as_str() {
 
 #[test]
 fn enrichment_denial_reason_as_str_all_distinct() {
-    let strings: BTreeSet<&str> = SynthesisDenialReason::ALL.iter().map(|r| r.as_str()).collect();
+    let strings: BTreeSet<&str> = SynthesisDenialReason::ALL
+        .iter()
+        .map(|r| r.as_str())
+        .collect();
     assert_eq!(strings.len(), 8);
 }
 
@@ -525,11 +527,5 @@ fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", ProgramKind::PlainJs).is_empty());
     assert!(!format!("{:?}", SynthesisDenialReason::InsufficientNovelty).is_empty());
     assert!(!format!("{:?}", SynthesisError::InvalidConstraint).is_empty());
-    assert!(
-        !format!(
-            "{:?}",
-            SynthesisConstraint::new(100, 1000, 300_000)
-        )
-        .is_empty()
-    );
+    assert!(!format!("{:?}", SynthesisConstraint::new(100, 1000, 300_000)).is_empty());
 }

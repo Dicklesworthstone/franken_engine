@@ -22,13 +22,7 @@ fn hash(label: &str) -> ContentHash {
     ContentHash::compute(label.as_bytes())
 }
 
-fn make_prior(
-    id: &str,
-    kind: TransferKind,
-    ep: u64,
-    confidence: i64,
-    rules: usize,
-) -> PriorEntry {
+fn make_prior(id: &str, kind: TransferKind, ep: u64, confidence: i64, rules: usize) -> PriorEntry {
     PriorEntry {
         prior_id: id.to_string(),
         kind,
@@ -99,7 +93,12 @@ fn enrichment_transfer_kind_display_all_unique() {
     for k in &kinds {
         let s = k.to_string();
         assert!(!s.is_empty(), "Display must not be empty for {:?}", k);
-        assert!(seen.insert(s.clone()), "Duplicate Display for {:?}: {}", k, s);
+        assert!(
+            seen.insert(s.clone()),
+            "Duplicate Display for {:?}: {}",
+            k,
+            s
+        );
     }
     assert_eq!(seen.len(), 6);
 }
@@ -132,7 +131,12 @@ fn enrichment_transfer_denial_reason_display_all_unique() {
     for r in &reasons {
         let s = r.to_string();
         assert!(!s.is_empty());
-        assert!(seen.insert(s.clone()), "Duplicate Display for {:?}: {}", r, s);
+        assert!(
+            seen.insert(s.clone()),
+            "Duplicate Display for {:?}: {}",
+            r,
+            s
+        );
     }
     assert_eq!(seen.len(), 10);
 }
@@ -151,7 +155,11 @@ fn enrichment_transfer_status_display_all_unique() {
     for s in &statuses {
         let display = s.to_string();
         assert!(!display.is_empty());
-        assert!(seen.insert(display.clone()), "Duplicate Display: {}", display);
+        assert!(
+            seen.insert(display.clone()),
+            "Duplicate Display: {}",
+            display
+        );
     }
     assert_eq!(seen.len(), 6);
 }
@@ -247,7 +255,11 @@ fn enrichment_transfer_error_display_all_variants() {
         assert!(!s.is_empty());
         displays.insert(s);
     }
-    assert_eq!(displays.len(), variants.len(), "All TransferError Display must be unique");
+    assert_eq!(
+        displays.len(),
+        variants.len(),
+        "All TransferError Display must be unique"
+    );
 }
 
 // =========================================================================
@@ -480,8 +492,12 @@ fn enrichment_serde_roundtrip_transfer_evidence_inventory() {
 #[test]
 fn enrichment_serde_roundtrip_transfer_error_all_variants() {
     let variants: Vec<TransferError> = vec![
-        TransferError::PriorNotFound { prior_id: "pA".to_string() },
-        TransferError::TransferNotFound { transfer_id: "tA".to_string() },
+        TransferError::PriorNotFound {
+            prior_id: "pA".to_string(),
+        },
+        TransferError::TransferNotFound {
+            transfer_id: "tA".to_string(),
+        },
         TransferError::TransferNotActive {
             transfer_id: "tB".to_string(),
             status: TransferStatus::RevokedStale,
@@ -489,9 +505,15 @@ fn enrichment_serde_roundtrip_transfer_error_all_variants() {
         TransferError::PolicyViolation {
             reason: TransferDenialReason::DriftBudgetExhausted,
         },
-        TransferError::DuplicateTransfer { transfer_id: "tC".to_string() },
-        TransferError::DuplicatePrior { prior_id: "pC".to_string() },
-        TransferError::CertificateRejection { certificate_id: "cA".to_string() },
+        TransferError::DuplicateTransfer {
+            transfer_id: "tC".to_string(),
+        },
+        TransferError::DuplicatePrior {
+            prior_id: "pC".to_string(),
+        },
+        TransferError::CertificateRejection {
+            certificate_id: "cA".to_string(),
+        },
     ];
     for v in &variants {
         let json = serde_json::to_string(v).unwrap();
@@ -506,7 +528,10 @@ fn enrichment_serde_roundtrip_transfer_error_all_variants() {
 
 #[test]
 fn enrichment_constants_values() {
-    assert_eq!(TRANSFER_PRIOR_SCHEMA_VERSION, "franken-engine.workload-transfer-prior.v1");
+    assert_eq!(
+        TRANSFER_PRIOR_SCHEMA_VERSION,
+        "franken-engine.workload-transfer-prior.v1"
+    );
     assert_eq!(MAX_TRANSFERRED_RULES, 512);
     assert_eq!(DEFAULT_DRIFT_BUDGET_MILLIONTHS, 100_000);
     assert_eq!(DEFAULT_CONFIDENCE_FLOOR_MILLIONTHS, 700_000);
@@ -688,8 +713,16 @@ fn enrichment_default_policy_all_kinds_permitted() {
     assert!(policy.permitted_kinds.contains(&TransferKind::TieringPrior));
     assert!(policy.permitted_kinds.contains(&TransferKind::CacheHint));
     assert!(policy.permitted_kinds.contains(&TransferKind::ShapePrior));
-    assert!(policy.permitted_kinds.contains(&TransferKind::GcTuningPrior));
-    assert!(policy.permitted_kinds.contains(&TransferKind::SchedulerPrior));
+    assert!(
+        policy
+            .permitted_kinds
+            .contains(&TransferKind::GcTuningPrior)
+    );
+    assert!(
+        policy
+            .permitted_kinds
+            .contains(&TransferKind::SchedulerPrior)
+    );
     assert_eq!(policy.permitted_kinds.len(), 6);
 }
 
@@ -698,8 +731,14 @@ fn enrichment_default_policy_field_values() {
     let policy = TransferPolicy::default();
     assert_eq!(policy.schema_version, TRANSFER_PRIOR_SCHEMA_VERSION);
     assert_eq!(policy.max_prior_age_epochs, DEFAULT_MAX_PRIOR_AGE_EPOCHS);
-    assert_eq!(policy.confidence_floor_millionths, DEFAULT_CONFIDENCE_FLOOR_MILLIONTHS);
-    assert_eq!(policy.drift_budget_millionths, DEFAULT_DRIFT_BUDGET_MILLIONTHS);
+    assert_eq!(
+        policy.confidence_floor_millionths,
+        DEFAULT_CONFIDENCE_FLOOR_MILLIONTHS
+    );
+    assert_eq!(
+        policy.drift_budget_millionths,
+        DEFAULT_DRIFT_BUDGET_MILLIONTHS
+    );
     assert_eq!(policy.max_transferred_rules, MAX_TRANSFERRED_RULES);
     assert!(policy.allow_marginal_transfer);
     assert_eq!(policy.marginal_discount_millionths, 200_000);
@@ -876,7 +915,10 @@ fn enrichment_engine_new_with_defaults() {
     assert_eq!(engine.prior_count(), 0);
     assert_eq!(engine.active_transfer_count(), 0);
     assert_eq!(engine.revoked_transfer_count(), 0);
-    assert_eq!(engine.policy().schema_version, TRANSFER_PRIOR_SCHEMA_VERSION);
+    assert_eq!(
+        engine.policy().schema_version,
+        TRANSFER_PRIOR_SCHEMA_VERSION
+    );
 }
 
 #[test]
@@ -1269,7 +1311,10 @@ fn enrichment_revoke_active_transfer() {
     let receipt = engine.revoke_transfer("t1").unwrap();
     assert_eq!(receipt.reason, TransferStatus::RevokedManual);
     assert!(receipt.drift_verdict.is_none());
-    assert_eq!(engine.get_transfer("t1").unwrap().status, TransferStatus::RevokedManual);
+    assert_eq!(
+        engine.get_transfer("t1").unwrap().status,
+        TransferStatus::RevokedManual
+    );
     assert_eq!(engine.revoked_transfer_count(), 1);
     assert_eq!(engine.active_transfer_count(), 0);
 }
@@ -1743,7 +1788,13 @@ fn enrichment_full_lifecycle_register_execute_drift_revoke_auto() {
     };
     let mut engine = TransferEngine::new(policy, epoch(5));
     engine
-        .register_prior(make_prior("p-auto", TransferKind::GcTuningPrior, 3, 900_000, 4))
+        .register_prior(make_prior(
+            "p-auto",
+            TransferKind::GcTuningPrior,
+            3,
+            900_000,
+            4,
+        ))
         .unwrap();
     engine
         .execute_transfer(&near_input("t-auto", "p-auto", "tgt-auto", "cert-auto"))

@@ -254,8 +254,16 @@ fn enrichment_density_config_density_larger_than_budget() {
         }
     }
     let events = guard.drain_events();
-    assert!(events.iter().any(|e| e.reason == CheckpointReason::BudgetExhausted));
-    assert!(!events.iter().any(|e| e.reason == CheckpointReason::Periodic));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.reason == CheckpointReason::BudgetExhausted)
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.reason == CheckpointReason::Periodic)
+    );
 }
 
 // =========================================================================

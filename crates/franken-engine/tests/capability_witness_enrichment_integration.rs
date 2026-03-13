@@ -922,3 +922,263 @@ fn serde_roundtrip_witness_index_error_all_variants() {
         assert_eq!(*v, rt);
     }
 }
+
+// ===========================================================================
+// 21) Copy semantics for Copy types
+// ===========================================================================
+
+#[test]
+fn copy_semantics_lifecycle_state() {
+    let a = LifecycleState::Active;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn copy_semantics_proof_kind() {
+    let a = ProofKind::DynamicAblation;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn copy_semantics_witness_schema_version() {
+    let a = WitnessSchemaVersion::CURRENT;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn copy_semantics_confidence_interval() {
+    let a = ConfidenceInterval::from_trials(100, 95);
+    let b = a;
+    assert_eq!(a, b);
+}
+
+// ===========================================================================
+// 22) Clone independence
+// ===========================================================================
+
+#[test]
+fn clone_independence_rollback_token() {
+    let original = RollbackToken {
+        previous_witness_hash: ContentHash::compute(b"original"),
+        previous_witness_id: Some(oid(1)),
+        created_epoch: SecurityEpoch::from_raw(1),
+        sequence: 10,
+    };
+    let mut cloned = original.clone();
+    cloned.sequence = 99;
+    assert_eq!(original.sequence, 10);
+    assert_eq!(cloned.sequence, 99);
+}
+
+#[test]
+fn clone_independence_proof_obligation() {
+    let original = ProofObligation {
+        capability: Capability::new("cap-1"),
+        kind: ProofKind::StaticAnalysis,
+        proof_artifact_id: oid(1),
+        justification: "original".to_string(),
+        artifact_hash: ContentHash::compute(b"hash"),
+    };
+    let mut cloned = original.clone();
+    cloned.justification = "modified".to_string();
+    assert_eq!(original.justification, "original");
+}
+
+#[test]
+fn clone_independence_denial_record() {
+    let original = DenialRecord {
+        capability: Capability::new("cap-2"),
+        reason: "original".to_string(),
+        evidence_id: None,
+    };
+    let mut cloned = original.clone();
+    cloned.reason = "modified".to_string();
+    assert_eq!(original.reason, "original");
+}
+
+#[test]
+fn clone_independence_witness_error() {
+    let original = WitnessError::MissingProofObligation {
+        capability: "original".to_string(),
+    };
+    let mut cloned = original.clone();
+    if let WitnessError::MissingProofObligation { ref mut capability } = cloned {
+        *capability = "modified".to_string();
+    }
+    if let WitnessError::MissingProofObligation { capability } = &original {
+        assert_eq!(capability, "original");
+    }
+}
+
+// ===========================================================================
+// 23) LifecycleState BTreeSet ordering and dedup
+// ===========================================================================
+
+#[test]
+fn lifecycle_state_btreeset_ordering_dedup() {
+    let mut set = BTreeSet::new();
+    set.insert(LifecycleState::Revoked);
+    set.insert(LifecycleState::Draft);
+    set.insert(LifecycleState::Active);
+    set.insert(LifecycleState::Promoted);
+    set.insert(LifecycleState::Validated);
+    set.insert(LifecycleState::Superseded);
+    set.insert(LifecycleState::Draft); // dup
+    assert_eq!(set.len(), 6);
+    let ordered: Vec<_> = set.into_iter().collect();
+    for i in 1..ordered.len() {
+        assert!(ordered[i - 1] < ordered[i]);
+    }
+}
+
+// ===========================================================================
+// 24) LifecycleState terminal states have no transitions
+// ===========================================================================
+
+#[test]
+fn lifecycle_terminal_states_no_transitions() {
+    assert!(LifecycleState::Superseded.valid_transitions().is_empty());
+    assert!(LifecycleState::Revoked.valid_transitions().is_empty());
+    assert!(!LifecycleState::Superseded.can_transition_to(LifecycleState::Draft));
+    assert!(!LifecycleState::Revoked.can_transition_to(LifecycleState::Active));
+}
+
+// ===========================================================================
+// 25) LifecycleState full transition chain
+// ===========================================================================
+
+#[test]
+fn lifecycle_full_transition_chain() {
+    assert!(LifecycleState::Draft.can_transition_to(LifecycleState::Validated));
+    assert!(LifecycleState::Validated.can_transition_to(LifecycleState::Promoted));
+    assert!(LifecycleState::Promoted.can_transition_to(LifecycleState::Active));
+    assert!(LifecycleState::Active.can_transition_to(LifecycleState::Superseded));
+    assert!(LifecycleState::Active.can_transition_to(LifecycleState::Revoked));
+    // Invalid backward transition
+    assert!(!LifecycleState::Validated.can_transition_to(LifecycleState::Draft));
+    assert!(!LifecycleState::Active.can_transition_to(LifecycleState::Draft));
+}
+
+// ===========================================================================
+// 26) WitnessSchemaVersion compatibility edge cases
+// ===========================================================================
+
+#[test]
+fn schema_version_same_major_higher_minor_compatible() {
+    let reader = WitnessSchemaVersion { major: 1, minor: 2 };
+    let witness = WitnessSchemaVersion { major: 1, minor: 0 };
+    assert!(reader.is_compatible_with(&witness));
+}
+
+#[test]
+fn schema_version_same_major_lower_minor_incompatible() {
+    let reader = WitnessSchemaVersion { major: 1, minor: 0 };
+    let witness = WitnessSchemaVersion { major: 1, minor: 2 };
+    assert!(!reader.is_compatible_with(&witness));
+}
+
+// ===========================================================================
+// 27) ConfidenceInterval all successes
+// ===========================================================================
+
+#[test]
+fn confidence_interval_all_successes() {
+    let ci = ConfidenceInterval::from_trials(1000, 1000);
+    assert_eq!(ci.point_estimate_millionths(), 1_000_000);
+    assert!(ci.meets_threshold(900_000));
+}
+
+// ===========================================================================
+// 28) ConfidenceInterval no successes
+// ===========================================================================
+
+#[test]
+fn confidence_interval_no_successes() {
+    let ci = ConfidenceInterval::from_trials(100, 0);
+    assert_eq!(ci.point_estimate_millionths(), 0);
+    assert!(!ci.meets_threshold(100_000));
+}
+
+// ===========================================================================
+// 29) Debug nonempty for all key types
+// ===========================================================================
+
+#[test]
+fn debug_nonempty_all_key_types() {
+    assert!(!format!("{:?}", LifecycleState::Draft).is_empty());
+    assert!(!format!("{:?}", ProofKind::StaticAnalysis).is_empty());
+    assert!(!format!("{:?}", PromotionTheoremKind::MergeLegality).is_empty());
+    assert!(!format!("{:?}", WitnessSchemaVersion::CURRENT).is_empty());
+    assert!(!format!("{:?}", ConfidenceInterval::from_trials(10, 9)).is_empty());
+    let rt = RollbackToken {
+        previous_witness_hash: ContentHash::compute(b"x"),
+        previous_witness_id: None,
+        created_epoch: SecurityEpoch::from_raw(0),
+        sequence: 0,
+    };
+    assert!(!format!("{rt:?}").is_empty());
+}
+
+// ===========================================================================
+// 30) WitnessError serde roundtrip EpochMismatch
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_witness_error_epoch_mismatch() {
+    let err = WitnessError::EpochMismatch {
+        witness_epoch: 5,
+        current_epoch: 10,
+    };
+    let json = serde_json::to_string(&err).unwrap();
+    let back: WitnessError = serde_json::from_str(&json).unwrap();
+    assert_eq!(err, back);
+}
+
+// ===========================================================================
+// 31) WitnessError Display EpochMismatch contains epoch values
+// ===========================================================================
+
+#[test]
+fn witness_error_display_epoch_mismatch_contains_values() {
+    let err = WitnessError::EpochMismatch {
+        witness_epoch: 5,
+        current_epoch: 10,
+    };
+    let display = err.to_string();
+    assert!(display.contains("5"));
+    assert!(display.contains("10"));
+}
+
+// ===========================================================================
+// 32) WitnessSchemaVersion serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_witness_schema_version() {
+    let v = WitnessSchemaVersion { major: 3, minor: 7 };
+    let json = serde_json::to_string(&v).unwrap();
+    let back: WitnessSchemaVersion = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, back);
+}
+
+// ===========================================================================
+// 33) PromotionTheoremKind BTreeSet ordering
+// ===========================================================================
+
+#[test]
+fn promotion_theorem_kind_btreeset_ordering() {
+    let mut set = BTreeSet::new();
+    set.insert(PromotionTheoremKind::NonInterference);
+    set.insert(PromotionTheoremKind::MergeLegality);
+    set.insert(PromotionTheoremKind::AttenuationLegality);
+    set.insert(PromotionTheoremKind::Custom("z-test".to_string()));
+    set.insert(PromotionTheoremKind::MergeLegality); // dup
+    assert_eq!(set.len(), 4);
+    let ordered: Vec<_> = set.into_iter().collect();
+    for i in 1..ordered.len() {
+        assert!(ordered[i - 1] < ordered[i]);
+    }
+}

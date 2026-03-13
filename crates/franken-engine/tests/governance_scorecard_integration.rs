@@ -23,10 +23,9 @@ use frankenengine_engine::governance_scorecard::{
     CrossRepoConformanceStabilitySummary, GOVERNANCE_SCORECARD_COMPONENT,
     GOVERNANCE_SCORECARD_SCHEMA_VERSION, GovernanceScorecardError, GovernanceScorecardEvent,
     GovernanceScorecardOutcome, GovernanceScorecardPublication, GovernanceScorecardRequest,
-    GovernanceScorecardThresholds, GovernanceScorecardTrendPoint,
-    MoonshotGovernorDecisionSummary, MoonshotGovernorHealthInput, PrivacyBudgetHealthInput,
-    PrivacyBudgetHealthSummary, publish_governance_scorecard,
-    verify_governance_scorecard_signature,
+    GovernanceScorecardThresholds, GovernanceScorecardTrendPoint, MoonshotGovernorDecisionSummary,
+    MoonshotGovernorHealthInput, PrivacyBudgetHealthInput, PrivacyBudgetHealthSummary,
+    publish_governance_scorecard, verify_governance_scorecard_signature,
 };
 use frankenengine_engine::portfolio_governor::governance_audit_ledger::{
     GovernanceActor, GovernanceAuditLedger, GovernanceDecisionType, GovernanceLedgerConfig,
@@ -1268,10 +1267,7 @@ fn enrichment_generated_at_ns_propagated() {
 #[test]
 fn enrichment_schema_version_constant_matches_publication() {
     let p = publish(&baseline_request());
-    assert_eq!(
-        p.schema_version,
-        "franken-engine.governance-scorecard.v1"
-    );
+    assert_eq!(p.schema_version, "franken-engine.governance-scorecard.v1");
 }
 
 #[test]
@@ -1591,10 +1587,7 @@ fn enrichment_warning_decision_event_outcome_is_warn() {
 fn enrichment_artifact_hash_hex_is_64_hex_chars() {
     let p = publish(&baseline_request());
     assert_eq!(p.artifact_hash_hex.len(), 64);
-    assert!(p
-        .artifact_hash_hex
-        .chars()
-        .all(|c| c.is_ascii_hexdigit()));
+    assert!(p.artifact_hash_hex.chars().all(|c| c.is_ascii_hexdigit()));
 }
 
 #[test]
@@ -1676,7 +1669,8 @@ fn enrichment_validation_rejects_whitespace_policy_id() {
 #[test]
 fn enrichment_validation_rejects_duplicate_receipt_ids_detail() {
     let mut req = baseline_request();
-    req.attested_receipts.push(high_impact_receipt("hi-1", true));
+    req.attested_receipts
+        .push(high_impact_receipt("hi-1", true));
     let mut l = ledger();
     let result = publish_governance_scorecard(&req, &signing_key(), &mut l, actor());
     assert!(result.is_err());
@@ -1825,7 +1819,10 @@ fn enrichment_publication_serde_roundtrip_full() {
     assert_eq!(p.ledger_sequence, recovered.ledger_sequence);
     assert_eq!(p.blockers, recovered.blockers);
     assert_eq!(p.warnings, recovered.warnings);
-    assert_eq!(p.trend_regression_detected, recovered.trend_regression_detected);
+    assert_eq!(
+        p.trend_regression_detected,
+        recovered.trend_regression_detected
+    );
     assert_eq!(p.trend.len(), recovered.trend.len());
     assert_eq!(p.events.len(), recovered.events.len());
 }
@@ -1930,9 +1927,13 @@ fn enrichment_error_is_std_error_for_all_variants() {
             field: "f".to_string(),
             detail: "d".to_string(),
         }),
-        Box::new(GovernanceScorecardError::SerializationFailure("s".to_string())),
+        Box::new(GovernanceScorecardError::SerializationFailure(
+            "s".to_string(),
+        )),
         Box::new(GovernanceScorecardError::SignatureFailure("s".to_string())),
-        Box::new(GovernanceScorecardError::LedgerWriteFailure("l".to_string())),
+        Box::new(GovernanceScorecardError::LedgerWriteFailure(
+            "l".to_string(),
+        )),
     ];
     for err in &errors {
         assert!(!err.to_string().is_empty());
@@ -1942,9 +1943,7 @@ fn enrichment_error_is_std_error_for_all_variants() {
 #[test]
 fn enrichment_moonshot_high_kill_rate_triggers_blocker() {
     let mut req = baseline_request();
-    req.moonshot_governor
-        .governance_report
-        .kill_rate_millionths = 500_000;
+    req.moonshot_governor.governance_report.kill_rate_millionths = 500_000;
     let p = publish(&req);
     assert_eq!(p.outcome, GovernanceScorecardOutcome::Critical);
     assert!(p.blockers.iter().any(|b| b.contains("moonshot")));
@@ -2093,8 +2092,7 @@ fn enrichment_event_serde_roundtrip_with_all_fields() {
         detail: Some("within budget".to_string()),
     };
     let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: GovernanceScorecardEvent =
-        serde_json::from_str(&json).expect("deserialize");
+    let recovered: GovernanceScorecardEvent = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(event, recovered);
 }
 
@@ -2112,8 +2110,7 @@ fn enrichment_event_serde_roundtrip_with_none_fields() {
         detail: None,
     };
     let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: GovernanceScorecardEvent =
-        serde_json::from_str(&json).expect("deserialize");
+    let recovered: GovernanceScorecardEvent = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(event, recovered);
 }
 
@@ -2153,8 +2150,7 @@ fn enrichment_privacy_budget_health_summary_serde_roundtrip() {
         near_term_exhaustion_warning: false,
     };
     let json = serde_json::to_string(&summary).expect("serialize");
-    let recovered: PrivacyBudgetHealthSummary =
-        serde_json::from_str(&json).expect("deserialize");
+    let recovered: PrivacyBudgetHealthSummary = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(summary, recovered);
 }
 
@@ -2231,8 +2227,7 @@ fn enrichment_request_serde_roundtrip_with_thresholds() {
         ..GovernanceScorecardThresholds::default()
     });
     let json = serde_json::to_string(&req).expect("serialize");
-    let recovered: GovernanceScorecardRequest =
-        serde_json::from_str(&json).expect("deserialize");
+    let recovered: GovernanceScorecardRequest = serde_json::from_str(&json).expect("deserialize");
     assert!(recovered.thresholds.is_some());
     assert!(recovered.thresholds.unwrap().fail_on_trend_regression);
 }
@@ -2250,8 +2245,7 @@ fn enrichment_request_serde_roundtrip_with_historical() {
         outcome: GovernanceScorecardOutcome::Healthy,
     });
     let json = serde_json::to_string(&req).expect("serialize");
-    let recovered: GovernanceScorecardRequest =
-        serde_json::from_str(&json).expect("deserialize");
+    let recovered: GovernanceScorecardRequest = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(recovered.historical.len(), 1);
     assert_eq!(recovered.historical[0].scorecard_id, "hist-1");
 }
@@ -2563,8 +2557,7 @@ fn enrichment_different_trace_id_gives_different_auto_derived_id() {
 fn enrichment_moonshot_governor_summary_serde_from_publication() {
     let p = publish(&baseline_request());
     let json = serde_json::to_string(&p.moonshot_governor).expect("ser");
-    let recovered: MoonshotGovernorDecisionSummary =
-        serde_json::from_str(&json).expect("deser");
+    let recovered: MoonshotGovernorDecisionSummary = serde_json::from_str(&json).expect("deser");
     assert_eq!(p.moonshot_governor, recovered);
 }
 
@@ -2572,8 +2565,7 @@ fn enrichment_moonshot_governor_summary_serde_from_publication() {
 fn enrichment_privacy_budget_health_summary_serde_from_publication() {
     let p = publish(&baseline_request());
     let json = serde_json::to_string(&p.privacy_budget_health).expect("ser");
-    let recovered: PrivacyBudgetHealthSummary =
-        serde_json::from_str(&json).expect("deser");
+    let recovered: PrivacyBudgetHealthSummary = serde_json::from_str(&json).expect("deser");
     assert_eq!(p.privacy_budget_health, recovered);
 }
 
@@ -2581,8 +2573,7 @@ fn enrichment_privacy_budget_health_summary_serde_from_publication() {
 fn enrichment_attested_receipt_coverage_summary_serde_from_publication() {
     let p = publish(&baseline_request());
     let json = serde_json::to_string(&p.attested_receipt_coverage).expect("ser");
-    let recovered: AttestedReceiptCoverageSummary =
-        serde_json::from_str(&json).expect("deser");
+    let recovered: AttestedReceiptCoverageSummary = serde_json::from_str(&json).expect("deser");
     assert_eq!(p.attested_receipt_coverage, recovered);
 }
 

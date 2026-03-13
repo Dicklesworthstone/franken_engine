@@ -14,10 +14,10 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::benchmark_behavior_equivalence::{
-    BehaviorEquivalenceClass, BehaviorEquivalenceObservation, BehaviorEquivalenceReport,
-    BenchmarkParityVerdictRecord, DivergenceOwnerRoute, EvidenceSurface, OwnerRoute,
-    OwnerRouteHint, PublicationDisposition, BEAD_ID, COMPONENT, POLICY_ID, SCHEMA_VERSION,
-    build_record, build_report, publication_disposition_for, route_owner,
+    BEAD_ID, BehaviorEquivalenceClass, BehaviorEquivalenceObservation, BehaviorEquivalenceReport,
+    BenchmarkParityVerdictRecord, COMPONENT, DivergenceOwnerRoute, EvidenceSurface, OwnerRoute,
+    OwnerRouteHint, POLICY_ID, PublicationDisposition, SCHEMA_VERSION, build_record, build_report,
+    publication_disposition_for, route_owner,
 };
 use frankenengine_engine::benchmark_evidence_bundle::ParityTarget;
 
@@ -429,10 +429,7 @@ fn enrichment_route_owner_all_non_equivalent_return_some() {
     ];
     for class in &non_equivalent {
         let route = route_owner(*class, OwnerRouteHint::RuntimeSemantics);
-        assert!(
-            route.is_some(),
-            "{class} should produce an owner route"
-        );
+        assert!(route.is_some(), "{class} should produce an owner route");
     }
 }
 
@@ -658,11 +655,7 @@ fn enrichment_report_all_classification_types() {
     let report = build_report("t", "d", POLICY_ID, &observations);
     assert_eq!(report.records.len(), 6);
 
-    let classes: BTreeSet<_> = report
-        .records
-        .iter()
-        .map(|r| r.classification)
-        .collect();
+    let classes: BTreeSet<_> = report.records.iter().map(|r| r.classification).collect();
     assert_eq!(classes.len(), 6);
 
     // Only equiv has no owner route, so 5 records have routes.

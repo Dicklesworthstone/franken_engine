@@ -14,10 +14,10 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::regexp_string_governance::{
-    BenchmarkCategory, BenchmarkEntry, GovernanceConfig, GovernanceEvaluator,
-    GovernanceReceipt, GovernanceSummary, GovernanceVerdict, MILLIONTHS, ParityAxis,
-    ParityResult, ParitySubject, RegexpFeature, StringLane, TailRiskEntry,
-    UnicodeCoverage, Violation, regexp_string_governance_manifest, summarize_receipt,
+    BenchmarkCategory, BenchmarkEntry, GovernanceConfig, GovernanceEvaluator, GovernanceReceipt,
+    GovernanceSummary, GovernanceVerdict, MILLIONTHS, ParityAxis, ParityResult, ParitySubject,
+    RegexpFeature, StringLane, TailRiskEntry, UnicodeCoverage, Violation,
+    regexp_string_governance_manifest, summarize_receipt,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -347,7 +347,10 @@ fn enrichment_evaluator_last_receipt_available() {
     assert!(eval.last_receipt().is_none());
     let receipt = eval.evaluate();
     assert!(eval.last_receipt().is_some());
-    assert_eq!(eval.last_receipt().unwrap().content_hash, receipt.content_hash);
+    assert_eq!(
+        eval.last_receipt().unwrap().content_hash,
+        receipt.content_hash
+    );
 }
 
 #[test]
@@ -366,7 +369,10 @@ fn enrichment_evaluator_accessors() {
     let config = GovernanceConfig::default_config();
     let eval = GovernanceEvaluator::with_defaults(ep());
     assert_eq!(*eval.epoch(), ep());
-    assert_eq!(eval.config().min_parity_millionths, config.min_parity_millionths);
+    assert_eq!(
+        eval.config().min_parity_millionths,
+        config.min_parity_millionths
+    );
     assert!(eval.parity_results().is_empty());
     assert!(eval.unicode_coverage().is_empty());
     assert!(eval.benchmark_entries().is_empty());

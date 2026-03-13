@@ -15,11 +15,11 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::metadata_substrate_optimized::{
-    FallbackPath, OptimizationLevel, OverrideConfig, RollbackStrategy,
-    SUBSTRATE_OPT_COMPONENT, SUBSTRATE_OPT_POLICY_ID, SUBSTRATE_OPT_SCHEMA_VERSION,
-    SubstrateError, SubstrateKind, SubstrateProfile, SubstrateTransition,
-    TransitionTrigger, apply_override, build_canonical_inventory, certify_substrate,
-    compute_transition_cost, evaluate_substrate, run_substrate_evidence,
+    FallbackPath, OptimizationLevel, OverrideConfig, RollbackStrategy, SUBSTRATE_OPT_COMPONENT,
+    SUBSTRATE_OPT_POLICY_ID, SUBSTRATE_OPT_SCHEMA_VERSION, SubstrateError, SubstrateKind,
+    SubstrateProfile, SubstrateTransition, TransitionTrigger, apply_override,
+    build_canonical_inventory, certify_substrate, compute_transition_cost, evaluate_substrate,
+    run_substrate_evidence,
 };
 
 fn hot_profile(id: &str, kind: SubstrateKind, accesses: u64) -> SubstrateProfile {
@@ -512,9 +512,7 @@ fn enrichment_canonical_inventory_hot_count_le_total() {
 #[test]
 fn enrichment_canonical_inventory_optimized_plus_fallback_le_total() {
     let report = build_canonical_inventory();
-    assert!(
-        (report.optimized_count + report.fallback_count) as usize <= report.profiles.len()
-    );
+    assert!((report.optimized_count + report.fallback_count) as usize <= report.profiles.len());
 }
 
 #[test]

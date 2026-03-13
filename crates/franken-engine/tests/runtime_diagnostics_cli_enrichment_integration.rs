@@ -25,9 +25,13 @@ use frankenengine_engine::containment_executor::ContainmentState;
 use frankenengine_engine::evidence_ledger::DecisionType;
 use frankenengine_engine::runtime_diagnostics_cli::{
     CompatibilityUserImpactClass, EvidenceExportFilter, EvidenceRecordKind, EvidenceSeverity,
-    GaEvidenceArtifactCategory, GcPressureSample, OnboardingReadinessClass,
-    OnboardingRemediationEffort, PreflightVerdict, RolloutRecommendation, RuntimeDiagnosticsOutput,
-    RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample, StructuredLogEvent,
+    GaEvidenceArtifactCategory, GaEvidenceArtifactLink, GaEvidencePackageMandatoryFieldStatus,
+    GaEvidenceRiskDisposition, GcPressureSample, OnboardingReadinessClass,
+    OnboardingRemediationEffort, OnboardingRemediationStep, OnboardingScoreBreakdown,
+    OnboardingScorecardSignal, PreflightBlocker, PreflightMandatoryFieldStatus, PreflightVerdict,
+    ReplayArtifactRecord, RolloutDecisionMandatoryFieldStatus, RolloutRecommendation,
+    RuntimeDiagnosticsOutput, RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample,
+    StructuredLogEvent, SupportBundleFile, SupportBundleFileIndexEntry,
     SupportBundleRedactionPolicy, collect_runtime_diagnostics, parse_decision_type,
     parse_evidence_severity, render_diagnostics_summary,
 };
@@ -807,4 +811,651 @@ fn enrichment_scheduler_lanes_sorted_by_name() {
         .map(|l| l.lane.as_str())
         .collect();
     assert_eq!(names, vec!["async-io", "compute", "priority"]);
+}
+
+// ===========================================================================
+// Copy semantics for small enums
+// ===========================================================================
+
+#[test]
+fn enrichment_evidence_severity_copy() {
+    let a = EvidenceSeverity::Critical;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_evidence_record_kind_copy() {
+    let a = EvidenceRecordKind::HostcallTelemetry;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_preflight_verdict_copy() {
+    let a = PreflightVerdict::Yellow;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_onboarding_readiness_copy() {
+    let a = OnboardingReadinessClass::Conditional;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_remediation_effort_copy() {
+    let a = OnboardingRemediationEffort::High;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_rollout_recommendation_copy() {
+    let a = RolloutRecommendation::CanaryHold;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_ga_evidence_category_copy() {
+    let a = GaEvidenceArtifactCategory::Security;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+// ===========================================================================
+// Clone independence for struct types
+// ===========================================================================
+
+#[test]
+fn enrichment_clone_independence_runtime_extension_state() {
+    let original = RuntimeExtensionState {
+        extension_id: "ext-a".to_string(),
+        containment_state: ContainmentState::Running,
+    };
+    let mut cloned = original.clone();
+    cloned.extension_id = "ext-modified".to_string();
+    assert_eq!(original.extension_id, "ext-a");
+    assert_eq!(cloned.extension_id, "ext-modified");
+}
+
+#[test]
+fn enrichment_clone_independence_gc_pressure_sample() {
+    let original = gc_sample("ext-a", 100, 200);
+    let mut cloned = original.clone();
+    cloned.used_bytes = 999;
+    assert_eq!(original.used_bytes, 100);
+    assert_eq!(cloned.used_bytes, 999);
+}
+
+#[test]
+fn enrichment_clone_independence_scheduler_lane_sample() {
+    let original = sched_lane("default", 50, 100);
+    let mut cloned = original.clone();
+    cloned.lane = "modified".to_string();
+    assert_eq!(original.lane, "default");
+    assert_eq!(cloned.lane, "modified");
+}
+
+#[test]
+fn enrichment_clone_independence_structured_log_event() {
+    let original = StructuredLogEvent {
+        trace_id: "t-1".to_string(),
+        decision_id: "d-1".to_string(),
+        policy_id: "p-1".to_string(),
+        component: "test".to_string(),
+        event: "evt".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+    };
+    let mut cloned = original.clone();
+    cloned.outcome = "fail".to_string();
+    assert_eq!(original.outcome, "pass");
+    assert_eq!(cloned.outcome, "fail");
+}
+
+#[test]
+fn enrichment_clone_independence_evidence_filter() {
+    let original = EvidenceExportFilter {
+        extension_id: Some("ext-1".to_string()),
+        trace_id: None,
+        start_timestamp_ns: None,
+        end_timestamp_ns: None,
+        severity: None,
+        decision_type: None,
+    };
+    let mut cloned = original.clone();
+    cloned.trace_id = Some("trace-modified".to_string());
+    assert!(original.trace_id.is_none());
+    assert_eq!(cloned.trace_id.as_deref(), Some("trace-modified"));
+}
+
+// ===========================================================================
+// RuntimeStateInput serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_runtime_state_input_serde_roundtrip() {
+    let input = make_state_input(
+        vec![gc_sample("ext-a", 100, 200)],
+        vec![sched_lane("main", 5, 10)],
+    );
+    let json = serde_json::to_string(&input).unwrap();
+    let back: RuntimeStateInput = serde_json::from_str(&json).unwrap();
+    assert_eq!(input, back);
+}
+
+// ===========================================================================
+// Debug nonempty for all main types
+// ===========================================================================
+
+#[test]
+fn enrichment_debug_nonempty_all_enums() {
+    assert!(!format!("{:?}", EvidenceSeverity::Info).is_empty());
+    assert!(!format!("{:?}", EvidenceRecordKind::DecisionReceipt).is_empty());
+    assert!(!format!("{:?}", PreflightVerdict::Green).is_empty());
+    assert!(!format!("{:?}", OnboardingReadinessClass::Ready).is_empty());
+    assert!(!format!("{:?}", OnboardingRemediationEffort::Low).is_empty());
+    assert!(!format!("{:?}", CompatibilityUserImpactClass::BreakingBehavior).is_empty());
+    assert!(!format!("{:?}", RolloutRecommendation::Promote).is_empty());
+    assert!(!format!("{:?}", GaEvidenceArtifactCategory::Conformance).is_empty());
+}
+
+// ===========================================================================
+// parse_decision_type case insensitive
+// ===========================================================================
+
+#[test]
+fn enrichment_parse_decision_type_case_insensitive() {
+    assert_eq!(
+        parse_decision_type("SECURITY_ACTION"),
+        Some(DecisionType::SecurityAction)
+    );
+    assert_eq!(
+        parse_decision_type("Policy_Update"),
+        Some(DecisionType::PolicyUpdate)
+    );
+}
+
+// ===========================================================================
+// GcPressureDiagnostics serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_gc_pressure_diagnostics_serde_roundtrip() {
+    use frankenengine_engine::runtime_diagnostics_cli::GcPressureDiagnostics;
+    let diag = GcPressureDiagnostics {
+        extension_id: "ext-test".to_string(),
+        used_bytes: 500,
+        budget_bytes: 1000,
+        pressure_millionths: 500_000,
+        over_budget: false,
+    };
+    let json = serde_json::to_string(&diag).unwrap();
+    let back: GcPressureDiagnostics = serde_json::from_str(&json).unwrap();
+    assert_eq!(diag, back);
+}
+
+// ===========================================================================
+// SchedulerLaneDiagnostics serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_scheduler_lane_diagnostics_serde_roundtrip() {
+    use frankenengine_engine::runtime_diagnostics_cli::SchedulerLaneDiagnostics;
+    let diag = SchedulerLaneDiagnostics {
+        lane: "compute".to_string(),
+        queue_depth: 25,
+        max_depth: 100,
+        utilization_millionths: 250_000,
+        tasks_submitted: 100,
+        tasks_scheduled: 90,
+        tasks_completed: 80,
+        tasks_timed_out: 2,
+    };
+    let json = serde_json::to_string(&diag).unwrap();
+    let back: SchedulerLaneDiagnostics = serde_json::from_str(&json).unwrap();
+    assert_eq!(diag, back);
+}
+
+// ===========================================================================
+// Struct serde roundtrips — uncovered types
+// ===========================================================================
+
+#[test]
+fn enrichment_support_bundle_file_index_entry_serde_roundtrip() {
+    let entry = SupportBundleFileIndexEntry {
+        path: "diagnostics/runtime.json".into(),
+        sha256: "abc123".into(),
+        bytes: 1024,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let rt: SupportBundleFileIndexEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, rt);
+}
+
+#[test]
+fn enrichment_support_bundle_file_serde_roundtrip() {
+    let file = SupportBundleFile {
+        path: "diagnostics/runtime.json".into(),
+        content: r#"{"status":"ok"}"#.into(),
+        sha256: "def456".into(),
+        bytes: 15,
+    };
+    let json = serde_json::to_string(&file).unwrap();
+    let rt: SupportBundleFile = serde_json::from_str(&json).unwrap();
+    assert_eq!(file, rt);
+}
+
+#[test]
+fn enrichment_preflight_blocker_serde_roundtrip() {
+    let blocker = PreflightBlocker {
+        blocker_id: "block-1".into(),
+        severity: EvidenceSeverity::Critical,
+        rationale: "missing evidence".into(),
+        remediation: "run evidence collection".into(),
+        reproducible_command: "frankenctl collect".into(),
+        evidence_links: vec!["ref-1".into()],
+    };
+    let json = serde_json::to_string(&blocker).unwrap();
+    let rt: PreflightBlocker = serde_json::from_str(&json).unwrap();
+    assert_eq!(blocker, rt);
+}
+
+#[test]
+fn enrichment_preflight_mandatory_field_status_serde_roundtrip() {
+    let status = PreflightMandatoryFieldStatus {
+        valid: false,
+        missing_fields: vec!["trace_id".into()],
+        inconsistent_fields: vec!["epoch".into()],
+    };
+    let json = serde_json::to_string(&status).unwrap();
+    let rt: PreflightMandatoryFieldStatus = serde_json::from_str(&json).unwrap();
+    assert_eq!(status, rt);
+}
+
+#[test]
+fn enrichment_onboarding_scorecard_signal_serde_roundtrip() {
+    let signal = OnboardingScorecardSignal {
+        signal_id: "sig-1".into(),
+        source: "compatibility-check".into(),
+        severity: EvidenceSeverity::Warning,
+        summary: "minor divergence detected".into(),
+        remediation: "update fixture".into(),
+        reproducible_command: "frankenctl check".into(),
+        evidence_links: vec!["ref-1".into()],
+        owner_hint: Some("platform-team".into()),
+    };
+    let json = serde_json::to_string(&signal).unwrap();
+    let rt: OnboardingScorecardSignal = serde_json::from_str(&json).unwrap();
+    assert_eq!(signal, rt);
+}
+
+#[test]
+fn enrichment_onboarding_scorecard_signal_no_owner_hint_roundtrip() {
+    let signal = OnboardingScorecardSignal {
+        signal_id: "sig-2".into(),
+        source: "preflight".into(),
+        severity: EvidenceSeverity::Info,
+        summary: "all clear".into(),
+        remediation: "none".into(),
+        reproducible_command: "frankenctl preflight".into(),
+        evidence_links: vec![],
+        owner_hint: None,
+    };
+    let json = serde_json::to_string(&signal).unwrap();
+    assert!(!json.contains("owner_hint"));
+    let rt: OnboardingScorecardSignal = serde_json::from_str(&json).unwrap();
+    assert_eq!(signal, rt);
+}
+
+#[test]
+fn enrichment_onboarding_score_breakdown_serde_roundtrip() {
+    let score = OnboardingScoreBreakdown {
+        baseline_risk_millionths: 100_000,
+        signal_risk_millionths: 50_000,
+        total_risk_millionths: 150_000,
+        critical_signals: 0,
+        warning_signals: 2,
+        info_signals: 5,
+    };
+    let json = serde_json::to_string(&score).unwrap();
+    let rt: OnboardingScoreBreakdown = serde_json::from_str(&json).unwrap();
+    assert_eq!(score, rt);
+}
+
+#[test]
+fn enrichment_onboarding_remediation_step_serde_roundtrip() {
+    let step = OnboardingRemediationStep {
+        step_id: "step-1".into(),
+        severity: EvidenceSeverity::Warning,
+        summary: "update config".into(),
+        remediation: "edit config.toml".into(),
+        owner: "infra-team".into(),
+        reproducible_command: "frankenctl update".into(),
+        evidence_links: vec!["link-1".into()],
+    };
+    let json = serde_json::to_string(&step).unwrap();
+    let rt: OnboardingRemediationStep = serde_json::from_str(&json).unwrap();
+    assert_eq!(step, rt);
+}
+
+#[test]
+fn enrichment_rollout_decision_mandatory_field_status_serde_roundtrip() {
+    let status = RolloutDecisionMandatoryFieldStatus {
+        valid: true,
+        missing_fields: vec![],
+        inconsistent_fields: vec![],
+    };
+    let json = serde_json::to_string(&status).unwrap();
+    let rt: RolloutDecisionMandatoryFieldStatus = serde_json::from_str(&json).unwrap();
+    assert_eq!(status, rt);
+}
+
+#[test]
+fn enrichment_ga_evidence_artifact_link_serde_roundtrip() {
+    let link = GaEvidenceArtifactLink {
+        category: GaEvidenceArtifactCategory::Security,
+        path: "evidence/security-report.json".into(),
+        description: "adversarial test results".into(),
+    };
+    let json = serde_json::to_string(&link).unwrap();
+    let rt: GaEvidenceArtifactLink = serde_json::from_str(&json).unwrap();
+    assert_eq!(link, rt);
+}
+
+#[test]
+fn enrichment_ga_evidence_package_mandatory_field_status_serde_roundtrip() {
+    let status = GaEvidencePackageMandatoryFieldStatus {
+        valid: false,
+        missing_fields: vec!["release_candidate_id".into()],
+        inconsistent_fields: vec![],
+    };
+    let json = serde_json::to_string(&status).unwrap();
+    let rt: GaEvidencePackageMandatoryFieldStatus = serde_json::from_str(&json).unwrap();
+    assert_eq!(status, rt);
+}
+
+#[test]
+fn enrichment_ga_evidence_risk_disposition_serde_roundtrip() {
+    let disposition = GaEvidenceRiskDisposition {
+        readiness: OnboardingReadinessClass::Conditional,
+        recommendation: RolloutRecommendation::CanaryHold,
+        remediation_effort: OnboardingRemediationEffort::Medium,
+        rationale: "needs more testing".into(),
+        critical_signals: 0,
+        warning_signals: 3,
+        info_signals: 10,
+        unresolved_signal_ids: vec!["sig-1".into()],
+        next_steps: vec![],
+    };
+    let json = serde_json::to_string(&disposition).unwrap();
+    let rt: GaEvidenceRiskDisposition = serde_json::from_str(&json).unwrap();
+    assert_eq!(disposition, rt);
+}
+
+#[test]
+fn enrichment_replay_artifact_record_serde_roundtrip() {
+    let record = ReplayArtifactRecord {
+        trace_id: "trace-1".into(),
+        extension_id: "ext-1".into(),
+        timestamp_ns: 1_000_000_000,
+        artifact_id: "art-1".into(),
+        replay_pointer: "pointer-1".into(),
+    };
+    let json = serde_json::to_string(&record).unwrap();
+    let rt: ReplayArtifactRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(record, rt);
+}
+
+// ===========================================================================
+// BTreeSet ordering — enum variants via serde tags
+// ===========================================================================
+
+#[test]
+fn enrichment_evidence_severity_btreeset_ordering() {
+    let tags: Vec<String> = [
+        EvidenceSeverity::Info,
+        EvidenceSeverity::Warning,
+        EvidenceSeverity::Critical,
+    ]
+    .iter()
+    .map(|v| serde_json::to_string(v).unwrap())
+    .collect();
+    let unique: BTreeSet<_> = tags.iter().collect();
+    assert_eq!(unique.len(), 3);
+}
+
+#[test]
+fn enrichment_evidence_record_kind_btreeset_ordering() {
+    let tags: Vec<String> = [
+        EvidenceRecordKind::DecisionReceipt,
+        EvidenceRecordKind::HostcallTelemetry,
+        EvidenceRecordKind::ContainmentAction,
+        EvidenceRecordKind::PolicyChange,
+        EvidenceRecordKind::ReplayArtifact,
+    ]
+    .iter()
+    .map(|v| serde_json::to_string(v).unwrap())
+    .collect();
+    let unique: BTreeSet<_> = tags.iter().collect();
+    assert_eq!(unique.len(), 5);
+}
+
+#[test]
+fn enrichment_ga_evidence_category_btreeset_ordering() {
+    let tags: Vec<String> = [
+        GaEvidenceArtifactCategory::Conformance,
+        GaEvidenceArtifactCategory::Performance,
+        GaEvidenceArtifactCategory::Security,
+    ]
+    .iter()
+    .map(|v| serde_json::to_string(v).unwrap())
+    .collect();
+    let unique: BTreeSet<_> = tags.iter().collect();
+    assert_eq!(unique.len(), 3);
+}
+
+#[test]
+fn enrichment_rollout_recommendation_btreeset_ordering() {
+    let tags: Vec<String> = [
+        RolloutRecommendation::Promote,
+        RolloutRecommendation::CanaryHold,
+        RolloutRecommendation::Rollback,
+        RolloutRecommendation::Defer,
+    ]
+    .iter()
+    .map(|v| serde_json::to_string(v).unwrap())
+    .collect();
+    let unique: BTreeSet<_> = tags.iter().collect();
+    assert_eq!(unique.len(), 4);
+}
+
+// ===========================================================================
+// Display == serde tag consistency
+// ===========================================================================
+
+#[test]
+fn enrichment_evidence_severity_display_matches_serde_tag() {
+    for sev in [
+        EvidenceSeverity::Info,
+        EvidenceSeverity::Warning,
+        EvidenceSeverity::Critical,
+    ] {
+        let display = sev.to_string();
+        let serde_tag = serde_json::to_string(&sev).unwrap();
+        assert_eq!(format!("\"{display}\""), serde_tag);
+    }
+}
+
+#[test]
+fn enrichment_evidence_record_kind_display_matches_serde_tag() {
+    for kind in [
+        EvidenceRecordKind::DecisionReceipt,
+        EvidenceRecordKind::HostcallTelemetry,
+        EvidenceRecordKind::ContainmentAction,
+        EvidenceRecordKind::PolicyChange,
+        EvidenceRecordKind::ReplayArtifact,
+    ] {
+        let display = kind.to_string();
+        let serde_tag = serde_json::to_string(&kind).unwrap();
+        assert_eq!(format!("\"{display}\""), serde_tag);
+    }
+}
+
+#[test]
+fn enrichment_preflight_verdict_display_matches_serde_tag() {
+    for verdict in [
+        PreflightVerdict::Green,
+        PreflightVerdict::Yellow,
+        PreflightVerdict::Red,
+    ] {
+        let display = verdict.to_string();
+        let serde_tag = serde_json::to_string(&verdict).unwrap();
+        assert_eq!(format!("\"{display}\""), serde_tag);
+    }
+}
+
+#[test]
+fn enrichment_rollout_recommendation_display_matches_serde_tag() {
+    for rec in [
+        RolloutRecommendation::Promote,
+        RolloutRecommendation::CanaryHold,
+        RolloutRecommendation::Rollback,
+        RolloutRecommendation::Defer,
+    ] {
+        let display = rec.to_string();
+        let serde_tag = serde_json::to_string(&rec).unwrap();
+        assert_eq!(format!("\"{display}\""), serde_tag);
+    }
+}
+
+#[test]
+fn enrichment_ga_evidence_category_display_matches_serde_tag() {
+    for cat in [
+        GaEvidenceArtifactCategory::Conformance,
+        GaEvidenceArtifactCategory::Performance,
+        GaEvidenceArtifactCategory::Security,
+    ] {
+        let display = cat.to_string();
+        let serde_tag = serde_json::to_string(&cat).unwrap();
+        assert_eq!(format!("\"{display}\""), serde_tag);
+    }
+}
+
+// ===========================================================================
+// Clone independence — additional struct types
+// ===========================================================================
+
+#[test]
+fn enrichment_clone_independence_preflight_blocker() {
+    let original = PreflightBlocker {
+        blocker_id: "block-1".into(),
+        severity: EvidenceSeverity::Critical,
+        rationale: "missing".into(),
+        remediation: "collect".into(),
+        reproducible_command: "cmd".into(),
+        evidence_links: vec!["ref".into()],
+    };
+    let mut cloned = original.clone();
+    cloned.blocker_id = "modified".into();
+    assert_eq!(original.blocker_id, "block-1");
+    assert_eq!(cloned.blocker_id, "modified");
+}
+
+#[test]
+fn enrichment_clone_independence_support_bundle_redaction_policy() {
+    let original = SupportBundleRedactionPolicy::default();
+    let mut cloned = original.clone();
+    cloned.replacement = "MODIFIED".into();
+    assert_ne!(original.replacement, cloned.replacement);
+}
+
+#[test]
+fn enrichment_clone_independence_onboarding_score_breakdown() {
+    let original = OnboardingScoreBreakdown {
+        baseline_risk_millionths: 100_000,
+        signal_risk_millionths: 50_000,
+        total_risk_millionths: 150_000,
+        critical_signals: 0,
+        warning_signals: 1,
+        info_signals: 2,
+    };
+    let mut cloned = original.clone();
+    cloned.critical_signals = 5;
+    assert_eq!(original.critical_signals, 0);
+    assert_eq!(cloned.critical_signals, 5);
+}
+
+// ===========================================================================
+// Debug nonempty — additional struct types
+// ===========================================================================
+
+#[test]
+fn enrichment_debug_nonempty_preflight_blocker() {
+    let blocker = PreflightBlocker {
+        blocker_id: "b".into(),
+        severity: EvidenceSeverity::Info,
+        rationale: "r".into(),
+        remediation: "r".into(),
+        reproducible_command: "c".into(),
+        evidence_links: vec![],
+    };
+    let debug = format!("{blocker:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("PreflightBlocker"));
+}
+
+#[test]
+fn enrichment_debug_nonempty_support_bundle_file_index_entry() {
+    let entry = SupportBundleFileIndexEntry {
+        path: "p".into(),
+        sha256: "s".into(),
+        bytes: 0,
+    };
+    let debug = format!("{entry:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("SupportBundleFileIndexEntry"));
+}
+
+#[test]
+fn enrichment_debug_nonempty_ga_evidence_artifact_link() {
+    let link = GaEvidenceArtifactLink {
+        category: GaEvidenceArtifactCategory::Conformance,
+        path: "p".into(),
+        description: "d".into(),
+    };
+    let debug = format!("{link:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("GaEvidenceArtifactLink"));
+}
+
+// ===========================================================================
+// CompatibilityUserImpactClass — Copy + clone
+// ===========================================================================
+
+#[test]
+fn enrichment_compatibility_impact_copy() {
+    let original = CompatibilityUserImpactClass::BreakingBehavior;
+    let copied = original;
+    assert_eq!(original, copied);
+}
+
+// ===========================================================================
+// Preflight mandatory field status — valid case
+// ===========================================================================
+
+#[test]
+fn enrichment_preflight_mandatory_field_status_valid() {
+    let status = PreflightMandatoryFieldStatus {
+        valid: true,
+        missing_fields: vec![],
+        inconsistent_fields: vec![],
+    };
+    assert!(status.valid);
+    assert!(status.missing_fields.is_empty());
+    assert!(status.inconsistent_fields.is_empty());
 }

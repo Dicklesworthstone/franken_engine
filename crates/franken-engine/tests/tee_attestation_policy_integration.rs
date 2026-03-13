@@ -1415,7 +1415,9 @@ fn enrichment_validate_sha512_digest_correct_length_accepted() {
             digest_hex: digest_hex(0xcc, 64),
         }],
     );
-    policy.validate().expect("sha512 with correct length should pass");
+    policy
+        .validate()
+        .expect("sha512 with correct length should pass");
 }
 
 #[test]
@@ -1467,7 +1469,12 @@ fn enrichment_validate_uppercase_hex_canonicalized_and_accepted() {
         .approved_measurements
         .get(&TeePlatform::IntelSgx)
         .unwrap();
-    assert!(sgx_measurements[0].digest_hex.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    assert!(
+        sgx_measurements[0]
+            .digest_hex
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    );
 }
 
 #[test]
@@ -1490,7 +1497,9 @@ fn enrichment_validate_multiple_measurements_same_platform_accepted() {
             },
         ],
     );
-    policy.validate().expect("multiple different measurements should pass");
+    policy
+        .validate()
+        .expect("multiple different measurements should pass");
 }
 
 #[test]
@@ -1564,7 +1573,9 @@ fn enrichment_validate_freshness_equal_windows_accepted() {
     let mut policy = sample_policy(1);
     policy.freshness_window.standard_max_age_secs = 120;
     policy.freshness_window.high_impact_max_age_secs = 120;
-    policy.validate().expect("equal freshness windows should pass");
+    policy
+        .validate()
+        .expect("equal freshness windows should pass");
 }
 
 #[test]
@@ -1678,7 +1689,11 @@ fn enrichment_evaluate_quote_at_exact_high_impact_freshness_boundary_accepted() 
     let mut quote = sgx_quote();
     quote.quote_age_secs = 60; // exactly at the 60s limit
     policy
-        .evaluate_quote(&quote, DecisionImpact::HighImpact, SecurityEpoch::from_raw(1))
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::HighImpact,
+            SecurityEpoch::from_raw(1),
+        )
         .expect("boundary value should pass");
 }
 
@@ -1699,7 +1714,11 @@ fn enrichment_evaluate_quote_one_second_over_high_impact_limit_rejected() {
     let mut quote = sgx_quote();
     quote.quote_age_secs = 61;
     let err = policy
-        .evaluate_quote(&quote, DecisionImpact::HighImpact, SecurityEpoch::from_raw(1))
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::HighImpact,
+            SecurityEpoch::from_raw(1),
+        )
         .expect_err("must fail");
     assert_eq!(err.error_code(), "tee_policy_attestation_stale");
 }
@@ -1710,7 +1729,11 @@ fn enrichment_evaluate_quote_zero_age_accepted() {
     let mut quote = sgx_quote();
     quote.quote_age_secs = 0;
     policy
-        .evaluate_quote(&quote, DecisionImpact::HighImpact, SecurityEpoch::from_raw(1))
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::HighImpact,
+            SecurityEpoch::from_raw(1),
+        )
         .expect("zero age should pass");
 }
 
@@ -1770,7 +1793,11 @@ fn enrichment_evaluate_quote_for_arm_cca_platform() {
         revocation_observations: rev,
     };
     policy
-        .evaluate_quote(&quote, DecisionImpact::HighImpact, SecurityEpoch::from_raw(1))
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::HighImpact,
+            SecurityEpoch::from_raw(1),
+        )
         .expect("ARM CCA quote should pass");
 }
 
@@ -1812,7 +1839,11 @@ fn enrichment_evaluate_quote_trust_root_not_yet_active_rejected() {
     let mut quote = sgx_quote();
     quote.trust_root_id = "sgx-root-future".to_string();
     let err = policy
-        .evaluate_quote(&quote, DecisionImpact::Standard, SecurityEpoch::from_raw(10))
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::Standard,
+            SecurityEpoch::from_raw(10),
+        )
         .expect_err("future root should fail");
     assert_eq!(err.error_code(), "tee_policy_expired_trust_root");
 }
@@ -2082,7 +2113,12 @@ fn enrichment_store_evaluate_rejected_event_has_reason_metadata() {
         .expect_err("must fail");
     let last = store.governance_ledger().last().unwrap();
     assert!(last.metadata.contains_key("reason"));
-    assert!(last.metadata.get("reason").unwrap().contains("not approved"));
+    assert!(
+        last.metadata
+            .get("reason")
+            .unwrap()
+            .contains("not approved")
+    );
 }
 
 #[test]
@@ -2626,9 +2662,7 @@ fn enrichment_emitter_sync_updates_epoch_on_policy_advance() {
         emitter.last_synced_policy_epoch,
         Some(SecurityEpoch::from_raw(5))
     );
-    store
-        .load_policy(sample_policy(10), "t", "d")
-        .unwrap();
+    store.load_policy(sample_policy(10), "t", "d").unwrap();
     emitter.sync_policy(&store).unwrap();
     assert_eq!(
         emitter.last_synced_policy_epoch,
@@ -2661,9 +2695,7 @@ fn enrichment_emitter_stale_after_policy_advances_two() {
     let mut store = loaded_store(5);
     let mut emitter = DecisionReceiptEmitter::new("em-stale2");
     emitter.sync_policy(&store).unwrap();
-    store
-        .load_policy(sample_policy(8), "t", "d")
-        .unwrap();
+    store.load_policy(sample_policy(8), "t", "d").unwrap();
     let err = emitter
         .can_emit(SecurityEpoch::from_raw(8), &store)
         .expect_err("must fail");
@@ -2675,9 +2707,7 @@ fn enrichment_emitter_can_emit_one_behind_active_epoch() {
     let mut store = loaded_store(5);
     let mut emitter = DecisionReceiptEmitter::new("em-one-behind");
     emitter.sync_policy(&store).unwrap();
-    store
-        .load_policy(sample_policy(6), "t", "d")
-        .unwrap();
+    store.load_policy(sample_policy(6), "t", "d").unwrap();
     // Synced at 5, active is 6 — one behind is ok
     emitter
         .can_emit(SecurityEpoch::from_raw(6), &store)
@@ -2862,7 +2892,10 @@ fn enrichment_serde_policy_store_roundtrip() {
     let store = loaded_store(5);
     let json = serde_json::to_string(&store).unwrap();
     let back: TeeAttestationPolicyStore = serde_json::from_str(&json).unwrap();
-    assert_eq!(store.receipt_emission_halted(), back.receipt_emission_halted());
+    assert_eq!(
+        store.receipt_emission_halted(),
+        back.receipt_emission_halted()
+    );
     assert_eq!(store.last_error_code(), back.last_error_code());
     assert_eq!(
         store.active_policy().unwrap().policy_epoch,
@@ -2902,7 +2935,10 @@ fn enrichment_policy_canonicalize_sorts_trust_roots_by_platform_then_id() {
         .map(|r| r.platform)
         .collect();
     for window in platforms.windows(2) {
-        assert!(window[0] <= window[1], "trust roots should be sorted by platform");
+        assert!(
+            window[0] <= window[1],
+            "trust roots should be sorted by platform"
+        );
     }
 }
 
@@ -2918,9 +2954,7 @@ fn enrichment_store_policy_reload_with_different_measurements_changes_active() {
             digest_hex: digest_hex(0xee, 48),
         }],
     );
-    store
-        .load_policy(policy2, "t-new", "d-new")
-        .unwrap();
+    store.load_policy(policy2, "t-new", "d-new").unwrap();
     // Old SGX quote should now fail
     let quote = sgx_quote(); // uses 0x11 digest
     let err = store
@@ -2941,9 +2975,7 @@ fn enrichment_store_policy_reload_with_new_freshness_enforced() {
     let mut policy2 = sample_policy(6);
     policy2.freshness_window.standard_max_age_secs = 100;
     policy2.freshness_window.high_impact_max_age_secs = 30;
-    store
-        .load_policy(policy2, "t", "d")
-        .unwrap();
+    store.load_policy(policy2, "t", "d").unwrap();
     let mut quote = sgx_quote();
     quote.quote_age_secs = 150; // was OK with 300, now exceeds 100
     let err = store
@@ -2984,7 +3016,10 @@ fn enrichment_tee_platform_ord_consistent_with_all_array() {
 
 #[test]
 fn enrichment_revocation_fallback_serde_roundtrip() {
-    for fb in [RevocationFallback::TryNextSource, RevocationFallback::FailClosed] {
+    for fb in [
+        RevocationFallback::TryNextSource,
+        RevocationFallback::FailClosed,
+    ] {
         let json = serde_json::to_string(&fb).unwrap();
         let back: RevocationFallback = serde_json::from_str(&json).unwrap();
         assert_eq!(fb, back);

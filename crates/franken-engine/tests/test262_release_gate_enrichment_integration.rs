@@ -13,10 +13,10 @@
 
 use frankenengine_engine::test262_release_gate::{
     DeterministicWorkerAssignment, ProfileDecision, Test262CollectedArtifacts, Test262GateError,
-    Test262GateRun, Test262GateRunner, Test262HighWaterMark,
-    Test262ObservedOutcome, Test262ObservedResult, Test262Outcome, Test262PassRegressionWarning,
-    Test262PinSet, Test262Profile, Test262ProfileExclude, Test262ProfileInclude,
-    Test262RunSummary, Test262RunnerConfig, Test262Waiver, Test262WaiverReason, Test262WaiverSet,
+    Test262GateRun, Test262GateRunner, Test262HighWaterMark, Test262ObservedOutcome,
+    Test262ObservedResult, Test262Outcome, Test262PassRegressionWarning, Test262PinSet,
+    Test262Profile, Test262ProfileExclude, Test262ProfileInclude, Test262RunSummary,
+    Test262RunnerConfig, Test262Waiver, Test262WaiverReason, Test262WaiverSet,
     deterministic_worker_assignments, next_high_water_mark,
 };
 
@@ -154,7 +154,7 @@ fn enrichment_gate_error_display_all_variants() {
             field: "es2020_clause",
         },
         Test262GateError::InvalidProfile("bad profile".into()),
-        Test262GateError::Io(std::io::Error::new(std::io::ErrorKind::Other, "io err")),
+        Test262GateError::Io(std::io::Error::other("io err")),
     ];
     let mut displays = std::collections::BTreeSet::new();
     for err in &errors {
@@ -168,8 +168,7 @@ fn enrichment_gate_error_display_all_variants() {
 
 #[test]
 fn enrichment_gate_error_implements_std_error() {
-    let err: Box<dyn std::error::Error> =
-        Box::new(Test262GateError::InvalidConfig("test".into()));
+    let err: Box<dyn std::error::Error> = Box::new(Test262GateError::InvalidConfig("test".into()));
     assert!(!err.to_string().is_empty());
 }
 
@@ -460,9 +459,7 @@ fn enrichment_runner_timeout_waived_not_blocked() {
     }];
 
     let runner = Test262GateRunner { config };
-    let run = runner
-        .run(&pins, &prof, &waivers, &observed, None)
-        .unwrap();
+    let run = runner.run(&pins, &prof, &waivers, &observed, None).unwrap();
     assert!(!run.blocked);
     assert_eq!(run.summary.waived, 1);
     assert_eq!(run.summary.timed_out, 0);
@@ -493,9 +490,7 @@ fn enrichment_runner_crash_waived_not_blocked() {
     }];
 
     let runner = Test262GateRunner { config };
-    let run = runner
-        .run(&pins, &prof, &waivers, &observed, None)
-        .unwrap();
+    let run = runner.run(&pins, &prof, &waivers, &observed, None).unwrap();
     assert!(!run.blocked);
     assert_eq!(run.summary.waived, 1);
     assert_eq!(run.summary.crashed, 0);
@@ -580,9 +575,7 @@ fn enrichment_log_event_worker_index_within_bounds() {
         .collect();
 
     let runner = Test262GateRunner { config };
-    let run = runner
-        .run(&pins, &prof, &waivers, &observed, None)
-        .unwrap();
+    let run = runner.run(&pins, &prof, &waivers, &observed, None).unwrap();
     for log in &run.logs {
         assert!(
             log.worker_index < 3,
@@ -601,9 +594,7 @@ fn enrichment_log_event_policy_id_from_config() {
 
     let observed = vec![observed_pass("built-ins/Array/from")];
     let runner = Test262GateRunner { config };
-    let run = runner
-        .run(&pins, &prof, &waivers, &observed, None)
-        .unwrap();
+    let run = runner.run(&pins, &prof, &waivers, &observed, None).unwrap();
 
     for log in &run.logs {
         assert_eq!(log.policy_id, "policy-test262-es2020");
@@ -650,13 +641,7 @@ fn enrichment_debug_all_types_nonempty() {
     assert!(!format!("{:?}", Test262WaiverReason::HarnessGap).is_empty());
     assert!(!format!("{:?}", Test262ObservedOutcome::Pass).is_empty());
     assert!(!format!("{:?}", Test262Outcome::Waived).is_empty());
-    assert!(
-        !format!(
-            "{:?}",
-            Test262GateError::InvalidConfig("x".into())
-        )
-        .is_empty()
-    );
+    assert!(!format!("{:?}", Test262GateError::InvalidConfig("x".into())).is_empty());
     assert!(!format!("{:?}", make_simple_run(1, false)).is_empty());
 }
 
@@ -673,9 +658,7 @@ fn enrichment_run_summary_hashes_nonempty() {
 
     let observed = vec![observed_pass("built-ins/Array/from")];
     let runner = Test262GateRunner { config };
-    let run = runner
-        .run(&pins, &prof, &waivers, &observed, None)
-        .unwrap();
+    let run = runner.run(&pins, &prof, &waivers, &observed, None).unwrap();
 
     assert!(!run.summary.profile_hash.is_empty());
     assert!(!run.summary.waiver_hash.is_empty());
@@ -710,10 +693,7 @@ fn enrichment_run_summary_hashes_deterministic() {
     assert_eq!(run1.summary.profile_hash, run2.summary.profile_hash);
     assert_eq!(run1.summary.waiver_hash, run2.summary.waiver_hash);
     assert_eq!(run1.summary.pin_hash, run2.summary.pin_hash);
-    assert_eq!(
-        run1.summary.env_fingerprint,
-        run2.summary.env_fingerprint
-    );
+    assert_eq!(run1.summary.env_fingerprint, run2.summary.env_fingerprint);
 }
 
 // =========================================================================
@@ -830,9 +810,7 @@ fn enrichment_log_event_waived_has_error_detail() {
 
     let observed = vec![observed_fail("built-ins/Array/from")];
     let runner = Test262GateRunner { config };
-    let run = runner
-        .run(&pins, &prof, &waivers, &observed, None)
-        .unwrap();
+    let run = runner.run(&pins, &prof, &waivers, &observed, None).unwrap();
 
     assert_eq!(run.logs.len(), 1);
     let log = &run.logs[0];

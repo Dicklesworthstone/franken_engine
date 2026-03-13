@@ -653,10 +653,10 @@ fn module_with_export_default_produces_ir3() {
 
 use frankenengine_engine::ast::{Expression, ExpressionStatement, Statement};
 use frankenengine_engine::ifc_artifacts::ProofMethod;
+use frankenengine_engine::ir_contract::IrLevel;
 use frankenengine_engine::lowering_pipeline::{
     FlowProofArtifactEntry, RuntimeCheckpointArtifactEntry,
 };
-use frankenengine_engine::ir_contract::IrLevel;
 
 fn span() -> SourceSpan {
     SourceSpan::new(0, 0, 1, 1, 1, 1)
@@ -702,7 +702,9 @@ fn enrichment_numeric_literal_lowering_produces_ir3() {
 #[test]
 fn enrichment_string_literal_lowering_produces_ir3() {
     let ir0 = make_ir0(
-        vec![make_expr_stmt(Expression::StringLiteral("hello".to_string()))],
+        vec![make_expr_stmt(Expression::StringLiteral(
+            "hello".to_string(),
+        ))],
         ParseGoal::Script,
         "enr_str.js",
     );
@@ -821,14 +823,14 @@ fn enrichment_const_declaration_lowering() {
 #[test]
 fn enrichment_binary_add_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("1 + 2;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("1 + 2;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_add.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_add = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Add { .. })
-    });
+    let has_add = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Add { .. }));
     assert!(has_add, "should have Add instruction");
 }
 
@@ -837,14 +839,14 @@ fn enrichment_binary_add_lowering() {
 #[test]
 fn enrichment_binary_subtract_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("10 - 3;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("10 - 3;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_sub.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_sub = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Sub { .. })
-    });
+    let has_sub = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Sub { .. }));
     assert!(has_sub, "should have Sub instruction");
 }
 
@@ -853,14 +855,14 @@ fn enrichment_binary_subtract_lowering() {
 #[test]
 fn enrichment_binary_multiply_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("4 * 5;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("4 * 5;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_mul.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_mul = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Mul { .. })
-    });
+    let has_mul = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Mul { .. }));
     assert!(has_mul, "should have Mul instruction");
 }
 
@@ -869,14 +871,14 @@ fn enrichment_binary_multiply_lowering() {
 #[test]
 fn enrichment_binary_divide_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("10 / 2;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("10 / 2;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_div.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_div = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Div { .. })
-    });
+    let has_div = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Div { .. }));
     assert!(has_div, "should have Div instruction");
 }
 
@@ -885,14 +887,14 @@ fn enrichment_binary_divide_lowering() {
 #[test]
 fn enrichment_binary_remainder_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("7 % 3;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("7 % 3;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_mod.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_mod = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Mod { .. })
-    });
+    let has_mod = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Mod { .. }));
     assert!(has_mod, "should have Mod instruction");
 }
 
@@ -901,56 +903,56 @@ fn enrichment_binary_remainder_lowering() {
 #[test]
 fn enrichment_less_than_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("1 < 2;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("1 < 2;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_lt.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_lt = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Lt { .. })
-    });
+    let has_lt = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Lt { .. }));
     assert!(has_lt, "should have Lt instruction");
 }
 
 #[test]
 fn enrichment_greater_than_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("2 > 1;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("2 > 1;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_gt.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_gt = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Gt { .. })
-    });
+    let has_gt = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Gt { .. }));
     assert!(has_gt, "should have Gt instruction");
 }
 
 #[test]
 fn enrichment_strict_equal_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("1 === 1;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("1 === 1;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_seq.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_seq = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::StrictEq { .. })
-    });
+    let has_seq = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::StrictEq { .. }));
     assert!(has_seq, "should have StrictEq instruction");
 }
 
 #[test]
 fn enrichment_not_equal_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("1 != 2;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("1 != 2;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_neq.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_neq = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::NotEq { .. })
-    });
+    let has_neq = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::NotEq { .. }));
     assert!(has_neq, "should have NotEq instruction");
 }
 
@@ -959,70 +961,70 @@ fn enrichment_not_equal_lowering() {
 #[test]
 fn enrichment_bitwise_and_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("5 & 3;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("5 & 3;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_bitand.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_bitand = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::BitAnd { .. })
-    });
+    let has_bitand = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::BitAnd { .. }));
     assert!(has_bitand, "should have BitAnd instruction");
 }
 
 #[test]
 fn enrichment_bitwise_or_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("5 | 3;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("5 | 3;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_bitor.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_bitor = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::BitOr { .. })
-    });
+    let has_bitor = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::BitOr { .. }));
     assert!(has_bitor, "should have BitOr instruction");
 }
 
 #[test]
 fn enrichment_bitwise_xor_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("5 ^ 3;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("5 ^ 3;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_bitxor.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_bitxor = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::BitXor { .. })
-    });
+    let has_bitxor = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::BitXor { .. }));
     assert!(has_bitxor, "should have BitXor instruction");
 }
 
 #[test]
 fn enrichment_left_shift_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("1 << 3;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("1 << 3;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_shl.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_shl = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Shl { .. })
-    });
+    let has_shl = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Shl { .. }));
     assert!(has_shl, "should have Shl instruction");
 }
 
 #[test]
 fn enrichment_right_shift_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("8 >> 2;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("8 >> 2;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_shr.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_shr = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Shr { .. })
-    });
+    let has_shr = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Shr { .. }));
     assert!(has_shr, "should have Shr instruction");
 }
 
@@ -1031,70 +1033,70 @@ fn enrichment_right_shift_lowering() {
 #[test]
 fn enrichment_unary_negate_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("-42;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("-42;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_neg.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_neg = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::UnaryNeg { .. })
-    });
+    let has_neg = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::UnaryNeg { .. }));
     assert!(has_neg, "should have UnaryNeg instruction");
 }
 
 #[test]
 fn enrichment_unary_logical_not_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("!true;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("!true;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_not.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_not = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::LogicalNot { .. })
-    });
+    let has_not = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::LogicalNot { .. }));
     assert!(has_not, "should have LogicalNot instruction");
 }
 
 #[test]
 fn enrichment_unary_typeof_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("typeof x;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("typeof x;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_typeof.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_typeof = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::TypeOf { .. })
-    });
+    let has_typeof = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::TypeOf { .. }));
     assert!(has_typeof, "should have TypeOf instruction");
 }
 
 #[test]
 fn enrichment_unary_void_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("void 0;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("void 0;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_void.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_void = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Void { .. })
-    });
+    let has_void = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Void { .. }));
     assert!(has_void, "should have Void instruction");
 }
 
 #[test]
 fn enrichment_unary_bitwise_not_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("~42;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("~42;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_bitnot.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_bitnot = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::BitNot { .. })
-    });
+    let has_bitnot = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::BitNot { .. }));
     assert!(has_bitnot, "should have BitNot instruction");
 }
 
@@ -1109,7 +1111,10 @@ fn enrichment_if_statement_lowering() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_if.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     let has_jump = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Jump { .. } | Ir3Instruction::JumpIf { .. })
+        matches!(
+            i,
+            Ir3Instruction::Jump { .. } | Ir3Instruction::JumpIf { .. }
+        )
     });
     assert!(has_jump, "if statement should produce jump instructions");
 }
@@ -1135,10 +1140,16 @@ fn enrichment_while_loop_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_while.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let jump_count = output.ir3.instructions.iter().filter(|i| {
-        matches!(i, Ir3Instruction::Jump { .. })
-    }).count();
-    assert!(jump_count >= 1, "while loop should have at least one back-edge jump");
+    let jump_count = output
+        .ir3
+        .instructions
+        .iter()
+        .filter(|i| matches!(i, Ir3Instruction::Jump { .. }))
+        .count();
+    assert!(
+        jump_count >= 1,
+        "while loop should have at least one back-edge jump"
+    );
 }
 
 // --- 33. Do-while loop ---
@@ -1160,7 +1171,10 @@ fn enrichment_do_while_loop_lowering() {
 fn enrichment_for_loop_lowering() {
     let parser = CanonicalEs2020Parser;
     let tree = parser
-        .parse("for (let i = 0; i < 10; i = i + 1) { 1; }", ParseGoal::Script)
+        .parse(
+            "for (let i = 0; i < 10; i = i + 1) { 1; }",
+            ParseGoal::Script,
+        )
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_for.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
@@ -1178,7 +1192,10 @@ fn enrichment_for_in_loop_lowering() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_forin.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     let has_for_in = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::ForInInit { .. } | Ir3Instruction::ForInNext { .. })
+        matches!(
+            i,
+            Ir3Instruction::ForInInit { .. } | Ir3Instruction::ForInNext { .. }
+        )
     });
     assert!(has_for_in, "for-in should produce ForInInit/ForInNext");
 }
@@ -1194,7 +1211,10 @@ fn enrichment_for_of_loop_lowering() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_forof.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     let has_for_of = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::ForOfInit { .. } | Ir3Instruction::ForOfNext { .. })
+        matches!(
+            i,
+            Ir3Instruction::ForOfInit { .. } | Ir3Instruction::ForOfNext { .. }
+        )
     });
     assert!(has_for_of, "for-of should produce ForOfInit/ForOfNext");
 }
@@ -1217,9 +1237,7 @@ fn enrichment_try_catch_lowering() {
 #[test]
 fn enrichment_throw_statement_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("throw 42;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("throw 42;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_throw.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     assert!(!output.ir3.instructions.is_empty());
@@ -1287,9 +1305,11 @@ fn enrichment_call_expression_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_call.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_call = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Call { .. })
-    });
+    let has_call = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Call { .. }));
     assert!(has_call, "call expression should produce Call instruction");
 }
 
@@ -1298,14 +1318,14 @@ fn enrichment_call_expression_lowering() {
 #[test]
 fn enrichment_member_access_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("obj.prop;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("obj.prop;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_member.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_get = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::GetProperty { .. })
-    });
+    let has_get = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::GetProperty { .. }));
     assert!(has_get, "member access should produce GetProperty");
 }
 
@@ -1314,14 +1334,14 @@ fn enrichment_member_access_lowering() {
 #[test]
 fn enrichment_computed_member_access_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("obj[0];", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("obj[0];", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_computed.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_get = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::GetProperty { .. })
-    });
+    let has_get = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::GetProperty { .. }));
     assert!(has_get, "computed member access should produce GetProperty");
 }
 
@@ -1348,9 +1368,11 @@ fn enrichment_add_assign_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_addassign.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_add = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Add { .. })
-    });
+    let has_add = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Add { .. }));
     assert!(has_add, "+= should produce Add instruction");
 }
 
@@ -1364,9 +1386,11 @@ fn enrichment_sub_assign_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_subassign.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_sub = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Sub { .. })
-    });
+    let has_sub = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Sub { .. }));
     assert!(has_sub, "-= should produce Sub instruction");
 }
 
@@ -1375,9 +1399,7 @@ fn enrichment_sub_assign_lowering() {
 #[test]
 fn enrichment_await_expression_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("await 42;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("await 42;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_await.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     assert!(!output.ir3.instructions.is_empty());
@@ -1388,9 +1410,7 @@ fn enrichment_await_expression_lowering() {
 #[test]
 fn enrichment_this_expression_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("this;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("this;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_this.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     assert!(!output.ir3.instructions.is_empty());
@@ -1406,9 +1426,11 @@ fn enrichment_array_literal_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_array.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_new_array = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::NewArray { .. })
-    });
+    let has_new_array = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::NewArray { .. }));
     assert!(has_new_array, "array literal should produce NewArray");
 }
 
@@ -1422,9 +1444,11 @@ fn enrichment_object_literal_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_object.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_new_obj = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::NewObject { .. })
-    });
+    let has_new_obj = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::NewObject { .. }));
     assert!(has_new_obj, "object literal should produce NewObject");
 }
 
@@ -1438,9 +1462,11 @@ fn enrichment_new_expression_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_new.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_construct = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::Construct { .. })
-    });
+    let has_construct = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Construct { .. }));
     assert!(has_construct, "new expression should produce Construct");
 }
 
@@ -1467,10 +1493,15 @@ fn enrichment_logical_and_short_circuit() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_logand.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_jump_if = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::JumpIf { .. })
-    });
-    assert!(has_jump_if, "logical AND should produce JumpIf for short-circuit");
+    let has_jump_if = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::JumpIf { .. }));
+    assert!(
+        has_jump_if,
+        "logical AND should produce JumpIf for short-circuit"
+    );
 }
 
 // --- 56. Logical OR short-circuit ---
@@ -1496,9 +1527,11 @@ fn enrichment_nullish_coalescing() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_nullish.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_nullish_jump = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::JumpIfNullish { .. })
-    });
+    let has_nullish_jump = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::JumpIfNullish { .. }));
     assert!(has_nullish_jump, "?? should produce JumpIfNullish");
 }
 
@@ -1508,7 +1541,10 @@ fn enrichment_nullish_coalescing() {
 fn enrichment_switch_statement_lowering() {
     let parser = CanonicalEs2020Parser;
     let tree = parser
-        .parse("switch (x) { case 1: 10; break; case 2: 20; break; default: 0; }", ParseGoal::Script)
+        .parse(
+            "switch (x) { case 1: 10; break; case 2: 20; break; default: 0; }",
+            ParseGoal::Script,
+        )
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_switch.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
@@ -1525,9 +1561,11 @@ fn enrichment_delete_member_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_delete.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_delete = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::DeleteProperty { .. })
-    });
+    let has_delete = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::DeleteProperty { .. }));
     assert!(has_delete, "delete obj.x should produce DeleteProperty");
 }
 
@@ -1632,9 +1670,7 @@ fn enrichment_var_var_no_conflict() {
 #[test]
 fn enrichment_const_no_init_validation() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("const x;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("const x;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_const_no_init.js");
     let result = validate_ir0_static_semantics(&ir0);
     assert!(!result.is_valid());
@@ -1645,9 +1681,7 @@ fn enrichment_const_no_init_validation() {
 #[test]
 fn enrichment_const_no_init_lowering_error() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("const x;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("const x;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_const_no_init_lower.js");
     let err = lower_ir0_to_ir3(&ir0, &default_ctx()).expect_err("should fail");
     assert!(matches!(err, LoweringPipelineError::SemanticViolation(_)));
@@ -1666,7 +1700,10 @@ fn enrichment_duplicate_import_binding_validation() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_dup_import.mjs");
     let result = validate_ir0_static_semantics(&ir0);
-    assert!(!result.is_valid(), "duplicate import bindings should be invalid");
+    assert!(
+        !result.is_valid(),
+        "duplicate import bindings should be invalid"
+    );
 }
 
 // --- 70. Duplicate default export ---
@@ -1679,7 +1716,10 @@ fn enrichment_duplicate_default_export_validation() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_dup_default.mjs");
     let result = validate_ir0_static_semantics(&ir0);
-    assert!(!result.is_valid(), "duplicate default exports should be invalid");
+    assert!(
+        !result.is_valid(),
+        "duplicate default exports should be invalid"
+    );
 }
 
 // --- 71. IR3 always ends with Halt ---
@@ -1687,9 +1727,7 @@ fn enrichment_duplicate_default_export_validation() {
 #[test]
 fn enrichment_ir3_ends_with_halt() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("42;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("42;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_halt.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     assert!(
@@ -1703,9 +1741,7 @@ fn enrichment_ir3_ends_with_halt() {
 #[test]
 fn enrichment_ir3_function_table_has_main() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("42;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("42;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_ftable.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     assert!(!output.ir3.function_table.is_empty());
@@ -1774,13 +1810,12 @@ fn enrichment_runtime_checkpoint_entry_serde_roundtrip() {
 
 #[test]
 fn enrichment_error_display_semantic_violation() {
-    let err = LoweringPipelineError::SemanticViolation(
-        frankenengine_engine::parser::SemanticError::new(
+    let err =
+        LoweringPipelineError::SemanticViolation(frankenengine_engine::parser::SemanticError::new(
             frankenengine_engine::parser::SemanticErrorCode::DuplicateLetConstDeclaration,
             Some("x".to_string()),
             None,
-        ),
-    );
+        ));
     let msg = err.to_string();
     assert!(!msg.is_empty());
 }
@@ -1803,9 +1838,7 @@ fn enrichment_error_display_unauthorized_flow() {
 #[test]
 fn enrichment_events_component_is_lowering_pipeline() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("1;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("1;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_component.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     for event in &output.events {
@@ -1818,9 +1851,7 @@ fn enrichment_events_component_is_lowering_pipeline() {
 #[test]
 fn enrichment_ledger_op_counts_consistent() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("1 + 2;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("1 + 2;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_opcounts.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     for entry in &output.isomorphism_ledger {
@@ -1828,8 +1859,7 @@ fn enrichment_ledger_op_counts_consistent() {
     }
     // First pass output count should equal second pass input (by op count reasoning)
     assert_eq!(
-        output.isomorphism_ledger[0].output_op_count,
-        output.isomorphism_ledger[1].input_op_count,
+        output.isomorphism_ledger[0].output_op_count, output.isomorphism_ledger[1].input_op_count,
         "pass 1 output ops == pass 2 input ops"
     );
 }
@@ -1897,9 +1927,21 @@ fn enrichment_nested_binary_expression() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_nested.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_add = output.ir3.instructions.iter().any(|i| matches!(i, Ir3Instruction::Add { .. }));
-    let has_sub = output.ir3.instructions.iter().any(|i| matches!(i, Ir3Instruction::Sub { .. }));
-    let has_mul = output.ir3.instructions.iter().any(|i| matches!(i, Ir3Instruction::Mul { .. }));
+    let has_add = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Add { .. }));
+    let has_sub = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Sub { .. }));
+    let has_mul = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Mul { .. }));
     assert!(has_add && has_sub && has_mul);
 }
 
@@ -1922,7 +1964,10 @@ fn enrichment_identifier_reference_lowering() {
 fn enrichment_ir3_jump_targets_in_bounds() {
     let parser = CanonicalEs2020Parser;
     let tree = parser
-        .parse("if (true) { 1; } else { 2; } while (false) { 3; }", ParseGoal::Script)
+        .parse(
+            "if (true) { 1; } else { 2; } while (false) { 3; }",
+            ParseGoal::Script,
+        )
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_bounds.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
@@ -1945,9 +1990,7 @@ fn enrichment_ir3_jump_targets_in_bounds() {
 #[test]
 fn enrichment_flow_proof_artifact_id_stable() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("42;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("42;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_artifact_stable.js");
     let ctx = default_ctx();
     let out1 = lower_ir0_to_ir3(&ir0, &ctx).expect("pipeline 1");
@@ -1968,10 +2011,15 @@ fn enrichment_template_literal_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_template.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_template = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::TemplateLiteral { .. })
-    });
-    assert!(has_template, "template literal should produce TemplateLiteral");
+    let has_template = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::TemplateLiteral { .. }));
+    assert!(
+        has_template,
+        "template literal should produce TemplateLiteral"
+    );
 }
 
 // --- 89. Large numeric literal ---
@@ -2053,7 +2101,11 @@ fn enrichment_witness_pass_id_matches_ledger() {
         "enr_match_ids.js",
     );
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    for (witness, ledger) in output.witnesses.iter().zip(output.isomorphism_ledger.iter()) {
+    for (witness, ledger) in output
+        .witnesses
+        .iter()
+        .zip(output.isomorphism_ledger.iter())
+    {
         assert_eq!(witness.pass_id, ledger.pass_id);
     }
 }
@@ -2082,12 +2134,8 @@ fn enrichment_error_variant_equality() {
     let err2 = LoweringPipelineError::EmptyIr0Body;
     assert_eq!(err1, err2);
 
-    let err3 = LoweringPipelineError::InvariantViolation {
-        detail: "test",
-    };
-    let err4 = LoweringPipelineError::InvariantViolation {
-        detail: "test",
-    };
+    let err3 = LoweringPipelineError::InvariantViolation { detail: "test" };
+    let err4 = LoweringPipelineError::InvariantViolation { detail: "test" };
     assert_eq!(err3, err4);
 }
 
@@ -2145,9 +2193,11 @@ fn enrichment_property_set_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_setprop.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_set = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::SetProperty { .. })
-    });
+    let has_set = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::SetProperty { .. }));
     assert!(has_set, "property assignment should produce SetProperty");
 }
 
@@ -2156,15 +2206,19 @@ fn enrichment_property_set_lowering() {
 #[test]
 fn enrichment_chained_member_access() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("a.b.c;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("a.b.c;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_chain.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let get_count = output.ir3.instructions.iter().filter(|i| {
-        matches!(i, Ir3Instruction::GetProperty { .. })
-    }).count();
-    assert!(get_count >= 2, "a.b.c should produce at least 2 GetProperty");
+    let get_count = output
+        .ir3
+        .instructions
+        .iter()
+        .filter(|i| matches!(i, Ir3Instruction::GetProperty { .. }))
+        .count();
+    assert!(
+        get_count >= 2,
+        "a.b.c should produce at least 2 GetProperty"
+    );
 }
 
 // --- 102. Empty array literal ---
@@ -2172,14 +2226,14 @@ fn enrichment_chained_member_access() {
 #[test]
 fn enrichment_empty_array_literal() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("[];", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("[];", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_empty_arr.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_new_array = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::NewArray { .. })
-    });
+    let has_new_array = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::NewArray { .. }));
     assert!(has_new_array, "empty array literal should produce NewArray");
 }
 
@@ -2189,7 +2243,10 @@ fn enrichment_empty_array_literal() {
 fn enrichment_try_catch_finally_lowering() {
     let parser = CanonicalEs2020Parser;
     let tree = parser
-        .parse("try { 1; } catch (e) { 2; } finally { 3; }", ParseGoal::Script)
+        .parse(
+            "try { 1; } catch (e) { 2; } finally { 3; }",
+            ParseGoal::Script,
+        )
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_tcf.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
@@ -2283,9 +2340,11 @@ fn enrichment_instanceof_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_instanceof.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_instanceof = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::InstanceOf { .. })
-    });
+    let has_instanceof = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::InstanceOf { .. }));
     assert!(has_instanceof, "instanceof should produce InstanceOf");
 }
 
@@ -2294,13 +2353,13 @@ fn enrichment_instanceof_lowering() {
 #[test]
 fn enrichment_unary_plus_lowering() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("+42;", ParseGoal::Script)
-        .expect("parse");
+    let tree = parser.parse("+42;", ParseGoal::Script).expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_uplus.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_uplus = output.ir3.instructions.iter().any(|i| {
-        matches!(i, Ir3Instruction::UnaryPlus { .. })
-    });
+    let has_uplus = output
+        .ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::UnaryPlus { .. }));
     assert!(has_uplus, "unary + should produce UnaryPlus");
 }

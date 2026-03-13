@@ -919,7 +919,9 @@ fn enrichment_error_serde_roundtrip() {
 fn enrichment_multi_sample_same_cohort_mean_over_privilege() {
     let mut request = good_request();
     // Replace Simple sample with two: one with ratio 2.0 and one with ratio 1.0
-    request.samples.retain(|s| s.cohort != PlasBenchmarkCohort::Simple);
+    request
+        .samples
+        .retain(|s| s.cohort != PlasBenchmarkCohort::Simple);
     let mut s1 = good_sample("ext-s1", PlasBenchmarkCohort::Simple);
     s1.synthesized_capability_count = 10;
     s1.empirically_required_capability_count = 5; // ratio = 2.0
@@ -941,7 +943,9 @@ fn enrichment_multi_sample_same_cohort_mean_over_privilege() {
 #[test]
 fn enrichment_multi_sample_same_cohort_witness_coverage_partial() {
     let mut request = good_request();
-    request.samples.retain(|s| s.cohort != PlasBenchmarkCohort::Complex);
+    request
+        .samples
+        .retain(|s| s.cohort != PlasBenchmarkCohort::Complex);
     let mut s1 = good_sample("ext-c1", PlasBenchmarkCohort::Complex);
     s1.witness_present = true;
     let mut s2 = good_sample("ext-c2", PlasBenchmarkCohort::Complex);
@@ -961,7 +965,9 @@ fn enrichment_multi_sample_same_cohort_witness_coverage_partial() {
 #[test]
 fn enrichment_multi_sample_mean_false_deny() {
     let mut request = good_request();
-    request.samples.retain(|s| s.cohort != PlasBenchmarkCohort::HighRisk);
+    request
+        .samples
+        .retain(|s| s.cohort != PlasBenchmarkCohort::HighRisk);
     let mut s1 = good_sample("ext-h1", PlasBenchmarkCohort::HighRisk);
     s1.benign_request_count = 1000;
     s1.benign_false_deny_count = 0; // 0%
@@ -983,7 +989,9 @@ fn enrichment_multi_sample_mean_false_deny() {
 #[test]
 fn enrichment_multi_sample_mean_authoring_reduction() {
     let mut request = good_request();
-    request.samples.retain(|s| s.cohort != PlasBenchmarkCohort::Boundary);
+    request
+        .samples
+        .retain(|s| s.cohort != PlasBenchmarkCohort::Boundary);
     let mut s1 = good_sample("ext-b1", PlasBenchmarkCohort::Boundary);
     s1.manual_authoring_time_ms = 10_000;
     s1.plas_authoring_time_ms = 2_000; // 80% reduction = 800_000
@@ -1005,8 +1013,12 @@ fn enrichment_multi_sample_mean_authoring_reduction() {
 #[test]
 fn enrichment_multi_sample_extension_count_in_summary() {
     let mut request = good_request();
-    request.samples.push(good_sample("ext-simple-2", PlasBenchmarkCohort::Simple));
-    request.samples.push(good_sample("ext-simple-3", PlasBenchmarkCohort::Simple));
+    request
+        .samples
+        .push(good_sample("ext-simple-2", PlasBenchmarkCohort::Simple));
+    request
+        .samples
+        .push(good_sample("ext-simple-3", PlasBenchmarkCohort::Simple));
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     let simple = decision
         .cohort_summaries
@@ -1019,8 +1031,12 @@ fn enrichment_multi_sample_extension_count_in_summary() {
 #[test]
 fn enrichment_multi_sample_overall_extension_count() {
     let mut request = good_request();
-    request.samples.push(good_sample("ext-simple-2", PlasBenchmarkCohort::Simple));
-    request.samples.push(good_sample("ext-complex-2", PlasBenchmarkCohort::Complex));
+    request
+        .samples
+        .push(good_sample("ext-simple-2", PlasBenchmarkCohort::Simple));
+    request
+        .samples
+        .push(good_sample("ext-complex-2", PlasBenchmarkCohort::Complex));
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     assert_eq!(decision.overall_summary.extension_count, 6);
 }
@@ -1036,14 +1052,21 @@ fn enrichment_multi_sample_overall_witness_coverage_mixed() {
     request.samples.push(extra);
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     // 4 out of 5 witnesses present → 800_000
-    assert_eq!(decision.overall_summary.witness_coverage_millionths, 800_000);
+    assert_eq!(
+        decision.overall_summary.witness_coverage_millionths,
+        800_000
+    );
 }
 
 #[test]
 fn enrichment_multi_sample_deterministic_ordering() {
     let mut request = good_request();
-    request.samples.push(good_sample("ext-aaa", PlasBenchmarkCohort::Simple));
-    request.samples.push(good_sample("ext-zzz", PlasBenchmarkCohort::Simple));
+    request
+        .samples
+        .push(good_sample("ext-aaa", PlasBenchmarkCohort::Simple));
+    request
+        .samples
+        .push(good_sample("ext-zzz", PlasBenchmarkCohort::Simple));
     let d1 = build_plas_benchmark_bundle(&request).unwrap();
     // Reverse the samples
     request.samples.reverse();
@@ -1108,7 +1131,10 @@ fn enrichment_negative_reduction_denies_publish() {
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     assert!(!decision.publish_allowed);
     assert!(
-        decision.blockers.iter().any(|b| b.contains("authoring-time")),
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("authoring-time")),
         "blockers: {:?}",
         decision.blockers
     );
@@ -1125,7 +1151,10 @@ fn enrichment_plas_authoring_just_below_threshold() {
     }
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     assert!(
-        decision.blockers.iter().any(|b| b.contains("authoring-time")),
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("authoring-time")),
         "just below threshold should block: {:?}",
         decision.blockers
     );
@@ -1282,7 +1311,9 @@ fn enrichment_custom_threshold_min_authoring_negative_allows_worse() {
     });
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     assert!(
-        decision.overall_summary.authoring_time_reduction_threshold_pass,
+        decision
+            .overall_summary
+            .authoring_time_reduction_threshold_pass,
         "negative threshold should allow negative reduction"
     );
 }
@@ -1656,7 +1687,9 @@ fn enrichment_events_decision_allow_when_publish_allowed() {
 #[test]
 fn enrichment_events_decision_deny_when_blocked() {
     let mut request = good_request();
-    request.samples.retain(|s| s.cohort != PlasBenchmarkCohort::Boundary);
+    request
+        .samples
+        .retain(|s| s.cohort != PlasBenchmarkCohort::Boundary);
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     assert!(!decision.publish_allowed);
     let decision_event = decision
@@ -1715,7 +1748,10 @@ fn enrichment_sample_zero_empirically_required_fails() {
     let mut request = good_request();
     request.samples[0].empirically_required_capability_count = 0;
     let err = build_plas_benchmark_bundle(&request).unwrap_err();
-    assert!(err.to_string().contains("empirically_required_capability_count"));
+    assert!(
+        err.to_string()
+            .contains("empirically_required_capability_count")
+    );
 }
 
 // ===========================================================================
@@ -1812,7 +1848,9 @@ fn enrichment_overall_mean_escrow_rate_zero_events() {
     }
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     assert_eq!(
-        decision.overall_summary.mean_escrow_event_rate_per_hour_millionths,
+        decision
+            .overall_summary
+            .mean_escrow_event_rate_per_hour_millionths,
         0
     );
 }
@@ -1821,7 +1859,11 @@ fn enrichment_overall_mean_escrow_rate_zero_events() {
 fn enrichment_overall_all_thresholds_pass_when_good() {
     let decision = build_plas_benchmark_bundle(&good_request()).unwrap();
     assert!(decision.overall_summary.over_privilege_ratio_threshold_pass);
-    assert!(decision.overall_summary.authoring_time_reduction_threshold_pass);
+    assert!(
+        decision
+            .overall_summary
+            .authoring_time_reduction_threshold_pass
+    );
     assert!(decision.overall_summary.false_deny_rate_threshold_pass);
     assert!(decision.overall_summary.witness_coverage_threshold_pass);
     assert!(decision.overall_summary.escrow_event_rate_threshold_pass);
@@ -1905,7 +1947,9 @@ fn enrichment_error_clone_eq() {
 #[test]
 fn enrichment_cohort_coverage_fail_event_when_missing() {
     let mut request = good_request();
-    request.samples.retain(|s| s.cohort != PlasBenchmarkCohort::HighRisk);
+    request
+        .samples
+        .retain(|s| s.cohort != PlasBenchmarkCohort::HighRisk);
     let decision = build_plas_benchmark_bundle(&request).unwrap();
     let coverage_event = decision
         .events
@@ -1925,7 +1969,10 @@ fn enrichment_cohort_evaluated_events_have_cohort_field() {
         .filter(|e| e.event == "cohort_evaluated")
         .collect();
     for event in &cohort_events {
-        assert!(event.cohort.is_some(), "cohort_evaluated event should have cohort field");
+        assert!(
+            event.cohort.is_some(),
+            "cohort_evaluated event should have cohort field"
+        );
     }
 }
 
@@ -1933,7 +1980,9 @@ fn enrichment_cohort_evaluated_events_have_cohort_field() {
 fn enrichment_cohort_evaluated_fail_event_has_error_code() {
     let mut request = good_request();
     // Make simple cohort fail by setting very high over-privilege
-    request.samples.iter_mut()
+    request
+        .samples
+        .iter_mut()
         .filter(|s| s.cohort == PlasBenchmarkCohort::Simple)
         .for_each(|s| {
             s.synthesized_capability_count = 100;
@@ -1997,10 +2046,9 @@ fn enrichment_many_samples_per_cohort_produces_correct_summaries() {
     request.samples.clear();
     for cohort in PlasBenchmarkCohort::all() {
         for i in 0..10 {
-            request.samples.push(good_sample(
-                &format!("ext-{}-{i}", cohort.as_str()),
-                cohort,
-            ));
+            request
+                .samples
+                .push(good_sample(&format!("ext-{}-{i}", cohort.as_str()), cohort));
         }
     }
     let decision = build_plas_benchmark_bundle(&request).unwrap();
@@ -2017,10 +2065,9 @@ fn enrichment_many_samples_publish_allowed() {
     request.samples.clear();
     for cohort in PlasBenchmarkCohort::all() {
         for i in 0..5 {
-            request.samples.push(good_sample(
-                &format!("ext-{}-{i}", cohort.as_str()),
-                cohort,
-            ));
+            request
+                .samples
+                .push(good_sample(&format!("ext-{}-{i}", cohort.as_str()), cohort));
         }
     }
     let decision = build_plas_benchmark_bundle(&request).unwrap();
@@ -2035,9 +2082,15 @@ fn enrichment_many_samples_publish_allowed() {
 fn enrichment_single_bad_sample_among_many_can_still_pass_mean() {
     let mut request = good_request();
     // Add many good simple samples, then one with bad over-privilege
-    request.samples.push(good_sample("ext-simple-2", PlasBenchmarkCohort::Simple));
-    request.samples.push(good_sample("ext-simple-3", PlasBenchmarkCohort::Simple));
-    request.samples.push(good_sample("ext-simple-4", PlasBenchmarkCohort::Simple));
+    request
+        .samples
+        .push(good_sample("ext-simple-2", PlasBenchmarkCohort::Simple));
+    request
+        .samples
+        .push(good_sample("ext-simple-3", PlasBenchmarkCohort::Simple));
+    request
+        .samples
+        .push(good_sample("ext-simple-4", PlasBenchmarkCohort::Simple));
     let mut bad = good_sample("ext-simple-bad", PlasBenchmarkCohort::Simple);
     bad.synthesized_capability_count = 8;
     bad.empirically_required_capability_count = 5; // 1.6x but mean of 5 samples ~1.12x

@@ -24,10 +24,9 @@ use std::path::PathBuf;
 
 use frankenengine_engine::security_conformance::{
     BinomialConfidenceInterval, SecurityAttackTaxonomy, SecurityConformanceError,
-    SecurityConformanceThresholds, SecurityCorpus, SecurityOutcome,
-    SecurityWorkloadLabel, SecurityWorkloadLabelRecord, SecurityWorkloadObservation,
-    clopper_pearson_interval, corpus_manifest_hash, default_observation_from_label,
-    evaluate_security_conformance,
+    SecurityConformanceThresholds, SecurityCorpus, SecurityOutcome, SecurityWorkloadLabel,
+    SecurityWorkloadLabelRecord, SecurityWorkloadObservation, clopper_pearson_interval,
+    corpus_manifest_hash, default_observation_from_label, evaluate_security_conformance,
 };
 
 // ---------------------------------------------------------------------------
@@ -152,8 +151,16 @@ fn enrichment_clopper_pearson_negative_confidence_fails() {
 #[test]
 fn enrichment_clopper_pearson_large_sample_tight_ci() {
     let ci = clopper_pearson_interval(950, 1000, 0.95).unwrap();
-    assert!(ci.lower_millionths > 920_000, "lower={}", ci.lower_millionths);
-    assert!(ci.upper_millionths < 980_000, "upper={}", ci.upper_millionths);
+    assert!(
+        ci.lower_millionths > 920_000,
+        "lower={}",
+        ci.lower_millionths
+    );
+    assert!(
+        ci.upper_millionths < 980_000,
+        "upper={}",
+        ci.upper_millionths
+    );
 }
 
 #[test]
@@ -186,9 +193,19 @@ fn enrichment_gate_failure_mentions_tpr() {
             error_code: None,
         },
     ];
-    let eval = evaluate_security_conformance(&records, &observations, &SecurityConformanceThresholds::default()).unwrap();
+    let eval = evaluate_security_conformance(
+        &records,
+        &observations,
+        &SecurityConformanceThresholds::default(),
+    )
+    .unwrap();
     assert!(!eval.summary.gate_pass);
-    assert!(eval.summary.gate_failure_reasons.iter().any(|r| r.contains("TPR")));
+    assert!(
+        eval.summary
+            .gate_failure_reasons
+            .iter()
+            .any(|r| r.contains("TPR"))
+    );
 }
 
 #[test]
@@ -209,7 +226,10 @@ fn enrichment_gate_failure_mentions_fpr() {
         });
     }
     let mid = "m-0".to_string();
-    records.push(label_record(malicious_label(&mid, SecurityAttackTaxonomy::Dos)));
+    records.push(label_record(malicious_label(
+        &mid,
+        SecurityAttackTaxonomy::Dos,
+    )));
     observations.push(malicious_observation(&mid));
 
     let thresholds = SecurityConformanceThresholds {
@@ -218,7 +238,12 @@ fn enrichment_gate_failure_mentions_fpr() {
     };
     let eval = evaluate_security_conformance(&records, &observations, &thresholds).unwrap();
     assert!(!eval.summary.gate_pass);
-    assert!(eval.summary.gate_failure_reasons.iter().any(|r| r.contains("FPR")));
+    assert!(
+        eval.summary
+            .gate_failure_reasons
+            .iter()
+            .any(|r| r.contains("FPR"))
+    );
 }
 
 #[test]
@@ -232,7 +257,10 @@ fn enrichment_gate_failure_mentions_latency() {
     }
     for i in 0..100 {
         let mid = format!("m-{i}");
-        records.push(label_record(malicious_label(&mid, SecurityAttackTaxonomy::Dos)));
+        records.push(label_record(malicious_label(
+            &mid,
+            SecurityAttackTaxonomy::Dos,
+        )));
         observations.push(SecurityWorkloadObservation {
             workload_id: mid,
             actual_outcome: SecurityOutcome::Contain,
@@ -243,9 +271,19 @@ fn enrichment_gate_failure_mentions_latency() {
             error_code: None,
         });
     }
-    let eval = evaluate_security_conformance(&records, &observations, &SecurityConformanceThresholds::default()).unwrap();
+    let eval = evaluate_security_conformance(
+        &records,
+        &observations,
+        &SecurityConformanceThresholds::default(),
+    )
+    .unwrap();
     assert!(!eval.summary.gate_pass);
-    assert!(eval.summary.gate_failure_reasons.iter().any(|r| r.contains("latency")));
+    assert!(
+        eval.summary
+            .gate_failure_reasons
+            .iter()
+            .any(|r| r.contains("latency"))
+    );
 }
 
 #[test]
@@ -270,7 +308,12 @@ fn enrichment_gate_pass_no_failure_reasons() {
         records.push(label_record(malicious_label(&mid, tax)));
         observations.push(malicious_observation(&mid));
     }
-    let eval = evaluate_security_conformance(&records, &observations, &SecurityConformanceThresholds::default()).unwrap();
+    let eval = evaluate_security_conformance(
+        &records,
+        &observations,
+        &SecurityConformanceThresholds::default(),
+    )
+    .unwrap();
     assert!(eval.summary.gate_pass);
     assert!(eval.summary.gate_failure_reasons.is_empty());
 }
@@ -301,7 +344,12 @@ fn enrichment_gate_multiple_failures_accumulated() {
             error_code: None,
         },
     ];
-    let eval = evaluate_security_conformance(&records, &observations, &SecurityConformanceThresholds::default()).unwrap();
+    let eval = evaluate_security_conformance(
+        &records,
+        &observations,
+        &SecurityConformanceThresholds::default(),
+    )
+    .unwrap();
     assert!(!eval.summary.gate_pass);
     assert!(eval.summary.gate_failure_reasons.len() >= 2);
 }
@@ -312,7 +360,11 @@ fn enrichment_gate_multiple_failures_accumulated() {
 
 #[test]
 fn enrichment_default_observation_quarantine() {
-    let label = malicious_label_outcome("m-1", SecurityAttackTaxonomy::Evasion, SecurityOutcome::Quarantine);
+    let label = malicious_label_outcome(
+        "m-1",
+        SecurityAttackTaxonomy::Evasion,
+        SecurityOutcome::Quarantine,
+    );
     let obs = default_observation_from_label(&label);
     assert_eq!(obs.actual_outcome, SecurityOutcome::Quarantine);
     assert_eq!(obs.policy_action, "quarantine");
@@ -320,7 +372,11 @@ fn enrichment_default_observation_quarantine() {
 
 #[test]
 fn enrichment_default_observation_terminate() {
-    let label = malicious_label_outcome("m-1", SecurityAttackTaxonomy::Dos, SecurityOutcome::Terminate);
+    let label = malicious_label_outcome(
+        "m-1",
+        SecurityAttackTaxonomy::Dos,
+        SecurityOutcome::Terminate,
+    );
     let obs = default_observation_from_label(&label);
     assert_eq!(obs.actual_outcome, SecurityOutcome::Terminate);
     assert_eq!(obs.policy_action, "terminate");
@@ -455,8 +511,16 @@ fn enrichment_label_all_taxonomy_variants_valid() {
 
 #[test]
 fn enrichment_label_malicious_all_non_allow_outcomes_valid() {
-    for outcome in [SecurityOutcome::Contain, SecurityOutcome::Quarantine, SecurityOutcome::Terminate] {
-        assert!(malicious_label_outcome("m-test", SecurityAttackTaxonomy::Dos, outcome).validate().is_ok());
+    for outcome in [
+        SecurityOutcome::Contain,
+        SecurityOutcome::Quarantine,
+        SecurityOutcome::Terminate,
+    ] {
+        assert!(
+            malicious_label_outcome("m-test", SecurityAttackTaxonomy::Dos, outcome)
+                .validate()
+                .is_ok()
+        );
     }
 }
 
@@ -465,7 +529,10 @@ fn enrichment_label_serde_malicious_roundtrip() {
     let label = malicious_label("m-1", SecurityAttackTaxonomy::SideChannel);
     let json = serde_json::to_string(&label).unwrap();
     let back: SecurityWorkloadLabel = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.attack_taxonomy, Some(SecurityAttackTaxonomy::SideChannel));
+    assert_eq!(
+        back.attack_taxonomy,
+        Some(SecurityAttackTaxonomy::SideChannel)
+    );
 }
 
 // ===========================================================================
@@ -492,7 +559,8 @@ fn enrichment_evaluate_tpr_millionths_correct() {
             error_code: None,
         },
     ];
-    let eval = evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
+    let eval =
+        evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
     assert_eq!(eval.summary.tpr_millionths, 500_000);
 }
 
@@ -516,7 +584,8 @@ fn enrichment_evaluate_fpr_millionths_correct() {
         benign_observation("b-2"),
         malicious_observation("m-1"),
     ];
-    let eval = evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
+    let eval =
+        evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
     assert_eq!(eval.summary.fpr_millionths, 500_000);
 }
 
@@ -527,8 +596,12 @@ fn enrichment_evaluate_corpus_manifest_hash_populated() {
         label_record(malicious_label("m-1", SecurityAttackTaxonomy::Exfil)),
     ];
     let observations = vec![benign_observation("b-1"), malicious_observation("m-1")];
-    let eval = evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
-    assert_eq!(eval.summary.corpus_manifest_hash, corpus_manifest_hash(&records));
+    let eval =
+        evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
+    assert_eq!(
+        eval.summary.corpus_manifest_hash,
+        corpus_manifest_hash(&records)
+    );
 }
 
 #[test]
@@ -558,7 +631,8 @@ fn enrichment_evaluate_observations_by_workload_complete() {
         benign_observation("b-2"),
         malicious_observation("m-1"),
     ];
-    let eval = evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
+    let eval =
+        evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
     assert_eq!(eval.observations_by_workload.len(), 3);
 }
 
@@ -585,7 +659,12 @@ fn enrichment_taxonomy_as_str_all_distinct() {
 #[test]
 fn enrichment_outcome_as_str_all_distinct() {
     let mut strs = BTreeSet::new();
-    for outcome in [SecurityOutcome::Allow, SecurityOutcome::Contain, SecurityOutcome::Quarantine, SecurityOutcome::Terminate] {
+    for outcome in [
+        SecurityOutcome::Allow,
+        SecurityOutcome::Contain,
+        SecurityOutcome::Quarantine,
+        SecurityOutcome::Terminate,
+    ] {
         strs.insert(outcome.as_str());
     }
     assert_eq!(strs.len(), 4);

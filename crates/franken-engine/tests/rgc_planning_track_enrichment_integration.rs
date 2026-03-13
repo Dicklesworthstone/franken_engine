@@ -15,15 +15,14 @@ use std::io;
 use std::path::PathBuf;
 
 use frankenengine_engine::rgc_planning_track::{
-    BEAD_ID, BlockerClassSource, BundleManifest, CiGateSource, COMPONENT,
-    DependentTrackEvidence, EVENT_SCHEMA_VERSION, MILESTONE_GATEBOOK_SCHEMA_VERSION,
-    MilestoneEvidenceLink, PassPredicateSource,
-    PlanningMilestoneGatebook, PlanningTrackContractBundle, PlanningTrackEvent,
-    RISK_ACCEPTANCE_LEDGER_SCHEMA_VERSION, RgcPlanningTrackBundleArtifacts,
+    BEAD_ID, BlockerClassSource, BundleManifest, COMPONENT, CiGateSource, DependentTrackEvidence,
+    EVENT_SCHEMA_VERSION, MILESTONE_GATEBOOK_SCHEMA_VERSION, MilestoneEvidenceLink,
+    PassPredicateSource, PlanningMilestoneGatebook, PlanningTrackContractBundle,
+    PlanningTrackEvent, RISK_ACCEPTANCE_LEDGER_SCHEMA_VERSION, RgcPlanningTrackBundleArtifacts,
     RgcPlanningTrackError, RiskAcceptanceEntry, RiskAcceptanceLedger, RiskAcceptanceStatus,
-    RollbackTriggerSource, SCHEMA_VERSION, SCOPE_CONTRACT_SCHEMA_VERSION,
-    ScopeContractSnapshot, TrackRef, ValidationState, WAVE_HANDOFF_MATRIX_SCHEMA_VERSION,
-    WaveHandoffMatrix, build_rgc_planning_track_bundle_with_generated_at,
+    RollbackTriggerSource, SCHEMA_VERSION, SCOPE_CONTRACT_SCHEMA_VERSION, ScopeContractSnapshot,
+    TrackRef, ValidationState, WAVE_HANDOFF_MATRIX_SCHEMA_VERSION, WaveHandoffMatrix,
+    build_rgc_planning_track_bundle_with_generated_at,
 };
 
 // =========================================================================
@@ -62,7 +61,11 @@ fn enrichment_schema_version_constants_distinct() {
         EVENT_SCHEMA_VERSION,
     ];
     let set: std::collections::BTreeSet<&str> = versions.iter().copied().collect();
-    assert_eq!(set.len(), versions.len(), "schema versions must be distinct");
+    assert_eq!(
+        set.len(),
+        versions.len(),
+        "schema versions must be distinct"
+    );
 }
 
 // =========================================================================
@@ -635,7 +638,12 @@ fn enrichment_wave_handoff_matrix_has_dry_run_events() {
 #[test]
 fn enrichment_wave_handoff_matrix_has_dependent_evidence() {
     let bundle = bundle_before_expiry();
-    assert!(!bundle.wave_handoff_matrix.dependent_track_evidence.is_empty());
+    assert!(
+        !bundle
+            .wave_handoff_matrix
+            .dependent_track_evidence
+            .is_empty()
+    );
 }
 
 // =========================================================================

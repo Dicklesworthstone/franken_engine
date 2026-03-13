@@ -25,9 +25,9 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::IrLevel;
 use frankenengine_engine::tropical_semiring::{
     DeadCodeEliminator, DeadCodeReport, InstructionCostGraph, InstructionNode,
-    OptimalityCertificate, RegisterPressureAnalyzer, RegisterPressureReport,
-    ScheduleOptimizer, ScheduleQuality, TROPICAL_INFINITY, TROPICAL_SCHEMA_VERSION, TROPICAL_ZERO,
-    TropicalError, TropicalMatrix, TropicalPassWitness, TropicalWeight,
+    OptimalityCertificate, RegisterPressureAnalyzer, RegisterPressureReport, ScheduleOptimizer,
+    ScheduleQuality, TROPICAL_INFINITY, TROPICAL_SCHEMA_VERSION, TROPICAL_ZERO, TropicalError,
+    TropicalMatrix, TropicalPassWitness, TropicalWeight,
 };
 
 // ---------------------------------------------------------------------------
@@ -143,7 +143,10 @@ fn enrichment_tropical_add_associative() {
     let b = TropicalWeight::finite(7);
     let c = TropicalWeight::finite(1);
     // (a ⊕ b) ⊕ c == a ⊕ (b ⊕ c)
-    assert_eq!(a.tropical_add(b).tropical_add(c), a.tropical_add(b.tropical_add(c)));
+    assert_eq!(
+        a.tropical_add(b).tropical_add(c),
+        a.tropical_add(b.tropical_add(c))
+    );
 }
 
 #[test]
@@ -152,7 +155,10 @@ fn enrichment_tropical_mul_associative() {
     let b = TropicalWeight::finite(7);
     let c = TropicalWeight::finite(2);
     // (a ⊗ b) ⊗ c == a ⊗ (b ⊗ c)
-    assert_eq!(a.tropical_mul(b).tropical_mul(c), a.tropical_mul(b.tropical_mul(c)));
+    assert_eq!(
+        a.tropical_mul(b).tropical_mul(c),
+        a.tropical_mul(b.tropical_mul(c))
+    );
 }
 
 #[test]
@@ -194,7 +200,10 @@ fn enrichment_tropical_add_idempotent() {
     // min(x, x) = x for all x
     let w = TropicalWeight::finite(42);
     assert_eq!(w.tropical_add(w), w);
-    assert_eq!(TropicalWeight::INFINITY.tropical_add(TropicalWeight::INFINITY), TropicalWeight::INFINITY);
+    assert_eq!(
+        TropicalWeight::INFINITY.tropical_add(TropicalWeight::INFINITY),
+        TropicalWeight::INFINITY
+    );
 }
 
 #[test]
@@ -238,7 +247,10 @@ fn enrichment_weight_hash_distinct_across_values() {
 
 #[test]
 fn enrichment_kleene_star_zero_is_zero() {
-    assert_eq!(TropicalWeight::ZERO.kleene_star(), Some(TropicalWeight::ZERO));
+    assert_eq!(
+        TropicalWeight::ZERO.kleene_star(),
+        Some(TropicalWeight::ZERO)
+    );
 }
 
 #[test]
@@ -365,7 +377,10 @@ fn enrichment_matrix_add_with_identity() {
 fn enrichment_matrix_add_dimension_mismatch() {
     let a = TropicalMatrix::new_infinity(2).unwrap();
     let b = TropicalMatrix::new_infinity(3).unwrap();
-    assert!(matches!(a.tropical_add(&b), Err(TropicalError::DimensionMismatch { .. })));
+    assert!(matches!(
+        a.tropical_add(&b),
+        Err(TropicalError::DimensionMismatch { .. })
+    ));
 }
 
 #[test]

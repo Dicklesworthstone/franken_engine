@@ -1266,24 +1266,18 @@ fn violations_accumulate_in_state() {
 // ============================================================================
 
 use frankenengine_engine::observability_channel_model::{
-    canonical_engine_observability_channel_policy, canonical_operator_mode_contract,
-    canonical_sketch_error_envelope_report,
-    canonical_telemetry_sampling_contract, canonical_telemetry_site_policy_matrix,
-    derive_sampling_seed_hex, deterministic_sampling_interval,
-    resolve_observability_mode, validate_observability_contract,
-    DistortionRiskLedger,
+    DistortionRiskLedger, ENGINE_OBSERVABILITY_CHANNEL_POLICY_SCHEMA_VERSION,
+    OBSERVABILITY_CONTRACT_VALIDATION_REPORT_SCHEMA_VERSION, OPERATOR_MODE_CONTRACT_SCHEMA_VERSION,
     ObservabilityContractValidationReport, ObservabilityContractViolation, ObservabilityMode,
-    OperatorModePolicy, SamplingSeedField, SamplingStrategy,
-    SketchErrorEnvelope, SketchFamily,
-    TelemetrySamplingRule, TelemetrySitePolicy,
-    SamplingReplayFixture,
-    ENGINE_OBSERVABILITY_CHANNEL_POLICY_SCHEMA_VERSION,
-    OPERATOR_MODE_CONTRACT_SCHEMA_VERSION,
-    TELEMETRY_SITE_POLICY_MATRIX_SCHEMA_VERSION,
-    TELEMETRY_SAMPLING_CONTRACT_SCHEMA_VERSION,
-    SKETCH_ERROR_ENVELOPE_REPORT_SCHEMA_VERSION,
-    SAMPLING_SEED_REPLAY_FIXTURE_MATRIX_SCHEMA_VERSION,
-    OBSERVABILITY_CONTRACT_VALIDATION_REPORT_SCHEMA_VERSION,
+    OperatorModePolicy, SAMPLING_SEED_REPLAY_FIXTURE_MATRIX_SCHEMA_VERSION,
+    SKETCH_ERROR_ENVELOPE_REPORT_SCHEMA_VERSION, SamplingReplayFixture, SamplingSeedField,
+    SamplingStrategy, SketchErrorEnvelope, SketchFamily,
+    TELEMETRY_SAMPLING_CONTRACT_SCHEMA_VERSION, TELEMETRY_SITE_POLICY_MATRIX_SCHEMA_VERSION,
+    TelemetrySamplingRule, TelemetrySitePolicy, canonical_engine_observability_channel_policy,
+    canonical_operator_mode_contract, canonical_sketch_error_envelope_report,
+    canonical_telemetry_sampling_contract, canonical_telemetry_site_policy_matrix,
+    derive_sampling_seed_hex, deterministic_sampling_interval, resolve_observability_mode,
+    validate_observability_contract,
 };
 
 // ---------------------------------------------------------------------------
@@ -1482,7 +1476,10 @@ fn enrichment_degradation_just_at_threshold_not_counted() {
     // degradation_threshold_millionths = 50_000
     let mut state = ChannelState::new("ch-deg-at".to_string(), epoch(1));
     state.emit(&spec, 50_000).unwrap();
-    assert_eq!(state.items_degraded, 0, "distortion at threshold is not degraded");
+    assert_eq!(
+        state.items_degraded, 0,
+        "distortion at threshold is not degraded"
+    );
 }
 
 #[test]
@@ -1670,8 +1667,14 @@ fn enrichment_violations_in_order_of_occurrence() {
     // Second violation: backpressure
     state.emit(&spec, 0).unwrap();
     let _ = state.emit(&spec, 0);
-    assert_eq!(state.violations[0].violation_kind, ViolationKind::DropBudgetExceeded);
-    assert_eq!(state.violations[1].violation_kind, ViolationKind::BackpressureOverflow);
+    assert_eq!(
+        state.violations[0].violation_kind,
+        ViolationKind::DropBudgetExceeded
+    );
+    assert_eq!(
+        state.violations[1].violation_kind,
+        ViolationKind::BackpressureOverflow
+    );
 }
 
 #[test]
@@ -1877,7 +1880,11 @@ fn enrichment_telemetry_sampling_rule_serde_roundtrip() {
         strategy: SamplingStrategy::GeometricWeightedSkip,
         base_interval: 32,
         max_burst_samples: 8,
-        seed_fields: vec![SamplingSeedField::TraceId, SamplingSeedField::SiteId, SamplingSeedField::Mode],
+        seed_fields: vec![
+            SamplingSeedField::TraceId,
+            SamplingSeedField::SiteId,
+            SamplingSeedField::Mode,
+        ],
         precision_target_millionths: 100_000,
         replay_stable: true,
     };
@@ -1940,9 +1947,18 @@ fn enrichment_envelope_three_point_interpolation() {
         family: PayloadFamily::Decision,
         metric: DistortionMetric::LogLoss,
         frontier: vec![
-            RateDistortionPoint { distortion_millionths: 0, rate_millibits: 3_000_000 },
-            RateDistortionPoint { distortion_millionths: 100_000, rate_millibits: 2_000_000 },
-            RateDistortionPoint { distortion_millionths: 200_000, rate_millibits: 1_000_000 },
+            RateDistortionPoint {
+                distortion_millionths: 0,
+                rate_millibits: 3_000_000,
+            },
+            RateDistortionPoint {
+                distortion_millionths: 100_000,
+                rate_millibits: 2_000_000,
+            },
+            RateDistortionPoint {
+                distortion_millionths: 200_000,
+                rate_millibits: 1_000_000,
+            },
         ],
         max_distortion_millionths: 200_000,
         min_rate_millibits: 500_000,
@@ -1978,8 +1994,14 @@ fn enrichment_envelope_is_achievable_exact_boundary() {
         family: PayloadFamily::Optimization,
         metric: DistortionMetric::SquaredError,
         frontier: vec![
-            RateDistortionPoint { distortion_millionths: 0, rate_millibits: 1_000_000 },
-            RateDistortionPoint { distortion_millionths: 500_000, rate_millibits: 500_000 },
+            RateDistortionPoint {
+                distortion_millionths: 0,
+                rate_millibits: 1_000_000,
+            },
+            RateDistortionPoint {
+                distortion_millionths: 500_000,
+                rate_millibits: 500_000,
+            },
         ],
         max_distortion_millionths: 500_000,
         min_rate_millibits: 100_000,
@@ -1997,9 +2019,10 @@ fn enrichment_envelope_is_achievable_negative_distortion_below_frontier() {
     let envelope = RateDistortionEnvelope {
         family: PayloadFamily::Decision,
         metric: DistortionMetric::LogLoss,
-        frontier: vec![
-            RateDistortionPoint { distortion_millionths: 0, rate_millibits: 2_000_000 },
-        ],
+        frontier: vec![RateDistortionPoint {
+            distortion_millionths: 0,
+            rate_millibits: 2_000_000,
+        }],
         max_distortion_millionths: 100_000,
         min_rate_millibits: 500_000,
     };
@@ -2010,7 +2033,10 @@ fn enrichment_envelope_is_achievable_negative_distortion_below_frontier() {
 #[test]
 fn enrichment_risk_ledger_interpolation_midpoint() {
     let ledgers = canonical_risk_ledgers();
-    let decision_ledger = ledgers.iter().find(|l| l.family == PayloadFamily::Decision).unwrap();
+    let decision_ledger = ledgers
+        .iter()
+        .find(|l| l.family == PayloadFamily::Decision)
+        .unwrap();
     // Decision ledger: 0->0, 50_000->200_000, 100_000->600_000
     let risk_at_25k = decision_ledger.risk_at_distortion(25_000);
     // Should interpolate between 0 and 200_000 at midpoint -> 100_000
@@ -2020,7 +2046,10 @@ fn enrichment_risk_ledger_interpolation_midpoint() {
 #[test]
 fn enrichment_risk_ledger_at_exact_entries() {
     let ledgers = canonical_risk_ledgers();
-    let decision_ledger = ledgers.iter().find(|l| l.family == PayloadFamily::Decision).unwrap();
+    let decision_ledger = ledgers
+        .iter()
+        .find(|l| l.family == PayloadFamily::Decision)
+        .unwrap();
     assert_eq!(decision_ledger.risk_at_distortion(0), 0);
     assert_eq!(decision_ledger.risk_at_distortion(50_000), 200_000);
     assert_eq!(decision_ledger.risk_at_distortion(100_000), 600_000);
@@ -2098,23 +2127,37 @@ fn enrichment_validate_redaction_not_preceding_sampling_fails() {
     let site_matrix = canonical_telemetry_site_policy_matrix();
     let sampling = canonical_telemetry_sampling_contract();
     let sketch = canonical_sketch_error_envelope_report();
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-CONTRACT-0001"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-CONTRACT-0001")
+    );
 }
 
 #[test]
 fn enrichment_validate_lossless_and_approximate_overlap_fails() {
     let mut policy = canonical_engine_observability_channel_policy();
     // Make Security both lossless and approximate
-    policy.approximate_allowed_families.push(PayloadFamily::Security);
+    policy
+        .approximate_allowed_families
+        .push(PayloadFamily::Security);
     let mode_contract = canonical_operator_mode_contract();
     let site_matrix = canonical_telemetry_site_policy_matrix();
     let sampling = canonical_telemetry_sampling_contract();
     let sketch = canonical_sketch_error_envelope_report();
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-CONTRACT-0002"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-CONTRACT-0002")
+    );
 }
 
 #[test]
@@ -2126,24 +2169,40 @@ fn enrichment_validate_missing_mode_in_contract_fails() {
     let site_matrix = canonical_telemetry_site_policy_matrix();
     let sampling = canonical_telemetry_sampling_contract();
     let sketch = canonical_sketch_error_envelope_report();
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-MODE-0003"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-MODE-0003")
+    );
 }
 
 #[test]
 fn enrichment_validate_support_bundle_export_lossy_fails() {
     let mut mode_contract = canonical_operator_mode_contract();
-    if let Some(sbe) = mode_contract.modes.iter_mut().find(|m| m.mode == ObservabilityMode::SupportBundleExport) {
+    if let Some(sbe) = mode_contract
+        .modes
+        .iter_mut()
+        .find(|m| m.mode == ObservabilityMode::SupportBundleExport)
+    {
         sbe.approximate_allowed = true;
     }
     let policy = canonical_engine_observability_channel_policy();
     let site_matrix = canonical_telemetry_site_policy_matrix();
     let sampling = canonical_telemetry_sampling_contract();
     let sketch = canonical_sketch_error_envelope_report();
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-MODE-0004"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-MODE-0004")
+    );
 }
 
 #[test]
@@ -2163,9 +2222,15 @@ fn enrichment_validate_sketch_on_non_approximate_family_fails() {
         quantile_error_bound_millionths: 0,
         required_exact_shadow_samples: 100,
     });
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-SKETCH-0001"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-SKETCH-0001")
+    );
 }
 
 #[test]
@@ -2179,9 +2244,15 @@ fn enrichment_validate_sketch_zero_shadow_samples_fails() {
     if let Some(env) = sketch.envelopes.first_mut() {
         env.required_exact_shadow_samples = 0;
     }
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-SKETCH-0002"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-SKETCH-0002")
+    );
 }
 
 #[test]
@@ -2194,9 +2265,15 @@ fn enrichment_validate_non_replay_stable_sampling_fails() {
         rule.replay_stable = false;
     }
     let sketch = canonical_sketch_error_envelope_report();
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-SAMPLING-0003"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-SAMPLING-0003")
+    );
 }
 
 #[test]
@@ -2209,9 +2286,15 @@ fn enrichment_validate_sampling_missing_site_id_in_seed_fails() {
         rule.seed_fields.retain(|f| *f != SamplingSeedField::SiteId);
     }
     let sketch = canonical_sketch_error_envelope_report();
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-SAMPLING-0004"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-SAMPLING-0004")
+    );
 }
 
 #[test]
@@ -2222,7 +2305,8 @@ fn enrichment_validate_contract_report_serde_with_violations() {
     let site_matrix = canonical_telemetry_site_policy_matrix();
     let sampling = canonical_telemetry_sampling_contract();
     let sketch = canonical_sketch_error_envelope_report();
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
     let json = serde_json::to_string(&report).unwrap();
     let back: ObservabilityContractValidationReport = serde_json::from_str(&json).unwrap();
@@ -2242,9 +2326,15 @@ fn enrichment_validate_duplicate_sketch_envelope_fails() {
         let dup = sketch.envelopes[0].clone();
         sketch.envelopes.push(dup);
     }
-    let report = validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
+    let report =
+        validate_observability_contract(&policy, &mode_contract, &site_matrix, &sampling, &sketch);
     assert!(!report.gate_pass);
-    assert!(report.violations.iter().any(|v| v.code == "FE-RGC-066A-SKETCH-0003"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.code == "FE-RGC-066A-SKETCH-0003")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2260,8 +2350,20 @@ fn enrichment_sampling_seed_is_sha256_length() {
 
 #[test]
 fn enrichment_sampling_seed_differs_by_workload_id() {
-    let s1 = derive_sampling_seed_hex("t", "workload-a", "h", "s", ObservabilityMode::DefaultCapture);
-    let s2 = derive_sampling_seed_hex("t", "workload-b", "h", "s", ObservabilityMode::DefaultCapture);
+    let s1 = derive_sampling_seed_hex(
+        "t",
+        "workload-a",
+        "h",
+        "s",
+        ObservabilityMode::DefaultCapture,
+    );
+    let s2 = derive_sampling_seed_hex(
+        "t",
+        "workload-b",
+        "h",
+        "s",
+        ObservabilityMode::DefaultCapture,
+    );
     assert_ne!(s1, s2);
 }
 
@@ -2293,11 +2395,16 @@ fn enrichment_sampling_interval_short_seed_hex_does_not_panic() {
 #[test]
 fn enrichment_resolve_mode_incident_highest_precedence() {
     let contract = canonical_operator_mode_contract();
-    let incident_prec = contract.precedence_of(ObservabilityMode::IncidentFullCapture).unwrap();
+    let incident_prec = contract
+        .precedence_of(ObservabilityMode::IncidentFullCapture)
+        .unwrap();
     for mode in ObservabilityMode::ALL {
         if mode != ObservabilityMode::IncidentFullCapture {
             let p = contract.precedence_of(mode).unwrap();
-            assert!(incident_prec >= p, "incident should have highest precedence");
+            assert!(
+                incident_prec >= p,
+                "incident should have highest precedence"
+            );
         }
     }
 }
@@ -2307,7 +2414,9 @@ fn enrichment_resolve_mode_approximate_site_allows_degraded() {
     let matrix = canonical_telemetry_site_policy_matrix();
     let approx_site = matrix.sites.iter().find(|s| !s.lossless_required).unwrap();
     assert!(
-        approx_site.allowed_modes.contains(&ObservabilityMode::Degraded),
+        approx_site
+            .allowed_modes
+            .contains(&ObservabilityMode::Degraded),
         "approximate sites should allow degraded mode",
     );
 }
@@ -2317,7 +2426,9 @@ fn enrichment_resolve_mode_lossless_site_forbids_degraded() {
     let matrix = canonical_telemetry_site_policy_matrix();
     let lossless_site = matrix.sites.iter().find(|s| s.lossless_required).unwrap();
     assert!(
-        !lossless_site.allowed_modes.contains(&ObservabilityMode::Degraded),
+        !lossless_site
+            .allowed_modes
+            .contains(&ObservabilityMode::Degraded),
         "lossless sites should not allow degraded mode",
     );
 }
@@ -2343,5 +2454,8 @@ fn enrichment_resolve_mode_with_all_disallowed_returns_none() {
         &[ObservabilityMode::Degraded, ObservabilityMode::ExactShadow],
         &contract,
     );
-    assert!(result.is_none(), "all requested modes disallowed should return None");
+    assert!(
+        result.is_none(),
+        "all requested modes disallowed should return None"
+    );
 }

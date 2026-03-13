@@ -827,7 +827,11 @@ fn enrichment_wgm_err_mixed_some_none_weights() {
 fn enrichment_wgm_err_duplicate_in_bun_baseline() {
     let cases = vec![case("dup", 3.0, None), case("dup", 4.0, None)];
     let err = weighted_geometric_mean(&cases, BaselineEngine::Bun).unwrap_err();
-    if let BenchmarkDenominatorError::DuplicateWorkloadId { baseline, workload_id } = &err {
+    if let BenchmarkDenominatorError::DuplicateWorkloadId {
+        baseline,
+        workload_id,
+    } = &err
+    {
         assert_eq!(baseline, "bun");
         assert_eq!(workload_id, "dup");
     } else {
@@ -857,7 +861,7 @@ fn enrichment_wgm_order_independent() {
 #[test]
 fn enrichment_wgm_determinism_ten_runs() {
     let cases = vec![
-        case("x", 3.14, None),
+        case("x", 3.15, None),
         case("y", 2.72, None),
         case("z", 1.41, None),
     ];
@@ -932,10 +936,7 @@ fn enrichment_gate_multi_case_per_baseline() {
             case("n2", 5.0, None),
             case("n3", 3.5, None),
         ],
-        bun_cases: vec![
-            case("b1", 3.5, None),
-            case("b2", 4.5, None),
-        ],
+        bun_cases: vec![case("b1", 3.5, None), case("b2", 4.5, None)],
         native_coverage_progression: coverage(),
         replacement_lineage_ids: vec!["lin-1".to_string()],
     };
@@ -957,7 +958,11 @@ fn enrichment_gate_behavior_false_on_bun_blocks() {
     };
     let d = evaluate_publication_gate(&input, &context()).unwrap();
     assert!(!d.publish_allowed);
-    assert!(d.blockers.iter().any(|b| b.contains("behavior-equivalence")));
+    assert!(
+        d.blockers
+            .iter()
+            .any(|b| b.contains("behavior-equivalence"))
+    );
     assert!(d.blockers.iter().any(|b| b.contains("bun")));
 }
 
@@ -1175,9 +1180,7 @@ fn enrichment_gate_lineage_trim_preserves_content() {
         node_cases: vec![case("n", 5.0, None)],
         bun_cases: vec![case("b", 5.0, None)],
         native_coverage_progression: coverage(),
-        replacement_lineage_ids: vec![
-            "  lin-spaced  ".to_string(),
-        ],
+        replacement_lineage_ids: vec!["  lin-spaced  ".to_string()],
     };
     let d = evaluate_publication_gate(&input, &context()).unwrap();
     assert_eq!(d.replacement_lineage_ids[0], "lin-spaced");
@@ -1196,7 +1199,10 @@ fn enrichment_gate_lineage_sorted_output() {
         ],
     };
     let d = evaluate_publication_gate(&input, &context()).unwrap();
-    assert_eq!(d.replacement_lineage_ids, vec!["aaa-lineage", "mmm-lineage", "zzz-lineage"]);
+    assert_eq!(
+        d.replacement_lineage_ids,
+        vec!["aaa-lineage", "mmm-lineage", "zzz-lineage"]
+    );
 }
 
 #[test]
@@ -1205,13 +1211,13 @@ fn enrichment_gate_lineage_all_whitespace_rejected() {
         node_cases: vec![case("n", 5.0, None)],
         bun_cases: vec![case("b", 5.0, None)],
         native_coverage_progression: coverage(),
-        replacement_lineage_ids: vec![
-            "   ".to_string(),
-            "\t".to_string(),
-        ],
+        replacement_lineage_ids: vec!["   ".to_string(), "\t".to_string()],
     };
     let err = evaluate_publication_gate(&input, &context()).unwrap_err();
-    assert!(matches!(err, BenchmarkDenominatorError::MissingReplacementLineage));
+    assert!(matches!(
+        err,
+        BenchmarkDenominatorError::MissingReplacementLineage
+    ));
 }
 
 #[test]
@@ -1264,7 +1270,10 @@ fn enrichment_gate_missing_coverage_err_checked_before_lineage() {
     };
     let err = evaluate_publication_gate(&input, &context()).unwrap_err();
     // Coverage checked first
-    assert!(matches!(err, BenchmarkDenominatorError::MissingCoverageProgression));
+    assert!(matches!(
+        err,
+        BenchmarkDenominatorError::MissingCoverageProgression
+    ));
 }
 
 // ── Serde round-trip enrichment ─────────────────────────────────────
@@ -1476,9 +1485,19 @@ fn enrichment_error_serialization_failure_display() {
 fn enrichment_error_stable_code_groups() {
     // EmptyCaseSet, EmptyWorkloadId, DuplicateWorkloadId share FE-BENCH-1001
     let codes: Vec<&str> = vec![
-        BenchmarkDenominatorError::EmptyCaseSet { baseline: "x".into() }.stable_code(),
-        BenchmarkDenominatorError::EmptyWorkloadId { baseline: "x".into() }.stable_code(),
-        BenchmarkDenominatorError::DuplicateWorkloadId { baseline: "x".into(), workload_id: "w".into() }.stable_code(),
+        BenchmarkDenominatorError::EmptyCaseSet {
+            baseline: "x".into(),
+        }
+        .stable_code(),
+        BenchmarkDenominatorError::EmptyWorkloadId {
+            baseline: "x".into(),
+        }
+        .stable_code(),
+        BenchmarkDenominatorError::DuplicateWorkloadId {
+            baseline: "x".into(),
+            workload_id: "w".into(),
+        }
+        .stable_code(),
     ];
     assert!(codes.iter().all(|c| *c == "FE-BENCH-1001"));
 }
@@ -1487,10 +1506,25 @@ fn enrichment_error_stable_code_groups() {
 fn enrichment_error_stable_codes_distinct_families() {
     use std::collections::BTreeSet;
     let codes: BTreeSet<&str> = vec![
-        BenchmarkDenominatorError::EmptyCaseSet { baseline: "x".into() }.stable_code(),
-        BenchmarkDenominatorError::InvalidWeight { workload_id: "x".into(), reason: "r".into() }.stable_code(),
-        BenchmarkDenominatorError::InvalidThroughput { workload_id: "x".into(), field: "f".into() }.stable_code(),
-        BenchmarkDenominatorError::InvalidWeightSum { baseline: "x".into(), sum: 0.5 }.stable_code(),
+        BenchmarkDenominatorError::EmptyCaseSet {
+            baseline: "x".into(),
+        }
+        .stable_code(),
+        BenchmarkDenominatorError::InvalidWeight {
+            workload_id: "x".into(),
+            reason: "r".into(),
+        }
+        .stable_code(),
+        BenchmarkDenominatorError::InvalidThroughput {
+            workload_id: "x".into(),
+            field: "f".into(),
+        }
+        .stable_code(),
+        BenchmarkDenominatorError::InvalidWeightSum {
+            baseline: "x".into(),
+            sum: 0.5,
+        }
+        .stable_code(),
         BenchmarkDenominatorError::MissingCoverageProgression.stable_code(),
         BenchmarkDenominatorError::MissingReplacementLineage.stable_code(),
         BenchmarkDenominatorError::SerializationFailure("x".into()).stable_code(),
@@ -1503,12 +1537,28 @@ fn enrichment_error_stable_codes_distinct_families() {
 #[test]
 fn enrichment_error_all_serde_roundtrip() {
     let errors = vec![
-        BenchmarkDenominatorError::EmptyCaseSet { baseline: "node".to_string() },
-        BenchmarkDenominatorError::EmptyWorkloadId { baseline: "bun".to_string() },
-        BenchmarkDenominatorError::DuplicateWorkloadId { baseline: "node".to_string(), workload_id: "w".to_string() },
-        BenchmarkDenominatorError::InvalidWeight { workload_id: "w".to_string(), reason: "bad".to_string() },
-        BenchmarkDenominatorError::InvalidThroughput { workload_id: "w".to_string(), field: "f".to_string() },
-        BenchmarkDenominatorError::InvalidWeightSum { baseline: "node".to_string(), sum: 1.5 },
+        BenchmarkDenominatorError::EmptyCaseSet {
+            baseline: "node".to_string(),
+        },
+        BenchmarkDenominatorError::EmptyWorkloadId {
+            baseline: "bun".to_string(),
+        },
+        BenchmarkDenominatorError::DuplicateWorkloadId {
+            baseline: "node".to_string(),
+            workload_id: "w".to_string(),
+        },
+        BenchmarkDenominatorError::InvalidWeight {
+            workload_id: "w".to_string(),
+            reason: "bad".to_string(),
+        },
+        BenchmarkDenominatorError::InvalidThroughput {
+            workload_id: "w".to_string(),
+            field: "f".to_string(),
+        },
+        BenchmarkDenominatorError::InvalidWeightSum {
+            baseline: "node".to_string(),
+            sum: 1.5,
+        },
         BenchmarkDenominatorError::MissingCoverageProgression,
         BenchmarkDenominatorError::MissingReplacementLineage,
         BenchmarkDenominatorError::SerializationFailure("oops".to_string()),
@@ -1523,12 +1573,28 @@ fn enrichment_error_all_serde_roundtrip() {
 #[test]
 fn enrichment_error_debug_not_empty_all_variants() {
     let errors: Vec<BenchmarkDenominatorError> = vec![
-        BenchmarkDenominatorError::EmptyCaseSet { baseline: "x".into() },
-        BenchmarkDenominatorError::EmptyWorkloadId { baseline: "x".into() },
-        BenchmarkDenominatorError::DuplicateWorkloadId { baseline: "x".into(), workload_id: "w".into() },
-        BenchmarkDenominatorError::InvalidWeight { workload_id: "w".into(), reason: "r".into() },
-        BenchmarkDenominatorError::InvalidThroughput { workload_id: "w".into(), field: "f".into() },
-        BenchmarkDenominatorError::InvalidWeightSum { baseline: "x".into(), sum: 0.5 },
+        BenchmarkDenominatorError::EmptyCaseSet {
+            baseline: "x".into(),
+        },
+        BenchmarkDenominatorError::EmptyWorkloadId {
+            baseline: "x".into(),
+        },
+        BenchmarkDenominatorError::DuplicateWorkloadId {
+            baseline: "x".into(),
+            workload_id: "w".into(),
+        },
+        BenchmarkDenominatorError::InvalidWeight {
+            workload_id: "w".into(),
+            reason: "r".into(),
+        },
+        BenchmarkDenominatorError::InvalidThroughput {
+            workload_id: "w".into(),
+            field: "f".into(),
+        },
+        BenchmarkDenominatorError::InvalidWeightSum {
+            baseline: "x".into(),
+            sum: 0.5,
+        },
         BenchmarkDenominatorError::MissingCoverageProgression,
         BenchmarkDenominatorError::MissingReplacementLineage,
         BenchmarkDenominatorError::SerializationFailure("x".into()),
@@ -1543,7 +1609,9 @@ fn enrichment_error_debug_not_empty_all_variants() {
 fn enrichment_error_source_none_all_variants() {
     use std::error::Error as StdError;
     let errors: Vec<BenchmarkDenominatorError> = vec![
-        BenchmarkDenominatorError::EmptyCaseSet { baseline: "x".into() },
+        BenchmarkDenominatorError::EmptyCaseSet {
+            baseline: "x".into(),
+        },
         BenchmarkDenominatorError::MissingCoverageProgression,
         BenchmarkDenominatorError::SerializationFailure("x".into()),
     ];
@@ -1557,7 +1625,7 @@ fn enrichment_error_source_none_all_variants() {
 #[test]
 fn enrichment_gate_determinism_full_decision() {
     let input = PublicationGateInput {
-        node_cases: vec![case("n1", 3.14, None), case("n2", 4.56, None)],
+        node_cases: vec![case("n1", 3.15, None), case("n2", 4.56, None)],
         bun_cases: vec![case("b1", 3.78, None)],
         native_coverage_progression: coverage(),
         replacement_lineage_ids: vec!["lin-x".to_string()],
@@ -1732,7 +1800,10 @@ fn enrichment_gate_input_clone_eq() {
     };
     let cloned = input.clone();
     assert_eq!(input.node_cases.len(), cloned.node_cases.len());
-    assert_eq!(input.replacement_lineage_ids, cloned.replacement_lineage_ids);
+    assert_eq!(
+        input.replacement_lineage_ids,
+        cloned.replacement_lineage_ids
+    );
 }
 
 // ── BenchmarkPublicationEvent enrichment ────────────────────────────
@@ -1764,7 +1835,15 @@ fn enrichment_event_json_field_names() {
         error_code: Some("code".to_string()),
     };
     let json = serde_json::to_string(&evt).unwrap();
-    for field in &["trace_id", "decision_id", "policy_id", "component", "event", "outcome", "error_code"] {
+    for field in &[
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "component",
+        "event",
+        "outcome",
+        "error_code",
+    ] {
         assert!(json.contains(field), "missing field: {field}");
     }
 }
@@ -1796,7 +1875,10 @@ fn enrichment_decision_json_pretty_is_multiline() {
     };
     let d = evaluate_publication_gate(&input, &context()).unwrap();
     let json_pretty = d.to_json_pretty().unwrap();
-    assert!(json_pretty.contains('\n'), "pretty JSON should be multiline");
+    assert!(
+        json_pretty.contains('\n'),
+        "pretty JSON should be multiline"
+    );
 }
 
 #[test]

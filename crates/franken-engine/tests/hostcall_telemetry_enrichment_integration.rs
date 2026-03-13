@@ -118,7 +118,12 @@ fn enrichment_hostcall_type_ordering_all_11() {
     ];
     // Each consecutive pair should maintain Ord invariant.
     for i in 0..all.len() - 1 {
-        assert!(all[i] < all[i + 1], "{:?} should be < {:?}", all[i], all[i + 1]);
+        assert!(
+            all[i] < all[i + 1],
+            "{:?} should be < {:?}",
+            all[i],
+            all[i + 1]
+        );
     }
 }
 
@@ -511,15 +516,7 @@ fn enrichment_backpressure_exact_capacity_boundary() {
 fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", HostcallType::FsRead).is_empty());
     assert!(!format!("{:?}", HostcallResult::Success).is_empty());
-    assert!(
-        !format!(
-            "{:?}",
-            HostcallResult::Denied {
-                reason: "x".into()
-            }
-        )
-        .is_empty()
-    );
+    assert!(!format!("{:?}", HostcallResult::Denied { reason: "x".into() }).is_empty());
     assert!(!format!("{:?}", HostcallResult::Error { code: 1 }).is_empty());
     assert!(!format!("{:?}", HostcallResult::Timeout).is_empty());
     assert!(!format!("{:?}", FlowLabel::new("a", "b")).is_empty());
@@ -536,8 +533,11 @@ fn enrichment_debug_nonempty_all_types() {
 fn enrichment_record_preserves_all_result_variants() {
     let mut rec = default_recorder();
 
-    rec.record(100, make_input_with_result("ext-a", HostcallType::FsRead, HostcallResult::Success))
-        .unwrap();
+    rec.record(
+        100,
+        make_input_with_result("ext-a", HostcallType::FsRead, HostcallResult::Success),
+    )
+    .unwrap();
     rec.record(
         200,
         make_input_with_result(
@@ -704,5 +704,8 @@ fn enrichment_different_capabilities_produce_different_hashes() {
     rec2.record(1000, input2).unwrap();
 
     // Different capability should produce different content hash.
-    assert_ne!(rec1.records()[0].content_hash, rec2.records()[0].content_hash);
+    assert_ne!(
+        rec1.records()[0].content_hash,
+        rec2.records()[0].content_hash
+    );
 }

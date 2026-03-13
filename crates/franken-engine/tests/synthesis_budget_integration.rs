@@ -1280,10 +1280,7 @@ fn enrichment_registry_override_replacement() {
         justification: "second".to_string(),
     });
     assert_eq!(reg.override_count(), 1);
-    assert_eq!(
-        reg.effective_contract("ext-a").global_time_cap_ns,
-        2_000
-    );
+    assert_eq!(reg.effective_contract("ext-a").global_time_cap_ns, 2_000);
 }
 
 #[test]
@@ -1303,10 +1300,7 @@ fn enrichment_registry_serde_roundtrip_with_overrides() {
     let json = serde_json::to_string(&reg).unwrap();
     let back: BudgetRegistry = serde_json::from_str(&json).unwrap();
     assert_eq!(back.override_count(), 1);
-    assert_eq!(
-        back.effective_contract("ext-x").global_time_cap_ns,
-        1_000
-    );
+    assert_eq!(back.effective_contract("ext-x").global_time_cap_ns, 1_000);
 }
 
 #[test]

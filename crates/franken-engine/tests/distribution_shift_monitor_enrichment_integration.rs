@@ -12,11 +12,10 @@
 )]
 
 use frankenengine_engine::distribution_shift_monitor::{
-    EmbeddingVector, KernelKind, MonitorConfig, MonitorState, MmdResult,
-    ShiftCertificate, ShiftError, ShiftEvidenceManifest, ShiftVerdict, StreamKind,
-    WindowConfig, build_window, compute_kernel_value, compute_mmd_squared,
-    detect_shift, run_shift_evidence,
-    SHIFT_MONITOR_SCHEMA_VERSION,
+    EmbeddingVector, KernelKind, MmdResult, MonitorConfig, MonitorState,
+    SHIFT_MONITOR_SCHEMA_VERSION, ShiftCertificate, ShiftError, ShiftEvidenceManifest,
+    ShiftVerdict, StreamKind, WindowConfig, build_window, compute_kernel_value,
+    compute_mmd_squared, detect_shift, run_shift_evidence,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 

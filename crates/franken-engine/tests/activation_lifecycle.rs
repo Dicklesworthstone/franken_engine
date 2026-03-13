@@ -15,9 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::activation_lifecycle::{
     ActivationLifecycleController, ActivationValidation, ComponentDescriptor, CrashLoopDetector,
-    EphemeralSecret, KnownGoodPin, LifecycleConfig, LifecycleError, LifecycleEvent,
-    LifecycleState, PreActivationCheck, RolloutPhase, SecretInjectionReceipt, TransitionTrigger,
-    error_code,
+    EphemeralSecret, KnownGoodPin, LifecycleConfig, LifecycleError, LifecycleEvent, LifecycleState,
+    PreActivationCheck, RolloutPhase, SecretInjectionReceipt, TransitionTrigger, error_code,
 };
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 
@@ -673,10 +672,7 @@ fn enrichment_begin_activation_reaches_pending() {
     ctrl.register(descriptor("ext-p", "1.0.0"), "t").unwrap();
     ctrl.begin_activation("ext-p", &passing_validation("ext-p", "1.0.0"), "t")
         .unwrap();
-    assert_eq!(
-        ctrl.state("ext-p"),
-        Some(LifecycleState::PendingActivation)
-    );
+    assert_eq!(ctrl.state("ext-p"), Some(LifecycleState::PendingActivation));
 }
 
 #[test]
@@ -921,9 +917,7 @@ fn enrichment_begin_activation_missing_component() {
 #[test]
 fn enrichment_inject_secrets_missing_component() {
     let mut ctrl = make_controller();
-    let err = ctrl
-        .inject_secrets("ghost", &[], "t")
-        .unwrap_err();
+    let err = ctrl.inject_secrets("ghost", &[], "t").unwrap_err();
     assert!(matches!(err, LifecycleError::ComponentNotFound { .. }));
 }
 
@@ -1005,7 +999,11 @@ fn enrichment_crash_loop_event_emitted() {
     ctrl.report_crash("ext-ce", "t").unwrap();
 
     let events = ctrl.drain_events();
-    assert!(events.iter().any(|e| e.trigger.as_deref() == Some("crash_loop")));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.trigger.as_deref() == Some("crash_loop"))
+    );
     assert!(events.iter().any(|e| e.event == "crash_reported"));
 }
 
@@ -1022,7 +1020,10 @@ fn enrichment_crashes_outside_window_do_not_accumulate() {
     ctrl.report_crash("ext-cw", "t").unwrap();
     ctrl.set_tick(150); // 70 ticks later again
     let result = ctrl.report_crash("ext-cw", "t").unwrap();
-    assert!(result.is_none(), "spaced-out crashes should not trigger loop");
+    assert!(
+        result.is_none(),
+        "spaced-out crashes should not trigger loop"
+    );
 }
 
 #[test]
@@ -1201,7 +1202,10 @@ fn enrichment_rollback_holdoff_remaining_ticks_in_error() {
     let err = ctrl
         .begin_update("ext-rhr", descriptor("ext-rhr", "3.0.0"), 3, "t")
         .unwrap_err();
-    if let LifecycleError::RollbackHoldoffActive { remaining_ticks, .. } = err {
+    if let LifecycleError::RollbackHoldoffActive {
+        remaining_ticks, ..
+    } = err
+    {
         assert_eq!(remaining_ticks, 15);
     } else {
         panic!("expected RollbackHoldoffActive");
@@ -1225,13 +1229,15 @@ fn enrichment_rollback_holdoff_custom_short_config() {
     ctrl.rollback("ext-rhs", "t").unwrap();
 
     ctrl.set_tick(54);
-    assert!(ctrl
-        .begin_update("ext-rhs", descriptor("ext-rhs", "3.0.0"), 3, "t")
-        .is_err());
+    assert!(
+        ctrl.begin_update("ext-rhs", descriptor("ext-rhs", "3.0.0"), 3, "t")
+            .is_err()
+    );
     ctrl.set_tick(55);
-    assert!(ctrl
-        .begin_update("ext-rhs", descriptor("ext-rhs", "3.0.0"), 3, "t")
-        .is_ok());
+    assert!(
+        ctrl.begin_update("ext-rhs", descriptor("ext-rhs", "3.0.0"), 3, "t")
+            .is_ok()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1339,11 +1345,7 @@ fn enrichment_deactivation_clears_secrets_allows_fresh_injection() {
     ctrl.begin_activation("ext-cs", &passing_validation("ext-cs", "1.0.0"), "t")
         .unwrap();
     let receipt = ctrl
-        .inject_secrets(
-            "ext-cs",
-            &[EphemeralSecret::new("fresh", vec![0xDD])],
-            "t",
-        )
+        .inject_secrets("ext-cs", &[EphemeralSecret::new("fresh", vec![0xDD])], "t")
         .unwrap();
     assert_eq!(receipt.injected_keys, vec!["fresh"]);
 }
@@ -1586,8 +1588,16 @@ fn enrichment_validation_all_checks_pass() {
         "v-comp",
         "1.0",
         vec![
-            PreActivationCheck { check_name: "a".into(), passed: true, detail: "ok".into() },
-            PreActivationCheck { check_name: "b".into(), passed: true, detail: "ok".into() },
+            PreActivationCheck {
+                check_name: "a".into(),
+                passed: true,
+                detail: "ok".into(),
+            },
+            PreActivationCheck {
+                check_name: "b".into(),
+                passed: true,
+                detail: "ok".into(),
+            },
         ],
     );
     assert!(val.all_passed);
@@ -1600,8 +1610,16 @@ fn enrichment_validation_one_check_fails() {
         "v-comp",
         "1.0",
         vec![
-            PreActivationCheck { check_name: "a".into(), passed: true, detail: "ok".into() },
-            PreActivationCheck { check_name: "b".into(), passed: false, detail: "bad".into() },
+            PreActivationCheck {
+                check_name: "a".into(),
+                passed: true,
+                detail: "ok".into(),
+            },
+            PreActivationCheck {
+                check_name: "b".into(),
+                passed: false,
+                detail: "bad".into(),
+            },
         ],
     );
     assert!(!val.all_passed);
@@ -1643,10 +1661,14 @@ fn enrichment_failing_validation_rejects_activation() {
 #[test]
 fn enrichment_registration_emits_event() {
     let mut ctrl = make_controller();
-    ctrl.register(descriptor("ev-reg", "1.0.0"), "trace-r").unwrap();
+    ctrl.register(descriptor("ev-reg", "1.0.0"), "trace-r")
+        .unwrap();
     let events = ctrl.events();
     assert!(events.iter().any(|e| e.event == "component_registered"));
-    let reg = events.iter().find(|e| e.event == "component_registered").unwrap();
+    let reg = events
+        .iter()
+        .find(|e| e.event == "component_registered")
+        .unwrap();
     assert_eq!(reg.component, "activation_lifecycle");
     assert_eq!(reg.outcome, "ok");
     assert_eq!(reg.component_id.as_deref(), Some("ev-reg"));
@@ -1702,10 +1724,13 @@ fn enrichment_rollback_emits_two_transition_events() {
         .filter(|e| e.event == "lifecycle_transition")
         .collect();
     assert_eq!(transitions.len(), 2);
-    assert!(transitions.iter().any(|e| e.to_state.as_deref() == Some("rolling_back")));
+    assert!(
+        transitions
+            .iter()
+            .any(|e| e.to_state.as_deref() == Some("rolling_back"))
+    );
     assert!(transitions.iter().any(|e| {
-        e.from_state.as_deref() == Some("rolling_back")
-            && e.to_state.as_deref() == Some("active")
+        e.from_state.as_deref() == Some("rolling_back") && e.to_state.as_deref() == Some("active")
     }));
 }
 
@@ -1727,7 +1752,10 @@ fn enrichment_deactivation_emits_transition_event() {
 
     ctrl.deactivate("ev-deact", "t").unwrap();
     let events = ctrl.drain_events();
-    let t = events.iter().find(|e| e.event == "lifecycle_transition").unwrap();
+    let t = events
+        .iter()
+        .find(|e| e.event == "lifecycle_transition")
+        .unwrap();
     assert_eq!(t.from_state.as_deref(), Some("active"));
     assert_eq!(t.to_state.as_deref(), Some("inactive"));
 }
@@ -1852,7 +1880,9 @@ fn enrichment_error_code_all_variants() {
         "LC_ACTIVATION_FAILED"
     );
     assert_eq!(
-        error_code(&LifecycleError::ComponentNotFound { component_id: "x".into() }),
+        error_code(&LifecycleError::ComponentNotFound {
+            component_id: "x".into()
+        }),
         "LC_COMPONENT_NOT_FOUND"
     );
     assert_eq!(
@@ -1863,11 +1893,16 @@ fn enrichment_error_code_all_variants() {
         "LC_ROLLOUT_MISMATCH"
     );
     assert_eq!(
-        error_code(&LifecycleError::NoKnownGoodVersion { component_id: "x".into() }),
+        error_code(&LifecycleError::NoKnownGoodVersion {
+            component_id: "x".into()
+        }),
         "LC_NO_KNOWN_GOOD"
     );
     assert_eq!(
-        error_code(&LifecycleError::CrashLoopDetected { component_id: "x".into(), crash_count: 3 }),
+        error_code(&LifecycleError::CrashLoopDetected {
+            component_id: "x".into(),
+            crash_count: 3
+        }),
         "LC_CRASH_LOOP"
     );
     assert_eq!(
@@ -1875,11 +1910,16 @@ fn enrichment_error_code_all_variants() {
         "LC_REVOCATION_FAILED"
     );
     assert_eq!(
-        error_code(&LifecycleError::RollbackHoldoffActive { component_id: "x".into(), remaining_ticks: 1 }),
+        error_code(&LifecycleError::RollbackHoldoffActive {
+            component_id: "x".into(),
+            remaining_ticks: 1
+        }),
         "LC_ROLLBACK_HOLDOFF"
     );
     assert_eq!(
-        error_code(&LifecycleError::CheckpointRegression { component_id: "x".into() }),
+        error_code(&LifecycleError::CheckpointRegression {
+            component_id: "x".into()
+        }),
         "LC_CHECKPOINT_REGRESSION"
     );
 }
@@ -2023,9 +2063,10 @@ fn enrichment_activate_update_crash_loop_holdoff_reupdate_complete() {
 
     // Holdoff blocks immediate re-update
     ctrl.set_tick(110);
-    assert!(ctrl
-        .begin_update("full-1", descriptor("full-1", "3.0.0"), 3, "t")
-        .is_err());
+    assert!(
+        ctrl.begin_update("full-1", descriptor("full-1", "3.0.0"), 3, "t")
+            .is_err()
+    );
 
     // Wait for holdoff, re-update and complete
     ctrl.set_tick(133);
@@ -2089,7 +2130,10 @@ fn enrichment_activate_deactivate_then_update_rejected() {
 #[test]
 fn enrichment_lifecycle_state_display_all_variants() {
     assert_eq!(LifecycleState::Inactive.to_string(), "inactive");
-    assert_eq!(LifecycleState::PendingActivation.to_string(), "pending_activation");
+    assert_eq!(
+        LifecycleState::PendingActivation.to_string(),
+        "pending_activation"
+    );
     assert_eq!(LifecycleState::Active.to_string(), "active");
     assert_eq!(LifecycleState::RollingBack.to_string(), "rolling_back");
     for phase in RolloutPhase::ALL {
@@ -2113,11 +2157,15 @@ fn enrichment_error_display_all_variants() {
             "invalid transition: inactive -> active",
         ),
         (
-            LifecycleError::ActivationValidationFailed { detail: "bad sig".into() },
+            LifecycleError::ActivationValidationFailed {
+                detail: "bad sig".into(),
+            },
             "activation validation failed: bad sig",
         ),
         (
-            LifecycleError::ComponentNotFound { component_id: "comp-z".into() },
+            LifecycleError::ComponentNotFound {
+                component_id: "comp-z".into(),
+            },
             "component not found: comp-z",
         ),
         (
@@ -2128,23 +2176,35 @@ fn enrichment_error_display_all_variants() {
             "rollout phase mismatch: expected canary, got shadow",
         ),
         (
-            LifecycleError::NoKnownGoodVersion { component_id: "c".into() },
+            LifecycleError::NoKnownGoodVersion {
+                component_id: "c".into(),
+            },
             "no known-good version for c",
         ),
         (
-            LifecycleError::CrashLoopDetected { component_id: "c".into(), crash_count: 3 },
+            LifecycleError::CrashLoopDetected {
+                component_id: "c".into(),
+                crash_count: 3,
+            },
             "crash-loop detected for c: 3 crashes",
         ),
         (
-            LifecycleError::RevocationCheckFailed { detail: "key gone".into() },
+            LifecycleError::RevocationCheckFailed {
+                detail: "key gone".into(),
+            },
             "revocation check failed: key gone",
         ),
         (
-            LifecycleError::RollbackHoldoffActive { component_id: "c".into(), remaining_ticks: 5 },
+            LifecycleError::RollbackHoldoffActive {
+                component_id: "c".into(),
+                remaining_ticks: 5,
+            },
             "rollback holdoff active for c: 5 ticks remaining",
         ),
         (
-            LifecycleError::CheckpointRegression { component_id: "c".into() },
+            LifecycleError::CheckpointRegression {
+                component_id: "c".into(),
+            },
             "checkpoint frontier would regress for c",
         ),
     ];
@@ -2259,7 +2319,12 @@ fn enrichment_known_good_pin_has_correct_timestamp() {
 fn enrichment_double_register_same_id_fails() {
     let mut ctrl = make_controller();
     ctrl.register(descriptor("dup-a", "1.0.0"), "t").unwrap();
-    let err = ctrl.register(descriptor("dup-a", "2.0.0"), "t").unwrap_err();
-    assert!(matches!(err, LifecycleError::ActivationValidationFailed { .. }));
+    let err = ctrl
+        .register(descriptor("dup-a", "2.0.0"), "t")
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        LifecycleError::ActivationValidationFailed { .. }
+    ));
     assert!(err.to_string().contains("already registered"));
 }

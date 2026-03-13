@@ -1474,8 +1474,17 @@ fn enrichment_artifact_entry_json_field_names() {
     };
     let val: serde_json::Value = serde_json::to_value(&entry).unwrap();
     let obj = val.as_object().unwrap();
-    for field in ["artifact_id", "kind", "content_hash", "redacted", "size_bytes"] {
-        assert!(obj.contains_key(field), "ArtifactEntry missing field: {field}");
+    for field in [
+        "artifact_id",
+        "kind",
+        "content_hash",
+        "redacted",
+        "size_bytes",
+    ] {
+        assert!(
+            obj.contains_key(field),
+            "ArtifactEntry missing field: {field}"
+        );
     }
 }
 
@@ -1503,7 +1512,10 @@ fn enrichment_policy_snapshot_json_field_names() {
         "config_hash",
         "config_bytes",
     ] {
-        assert!(obj.contains_key(field), "PolicySnapshot missing field: {field}");
+        assert!(
+            obj.contains_key(field),
+            "PolicySnapshot missing field: {field}"
+        );
     }
 }
 
@@ -1517,10 +1529,7 @@ fn enrichment_policy_snapshot_different_ids_not_equal() {
 #[test]
 fn enrichment_policy_snapshot_config_hash_matches_bytes() {
     let snap = enr_make_policy_snapshot("hash-test");
-    assert_eq!(
-        snap.config_hash,
-        ContentHash::compute(&snap.config_bytes)
-    );
+    assert_eq!(snap.config_hash, ContentHash::compute(&snap.config_bytes));
 }
 
 // ===========================================================================

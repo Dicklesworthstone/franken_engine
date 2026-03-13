@@ -2179,14 +2179,22 @@ fn enrichment_decorator_with_class_body() {
 fn enrichment_jsx_element_with_text_content() {
     let source = "<span>world</span>";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("createElement(\"span\", null, world)"));
+    assert!(
+        output
+            .normalized_source
+            .contains("createElement(\"span\", null, world)")
+    );
 }
 
 #[test]
 fn enrichment_jsx_self_closing_custom_component() {
     let source = "<MyComponent />";
     let output = normalize(source).unwrap();
-    assert!(output.normalized_source.contains("createElement(\"MyComponent\", null)"));
+    assert!(
+        output
+            .normalized_source
+            .contains("createElement(\"MyComponent\", null)")
+    );
 }
 
 #[test]
@@ -2220,7 +2228,8 @@ fn enrichment_type_import_with_multiple_specifiers() {
 
 #[test]
 fn enrichment_mixed_imports_only_type_imports_removed() {
-    let source = "import { useState } from 'react';\nimport type { FC } from 'react';\nconst x = useState;";
+    let source =
+        "import { useState } from 'react';\nimport type { FC } from 'react';\nconst x = useState;";
     let output = normalize(source).unwrap();
     assert!(output.normalized_source.contains("import { useState }"));
     assert!(!output.normalized_source.contains("import type"));
@@ -2231,7 +2240,10 @@ fn enrichment_empty_source_after_stripping_all_types() {
     let source = "type A = string;\ntype B = number;";
     let result = normalize(source);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TsNormalizationError::EmptySource));
+    assert!(matches!(
+        result.unwrap_err(),
+        TsNormalizationError::EmptySource
+    ));
 }
 
 #[test]
@@ -2239,7 +2251,10 @@ fn enrichment_only_interface_becomes_empty() {
     let source = "interface A { x: number; }\ninterface B { y: string; }";
     let result = normalize(source);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TsNormalizationError::EmptySource));
+    assert!(matches!(
+        result.unwrap_err(),
+        TsNormalizationError::EmptySource
+    ));
 }
 
 #[test]
@@ -2250,7 +2265,8 @@ fn enrichment_unsupported_target_es2015() {
             ..TsCompilerOptions::default()
         },
     };
-    let err = normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
+    let err =
+        normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
     match err {
         TsNormalizationError::UnsupportedCompilerOption { option, value } => {
             assert_eq!(option, "target");
@@ -2268,7 +2284,8 @@ fn enrichment_unsupported_module_umd() {
             ..TsCompilerOptions::default()
         },
     };
-    let err = normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
+    let err =
+        normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
     match err {
         TsNormalizationError::UnsupportedCompilerOption { option, value } => {
             assert_eq!(option, "module");
@@ -2286,7 +2303,8 @@ fn enrichment_unsupported_jsx_react_native() {
             ..TsCompilerOptions::default()
         },
     };
-    let err = normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
+    let err =
+        normalize_typescript_to_es2020("const x = 1;", &cfg, "t-1", "d-1", "p-1").unwrap_err();
     match err {
         TsNormalizationError::UnsupportedCompilerOption { option, value } => {
             assert_eq!(option, "jsx");
@@ -2413,14 +2431,22 @@ fn enrichment_failure_event_on_empty_source() {
     let source = "";
     let _err = normalize(source).unwrap_err();
     // The error itself is EmptySource - we verify the error type
-    assert!(matches!(normalize(source).unwrap_err(), TsNormalizationError::EmptySource));
+    assert!(matches!(
+        normalize(source).unwrap_err(),
+        TsNormalizationError::EmptySource
+    ));
 }
 
 #[test]
 fn enrichment_decision_type_only_import_changed_true() {
     let source = "import type { Foo } from 'foo';\nconst x = 1;";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "type_only_import_elision").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "type_only_import_elision")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2428,7 +2454,12 @@ fn enrichment_decision_type_only_import_changed_true() {
 fn enrichment_decision_type_only_import_changed_false_when_no_type_imports() {
     let source = "const x = 1;";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "type_only_import_elision").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "type_only_import_elision")
+        .unwrap();
     assert!(!decision.changed);
 }
 
@@ -2436,7 +2467,12 @@ fn enrichment_decision_type_only_import_changed_false_when_no_type_imports() {
 fn enrichment_decision_enum_lowering_changed_true() {
     let source = "enum Dir { Up, Down }";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "enum_lowering").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "enum_lowering")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2444,7 +2480,12 @@ fn enrichment_decision_enum_lowering_changed_true() {
 fn enrichment_decision_enum_lowering_changed_false_when_no_enums() {
     let source = "const x = 1;";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "enum_lowering").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "enum_lowering")
+        .unwrap();
     assert!(!decision.changed);
 }
 
@@ -2452,7 +2493,12 @@ fn enrichment_decision_enum_lowering_changed_false_when_no_enums() {
 fn enrichment_decision_const_assertion_changed_true() {
     let source = "const x = {} as const;";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "const_assertion_normalization").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "const_assertion_normalization")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2460,7 +2506,12 @@ fn enrichment_decision_const_assertion_changed_true() {
 fn enrichment_decision_const_assertion_changed_false() {
     let source = "const x = {};";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "const_assertion_normalization").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "const_assertion_normalization")
+        .unwrap();
     assert!(!decision.changed);
 }
 
@@ -2468,7 +2519,12 @@ fn enrichment_decision_const_assertion_changed_false() {
 fn enrichment_decision_type_annotation_stripping_changed_true() {
     let source = "const x: number = 1;";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "type_annotation_stripping").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "type_annotation_stripping")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2476,7 +2532,12 @@ fn enrichment_decision_type_annotation_stripping_changed_true() {
 fn enrichment_decision_type_annotation_stripping_changed_false() {
     let source = "const x = 1;";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "type_annotation_stripping").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "type_annotation_stripping")
+        .unwrap();
     assert!(!decision.changed);
 }
 
@@ -2484,7 +2545,12 @@ fn enrichment_decision_type_annotation_stripping_changed_false() {
 fn enrichment_decision_namespace_lowering_changed_true() {
     let source = "namespace NS { export const x = 1; }";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "namespace_lowering").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "namespace_lowering")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2492,7 +2558,12 @@ fn enrichment_decision_namespace_lowering_changed_true() {
 fn enrichment_decision_decorator_lowering_changed_true() {
     let source = "@log\nclass Svc { }";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "decorator_lowering").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "decorator_lowering")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2500,7 +2571,12 @@ fn enrichment_decision_decorator_lowering_changed_true() {
 fn enrichment_decision_abstract_class_lowering_changed_true() {
     let source = "abstract class Base { run() { return 0; } }";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "abstract_class_lowering").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "abstract_class_lowering")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2508,7 +2584,12 @@ fn enrichment_decision_abstract_class_lowering_changed_true() {
 fn enrichment_decision_implements_clause_changed_true() {
     let source = "class A implements B { go() { return 1; } }";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "implements_clause_normalization").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "implements_clause_normalization")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2516,7 +2597,12 @@ fn enrichment_decision_implements_clause_changed_true() {
 fn enrichment_decision_definite_assignment_changed_true() {
     let source = "class X { val!: number; run() { return 0; } }";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "definite_assignment_normalization").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "definite_assignment_normalization")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2524,7 +2610,12 @@ fn enrichment_decision_definite_assignment_changed_true() {
 fn enrichment_decision_jsx_lowering_changed_true() {
     let source = "<div>hello</div>";
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "jsx_lowering").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "jsx_lowering")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2532,7 +2623,12 @@ fn enrichment_decision_jsx_lowering_changed_true() {
 fn enrichment_decision_capability_intent_extraction_changed_true() {
     let source = r#"const x = hostcall<"fs.read">("path");"#;
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "capability_intent_extraction").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "capability_intent_extraction")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2540,7 +2636,12 @@ fn enrichment_decision_capability_intent_extraction_changed_true() {
 fn enrichment_decision_hostcall_type_param_stripping_changed_true() {
     let source = r#"const x = hostcall<"net.send">("url");"#;
     let output = normalize(source).unwrap();
-    let decision = output.witness.decisions.iter().find(|d| d.step == "hostcall_type_param_stripping").unwrap();
+    let decision = output
+        .witness
+        .decisions
+        .iter()
+        .find(|d| d.step == "hostcall_type_param_stripping")
+        .unwrap();
     assert!(decision.changed);
 }
 
@@ -2648,7 +2749,10 @@ fn enrichment_prepare_source_entry_js_no_normalization() {
     .unwrap();
     assert!(!prepared.source_ingestion.normalization_applied);
     assert!(prepared.normalization_output.is_none());
-    assert_eq!(prepared.source_ingestion.source_language, SourceLanguage::JavaScript);
+    assert_eq!(
+        prepared.source_ingestion.source_language,
+        SourceLanguage::JavaScript
+    );
     assert_eq!(prepared.source_ingestion.ts_decision_count, 0);
     assert_eq!(prepared.source_ingestion.ts_capability_intent_count, 0);
 }
@@ -2665,35 +2769,28 @@ fn enrichment_prepare_source_entry_ts_has_normalization_output() {
     .unwrap();
     assert!(prepared.source_ingestion.normalization_applied);
     assert!(prepared.normalization_output.is_some());
-    assert_eq!(prepared.source_ingestion.source_language, SourceLanguage::TypeScript);
+    assert_eq!(
+        prepared.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
     assert!(prepared.source_ingestion.ts_decision_count > 0);
 }
 
 #[test]
 fn enrichment_prepare_source_entry_js_prepared_source_equals_original() {
     let original = "const a = 42;";
-    let prepared = prepare_source_entry_for_public_entrypoints(
-        original,
-        "script.js",
-        "t-3",
-        "d-3",
-        "p-3",
-    )
-    .unwrap();
+    let prepared =
+        prepare_source_entry_for_public_entrypoints(original, "script.js", "t-3", "d-3", "p-3")
+            .unwrap();
     assert_eq!(prepared.prepared_source, original);
 }
 
 #[test]
 fn enrichment_prepare_source_entry_ts_prepared_source_differs() {
     let original = "const a: number = 42;";
-    let prepared = prepare_source_entry_for_public_entrypoints(
-        original,
-        "script.ts",
-        "t-4",
-        "d-4",
-        "p-4",
-    )
-    .unwrap();
+    let prepared =
+        prepare_source_entry_for_public_entrypoints(original, "script.ts", "t-4", "d-4", "p-4")
+            .unwrap();
     assert_ne!(prepared.prepared_source, original);
     assert!(!prepared.prepared_source.contains(": number"));
 }
@@ -2704,9 +2801,17 @@ fn enrichment_witness_hashes_are_hex_encoded() {
     // After "sha256:" prefix, the rest should be hex characters
     let source_hex = output.witness.source_hash.strip_prefix("sha256:").unwrap();
     assert!(source_hex.chars().all(|ch| ch.is_ascii_hexdigit()));
-    let normalized_hex = output.witness.normalized_hash.strip_prefix("sha256:").unwrap();
+    let normalized_hex = output
+        .witness
+        .normalized_hash
+        .strip_prefix("sha256:")
+        .unwrap();
     assert!(normalized_hex.chars().all(|ch| ch.is_ascii_hexdigit()));
-    let opts_hex = output.witness.compiler_options_hash.strip_prefix("sha256:").unwrap();
+    let opts_hex = output
+        .witness
+        .compiler_options_hash
+        .strip_prefix("sha256:")
+        .unwrap();
     assert!(opts_hex.chars().all(|ch| ch.is_ascii_hexdigit()));
 }
 
@@ -2716,7 +2821,11 @@ fn enrichment_witness_hash_length_is_sha256() {
     // SHA256 produces 64 hex chars
     let source_hex = output.witness.source_hash.strip_prefix("sha256:").unwrap();
     assert_eq!(source_hex.len(), 64);
-    let normalized_hex = output.witness.normalized_hash.strip_prefix("sha256:").unwrap();
+    let normalized_hex = output
+        .witness
+        .normalized_hash
+        .strip_prefix("sha256:")
+        .unwrap();
     assert_eq!(normalized_hex.len(), 64);
 }
 
@@ -2725,8 +2834,14 @@ fn enrichment_compiler_options_hash_same_for_default_config() {
     let o1 = normalize("const a = 1;").unwrap();
     let o2 = normalize("const b = 2;").unwrap();
     let o3 = normalize("const c = 3;").unwrap();
-    assert_eq!(o1.witness.compiler_options_hash, o2.witness.compiler_options_hash);
-    assert_eq!(o2.witness.compiler_options_hash, o3.witness.compiler_options_hash);
+    assert_eq!(
+        o1.witness.compiler_options_hash,
+        o2.witness.compiler_options_hash
+    );
+    assert_eq!(
+        o2.witness.compiler_options_hash,
+        o3.witness.compiler_options_hash
+    );
 }
 
 #[test]
@@ -2745,7 +2860,10 @@ fn enrichment_compiler_options_hash_differs_for_different_config() {
     };
     let o1 = normalize_typescript_to_es2020("const x = 1;", &cfg1, "t", "d", "p").unwrap();
     let o2 = normalize_typescript_to_es2020("const x = 1;", &cfg2, "t", "d", "p").unwrap();
-    assert_ne!(o1.witness.compiler_options_hash, o2.witness.compiler_options_hash);
+    assert_ne!(
+        o1.witness.compiler_options_hash,
+        o2.witness.compiler_options_hash
+    );
 }
 
 #[test]
@@ -2921,14 +3039,24 @@ fn enrichment_ingestion_with_commonjs_module() {
         TsIngestionProvenance::new("t-cjs", "d-cjs", "p-cjs"),
     )
     .unwrap();
-    assert!(!artifacts.normalization_output.normalized_source.contains(": number"));
+    assert!(
+        !artifacts
+            .normalization_output
+            .normalized_source
+            .contains(": number")
+    );
 }
 
 #[test]
 fn enrichment_all_fourteen_decision_steps_present() {
     let output = normalize("const x = 1;").unwrap();
     assert_eq!(output.witness.decisions.len(), 14);
-    let steps: Vec<&str> = output.witness.decisions.iter().map(|d| d.step.as_str()).collect();
+    let steps: Vec<&str> = output
+        .witness
+        .decisions
+        .iter()
+        .map(|d| d.step.as_str())
+        .collect();
     assert_eq!(steps[0], "type_only_import_elision");
     assert_eq!(steps[1], "type_space_declaration_elision");
     assert_eq!(steps[2], "namespace_lowering");

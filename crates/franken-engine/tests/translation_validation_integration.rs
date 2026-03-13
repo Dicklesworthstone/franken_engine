@@ -1841,10 +1841,7 @@ fn enrichment_gate_demote_ramp_to_shadow() {
         )
         .unwrap();
     }
-    assert_eq!(
-        gate.current_stage("opt-r2s"),
-        Some(ActivationStage::Ramp)
-    );
+    assert_eq!(gate.current_stage("opt-r2s"), Some(ActivationStage::Ramp));
 
     let demotion = gate
         .demote(
@@ -1858,10 +1855,7 @@ fn enrichment_gate_demote_ramp_to_shadow() {
         .unwrap();
     assert_eq!(demotion.from_stage, ActivationStage::Ramp);
     assert_eq!(demotion.to_stage, ActivationStage::Shadow);
-    assert_eq!(
-        gate.current_stage("opt-r2s"),
-        Some(ActivationStage::Shadow)
-    );
+    assert_eq!(gate.current_stage("opt-r2s"), Some(ActivationStage::Shadow));
 }
 
 #[test]
@@ -2051,7 +2045,10 @@ fn enrichment_gate_deterministic_serialization() {
     };
     let json_a = serde_json::to_string(&build_gate()).unwrap();
     let json_b = serde_json::to_string(&build_gate()).unwrap();
-    assert_eq!(json_a, json_b, "identical operations must produce identical JSON");
+    assert_eq!(
+        json_a, json_b,
+        "identical operations must produce identical JSON"
+    );
 }
 
 #[test]
@@ -2096,8 +2093,7 @@ fn enrichment_gate_events_monotonic_timestamps() {
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-mono");
     let token = test_token("opt-mono");
-    gate.submit(&receipt, &token, TEST_KEY, epoch, 100)
-        .unwrap();
+    gate.submit(&receipt, &token, TEST_KEY, epoch, 100).unwrap();
     gate.record_verdict("opt-mono", pass_verdict(), TEST_KEY, epoch, 200)
         .unwrap();
     gate.promote(
@@ -2190,22 +2186,13 @@ fn enrichment_gate_serde_roundtrip_with_promotions() {
         .unwrap();
     gate.record_verdict("opt-sp", pass_verdict(), TEST_KEY, epoch, 2000)
         .unwrap();
-    gate.promote(
-        "opt-sp",
-        ContentHash::compute(b"ev"),
-        TEST_KEY,
-        epoch,
-        3000,
-    )
-    .unwrap();
+    gate.promote("opt-sp", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
+        .unwrap();
 
     let json = serde_json::to_string(&gate).unwrap();
     let back: TranslationValidationGate = serde_json::from_str(&json).unwrap();
     assert_eq!(back.tracked_count(), 1);
-    assert_eq!(
-        back.current_stage("opt-sp"),
-        Some(ActivationStage::Canary)
-    );
+    assert_eq!(back.current_stage("opt-sp"), Some(ActivationStage::Canary));
 }
 
 #[test]
@@ -2239,10 +2226,7 @@ fn enrichment_lifecycle_promote_demote_promote_again() {
         3000,
     )
     .unwrap();
-    assert_eq!(
-        gate.current_stage("opt-pdp"),
-        Some(ActivationStage::Canary)
-    );
+    assert_eq!(gate.current_stage("opt-pdp"), Some(ActivationStage::Canary));
 
     // Demote back to Shadow
     gate.demote(
@@ -2254,10 +2238,7 @@ fn enrichment_lifecycle_promote_demote_promote_again() {
         4000,
     )
     .unwrap();
-    assert_eq!(
-        gate.current_stage("opt-pdp"),
-        Some(ActivationStage::Shadow)
-    );
+    assert_eq!(gate.current_stage("opt-pdp"), Some(ActivationStage::Shadow));
 
     // Pass again and re-promote to Canary
     gate.record_verdict("opt-pdp", pass_verdict(), TEST_KEY, epoch, 5000)
@@ -2270,10 +2251,7 @@ fn enrichment_lifecycle_promote_demote_promote_again() {
         6000,
     )
     .unwrap();
-    assert_eq!(
-        gate.current_stage("opt-pdp"),
-        Some(ActivationStage::Canary)
-    );
+    assert_eq!(gate.current_stage("opt-pdp"), Some(ActivationStage::Canary));
 
     // Promotion history should have 3 entries (promote, demote, promote)
     let history = gate.promotion_history("opt-pdp");
@@ -2321,10 +2299,7 @@ fn enrichment_lifecycle_multiple_opts_interleaved() {
 
     assert_eq!(gate.tracked_count(), 1);
     assert_eq!(gate.quarantine_count(), 1);
-    assert_eq!(
-        gate.current_stage("opt-a"),
-        Some(ActivationStage::Canary)
-    );
+    assert_eq!(gate.current_stage("opt-a"), Some(ActivationStage::Canary));
     assert!(gate.is_quarantined("opt-b"));
 }
 
@@ -2448,14 +2423,8 @@ fn enrichment_gate_quarantined_ids_deterministic_order() {
 
     // Submit and fail in reverse alphabetical order
     for id in ["opt-z", "opt-m", "opt-a"] {
-        gate.submit(
-            &test_receipt(id),
-            &test_token(id),
-            TEST_KEY,
-            epoch,
-            1000,
-        )
-        .unwrap();
+        gate.submit(&test_receipt(id), &test_token(id), TEST_KEY, epoch, 1000)
+            .unwrap();
         gate.record_verdict(id, fail_verdict(), TEST_KEY, epoch, 2000)
             .unwrap();
     }
@@ -2579,14 +2548,8 @@ fn enrichment_gate_promote_emits_stage_promoted_event() {
     .unwrap();
     gate.record_verdict("opt-pe", pass_verdict(), TEST_KEY, epoch, 2000)
         .unwrap();
-    gate.promote(
-        "opt-pe",
-        ContentHash::compute(b"ev"),
-        TEST_KEY,
-        epoch,
-        3000,
-    )
-    .unwrap();
+    gate.promote("opt-pe", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
+        .unwrap();
 
     let last = gate.events().last().unwrap();
     if let ValidationEventType::StagePromoted { from, to } = &last.event_type {
@@ -2611,14 +2574,8 @@ fn enrichment_gate_demote_emits_stage_demoted_event() {
     .unwrap();
     gate.record_verdict("opt-de", pass_verdict(), TEST_KEY, epoch, 2000)
         .unwrap();
-    gate.promote(
-        "opt-de",
-        ContentHash::compute(b"ev"),
-        TEST_KEY,
-        epoch,
-        3000,
-    )
-    .unwrap();
+    gate.promote("opt-de", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
+        .unwrap();
     gate.demote(
         "opt-de",
         ActivationStage::Shadow,
@@ -2715,14 +2672,8 @@ fn enrichment_gate_event_count_matches_events_len() {
     .unwrap();
     gate.record_verdict("opt-ec", pass_verdict(), TEST_KEY, epoch, 2000)
         .unwrap();
-    gate.promote(
-        "opt-ec",
-        ContentHash::compute(b"ev"),
-        TEST_KEY,
-        epoch,
-        3000,
-    )
-    .unwrap();
+    gate.promote("opt-ec", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
+        .unwrap();
 
     assert_eq!(gate.event_count(), gate.events().len());
 }

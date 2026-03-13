@@ -22,13 +22,16 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::adversarial_campaign::{
     AdversarialCampaign, AttackDimension, AttackGrammar, AttackStep, AttackStepKind, AutoMinimizer,
-    CalibrationReceipt, CampaignAttackCategory, CampaignComplexity, CampaignExecutionResult,
-    CampaignGenerator, CampaignGeneratorConfig, CampaignOutcomeRecord, CampaignRuntime,
-    CampaignSuppressionEvent, CampaignSuppressionSample, CampaignTrendPoint, ExploitObjectiveScore,
-    GuardplaneCalibrationState, MutationEngine, MutationOperator, MutationRequest,
-    PolicyRegressionSuite, RedBlueCalibrationConfig, RedBlueLoopIntegrator, RegressionGateDecision,
+    CalibrationReceipt, CampaignAttackCategory, CampaignComplexity, CampaignError,
+    CampaignExecutionResult, CampaignGenerator, CampaignGeneratorConfig, CampaignOutcomeRecord,
+    CampaignRuntime, CampaignSeverity, CampaignSuppressionEvent, CampaignSuppressionSample,
+    CampaignTrendPoint, ContainmentDifficulty, DefenseSubsystem, DeterministicReproFixture,
+    DeterministicRng, ExploitObjectiveScore, GuardplaneCalibrationState, MinimizationProof,
+    MutationEngine, MutationOperator, MutationRequest, PolicyRegressionSuite,
+    RedBlueCalibrationConfig, RedBlueLoopIntegrator, RegressionGateDecision,
     RegressionReplayResult, SuppressionGateConfig, SuppressionGateFailure, SuppressionGateInput,
-    SuppressionGateResult, evaluate_compromise_suppression_gate,
+    SuppressionGateResult, ThreatCategory, WeightedProduction,
+    evaluate_compromise_suppression_gate,
 };
 
 // ---------------------------------------------------------------------------
@@ -1564,4 +1567,586 @@ fn enrichment_multiple_cycles_accumulate_scores_and_events() {
         events.len() >= 3,
         "should have at least one event per campaign"
     );
+}
+
+// =========================================================================
+// Enrichment: CampaignError error_code all 6 distinct
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_error_codes_all_distinct() {
+    let errors = [
+        CampaignError::InvalidGrammar {
+            detail: "x".to_string(),
+        },
+        CampaignError::InvalidCampaign {
+            detail: "x".to_string(),
+        },
+        CampaignError::InvalidExecutionResult {
+            detail: "x".to_string(),
+        },
+        CampaignError::InvalidMutation {
+            detail: "x".to_string(),
+        },
+        CampaignError::InvalidSeed,
+        CampaignError::InvalidCalibration {
+            detail: "x".to_string(),
+        },
+    ];
+    let codes: BTreeSet<_> = errors.iter().map(|e| e.error_code()).collect();
+    assert_eq!(codes.len(), 6, "all 6 error codes must be distinct");
+}
+
+// =========================================================================
+// Enrichment: CampaignError Display all variants distinct
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_error_display_all_distinct() {
+    let errors = [
+        CampaignError::InvalidGrammar {
+            detail: "d1".to_string(),
+        },
+        CampaignError::InvalidCampaign {
+            detail: "d2".to_string(),
+        },
+        CampaignError::InvalidExecutionResult {
+            detail: "d3".to_string(),
+        },
+        CampaignError::InvalidMutation {
+            detail: "d4".to_string(),
+        },
+        CampaignError::InvalidSeed,
+        CampaignError::InvalidCalibration {
+            detail: "d6".to_string(),
+        },
+    ];
+    let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
+    assert_eq!(displays.len(), 6);
+    for d in &displays {
+        assert!(!d.is_empty());
+    }
+}
+
+// =========================================================================
+// Enrichment: CampaignError implements std::error::Error
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_error_std_error_trait() {
+    let err = CampaignError::InvalidGrammar {
+        detail: "test".to_string(),
+    };
+    let dyn_err: &dyn std::error::Error = &err;
+    assert!(!dyn_err.to_string().is_empty());
+    assert!(dyn_err.source().is_none());
+}
+
+// =========================================================================
+// Enrichment: CampaignError serde roundtrip all variants
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_error_serde_all_variants() {
+    let errors = [
+        CampaignError::InvalidGrammar {
+            detail: "g".to_string(),
+        },
+        CampaignError::InvalidCampaign {
+            detail: "c".to_string(),
+        },
+        CampaignError::InvalidExecutionResult {
+            detail: "e".to_string(),
+        },
+        CampaignError::InvalidMutation {
+            detail: "m".to_string(),
+        },
+        CampaignError::InvalidSeed,
+        CampaignError::InvalidCalibration {
+            detail: "cal".to_string(),
+        },
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).unwrap();
+        let back: CampaignError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*err, back);
+    }
+}
+
+// =========================================================================
+// Enrichment: DeterministicRng seed=0 error
+// =========================================================================
+
+#[test]
+fn enrichment_deterministic_rng_seed_zero_error() {
+    let err = DeterministicRng::new(0).unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidSeed));
+}
+
+// =========================================================================
+// Enrichment: DeterministicRng Copy semantics
+// =========================================================================
+
+#[test]
+fn enrichment_deterministic_rng_copy_semantics() {
+    let a = DeterministicRng::new(42).unwrap();
+    let b = a;
+    assert_eq!(a, b);
+}
+
+// =========================================================================
+// Enrichment: DeterministicRng serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_deterministic_rng_serde_roundtrip() {
+    let rng = DeterministicRng::new(12345).unwrap();
+    let json = serde_json::to_string(&rng).unwrap();
+    let back: DeterministicRng = serde_json::from_str(&json).unwrap();
+    assert_eq!(rng, back);
+}
+
+// =========================================================================
+// Enrichment: DeterministicRng choose_index with len=0
+// =========================================================================
+
+#[test]
+fn enrichment_deterministic_rng_choose_index_zero_len() {
+    let mut rng = DeterministicRng::new(99).unwrap();
+    assert_eq!(rng.choose_index(0), 0);
+}
+
+// =========================================================================
+// Enrichment: DeterministicRng range_u64 equal bounds
+// =========================================================================
+
+#[test]
+fn enrichment_deterministic_rng_range_equal_bounds() {
+    let mut rng = DeterministicRng::new(99).unwrap();
+    assert_eq!(rng.range_u64(5, 5), 5);
+    assert_eq!(rng.range_u64(10, 3), 10); // end < start
+}
+
+// =========================================================================
+// Enrichment: CampaignComplexity Copy semantics + serde
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_complexity_copy_and_serde() {
+    let variants = [
+        CampaignComplexity::Probe,
+        CampaignComplexity::MultiStage,
+        CampaignComplexity::Apt,
+    ];
+    for v in &variants {
+        let copy = *v;
+        assert_eq!(*v, copy);
+        let json = serde_json::to_string(v).unwrap();
+        let back: CampaignComplexity = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+// =========================================================================
+// Enrichment: AttackDimension BTreeSet ordering + serde
+// =========================================================================
+
+#[test]
+fn enrichment_attack_dimension_btreeset_ordering_and_serde() {
+    let mut set = BTreeSet::new();
+    set.insert(AttackDimension::Exfiltration);
+    set.insert(AttackDimension::HostcallSequence);
+    set.insert(AttackDimension::PolicyEvasion);
+    set.insert(AttackDimension::TemporalPayload);
+    set.insert(AttackDimension::PrivilegeEscalation);
+    set.insert(AttackDimension::Exfiltration); // dup
+    assert_eq!(set.len(), 5);
+    let ordered: Vec<_> = set.into_iter().collect();
+    for i in 1..ordered.len() {
+        assert!(ordered[i - 1] < ordered[i]);
+    }
+    // serde roundtrip for each
+    for dim in &ordered {
+        let json = serde_json::to_string(dim).unwrap();
+        let back: AttackDimension = serde_json::from_str(&json).unwrap();
+        assert_eq!(*dim, back);
+    }
+}
+
+// =========================================================================
+// Enrichment: ContainmentDifficulty Display distinct + Copy + serde
+// =========================================================================
+
+#[test]
+fn enrichment_containment_difficulty_display_copy_serde() {
+    let variants = [
+        ContainmentDifficulty::Easy,
+        ContainmentDifficulty::Moderate,
+        ContainmentDifficulty::Hard,
+        ContainmentDifficulty::Critical,
+    ];
+    let displays: BTreeSet<String> = variants.iter().map(|v| v.to_string()).collect();
+    assert_eq!(displays.len(), 4);
+    for v in &variants {
+        let copy = *v;
+        assert_eq!(*v, copy);
+        let json = serde_json::to_string(v).unwrap();
+        let back: ContainmentDifficulty = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+// =========================================================================
+// Enrichment: MutationOperator Display distinct + Copy + serde
+// =========================================================================
+
+#[test]
+fn enrichment_mutation_operator_display_copy_serde() {
+    let variants = [
+        MutationOperator::PointMutation,
+        MutationOperator::Crossover,
+        MutationOperator::Insertion,
+        MutationOperator::Deletion,
+        MutationOperator::TemporalShift,
+    ];
+    let displays: BTreeSet<String> = variants.iter().map(|v| v.to_string()).collect();
+    assert_eq!(displays.len(), 5);
+    for v in &variants {
+        let copy = *v;
+        assert_eq!(*v, copy);
+        let json = serde_json::to_string(v).unwrap();
+        let back: MutationOperator = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+// =========================================================================
+// Enrichment: DefenseSubsystem Display distinct + BTreeSet ordering + serde
+// =========================================================================
+
+#[test]
+fn enrichment_defense_subsystem_display_ordering_serde() {
+    let variants = [
+        DefenseSubsystem::Sentinel,
+        DefenseSubsystem::Containment,
+        DefenseSubsystem::EvidenceAccumulation,
+        DefenseSubsystem::FleetConvergence,
+    ];
+    let displays: BTreeSet<String> = variants.iter().map(|v| v.to_string()).collect();
+    assert_eq!(displays.len(), 4);
+    let mut set = BTreeSet::new();
+    for v in &variants {
+        set.insert(*v);
+        let json = serde_json::to_string(v).unwrap();
+        let back: DefenseSubsystem = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+    assert_eq!(set.len(), 4);
+}
+
+// =========================================================================
+// Enrichment: ThreatCategory Display distinct + BTreeSet ordering + serde
+// =========================================================================
+
+#[test]
+fn enrichment_threat_category_display_ordering_serde() {
+    let variants = [
+        ThreatCategory::CredentialTheft,
+        ThreatCategory::PrivilegeEscalation,
+        ThreatCategory::Persistence,
+        ThreatCategory::Exfiltration,
+        ThreatCategory::PolicyEvasion,
+    ];
+    let displays: BTreeSet<String> = variants.iter().map(|v| v.to_string()).collect();
+    assert_eq!(displays.len(), 5);
+    for v in &variants {
+        let json = serde_json::to_string(v).unwrap();
+        let back: ThreatCategory = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+// =========================================================================
+// Enrichment: CampaignSeverity Display distinct + ordering + serde
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_severity_display_ordering_serde() {
+    let variants = [
+        CampaignSeverity::Advisory,
+        CampaignSeverity::Moderate,
+        CampaignSeverity::Critical,
+        CampaignSeverity::Blocking,
+    ];
+    let displays: BTreeSet<String> = variants.iter().map(|v| v.to_string()).collect();
+    assert_eq!(displays.len(), 4);
+    let mut set = BTreeSet::new();
+    for v in &variants {
+        set.insert(*v);
+        let json = serde_json::to_string(v).unwrap();
+        let back: CampaignSeverity = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+    assert_eq!(set.len(), 4);
+}
+
+// =========================================================================
+// Enrichment: AttackGrammar validation version=0
+// =========================================================================
+
+#[test]
+fn enrichment_attack_grammar_version_zero_rejected() {
+    let mut grammar = AttackGrammar::default();
+    grammar.version = 0;
+    let err = grammar.validate().unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidGrammar { .. }));
+}
+
+// =========================================================================
+// Enrichment: AttackGrammar validation empty bucket
+// =========================================================================
+
+#[test]
+fn enrichment_attack_grammar_empty_bucket_rejected() {
+    let mut grammar = AttackGrammar::default();
+    grammar.hostcall_motifs = vec![];
+    let err = grammar.validate().unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidGrammar { .. }));
+}
+
+// =========================================================================
+// Enrichment: AttackGrammar zero-weight production rejected
+// =========================================================================
+
+#[test]
+fn enrichment_attack_grammar_zero_weight_rejected() {
+    let mut grammar = AttackGrammar::default();
+    grammar.hostcall_motifs[0].weight = 0;
+    let err = grammar.validate().unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidGrammar { .. }));
+}
+
+// =========================================================================
+// Enrichment: CampaignExecutionResult validation total_steps=0
+// =========================================================================
+
+#[test]
+fn enrichment_execution_result_total_steps_zero() {
+    let result = CampaignExecutionResult {
+        undetected_steps: 0,
+        total_steps: 0,
+        objective_achieved_before_containment: false,
+        damage_potential_millionths: 0,
+        evidence_atoms_before_detection: 0,
+        novel_technique: false,
+    };
+    let err = result.validate().unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidExecutionResult { .. }));
+}
+
+// =========================================================================
+// Enrichment: CampaignExecutionResult validation undetected > total
+// =========================================================================
+
+#[test]
+fn enrichment_execution_result_undetected_exceeds_total() {
+    let result = CampaignExecutionResult {
+        undetected_steps: 5,
+        total_steps: 3,
+        objective_achieved_before_containment: false,
+        damage_potential_millionths: 0,
+        evidence_atoms_before_detection: 0,
+        novel_technique: false,
+    };
+    let err = result.validate().unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidExecutionResult { .. }));
+}
+
+// =========================================================================
+// Enrichment: CampaignExecutionResult validation damage > 1M
+// =========================================================================
+
+#[test]
+fn enrichment_execution_result_damage_exceeds_max() {
+    let result = CampaignExecutionResult {
+        undetected_steps: 1,
+        total_steps: 2,
+        objective_achieved_before_containment: false,
+        damage_potential_millionths: 1_000_001,
+        evidence_atoms_before_detection: 0,
+        novel_technique: false,
+    };
+    let err = result.validate().unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidExecutionResult { .. }));
+}
+
+// =========================================================================
+// Enrichment: MinimizationProof serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_minimization_proof_serde_roundtrip() {
+    let proof = MinimizationProof {
+        rounds: 3,
+        removed_steps: 5,
+        is_fixed_point: true,
+    };
+    let json = serde_json::to_string(&proof).unwrap();
+    let back: MinimizationProof = serde_json::from_str(&json).unwrap();
+    assert_eq!(proof, back);
+}
+
+// =========================================================================
+// Enrichment: DeterministicReproFixture serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_deterministic_repro_fixture_serde_roundtrip() {
+    let camp = gen_campaign(CampaignComplexity::Probe, 0xF1);
+    let fixture = DeterministicReproFixture {
+        campaign_id: camp.campaign_id.clone(),
+        trace_id: camp.trace_id.clone(),
+        decision_id: camp.decision_id.clone(),
+        policy_id: camp.policy_id.clone(),
+        seed: camp.seed,
+        attack_sequence: camp.steps.clone(),
+        expected_defense_response: "block".to_string(),
+        actual_defense_response: "allow".to_string(),
+        minimality_proof: MinimizationProof {
+            rounds: 1,
+            removed_steps: 0,
+            is_fixed_point: true,
+        },
+    };
+    let json = serde_json::to_string(&fixture).unwrap();
+    let back: DeterministicReproFixture = serde_json::from_str(&json).unwrap();
+    assert_eq!(fixture, back);
+}
+
+// =========================================================================
+// Enrichment: WeightedProduction serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_weighted_production_serde_roundtrip() {
+    let wp = WeightedProduction {
+        label: "test_motif".to_string(),
+        weight: 10,
+    };
+    let json = serde_json::to_string(&wp).unwrap();
+    let back: WeightedProduction = serde_json::from_str(&json).unwrap();
+    assert_eq!(wp, back);
+}
+
+// =========================================================================
+// Enrichment: AdversarialCampaign validation empty campaign_id
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_validation_empty_campaign_id() {
+    let mut camp = gen_campaign(CampaignComplexity::Probe, 0xAA);
+    camp.campaign_id = "".to_string();
+    let err = camp.validate().unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidCampaign { .. }));
+}
+
+// =========================================================================
+// Enrichment: AdversarialCampaign validation seed=0
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_validation_seed_zero() {
+    let mut camp = gen_campaign(CampaignComplexity::Probe, 0xBB);
+    camp.seed = 0;
+    let err = camp.validate().unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidCampaign { .. }));
+}
+
+// =========================================================================
+// Enrichment: ExploitObjectiveScore difficulty thresholds
+// =========================================================================
+
+#[test]
+fn enrichment_exploit_objective_score_difficulty_easy() {
+    let result = CampaignExecutionResult {
+        undetected_steps: 0,
+        total_steps: 4,
+        objective_achieved_before_containment: false,
+        damage_potential_millionths: 100_000,
+        evidence_atoms_before_detection: 1,
+        novel_technique: false,
+    };
+    let score = ExploitObjectiveScore::from_result(&result).unwrap();
+    assert_eq!(score.difficulty, ContainmentDifficulty::Easy);
+}
+
+// =========================================================================
+// Enrichment: Debug nonempty for key types
+// =========================================================================
+
+#[test]
+fn enrichment_debug_nonempty_key_types() {
+    assert!(!format!("{:?}", CampaignError::InvalidSeed).is_empty());
+    assert!(!format!("{:?}", CampaignComplexity::Apt).is_empty());
+    assert!(!format!("{:?}", AttackDimension::Exfiltration).is_empty());
+    assert!(!format!("{:?}", ContainmentDifficulty::Critical).is_empty());
+    assert!(!format!("{:?}", MutationOperator::Crossover).is_empty());
+    assert!(!format!("{:?}", DefenseSubsystem::Sentinel).is_empty());
+    assert!(!format!("{:?}", ThreatCategory::Persistence).is_empty());
+    assert!(!format!("{:?}", CampaignSeverity::Blocking).is_empty());
+
+    let rng = DeterministicRng::new(1).unwrap();
+    assert!(!format!("{rng:?}").is_empty());
+
+    let wp = WeightedProduction {
+        label: "x".to_string(),
+        weight: 1,
+    };
+    assert!(!format!("{wp:?}").is_empty());
+}
+
+// =========================================================================
+// Enrichment: Clone independence CampaignError
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_error_clone_independence() {
+    let original = CampaignError::InvalidGrammar {
+        detail: "original".to_string(),
+    };
+    let mut cloned = original.clone();
+    if let CampaignError::InvalidGrammar { ref mut detail } = cloned {
+        *detail = "modified".to_string();
+    }
+    if let CampaignError::InvalidGrammar { detail } = &original {
+        assert_eq!(detail, "original");
+    }
+}
+
+// =========================================================================
+// Enrichment: Clone independence AttackGrammar
+// =========================================================================
+
+#[test]
+fn enrichment_attack_grammar_clone_independence() {
+    let original = AttackGrammar::default();
+    let mut cloned = original.clone();
+    cloned.version = 999;
+    assert_eq!(original.version, 1);
+    assert_eq!(cloned.version, 999);
+}
+
+// =========================================================================
+// Enrichment: CampaignGenerator seed=0 error
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_generator_seed_zero_error() {
+    let err = CampaignGenerator::new(
+        AttackGrammar::default(),
+        CampaignGeneratorConfig::default(),
+        0,
+    )
+    .unwrap_err();
+    assert!(matches!(err, CampaignError::InvalidSeed));
 }

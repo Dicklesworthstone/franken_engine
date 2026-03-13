@@ -501,9 +501,11 @@ fn json_fields_repro_metadata() {
 // ===========================================================================
 
 use frankenengine_engine::conformance_harness::{
-    ConformanceAssetRecord, ConformanceDeltaClassification, ConformanceIssueLink,
-    ConformanceMinimizationSummary, ConformanceReplayContract, ConformanceReplayVerificationError,
-    ConformanceReproEnvironment, ConformanceRunResult, ConformanceWaiver, ConformanceWaiverSet,
+    ConformanceAssetManifest, ConformanceAssetRecord, ConformanceDeltaClassification,
+    ConformanceIssueLink, ConformanceLogEvent, ConformanceManifestError,
+    ConformanceMinimizationSummary, ConformanceMinimizedFailingVector, ConformanceReplayContract,
+    ConformanceReplayVerificationError, ConformanceReproEnvironment, ConformanceRunError,
+    ConformanceRunLinkage, ConformanceRunResult, ConformanceWaiver, ConformanceWaiverSet,
     DonorFixture, DonorHarnessAdapter, DonorHarnessApi,
 };
 
@@ -1032,4 +1034,458 @@ fn serde_roundtrip_conformance_run_result() {
     let json = serde_json::to_string(&rr).unwrap();
     let rt: ConformanceRunResult = serde_json::from_str(&json).unwrap();
     assert_eq!(rr, rt);
+}
+
+// ===========================================================================
+// 29) ConformanceManifestError — Display all variants
+// ===========================================================================
+
+#[test]
+fn manifest_error_display_unsupported_schema() {
+    let e = ConformanceManifestError::UnsupportedSchema {
+        expected: "v1".to_string(),
+        actual: "v2".to_string(),
+    };
+    let s = e.to_string();
+    assert!(s.contains("v1"));
+    assert!(s.contains("v2"));
+    assert!(s.contains("unsupported"));
+}
+
+#[test]
+fn manifest_error_display_empty_asset_set() {
+    let e = ConformanceManifestError::EmptyAssetSet;
+    let s = e.to_string();
+    assert!(s.contains("no assets"));
+}
+
+#[test]
+fn manifest_error_display_manifest_has_no_parent() {
+    let e = ConformanceManifestError::ManifestHasNoParent;
+    let s = e.to_string();
+    assert!(s.contains("parent"));
+}
+
+#[test]
+fn manifest_error_display_missing_field() {
+    let e = ConformanceManifestError::MissingField("asset_id");
+    let s = e.to_string();
+    assert!(s.contains("asset_id"));
+    assert!(s.contains("missing"));
+}
+
+#[test]
+fn manifest_error_display_invalid_field_value() {
+    let e = ConformanceManifestError::InvalidFieldValue {
+        field: "category",
+        value: "unknown_cat".to_string(),
+    };
+    let s = e.to_string();
+    assert!(s.contains("category"));
+    assert!(s.contains("unknown_cat"));
+}
+
+#[test]
+fn manifest_error_display_invalid_ifc_expectation() {
+    let e = ConformanceManifestError::InvalidIfcExpectation {
+        asset_id: "test-asset".to_string(),
+        category: "benign".to_string(),
+        expected_outcome: "block".to_string(),
+        expected_evidence_type: "flow_violation".to_string(),
+    };
+    let s = e.to_string();
+    assert!(s.contains("test-asset"));
+    assert!(s.contains("benign"));
+}
+
+#[test]
+fn manifest_error_display_fixture_hash_mismatch() {
+    let e = ConformanceManifestError::FixtureHashMismatch {
+        asset_id: "asset-1".to_string(),
+        expected: "aabb".to_string(),
+        actual: "ccdd".to_string(),
+    };
+    let s = e.to_string();
+    assert!(s.contains("asset-1"));
+    assert!(s.contains("aabb"));
+    assert!(s.contains("ccdd"));
+}
+
+#[test]
+fn manifest_error_display_expected_output_hash_mismatch() {
+    let e = ConformanceManifestError::ExpectedOutputHashMismatch {
+        asset_id: "asset-2".to_string(),
+        expected: "1122".to_string(),
+        actual: "3344".to_string(),
+    };
+    let s = e.to_string();
+    assert!(s.contains("asset-2"));
+    assert!(s.contains("1122"));
+}
+
+#[test]
+fn manifest_error_display_all_unique() {
+    let errors: Vec<String> = vec![
+        ConformanceManifestError::UnsupportedSchema {
+            expected: "a".into(),
+            actual: "b".into(),
+        }
+        .to_string(),
+        ConformanceManifestError::EmptyAssetSet.to_string(),
+        ConformanceManifestError::ManifestHasNoParent.to_string(),
+        ConformanceManifestError::MissingField("f").to_string(),
+        ConformanceManifestError::InvalidFieldValue {
+            field: "x",
+            value: "y".into(),
+        }
+        .to_string(),
+        ConformanceManifestError::InvalidIfcExpectation {
+            asset_id: "a".into(),
+            category: "b".into(),
+            expected_outcome: "c".into(),
+            expected_evidence_type: "d".into(),
+        }
+        .to_string(),
+        ConformanceManifestError::FixtureHashMismatch {
+            asset_id: "a".into(),
+            expected: "e".into(),
+            actual: "f".into(),
+        }
+        .to_string(),
+        ConformanceManifestError::ExpectedOutputHashMismatch {
+            asset_id: "a".into(),
+            expected: "g".into(),
+            actual: "h".into(),
+        }
+        .to_string(),
+    ];
+    let unique: BTreeSet<_> = errors.iter().collect();
+    assert_eq!(unique.len(), 8);
+}
+
+#[test]
+fn manifest_error_is_std_error() {
+    let e = ConformanceManifestError::EmptyAssetSet;
+    let err: &dyn std::error::Error = &e;
+    assert!(!err.to_string().is_empty());
+    assert!(err.source().is_none());
+}
+
+// ===========================================================================
+// 30) ConformanceRunError — Display all variants
+// ===========================================================================
+
+#[test]
+fn run_error_display_invalid_config() {
+    let e = ConformanceRunError::InvalidConfig("bad seed".to_string());
+    let s = e.to_string();
+    assert!(s.contains("bad seed"));
+    assert!(s.contains("invalid"));
+}
+
+#[test]
+fn run_error_display_repro_invariant() {
+    let e = ConformanceRunError::ReproInvariant {
+        asset_id: "asset-r".to_string(),
+        detail: "digest changed".to_string(),
+    };
+    let s = e.to_string();
+    assert!(s.contains("asset-r"));
+    assert!(s.contains("digest changed"));
+}
+
+#[test]
+fn run_error_is_std_error() {
+    let e = ConformanceRunError::InvalidConfig("test".to_string());
+    let err: &dyn std::error::Error = &e;
+    assert!(!err.to_string().is_empty());
+    assert!(err.source().is_none());
+}
+
+// ===========================================================================
+// 31) ConformanceRunLinkage — serde
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_run_linkage() {
+    let rl = ConformanceRunLinkage {
+        run_id: "run-1".into(),
+        trace_id: "trace-1".into(),
+        decision_id: "dec-1".into(),
+        ci_run_id: Some("ci-42".into()),
+    };
+    let json = serde_json::to_string(&rl).unwrap();
+    let rt: ConformanceRunLinkage = serde_json::from_str(&json).unwrap();
+    assert_eq!(rl, rt);
+}
+
+#[test]
+fn serde_roundtrip_run_linkage_no_ci() {
+    let rl = ConformanceRunLinkage {
+        run_id: "run-2".into(),
+        trace_id: "trace-2".into(),
+        decision_id: "dec-2".into(),
+        ci_run_id: None,
+    };
+    let json = serde_json::to_string(&rl).unwrap();
+    let rt: ConformanceRunLinkage = serde_json::from_str(&json).unwrap();
+    assert_eq!(rl, rt);
+}
+
+// ===========================================================================
+// 32) ConformanceMinimizedFailingVector — serde
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_minimized_failing_vector() {
+    let v = ConformanceMinimizedFailingVector {
+        asset_id: "test262/Array.json".into(),
+        source_donor: "test262".into(),
+        semantic_domain: "built-ins".into(),
+        normative_reference: "ECMA-262 22.1".into(),
+        fixture: DonorFixture {
+            donor_harness: "test262".into(),
+            source: "var x = [1,2,3];".into(),
+            observed_output: "[1,2,3]".into(),
+        },
+        expected_output: "1,2,3".into(),
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    let rt: ConformanceMinimizedFailingVector = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, rt);
+}
+
+// ===========================================================================
+// 33) ConformanceLogEvent — serde
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_log_event() {
+    let event = ConformanceLogEvent {
+        trace_id: "t-1".into(),
+        decision_id: "d-1".into(),
+        policy_id: "p-1".into(),
+        component: "conformance_harness".into(),
+        event: "asset_run".into(),
+        outcome: "pass".into(),
+        error_code: None,
+        asset_id: "asset-1".into(),
+        workload_id: "wl-1".into(),
+        semantic_domain: "built-ins".into(),
+        category: None,
+        source_labels: vec![],
+        sink_clearances: vec![],
+        flow_path_type: None,
+        expected_outcome: None,
+        actual_outcome: None,
+        evidence_type: None,
+        evidence_id: None,
+        duration_us: 1234,
+        error_detail: None,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let rt: ConformanceLogEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, rt);
+}
+
+#[test]
+fn serde_roundtrip_log_event_with_ifc_fields() {
+    let event = ConformanceLogEvent {
+        trace_id: "t-2".into(),
+        decision_id: "d-2".into(),
+        policy_id: "p-2".into(),
+        component: "conformance_harness".into(),
+        event: "ifc_check".into(),
+        outcome: "block".into(),
+        error_code: Some("IFC-VIOLATION".into()),
+        asset_id: "ifc-asset-1".into(),
+        workload_id: "wl-2".into(),
+        semantic_domain: "ifc_corpus/exfil".into(),
+        category: Some("exfil".into()),
+        source_labels: vec!["credential".into()],
+        sink_clearances: vec!["network_egress".into()],
+        flow_path_type: Some("direct".into()),
+        expected_outcome: Some("block".into()),
+        actual_outcome: Some("block".into()),
+        evidence_type: Some("flow_violation".into()),
+        evidence_id: Some("ev-123".into()),
+        duration_us: 5678,
+        error_detail: Some("data flow blocked".into()),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let rt: ConformanceLogEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, rt);
+}
+
+// ===========================================================================
+// 34) ConformanceAssetManifest::CURRENT_SCHEMA
+// ===========================================================================
+
+#[test]
+fn asset_manifest_current_schema_non_empty() {
+    assert!(!ConformanceAssetManifest::CURRENT_SCHEMA.is_empty());
+    assert!(ConformanceAssetManifest::CURRENT_SCHEMA.starts_with("franken-engine."));
+}
+
+// ===========================================================================
+// 35) DeterministicRng — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_deterministic_rng() {
+    let rng = DeterministicRng::seeded(42);
+    let json = serde_json::to_string(&rng).unwrap();
+    let rt: DeterministicRng = serde_json::from_str(&json).unwrap();
+    assert_eq!(rng, rt);
+}
+
+// ===========================================================================
+// 36) Copy semantics for small enums
+// ===========================================================================
+
+#[test]
+fn copy_semantics_waiver_reason_code() {
+    let a = WaiverReasonCode::HarnessGap;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn copy_semantics_failure_class() {
+    let a = ConformanceFailureClass::Breaking;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn copy_semantics_failure_severity() {
+    let a = ConformanceFailureSeverity::Critical;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn copy_semantics_delta_kind() {
+    let a = ConformanceDeltaKind::TimingChange;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+// ===========================================================================
+// 37) Clone independence for struct types
+// ===========================================================================
+
+#[test]
+fn clone_independence_conformance_waiver() {
+    let original = ConformanceWaiver {
+        asset_id: "test.json".into(),
+        reason_code: WaiverReasonCode::HarnessGap,
+        tracking_bead: "bd-1".into(),
+        expiry_date: "2027-01-01".into(),
+    };
+    let mut cloned = original.clone();
+    cloned.asset_id = "modified.json".into();
+    assert_eq!(original.asset_id, "test.json");
+    assert_eq!(cloned.asset_id, "modified.json");
+}
+
+#[test]
+fn clone_independence_conformance_run_summary() {
+    let original = ConformanceRunSummary {
+        run_id: "r1".into(),
+        asset_manifest_hash: "h".into(),
+        total_assets: 10,
+        passed: 8,
+        failed: 1,
+        waived: 1,
+        errored: 0,
+        env_fingerprint: "fp".into(),
+    };
+    let mut cloned = original.clone();
+    cloned.passed = 99;
+    assert_eq!(original.passed, 8);
+    assert_eq!(cloned.passed, 99);
+}
+
+#[test]
+fn clone_independence_donor_fixture() {
+    let original = DonorFixture {
+        donor_harness: "test262".into(),
+        source: "var x = 1;".into(),
+        observed_output: "1".into(),
+    };
+    let mut cloned = original.clone();
+    cloned.source = "modified".into();
+    assert_eq!(original.source, "var x = 1;");
+    assert_eq!(cloned.source, "modified");
+}
+
+// ===========================================================================
+// 38) ConformanceRunResult enforce_ci_gate
+// ===========================================================================
+
+#[test]
+fn enforce_ci_gate_passes_on_zero_failures() {
+    let rr = ConformanceRunResult {
+        run_id: "r".into(),
+        asset_manifest_hash: "h".into(),
+        logs: vec![],
+        summary: ConformanceRunSummary {
+            run_id: "r".into(),
+            asset_manifest_hash: "h".into(),
+            total_assets: 10,
+            passed: 10,
+            failed: 0,
+            waived: 0,
+            errored: 0,
+            env_fingerprint: "f".into(),
+        },
+        minimized_repros: vec![],
+    };
+    assert!(rr.enforce_ci_gate().is_ok());
+}
+
+#[test]
+fn enforce_ci_gate_fails_on_failures() {
+    let rr = ConformanceRunResult {
+        run_id: "r".into(),
+        asset_manifest_hash: "h".into(),
+        logs: vec![],
+        summary: ConformanceRunSummary {
+            run_id: "r".into(),
+            asset_manifest_hash: "h".into(),
+            total_assets: 10,
+            passed: 8,
+            failed: 2,
+            waived: 0,
+            errored: 0,
+            env_fingerprint: "f".into(),
+        },
+        minimized_repros: vec![],
+    };
+    let err = rr.enforce_ci_gate().unwrap_err();
+    assert_eq!(err.failed, 2);
+    assert_eq!(err.errored, 0);
+}
+
+#[test]
+fn enforce_ci_gate_fails_on_errors() {
+    let rr = ConformanceRunResult {
+        run_id: "r".into(),
+        asset_manifest_hash: "h".into(),
+        logs: vec![],
+        summary: ConformanceRunSummary {
+            run_id: "r".into(),
+            asset_manifest_hash: "h".into(),
+            total_assets: 10,
+            passed: 9,
+            failed: 0,
+            waived: 0,
+            errored: 1,
+            env_fingerprint: "f".into(),
+        },
+        minimized_repros: vec![],
+    };
+    let err = rr.enforce_ci_gate().unwrap_err();
+    assert_eq!(err.errored, 1);
 }

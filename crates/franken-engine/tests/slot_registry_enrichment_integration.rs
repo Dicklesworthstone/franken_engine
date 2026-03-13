@@ -726,3 +726,454 @@ fn promotion_status_candidate_is_neither() {
     assert!(!status.is_native());
     assert!(!status.is_delegate());
 }
+
+// ===========================================================================
+// 21) SlotId — validation edge cases
+// ===========================================================================
+
+#[test]
+fn slot_id_uppercase_rejected() {
+    assert!(SlotId::new("UPPER").is_err());
+}
+
+#[test]
+fn slot_id_space_rejected() {
+    assert!(SlotId::new("has space").is_err());
+}
+
+#[test]
+fn slot_id_underscore_rejected() {
+    assert!(SlotId::new("has_underscore").is_err());
+}
+
+#[test]
+fn slot_id_digits_and_dashes_accepted() {
+    let id = SlotId::new("slot-123-abc").unwrap();
+    assert_eq!(id.as_str(), "slot-123-abc");
+}
+
+#[test]
+fn slot_id_ordering_is_lexicographic() {
+    let a = SlotId::new("aaa").unwrap();
+    let b = SlotId::new("bbb").unwrap();
+    let c = SlotId::new("zzz").unwrap();
+    assert!(a < b);
+    assert!(b < c);
+}
+
+#[test]
+fn slot_id_btreeset_dedup() {
+    let mut set = BTreeSet::new();
+    set.insert(SlotId::new("same").unwrap());
+    set.insert(SlotId::new("same").unwrap());
+    set.insert(SlotId::new("other").unwrap());
+    assert_eq!(set.len(), 2);
+}
+
+#[test]
+fn slot_id_hash_consistency() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let id = SlotId::new("test-id").unwrap();
+    let mut h1 = DefaultHasher::new();
+    id.hash(&mut h1);
+    let mut h2 = DefaultHasher::new();
+    id.hash(&mut h2);
+    assert_eq!(h1.finish(), h2.finish());
+}
+
+// ===========================================================================
+// 22) PromotionStatus — Display all variants exact
+// ===========================================================================
+
+#[test]
+fn promotion_status_display_all_distinct() {
+    let variants = [
+        PromotionStatus::Delegate,
+        PromotionStatus::PromotionCandidate {
+            candidate_digest: "cd".into(),
+        },
+        PromotionStatus::Promoted {
+            native_digest: "nd".into(),
+            receipt_id: "ri".into(),
+        },
+        PromotionStatus::Demoted {
+            reason: "perf".into(),
+            rollback_digest: "rd".into(),
+        },
+    ];
+    let displays: BTreeSet<String> = variants.iter().map(|v| v.to_string()).collect();
+    assert_eq!(displays.len(), 4);
+}
+
+#[test]
+fn promotion_status_promoted_display_contains_fields() {
+    let p = PromotionStatus::Promoted {
+        native_digest: "ndig-42".into(),
+        receipt_id: "rcpt-7".into(),
+    };
+    let s = p.to_string();
+    assert!(s.contains("ndig-42"));
+    assert!(s.contains("rcpt-7"));
+}
+
+#[test]
+fn promotion_status_demoted_display_contains_fields() {
+    let d = PromotionStatus::Demoted {
+        reason: "latency regression".into(),
+        rollback_digest: "rb-9".into(),
+    };
+    let s = d.to_string();
+    assert!(s.contains("latency regression"));
+    assert!(s.contains("rb-9"));
+}
+
+// ===========================================================================
+// 23) LineageEvent + PromotionTransition — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_promotion_transition_all() {
+    use frankenengine_engine::slot_registry::PromotionTransition;
+    let transitions = [
+        PromotionTransition::RegisteredDelegate,
+        PromotionTransition::EnteredCandidacy,
+        PromotionTransition::PromotedToNative,
+        PromotionTransition::DemotedToDelegate,
+        PromotionTransition::RolledBack,
+    ];
+    for t in &transitions {
+        let json = serde_json::to_string(t).unwrap();
+        let rt: PromotionTransition = serde_json::from_str(&json).unwrap();
+        assert_eq!(*t, rt);
+    }
+}
+
+#[test]
+fn serde_roundtrip_lineage_event() {
+    use frankenengine_engine::slot_registry::{LineageEvent, PromotionTransition};
+    let event = LineageEvent {
+        transition: PromotionTransition::PromotedToNative,
+        digest: "dig-42".to_string(),
+        timestamp: "2026-01-15T12:00:00Z".to_string(),
+        receipt_id: Some("receipt-7".to_string()),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let rt: LineageEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, rt);
+}
+
+#[test]
+fn serde_roundtrip_lineage_event_no_receipt() {
+    use frankenengine_engine::slot_registry::{LineageEvent, PromotionTransition};
+    let event = LineageEvent {
+        transition: PromotionTransition::RegisteredDelegate,
+        digest: "del-1".to_string(),
+        timestamp: "2026-02-01T00:00:00Z".to_string(),
+        receipt_id: None,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let rt: LineageEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, rt);
+}
+
+// ===========================================================================
+// 24) SlotEntry — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_slot_entry() {
+    use frankenengine_engine::slot_registry::{LineageEvent, PromotionTransition, SlotEntry};
+    let entry = SlotEntry {
+        id: SlotId::new("test-slot").unwrap(),
+        kind: SlotKind::Parser,
+        authority: AuthorityEnvelope {
+            required: vec![SlotCapability::ReadSource],
+            permitted: vec![SlotCapability::ReadSource, SlotCapability::EmitIr],
+        },
+        status: PromotionStatus::Delegate,
+        implementation_digest: "digest-1".to_string(),
+        promotion_lineage: vec![LineageEvent {
+            transition: PromotionTransition::RegisteredDelegate,
+            digest: "digest-1".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            receipt_id: None,
+        }],
+        rollback_target: None,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let rt: SlotEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, rt);
+}
+
+// ===========================================================================
+// 25) Clone independence
+// ===========================================================================
+
+#[test]
+fn clone_independence_authority_envelope() {
+    let original = AuthorityEnvelope {
+        required: vec![SlotCapability::ReadSource],
+        permitted: vec![SlotCapability::ReadSource, SlotCapability::EmitIr],
+    };
+    let mut cloned = original.clone();
+    cloned.permitted.push(SlotCapability::HeapAlloc);
+    assert_eq!(original.permitted.len(), 2);
+    assert_eq!(cloned.permitted.len(), 3);
+}
+
+#[test]
+fn clone_independence_slot_replacement_signal() {
+    let original = SlotReplacementSignal::default();
+    let cloned = original.clone();
+    assert_eq!(
+        original.invocation_weight_millionths,
+        cloned.invocation_weight_millionths
+    );
+}
+
+// ===========================================================================
+// 26) SlotRegistry — native_coverage
+// ===========================================================================
+
+#[test]
+fn slot_registry_native_coverage_empty() {
+    let reg = SlotRegistry::new();
+    assert_eq!(reg.native_coverage(), 0.0);
+}
+
+#[test]
+fn slot_registry_native_coverage_all_delegates() {
+    let mut reg = SlotRegistry::new();
+    for name in ["slot-a", "slot-b"] {
+        let id = SlotId::new(name).unwrap();
+        let authority = AuthorityEnvelope {
+            required: vec![],
+            permitted: vec![SlotCapability::ReadSource],
+        };
+        reg.register_delegate(id, SlotKind::Parser, authority, "d".into(), "t".into())
+            .unwrap();
+    }
+    assert_eq!(reg.native_coverage(), 0.0);
+    assert_eq!(reg.delegate_count(), 2);
+    assert_eq!(reg.native_count(), 0);
+}
+
+// ===========================================================================
+// 27) SlotRegistry — get nonexistent returns None
+// ===========================================================================
+
+#[test]
+fn slot_registry_get_nonexistent() {
+    let reg = SlotRegistry::new();
+    let id = SlotId::new("nonexistent").unwrap();
+    assert!(reg.get(&id).is_none());
+}
+
+// ===========================================================================
+// 28) SlotRegistry serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_slot_registry() {
+    let mut reg = SlotRegistry::new();
+    let id = SlotId::new("slot-serde").unwrap();
+    let authority = AuthorityEnvelope {
+        required: vec![SlotCapability::ReadSource],
+        permitted: vec![SlotCapability::ReadSource],
+    };
+    reg.register_delegate(id, SlotKind::Builtins, authority, "d".into(), "t".into())
+        .unwrap();
+    let json = serde_json::to_string(&reg).unwrap();
+    let rt: SlotRegistry = serde_json::from_str(&json).unwrap();
+    assert_eq!(reg.len(), rt.len());
+    let id_check = SlotId::new("slot-serde").unwrap();
+    assert!(rt.get(&id_check).is_some());
+}
+
+// ===========================================================================
+// 29) CoreSlotExemption — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_core_slot_exemption() {
+    use frankenengine_engine::slot_registry::CoreSlotExemption;
+    let ex = CoreSlotExemption {
+        exemption_id: "ex-1".to_string(),
+        slot_id: SlotId::new("parser").unwrap(),
+        approved_by: "admin".to_string(),
+        signed_risk_acknowledgement: "ack".to_string(),
+        remediation_plan: "plan".to_string(),
+        remediation_deadline_epoch: 10,
+        expires_at_epoch: 20,
+    };
+    let json = serde_json::to_string(&ex).unwrap();
+    let rt: CoreSlotExemption = serde_json::from_str(&json).unwrap();
+    assert_eq!(ex, rt);
+}
+
+// ===========================================================================
+// 30) GaSignedLineageArtifact — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_ga_signed_lineage_artifact() {
+    use frankenengine_engine::slot_registry::GaSignedLineageArtifact;
+    let artifact = GaSignedLineageArtifact {
+        slot_id: SlotId::new("parser").unwrap(),
+        former_delegate_digest: "fd".to_string(),
+        replacement_component_digest: "rcd".to_string(),
+        replacement_author: "author".to_string(),
+        replacement_timestamp: "2026-01-01T00:00:00Z".to_string(),
+        lineage_signature: "sig".to_string(),
+        trust_anchor_ref: "anchor".to_string(),
+        signature_verified: true,
+        equivalence_suite_ref: "suite".to_string(),
+        equivalence_passed: true,
+        delegate_fallback_reachable: true,
+    };
+    let json = serde_json::to_string(&artifact).unwrap();
+    let rt: GaSignedLineageArtifact = serde_json::from_str(&json).unwrap();
+    assert_eq!(artifact, rt);
+}
+
+// ===========================================================================
+// 31) GaReleaseGuardError — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_ga_release_guard_error_all() {
+    let errors = vec![
+        GaReleaseGuardError::InvalidInput {
+            field: "f".into(),
+            detail: "d".into(),
+        },
+        GaReleaseGuardError::UnknownCoreSlot {
+            slot_id: "s".into(),
+        },
+        GaReleaseGuardError::InvalidExemption {
+            exemption_id: "e".into(),
+            detail: "d".into(),
+        },
+        GaReleaseGuardError::DuplicateExemption {
+            slot_id: "s".into(),
+        },
+        GaReleaseGuardError::InvalidLineageArtifact {
+            slot_id: "s".into(),
+            detail: "d".into(),
+        },
+        GaReleaseGuardError::DuplicateLineageArtifact {
+            slot_id: "s".into(),
+        },
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let rt: GaReleaseGuardError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*e, rt);
+    }
+}
+
+// ===========================================================================
+// 32) ReplacementProgressError — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_replacement_progress_error_all() {
+    let errors = vec![
+        ReplacementProgressError::InvalidInput {
+            field: "f".into(),
+            detail: "d".into(),
+        },
+        ReplacementProgressError::UnknownSignalSlot {
+            slot_id: "s".into(),
+        },
+        ReplacementProgressError::InvalidSignal {
+            slot_id: "s".into(),
+            detail: "d".into(),
+        },
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let rt: ReplacementProgressError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*e, rt);
+    }
+}
+
+// ===========================================================================
+// 33) SlotRegistry — BTreeMap deterministic iteration order
+// ===========================================================================
+
+#[test]
+fn slot_registry_iter_deterministic_order() {
+    let mut reg = SlotRegistry::new();
+    for name in ["zzz-slot", "aaa-slot", "mmm-slot"] {
+        let id = SlotId::new(name).unwrap();
+        let authority = AuthorityEnvelope {
+            required: vec![],
+            permitted: vec![SlotCapability::ReadSource],
+        };
+        reg.register_delegate(id, SlotKind::Parser, authority, "d".into(), "t".into())
+            .unwrap();
+    }
+    let ids: Vec<String> = reg.iter().map(|(id, _)| id.as_str().to_string()).collect();
+    assert_eq!(ids, vec!["aaa-slot", "mmm-slot", "zzz-slot"]);
+}
+
+// ===========================================================================
+// 34) SlotEntry — initial delegate has lineage event
+// ===========================================================================
+
+#[test]
+fn slot_entry_initial_delegate_has_registered_lineage() {
+    use frankenengine_engine::slot_registry::PromotionTransition;
+    let mut reg = SlotRegistry::new();
+    let id = SlotId::new("lineage-test").unwrap();
+    let authority = AuthorityEnvelope {
+        required: vec![],
+        permitted: vec![SlotCapability::ReadSource],
+    };
+    reg.register_delegate(
+        id.clone(),
+        SlotKind::Interpreter,
+        authority,
+        "dig-init".into(),
+        "2026-01-01".into(),
+    )
+    .unwrap();
+
+    let entry = reg.get(&id).unwrap();
+    assert_eq!(entry.promotion_lineage.len(), 1);
+    assert_eq!(
+        entry.promotion_lineage[0].transition,
+        PromotionTransition::RegisteredDelegate
+    );
+    assert_eq!(entry.promotion_lineage[0].digest, "dig-init");
+    assert!(entry.promotion_lineage[0].receipt_id.is_none());
+    assert!(entry.rollback_target.is_none());
+}
+
+// ===========================================================================
+// 35) GaReleaseGuardVerdict — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_ga_release_guard_verdict() {
+    for v in [GaReleaseGuardVerdict::Pass, GaReleaseGuardVerdict::Blocked] {
+        let json = serde_json::to_string(&v).unwrap();
+        let rt: GaReleaseGuardVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, rt);
+    }
+}
+
+// ===========================================================================
+// 36) ReleaseSlotClass — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_release_slot_class() {
+    for v in [ReleaseSlotClass::Core, ReleaseSlotClass::NonCore] {
+        let json = serde_json::to_string(&v).unwrap();
+        let rt: ReleaseSlotClass = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, rt);
+    }
+}

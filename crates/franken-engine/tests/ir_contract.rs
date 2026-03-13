@@ -21,10 +21,10 @@ use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{
     BindingKind, CapabilityTag, EffectBoundary, ExecutionOutcome, FlowAnnotation,
     HostcallDecisionRecord, Ir0Module, Ir1Module, Ir1Op, Ir2Module, Ir2Op, Ir3FunctionDesc,
-    Ir3Instruction, Ir3Module, Ir4Module, IrContractEvent, IrError, IrErrorCode, IrHeader,
-    IrLevel, IrSchemaVersion, IrVerifier, RegRange, ResolvedBinding, ScopeId, ScopeKind,
-    ScopeNode, SpecializationLinkage, WitnessEvent, WitnessEventKind, error_code,
-    verify_ir1_source, verify_ir3_specialization, verify_ir4_linkage,
+    Ir3Instruction, Ir3Module, Ir4Module, IrContractEvent, IrError, IrErrorCode, IrHeader, IrLevel,
+    IrSchemaVersion, IrVerifier, RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode,
+    SpecializationLinkage, WitnessEvent, WitnessEventKind, error_code, verify_ir1_source,
+    verify_ir3_specialization, verify_ir4_linkage,
 };
 
 // ---------------------------------------------------------------------------
@@ -2014,10 +2014,7 @@ fn enrichment_ir_header_serde_roundtrip_without_source_hash() {
 
 #[test]
 fn enrichment_scope_id_serde_roundtrip() {
-    let sid = ScopeId {
-        depth: 3,
-        index: 7,
-    };
+    let sid = ScopeId { depth: 3, index: 7 };
     let json = serde_json::to_string(&sid).unwrap();
     let recovered: ScopeId = serde_json::from_str(&json).unwrap();
     assert_eq!(sid, recovered);

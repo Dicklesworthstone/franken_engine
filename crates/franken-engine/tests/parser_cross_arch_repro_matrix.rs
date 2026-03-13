@@ -253,6 +253,7 @@ fn parser_cross_arch_repro_matrix_contract_doc_has_required_sections() {
         "artifacts/parser_event_ast_equivalence",
         "artifacts/parser_parallel_interference",
         "matrix_inputs",
+        "missing_required_inputs",
         "incomplete_matrix",
         "latest complete run directory",
         "scratch-only partial directories",
@@ -485,6 +486,7 @@ fn runner_script_contains_manifest_auto_discovery_contract() {
         "PARSER_CROSS_ARCH_PARALLEL_INTERFERENCE_ARTIFACT_ROOT",
         "find_latest_manifest_for_arch",
         "resolve_manifest_input",
+        "missing_required_inputs_json",
         "run_rch_strict_logged",
         "rch-pid.",
         "rch-local-fallback-detected",
@@ -501,6 +503,7 @@ fn runner_script_contains_manifest_auto_discovery_contract() {
         "FE-PARSER-CROSS-ARCH-MATRIX-0002",
         "FE-PARSER-CROSS-ARCH-MATRIX-0003",
         "\"matrix_inputs\": {",
+        "\"missing_required_inputs\":",
         "auto_discovered",
     ] {
         assert!(

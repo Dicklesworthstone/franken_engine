@@ -319,7 +319,7 @@ fn enrichment_effect_classification_with_capabilities() {
     let mut caps = BTreeSet::new();
     caps.insert("network".to_string());
     let ec = EffectClassification {
-        boundary: EffectBoundary::Impure,
+        boundary: EffectBoundary::NetworkEffect,
         required_capabilities: caps,
         idempotent: false,
         commutative: false,
@@ -504,7 +504,7 @@ fn enrichment_effect_classification_serde_roundtrip() {
     caps.insert("timer".to_string());
     caps.insert("network".to_string());
     let ec = EffectClassification {
-        boundary: EffectBoundary::Impure,
+        boundary: EffectBoundary::NetworkEffect,
         required_capabilities: caps,
         idempotent: true,
         commutative: false,

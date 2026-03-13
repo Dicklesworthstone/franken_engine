@@ -421,7 +421,7 @@ pub struct Ir2FlowLattice {
     obligations: BTreeMap<String, DeclassificationObligation>,
     events: Vec<FlowLatticeEvent>,
     policy_id: String,
-    trusted_receipt_authorizers: BTreeSet<VerificationKey>,
+    trusted_receipt_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
 }
 
 impl Ir2FlowLattice {
@@ -430,7 +430,7 @@ impl Ir2FlowLattice {
             obligations: BTreeMap::new(),
             events: Vec::new(),
             policy_id: policy_id.into(),
-            trusted_receipt_authorizers: BTreeSet::new(),
+            trusted_receipt_authorizers: BTreeMap::new(),
         }
     }
 
@@ -446,9 +446,16 @@ impl Ir2FlowLattice {
         self.obligations.get(obligation_id)
     }
 
-    /// Trust a receipt authorizer verification key for runtime receipt use.
-    pub fn trust_receipt_authorizer(&mut self, verification_key: VerificationKey) {
-        self.trusted_receipt_authorizers.insert(verification_key);
+    /// Trust a receipt authorizer verification key for a specific decision contract.
+    pub fn trust_receipt_authorizer_for_contract(
+        &mut self,
+        decision_contract_id: impl Into<String>,
+        verification_key: VerificationKey,
+    ) {
+        self.trusted_receipt_authorizers
+            .entry(decision_contract_id.into())
+            .or_default()
+            .insert(verification_key);
     }
 
     /// Register a declassification obligation.
@@ -561,22 +568,26 @@ impl Ir2FlowLattice {
             });
         }
 
-        if !self
+        let decision_contract_id = self
+            .obligations
+            .get(obligation_id)
+            .map(|obligation| obligation.decision_contract_id.clone())
+            .expect("checked above");
+
+        let authorizer_is_trusted = self
             .trusted_receipt_authorizers
-            .contains(&receipt.authorized_by)
-        {
+            .get(&decision_contract_id)
+            .is_some_and(|trusted| trusted.contains(&receipt.authorized_by));
+
+        if !authorizer_is_trusted {
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
-                    "receipt {} authorizer is not trusted for obligation {obligation_id}",
-                    receipt.receipt_id
+                    "receipt {} authorizer is not trusted for decision contract {} on obligation {obligation_id}",
+                    receipt.receipt_id, decision_contract_id
                 ),
             });
         }
 
-        let decision_contract_id = self
-            .obligations
-            .get(obligation_id)
-            .map(|obligation| obligation.decision_contract_id.clone());
         let obligation = self
             .obligations
             .get_mut(obligation_id)
@@ -637,7 +648,7 @@ impl Ir2FlowLattice {
             "ok",
             None,
             Some(obligation_id.to_string()),
-            decision_contract_id,
+            Some(decision_contract_id),
             Some(receipt.receipt_id.clone()),
             Some(receipt.replay_command()),
         );
@@ -1358,7 +1369,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         receipt.sign(&signing_key).unwrap();
-        lattice.trust_receipt_authorizer(signing_key.verification_key());
+        lattice.trust_receipt_authorizer_for_contract("decision-2", signing_key.verification_key());
 
         lattice
             .use_declassification_with_receipt("obl-2", &receipt, "trace-rt")
@@ -1406,7 +1417,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         denied_receipt.sign(&signing_key).unwrap();
-        lattice.trust_receipt_authorizer(signing_key.verification_key());
+        lattice.trust_receipt_authorizer_for_contract("decision-3", signing_key.verification_key());
 
         let err = lattice
             .use_declassification_with_receipt("obl-3", &denied_receipt, "trace-deny")
@@ -1450,7 +1461,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         tampered_receipt.sign(&signing_key).unwrap();
-        lattice.trust_receipt_authorizer(signing_key.verification_key());
+        lattice.trust_receipt_authorizer_for_contract("decision-4", signing_key.verification_key());
         // Tamper after signing to simulate malicious receipt mutation.
         tampered_receipt.replay_linkage = "trace-modified".to_string();
 
@@ -1548,7 +1559,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         receipt.sign(&signing_key).unwrap();
-        lattice.trust_receipt_authorizer(signing_key.verification_key());
+        lattice.trust_receipt_authorizer_for_contract("decision-6", signing_key.verification_key());
 
         let err = lattice
             .use_declassification_with_receipt("obl-6", &receipt, "trace-other")
@@ -2275,7 +2286,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         receipt.sign(&signing_key).unwrap();
-        lattice.trust_receipt_authorizer(signing_key.verification_key());
+        lattice.trust_receipt_authorizer_for_contract("dc-m", signing_key.verification_key());
 
         let err = lattice
             .use_declassification_with_receipt("obl-m", &receipt, "trace-m")
@@ -2318,7 +2329,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         receipt.sign(&signing_key).unwrap();
-        lattice.trust_receipt_authorizer(signing_key.verification_key());
+        lattice.trust_receipt_authorizer_for_contract("dc-sink", signing_key.verification_key());
 
         let err = lattice
             .use_declassification_with_receipt("obl-sink", &receipt, "trace-sink")
@@ -2363,7 +2374,7 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         receipt.sign(&signing_key).unwrap();
-        lattice.trust_receipt_authorizer(signing_key.verification_key());
+        lattice.trust_receipt_authorizer_for_contract("dc-custom", signing_key.verification_key());
 
         let err = lattice
             .use_declassification_with_receipt("obl-custom", &receipt, "trace-custom")
@@ -2372,6 +2383,48 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("sink clearance custom(ultra, level=5) cannot flow"));
         assert_eq!(lattice.obligation("obl-custom").unwrap().use_count, 0);
+    }
+
+    #[test]
+    fn enrichment_receipt_authorizer_trusted_for_other_contract_rejected() {
+        let mut lattice = Ir2FlowLattice::new("policy-contract-scope");
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "obl-contract".into(),
+                source_label: LabelClass::Secret,
+                target_clearance: Clearance::NeverSink,
+                decision_contract_id: "dc-expected".into(),
+                requires_operator_approval: false,
+                max_uses: 0,
+                use_count: 0,
+            })
+            .unwrap();
+
+        let signing_key = SigningKey::from_bytes([12u8; 32]);
+        let mut receipt = DeclassificationReceipt {
+            receipt_id: "rcpt-contract".into(),
+            source_label: Label::Secret,
+            sink_clearance: Label::Public,
+            declassification_route_ref: "route-contract".into(),
+            policy_evaluation_summary: "approved".into(),
+            loss_assessment_milli: 0,
+            decision: DeclassificationDecision::Allow,
+            authorized_by: signing_key.verification_key(),
+            replay_linkage: "trace-contract".into(),
+            timestamp_ms: 1_700_000_000_002,
+            schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        receipt.sign(&signing_key).unwrap();
+        lattice.trust_receipt_authorizer_for_contract("dc-other", signing_key.verification_key());
+
+        let err = lattice
+            .use_declassification_with_receipt("obl-contract", &receipt, "trace-contract")
+            .unwrap_err();
+        assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
+        let msg = format!("{err}");
+        assert!(msg.contains("decision contract dc-expected"));
+        assert_eq!(lattice.obligation("obl-contract").unwrap().use_count, 0);
     }
 
     #[test]

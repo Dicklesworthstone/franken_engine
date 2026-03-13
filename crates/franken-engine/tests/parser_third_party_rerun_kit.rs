@@ -225,6 +225,7 @@ fn parser_third_party_rerun_kit_script_contains_required_markers() {
         "matrix_input_auto_discovery_enabled",
         "auto_discovered",
         "target_rch_parser_third_party_rerun_kit_",
+        "cargo test --no-run -p frankenengine-engine --test parser_third_party_rerun_kit",
         "parser_frontier_emit_manifest_environment_fields",
         "./scripts/e2e/parser_third_party_rerun_kit_replay.sh",
     ];
@@ -543,6 +544,17 @@ fn parser_third_party_rerun_kit_doc_mentions_rch_timeout() {
         doc.contains("RCH_BUILD_TIMEOUT"),
         "rerun kit doc must mention RCH_BUILD_TIMEOUT env variable"
     );
+    for marker in [
+        "cargo test --no-run -p frankenengine-engine --test parser_third_party_rerun_kit",
+        "instead of `cargo check`",
+        "cargo check",
+        "compile-smoke",
+    ] {
+        assert!(
+            doc.contains(marker),
+            "rerun kit doc missing timeout contract marker: {marker}"
+        );
+    }
 }
 
 #[test]

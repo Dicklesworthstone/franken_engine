@@ -260,8 +260,8 @@ run_mode() {
   case "$mode" in
     check)
       run_step \
-        "cargo check -p frankenengine-engine --test parser_third_party_rerun_kit" \
-        cargo check -p frankenengine-engine --test parser_third_party_rerun_kit || return 1
+        "cargo test --no-run -p frankenengine-engine --test parser_third_party_rerun_kit" \
+        cargo test --no-run -p frankenengine-engine --test parser_third_party_rerun_kit || return 1
       ;;
     test)
       run_step \
@@ -275,8 +275,8 @@ run_mode() {
       ;;
     ci)
       run_step \
-        "cargo check -p frankenengine-engine --test parser_third_party_rerun_kit" \
-        cargo check -p frankenengine-engine --test parser_third_party_rerun_kit || return 1
+        "cargo test --no-run -p frankenengine-engine --test parser_third_party_rerun_kit" \
+        cargo test --no-run -p frankenengine-engine --test parser_third_party_rerun_kit || return 1
       run_step \
         "cargo test -p frankenengine-engine --test parser_third_party_rerun_kit" \
         cargo test -p frankenengine-engine --test parser_third_party_rerun_kit || return 1

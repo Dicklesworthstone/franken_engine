@@ -114,6 +114,20 @@ If remote builds exceed the `rch` default build wrapper timeout, set
 does not fail early with timeout kill exits while the outer gate timeout is
 still larger. The gate now exports both env variants on every heavy step.
 
+The rerun-kit `check` lane intentionally uses:
+
+```bash
+cargo test --no-run -p frankenengine-engine --test parser_third_party_rerun_kit
+```
+
+instead of `cargo check`. On this fleet, `rch` can apply a materially lower
+wrapper timeout to the `cargo check` family than to the `cargo test` family,
+which turns the verification lane into an infrastructure timeout lottery
+rather than a real compile-smoke gate. The `cargo test --no-run` path preserves
+the intended compile-only semantics while staying inside the longer
+test-family timeout budget that the operator lane already uses for the full
+test step.
+
 If `rch` reports remote-preflight/local-fallback conditions (including
 `RCH-E326` or `running locally`), the gate must fail closed rather than
 continuing on local execution.
@@ -146,6 +160,7 @@ Each run emits:
    - `rerun_kit_index.json` has expected `matrix_input_status`.
    - `matrix_inputs` records exact paths plus `env`, `auto_discovered`, or `missing` source states for summary, delta, and manifest inputs.
    - `step_logs/` contains per-step `rch` logs for triage and remote-exit diagnostics.
+   - the compile-smoke step in `commands.txt` uses `cargo test --no-run ... parser_third_party_rerun_kit` rather than `cargo check`, matching the shipped `rch` timeout-safe path.
    - `events.jsonl` validates with `scripts/validate_parser_log_schema.sh`.
 4. Replay through:
 

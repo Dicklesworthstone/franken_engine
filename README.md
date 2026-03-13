@@ -677,7 +677,8 @@ PARSER_CROSS_ARCH_ARM64_PARALLEL_INTERFERENCE_MANIFEST=artifacts/.../arm64_paral
 
 The replay wrapper now chooses the latest complete artifact directory and
 ignores scratch-only partial directories from interrupted/fallback-detected
-matrix runs.
+matrix runs, warning when it has to skip an incomplete newest directory and
+failing non-zero if no complete artifact directory exists.
 
 Contract and vectors:
 

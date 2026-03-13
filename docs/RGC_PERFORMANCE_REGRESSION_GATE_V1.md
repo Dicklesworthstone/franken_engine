@@ -59,6 +59,17 @@ Gate runs publish deterministic artifacts under
 ```
 
 All heavy Rust build/test/lint commands are executed via `rch`.
+Use `RCH_EXEC_TIMEOUT_SECONDS` and `RCH_BUILD_TIMEOUT_SECONDS` to raise the
+outer and remote cargo timeouts together when a cold worker needs more headroom.
+If `rch` still reports a wrapped `timeout_secs` value below the requested
+`RCH_BUILD_TIMEOUT_*` value, the gate fails closed with
+`rch-timeout-mismatch-<reported>-lt-<requested>`.
+
+If you set `RCH_PROGRESS_STALL_SECONDS` to a value greater than `0`, the gate
+will fail closed with a `failed_command` marker shaped like
+`rch-stalled-no-progress-<seconds>s` when `rch` reaches remote execution and
+then stops emitting output for longer than that window. The default is `0`
+(disabled) because healthy `cargo` compiles can be silent for several minutes.
 
 ## Operator Verification
 

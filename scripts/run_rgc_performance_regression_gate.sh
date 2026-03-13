@@ -12,6 +12,8 @@ toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 target_dir="${CARGO_TARGET_DIR:-/data/projects/franken_engine/target_rch_rgc_performance_regression_gate}"
 artifact_root="${RGC_PERFORMANCE_REGRESSION_GATE_ARTIFACT_ROOT:-artifacts/rgc_performance_regression_gate}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
+rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-${rch_timeout_seconds}}}"
+rch_progress_stall_seconds="${RCH_PROGRESS_STALL_SECONDS:-0}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
@@ -34,7 +36,9 @@ if ! command -v rch >/dev/null 2>&1; then
 fi
 
 run_rch() {
-  timeout "${rch_timeout_seconds}" \
+  RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
+    RCH_BUILD_TIMEOUT_SECONDS="${rch_build_timeout_sec}" \
+    timeout --kill-after=30 "${rch_timeout_seconds}" \
     rch exec -- env \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
@@ -79,6 +83,92 @@ rch_recovered_success() {
   return 1
 }
 
+rch_reported_timeout_seconds() {
+  local log_path="$1"
+  local timeout_value
+
+  timeout_value="$(
+    rch_strip_ansi "$log_path" | sed -nE 's/.*timeout_secs: ([0-9]+).*/\1/p' | tail -n 1
+  )"
+  if [[ -z "$timeout_value" ]]; then
+    echo ""
+    return
+  fi
+
+  echo "$timeout_value"
+}
+
+kill_process_tree() {
+  local root_pid="$1"
+  local child_pid
+
+  while read -r child_pid; do
+    [[ -n "$child_pid" ]] || continue
+    kill_process_tree "$child_pid"
+  done < <(ps -o pid= --ppid "$root_pid" 2>/dev/null || true)
+
+  kill "$root_pid" 2>/dev/null || true
+}
+
+watch_rch_progress() {
+  local log_path="$1"
+  local step_pid="$2"
+  local stall_seconds="$3"
+  local expected_timeout="$4"
+  local remote_started=false
+  local last_size="-1"
+  local last_progress_ts
+  local current_size now_ts reported_timeout
+
+  last_progress_ts="$(date +%s)"
+
+  while kill -0 "$step_pid" 2>/dev/null; do
+    sleep 5
+
+    if [[ ! -f "$log_path" ]]; then
+      continue
+    fi
+
+    current_size="$(wc -c <"$log_path")"
+    if [[ "$current_size" != "$last_size" ]]; then
+      last_size="$current_size"
+      last_progress_ts="$(date +%s)"
+    fi
+
+    reported_timeout="$(rch_reported_timeout_seconds "$log_path")"
+    if [[ "$expected_timeout" =~ ^[0-9]+$ && "$reported_timeout" =~ ^[0-9]+$ ]] \
+      && (( reported_timeout < expected_timeout )); then
+      echo "rch reported timeout_secs=${reported_timeout} but requested build timeout is ${expected_timeout}" \
+        | tee -a "$log_path"
+      kill_process_tree "$step_pid"
+      return 4
+    fi
+
+    if [[ "$remote_started" == false ]] \
+      && rch_strip_ansi "$log_path" | rg -q 'Executing command remotely:'; then
+      remote_started=true
+      last_progress_ts="$(date +%s)"
+      continue
+    fi
+
+    if [[ "$remote_started" != true || "$stall_seconds" -le 0 ]]; then
+      continue
+    fi
+
+    now_ts="$(date +%s)"
+    if (( now_ts - last_progress_ts < stall_seconds )); then
+      continue
+    fi
+
+    echo "==> failure: no remote progress for ${stall_seconds}s after remote execution started" \
+      | tee -a "$log_path"
+    kill_process_tree "$step_pid"
+    return 3
+  done
+
+  return 0
+}
+
 declare -a commands_run=()
 declare -a step_logs=()
 failed_command=""
@@ -87,7 +177,7 @@ step_log_index=0
 
 run_step() {
   local command_text="$1"
-  local status remote_exit_code
+  local status remote_exit_code step_pid progress_watch_pid progress_watch_status reported_timeout
   local step_log_path="${run_dir}/step_$(printf '%03d' "$step_log_index").log"
   step_log_index=$((step_log_index + 1))
   shift
@@ -97,9 +187,37 @@ run_step() {
   echo "==> $command_text"
 
   set +e
-  run_rch "$@" > >(tee "$step_log_path") 2>&1
+  : >"$step_log_path"
+  run_rch "$@" > >(tee "$step_log_path") 2>&1 &
+  step_pid=$!
+  progress_watch_status=0
+  progress_watch_pid=""
+  if [[ "$rch_progress_stall_seconds" -gt 0 || "$rch_build_timeout_sec" -gt 0 ]]; then
+    watch_rch_progress \
+      "$step_log_path" \
+      "$step_pid" \
+      "$rch_progress_stall_seconds" \
+      "$rch_build_timeout_sec" &
+    progress_watch_pid=$!
+  fi
+
+  wait "$step_pid"
   status=$?
+  if [[ -n "$progress_watch_pid" ]]; then
+    wait "$progress_watch_pid"
+    progress_watch_status=$?
+  fi
   set -e
+
+  if [[ "$progress_watch_status" -eq 3 ]]; then
+    failed_command="${command_text} (rch-stalled-no-progress-${rch_progress_stall_seconds}s)"
+    return 1
+  fi
+  if [[ "$progress_watch_status" -eq 4 ]]; then
+    reported_timeout="$(rch_reported_timeout_seconds "$step_log_path")"
+    failed_command="${command_text} (rch-timeout-mismatch-${reported_timeout}-lt-${rch_build_timeout_sec})"
+    return 1
+  fi
 
   if [[ "$status" -ne 0 ]]; then
     if [[ "$status" -eq 124 ]]; then
@@ -119,6 +237,15 @@ run_step() {
       fi
       return 1
     fi
+  fi
+
+  reported_timeout="$(rch_reported_timeout_seconds "$step_log_path")"
+  if [[ "$rch_build_timeout_sec" =~ ^[0-9]+$ && "$reported_timeout" =~ ^[0-9]+$ ]] \
+    && (( reported_timeout < rch_build_timeout_sec )); then
+    echo "rch reported timeout_secs=${reported_timeout} but requested build timeout is ${rch_build_timeout_sec}" \
+      | tee -a "$step_log_path"
+    failed_command="${command_text} (rch-timeout-mismatch-${reported_timeout}-lt-${rch_build_timeout_sec})"
+    return 1
   fi
 
   if ! rch_reject_local_fallback "$step_log_path"; then

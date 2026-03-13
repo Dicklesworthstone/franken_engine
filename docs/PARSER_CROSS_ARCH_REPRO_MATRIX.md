@@ -63,6 +63,10 @@ so compiler/test gate runs can execute without architecture-manifest inputs.
 - `blocked_critical_deltas`: matrix inputs are complete but critical deltas remain.
 - `ready_for_external_rerun`: complete matrix with no unresolved critical deltas.
 
+`missing_required_inputs` is emitted alongside `matrix_input_status` in both
+artifacts as a deterministic array of exact missing lane/architecture slots
+(for example `parser_parallel_interference:aarch64-unknown-linux-gnu`).
+
 ## Structured Logging Contract
 
 Event streams for this lane must include:
@@ -115,7 +119,9 @@ The auto-discovered input set is recorded in both `run_manifest.json` and
 `matrix_summary.json` under `matrix_inputs`. When local `aarch64` inputs are
 absent, strict `matrix` mode fails closed with `matrix_input_status ==
 incomplete_matrix`, which is the expected state until upstream arm64 evidence is
-available. Set `PARSER_CROSS_ARCH_AUTO_DISCOVER_MANIFESTS=0` to disable
+available. `missing_required_inputs` surfaces the exact unresolved slots so
+downstream gates and operators do not need to infer blockers from nested `null`
+fields. Set `PARSER_CROSS_ARCH_AUTO_DISCOVER_MANIFESTS=0` to disable
 auto-discovery and require fully explicit input paths.
 
 One-command replay wrapper:
@@ -126,7 +132,11 @@ One-command replay wrapper:
 
 The replay wrapper selects the latest complete run directory and ignores
 scratch-only partial directories from interrupted or fallback-detected runs
-(for example `rch-pid.*` / `rch-fallback.*` breadcrumbs with no manifest).
+(for example `rch-pid.*` / `rch-fallback.*` breadcrumbs with no manifest). If
+the newest directory is incomplete, the wrapper warns and then falls back to
+the latest complete directory before printing artifacts. If no complete run
+directory exists, the wrapper fails closed with a non-zero exit instead of
+returning success.
 
 All heavy Rust checks/tests are executed through `rch`.
 If `rch` reports a local fallback, the gate must terminate that local path
@@ -163,3 +173,6 @@ Each run emits:
 
    - It should print artifacts from the latest complete run directory rather
      than a scratch-only partial directory.
+   - If the newest directory is incomplete, it should emit a warning before
+     falling back to the latest complete directory.
+   - If no complete run directory exists, it should fail non-zero.

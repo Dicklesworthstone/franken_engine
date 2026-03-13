@@ -658,7 +658,8 @@ deterministic reproducibility, classifies drift with explicit severity, and
 fails closed on unresolved critical deltas in strict matrix mode.
 `run_manifest.json` and `matrix_summary.json` include deterministic
 `matrix_input_status` (`pending_upstream_matrix`, `incomplete_matrix`,
-`blocked_critical_deltas`, `ready_for_external_rerun`) for downstream gating.
+`blocked_critical_deltas`, `ready_for_external_rerun`) plus
+`missing_required_inputs` for downstream gating and exact blocker reporting.
 
 ```bash
 # cross-arch matrix contract/test gate (rch-backed check + test + clippy)

@@ -255,6 +255,17 @@ json_string_or_null() {
   fi
 }
 
+missing_required_inputs_json() {
+  local missing=()
+
+  [[ -f "$x86_event_ast_manifest" ]] || missing+=("parser_event_ast_equivalence:x86_64-unknown-linux-gnu")
+  [[ -f "$arm64_event_ast_manifest" ]] || missing+=("parser_event_ast_equivalence:aarch64-unknown-linux-gnu")
+  [[ -f "$x86_parallel_manifest" ]] || missing+=("parser_parallel_interference:x86_64-unknown-linux-gnu")
+  [[ -f "$arm64_parallel_manifest" ]] || missing+=("parser_parallel_interference:aarch64-unknown-linux-gnu")
+
+  jq -nc '$ARGS.positional' --args "${missing[@]}"
+}
+
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
@@ -684,8 +695,9 @@ gate_error_code() {
 }
 
 write_matrix_summary() {
-  local lane_deltas_json
+  local lane_deltas_json missing_required_inputs
   lane_deltas_json="$(jq -s '.' "$matrix_deltas_path")"
+  missing_required_inputs="$(missing_required_inputs_json)"
 
   jq -n \
     --arg schema_version "franken-engine.parser-cross-arch-repro-matrix.summary.v1" \
@@ -712,6 +724,7 @@ write_matrix_summary() {
     --argjson matrix_complete "$matrix_complete" \
     --argjson critical_delta_count "$critical_delta_count" \
     --argjson lane_deltas "$lane_deltas_json" \
+    --argjson missing_required_inputs "$missing_required_inputs" \
     '{
       schema_version: $schema_version,
       bead_id: $bead_id,
@@ -741,6 +754,7 @@ write_matrix_summary() {
           aarch64_source: $arm64_parallel_manifest_source
         }
       },
+      missing_required_inputs: $missing_required_inputs,
       matrix_eval_error: (if $matrix_eval_error == "" then null else $matrix_eval_error end),
       lane_deltas: $lane_deltas
     }' >"$matrix_summary_path"
@@ -748,6 +762,7 @@ write_matrix_summary() {
 
 write_manifest() {
   local exit_code="${1:-0}"
+  local missing_required_inputs
   local outcome error_code git_commit dirty_worktree idx comma
 
   if [[ "$manifest_written" == true ]]; then
@@ -768,6 +783,7 @@ write_manifest() {
   else
     dirty_worktree=true
   fi
+  missing_required_inputs="$(missing_required_inputs_json)"
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
@@ -837,6 +853,7 @@ write_manifest() {
     echo "      \"aarch64_source\": \"${arm64_parallel_manifest_source}\""
     echo '    }'
     echo '  },'
+    echo "  \"missing_required_inputs\": ${missing_required_inputs},"
     echo '  "deterministic_environment": {'
     parser_frontier_emit_manifest_environment_fields "    " "null"
     echo "  },"

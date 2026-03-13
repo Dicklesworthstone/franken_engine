@@ -163,6 +163,7 @@ Each run emits:
    - `run_manifest.json` shows `matrix_complete=true`.
    - `run_manifest.json` / `matrix_summary.json` list the exact `matrix_inputs`
      used for the run.
+   - `missing_required_inputs` is empty before treating the matrix as rerun-ready.
    - `matrix_summary.json` has expected architecture/lane coverage.
    - no critical unresolved deltas are present.
 4. Run replay wrapper:

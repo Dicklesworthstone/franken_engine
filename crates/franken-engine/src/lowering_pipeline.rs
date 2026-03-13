@@ -2435,6 +2435,7 @@ fn build_ir2_flow_proof_artifact(
         let source_class = LabelClass::from_label(&source_label);
         let sink_clearance = sink_label_to_clearance(&sink_clearance_label);
         let capability = op.required_capability.as_ref().map(|cap| cap.0.clone());
+        let mut obligation_hint = None;
 
         if flow.declassification_required
             && let Some(required_capability) = op.required_capability.as_ref()
@@ -2444,7 +2445,7 @@ fn build_ir2_flow_proof_artifact(
             if !lattice.obligations().contains_key(&obligation_id) {
                 lattice
                     .register_obligation(DeclassificationObligation {
-                        obligation_id,
+                        obligation_id: obligation_id.clone(),
                         source_label: source_class.clone(),
                         target_clearance: sink_clearance.clone(),
                         decision_contract_id: context.decision_id.clone(),
@@ -2456,6 +2457,7 @@ fn build_ir2_flow_proof_artifact(
                         detail: err.to_string(),
                     })?;
             }
+            obligation_hint = Some(obligation_id);
         }
 
         if let Some(required_capability) = op.required_capability.as_ref()
@@ -2473,7 +2475,12 @@ fn build_ir2_flow_proof_artifact(
             continue;
         }
 
-        match lattice.check_flow(&source_class, &sink_clearance, &context.trace_id) {
+        match lattice.check_flow_with_obligation_hint(
+            &source_class,
+            &sink_clearance,
+            obligation_hint.as_deref(),
+            &context.trace_id,
+        ) {
             LatticeFlowCheckResult::LegalByLattice => {
                 artifact.proved_flows.push(FlowProofArtifactEntry {
                     op_index: op_index_u64,
@@ -4316,6 +4323,41 @@ mod tests {
             artifact.required_declassifications[0].replay_command_hint,
             "frankenctl replay run --trace trace-declass --obligation declass-op-0"
         );
+    }
+
+    #[test]
+    fn ir2_flow_proof_artifact_keeps_distinct_obligation_ids_for_repeated_matching_flows() {
+        let mut ir2 = Ir2Module::new(ContentHash::compute(b"ir1"), "declass_repeat_fixture.js");
+        for _ in 0..2 {
+            ir2.ops.push(Ir2Op {
+                inner: Ir1Op::Call { arg_count: 1 },
+                effect: EffectBoundary::HostcallEffect,
+                required_capability: Some(CapabilityTag("declassify.audit".to_string())),
+                flow: Some(FlowAnnotation {
+                    data_label: Label::Secret,
+                    sink_clearance: Label::Public,
+                    declassification_required: true,
+                }),
+            });
+        }
+
+        let context = LoweringContext::new("trace-repeat", "decision-repeat", "policy-repeat");
+        let artifact = build_ir2_flow_proof_artifact(&ir2, &context)
+            .expect("repeated declassification routes should be tracked independently");
+
+        assert!(artifact.denied_flows.is_empty());
+        assert!(artifact.proved_flows.is_empty());
+        assert_eq!(artifact.required_declassifications.len(), 2);
+        assert_eq!(
+            artifact.required_declassifications[0].obligation_id,
+            "declass-op-0"
+        );
+        assert_eq!(
+            artifact.required_declassifications[1].obligation_id,
+            "declass-op-1"
+        );
+        assert_eq!(artifact.required_declassifications[0].op_index, 0);
+        assert_eq!(artifact.required_declassifications[1].op_index, 1);
     }
 
     #[test]

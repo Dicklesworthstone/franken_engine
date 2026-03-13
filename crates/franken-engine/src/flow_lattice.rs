@@ -483,10 +483,56 @@ impl Ir2FlowLattice {
         sink: &Clearance,
         trace_id: &str,
     ) -> FlowCheckResult {
+        self.check_flow_with_obligation_hint(source, sink, None, trace_id)
+    }
+
+    /// Check whether a flow is legal while preferring a specific obligation id.
+    ///
+    /// This is used when the caller has already registered an operation-local
+    /// declassification obligation and needs fail-closed linkage to that exact
+    /// obligation instead of whichever matching entry appears first in the map.
+    pub fn check_flow_with_obligation_hint(
+        &mut self,
+        source: &LabelClass,
+        sink: &Clearance,
+        preferred_obligation_id: Option<&str>,
+        trace_id: &str,
+    ) -> FlowCheckResult {
         // 1. Check lattice legality
         if source.can_flow_to(sink) {
             self.emit_event(trace_id, "check_flow", "legal_by_lattice", None);
             return FlowCheckResult::LegalByLattice;
+        }
+
+        if let Some(obligation_id) = preferred_obligation_id {
+            let preferred_obligation = self.obligations.get(obligation_id);
+            if preferred_obligation.is_some_and(|obligation| {
+                obligation.source_label == *source
+                    && obligation.target_clearance == *sink
+                    && obligation.has_remaining_uses()
+            }) {
+                let decision_contract_id =
+                    preferred_obligation.map(|obligation| obligation.decision_contract_id.clone());
+                self.emit_event_with_metadata(
+                    trace_id,
+                    "check_flow",
+                    "requires_declassification",
+                    None,
+                    Some(obligation_id.to_string()),
+                    decision_contract_id,
+                    None,
+                    None,
+                );
+                return FlowCheckResult::RequiresDeclassification {
+                    obligation_id: obligation_id.to_string(),
+                };
+            }
+
+            self.emit_event(trace_id, "check_flow", "blocked", Some("FLOW_BLOCKED"));
+            return FlowCheckResult::Blocked {
+                source: source.clone(),
+                sink: sink.clone(),
+            };
         }
 
         // 2. Check for declassification route
@@ -2248,6 +2294,46 @@ mod tests {
         let result2 = lattice.check_flow(&LabelClass::TopSecret, &Clearance::NeverSink, "t2");
         assert_eq!(
             result2,
+            FlowCheckResult::RequiresDeclassification {
+                obligation_id: "beta".into()
+            }
+        );
+    }
+
+    #[test]
+    fn enrichment_lattice_obligation_hint_overrides_first_match() {
+        let mut lattice = Ir2FlowLattice::new("policy-hinted");
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "alpha".into(),
+                source_label: LabelClass::TopSecret,
+                target_clearance: Clearance::NeverSink,
+                decision_contract_id: "c-a".into(),
+                requires_operator_approval: false,
+                max_uses: 0,
+                use_count: 0,
+            })
+            .unwrap();
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "beta".into(),
+                source_label: LabelClass::TopSecret,
+                target_clearance: Clearance::NeverSink,
+                decision_contract_id: "c-b".into(),
+                requires_operator_approval: false,
+                max_uses: 0,
+                use_count: 0,
+            })
+            .unwrap();
+
+        let result = lattice.check_flow_with_obligation_hint(
+            &LabelClass::TopSecret,
+            &Clearance::NeverSink,
+            Some("beta"),
+            "trace-hinted",
+        );
+        assert_eq!(
+            result,
             FlowCheckResult::RequiresDeclassification {
                 obligation_id: "beta".into()
             }

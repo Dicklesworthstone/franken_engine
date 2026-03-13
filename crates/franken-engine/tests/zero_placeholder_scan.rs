@@ -36,6 +36,16 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     env::temp_dir().join(format!("frankenengine-{label}-{}-{nanos}", process::id()))
 }
 
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn read_repo_text(path: &str) -> String {
+    let path = repo_root().join(path);
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 #[test]
 fn zero_placeholder_scan_cli_writes_artifact_bundle() {
     let out_dir = unique_temp_dir("zero-placeholder-cli");
@@ -137,6 +147,23 @@ fn zero_placeholder_scan_cli_help_exits_successfully() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage: franken_zero_placeholder_scan --out-dir <DIR>"));
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn zero_placeholder_scan_gate_script_uses_repo_local_rch_target_dir() {
+    let script = read_repo_text("scripts/run_rgc_zero_placeholder_scan.sh");
+    assert!(
+        script.contains("target_rch_rgc_zero_placeholder_scan_"),
+        "gate script should use a dedicated repo-local remote target dir"
+    );
+    assert!(
+        script.contains("${root_dir}/target_rch_rgc_zero_placeholder_scan_"),
+        "gate script should keep the remote target dir under the repo root"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_rgc_zero_placeholder_scan_"),
+        "gate script must not default to /tmp for the remote cargo target dir"
+    );
 }
 
 #[test]

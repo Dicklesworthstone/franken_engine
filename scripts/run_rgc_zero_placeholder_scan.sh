@@ -10,7 +10,7 @@ artifact_root="${RGC_ZERO_PLACEHOLDER_SCAN_ARTIFACT_ROOT:-artifacts/rgc_zero_pla
 out_dir="${RGC_ZERO_PLACEHOLDER_SCAN_OUT_DIR:-${artifact_root}/${timestamp}}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 target_namespace="${mode}_$$"
-target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_rgc_zero_placeholder_scan_${target_namespace}}"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_zero_placeholder_scan_${target_namespace}}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 

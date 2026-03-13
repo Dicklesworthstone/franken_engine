@@ -190,7 +190,7 @@ impl fmt::Display for Label {
 /// - `RestrictedSink` can receive data up to `Internal`.
 /// - `AuditedSink` can receive data up to `Confidential` with audit trail.
 /// - `SealedSink` can receive data up to `Secret` with explicit declassification.
-/// - `NeverSink` cannot receive any labeled data without declassification.
+/// - `NeverSink` can receive only `Public`; anything more sensitive requires declassification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ClearanceClass {
     /// Can receive any data (e.g., stdout logging with redaction).
@@ -201,7 +201,7 @@ pub enum ClearanceClass {
     AuditedSink,
     /// Can receive up to Secret with explicit declassification (e.g., key derivation output).
     SealedSink,
-    /// Cannot receive any labeled data (e.g., raw network egress without declassification).
+    /// Can receive only `Public` (e.g., raw network egress after declassification to public).
     NeverSink,
 }
 
@@ -218,15 +218,13 @@ impl ClearanceClass {
     }
 
     /// Maximum label level this clearance can receive without declassification.
-    ///
-    /// Returns `None` for `NeverSink` (cannot receive any labeled data).
     pub fn max_receivable_label_level(&self) -> Option<u32> {
         match self {
             Self::OpenSink => Some(4),       // up to TopSecret
             Self::RestrictedSink => Some(1), // up to Internal
             Self::AuditedSink => Some(2),    // up to Confidential
             Self::SealedSink => Some(3),     // up to Secret
-            Self::NeverSink => None,         // nothing without declassification
+            Self::NeverSink => Some(0),      // only Public without declassification
         }
     }
 
@@ -1806,8 +1804,8 @@ mod tests {
         assert!(ClearanceClass::SealedSink.can_receive(&Label::Secret));
         assert!(!ClearanceClass::SealedSink.can_receive(&Label::TopSecret));
 
-        // NeverSink accepts nothing
-        assert!(!ClearanceClass::NeverSink.can_receive(&Label::Public));
+        // NeverSink accepts only Public
+        assert!(ClearanceClass::NeverSink.can_receive(&Label::Public));
         assert!(!ClearanceClass::NeverSink.can_receive(&Label::TopSecret));
     }
 
@@ -1858,7 +1856,10 @@ mod tests {
             ClearanceClass::SealedSink.max_receivable_label_level(),
             Some(3)
         );
-        assert_eq!(ClearanceClass::NeverSink.max_receivable_label_level(), None);
+        assert_eq!(
+            ClearanceClass::NeverSink.max_receivable_label_level(),
+            Some(0)
+        );
     }
 
     // -- DeclassificationObligation tests --

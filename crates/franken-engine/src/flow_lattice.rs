@@ -30,7 +30,7 @@ use crate::signature_preimage::VerificationKey;
 /// Sink clearance level: determines what data sensitivity a sink may receive.
 ///
 /// Ordered: `OpenSink < RestrictedSink < AuditedSink < SealedSink < NeverSink`.
-/// NeverSink cannot receive any labeled data without declassification.
+/// NeverSink can receive only `Public`; anything more sensitive requires declassification.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Clearance {
     /// Can receive any data (e.g., stdout with redaction).
@@ -41,7 +41,7 @@ pub enum Clearance {
     AuditedSink,
     /// Can receive up to Secret with explicit declassification.
     SealedSink,
-    /// Cannot receive any labeled data.
+    /// Can receive only `Public`.
     NeverSink,
 }
 
@@ -66,6 +66,11 @@ impl Clearance {
             Self::SealedSink => 3,
             Self::NeverSink => 0, // Only Public (level 0), but even that requires audit
         }
+    }
+
+    /// Whether this clearance can receive the provided label.
+    pub fn can_receive_label(&self, label: &Label) -> bool {
+        label.level() <= self.max_label_level()
     }
 
     /// Meet (greatest lower bound) for clearance narrowing.
@@ -604,12 +609,14 @@ impl Ir2FlowLattice {
             });
         }
 
-        let declassified_label = LabelClass::from_label(&receipt.sink_clearance);
-        if !declassified_label.can_flow_to(&obligation.target_clearance) {
+        if !obligation
+            .target_clearance
+            .can_receive_label(&receipt.sink_clearance)
+        {
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
-                    "receipt {} declassified label {} cannot flow to obligation target clearance {} for obligation {obligation_id}",
-                    receipt.receipt_id, declassified_label, obligation.target_clearance
+                    "receipt {} sink clearance {} cannot flow to obligation target clearance {} for obligation {obligation_id}",
+                    receipt.receipt_id, receipt.sink_clearance, obligation.target_clearance
                 ),
             });
         }
@@ -691,7 +698,7 @@ impl Ir2FlowLattice {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signature_preimage::{Signature, SigningKey, SIGNATURE_SENTINEL};
+    use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
     // -----------------------------------------------------------------------
     // LabelClass lattice operations
@@ -2318,8 +2325,53 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
         let msg = format!("{err}");
-        assert!(msg.contains("declassified label internal cannot flow"));
+        assert!(msg.contains("sink clearance internal cannot flow"));
         assert_eq!(lattice.obligation("obl-sink").unwrap().use_count, 0);
+    }
+
+    #[test]
+    fn enrichment_custom_sink_label_above_open_sink_rejected() {
+        let mut lattice = Ir2FlowLattice::new("policy-custom-sink");
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "obl-custom".into(),
+                source_label: LabelClass::Secret,
+                target_clearance: Clearance::OpenSink,
+                decision_contract_id: "dc-custom".into(),
+                requires_operator_approval: false,
+                max_uses: 0,
+                use_count: 0,
+            })
+            .unwrap();
+
+        let signing_key = SigningKey::from_bytes([11u8; 32]);
+        let mut receipt = DeclassificationReceipt {
+            receipt_id: "rcpt-custom".into(),
+            source_label: Label::Secret,
+            sink_clearance: Label::Custom {
+                name: "ultra".into(),
+                level: 5,
+            },
+            declassification_route_ref: "route-custom".into(),
+            policy_evaluation_summary: "approved".into(),
+            loss_assessment_milli: 0,
+            decision: DeclassificationDecision::Allow,
+            authorized_by: signing_key.verification_key(),
+            replay_linkage: "trace-custom".into(),
+            timestamp_ms: 1_700_000_000_001,
+            schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        receipt.sign(&signing_key).unwrap();
+        lattice.trust_receipt_authorizer(signing_key.verification_key());
+
+        let err = lattice
+            .use_declassification_with_receipt("obl-custom", &receipt, "trace-custom")
+            .unwrap_err();
+        assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
+        let msg = format!("{err}");
+        assert!(msg.contains("sink clearance custom(ultra, level=5) cannot flow"));
+        assert_eq!(lattice.obligation("obl-custom").unwrap().use_count, 0);
     }
 
     #[test]

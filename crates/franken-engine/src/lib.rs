@@ -20,6 +20,7 @@ pub mod array_fast_lane;
 pub mod artifact_compression_pipeline;
 pub mod assumptions_ledger;
 pub mod ast;
+pub mod asupersync_contract_matrix;
 pub mod attack_surface_game_model;
 pub mod attestation_handshake;
 pub mod attested_execution_cell;

@@ -3419,11 +3419,11 @@ fn encode_json_value<T: Serialize>(value: &T, target: &str) -> Result<Vec<u8>, S
 }
 
 fn write_bytes_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("failed to create `{}`: {error}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create `{}`: {error}", parent.display()))?;
     }
     fs::write(path, bytes).map_err(|error| format!("failed to write `{}`: {error}", path.display()))
 }

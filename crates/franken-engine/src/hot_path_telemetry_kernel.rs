@@ -763,6 +763,8 @@ pub enum TelemetryError {
     EmptyInput,
 }
 
+impl std::error::Error for TelemetryError {}
+
 impl fmt::Display for TelemetryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

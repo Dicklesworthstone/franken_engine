@@ -577,4 +577,292 @@ mod tests {
         assert_eq!(telemetry.total_reads, 10);
         assert_eq!(telemetry.fast_path_reads, 10);
     }
+
+    // ── multi-threaded concurrent reads ─────────────────────────────
+
+    #[test]
+    fn concurrent_reads_after_single_publish() {
+        let fast_path = Arc::new(SnapshotFastPath::new(RetryBudgetPolicy::new(8, 4)));
+        fast_path.publish(777_u64);
+
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let fp = Arc::clone(&fast_path);
+            handles.push(thread::spawn(move || {
+                let mut fast_count = 0u64;
+                for _ in 0..50 {
+                    let result = fp.read_clone_or_else(|| 0);
+                    assert_eq!(result.value, 777);
+                    if result.source == FastPathReadSource::FastPath {
+                        fast_count += 1;
+                    }
+                }
+                fast_count
+            }));
+        }
+
+        let total_fast: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
+        // With no concurrent writer, all reads should be fast-path.
+        assert_eq!(total_fast, 200);
+        let telemetry = fast_path.telemetry();
+        assert_eq!(telemetry.total_reads, 200);
+    }
+
+    // ── publish sequence monotonicity ───────────────────────────────
+
+    #[test]
+    fn sequential_publishes_always_visible_to_reader() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+
+        for i in 0..20u64 {
+            fast_path.publish(i);
+            let result = fast_path.read_clone_or_else(|| u64::MAX);
+            assert_eq!(result.value, i, "read after publish {i} must see {i}");
+            assert_eq!(result.source, FastPathReadSource::FastPath);
+        }
+
+        let telemetry = fast_path.telemetry();
+        assert_eq!(telemetry.writes, 20);
+        assert_eq!(telemetry.total_reads, 20);
+        assert_eq!(telemetry.fast_path_reads, 20);
+    }
+
+    // ── seed + publish interaction ──────────────────────────────────
+
+    #[test]
+    fn seed_then_publish_updates_value() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fast_path.seed_if_uninitialized(100_u64);
+
+        let r1 = fast_path.read_clone_or_else(|| 0);
+        assert_eq!(r1.value, 100);
+
+        fast_path.publish(200_u64);
+        let r2 = fast_path.read_clone_or_else(|| 0);
+        assert_eq!(r2.value, 200);
+
+        // Seed doesn't count as write, publish does.
+        assert_eq!(fast_path.telemetry().writes, 1);
+    }
+
+    // ── telemetry accumulation ──────────────────────────────────────
+
+    #[test]
+    fn telemetry_accumulates_across_mixed_operations() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+
+        // 2 uninitialized fallback reads
+        let _ = fast_path.read_clone_or_else(|| 0_u64);
+        let _ = fast_path.read_clone_or_else(|| 0_u64);
+
+        // 1 publish
+        fast_path.publish(42);
+
+        // 3 fast-path reads
+        for _ in 0..3 {
+            let _ = fast_path.read_clone_or_else(|| 0);
+        }
+
+        let t = fast_path.telemetry();
+        assert_eq!(t.total_reads, 5);
+        assert_eq!(t.uninitialized_fallbacks, 2);
+        assert_eq!(t.fallback_reads, 2);
+        assert_eq!(t.fast_path_reads, 3);
+        assert_eq!(t.writes, 1);
+    }
+
+    // ── RetryBudgetPolicy edge cases ────────────────────────────────
+
+    #[test]
+    fn retry_budget_zero_retries() {
+        let policy = RetryBudgetPolicy::new(0, 0);
+        assert_eq!(policy.max_retries, 0);
+        assert_eq!(policy.max_writer_pressure_observations, 0);
+    }
+
+    #[test]
+    fn retry_budget_large_values() {
+        let policy = RetryBudgetPolicy::new(u32::MAX, u32::MAX);
+        assert_eq!(policy.max_retries, u32::MAX);
+        assert_eq!(policy.max_writer_pressure_observations, u32::MAX);
+    }
+
+    // ── FastPathReadResult fields ───────────────────────────────────
+
+    #[test]
+    fn read_result_fallback_with_reason() {
+        let result = FastPathReadResult {
+            value: 0_u64,
+            source: FastPathReadSource::Fallback,
+            attempts: 5,
+            writer_pressure_observations: 3,
+            fallback_reason: Some(FastPathFallbackReason::RetryBudgetExceeded),
+        };
+        assert_eq!(result.source, FastPathReadSource::Fallback);
+        assert_eq!(result.attempts, 5);
+        assert_eq!(result.writer_pressure_observations, 3);
+        assert_eq!(
+            result.fallback_reason,
+            Some(FastPathFallbackReason::RetryBudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn read_result_fast_path_no_fallback_reason() {
+        let result = FastPathReadResult {
+            value: 42_u64,
+            source: FastPathReadSource::FastPath,
+            attempts: 0,
+            writer_pressure_observations: 0,
+            fallback_reason: None,
+        };
+        assert!(result.fallback_reason.is_none());
+    }
+
+    // ── FastPathTelemetry invariants ────────────────────────────────
+
+    #[test]
+    fn telemetry_reads_sum_invariant() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+
+        // Some fallback reads
+        let _ = fast_path.read_clone_or_else(|| 0_u64);
+
+        // Publish + fast-path reads
+        fast_path.publish(1);
+        let _ = fast_path.read_clone_or_else(|| 0);
+        let _ = fast_path.read_clone_or_else(|| 0);
+        let _ = fast_path.read_clone_or_else(|| 0);
+
+        let t = fast_path.telemetry();
+        // total_reads = fast_path_reads + fallback_reads
+        assert_eq!(t.total_reads, t.fast_path_reads + t.fallback_reads);
+    }
+
+    // ── String snapshot type ────────────────────────────────────────
+
+    #[test]
+    fn works_with_string_type() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fast_path.publish("hello".to_string());
+
+        let result = fast_path.read_clone_or_else(|| "fallback".to_string());
+        assert_eq!(result.value, "hello");
+        assert_eq!(result.source, FastPathReadSource::FastPath);
+    }
+
+    #[test]
+    fn works_with_vec_type() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fast_path.publish(vec![1, 2, 3]);
+
+        let result = fast_path.read_clone_or_else(|| vec![]);
+        assert_eq!(result.value, vec![1, 2, 3]);
+    }
+
+    // ── concurrent seed_if_uninitialized ────────────────────────────
+
+    #[test]
+    fn concurrent_seed_only_one_succeeds() {
+        let fast_path = Arc::new(SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2)));
+        let barrier = Arc::new(Barrier::new(4));
+
+        let mut handles = Vec::new();
+        for i in 0..4u64 {
+            let fp = Arc::clone(&fast_path);
+            let b = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                b.wait();
+                fp.seed_if_uninitialized(i)
+            }));
+        }
+
+        let successes: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        // Exactly one thread should succeed.
+        assert_eq!(successes.iter().filter(|&&s| s).count(), 1);
+        assert!(fast_path.is_initialized());
+    }
+
+    // ── concurrent publish + read ───────────────────────────────────
+
+    #[test]
+    fn concurrent_writer_reader_no_panic() {
+        let fast_path = Arc::new(SnapshotFastPath::new(RetryBudgetPolicy::new(8, 4)));
+        fast_path.publish(0_u64);
+
+        let writer_fp = Arc::clone(&fast_path);
+        let writer = thread::spawn(move || {
+            for i in 1..=100u64 {
+                writer_fp.publish(i);
+            }
+        });
+
+        let reader_fp = Arc::clone(&fast_path);
+        let reader = thread::spawn(move || {
+            let mut reads = 0u64;
+            for _ in 0..200 {
+                let result = reader_fp.read_clone_or_else(|| 0);
+                assert!(result.value <= 100, "value must be within published range");
+                reads += 1;
+            }
+            reads
+        });
+
+        writer.join().unwrap();
+        let total_reads = reader.join().unwrap();
+        assert_eq!(total_reads, 200);
+
+        let t = fast_path.telemetry();
+        assert_eq!(t.writes, 101); // 1 initial + 100 from writer thread
+        assert_eq!(t.total_reads, 200);
+    }
+
+    // ── policy accessor ─────────────────────────────────────────────
+
+    #[test]
+    fn policy_accessor_returns_construction_policy() {
+        let policy = RetryBudgetPolicy::new(11, 7);
+        let fp = SnapshotFastPath::<u64>::new(policy);
+        assert_eq!(fp.policy(), policy);
+    }
+
+    // ── is_initialized transitions ──────────────────────────────────
+
+    #[test]
+    fn is_initialized_false_until_publish_or_seed() {
+        let fp = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+        assert!(!fp.is_initialized());
+
+        // Reading doesn't initialize
+        let _ = fp.read_clone_or_else(|| 0);
+        assert!(!fp.is_initialized());
+    }
+
+    #[test]
+    fn is_initialized_true_after_seed() {
+        let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fp.seed_if_uninitialized(42_u64);
+        assert!(fp.is_initialized());
+    }
+
+    #[test]
+    fn is_initialized_true_after_publish() {
+        let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+        fp.publish(42_u64);
+        assert!(fp.is_initialized());
+    }
+
+    // ── seed then multiple reads ────────────────────────────────────
+
+    #[test]
+    fn seeded_value_survives_multiple_reads() {
+        let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+        fp.seed_if_uninitialized(55_u64);
+
+        for _ in 0..10 {
+            let r = fp.read_clone_or_else(|| 0);
+            assert_eq!(r.value, 55);
+            assert_eq!(r.source, FastPathReadSource::FastPath);
+        }
+    }
 }

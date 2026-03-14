@@ -1410,6 +1410,225 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // shell_quote tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shell_quote_empty_string() {
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn shell_quote_simple_path() {
+        assert_eq!(shell_quote("/tmp/test.rs"), "/tmp/test.rs");
+    }
+
+    #[test]
+    fn shell_quote_with_spaces() {
+        let quoted = shell_quote("hello world");
+        assert!(quoted.starts_with('\''));
+        assert!(quoted.ends_with('\''));
+    }
+
+    #[test]
+    fn shell_quote_safe_chars_unquoted() {
+        assert_eq!(shell_quote("a-z_A-Z.0:9=+/path"), "a-z_A-Z.0:9=+/path");
+    }
+
+    // -----------------------------------------------------------------------
+    // Constants tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn schema_version_is_nonempty() {
+        assert!(!SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn bead_id_matches_expected() {
+        assert_eq!(BEAD_ID, "bd-1lsy.1");
+    }
+
+    #[test]
+    fn component_matches_module_name() {
+        assert_eq!(COMPONENT, "rgc_planning_track");
+    }
+
+    #[test]
+    fn all_schema_versions_are_nonempty() {
+        assert!(!SCOPE_CONTRACT_SCHEMA_VERSION.is_empty());
+        assert!(!MILESTONE_GATEBOOK_SCHEMA_VERSION.is_empty());
+        assert!(!RISK_ACCEPTANCE_LEDGER_SCHEMA_VERSION.is_empty());
+        assert!(!WAVE_HANDOFF_MATRIX_SCHEMA_VERSION.is_empty());
+        assert!(!EVENT_SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn error_codes_are_nonempty() {
+        assert!(!RISK_EXPIRY_ERROR_CODE.is_empty());
+        assert!(!GATE_COMMAND_ERROR_CODE.is_empty());
+        assert!(!DEPENDENCY_ORDER_ERROR_CODE.is_empty());
+        assert!(!WAVE_VALIDATION_ERROR_CODE.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Error Display tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn error_display_io() {
+        let err = RgcPlanningTrackError::Io {
+            path: PathBuf::from("/tmp/test"),
+            source: io::Error::new(io::ErrorKind::NotFound, "missing"),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/tmp/test"));
+    }
+
+    #[test]
+    fn error_display_json_parse() {
+        let err = RgcPlanningTrackError::JsonParse {
+            path: PathBuf::from("source.json"),
+            reason: "invalid".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("source.json"));
+        assert!(msg.contains("invalid"));
+    }
+
+    #[test]
+    fn error_display_timestamp_parse() {
+        let err = RgcPlanningTrackError::TimestampParse {
+            field: "start_utc",
+            value: "not-a-date".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("start_utc"));
+        assert!(msg.contains("not-a-date"));
+    }
+
+    #[test]
+    fn error_display_missing_linkage() {
+        let err = RgcPlanningTrackError::MissingLinkage {
+            field: "milestone_reviews",
+            key: "M1".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("milestone_reviews"));
+        assert!(msg.contains("M1"));
+    }
+
+    #[test]
+    fn error_display_coordination_validation() {
+        let err = RgcPlanningTrackError::CoordinationValidation {
+            reason: "wave order invalid".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("wave order invalid"));
+    }
+
+    // -----------------------------------------------------------------------
+    // TrackRef serde tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn track_ref_serde_roundtrip() {
+        let track = TrackRef {
+            id: "RGC-010".to_string(),
+            name: "Planning Track".to_string(),
+        };
+        let json = serde_json::to_string(&track).unwrap();
+        let back: TrackRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "RGC-010");
+        assert_eq!(back.name, "Planning Track");
+    }
+
+    // -----------------------------------------------------------------------
+    // Embedded JSON parse tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scope_source_json_parses_successfully() {
+        let matrix = parse_embedded_json::<CompatibilityMatrixSource>(
+            SCOPE_SOURCE_JSON,
+            SCOPE_SOURCE_JSON_PATH,
+        )
+        .expect("scope source JSON should parse");
+        assert!(!matrix.schema_version.is_empty());
+        assert!(!matrix.bead_id.is_empty());
+    }
+
+    #[test]
+    fn milestone_source_json_parses_successfully() {
+        let gatebook = parse_embedded_json::<MilestoneGatebookSource>(
+            MILESTONE_SOURCE_JSON,
+            MILESTONE_SOURCE_JSON_PATH,
+        )
+        .expect("milestone source JSON should parse");
+        assert!(!gatebook.schema_version.is_empty());
+    }
+
+    #[test]
+    fn risk_source_json_parses_successfully() {
+        let register =
+            parse_embedded_json::<RiskRegisterSource>(RISK_SOURCE_JSON, RISK_SOURCE_JSON_PATH)
+                .expect("risk source JSON should parse");
+        assert!(!register.schema_version.is_empty());
+        assert!(!register.risks.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // sorted_unique tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sorted_unique_empty_slice() {
+        assert!(sorted_unique(&[]));
+    }
+
+    #[test]
+    fn sorted_unique_single_element() {
+        assert!(sorted_unique(&["bd-1".to_string()]));
+    }
+
+    // -----------------------------------------------------------------------
+    // command_uses_rch tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn command_uses_rch_for_plain_rch() {
+        assert!(command_uses_rch("rch exec cargo check"));
+    }
+
+    #[test]
+    fn command_uses_rch_for_script() {
+        assert!(command_uses_rch("./scripts/run_something.sh"));
+    }
+
+    #[test]
+    fn command_uses_rch_false_for_bare_cargo() {
+        assert!(!command_uses_rch("cargo clippy --all-targets"));
+    }
+
+    // -----------------------------------------------------------------------
+    // select_bundle_failure tests (additional paths)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bundle_failure_none_when_all_pass() {
+        assert_eq!(
+            select_bundle_failure(true, true, true, true, true),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn bundle_failure_wave_validation_code() {
+        let (code, _) = select_bundle_failure(true, true, true, true, false);
+        assert_eq!(code, Some(WAVE_VALIDATION_ERROR_CODE));
+    }
+
     #[test]
     fn risk_acceptance_ledger_requires_review_mapping() {
         let register = RiskRegisterSource {

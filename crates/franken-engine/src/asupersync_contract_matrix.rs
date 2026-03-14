@@ -1451,7 +1451,95 @@ impl DecisionContract for MiniContract {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompatibilityDisposition, ContractFailureCode};
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // AsupersyncSurface tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn surface_all_contains_four_variants() {
+        assert_eq!(AsupersyncSurface::all().len(), 4);
+    }
+
+    #[test]
+    fn surface_all_order_is_deterministic() {
+        let surfaces = AsupersyncSurface::all();
+        assert_eq!(surfaces[0], AsupersyncSurface::KernelContext);
+        assert_eq!(surfaces[1], AsupersyncSurface::DecisionContract);
+        assert_eq!(surfaces[2], AsupersyncSurface::EvidenceLedger);
+        assert_eq!(surfaces[3], AsupersyncSurface::FrankenlabCli);
+    }
+
+    #[test]
+    fn surface_as_str_is_snake_case() {
+        for surface in AsupersyncSurface::all() {
+            assert!(!surface.as_str().is_empty());
+            assert!(!surface.as_str().contains(' '));
+        }
+    }
+
+    #[test]
+    fn surface_display_matches_as_str() {
+        for surface in AsupersyncSurface::all() {
+            assert_eq!(format!("{surface}"), surface.as_str());
+        }
+    }
+
+    #[test]
+    fn surface_serde_roundtrip() {
+        for surface in AsupersyncSurface::all() {
+            let json = serde_json::to_string(surface).unwrap();
+            let back: AsupersyncSurface = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, *surface);
+        }
+    }
+
+    #[test]
+    fn surface_serde_is_snake_case() {
+        let json = serde_json::to_string(&AsupersyncSurface::KernelContext).unwrap();
+        assert_eq!(json, "\"kernel_context\"");
+    }
+
+    #[test]
+    fn surface_crate_name_is_nonempty() {
+        for surface in AsupersyncSurface::all() {
+            assert!(!surface.crate_name().is_empty());
+        }
+    }
+
+    #[test]
+    fn surface_manifest_rel_path_ends_with_cargo_toml() {
+        for surface in AsupersyncSurface::all() {
+            assert!(
+                surface.manifest_rel_path().ends_with("Cargo.toml"),
+                "{} manifest path doesn't end with Cargo.toml",
+                surface.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn surface_trace_timestamps_are_distinct() {
+        let timestamps: Vec<u64> = AsupersyncSurface::all()
+            .iter()
+            .map(|s| s.trace_timestamp_ms())
+            .collect();
+        let deduped: std::collections::BTreeSet<u64> = timestamps.iter().copied().collect();
+        assert_eq!(timestamps.len(), deduped.len());
+    }
+
+    // -----------------------------------------------------------------------
+    // CompatibilityDisposition tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compatibility_disposition_compatible_for_no_codes() {
+        assert_eq!(
+            CompatibilityDisposition::from_codes(&[]),
+            CompatibilityDisposition::Compatible
+        );
+    }
 
     #[test]
     fn compatibility_disposition_prefers_version_drift_for_release_codes() {
@@ -1463,8 +1551,366 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_disposition_version_drift_for_all_drift_codes() {
+        let codes = [
+            ContractFailureCode::AsupersyncReleaseCellDrift,
+            ContractFailureCode::DecisionEvidenceVersionDrift,
+        ];
+        assert_eq!(
+            CompatibilityDisposition::from_codes(&codes),
+            CompatibilityDisposition::VersionDrift
+        );
+    }
+
+    #[test]
+    fn compatibility_disposition_missing_capability_for_cli_missing() {
+        let codes = [ContractFailureCode::FrankenlabCliMissing];
+        assert_eq!(
+            CompatibilityDisposition::from_codes(&codes),
+            CompatibilityDisposition::MissingCapability
+        );
+    }
+
+    #[test]
+    fn compatibility_disposition_missing_capability_for_scenarios_missing() {
+        let codes = [ContractFailureCode::FrankenlabExampleScenariosMissing];
+        assert_eq!(
+            CompatibilityDisposition::from_codes(&codes),
+            CompatibilityDisposition::MissingCapability
+        );
+    }
+
+    #[test]
+    fn compatibility_disposition_bridge_incompatible_for_eval_failed() {
+        let codes = [ContractFailureCode::DecisionContractEvalFailed];
+        assert_eq!(
+            CompatibilityDisposition::from_codes(&codes),
+            CompatibilityDisposition::BridgeIncompatible
+        );
+    }
+
+    #[test]
+    fn compatibility_disposition_as_str_matches_display() {
+        for disp in [
+            CompatibilityDisposition::Compatible,
+            CompatibilityDisposition::VersionDrift,
+            CompatibilityDisposition::MissingCapability,
+            CompatibilityDisposition::BridgeIncompatible,
+        ] {
+            assert_eq!(format!("{disp}"), disp.as_str());
+        }
+    }
+
+    #[test]
+    fn compatibility_disposition_serde_roundtrip() {
+        for disp in [
+            CompatibilityDisposition::Compatible,
+            CompatibilityDisposition::VersionDrift,
+            CompatibilityDisposition::MissingCapability,
+            CompatibilityDisposition::BridgeIncompatible,
+        ] {
+            let json = serde_json::to_string(&disp).unwrap();
+            let back: CompatibilityDisposition = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, disp);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // ContractFailureCode tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn failure_code_all_has_nine_variants() {
+        assert_eq!(ContractFailureCode::all().len(), 9);
+    }
+
+    #[test]
     fn canonical_failure_catalog_includes_frankenlab_missing_cli() {
         let codes = ContractFailureCode::all();
         assert!(codes.contains(&ContractFailureCode::FrankenlabCliMissing));
+    }
+
+    #[test]
+    fn failure_code_as_str_is_snake_case() {
+        for code in ContractFailureCode::all() {
+            assert!(!code.as_str().is_empty());
+            assert!(!code.as_str().contains(' '));
+        }
+    }
+
+    #[test]
+    fn failure_code_display_matches_as_str() {
+        for code in ContractFailureCode::all() {
+            assert_eq!(format!("{code}"), code.as_str());
+        }
+    }
+
+    #[test]
+    fn failure_code_description_is_nonempty() {
+        for code in ContractFailureCode::all() {
+            assert!(
+                !code.description().is_empty(),
+                "{} has empty description",
+                code.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn failure_code_remediation_is_nonempty() {
+        for code in ContractFailureCode::all() {
+            assert!(
+                !code.remediation().is_empty(),
+                "{} has empty remediation",
+                code.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn failure_code_severity_is_critical_for_all() {
+        for code in ContractFailureCode::all() {
+            assert_eq!(
+                code.severity(),
+                FailureSeverity::Critical,
+                "{} should be critical",
+                code.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn failure_code_required_response_is_block_for_all() {
+        for code in ContractFailureCode::all() {
+            assert_eq!(
+                code.required_response(),
+                RequiredResponse::Block,
+                "{} should be block",
+                code.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn failure_code_serde_roundtrip() {
+        for code in ContractFailureCode::all() {
+            let json = serde_json::to_string(code).unwrap();
+            let back: ContractFailureCode = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, *code);
+        }
+    }
+
+    #[test]
+    fn failure_code_is_version_drift_matches_expected_set() {
+        let drift_codes = ContractFailureCode::all()
+            .iter()
+            .filter(|c| c.is_version_drift())
+            .count();
+        assert_eq!(drift_codes, 4);
+    }
+
+    #[test]
+    fn failure_code_is_missing_capability_matches_expected_set() {
+        let missing_codes = ContractFailureCode::all()
+            .iter()
+            .filter(|c| c.is_missing_capability())
+            .count();
+        assert_eq!(missing_codes, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Error type tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn error_display_io() {
+        let err = AsupersyncContractMatrixError::Io {
+            path: PathBuf::from("/tmp/test"),
+            source: io::Error::new(io::ErrorKind::NotFound, "missing"),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/tmp/test"));
+        assert!(msg.contains("I/O error"));
+    }
+
+    #[test]
+    fn error_display_manifest_parse() {
+        let err = AsupersyncContractMatrixError::ManifestParse {
+            path: PathBuf::from("Cargo.toml"),
+            reason: "invalid toml".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("Cargo.toml"));
+        assert!(msg.contains("invalid toml"));
+    }
+
+    #[test]
+    fn error_display_missing_field() {
+        let err = AsupersyncContractMatrixError::MissingField {
+            path: PathBuf::from("Cargo.toml"),
+            field: "package.version",
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("package.version"));
+    }
+
+    // -----------------------------------------------------------------------
+    // canonical_failure_code_catalog tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn canonical_catalog_has_correct_schema_version() {
+        let catalog = canonical_failure_code_catalog();
+        assert_eq!(catalog.schema_version, FAILURE_CODE_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn canonical_catalog_has_correct_bead_id() {
+        let catalog = canonical_failure_code_catalog();
+        assert_eq!(catalog.bead_id, BEAD_ID);
+    }
+
+    #[test]
+    fn canonical_catalog_covers_all_failure_codes() {
+        let catalog = canonical_failure_code_catalog();
+        assert_eq!(
+            catalog.failure_codes.len(),
+            ContractFailureCode::all().len()
+        );
+    }
+
+    #[test]
+    fn canonical_catalog_serde_roundtrip() {
+        let catalog = canonical_failure_code_catalog();
+        let json = serde_json::to_string(&catalog).unwrap();
+        let back: VersionDriftFailureCatalog = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.failure_codes.len(), catalog.failure_codes.len());
+    }
+
+    // -----------------------------------------------------------------------
+    // default_asupersync_root tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_asupersync_root_is_dp_asupersync() {
+        assert_eq!(
+            default_asupersync_root(),
+            PathBuf::from(DEFAULT_ASUPERSYNC_ROOT)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Constants tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn schema_version_is_nonempty() {
+        assert!(!SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn component_matches_module_name() {
+        assert_eq!(COMPONENT, "asupersync_contract_matrix");
+    }
+
+    #[test]
+    fn bead_id_matches_expected() {
+        assert_eq!(BEAD_ID, "bd-3nr.1.5.1");
+    }
+
+    // -----------------------------------------------------------------------
+    // UpstreamReleaseIdentifier serde tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn upstream_release_identifier_serde_roundtrip() {
+        let release = UpstreamReleaseIdentifier {
+            surface: AsupersyncSurface::KernelContext,
+            package_name: "franken-kernel".to_string(),
+            crate_name: "franken_kernel".to_string(),
+            manifest_path: "franken_kernel/Cargo.toml".to_string(),
+            release_id: "0.1.0".to_string(),
+            manifest_hash: "abc123".to_string(),
+            dependency_versions: BTreeMap::new(),
+        };
+        let json = serde_json::to_string(&release).unwrap();
+        let back: UpstreamReleaseIdentifier = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.surface, AsupersyncSurface::KernelContext);
+        assert_eq!(back.package_name, "franken-kernel");
+    }
+
+    // -----------------------------------------------------------------------
+    // CompatibilityCell serde tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compatibility_cell_serde_roundtrip() {
+        let cell = CompatibilityCell {
+            surface: AsupersyncSurface::EvidenceLedger,
+            package_name: "franken-evidence".to_string(),
+            crate_name: "franken_evidence".to_string(),
+            manifest_path: "franken_evidence/Cargo.toml".to_string(),
+            release_id: "0.1.0".to_string(),
+            supported_version_range: ">=0.1.0".to_string(),
+            disposition: CompatibilityDisposition::Compatible,
+            diagnostic_codes: Vec::new(),
+            detail: "all checks passed".to_string(),
+            checks: vec!["check1".to_string()],
+            trace_id: "trace-1".to_string(),
+            decision_id: None,
+            policy_id: None,
+            budget_state: None,
+            capability_profile: None,
+            version_cell: "0.1.0".to_string(),
+            dependency_versions: BTreeMap::new(),
+        };
+        let json = serde_json::to_string(&cell).unwrap();
+        let back: CompatibilityCell = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.disposition, CompatibilityDisposition::Compatible);
+    }
+
+    // -----------------------------------------------------------------------
+    // FailureCodeDescriptor serde tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn failure_code_descriptor_serde_roundtrip() {
+        let descriptor = FailureCodeDescriptor {
+            code: ContractFailureCode::FrankenlabCliMissing,
+            severity: FailureSeverity::Critical,
+            required_response: RequiredResponse::Block,
+            description: "CLI missing".to_string(),
+            remediation: "restore the CLI".to_string(),
+        };
+        let json = serde_json::to_string(&descriptor).unwrap();
+        let back: FailureCodeDescriptor = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.code, ContractFailureCode::FrankenlabCliMissing);
+    }
+
+    // -----------------------------------------------------------------------
+    // ContractEvent serde tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn contract_event_serde_roundtrip() {
+        let event = ContractEvent {
+            trace_id: "trace-1".to_string(),
+            component: COMPONENT.to_string(),
+            event: "surface_probed".to_string(),
+            outcome: "compatible".to_string(),
+            error_code: None,
+            seed: "test-seed".to_string(),
+            scenario_id: "kernel_context".to_string(),
+            decision_id: None,
+            policy_id: None,
+            budget_state: None,
+            capability_profile: None,
+            compatibility_disposition: "compatible".to_string(),
+            version_cell: "0.1.0".to_string(),
+            upstream_revision: "abc123".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ContractEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.event, "surface_probed");
     }
 }

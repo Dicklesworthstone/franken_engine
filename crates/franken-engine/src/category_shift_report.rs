@@ -805,6 +805,535 @@ mod tests {
         ]
     }
 
+    // -----------------------------------------------------------------------
+    // CategoryShiftCapability tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn capability_all_has_five_elements() {
+        assert_eq!(CategoryShiftCapability::ALL.len(), 5);
+    }
+
+    #[test]
+    fn capability_all_order_is_deterministic() {
+        assert_eq!(
+            CategoryShiftCapability::ALL[0],
+            CategoryShiftCapability::ProofCarryingOptimization
+        );
+        assert_eq!(
+            CategoryShiftCapability::ALL[4],
+            CategoryShiftCapability::AdversarialCompromiseRateSuppression
+        );
+    }
+
+    #[test]
+    fn capability_as_str_is_snake_case() {
+        for cap in CategoryShiftCapability::ALL {
+            assert!(!cap.as_str().is_empty());
+            assert!(!cap.as_str().contains(' '));
+        }
+    }
+
+    #[test]
+    fn capability_display_name_is_human_readable() {
+        for cap in CategoryShiftCapability::ALL {
+            assert!(!cap.display_name().is_empty());
+            assert!(cap.display_name().contains(' ') || cap.display_name() == "Deterministic IFC");
+        }
+    }
+
+    #[test]
+    fn capability_display_matches_as_str() {
+        for cap in CategoryShiftCapability::ALL {
+            assert_eq!(format!("{cap}"), cap.as_str());
+        }
+    }
+
+    #[test]
+    fn capability_serde_roundtrip() {
+        for cap in CategoryShiftCapability::ALL {
+            let json = serde_json::to_string(&cap).unwrap();
+            let back: CategoryShiftCapability = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, cap);
+        }
+    }
+
+    #[test]
+    fn capability_serde_is_snake_case() {
+        let json = serde_json::to_string(&CategoryShiftCapability::DeterministicIfc).unwrap();
+        assert_eq!(json, "\"deterministic_ifc\"");
+    }
+
+    // -----------------------------------------------------------------------
+    // Claim validation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn claim_validate_ok_for_well_formed_claim() {
+        let c = claim(CategoryShiftCapability::DeterministicIfc);
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn claim_validate_rejects_empty_claim_id() {
+        let mut c = claim(CategoryShiftCapability::DeterministicIfc);
+        c.claim_id = "  ".to_string();
+        let err = c.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidClaimField { field, .. } if field == "claim_id"
+        ));
+    }
+
+    #[test]
+    fn claim_validate_rejects_empty_claim_statement() {
+        let mut c = claim(CategoryShiftCapability::DeterministicIfc);
+        c.claim_statement = String::new();
+        let err = c.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidClaimField { field, .. } if field == "claim_statement"
+        ));
+    }
+
+    #[test]
+    fn claim_validate_rejects_empty_evidence_summary() {
+        let mut c = claim(CategoryShiftCapability::DeterministicIfc);
+        c.evidence_summary = "   ".to_string();
+        let err = c.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidClaimField { field, .. } if field == "evidence_summary"
+        ));
+    }
+
+    #[test]
+    fn claim_validate_rejects_empty_evidence_bundle_ref() {
+        let mut c = claim(CategoryShiftCapability::DeterministicIfc);
+        c.evidence_bundle_ref = String::new();
+        let err = c.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidClaimField { field, .. } if field == "evidence_bundle_ref"
+        ));
+    }
+
+    #[test]
+    fn claim_validate_rejects_empty_reproduction_instructions() {
+        let mut c = claim(CategoryShiftCapability::DeterministicIfc);
+        c.reproduction_instructions = Vec::new();
+        let err = c.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidClaimField { field, .. } if field == "reproduction_instructions"
+        ));
+    }
+
+    #[test]
+    fn claim_validate_rejects_blank_reproduction_step() {
+        let mut c = claim(CategoryShiftCapability::DeterministicIfc);
+        c.reproduction_instructions = vec!["step 1".to_string(), "  ".to_string()];
+        let err = c.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidClaimField { field, .. } if field == "reproduction_instructions"
+        ));
+    }
+
+    #[test]
+    fn claim_validate_rejects_empty_source_beads() {
+        let mut c = claim(CategoryShiftCapability::DeterministicIfc);
+        c.source_beads = Vec::new();
+        let err = c.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidClaimField { field, .. } if field == "source_beads"
+        ));
+    }
+
+    #[test]
+    fn claim_validate_rejects_bead_without_prefix() {
+        let mut c = claim(CategoryShiftCapability::DeterministicIfc);
+        c.source_beads = vec!["no-prefix".to_string()];
+        let err = c.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidClaimField { field, .. } if field == "source_beads"
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Claim hash tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn claim_compute_hash_is_deterministic() {
+        let c = claim(CategoryShiftCapability::ProofCarryingOptimization);
+        let h1 = c.compute_hash();
+        let h2 = c.compute_hash();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn claim_compute_hash_differs_for_different_capabilities() {
+        let c1 = claim(CategoryShiftCapability::ProofCarryingOptimization);
+        let c2 = claim(CategoryShiftCapability::DeterministicIfc);
+        assert_ne!(c1.compute_hash(), c2.compute_hash());
+    }
+
+    #[test]
+    fn claim_compute_hash_sorts_source_beads() {
+        let mut c1 = claim(CategoryShiftCapability::DeterministicIfc);
+        c1.source_beads = vec!["bd-a".to_string(), "bd-b".to_string()];
+        let mut c2 = claim(CategoryShiftCapability::DeterministicIfc);
+        c2.source_beads = vec!["bd-b".to_string(), "bd-a".to_string()];
+        assert_eq!(c1.compute_hash(), c2.compute_hash());
+    }
+
+    // -----------------------------------------------------------------------
+    // MethodologySection validation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn methodology_validate_ok_for_well_formed() {
+        assert!(methodology().validate().is_ok());
+    }
+
+    #[test]
+    fn methodology_validate_rejects_empty_summary() {
+        let mut m = methodology();
+        m.summary = "  ".to_string();
+        let err = m.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidMethodologyField { field } if field == "summary"
+        ));
+    }
+
+    #[test]
+    fn methodology_validate_rejects_empty_frameworks() {
+        let mut m = methodology();
+        m.statistical_frameworks = Vec::new();
+        let err = m.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidMethodologyField { field } if field == "statistical_frameworks"
+        ));
+    }
+
+    #[test]
+    fn methodology_validate_rejects_blank_framework_item() {
+        let mut m = methodology();
+        m.statistical_frameworks = vec!["ok".to_string(), "".to_string()];
+        let err = m.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidMethodologyField { field } if field == "statistical_frameworks"
+        ));
+    }
+
+    #[test]
+    fn methodology_validate_rejects_empty_limitations() {
+        let mut m = methodology();
+        m.limitations = Vec::new();
+        let err = m.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::InvalidMethodologyField { field } if field == "limitations"
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // build_category_shift_report additional paths
+    // -----------------------------------------------------------------------
+
+    fn valid_input() -> CategoryShiftReportInput {
+        CategoryShiftReportInput {
+            report_version: "v1".to_string(),
+            candidate_id: "rc-1".to_string(),
+            generated_at_utc: "2026-03-13T00:00:00Z".to_string(),
+            archive_root: "archive/root".to_string(),
+            scorecard_schema: ScorecardSchema::default_schema(),
+            scorecard_result: scorecard_result(),
+            claims: CategoryShiftCapability::ALL
+                .iter()
+                .copied()
+                .map(claim)
+                .collect(),
+            methodology: methodology(),
+            peer_reviews: peer_reviews(),
+        }
+    }
+
+    #[test]
+    fn build_report_succeeds_for_valid_input() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        assert_eq!(report.schema_version, SCHEMA_VERSION);
+        assert_eq!(report.component, COMPONENT);
+        assert_eq!(report.bead_id, BEAD_ID);
+        assert_eq!(report.policy_id, POLICY_ID);
+        assert_eq!(report.claims.len(), 5);
+    }
+
+    #[test]
+    fn build_report_publication_hash_is_nonzero() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        assert_ne!(
+            report.publication_hash,
+            ContentHash::compute(b"placeholder")
+        );
+    }
+
+    #[test]
+    fn build_report_publication_hash_is_deterministic() {
+        let r1 = build_category_shift_report(valid_input()).unwrap();
+        let r2 = build_category_shift_report(valid_input()).unwrap();
+        assert_eq!(r1.publication_hash, r2.publication_hash);
+    }
+
+    #[test]
+    fn build_report_rejects_duplicate_claim_id() {
+        let mut input = valid_input();
+        input.claims[1].claim_id = input.claims[0].claim_id.clone();
+        input.claims[1].capability = input.claims[0].capability;
+        let err = build_category_shift_report(input).unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::DuplicateClaimId { .. }
+        ));
+    }
+
+    #[test]
+    fn build_report_rejects_duplicate_capability() {
+        let mut input = valid_input();
+        input.claims[1].capability = input.claims[0].capability;
+        let err = build_category_shift_report(input).unwrap_err();
+        assert!(
+            matches!(err, CategoryShiftReportError::DuplicateCapability { .. })
+                || matches!(err, CategoryShiftReportError::DuplicateClaimId { .. })
+                || matches!(
+                    err,
+                    CategoryShiftReportError::MissingRequiredCapability { .. }
+                )
+        );
+    }
+
+    #[test]
+    fn build_report_rejects_duplicate_peer_reviewer() {
+        let mut input = valid_input();
+        input.peer_reviews[1].reviewer_id = input.peer_reviews[0].reviewer_id.clone();
+        let err = build_category_shift_report(input).unwrap_err();
+        assert!(matches!(
+            err,
+            CategoryShiftReportError::DuplicatePeerReviewer { .. }
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // CategoryShiftReport methods
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn report_to_json_pretty_is_valid_json() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let json_str = report.to_json_pretty().unwrap();
+        let _parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    }
+
+    #[test]
+    fn report_to_markdown_contains_headings() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let md = report.to_markdown();
+        assert!(md.contains("# First Category-Shift Report"));
+        assert!(md.contains("## Disruption Scorecard"));
+        assert!(md.contains("## Beyond-Parity Claims"));
+        assert!(md.contains("## Methodology"));
+        assert!(md.contains("## Peer Review"));
+    }
+
+    #[test]
+    fn report_to_markdown_contains_all_capabilities() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let md = report.to_markdown();
+        for cap in CategoryShiftCapability::ALL {
+            assert!(
+                md.contains(cap.display_name()),
+                "markdown missing capability: {}",
+                cap.display_name()
+            );
+        }
+    }
+
+    #[test]
+    fn report_to_markdown_contains_publication_hash() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let md = report.to_markdown();
+        assert!(md.contains(&report.publication_hash.to_string()));
+    }
+
+    #[test]
+    fn report_compute_hash_is_idempotent() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let h1 = report.compute_hash();
+        let h2 = report.compute_hash();
+        assert_eq!(h1, h2);
+    }
+
+    // -----------------------------------------------------------------------
+    // generate_log_entries tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn log_entries_claim_published_events_have_claim_id() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let entries = generate_log_entries("trace-1", &report);
+        let claim_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.event == "claim_published")
+            .collect();
+        assert_eq!(claim_entries.len(), 5);
+        for entry in &claim_entries {
+            assert!(entry.claim_id.is_some());
+            assert!(entry.evidence_bundle_ref.is_some());
+            assert!(entry.evidence_hash.is_some());
+        }
+    }
+
+    #[test]
+    fn log_entries_peer_review_events_have_reviewer_id() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let entries = generate_log_entries("trace-1", &report);
+        let review_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.event == "peer_review_recorded")
+            .collect();
+        assert_eq!(review_entries.len(), MINIMUM_PEER_REVIEWERS);
+        for entry in &review_entries {
+            assert!(entry.reviewer_id.is_some());
+            assert!(entry.review_status.is_some());
+        }
+    }
+
+    #[test]
+    fn log_entries_all_have_trace_id() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let entries = generate_log_entries("my-trace", &report);
+        for entry in &entries {
+            assert_eq!(entry.trace_id, "my-trace");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Error Display tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn error_display_invalid_claim_field() {
+        let err = CategoryShiftReportError::InvalidClaimField {
+            claim_id: "c1".to_string(),
+            field: "claim_statement".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("c1"));
+        assert!(msg.contains("claim_statement"));
+    }
+
+    #[test]
+    fn error_display_missing_required_capability() {
+        let err = CategoryShiftReportError::MissingRequiredCapability {
+            capability: CategoryShiftCapability::DeterministicIfc,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("deterministic_ifc"));
+    }
+
+    #[test]
+    fn error_display_insufficient_peer_review() {
+        let err = CategoryShiftReportError::InsufficientPeerReview {
+            approved_reviewers: 1,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("1"));
+        assert!(msg.contains(&MINIMUM_PEER_REVIEWERS.to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Constants tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn constants_are_nonempty() {
+        assert!(!SCHEMA_VERSION.is_empty());
+        assert!(!COMPONENT.is_empty());
+        assert!(!BEAD_ID.is_empty());
+        assert!(!POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn minimum_peer_reviewers_is_two() {
+        assert_eq!(MINIMUM_PEER_REVIEWERS, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Serde round-trip tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn category_shift_claim_serde_roundtrip() {
+        let c = claim(CategoryShiftCapability::PlasSignedWitnesses);
+        let json = serde_json::to_string(&c).unwrap();
+        let back: CategoryShiftClaim = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.claim_id, c.claim_id);
+        assert_eq!(back.capability, c.capability);
+    }
+
+    #[test]
+    fn methodology_section_serde_roundtrip() {
+        let m = methodology();
+        let json = serde_json::to_string(&m).unwrap();
+        let back: MethodologySection = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.summary, m.summary);
+    }
+
+    #[test]
+    fn peer_review_signoff_serde_roundtrip() {
+        let review = PeerReviewSignoff {
+            reviewer_id: "test-reviewer".to_string(),
+            reviewed_at_utc: "2026-03-14T00:00:00Z".to_string(),
+            approved: true,
+            notes: "all good".to_string(),
+        };
+        let json = serde_json::to_string(&review).unwrap();
+        let back: PeerReviewSignoff = serde_json::from_str(&json).unwrap();
+        assert!(back.approved);
+    }
+
+    #[test]
+    fn dimension_publication_summary_serde_roundtrip() {
+        let summary = DimensionPublicationSummary {
+            raw_score_millionths: 500_000,
+            floor_millionths: 100_000,
+            target_millionths: 400_000,
+            meets_floor: true,
+            meets_target: true,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: DimensionPublicationSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.raw_score_millionths, 500_000);
+        assert!(back.meets_target);
+    }
+
+    #[test]
+    fn log_entry_serde_roundtrip() {
+        let report = build_category_shift_report(valid_input()).unwrap();
+        let entries = generate_log_entries("trace-1", &report);
+        for entry in &entries {
+            let json = serde_json::to_string(entry).unwrap();
+            let back: CategoryShiftReportLogEntry = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.trace_id, "trace-1");
+        }
+    }
+
     #[test]
     fn build_report_rejects_missing_capability() {
         let claims = CategoryShiftCapability::ALL[..4]

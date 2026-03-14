@@ -1004,4 +1004,428 @@ mod tests {
         assert!(summary.contains("evaluated_epoch: 5"));
         assert!(summary.contains("entitled: 1"));
     }
+
+    // -- Additional Display tests for composite types --
+
+    #[test]
+    fn claim_atom_display_format() {
+        let atom = test_atom(
+            "compat-es2024",
+            ClaimDomain::Compatibility,
+            ClaimTier::ShippedFact,
+        );
+        let display = atom.to_string();
+        assert_eq!(display, "compat-es2024[compatibility:shipped_fact]");
+    }
+
+    #[test]
+    fn evidence_morphism_display_format() {
+        let m = EvidenceMorphism {
+            morphism_id: "morph-42".to_string(),
+            evidence_kind: "test262_pass".to_string(),
+            effect: MorphismEffect::Disqualifies,
+            target_atoms: vec!["atom-a".to_string(), "atom-b".to_string()],
+            required_constraints: Vec::new(),
+            blocked_by_rules: Vec::new(),
+            rationale: "test".to_string(),
+        };
+        assert_eq!(m.to_string(), "morph-42(disqualifies → [atom-a, atom-b])");
+    }
+
+    #[test]
+    fn side_constraint_display_format() {
+        let sc = SideConstraint {
+            constraint_id: "freshness-24h".to_string(),
+            constraint_class: "freshness".to_string(),
+            description: "Evidence must be less than 24h old".to_string(),
+        };
+        assert_eq!(sc.to_string(), "freshness-24h(freshness)");
+    }
+
+    #[test]
+    fn disqualifier_rule_display_format() {
+        let rule = test_rule("rule-sec-1", "atom-a", DisqualifierVerdict::Forbid);
+        assert_eq!(rule.to_string(), "rule-sec-1(prec=0, forbid)");
+    }
+
+    // -- Additional serde roundtrip tests --
+
+    #[test]
+    fn claim_tier_serde_round_trip_all_variants() {
+        for tier in &[
+            ClaimTier::ShippedFact,
+            ClaimTier::ScopedObserved,
+            ClaimTier::FrontierAmbition,
+            ClaimTier::UnsupportedSurface,
+        ] {
+            let json = serde_json::to_string(tier).expect("serialize");
+            let deser: ClaimTier = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*tier, deser);
+        }
+    }
+
+    #[test]
+    fn claim_state_serde_round_trip_all_variants() {
+        for state in &[
+            ClaimState::Entitled,
+            ClaimState::NotYetProven,
+            ClaimState::BlockedByMissingEvidence,
+            ClaimState::Invalidated,
+        ] {
+            let json = serde_json::to_string(state).expect("serialize");
+            let deser: ClaimState = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*state, deser);
+        }
+    }
+
+    #[test]
+    fn disqualifier_verdict_serde_round_trip_all_variants() {
+        for verdict in &[
+            DisqualifierVerdict::Forbid,
+            DisqualifierVerdict::DowngradeToScoped,
+            DisqualifierVerdict::RequireOperatorGuidance,
+        ] {
+            let json = serde_json::to_string(verdict).expect("serialize");
+            let deser: DisqualifierVerdict = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*verdict, deser);
+        }
+    }
+
+    #[test]
+    fn morphism_effect_serde_round_trip_all_variants() {
+        for effect in &[
+            MorphismEffect::Supports,
+            MorphismEffect::Constrains,
+            MorphismEffect::Disqualifies,
+        ] {
+            let json = serde_json::to_string(effect).expect("serialize");
+            let deser: MorphismEffect = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*effect, deser);
+        }
+    }
+
+    #[test]
+    fn evidence_snapshot_serde_round_trip() {
+        let snap = EvidenceSnapshot {
+            evidence_kind: "benchmark_cell".to_string(),
+            is_fresh: false,
+            triggered_rules: vec!["rule-1".to_string(), "rule-2".to_string()],
+        };
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let deser: EvidenceSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(snap, deser);
+    }
+
+    #[test]
+    fn disqualifier_rule_serde_round_trip() {
+        let rule = DisqualifierRule {
+            rule_id: "disq-perf-regression".to_string(),
+            precedence: 10,
+            trigger_evidence_kind: "benchmark_cell".to_string(),
+            condition: "p99 latency > 10ms".to_string(),
+            target_atoms: vec!["atom-perf-1".to_string(), "atom-perf-2".to_string()],
+            verdict: DisqualifierVerdict::DowngradeToScoped,
+            remediation: "Profile and fix hotspots".to_string(),
+        };
+        let json = serde_json::to_string(&rule).expect("serialize");
+        let deser: DisqualifierRule = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(rule, deser);
+    }
+
+    #[test]
+    fn claim_atom_evaluation_serde_round_trip() {
+        let eval = ClaimAtomEvaluation {
+            atom_id: "claim-x".to_string(),
+            state: ClaimState::NotYetProven,
+            satisfied_morphisms: vec!["morph-1".to_string()],
+            missing_morphisms: vec!["morph-2".to_string()],
+            active_disqualifiers: vec!["rule-a".to_string()],
+        };
+        let json = serde_json::to_string(&eval).expect("serialize");
+        let deser: ClaimAtomEvaluation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(eval, deser);
+    }
+
+    #[test]
+    fn cover_relation_serde_round_trip() {
+        let cr = CoverRelation {
+            lower: "base".to_string(),
+            higher: "strict".to_string(),
+        };
+        let json = serde_json::to_string(&cr).expect("serialize");
+        let deser: CoverRelation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(cr, deser);
+    }
+
+    // -- Enum variant count tests --
+
+    #[test]
+    fn claim_domain_has_eight_variants() {
+        let all = [
+            ClaimDomain::Compatibility,
+            ClaimDomain::ShippedSurface,
+            ClaimDomain::React,
+            ClaimDomain::Supremacy,
+            ClaimDomain::Rollout,
+            ClaimDomain::Ga,
+            ClaimDomain::Docs,
+            ClaimDomain::Security,
+        ];
+        assert_eq!(all.len(), 8);
+        // Verify all distinct via Ord
+        let mut sorted = all.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 8);
+    }
+
+    #[test]
+    fn claim_tier_has_four_variants() {
+        let all = [
+            ClaimTier::ShippedFact,
+            ClaimTier::ScopedObserved,
+            ClaimTier::FrontierAmbition,
+            ClaimTier::UnsupportedSurface,
+        ];
+        assert_eq!(all.len(), 4);
+        let mut sorted = all.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 4);
+    }
+
+    #[test]
+    fn claim_state_has_four_variants() {
+        let all = [
+            ClaimState::Entitled,
+            ClaimState::NotYetProven,
+            ClaimState::BlockedByMissingEvidence,
+            ClaimState::Invalidated,
+        ];
+        assert_eq!(all.len(), 4);
+        let mut sorted = all.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 4);
+    }
+
+    // -- Lattice edge cases --
+
+    #[test]
+    fn lattice_unreachable_node_not_found_from_bottom() {
+        let lattice = ConstraintLattice {
+            top_id: "top".to_string(),
+            bottom_id: "bot".to_string(),
+            constraints: vec![
+                SideConstraint {
+                    constraint_id: "bot".to_string(),
+                    constraint_class: "x".to_string(),
+                    description: "bottom".to_string(),
+                },
+                SideConstraint {
+                    constraint_id: "top".to_string(),
+                    constraint_class: "x".to_string(),
+                    description: "top".to_string(),
+                },
+                SideConstraint {
+                    constraint_id: "island".to_string(),
+                    constraint_class: "x".to_string(),
+                    description: "disconnected node".to_string(),
+                },
+            ],
+            covers: vec![CoverRelation {
+                lower: "bot".to_string(),
+                higher: "top".to_string(),
+            }],
+        };
+        assert!(!lattice.is_reachable_from_bottom("island"));
+    }
+
+    #[test]
+    fn lattice_diamond_shape_reachability() {
+        // bot -> left, bot -> right, left -> top, right -> top
+        let lattice = ConstraintLattice {
+            top_id: "top".to_string(),
+            bottom_id: "bot".to_string(),
+            constraints: vec![
+                SideConstraint {
+                    constraint_id: "bot".to_string(),
+                    constraint_class: "x".to_string(),
+                    description: "bottom".to_string(),
+                },
+                SideConstraint {
+                    constraint_id: "left".to_string(),
+                    constraint_class: "x".to_string(),
+                    description: "left path".to_string(),
+                },
+                SideConstraint {
+                    constraint_id: "right".to_string(),
+                    constraint_class: "x".to_string(),
+                    description: "right path".to_string(),
+                },
+                SideConstraint {
+                    constraint_id: "top".to_string(),
+                    constraint_class: "x".to_string(),
+                    description: "top".to_string(),
+                },
+            ],
+            covers: vec![
+                CoverRelation {
+                    lower: "bot".to_string(),
+                    higher: "left".to_string(),
+                },
+                CoverRelation {
+                    lower: "bot".to_string(),
+                    higher: "right".to_string(),
+                },
+                CoverRelation {
+                    lower: "left".to_string(),
+                    higher: "top".to_string(),
+                },
+                CoverRelation {
+                    lower: "right".to_string(),
+                    higher: "top".to_string(),
+                },
+            ],
+        };
+        assert!(!lattice.has_cycle());
+        assert!(lattice.is_reachable_from_bottom("left"));
+        assert!(lattice.is_reachable_from_bottom("right"));
+        assert!(lattice.is_reachable_from_bottom("top"));
+    }
+
+    #[test]
+    fn lattice_empty_covers_no_cycle() {
+        let lattice = ConstraintLattice {
+            top_id: "sole".to_string(),
+            bottom_id: "sole".to_string(),
+            constraints: vec![SideConstraint {
+                constraint_id: "sole".to_string(),
+                constraint_class: "x".to_string(),
+                description: "single node".to_string(),
+            }],
+            covers: Vec::new(),
+        };
+        assert!(!lattice.has_cycle());
+        assert!(lattice.is_reachable_from_bottom("sole"));
+    }
+
+    // -- Evaluation edge cases --
+
+    #[test]
+    fn evaluate_multiple_atoms_mixed_states() {
+        let atoms = vec![
+            test_atom("a", ClaimDomain::Compatibility, ClaimTier::ShippedFact),
+            test_atom("b", ClaimDomain::Security, ClaimTier::ShippedFact),
+        ];
+        let morphisms = vec![
+            test_morphism("morph-a", "a", "test262_pass"),
+            test_morphism("morph-b", "b", "audit_report"),
+        ];
+        // Only provide evidence for atom "a", not "b"
+        let evidence = vec![test_evidence("test262_pass")];
+        let result = evaluate_claims(&atoms, &morphisms, &[], &evidence, 10);
+        assert_eq!(result.overall_state, ClaimState::BlockedByMissingEvidence);
+        assert_eq!(result.entitled_count, 1);
+        assert_eq!(result.blocked_count, 1);
+        assert_eq!(result.evaluated_epoch, 10);
+    }
+
+    #[test]
+    fn evaluate_downgrade_verdict_yields_not_yet_proven() {
+        let atoms = vec![test_atom(
+            "a",
+            ClaimDomain::Supremacy,
+            ClaimTier::ShippedFact,
+        )];
+        let morphisms = vec![test_morphism("morph-a", "a", "benchmark_cell")];
+        let rules = vec![test_rule(
+            "rule-dg",
+            "a",
+            DisqualifierVerdict::DowngradeToScoped,
+        )];
+        let evidence = vec![EvidenceSnapshot {
+            evidence_kind: "benchmark_cell".to_string(),
+            is_fresh: true,
+            triggered_rules: vec!["rule-dg".to_string()],
+        }];
+        let result = evaluate_claims(&atoms, &morphisms, &rules, &evidence, 0);
+        // DowngradeToScoped does not Forbid, so atom should be NotYetProven (has active disqualifiers)
+        assert_eq!(result.overall_state, ClaimState::NotYetProven);
+        assert_eq!(result.not_yet_proven_count, 1);
+        assert_eq!(result.invalidated_count, 0);
+    }
+
+    #[test]
+    fn evaluate_morphism_blocked_by_rule_yields_missing() {
+        let atoms = vec![test_atom(
+            "a",
+            ClaimDomain::Compatibility,
+            ClaimTier::ShippedFact,
+        )];
+        let morphisms = vec![EvidenceMorphism {
+            morphism_id: "morph-a".to_string(),
+            evidence_kind: "test262_pass".to_string(),
+            effect: MorphismEffect::Supports,
+            target_atoms: vec!["a".to_string()],
+            required_constraints: Vec::new(),
+            blocked_by_rules: vec!["blocker-1".to_string()],
+            rationale: "test".to_string(),
+        }];
+        let evidence = vec![EvidenceSnapshot {
+            evidence_kind: "test262_pass".to_string(),
+            is_fresh: true,
+            triggered_rules: vec!["blocker-1".to_string()],
+        }];
+        let result = evaluate_claims(&atoms, &morphisms, &[], &evidence, 0);
+        // The morphism is blocked, so evidence doesn't count
+        assert_eq!(result.overall_state, ClaimState::BlockedByMissingEvidence);
+        assert_eq!(result.evaluations[0].missing_morphisms, vec!["morph-a"]);
+    }
+
+    #[test]
+    fn evaluate_atom_with_no_required_morphisms_is_entitled() {
+        let atom = ClaimAtom {
+            atom_id: "trivial".to_string(),
+            domain: ClaimDomain::Docs,
+            tier: ClaimTier::ScopedObserved,
+            statement: "Docs exist".to_string(),
+            surface: "docs".to_string(),
+            owning_beads: vec!["bd-test".to_string()],
+            required_morphisms: Vec::new(),
+        };
+        let result = evaluate_claims(&[atom], &[], &[], &[], 0);
+        assert_eq!(result.overall_state, ClaimState::Entitled);
+        assert_eq!(result.entitled_count, 1);
+    }
+
+    // -- Summary edge cases --
+
+    #[test]
+    fn summary_for_invalidated_result_shows_invalidated_state() {
+        let atoms = vec![test_atom(
+            "a",
+            ClaimDomain::Security,
+            ClaimTier::ShippedFact,
+        )];
+        let morphisms = vec![test_morphism("morph-a", "a", "audit_report")];
+        let rules = vec![test_rule("rule-sec", "a", DisqualifierVerdict::Forbid)];
+        let evidence = vec![EvidenceSnapshot {
+            evidence_kind: "audit_report".to_string(),
+            is_fresh: true,
+            triggered_rules: vec!["rule-sec".to_string()],
+        }];
+        let result = evaluate_claims(&atoms, &morphisms, &rules, &evidence, 99);
+        let summary = render_entitlement_summary(&result);
+        assert!(summary.contains("overall_state: invalidated"));
+        assert!(summary.contains("invalidated: 1"));
+        assert!(summary.contains("evaluated_epoch: 99"));
+    }
+
+    #[test]
+    fn entitlement_result_schema_version_matches_constant() {
+        let result = evaluate_claims(&[], &[], &[], &[], 0);
+        assert_eq!(result.schema_version, ENTITLEMENT_RESULT_SCHEMA_VERSION);
+        assert_eq!(result.bead_id, CLAIM_ATOM_LATTICE_BEAD_ID);
+    }
 }

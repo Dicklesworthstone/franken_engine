@@ -1177,4 +1177,353 @@ mod tests {
         sorted.sort();
         assert_eq!(ids, sorted);
     }
+
+    // ── additional serde round-trips ─────────────────────────────────
+
+    #[test]
+    fn retry_budget_policy_row_serde_round_trip() {
+        let row = RetryBudgetPolicyRow {
+            candidate_id: "budget-candidate".to_string(),
+            max_retries: 5,
+            max_writer_pressure_observations: 3,
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        let back: RetryBudgetPolicyRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(row, back);
+    }
+
+    #[test]
+    fn retry_budget_policy_artifact_serde_round_trip() {
+        let artifact = RetryBudgetPolicyArtifact {
+            schema_version: RETRY_POLICY_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            component: COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            policy_hash: "hash123".to_string(),
+            rows: vec![
+                RetryBudgetPolicyRow {
+                    candidate_id: "c1".to_string(),
+                    max_retries: 4,
+                    max_writer_pressure_observations: 1,
+                },
+                RetryBudgetPolicyRow {
+                    candidate_id: "c2".to_string(),
+                    max_retries: 2,
+                    max_writer_pressure_observations: 2,
+                },
+            ],
+        };
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let back: RetryBudgetPolicyArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn fallback_matrix_row_serde_round_trip() {
+        let row = FallbackMatrixRow {
+            candidate_id: "fallback-test".to_string(),
+            incumbent_baseline: "rwlock".to_string(),
+            exact_fallback_conditions: vec![
+                "uninitialized".to_string(),
+                "writer_active".to_string(),
+            ],
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        let back: FallbackMatrixRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(row, back);
+    }
+
+    #[test]
+    fn incumbent_fallback_matrix_artifact_serde_round_trip() {
+        let artifact = IncumbentFallbackMatrixArtifact {
+            schema_version: FALLBACK_MATRIX_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            component: COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            matrix_hash: "matrixhash456".to_string(),
+            rows: vec![FallbackMatrixRow {
+                candidate_id: "governance-ledger-head-view".to_string(),
+                incumbent_baseline: "mutex-protected-query".to_string(),
+                exact_fallback_conditions: vec!["uninitialized".to_string()],
+            }],
+        };
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let back: IncumbentFallbackMatrixArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn structured_log_event_serde_round_trip() {
+        let event = StructuredLogEvent {
+            trace_id: "trace.rgc.621b".to_string(),
+            decision_id: "decision.rgc.621b".to_string(),
+            policy_id: "policy.rgc.621b".to_string(),
+            component: COMPONENT.to_string(),
+            event: "candidate_contract_evaluated".to_string(),
+            outcome: "accept".to_string(),
+            error_code: Some("E001".to_string()),
+            candidate_id: Some("module-cache-snapshot".to_string()),
+            detail: "read_api=ModuleCache::snapshot".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn structured_log_event_serde_with_none_fields() {
+        let event = StructuredLogEvent {
+            trace_id: "trace-none-test".to_string(),
+            decision_id: "decision-none-test".to_string(),
+            policy_id: "policy-none-test".to_string(),
+            component: COMPONENT.to_string(),
+            event: "test_event".to_string(),
+            outcome: "pass".to_string(),
+            error_code: None,
+            candidate_id: None,
+            detail: "no optional fields".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+        assert!(json.contains("\"error_code\":null"));
+        assert!(json.contains("\"candidate_id\":null"));
+    }
+
+    #[test]
+    fn manifest_artifact_reference_serde_round_trip() {
+        let reference = ManifestArtifactReference {
+            path: "seqlock_reader_writer_contract.json".to_string(),
+            sha256: "sha256:abcdef0123456789".to_string(),
+        };
+        let json = serde_json::to_string(&reference).unwrap();
+        let back: ManifestArtifactReference = serde_json::from_str(&json).unwrap();
+        assert_eq!(reference, back);
+    }
+
+    #[test]
+    fn reader_writer_contract_artifact_serde_round_trip() {
+        let artifact = ReaderWriterContractArtifact {
+            schema_version: CONTRACT_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            component: COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            contract_hash: "contract-hash-xyz".to_string(),
+            accepted_candidates: vec![ContractCandidateRow {
+                candidate_id: "test-candidate".to_string(),
+                surface_name: "test-surface".to_string(),
+                module_path: "crate::test".to_string(),
+                read_api: "Test::read".to_string(),
+                write_api: "Test::write".to_string(),
+                incumbent_baseline: "rwlock".to_string(),
+                retry_budget_policy: RetryBudgetPolicy::new(3, 2),
+                exact_fallback_conditions: vec!["uninitialized".to_string()],
+                telemetry_fields: vec!["total_reads".to_string()],
+            }],
+            observed_telemetry: vec![ObservedTelemetryRow {
+                candidate_id: "test-candidate".to_string(),
+                total_reads: 100,
+                fast_path_reads: 90,
+                fallback_reads: 10,
+                total_retries: 2,
+                writer_pressure_observations: 1,
+                writes: 50,
+                latest_read_source: "fast_path".to_string(),
+            }],
+        };
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let back: ReaderWriterContractArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn docs_contract_fixture_serde_round_trip() {
+        let fixture = build_docs_contract_fixture();
+        let json = serde_json::to_string_pretty(&fixture).unwrap();
+        let back: DocsContractFixture = serde_json::from_str(&json).unwrap();
+        assert_eq!(fixture, back);
+    }
+
+    #[test]
+    fn docs_candidate_policy_serde_round_trip() {
+        let policy = DocsCandidatePolicy {
+            candidate_id: "my-candidate".to_string(),
+            max_retries: 7,
+            max_writer_pressure_observations: 4,
+        };
+        let json = serde_json::to_string(&policy).unwrap();
+        let back: DocsCandidatePolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(policy, back);
+    }
+
+    // ── pure function tests ──────────────────────────────────────────
+
+    #[test]
+    fn fast_path_source_label_returns_expected_value() {
+        assert_eq!(fast_path_source_label(), "fast_path");
+    }
+
+    #[test]
+    fn digest_json_is_deterministic() {
+        let value = serde_json::json!({"key": "value", "number": 42});
+        let hash1 = digest_json(&value);
+        let hash2 = digest_json(&value);
+        assert_eq!(hash1, hash2);
+        assert!(!hash1.is_empty());
+    }
+
+    #[test]
+    fn digest_json_differs_for_different_inputs() {
+        let v1 = serde_json::json!({"key": "value1"});
+        let v2 = serde_json::json!({"key": "value2"});
+        assert_ne!(digest_json(&v1), digest_json(&v2));
+    }
+
+    #[test]
+    fn sha256_hex_produces_64_char_lowercase_hex() {
+        let hash = sha256_hex(b"hello world");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert!(hash.chars().all(|ch| !ch.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn sha256_hex_is_deterministic() {
+        let h1 = sha256_hex(b"deterministic");
+        let h2 = sha256_hex(b"deterministic");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn unique_temp_path_produces_distinct_paths() {
+        let base = Path::new("/tmp/test_artifact.json");
+        let p1 = unique_temp_path(base);
+        let p2 = unique_temp_path(base);
+        assert_ne!(p1, p2);
+    }
+
+    #[test]
+    fn unique_temp_path_preserves_parent_directory() {
+        let base = Path::new("/tmp/subdir/artifact.json");
+        let temp = unique_temp_path(base);
+        assert_eq!(temp.parent(), Some(Path::new("/tmp/subdir")));
+    }
+
+    #[test]
+    fn unique_temp_path_starts_with_dot_and_ends_with_tmp() {
+        let base = Path::new("/tmp/myfile.json");
+        let temp = unique_temp_path(base);
+        let file_name = temp.file_name().unwrap().to_str().unwrap();
+        assert!(
+            file_name.starts_with('.'),
+            "temp file should start with dot: {file_name}"
+        );
+        assert!(
+            file_name.ends_with(".tmp"),
+            "temp file should end with .tmp: {file_name}"
+        );
+    }
+
+    #[test]
+    fn required_artifact_names_count_is_eleven() {
+        let names = required_artifact_names();
+        assert_eq!(names.len(), 11);
+    }
+
+    #[test]
+    fn render_summary_includes_telemetry_section_when_telemetry_present() {
+        let contract = ReaderWriterContractArtifact {
+            schema_version: CONTRACT_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            component: COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            contract_hash: "testhash".to_string(),
+            accepted_candidates: vec![],
+            observed_telemetry: vec![ObservedTelemetryRow {
+                candidate_id: "telemetry-test".to_string(),
+                total_reads: 50,
+                fast_path_reads: 40,
+                fallback_reads: 10,
+                total_retries: 0,
+                writer_pressure_observations: 0,
+                writes: 20,
+                latest_read_source: "fast_path".to_string(),
+            }],
+        };
+        let summary = render_summary(&contract);
+        assert!(summary.contains("Observed Telemetry"));
+        assert!(summary.contains("telemetry-test"));
+        assert!(summary.contains("reads=50"));
+        assert!(summary.contains("fast_path=40"));
+        assert!(summary.contains("fallback=10"));
+        assert!(summary.contains("writes=20"));
+    }
+
+    #[test]
+    fn render_summary_includes_retry_and_pressure_for_candidates() {
+        let contract = ReaderWriterContractArtifact {
+            schema_version: CONTRACT_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            component: COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            contract_hash: "testhash2".to_string(),
+            accepted_candidates: vec![ContractCandidateRow {
+                candidate_id: "summary-candidate".to_string(),
+                surface_name: "test-surface".to_string(),
+                module_path: "crate::test".to_string(),
+                read_api: "TestRead::read".to_string(),
+                write_api: "TestWrite::write".to_string(),
+                incumbent_baseline: "rwlock".to_string(),
+                retry_budget_policy: RetryBudgetPolicy::new(5, 3),
+                exact_fallback_conditions: vec![],
+                telemetry_fields: vec![],
+            }],
+            observed_telemetry: vec![],
+        };
+        let summary = render_summary(&contract);
+        assert!(summary.contains("retries=5"));
+        assert!(summary.contains("writer_pressure_budget=3"));
+        assert!(summary.contains("read_api=`TestRead::read`"));
+    }
+
+    #[test]
+    fn candidate_rows_each_have_six_telemetry_fields() {
+        let rows = accepted_candidate_rows("2026-03-06T00:00:00Z");
+        let expected_fields = [
+            "total_reads",
+            "fast_path_reads",
+            "fallback_reads",
+            "total_retries",
+            "writer_pressure_observations",
+            "writes",
+        ];
+        for row in &rows {
+            assert_eq!(
+                row.telemetry_fields.len(),
+                6,
+                "expected 6 telemetry fields for {}",
+                row.candidate_id
+            );
+            for field in &expected_fields {
+                assert!(
+                    row.telemetry_fields.contains(&field.to_string()),
+                    "missing telemetry field {field} for {}",
+                    row.candidate_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn artifact_context_new_uses_provided_path() {
+        let ctx = ArtifactContext::new("/custom/artifact/dir");
+        assert_eq!(ctx.artifact_dir, PathBuf::from("/custom/artifact/dir"));
+    }
+
+    #[test]
+    fn docs_contract_fixture_required_artifacts_match_required_names() {
+        let fixture = build_docs_contract_fixture();
+        let expected = required_artifact_names();
+        assert_eq!(fixture.required_artifacts, expected);
+    }
 }

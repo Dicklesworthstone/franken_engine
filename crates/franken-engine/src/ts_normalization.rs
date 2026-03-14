@@ -416,7 +416,7 @@ pub fn normalize_typescript_to_es2020(
     decisions.push(build_decision(
         "type_only_import_elision",
         no_type_imports != current,
-        "Type-only imports were elided from runtime output.",
+        "Type-only imports and mixed type-only import/export specifiers were elided from runtime output.",
     ));
     current = no_type_imports;
 
@@ -775,10 +775,16 @@ fn source_label_has_typescript_extension(source_label: &str) -> bool {
 
 fn source_looks_typescript(source: &str) -> bool {
     if source.contains("import type ")
+        || source.contains("import { type ")
+        || source.contains("import {type ")
         || source.contains(" as const")
         || source.contains("!:")
         || source.contains("interface ")
         || source.contains("enum ")
+        || source.contains("export { type ")
+        || source.contains("export {type ")
+        || source.contains("export type {")
+        || source.contains("export type *")
         || source.contains(" implements ")
     {
         return true;
@@ -790,6 +796,11 @@ fn source_looks_typescript(source: &str) -> bool {
 fn line_looks_like_typescript_construct(line: &str) -> bool {
     let trimmed = line.trim_start();
     if trimmed.starts_with("export type ") || trimmed.starts_with("export interface ") {
+        return true;
+    }
+    if (trimmed.starts_with("import {") || trimmed.starts_with("export {"))
+        && trimmed.contains("type ")
+    {
         return true;
     }
     if trimmed.starts_with("type ") && trimmed.contains('=') {
@@ -1027,11 +1038,154 @@ fn is_valid_capability_annotation(value: &str) -> bool {
 }
 
 fn elide_type_only_imports(source: &str) -> String {
-    source
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("import type "))
-        .collect::<Vec<_>>()
-        .join("\n")
+    rewrite_outside_strings_and_comments(source, |source, index, output| {
+        if !is_statement_start(source, index)
+            || (!starts_with_keyword(source, index, "import")
+                && !starts_with_keyword(source, index, "export"))
+        {
+            return None;
+        }
+
+        let statement_end = find_import_export_statement_end(source, index)?;
+        let statement = &source[index..statement_end];
+        let rewritten = rewrite_type_only_import_export_statement(statement)?;
+        trim_trailing_inline_whitespace(output);
+        output.push_str(&rewritten);
+        Some(statement_end)
+    })
+}
+
+fn find_import_export_statement_end(source: &str, start: usize) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut cursor = start;
+    let mut state = LexicalRewriteState::Code;
+    let mut saw_code = false;
+
+    while let Some((index, ch)) = next_code_scan_char(source, &mut cursor, &mut state) {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            ';' if paren_depth == 0
+                && bracket_depth == 0
+                && brace_depth == 0
+                && angle_depth == 0 =>
+            {
+                return Some(index + ch.len_utf8());
+            }
+            '\n' if paren_depth == 0
+                && bracket_depth == 0
+                && brace_depth == 0
+                && angle_depth == 0
+                && saw_code =>
+            {
+                return Some(index);
+            }
+            _ => {}
+        }
+
+        if !ch.is_ascii_whitespace() {
+            saw_code = true;
+        }
+    }
+
+    Some(source.len())
+}
+
+fn rewrite_type_only_import_export_statement(statement: &str) -> Option<String> {
+    let start = statement.find(|ch: char| !ch.is_ascii_whitespace())?;
+    if starts_with_keyword(statement, start, "import") {
+        let after_import = skip_ascii_whitespace(statement, start + "import".len());
+        if after_import > start + "import".len()
+            && starts_with_keyword(statement, after_import, "type")
+        {
+            return Some(String::new());
+        }
+    } else if starts_with_keyword(statement, start, "export") {
+        let after_export = skip_ascii_whitespace(statement, start + "export".len());
+        if after_export > start + "export".len()
+            && starts_with_keyword(statement, after_export, "type")
+        {
+            let after_type = skip_ascii_whitespace(statement, after_export + "type".len());
+            if statement[after_type..].starts_with('{') || statement[after_type..].starts_with('*')
+            {
+                return Some(String::new());
+            }
+        }
+    } else {
+        return None;
+    }
+
+    let brace_start = find_top_level_char(statement, start, '{')?;
+    let brace_end = find_matching_delimiter(statement, brace_start, '{', '}')?;
+    let (runtime_specifiers, removed_any) =
+        filter_runtime_named_specifiers(&statement[brace_start + 1..brace_end]);
+    if !removed_any {
+        return None;
+    }
+
+    let prefix = &statement[..brace_start];
+    let suffix = statement[brace_end + 1..].trim_start();
+    if runtime_specifiers.is_empty() {
+        let prefix_without_specifiers =
+            prefix.trim_end_matches(|ch: char| ch.is_ascii_whitespace() || ch == ',');
+        let normalized_prefix = prefix_without_specifiers.trim_end();
+        if normalized_prefix == "import" || normalized_prefix == "export" {
+            return Some(String::new());
+        }
+        return Some(if suffix.is_empty() {
+            normalized_prefix.to_string()
+        } else {
+            format!("{normalized_prefix} {suffix}")
+        });
+    }
+
+    let normalized_prefix = prefix.trim_end();
+    let mut rewritten = String::new();
+    rewritten.push_str(normalized_prefix);
+    if !rewritten.ends_with(' ') {
+        rewritten.push(' ');
+    }
+    rewritten.push('{');
+    rewritten.push(' ');
+    rewritten.push_str(&runtime_specifiers.join(", "));
+    rewritten.push(' ');
+    rewritten.push('}');
+    if !suffix.is_empty() {
+        rewritten.push(' ');
+        rewritten.push_str(suffix);
+    }
+
+    Some(rewritten)
+}
+
+fn filter_runtime_named_specifiers(specifiers: &str) -> (Vec<String>, bool) {
+    let mut runtime_specifiers = Vec::<String>::new();
+    let mut removed_any = false;
+
+    for specifier in specifiers.split(',') {
+        let trimmed = specifier.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if starts_with_keyword(trimmed, 0, "type") {
+            removed_any = true;
+            continue;
+        }
+
+        runtime_specifiers.push(trimmed.to_string());
+    }
+
+    (runtime_specifiers, removed_any)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2958,6 +3112,43 @@ abstract class Base { }"#;
     }
 
     #[test]
+    fn elide_type_only_imports_rewrites_mixed_named_import_specifiers() {
+        let source = "import { type Foo, bar, type Baz as Qux } from \"pkg\";";
+        let result = elide_type_only_imports(source);
+        assert_eq!(result, "import { bar } from \"pkg\";");
+    }
+
+    #[test]
+    fn elide_type_only_imports_accepts_extra_spacing_in_import_type_keyword() {
+        let source = "import   type { Foo } from \"pkg\";\nconst value = 1;";
+        let result = elide_type_only_imports(source);
+        assert!(!result.contains("import   type"));
+        assert!(result.contains("const value = 1;"));
+    }
+
+    #[test]
+    fn elide_type_only_imports_rewrites_default_plus_type_only_named_imports() {
+        let source = "import React, { type FC } from \"react\";";
+        let result = elide_type_only_imports(source);
+        assert_eq!(result, "import React from \"react\";");
+    }
+
+    #[test]
+    fn elide_type_only_imports_rewrites_mixed_named_export_specifiers() {
+        let source = "export { type Foo, bar, type Baz as Qux } from \"pkg\";";
+        let result = elide_type_only_imports(source);
+        assert_eq!(result, "export { bar } from \"pkg\";");
+    }
+
+    #[test]
+    fn elide_type_only_imports_removes_export_type_named_reexports() {
+        let source = "export type { Foo, Bar } from \"pkg\";\nconst value = 1;";
+        let result = elide_type_only_imports(source);
+        assert!(!result.contains("export type"));
+        assert!(result.contains("const value = 1;"));
+    }
+
+    #[test]
     fn strip_type_annotations_basic() {
         let result = strip_type_annotations("let x: number = 5;");
         // The colon and everything until the next delimiter is stripped
@@ -3391,6 +3582,14 @@ abstract class Base { }"#;
         );
         assert_eq!(
             classify_source_language(None, "export type UserId = string;"),
+            SourceLanguage::TypeScript
+        );
+        assert_eq!(
+            classify_source_language(None, "import { type Foo, bar } from './foo';"),
+            SourceLanguage::TypeScript
+        );
+        assert_eq!(
+            classify_source_language(None, "export { type Foo, bar } from './foo';"),
             SourceLanguage::TypeScript
         );
     }

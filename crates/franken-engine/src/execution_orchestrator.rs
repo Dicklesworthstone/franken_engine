@@ -823,23 +823,30 @@ impl ExecutionOrchestrator {
         }
 
         let mut pending_declassifications = Vec::new();
-        let mut consumed_receipt_keys = Vec::new();
+        let mut attempted_receipt_keys = Vec::new();
         for entry in &artifact.required_declassifications {
             let staged_key = (artifact.trace_id.clone(), entry.obligation_id.clone());
-            if let Some(receipt) = self.staged_declassification_receipts.get(&staged_key) {
-                lattice
-                    .use_declassification_with_receipt(
-                        &entry.obligation_id,
-                        receipt,
-                        &artifact.trace_id,
-                    )
-                    .map_err(|err| OrchestratorError::IfcRuntimeGuardBlocked {
+            if let Some(receipt) = self
+                .staged_declassification_receipts
+                .get(&staged_key)
+                .cloned()
+            {
+                attempted_receipt_keys.push(staged_key.clone());
+                if let Err(err) = lattice.use_declassification_with_receipt(
+                    &entry.obligation_id,
+                    &receipt,
+                    &artifact.trace_id,
+                ) {
+                    for staged_key in attempted_receipt_keys {
+                        self.staged_declassification_receipts.remove(&staged_key);
+                    }
+                    return Err(OrchestratorError::IfcRuntimeGuardBlocked {
                         detail: format!(
                             "artifact {} receipt-linked declassification failed for {}: {}",
                             artifact.artifact_id, entry.obligation_id, err
                         ),
-                    })?;
-                consumed_receipt_keys.push(staged_key);
+                    });
+                }
                 continue;
             }
 
@@ -896,10 +903,11 @@ impl ExecutionOrchestrator {
             ));
         }
 
+        for staged_key in attempted_receipt_keys {
+            self.staged_declassification_receipts.remove(&staged_key);
+        }
+
         if summary.is_empty() {
-            for staged_key in consumed_receipt_keys {
-                self.staged_declassification_receipts.remove(&staged_key);
-            }
             return Ok(());
         }
 
@@ -1746,12 +1754,17 @@ mod tests {
             artifact_with_required_declassification("trace-block", "obl-block", "decision-block");
         let signing_key = SigningKey::from_bytes([18u8; 32]);
         let receipt = signed_receipt("trace-other", "decision-block", &signing_key);
+        let staged_key = ("trace-block".to_string(), "obl-block".to_string());
 
         orch.trust_declassification_authorizer_for_contract(
             "decision-block",
             signing_key.verification_key(),
         );
         orch.stage_declassification_receipt_for_obligation("trace-block", "obl-block", receipt);
+        assert!(
+            orch.staged_declassification_receipts
+                .contains_key(&staged_key)
+        );
 
         let err = orch
             .phase_enforce_runtime_flow_guards(&artifact)
@@ -1765,8 +1778,10 @@ mod tests {
         }
 
         assert!(
-            orch.staged_declassification_receipts
-                .contains_key(&("trace-block".to_string(), "obl-block".to_string(),))
+            !orch
+                .staged_declassification_receipts
+                .contains_key(&staged_key),
+            "invalid staged receipts should be evicted after a failed runtime-guard evaluation"
         );
     }
 
@@ -1785,6 +1800,55 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn phase_enforce_runtime_flow_guards_evicts_consumed_receipt_on_partial_failure() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let mut artifact = artifact_with_required_declassification(
+            "trace-partial",
+            "obl-partial",
+            "decision-partial",
+        );
+        artifact.runtime_checkpoints.push(
+            crate::lowering_pipeline::RuntimeCheckpointArtifactEntry {
+                op_index: 9,
+                source_label: crate::ifc_artifacts::Label::Secret,
+                sink_clearance: crate::ifc_artifacts::Label::Internal,
+                capability: Some("hostcall.invoke".to_string()),
+                reason: "dynamic_capability".to_string(),
+            },
+        );
+        let signing_key = SigningKey::from_bytes([19u8; 32]);
+        let receipt = signed_receipt("trace-partial", "decision-partial", &signing_key);
+        let staged_key = ("trace-partial".to_string(), "obl-partial".to_string());
+
+        orch.trust_declassification_authorizer_for_contract(
+            "decision-partial",
+            signing_key.verification_key(),
+        );
+        orch.stage_declassification_receipt_for_obligation("trace-partial", "obl-partial", receipt);
+        assert!(
+            orch.staged_declassification_receipts
+                .contains_key(&staged_key)
+        );
+
+        let err = orch
+            .phase_enforce_runtime_flow_guards(&artifact)
+            .expect_err("runtime checkpoint must still fail closed after receipt consumption");
+        match err {
+            OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+                assert!(detail.contains("runtime checkpoints=1"));
+                assert!(detail.contains("hostcall.invoke"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        assert!(
+            !orch
+                .staged_declassification_receipts
+                .contains_key(&staged_key),
+            "consumed staged receipts should be evicted even when later obligations still fail"
+        );
     }
 
     #[test]

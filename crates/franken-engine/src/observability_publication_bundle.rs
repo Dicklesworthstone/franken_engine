@@ -1313,3 +1313,555 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hasher.update(bytes);
     hex::encode(hasher.finalize())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // ObservabilityWorkloadClass tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn workload_class_all_contains_three_variants() {
+        assert_eq!(ObservabilityWorkloadClass::ALL.len(), 3);
+    }
+
+    #[test]
+    fn workload_class_all_order_is_deterministic() {
+        let classes = ObservabilityWorkloadClass::ALL;
+        assert_eq!(classes[0], ObservabilityWorkloadClass::DispatchSensitive);
+        assert_eq!(classes[1], ObservabilityWorkloadClass::HostcallSensitive);
+        assert_eq!(classes[2], ObservabilityWorkloadClass::StartupSensitive);
+    }
+
+    #[test]
+    fn workload_class_workload_id_dispatch() {
+        assert_eq!(
+            ObservabilityWorkloadClass::DispatchSensitive.workload_id(),
+            "dispatch_sensitive"
+        );
+    }
+
+    #[test]
+    fn workload_class_workload_id_hostcall() {
+        assert_eq!(
+            ObservabilityWorkloadClass::HostcallSensitive.workload_id(),
+            "hostcall_sensitive"
+        );
+    }
+
+    #[test]
+    fn workload_class_workload_id_startup() {
+        assert_eq!(
+            ObservabilityWorkloadClass::StartupSensitive.workload_id(),
+            "startup_sensitive"
+        );
+    }
+
+    #[test]
+    fn workload_class_telemetry_domain_dispatch() {
+        assert_eq!(
+            ObservabilityWorkloadClass::DispatchSensitive.telemetry_domain(),
+            "dispatch_hot_path"
+        );
+    }
+
+    #[test]
+    fn workload_class_telemetry_domain_hostcall() {
+        assert_eq!(
+            ObservabilityWorkloadClass::HostcallSensitive.telemetry_domain(),
+            "hostcall_boundary"
+        );
+    }
+
+    #[test]
+    fn workload_class_telemetry_domain_startup() {
+        assert_eq!(
+            ObservabilityWorkloadClass::StartupSensitive.telemetry_domain(),
+            "startup_latency"
+        );
+    }
+
+    #[test]
+    fn workload_class_display_matches_workload_id() {
+        for class in ObservabilityWorkloadClass::ALL {
+            assert_eq!(format!("{class}"), class.workload_id());
+        }
+    }
+
+    #[test]
+    fn workload_class_default_is_dispatch_sensitive() {
+        assert_eq!(
+            ObservabilityWorkloadClass::default(),
+            ObservabilityWorkloadClass::DispatchSensitive
+        );
+    }
+
+    #[test]
+    fn workload_class_serde_roundtrip() {
+        for class in ObservabilityWorkloadClass::ALL {
+            let json = serde_json::to_string(&class).unwrap();
+            let back: ObservabilityWorkloadClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, class);
+        }
+    }
+
+    #[test]
+    fn workload_class_serde_is_snake_case() {
+        let json = serde_json::to_string(&ObservabilityWorkloadClass::DispatchSensitive).unwrap();
+        assert_eq!(json, "\"dispatch_sensitive\"");
+    }
+
+    // -----------------------------------------------------------------------
+    // ObservabilityMode tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mode_all_contains_three_variants() {
+        assert_eq!(ObservabilityMode::ALL.len(), 3);
+    }
+
+    #[test]
+    fn mode_all_order_is_deterministic() {
+        let modes = ObservabilityMode::ALL;
+        assert_eq!(modes[0], ObservabilityMode::Off);
+        assert_eq!(modes[1], ObservabilityMode::Budgeted);
+        assert_eq!(modes[2], ObservabilityMode::ExactShadow);
+    }
+
+    #[test]
+    fn mode_as_str_off() {
+        assert_eq!(ObservabilityMode::Off.as_str(), "off");
+    }
+
+    #[test]
+    fn mode_as_str_budgeted() {
+        assert_eq!(ObservabilityMode::Budgeted.as_str(), "budgeted");
+    }
+
+    #[test]
+    fn mode_as_str_exact_shadow() {
+        assert_eq!(ObservabilityMode::ExactShadow.as_str(), "exact_shadow");
+    }
+
+    #[test]
+    fn mode_display_matches_as_str() {
+        for mode in ObservabilityMode::ALL {
+            assert_eq!(format!("{mode}"), mode.as_str());
+        }
+    }
+
+    #[test]
+    fn mode_default_is_off() {
+        assert_eq!(ObservabilityMode::default(), ObservabilityMode::Off);
+    }
+
+    #[test]
+    fn mode_serde_roundtrip() {
+        for mode in ObservabilityMode::ALL {
+            let json = serde_json::to_string(&mode).unwrap();
+            let back: ObservabilityMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, mode);
+        }
+    }
+
+    #[test]
+    fn mode_serde_is_snake_case() {
+        let json = serde_json::to_string(&ObservabilityMode::ExactShadow).unwrap();
+        assert_eq!(json, "\"exact_shadow\"");
+    }
+
+    // -----------------------------------------------------------------------
+    // Error type tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn error_display_io() {
+        let err = ObservabilityPublicationBundleError::Io {
+            path: "/tmp/test".to_string(),
+            source: io::Error::new(io::ErrorKind::NotFound, "missing"),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/tmp/test"));
+        assert!(msg.contains("I/O error"));
+    }
+
+    #[test]
+    fn error_display_busy() {
+        let err = ObservabilityPublicationBundleError::Busy {
+            path: "/tmp/lock".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/tmp/lock"));
+        assert!(msg.contains("locked"));
+    }
+
+    #[test]
+    fn error_source_io_returns_some() {
+        let err = ObservabilityPublicationBundleError::Io {
+            path: "p".to_string(),
+            source: io::Error::other("x"),
+        };
+        assert!(std::error::Error::source(&err).is_some());
+    }
+
+    #[test]
+    fn error_source_busy_returns_none() {
+        let err = ObservabilityPublicationBundleError::Busy {
+            path: "p".to_string(),
+        };
+        assert!(std::error::Error::source(&err).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // claim_state_transition tests (all 6 branches)
+    // -----------------------------------------------------------------------
+
+    fn make_surface(allowed: bool, exact: bool) -> ObservabilityClaimSurface {
+        ObservabilityClaimSurface {
+            workload_id: "test".to_string(),
+            workload_class: ObservabilityWorkloadClass::DispatchSensitive,
+            mode: ObservabilityMode::Budgeted,
+            total_events_captured: 0,
+            total_events_thinned: 0,
+            total_events_rejected: 0,
+            budget_utilization_millionths: 0,
+            survival_rate_millionths: 0,
+            exact_capture: exact,
+            claim_allowed: allowed,
+            suppression_reasons: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn claim_transition_suppressed_to_suppressed() {
+        let baseline = make_surface(false, false);
+        let comparison = make_surface(false, false);
+        assert_eq!(
+            claim_state_transition(&baseline, &comparison),
+            "suppressed_to_suppressed"
+        );
+    }
+
+    #[test]
+    fn claim_transition_suppressed_to_exact_attested() {
+        let baseline = make_surface(false, false);
+        let comparison = make_surface(true, true);
+        assert_eq!(
+            claim_state_transition(&baseline, &comparison),
+            "suppressed_to_exact_attested"
+        );
+    }
+
+    #[test]
+    fn claim_transition_suppressed_to_allowed() {
+        let baseline = make_surface(false, false);
+        let comparison = make_surface(true, false);
+        assert_eq!(
+            claim_state_transition(&baseline, &comparison),
+            "suppressed_to_allowed"
+        );
+    }
+
+    #[test]
+    fn claim_transition_allowed_to_suppressed() {
+        let baseline = make_surface(true, false);
+        let comparison = make_surface(false, false);
+        assert_eq!(
+            claim_state_transition(&baseline, &comparison),
+            "allowed_to_suppressed"
+        );
+    }
+
+    #[test]
+    fn claim_transition_allowed_to_exact_attested() {
+        let baseline = make_surface(true, false);
+        let comparison = make_surface(true, true);
+        assert_eq!(
+            claim_state_transition(&baseline, &comparison),
+            "allowed_to_exact_attested"
+        );
+    }
+
+    #[test]
+    fn claim_transition_allowed_to_allowed() {
+        let baseline = make_surface(true, false);
+        let comparison = make_surface(true, false);
+        assert_eq!(
+            claim_state_transition(&baseline, &comparison),
+            "allowed_to_allowed"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // build_claim_delta tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn claim_delta_captured_events_positive() {
+        let mut baseline = make_surface(false, false);
+        baseline.total_events_captured = 5;
+        let mut comparison = make_surface(true, false);
+        comparison.total_events_captured = 12;
+        let delta = build_claim_delta(&baseline, &comparison);
+        assert_eq!(delta.captured_delta, 7);
+    }
+
+    #[test]
+    fn claim_delta_captured_events_negative() {
+        let mut baseline = make_surface(true, false);
+        baseline.total_events_captured = 20;
+        let mut comparison = make_surface(true, false);
+        comparison.total_events_captured = 8;
+        let delta = build_claim_delta(&baseline, &comparison);
+        assert_eq!(delta.captured_delta, -12);
+    }
+
+    #[test]
+    fn claim_delta_thinned_events_computed() {
+        let mut baseline = make_surface(false, false);
+        baseline.total_events_thinned = 3;
+        let mut comparison = make_surface(true, false);
+        comparison.total_events_thinned = 7;
+        let delta = build_claim_delta(&baseline, &comparison);
+        assert_eq!(delta.thinned_delta, 4);
+    }
+
+    #[test]
+    fn claim_delta_utilization_delta_computed() {
+        let mut baseline = make_surface(false, false);
+        baseline.budget_utilization_millionths = 200_000;
+        let mut comparison = make_surface(true, false);
+        comparison.budget_utilization_millionths = 800_000;
+        let delta = build_claim_delta(&baseline, &comparison);
+        assert_eq!(delta.utilization_delta_millionths, 600_000);
+    }
+
+    #[test]
+    fn claim_delta_exact_capture_improved_true() {
+        let baseline = make_surface(false, false);
+        let comparison = make_surface(true, true);
+        let delta = build_claim_delta(&baseline, &comparison);
+        assert!(delta.exact_capture_improved);
+    }
+
+    #[test]
+    fn claim_delta_exact_capture_improved_false_when_both_exact() {
+        let baseline = make_surface(true, true);
+        let comparison = make_surface(true, true);
+        let delta = build_claim_delta(&baseline, &comparison);
+        assert!(!delta.exact_capture_improved);
+    }
+
+    // -----------------------------------------------------------------------
+    // sha256_hex tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sha256_hex_empty_input() {
+        let hash = sha256_hex(b"");
+        assert_eq!(hash.len(), 64);
+        // SHA-256 of empty is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn sha256_hex_deterministic() {
+        let a = sha256_hex(b"test-payload");
+        let b = sha256_hex(b"test-payload");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn sha256_hex_different_inputs_differ() {
+        let a = sha256_hex(b"alpha");
+        let b = sha256_hex(b"beta");
+        assert_ne!(a, b);
+    }
+
+    // -----------------------------------------------------------------------
+    // unique_temp_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unique_temp_path_includes_file_name() {
+        let base = PathBuf::from("/tmp/artifacts/report.json");
+        let temp = unique_temp_path(&base);
+        let name = temp.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with('.'));
+        assert!(name.contains("report.json"));
+        assert!(name.ends_with(".tmp"));
+    }
+
+    #[test]
+    fn unique_temp_path_lives_in_same_parent() {
+        let base = PathBuf::from("/tmp/artifacts/report.json");
+        let temp = unique_temp_path(&base);
+        assert_eq!(temp.parent().unwrap(), base.parent().unwrap());
+    }
+
+    #[test]
+    fn unique_temp_path_is_unique_across_calls() {
+        let base = PathBuf::from("/tmp/a.json");
+        let t1 = unique_temp_path(&base);
+        let t2 = unique_temp_path(&base);
+        assert_ne!(t1, t2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Constants tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn component_constant_is_module_name() {
+        assert_eq!(COMPONENT, "observability_publication_bundle");
+    }
+
+    #[test]
+    fn bead_id_constant_matches_expected() {
+        assert_eq!(BEAD_ID, "bd-1lsy.11.20.3");
+    }
+
+    #[test]
+    fn schema_versions_are_nonempty() {
+        assert!(!BUDGET_SENTINEL_SCHEMA_VERSION.is_empty());
+        assert!(!DEMOTION_RECEIPTS_SCHEMA_VERSION.is_empty());
+        assert!(!SUPREMACY_MATRIX_SCHEMA_VERSION.is_empty());
+        assert!(!CLAIM_DELTA_SCHEMA_VERSION.is_empty());
+        assert!(!PUBLICATION_POLICY_SCHEMA_VERSION.is_empty());
+        assert!(!SUPPORT_BUNDLE_ATTESTATION_SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn all_file_names_end_with_json() {
+        for name in [
+            OBSERVABILITY_BUDGET_SENTINEL_REPORT_FILE,
+            OBSERVABILITY_ON_SUPREMACY_MATRIX_FILE,
+            OBSERVABILITY_CLAIM_DELTA_REPORT_FILE,
+            TELEMETRY_DEMOTION_RECEIPTS_FILE,
+            OBSERVABILITY_PUBLICATION_POLICY_FILE,
+            SUPPORT_BUNDLE_OBSERVABILITY_ATTESTATION_FILE,
+        ] {
+            assert!(name.ends_with(".json"), "file {name} should end with .json");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Serde round-trip for artifact types
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hot_path_publication_summary_serde_roundtrip() {
+        let summary = HotPathPublicationSummary {
+            manifest_id: "test-manifest".to_string(),
+            manifest_hash: "abc123".to_string(),
+            overall_mode: "budgeted".to_string(),
+            publishable: true,
+            calibration_pass_count: 2,
+            calibration_total: 3,
+            thinning_retention_millionths: Some(500_000),
+            rejection_reasons: vec!["reason-a".to_string()],
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: HotPathPublicationSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.manifest_id, "test-manifest");
+        assert_eq!(back.calibration_pass_count, 2);
+        assert!(back.publishable);
+    }
+
+    #[test]
+    fn suppressed_claim_serde_roundtrip() {
+        let claim = SuppressedClaim {
+            workload_id: "dispatch_sensitive".to_string(),
+            workload_class: ObservabilityWorkloadClass::DispatchSensitive,
+            mode: ObservabilityMode::Off,
+            reasons: vec!["observability_off".to_string()],
+        };
+        let json = serde_json::to_string(&claim).unwrap();
+        let back: SuppressedClaim = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.workload_id, "dispatch_sensitive");
+        assert_eq!(back.mode, ObservabilityMode::Off);
+    }
+
+    #[test]
+    fn observability_claim_surface_serde_roundtrip() {
+        let surface = make_surface(true, false);
+        let json = serde_json::to_string(&surface).unwrap();
+        let back: ObservabilityClaimSurface = serde_json::from_str(&json).unwrap();
+        assert!(back.claim_allowed);
+        assert!(!back.exact_capture);
+    }
+
+    #[test]
+    fn observability_claim_delta_serde_roundtrip() {
+        let delta = ObservabilityClaimDelta {
+            workload_id: "test".to_string(),
+            workload_class: ObservabilityWorkloadClass::HostcallSensitive,
+            baseline_mode: ObservabilityMode::Off,
+            comparison_mode: ObservabilityMode::Budgeted,
+            captured_delta: 10,
+            thinned_delta: -2,
+            utilization_delta_millionths: 300_000,
+            exact_capture_improved: true,
+            claim_state_transition: "suppressed_to_allowed".to_string(),
+        };
+        let json = serde_json::to_string(&delta).unwrap();
+        let back: ObservabilityClaimDelta = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.captured_delta, 10);
+        assert!(back.exact_capture_improved);
+    }
+
+    // -----------------------------------------------------------------------
+    // WorkloadModeKey ordering tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn workload_mode_key_ord_is_deterministic() {
+        let key_a = WorkloadModeKey {
+            workload: ObservabilityWorkloadClass::DispatchSensitive,
+            mode: ObservabilityMode::Off,
+        };
+        let key_b = WorkloadModeKey {
+            workload: ObservabilityWorkloadClass::DispatchSensitive,
+            mode: ObservabilityMode::Budgeted,
+        };
+        // Same workload, different mode => ordering defined
+        assert!(key_a != key_b);
+    }
+
+    #[test]
+    fn workload_mode_key_eq() {
+        let key_a = WorkloadModeKey {
+            workload: ObservabilityWorkloadClass::StartupSensitive,
+            mode: ObservabilityMode::ExactShadow,
+        };
+        let key_b = WorkloadModeKey {
+            workload: ObservabilityWorkloadClass::StartupSensitive,
+            mode: ObservabilityMode::ExactShadow,
+        };
+        assert_eq!(key_a, key_b);
+    }
+
+    // -----------------------------------------------------------------------
+    // canonical_json_bytes tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn canonical_json_bytes_produces_valid_json() {
+        let surface = make_surface(true, true);
+        let bytes = canonical_json_bytes(&surface, Path::new("/tmp/test.json")).unwrap();
+        let _parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    }
+
+    #[test]
+    fn canonical_json_bytes_deterministic() {
+        let surface = make_surface(false, false);
+        let a = canonical_json_bytes(&surface, Path::new("/tmp/a.json")).unwrap();
+        let b = canonical_json_bytes(&surface, Path::new("/tmp/b.json")).unwrap();
+        assert_eq!(a, b);
+    }
+}

@@ -882,4 +882,288 @@ mod tests {
             .unwrap();
         assert_eq!(mapping.severity, DiagnosticSeverity::Info);
     }
+
+    // -- Exhaustive enum serde round-trips --
+
+    #[test]
+    fn all_failure_kinds_serde_round_trip() {
+        for kind in InternalFailureKind::all() {
+            let json = serde_json::to_string(kind).unwrap();
+            let back: InternalFailureKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*kind, back);
+        }
+    }
+
+    #[test]
+    fn all_severity_levels_serde_round_trip() {
+        for sev in [
+            DiagnosticSeverity::Fatal,
+            DiagnosticSeverity::Error,
+            DiagnosticSeverity::Warning,
+            DiagnosticSeverity::Info,
+        ] {
+            let json = serde_json::to_string(&sev).unwrap();
+            let back: DiagnosticSeverity = serde_json::from_str(&json).unwrap();
+            assert_eq!(sev, back);
+        }
+    }
+
+    #[test]
+    fn all_user_impacts_serde_round_trip() {
+        for impact in [
+            UserImpact::OperationFailed,
+            UserImpact::DegradedQuality,
+            UserImpact::None,
+        ] {
+            let json = serde_json::to_string(&impact).unwrap();
+            let back: UserImpact = serde_json::from_str(&json).unwrap();
+            assert_eq!(impact, back);
+        }
+    }
+
+    #[test]
+    fn all_operator_impacts_serde_round_trip() {
+        for impact in [
+            OperatorImpact::ImmediateAction,
+            OperatorImpact::TriageRequired,
+            OperatorImpact::InformationalOnly,
+        ] {
+            let json = serde_json::to_string(&impact).unwrap();
+            let back: OperatorImpact = serde_json::from_str(&json).unwrap();
+            assert_eq!(impact, back);
+        }
+    }
+
+    #[test]
+    fn all_next_actions_serde_round_trip() {
+        for action in [
+            NextAction::Retry,
+            NextAction::IncreaseBudget,
+            NextAction::GrantCapability,
+            NextAction::UpdatePolicy,
+            NextAction::UpgradeVersion,
+            NextAction::FileBugReport,
+            NextAction::NoAction,
+            NextAction::InvestigateInfra,
+        ] {
+            let json = serde_json::to_string(&action).unwrap();
+            let back: NextAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(action, back);
+        }
+    }
+
+    // -- Error code prefix structure --
+
+    #[test]
+    fn all_error_code_prefixes_start_with_fe() {
+        for kind in InternalFailureKind::all() {
+            assert!(
+                kind.error_code_prefix().starts_with("FE-"),
+                "prefix for {kind:?} must start with FE-"
+            );
+        }
+    }
+
+    #[test]
+    fn all_error_codes_in_contract_start_with_prefix() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        for kind in InternalFailureKind::all() {
+            let mapping = contract.mapping_for(*kind).unwrap();
+            assert!(
+                mapping.error_code.starts_with(kind.error_code_prefix()),
+                "error code {} should start with prefix {} for {:?}",
+                mapping.error_code,
+                kind.error_code_prefix(),
+                kind,
+            );
+        }
+    }
+
+    // -- Diagnostic emission for all failure kinds --
+
+    #[test]
+    fn emit_diagnostic_for_every_failure_kind() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        for kind in InternalFailureKind::all() {
+            let diag = contract.emit_diagnostic(
+                *kind,
+                &format!("test message for {kind}"),
+                Some("evidence-test"),
+                Some("replay-test"),
+                BTreeMap::new(),
+            );
+            assert_eq!(diag.failure_kind, *kind);
+            assert!(!diag.error_code.is_empty());
+            assert!(!diag.message.is_empty());
+            assert!(!diag.remediation.is_empty());
+        }
+    }
+
+    // -- Cancellation has correct mappings --
+
+    #[test]
+    fn cancellation_is_warning_with_retry() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        let mapping = contract
+            .mapping_for(InternalFailureKind::Cancellation)
+            .unwrap();
+        assert_eq!(mapping.severity, DiagnosticSeverity::Warning);
+        assert_eq!(mapping.next_action, NextAction::Retry);
+        assert_eq!(mapping.operator_impact, OperatorImpact::InformationalOnly);
+    }
+
+    // -- Infrastructure failure is error with immediate action --
+
+    #[test]
+    fn infra_failure_is_error_with_immediate_action() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        let mapping = contract
+            .mapping_for(InternalFailureKind::InfrastructureFailure)
+            .unwrap();
+        assert_eq!(mapping.severity, DiagnosticSeverity::Error);
+        assert_eq!(mapping.operator_impact, OperatorImpact::ImmediateAction);
+        assert_eq!(mapping.next_action, NextAction::InvestigateInfra);
+    }
+
+    // -- Diagnostic event serde --
+
+    #[test]
+    fn diagnostic_event_serde_round_trip() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        let diag = contract.emit_diagnostic(
+            InternalFailureKind::PolicyDenial,
+            "policy blocked",
+            None,
+            None,
+            BTreeMap::new(),
+        );
+        let event = build_diagnostic_event("t-1", "d-1", "s-1", &diag);
+        let json = serde_json::to_string(&event).unwrap();
+        let back: DiagnosticEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event.trace_id, back.trace_id);
+        assert_eq!(event.failure_kind, back.failure_kind);
+        assert_eq!(event.severity, back.severity);
+    }
+
+    // -- Epoch variation does not affect mappings --
+
+    #[test]
+    fn different_epochs_produce_same_mappings() {
+        let c1 = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        let c2 = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(42));
+        assert_eq!(c1.mappings, c2.mappings);
+        assert_eq!(c1.content_hash, c2.content_hash);
+    }
+
+    // -- Severity ordering exhaustive --
+
+    #[test]
+    fn severity_ordering_matches_weight() {
+        let severities = [
+            DiagnosticSeverity::Info,
+            DiagnosticSeverity::Warning,
+            DiagnosticSeverity::Error,
+            DiagnosticSeverity::Fatal,
+        ];
+        for window in severities.windows(2) {
+            assert!(
+                window[0].weight() < window[1].weight(),
+                "{:?} should have lower weight than {:?}",
+                window[0],
+                window[1],
+            );
+        }
+    }
+
+    // -- Contract schema version --
+
+    #[test]
+    fn contract_has_correct_schema_version() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        assert_eq!(contract.schema_version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn contract_has_correct_bead_id() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        assert_eq!(contract.bead_id, BEAD_ID);
+    }
+
+    // -- No evidence/replay for domain error --
+
+    #[test]
+    fn domain_error_has_no_evidence_or_replay_ref() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        let mapping = contract
+            .mapping_for(InternalFailureKind::DomainError)
+            .unwrap();
+        assert!(!mapping.has_evidence_ref);
+        assert!(!mapping.has_replay_ref);
+    }
+
+    // -- Panic class has both evidence and replay --
+
+    #[test]
+    fn panic_class_has_evidence_and_replay() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        let mapping = contract
+            .mapping_for(InternalFailureKind::PanicClass)
+            .unwrap();
+        assert!(mapping.has_evidence_ref);
+        assert!(mapping.has_replay_ref);
+    }
+
+    // -- Policy mapping serde --
+
+    #[test]
+    fn policy_mapping_serde_round_trip() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        let mapping = contract
+            .mapping_for(InternalFailureKind::BudgetExhaustion)
+            .unwrap();
+        let json = serde_json::to_string(mapping).unwrap();
+        let back: PolicyMapping = serde_json::from_str(&json).unwrap();
+        assert_eq!(*mapping, back);
+    }
+
+    // -- Diagnostic with context --
+
+    #[test]
+    fn diagnostic_context_keys_preserved() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        let mut ctx = BTreeMap::new();
+        ctx.insert("extension_id".to_string(), "ext-123".to_string());
+        ctx.insert("capability".to_string(), "FsWrite".to_string());
+        ctx.insert("operation".to_string(), "file_create".to_string());
+
+        let diag = contract.emit_diagnostic(
+            InternalFailureKind::CapabilityDenial,
+            "denied FsWrite",
+            None,
+            None,
+            ctx,
+        );
+
+        assert_eq!(diag.context.len(), 3);
+        assert_eq!(diag.context["extension_id"], "ext-123");
+        assert_eq!(diag.context["capability"], "FsWrite");
+    }
+
+    // -- All failure kinds have non-empty descriptions --
+
+    #[test]
+    fn all_mappings_have_non_empty_descriptions() {
+        let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        for kind in InternalFailureKind::all() {
+            let mapping = contract.mapping_for(*kind).unwrap();
+            assert!(
+                !mapping.description.is_empty(),
+                "mapping for {kind:?} must have a description"
+            );
+            assert!(
+                !mapping.remediation.is_empty(),
+                "mapping for {kind:?} must have remediation guidance"
+            );
+        }
+    }
 }

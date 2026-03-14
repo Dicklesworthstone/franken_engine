@@ -1934,4 +1934,494 @@ mod tests {
         assert!(!ctx.decision_id.is_empty());
         assert!(!ctx.command_invocation.is_empty());
     }
+
+    // ── CandidateKind variant count and ordering ─────────────────────
+
+    #[test]
+    fn candidate_kind_has_three_variants() {
+        let variants = [
+            CandidateKind::Invariant,
+            CandidateKind::SideCondition,
+            CandidateKind::NormalForm,
+        ];
+        let unique: BTreeSet<CandidateKind> = variants.iter().copied().collect();
+        assert_eq!(unique.len(), 3);
+    }
+
+    #[test]
+    fn candidate_kind_debug_contains_variant_name() {
+        assert_eq!(format!("{:?}", CandidateKind::Invariant), "Invariant");
+        assert_eq!(
+            format!("{:?}", CandidateKind::SideCondition),
+            "SideCondition"
+        );
+        assert_eq!(format!("{:?}", CandidateKind::NormalForm), "NormalForm");
+    }
+
+    #[test]
+    fn candidate_kind_ord_is_declaration_order() {
+        assert!(CandidateKind::Invariant < CandidateKind::SideCondition);
+        assert!(CandidateKind::SideCondition < CandidateKind::NormalForm);
+    }
+
+    // ── ProvenanceSourceKind properties ──────────────────────────────
+
+    #[test]
+    fn provenance_source_kind_has_two_variants() {
+        let variants = [
+            ProvenanceSourceKind::Counterexample,
+            ProvenanceSourceKind::EvidenceEntry,
+        ];
+        let unique: BTreeSet<ProvenanceSourceKind> = variants.iter().copied().collect();
+        assert_eq!(unique.len(), 2);
+    }
+
+    #[test]
+    fn provenance_source_kind_debug_format() {
+        assert_eq!(
+            format!("{:?}", ProvenanceSourceKind::Counterexample),
+            "Counterexample"
+        );
+        assert_eq!(
+            format!("{:?}", ProvenanceSourceKind::EvidenceEntry),
+            "EvidenceEntry"
+        );
+    }
+
+    // ── hashed_id determinism ────────────────────────────────────────
+
+    #[test]
+    fn hashed_id_is_deterministic_for_same_input() {
+        let first = hashed_id("test", &["alpha", "beta"]);
+        let second = hashed_id("test", &["alpha", "beta"]);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn hashed_id_starts_with_prefix() {
+        let result = hashed_id("scope", &["some-data"]);
+        assert!(result.starts_with("scope-"), "got: {result}");
+    }
+
+    #[test]
+    fn hashed_id_differs_for_different_inputs() {
+        let id_a = hashed_id("law", &["invariant", "statement-a"]);
+        let id_b = hashed_id("law", &["invariant", "statement-b"]);
+        assert_ne!(id_a, id_b);
+    }
+
+    #[test]
+    fn hashed_id_differs_for_different_prefixes() {
+        let id_a = hashed_id("law", &["data"]);
+        let id_b = hashed_id("prov", &["data"]);
+        assert_ne!(id_a, id_b);
+    }
+
+    // ── LawMiningValidation serde ────────────────────────────────────
+
+    #[test]
+    fn law_mining_validation_serde_round_trip() {
+        let validation = LawMiningValidation {
+            is_valid: true,
+            candidate_count: 5,
+            provenance_count: 3,
+            scope_count: 2,
+            warnings: vec!["test warning".to_string()],
+        };
+        let json = serde_json::to_string(&validation).unwrap();
+        let back: LawMiningValidation = serde_json::from_str(&json).unwrap();
+        assert_eq!(validation, back);
+    }
+
+    // ── LawMiningEvent serde ─────────────────────────────────────────
+
+    #[test]
+    fn law_mining_event_serde_round_trip() {
+        let event = LawMiningEvent {
+            schema_version: LAW_MINING_EVENT_STREAM_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-1".to_string(),
+            decision_id: "decision-1".to_string(),
+            policy_id: "policy-1".to_string(),
+            component: LAW_MINING_COMPONENT.to_string(),
+            event: "catalog_mined".to_string(),
+            outcome: "pass".to_string(),
+            error_code: None,
+            detail: "test detail".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: LawMiningEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn law_mining_event_with_error_code_serde_round_trip() {
+        let event = LawMiningEvent {
+            schema_version: LAW_MINING_EVENT_STREAM_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-err".to_string(),
+            decision_id: "decision-err".to_string(),
+            policy_id: "policy-err".to_string(),
+            component: LAW_MINING_COMPONENT.to_string(),
+            event: "mining_failed".to_string(),
+            outcome: "fail".to_string(),
+            error_code: Some("E_HASH_MISMATCH".to_string()),
+            detail: "hash did not match".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: LawMiningEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.error_code, Some("E_HASH_MISMATCH".to_string()));
+    }
+
+    // ── TraceIdsArtifact serde ───────────────────────────────────────
+
+    #[test]
+    fn trace_ids_artifact_serde_round_trip() {
+        let trace_ids = TraceIdsArtifact {
+            schema_version: LAW_MINING_TRACE_IDS_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-42".to_string(),
+            decision_id: "decision-42".to_string(),
+            policy_id: "policy-42".to_string(),
+            run_id: "run-42".to_string(),
+        };
+        let json = serde_json::to_string(&trace_ids).unwrap();
+        let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(trace_ids, back);
+    }
+
+    // ── LawMiningEnvArtifact serde ───────────────────────────────────
+
+    #[test]
+    fn law_mining_env_artifact_serde_round_trip() {
+        let env_artifact = LawMiningEnvArtifact {
+            schema_version: LAW_MINING_ENV_SCHEMA_VERSION.to_string(),
+            run_id: "run-env-1".to_string(),
+            generated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+            source_commit: "abc123".to_string(),
+            toolchain: "nightly-2026-01-01".to_string(),
+        };
+        let json = serde_json::to_string(&env_artifact).unwrap();
+        let back: LawMiningEnvArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(env_artifact, back);
+    }
+
+    // ── ArtifactHashRecord serde ─────────────────────────────────────
+
+    #[test]
+    fn artifact_hash_record_serde_round_trip() {
+        let record = ArtifactHashRecord {
+            path: "candidate_law_catalog.json".to_string(),
+            sha256: "deadbeef".to_string(),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let back: ArtifactHashRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record, back);
+    }
+
+    // ── LawMiningFixture serde ───────────────────────────────────────
+
+    #[test]
+    fn default_fixture_has_counterexamples_and_evidence() {
+        let fixture = default_fixture();
+        assert!(!fixture.counterexamples.is_empty());
+        assert!(!fixture.evidence_entries.is_empty());
+        assert!(fixture.generated_epoch > 0);
+    }
+
+    // ── catalog.candidate lookup ─────────────────────────────────────
+
+    #[test]
+    fn catalog_candidate_lookup_returns_none_for_missing_id() {
+        let catalog = LawMiningCatalog::from_sources(1, &[], &[]);
+        assert!(catalog.candidate("nonexistent-id").is_none());
+    }
+
+    #[test]
+    fn catalog_candidate_lookup_returns_some_for_existing_id() {
+        let cx = sample_counterexample(
+            60,
+            FormalProperty::MergeDeterminism,
+            &["fs.read"],
+            &[("k", "v")],
+            &["m"],
+        );
+        let catalog = LawMiningCatalog::from_sources(9, &[cx], &[]);
+        let first_id = &catalog.candidates[0].candidate_id;
+        assert!(catalog.candidate(first_id).is_some());
+    }
+
+    // ── normal form hypothesis generation ────────────────────────────
+
+    #[test]
+    fn counterexample_with_merge_path_produces_normal_form_hypothesis() {
+        let cx = sample_counterexample(
+            70,
+            FormalProperty::MergeDeterminism,
+            &["fs.read"],
+            &[("region", "eu")],
+            &["step-a", "step-b"],
+        );
+        let catalog = LawMiningCatalog::from_sources(11, &[cx], &[]);
+        assert!(
+            !catalog.normal_form_hypotheses.is_empty(),
+            "merge-path counterexample should produce a normal-form hypothesis"
+        );
+        let nfh = &catalog.normal_form_hypotheses[0];
+        assert!(!nfh.canonical_form.is_empty());
+        assert!(!nfh.merge_shapes.is_empty());
+        // Round-trip the hypothesis
+        let json = serde_json::to_string(&nfh).unwrap();
+        let back: NormalFormHypothesis = serde_json::from_str(&json).unwrap();
+        assert_eq!(*nfh, back);
+    }
+
+    // ── invariant seed generation ────────────────────────────────────
+
+    #[test]
+    fn counterexample_produces_invariant_seed() {
+        let cx = sample_counterexample(
+            80,
+            FormalProperty::Monotonicity,
+            &["net.send"],
+            &[("zone", "internal")],
+            &["path-x"],
+        );
+        let catalog = LawMiningCatalog::from_sources(13, &[cx], &[]);
+        assert!(
+            !catalog.invariant_seed_ledger.is_empty(),
+            "counterexample should produce at least one invariant seed"
+        );
+        let seed = &catalog.invariant_seed_ledger[0];
+        assert!(!seed.statement.is_empty());
+        // Round-trip the seed
+        let json = serde_json::to_string(&seed).unwrap();
+        let back: InvariantSeed = serde_json::from_str(&json).unwrap();
+        assert_eq!(*seed, back);
+    }
+
+    // ── scope hypothesis frontier_only flag ──────────────────────────
+
+    #[test]
+    fn scope_hypothesis_frontier_only_true_when_only_counterexamples() {
+        let cx = sample_counterexample(
+            90,
+            FormalProperty::NonInterference,
+            &["cache.store"],
+            &[("tier", "hot")],
+            &["merge-1"],
+        );
+        let catalog = LawMiningCatalog::from_sources(15, &[cx], &[]);
+        // All scope hypotheses from pure counterexample input should be frontier_only
+        for scope in &catalog.scope_hypotheses {
+            assert!(
+                scope.frontier_only,
+                "scope {} should be frontier_only when only counterexamples are present",
+                scope.scope_id
+            );
+        }
+    }
+
+    #[test]
+    fn scope_hypothesis_frontier_only_false_when_evidence_present() {
+        let evidence = sample_evidence_entry(
+            "trace-frontier",
+            DecisionType::ContractEvaluation,
+            "policy-frontier",
+            &["constraint-a"],
+            &["witness-a"],
+        );
+        let catalog = LawMiningCatalog::from_sources(15, &[], &[evidence]);
+        for scope in &catalog.scope_hypotheses {
+            assert!(
+                !scope.frontier_only,
+                "scope {} should not be frontier_only when evidence is present",
+                scope.scope_id
+            );
+        }
+    }
+
+    // ── render_summary for empty catalog ─────────────────────────────
+
+    #[test]
+    fn render_summary_for_empty_catalog_omits_top_candidate() {
+        let catalog = LawMiningCatalog::from_sources(1, &[], &[]);
+        let summary = render_summary(&catalog);
+        assert!(summary.contains("# Law Mining Summary"));
+        assert!(summary.contains("candidates: 0"));
+        assert!(!summary.contains("## Top Candidate"));
+    }
+
+    // ── push_strings helper ──────────────────────────────────────────
+
+    #[test]
+    fn push_strings_appends_with_separator() {
+        let mut data = Vec::new();
+        push_strings(&mut data, &["alpha".to_string(), "beta".to_string()]);
+        // Each string followed by 0xff separator
+        assert!(data.contains(&0xff));
+        assert!(data.starts_with(b"alpha"));
+    }
+
+    #[test]
+    fn push_strings_empty_input_produces_empty_output() {
+        let mut data = Vec::new();
+        push_strings(&mut data, &[]);
+        assert!(data.is_empty());
+    }
+
+    // ── validation detects unsorted candidates ───────────────────────
+
+    #[test]
+    fn validation_detects_unsorted_candidates() {
+        let cx_a = sample_counterexample(
+            100,
+            FormalProperty::MergeDeterminism,
+            &["fs.read", "net.send"],
+            &[("r", "a")],
+            &["m-a", "m-b"],
+        );
+        let cx_b = sample_counterexample(
+            101,
+            FormalProperty::MergeDeterminism,
+            &["fs.read", "net.send"],
+            &[("r", "a")],
+            &["m-a", "m-b"],
+        );
+        let mut catalog = LawMiningCatalog::from_sources(5, &[cx_a, cx_b], &[]);
+        // Reverse the candidates to break sort order
+        catalog.candidates.reverse();
+        // Only flag unsorted if the reversed order is actually different
+        if catalog.candidates.len() >= 2
+            && catalog.candidates[0].rank_millionths < catalog.candidates[1].rank_millionths
+        {
+            let validation = catalog.validate();
+            assert!(
+                !validation.is_valid || validation.warnings.iter().any(|w| w.contains("sorted")),
+                "validation should detect unsorted candidates"
+            );
+        }
+    }
+
+    // ── BundleWriteReport serde ──────────────────────────────────────
+
+    #[test]
+    fn bundle_write_report_serde_round_trip() {
+        let report = BundleWriteReport {
+            artifact_dir: PathBuf::from("/tmp/test"),
+            candidate_law_catalog_path: PathBuf::from("/tmp/test/catalog.json"),
+            invariant_seed_ledger_path: PathBuf::from("/tmp/test/seeds.json"),
+            normal_form_hypotheses_path: PathBuf::from("/tmp/test/normal.json"),
+            provenance_index_path: PathBuf::from("/tmp/test/prov.json"),
+            scope_hypotheses_path: PathBuf::from("/tmp/test/scope.json"),
+            trace_ids_path: PathBuf::from("/tmp/test/trace.json"),
+            run_manifest_path: PathBuf::from("/tmp/test/manifest.json"),
+            events_path: PathBuf::from("/tmp/test/events.jsonl"),
+            commands_path: PathBuf::from("/tmp/test/commands.txt"),
+            env_path: PathBuf::from("/tmp/test/env.json"),
+            artifact_index_path: PathBuf::from("/tmp/test/index.json"),
+            repro_lock_path: PathBuf::from("/tmp/test/repro.lock"),
+            summary_path: PathBuf::from("/tmp/test/summary.md"),
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        let back: BundleWriteReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, back);
+    }
+
+    // ── LawMiningArtifactIndex serde ─────────────────────────────────
+
+    #[test]
+    fn law_mining_artifact_index_serde_round_trip() {
+        let index = LawMiningArtifactIndex {
+            schema_version: LAW_MINING_ARTIFACT_INDEX_SCHEMA_VERSION.to_string(),
+            bead_id: LAW_MINING_BEAD_ID.to_string(),
+            run_id: "run-test-idx".to_string(),
+            artifacts: vec![
+                ArtifactHashRecord {
+                    path: "catalog.json".to_string(),
+                    sha256: "aabbcc".to_string(),
+                },
+                ArtifactHashRecord {
+                    path: "seeds.json".to_string(),
+                    sha256: "ddeeff".to_string(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&index).unwrap();
+        let back: LawMiningArtifactIndex = serde_json::from_str(&json).unwrap();
+        assert_eq!(index, back);
+    }
+
+    // ── LawProvenanceSource recompute_hash determinism ───────────────
+
+    #[test]
+    fn law_provenance_source_recompute_hash_is_deterministic() {
+        let mut source_a = LawProvenanceSource {
+            source_kind: ProvenanceSourceKind::Counterexample,
+            source_id: "src-1".to_string(),
+            policy_ids: vec!["pol-a".to_string()],
+            formal_properties: vec![FormalProperty::MergeDeterminism],
+            decision_types: vec![],
+            support_summary: "summary".to_string(),
+            source_hash: ContentHash::compute(b"placeholder"),
+        };
+        let mut source_b = source_a.clone();
+        source_a.recompute_hash();
+        source_b.recompute_hash();
+        assert_eq!(source_a.source_hash, source_b.source_hash);
+    }
+
+    // ── LawCandidate serde ───────────────────────────────────────────
+
+    #[test]
+    fn law_candidate_serde_round_trip() {
+        let cx = sample_counterexample(
+            110,
+            FormalProperty::PrecedenceStability,
+            &["sched.tick"],
+            &[("region", "west")],
+            &["merge-q"],
+        );
+        let catalog = LawMiningCatalog::from_sources(17, &[cx], &[]);
+        for candidate in &catalog.candidates {
+            let json = serde_json::to_string(candidate).unwrap();
+            let back: LawCandidate = serde_json::from_str(&json).unwrap();
+            assert_eq!(*candidate, back);
+        }
+    }
+
+    // ── LawProvenanceRecord serde ────────────────────────────────────
+
+    #[test]
+    fn law_provenance_record_serde_round_trip() {
+        let cx = sample_counterexample(
+            120,
+            FormalProperty::MergeDeterminism,
+            &["io.read"],
+            &[("env", "staging")],
+            &["path-1"],
+        );
+        let catalog = LawMiningCatalog::from_sources(19, &[cx], &[]);
+        for record in &catalog.provenance_index {
+            let json = serde_json::to_string(record).unwrap();
+            let back: LawProvenanceRecord = serde_json::from_str(&json).unwrap();
+            assert_eq!(*record, back);
+        }
+    }
+
+    // ── CandidateScopeHypothesis serde ───────────────────────────────
+
+    #[test]
+    fn candidate_scope_hypothesis_serde_round_trip() {
+        let cx = sample_counterexample(
+            130,
+            FormalProperty::Monotonicity,
+            &["cache.evict"],
+            &[("lane", "hot")],
+            &["step-1"],
+        );
+        let catalog = LawMiningCatalog::from_sources(21, &[cx], &[]);
+        for scope in &catalog.scope_hypotheses {
+            let json = serde_json::to_string(scope).unwrap();
+            let back: CandidateScopeHypothesis = serde_json::from_str(&json).unwrap();
+            assert_eq!(*scope, back);
+        }
+    }
 }

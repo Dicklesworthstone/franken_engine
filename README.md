@@ -825,6 +825,9 @@ Artifacts are written under:
 
 `bd-2mds.1.10.4` adds replay-first troubleshooting runbooks and deterministic
 operator drills for parser diagnostics/recovery/API/user-impact incidents.
+The gate now defaults heavy remote cargo work into a repo-local
+`target_rch_parser_operator_developer_runbook_<mode>_<pid>` target directory so
+fresh-operator reruns do not depend on fragile `/tmp` worker state.
 
 ```bash
 # parser operator/developer runbook gate (rch-backed check + test + clippy)
@@ -833,8 +836,9 @@ operator drills for parser diagnostics/recovery/API/user-impact incidents.
 # run scriptable drill mode (includes replay-path validation)
 ./scripts/run_parser_operator_developer_runbook.sh drill
 
-# one-command replay wrapper
-./scripts/e2e/parser_operator_developer_runbook_replay.sh
+# one-command replay wrappers
+./scripts/e2e/parser_operator_developer_runbook_replay.sh ci
+./scripts/e2e/parser_operator_developer_runbook_replay.sh drill
 ```
 
 Contract and vectors:
@@ -848,6 +852,7 @@ Artifacts are written under:
 - `artifacts/parser_operator_developer_runbook/<timestamp>/run_manifest.json`
 - `artifacts/parser_operator_developer_runbook/<timestamp>/events.jsonl`
 - `artifacts/parser_operator_developer_runbook/<timestamp>/commands.txt`
+- `artifacts/parser_operator_developer_runbook/<timestamp>/step_logs/step_*.log`
 
 ## Parser Differential Nightly Governance Gate
 

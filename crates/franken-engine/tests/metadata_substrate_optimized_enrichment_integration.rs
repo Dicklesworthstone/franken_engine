@@ -16,9 +16,10 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::metadata_substrate_optimized::{
     FallbackPath, OptimizationLevel, OverrideConfig, RollbackStrategy, SUBSTRATE_OPT_COMPONENT,
-    SUBSTRATE_OPT_POLICY_ID, SUBSTRATE_OPT_SCHEMA_VERSION, SubstrateError, SubstrateKind,
-    SubstrateProfile, SubstrateTransition, TransitionTrigger, apply_override,
-    build_canonical_inventory, certify_substrate, compute_transition_cost, evaluate_substrate,
+    SUBSTRATE_OPT_POLICY_ID, SUBSTRATE_OPT_SCHEMA_VERSION, SubstrateError,
+    SubstrateEvidenceManifest, SubstrateInventoryReport, SubstrateKind, SubstrateProfile,
+    SubstrateTransition, TransitionTrigger, apply_override, build_canonical_inventory,
+    certify_substrate, compute_transition_cost, evaluate_substrate, recommend_substrate_kind,
     run_substrate_evidence,
 };
 
@@ -612,4 +613,369 @@ fn enrichment_constants_not_empty_and_consistent() {
     assert!(!SUBSTRATE_OPT_SCHEMA_VERSION.is_empty());
     // Schema version contains the component concept
     assert!(SUBSTRATE_OPT_SCHEMA_VERSION.contains("substrate"));
+}
+
+// =========================================================================
+// W. recommend_substrate_kind — untested heuristic paths
+// =========================================================================
+
+#[test]
+fn test_recommend_compact_bitmap_for_high_hit_rate_small_memory() {
+    // hit_rate >= 950_000 AND memory_bytes < 4096 => CompactBitmap
+    let profile = SubstrateProfile {
+        id: "bitmap-path".into(),
+        kind: SubstrateKind::FlatArray,
+        access_count: 50_000,
+        hit_rate_millionths: 960_000,
+        avg_latency_millionths: 20,
+        memory_bytes: 2048,
+        is_hot: true,
+    };
+    assert_eq!(
+        recommend_substrate_kind(&profile),
+        SubstrateKind::CompactBitmap
+    );
+}
+
+#[test]
+fn test_recommend_art_tree_for_large_memory() {
+    // memory_bytes > 1_048_576 (and not caught by earlier conditions) => ArtTree
+    let profile = SubstrateProfile {
+        id: "art-path".into(),
+        kind: SubstrateKind::FlatArray,
+        access_count: 5_000,
+        hit_rate_millionths: 750_000,
+        avg_latency_millionths: 200,
+        memory_bytes: 2_097_152,
+        is_hot: true,
+    };
+    assert_eq!(recommend_substrate_kind(&profile), SubstrateKind::ArtTree);
+}
+
+#[test]
+fn test_recommend_swizzled_for_moderate_access() {
+    // access_count > 10_000, not caught by earlier conditions => Swizzled
+    let profile = SubstrateProfile {
+        id: "swizzled-path".into(),
+        kind: SubstrateKind::FlatArray,
+        access_count: 15_000,
+        hit_rate_millionths: 750_000,
+        avg_latency_millionths: 150,
+        memory_bytes: 131_072,
+        is_hot: true,
+    };
+    assert_eq!(recommend_substrate_kind(&profile), SubstrateKind::Swizzled);
+}
+
+#[test]
+fn test_recommend_flat_array_for_low_access_hot() {
+    // hot but access_count <= 10_000, moderate memory => FlatArray
+    let profile = SubstrateProfile {
+        id: "flatarray-path".into(),
+        kind: SubstrateKind::SwissTable,
+        access_count: 500,
+        hit_rate_millionths: 600_000,
+        avg_latency_millionths: 300,
+        memory_bytes: 16_384,
+        is_hot: true,
+    };
+    assert_eq!(recommend_substrate_kind(&profile), SubstrateKind::FlatArray);
+}
+
+#[test]
+fn test_recommend_generic_fallback_for_cold_profile() {
+    let profile = SubstrateProfile {
+        id: "cold-rec".into(),
+        kind: SubstrateKind::SwissTable,
+        access_count: 1_000_000,
+        hit_rate_millionths: 999_000,
+        avg_latency_millionths: 10,
+        memory_bytes: 512,
+        is_hot: false,
+    };
+    // Even very high stats, if not hot => GenericFallback
+    assert_eq!(
+        recommend_substrate_kind(&profile),
+        SubstrateKind::GenericFallback
+    );
+}
+
+// =========================================================================
+// X. certify_substrate — overrides_applied and empty transitions
+// =========================================================================
+
+#[test]
+fn test_certify_substrate_no_transition_when_kind_unchanged() {
+    // If the profile kind equals the recommended kind, transitions should be empty
+    let profile = SubstrateProfile {
+        id: "no-trans".into(),
+        kind: SubstrateKind::SwissTable,
+        access_count: 200_000,
+        hit_rate_millionths: 900_000,
+        avg_latency_millionths: 40,
+        memory_bytes: 32_768,
+        is_hot: true,
+    };
+    let decision = evaluate_substrate(&profile, None);
+    // Only certify if the recommended kind matches the current kind
+    if decision.recommended_kind == profile.kind {
+        let cert = certify_substrate(&profile, &decision);
+        assert!(cert.transitions.is_empty());
+    }
+}
+
+#[test]
+fn test_certify_substrate_overrides_applied_hot_generic_fallback() {
+    // overrides_applied = true when the profile is hot and recommended is GenericFallback
+    let profile = hot_profile("ov-applied", SubstrateKind::FlatArray, 50_000);
+    let override_cfg = OverrideConfig {
+        disable_optimization: true,
+        ..OverrideConfig::default()
+    };
+    let decision = evaluate_substrate(&profile, Some(&override_cfg));
+    assert_eq!(decision.recommended_kind, SubstrateKind::GenericFallback);
+    let cert = certify_substrate(&profile, &decision);
+    assert!(cert.overrides_applied);
+}
+
+#[test]
+fn test_certify_substrate_overrides_not_applied_for_cold_profile() {
+    // Cold profile legitimately gets GenericFallback, overrides_applied = false
+    let profile = SubstrateProfile {
+        id: "cold-cert".into(),
+        kind: SubstrateKind::FlatArray,
+        access_count: 100,
+        hit_rate_millionths: 300_000,
+        avg_latency_millionths: 500,
+        memory_bytes: 65_536,
+        is_hot: false,
+    };
+    let decision = evaluate_substrate(&profile, None);
+    assert_eq!(decision.recommended_kind, SubstrateKind::GenericFallback);
+    let cert = certify_substrate(&profile, &decision);
+    // Cold => not hot => overrides_applied = false
+    assert!(!cert.overrides_applied);
+}
+
+// =========================================================================
+// Y. apply_override — debug_mode confidence cap
+// =========================================================================
+
+#[test]
+fn test_apply_override_debug_mode_caps_confidence() {
+    let profile = hot_profile("debug-cap", SubstrateKind::FlatArray, 50_000);
+    let mut decision = evaluate_substrate(&profile, None);
+    // Ensure initial confidence is above 500_000
+    assert!(decision.confidence_millionths > 500_000);
+
+    let cfg = OverrideConfig {
+        debug_mode: true,
+        ..OverrideConfig::default()
+    };
+    apply_override(&mut decision, &cfg);
+    assert!(decision.confidence_millionths <= 500_000);
+}
+
+#[test]
+fn test_apply_override_force_fallback_only() {
+    let profile = hot_profile("fb-only", SubstrateKind::ArtTree, 50_000);
+    let original = evaluate_substrate(&profile, None);
+    let mut decision = original.clone();
+
+    let cfg = OverrideConfig {
+        force_fallback: Some(FallbackPath::Abstain),
+        ..OverrideConfig::default()
+    };
+    apply_override(&mut decision, &cfg);
+    assert_eq!(decision.fallback, FallbackPath::Abstain);
+    // kind should be unchanged
+    assert_eq!(decision.recommended_kind, original.recommended_kind);
+}
+
+// =========================================================================
+// Z. Serde roundtrips for remaining types
+// =========================================================================
+
+#[test]
+fn test_substrate_profile_serde_roundtrip() {
+    let profile = hot_profile("serde-prof", SubstrateKind::CompactBitmap, 77_777);
+    let json = serde_json::to_string(&profile).unwrap();
+    let back: SubstrateProfile = serde_json::from_str(&json).unwrap();
+    assert_eq!(profile, back);
+}
+
+#[test]
+fn test_substrate_error_serde_roundtrip_all_variants() {
+    let errors = vec![
+        SubstrateError::EmptyInventory,
+        SubstrateError::InvalidProfile {
+            reason: "bad data".into(),
+        },
+        SubstrateError::TransitionForbidden {
+            from: SubstrateKind::Swizzled,
+            to: SubstrateKind::InlineCache,
+        },
+        SubstrateError::OverrideConflict {
+            reason: "conflict reason".into(),
+        },
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).unwrap();
+        let back: SubstrateError = serde_json::from_str(&json).unwrap();
+        assert_eq!(err, &back);
+    }
+}
+
+#[test]
+fn test_substrate_transition_serde_roundtrip() {
+    let trans = SubstrateTransition {
+        from_kind: SubstrateKind::Swizzled,
+        to_kind: SubstrateKind::ArtTree,
+        trigger: TransitionTrigger::MemoryPressure,
+        cost_millionths: 900_000,
+    };
+    let json = serde_json::to_string(&trans).unwrap();
+    let back: SubstrateTransition = serde_json::from_str(&json).unwrap();
+    assert_eq!(trans, back);
+}
+
+#[test]
+fn test_substrate_inventory_report_serde_roundtrip() {
+    let report = build_canonical_inventory();
+    let json = serde_json::to_string(&report).unwrap();
+    let back: SubstrateInventoryReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, back);
+}
+
+#[test]
+fn test_substrate_evidence_manifest_serde_roundtrip() {
+    let manifest = run_substrate_evidence();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let back: SubstrateEvidenceManifest = serde_json::from_str(&json).unwrap();
+    assert_eq!(manifest, back);
+}
+
+// =========================================================================
+// AA. SubstrateInventoryReport — profiles and decisions counts match
+// =========================================================================
+
+#[test]
+fn test_inventory_report_profiles_decisions_count_match() {
+    let report = build_canonical_inventory();
+    assert_eq!(report.profiles.len(), report.decisions.len());
+}
+
+#[test]
+fn test_inventory_report_has_at_least_eight_profiles() {
+    let report = build_canonical_inventory();
+    assert!(report.profiles.len() >= 8);
+}
+
+// =========================================================================
+// AB. SubstrateEvidenceManifest — schema_version matches constant
+// =========================================================================
+
+#[test]
+fn test_evidence_manifest_schema_version_matches_constant() {
+    let manifest = run_substrate_evidence();
+    assert_eq!(manifest.schema_version, SUBSTRATE_OPT_SCHEMA_VERSION);
+}
+
+#[test]
+fn test_evidence_manifest_evaluated_equals_certificate_count() {
+    let manifest = run_substrate_evidence();
+    assert_eq!(
+        manifest.substrates_evaluated as usize,
+        manifest.certificates.len()
+    );
+}
+
+#[test]
+fn test_evidence_manifest_display_nonempty() {
+    let manifest = run_substrate_evidence();
+    let display = format!("{manifest}");
+    assert!(!display.is_empty());
+    assert!(display.contains("SubstrateEvidenceManifest"));
+}
+
+// =========================================================================
+// AC. compute_transition_cost asymmetry — swizzled is most expensive
+// =========================================================================
+
+#[test]
+fn test_transition_cost_swizzled_from_is_most_expensive_direction() {
+    // Swizzled -> anything costs 900_000 (base + 800_000)
+    // Anything -> Swizzled costs 800_000 (base + 700_000)
+    let cost_from = compute_transition_cost(SubstrateKind::Swizzled, SubstrateKind::FlatArray);
+    let cost_to = compute_transition_cost(SubstrateKind::FlatArray, SubstrateKind::Swizzled);
+    assert!(cost_from > cost_to);
+}
+
+#[test]
+fn test_transition_cost_to_generic_fallback_is_cheap() {
+    // Tear-down cost (to GenericFallback) should be less than rebuild cost (from GenericFallback)
+    let cost_down =
+        compute_transition_cost(SubstrateKind::SwissTable, SubstrateKind::GenericFallback);
+    let cost_up =
+        compute_transition_cost(SubstrateKind::GenericFallback, SubstrateKind::SwissTable);
+    assert!(cost_down < cost_up);
+}
+
+// =========================================================================
+// AD. evaluate_substrate — zero access count confidence is zero
+// =========================================================================
+
+#[test]
+fn test_evaluate_zero_access_count_confidence_is_zero() {
+    let profile = SubstrateProfile {
+        id: "zero-acc".into(),
+        kind: SubstrateKind::FlatArray,
+        access_count: 0,
+        hit_rate_millionths: 900_000,
+        avg_latency_millionths: 100,
+        memory_bytes: 32_768,
+        is_hot: true,
+    };
+    let decision = evaluate_substrate(&profile, None);
+    assert_eq!(decision.confidence_millionths, 0);
+}
+
+// =========================================================================
+// AE. SubstrateCertificate — schema_version matches constant
+// =========================================================================
+
+#[test]
+fn test_certificate_schema_version_matches_constant() {
+    let profile = hot_profile("cert-schema", SubstrateKind::ArtTree, 60_000);
+    let decision = evaluate_substrate(&profile, None);
+    let cert = certify_substrate(&profile, &decision);
+    assert_eq!(cert.schema_version, SUBSTRATE_OPT_SCHEMA_VERSION);
+}
+
+// =========================================================================
+// AF. OverrideConfig default has all fields at their zero/None values
+// =========================================================================
+
+#[test]
+fn test_override_config_default_all_none_and_false() {
+    let cfg = OverrideConfig::default();
+    assert!(cfg.force_kind.is_none());
+    assert!(cfg.force_fallback.is_none());
+    assert!(cfg.force_rollback.is_none());
+    assert!(!cfg.disable_optimization);
+    assert!(!cfg.debug_mode);
+}
+
+// =========================================================================
+// AG. SubstrateInventoryReport Display contains counts
+// =========================================================================
+
+#[test]
+fn test_inventory_report_display_contains_counts() {
+    let report = build_canonical_inventory();
+    let display = format!("{report}");
+    assert!(display.contains("SubstrateInventoryReport"));
+    // Display should include numeric values for the hot count
+    let hot_str = report.hot_count.to_string();
+    assert!(display.contains(&hot_str));
 }

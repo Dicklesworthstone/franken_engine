@@ -674,3 +674,482 @@ fn full_lifecycle_fail_with_waiver_passes() {
         d.blockers
     );
 }
+
+// ===========================================================================
+// 24. ChecklistCategory — Ord/PartialOrd
+// ===========================================================================
+
+#[test]
+fn test_checklist_category_ordering() {
+    use std::collections::BTreeSet;
+    let mut set = BTreeSet::new();
+    set.insert(ChecklistCategory::Operational);
+    set.insert(ChecklistCategory::Security);
+    set.insert(ChecklistCategory::Performance);
+    set.insert(ChecklistCategory::Reproducibility);
+    assert_eq!(set.len(), 4);
+    // BTreeSet iteration is sorted; verify all four are distinct
+    let v: Vec<_> = set.into_iter().collect();
+    assert_eq!(v.len(), 4);
+}
+
+// ===========================================================================
+// 25. ChecklistItemStatus — Ord/PartialOrd
+// ===========================================================================
+
+#[test]
+fn test_checklist_item_status_ordering() {
+    use std::collections::BTreeSet;
+    let mut set = BTreeSet::new();
+    set.insert(ChecklistItemStatus::Pass);
+    set.insert(ChecklistItemStatus::Fail);
+    set.insert(ChecklistItemStatus::NotRun);
+    set.insert(ChecklistItemStatus::Waived);
+    assert_eq!(set.len(), 4);
+}
+
+// ===========================================================================
+// 26. Debug trait on all public structs
+// ===========================================================================
+
+#[test]
+fn test_artifact_ref_debug() {
+    let ar = passing_artifact();
+    let s = format!("{ar:?}");
+    assert!(s.contains("art-1"));
+}
+
+#[test]
+fn test_checklist_waiver_debug() {
+    let w = ChecklistWaiver {
+        reason: "test reason".into(),
+        approver: "approver-a".into(),
+        exception_artifact_link: "/waivers/w.json".into(),
+    };
+    let s = format!("{w:?}");
+    assert!(s.contains("test reason"));
+}
+
+#[test]
+fn test_checklist_item_debug() {
+    let item = passing_item("security.conformance_suite", ChecklistCategory::Security);
+    let s = format!("{item:?}");
+    assert!(s.contains("conformance_suite"));
+}
+
+#[test]
+fn test_release_checklist_debug() {
+    let cl = valid_checklist();
+    let s = format!("{cl:?}");
+    assert!(s.contains("v1.0.0"));
+}
+
+#[test]
+fn test_gate_decision_debug() {
+    let cl = valid_checklist();
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_release_checklist_gate(&mut adapter, &cl);
+    let s = format!("{decision:?}");
+    assert!(s.contains("allow"));
+}
+
+#[test]
+fn test_gate_event_debug() {
+    let event = ReleaseChecklistGateEvent {
+        trace_id: "t-dbg".into(),
+        decision_id: "d-dbg".into(),
+        policy_id: "p-dbg".into(),
+        component: RELEASE_CHECKLIST_COMPONENT.into(),
+        event: "debug_event".into(),
+        outcome: "pass".into(),
+        error_code: None,
+        checklist_id: None,
+        item_id: None,
+    };
+    let s = format!("{event:?}");
+    assert!(s.contains("debug_event"));
+}
+
+// ===========================================================================
+// 27. ReleaseChecklistError — Display messages and StorageFailure rollback
+// ===========================================================================
+
+#[test]
+fn test_error_display_messages() {
+    let errs: Vec<(ReleaseChecklistError, &str)> = vec![
+        (
+            ReleaseChecklistError::InvalidRequest {
+                field: "myfield".into(),
+                detail: "bad value".into(),
+            },
+            "myfield",
+        ),
+        (
+            ReleaseChecklistError::InvalidTimestamp {
+                value: "not-a-ts".into(),
+            },
+            "not-a-ts",
+        ),
+        (
+            ReleaseChecklistError::InvalidItem {
+                item_id: "security.foo".into(),
+                detail: "broken".into(),
+            },
+            "security.foo",
+        ),
+        (
+            ReleaseChecklistError::SerializationFailure {
+                detail: "oops".into(),
+            },
+            "oops",
+        ),
+    ];
+    for (err, expected_fragment) in errs {
+        let msg = err.to_string();
+        assert!(
+            msg.contains(expected_fragment),
+            "expected fragment `{expected_fragment}` in error message `{msg}`"
+        );
+    }
+}
+
+// ===========================================================================
+// 28. Validation — empty decision_id and policy_id fail
+// ===========================================================================
+
+#[test]
+fn test_validate_empty_decision_id_fails() {
+    let mut cl = valid_checklist();
+    cl.decision_id = String::new();
+    assert!(validate_release_checklist(&cl).is_err());
+}
+
+#[test]
+fn test_validate_empty_policy_id_fails() {
+    let mut cl = valid_checklist();
+    cl.policy_id = String::new();
+    assert!(validate_release_checklist(&cl).is_err());
+}
+
+// ===========================================================================
+// 29. Validation — waiver with all-whitespace fields fails
+// ===========================================================================
+
+#[test]
+fn test_validate_waiver_empty_fields_fails() {
+    let mut cl = valid_checklist();
+    if let Some(item) = cl
+        .items
+        .iter_mut()
+        .find(|i| i.item_id == "security.conformance_suite")
+    {
+        item.status = ChecklistItemStatus::Waived;
+        item.waiver = Some(ChecklistWaiver {
+            reason: "   ".into(),
+            approver: "admin".into(),
+            exception_artifact_link: "/waivers/w.json".into(),
+        });
+    }
+    assert!(validate_release_checklist(&cl).is_err());
+}
+
+// ===========================================================================
+// 30. Validation — waiver present on non-waived item fails
+// ===========================================================================
+
+#[test]
+fn test_validate_waiver_present_on_non_waived_item_fails() {
+    let mut cl = valid_checklist();
+    if let Some(item) = cl
+        .items
+        .iter_mut()
+        .find(|i| i.item_id == "security.conformance_suite")
+    {
+        // status is Pass but we attach a waiver — not allowed
+        item.status = ChecklistItemStatus::Pass;
+        item.waiver = Some(ChecklistWaiver {
+            reason: "spurious".into(),
+            approver: "admin".into(),
+            exception_artifact_link: "/waivers/w.json".into(),
+        });
+    }
+    assert!(validate_release_checklist(&cl).is_err());
+}
+
+// ===========================================================================
+// 31. Validation — empty artifact_id or path inside artifact_refs fails
+// ===========================================================================
+
+#[test]
+fn test_validate_empty_artifact_id_fails() {
+    let mut cl = valid_checklist();
+    if let Some(item) = cl
+        .items
+        .iter_mut()
+        .find(|i| i.item_id == "security.conformance_suite")
+    {
+        item.artifact_refs = vec![ArtifactRef {
+            artifact_id: "  ".into(),
+            path: "/evidence/test.json".into(),
+            sha256: None,
+        }];
+    }
+    assert!(validate_release_checklist(&cl).is_err());
+}
+
+// ===========================================================================
+// 32. Validation — unknown required item_id fails
+// ===========================================================================
+
+#[test]
+fn test_validate_unknown_required_item_fails() {
+    let mut cl = valid_checklist();
+    // Add an item marked required=true with an unrecognised item_id
+    cl.items.push(ChecklistItem {
+        item_id: "unknown.category.xyz".into(),
+        category: ChecklistCategory::Security,
+        required: true,
+        status: ChecklistItemStatus::Pass,
+        artifact_refs: vec![passing_artifact()],
+        waiver: None,
+    });
+    assert!(validate_release_checklist(&cl).is_err());
+}
+
+// ===========================================================================
+// 33. Gate — NotRun required item blocks release
+// ===========================================================================
+
+#[test]
+fn test_not_run_item_blocks_gate() {
+    let mut cl = valid_checklist();
+    if let Some(item) = cl
+        .items
+        .iter_mut()
+        .find(|i| i.item_id == "performance.benchmark_suite")
+    {
+        item.status = ChecklistItemStatus::NotRun;
+    }
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_release_checklist_gate(&mut adapter, &cl);
+    assert!(decision.blocked);
+    assert!(!decision.allows_release());
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("benchmark_suite"))
+    );
+}
+
+// ===========================================================================
+// 34. Checklist ID — has expected rchk_ prefix
+// ===========================================================================
+
+#[test]
+fn test_checklist_id_prefix() {
+    let cl = valid_checklist();
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_release_checklist_gate(&mut adapter, &cl);
+    let id = decision.checklist_id.expect("checklist_id should be set");
+    assert!(
+        id.starts_with("rchk_"),
+        "checklist_id should start with rchk_, got: {id}"
+    );
+}
+
+// ===========================================================================
+// 35. Gate decision — rollback_required is false on normal pass/deny
+// ===========================================================================
+
+#[test]
+fn test_gate_decision_rollback_false_on_pass() {
+    let cl = valid_checklist();
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_release_checklist_gate(&mut adapter, &cl);
+    assert!(!decision.rollback_required);
+}
+
+#[test]
+fn test_gate_decision_rollback_false_on_deny() {
+    let mut cl = valid_checklist();
+    if let Some(item) = cl
+        .items
+        .iter_mut()
+        .find(|i| i.item_id == "security.conformance_suite")
+    {
+        item.status = ChecklistItemStatus::Fail;
+    }
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_release_checklist_gate(&mut adapter, &cl);
+    assert!(decision.blocked);
+    assert!(!decision.rollback_required);
+}
+
+// ===========================================================================
+// 36. Gate — multiple failing items all appear in blockers
+// ===========================================================================
+
+#[test]
+fn test_multiple_failures_all_reported() {
+    let mut cl = valid_checklist();
+    // Fail two distinct required items
+    for item in cl.items.iter_mut() {
+        if item.item_id == "security.conformance_suite"
+            || item.item_id == "performance.benchmark_suite"
+        {
+            item.status = ChecklistItemStatus::Fail;
+        }
+    }
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_release_checklist_gate(&mut adapter, &cl);
+    assert!(decision.blocked);
+    assert!(
+        decision.blockers.len() >= 2,
+        "expected at least 2 blockers, got: {:?}",
+        decision.blockers
+    );
+}
+
+// ===========================================================================
+// 37. Query — multiple checklists stored under same release tag
+// ===========================================================================
+
+#[test]
+fn test_query_multiple_checklists_same_tag() {
+    let mut adapter = InMemoryStorageAdapter::new();
+
+    // Run gate twice for same release_tag but different trace_ids so IDs differ
+    let cl1 = valid_checklist(); // trace_id = "t-1"
+    let mut cl2 = valid_checklist();
+    cl2.trace_id = "t-2".into();
+    cl2.decision_id = "d-2".into();
+
+    run_release_checklist_gate(&mut adapter, &cl1);
+    run_release_checklist_gate(&mut adapter, &cl2);
+
+    let results =
+        query_release_checklists_by_tag(&mut adapter, "v1.0.0", "t-q", "d-q", "p-q").unwrap();
+    assert_eq!(
+        results.len(),
+        2,
+        "expected 2 stored checklists for same tag, got: {}",
+        results.len()
+    );
+    assert!(results.iter().all(|r| r.release_tag == "v1.0.0"));
+}
+
+// ===========================================================================
+// 38. Category as_str values are stable
+// ===========================================================================
+
+#[test]
+fn test_category_as_str_stable_values() {
+    assert_eq!(ChecklistCategory::Security.as_str(), "security");
+    assert_eq!(ChecklistCategory::Performance.as_str(), "performance");
+    assert_eq!(
+        ChecklistCategory::Reproducibility.as_str(),
+        "reproducibility"
+    );
+    assert_eq!(ChecklistCategory::Operational.as_str(), "operational");
+}
+
+// ===========================================================================
+// 39. Status as_str values are stable
+// ===========================================================================
+
+#[test]
+fn test_status_as_str_stable_values() {
+    assert_eq!(ChecklistItemStatus::Pass.as_str(), "pass");
+    assert_eq!(ChecklistItemStatus::Fail.as_str(), "fail");
+    assert_eq!(ChecklistItemStatus::NotRun.as_str(), "not_run");
+    assert_eq!(ChecklistItemStatus::Waived.as_str(), "waived");
+}
+
+// ===========================================================================
+// 40. Gate outcome field is "deny" when blocked
+// ===========================================================================
+
+#[test]
+fn test_gate_outcome_deny_when_blocked() {
+    let mut cl = valid_checklist();
+    if let Some(item) = cl
+        .items
+        .iter_mut()
+        .find(|i| i.item_id == "security.conformance_suite")
+    {
+        item.status = ChecklistItemStatus::Fail;
+    }
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_release_checklist_gate(&mut adapter, &cl);
+    assert_eq!(decision.outcome, "deny");
+    assert!(decision.error_code.is_some());
+    assert_eq!(decision.error_code.as_deref(), Some(ERROR_RELEASE_BLOCKED));
+}
+
+// ===========================================================================
+// 41. ReleaseChecklistGateDecision Clone
+// ===========================================================================
+
+#[test]
+fn test_gate_decision_clone() {
+    let cl = valid_checklist();
+    let mut adapter = InMemoryStorageAdapter::new();
+    let decision = run_release_checklist_gate(&mut adapter, &cl);
+    let cloned = decision.clone();
+    assert_eq!(cloned, decision);
+}
+
+// ===========================================================================
+// 42. RequiredChecklistItem — all items have non-empty item_id
+// ===========================================================================
+
+#[test]
+fn test_required_items_nonempty_ids() {
+    for item in required_checklist_items() {
+        assert!(!item.item_id.is_empty(), "item_id must not be empty");
+    }
+}
+
+// ===========================================================================
+// 43. Serde — ArtifactRef with None sha256 round-trips cleanly
+// ===========================================================================
+
+#[test]
+fn test_artifact_ref_no_sha256_serde() {
+    let ar = ArtifactRef {
+        artifact_id: "art-nosig".into(),
+        path: "/evidence/nosig.json".into(),
+        sha256: None,
+    };
+    let json = serde_json::to_string(&ar).unwrap();
+    let back: ArtifactRef = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.sha256, None);
+    assert_eq!(back.artifact_id, "art-nosig");
+}
+
+// ===========================================================================
+// 44. Validation — invalid RFC3339 timestamp fails
+// ===========================================================================
+
+#[test]
+fn test_validate_invalid_timestamp_fails() {
+    let mut cl = valid_checklist();
+    cl.generated_at_utc = "not-a-timestamp".into();
+    let err = validate_release_checklist(&cl).unwrap_err();
+    assert!(matches!(
+        err,
+        ReleaseChecklistError::InvalidTimestamp { .. }
+    ));
+}
+
+// ===========================================================================
+// 45. Validation — whitespace-only release_tag fails after trim
+// ===========================================================================
+
+#[test]
+fn test_validate_whitespace_release_tag_fails() {
+    let mut cl = valid_checklist();
+    cl.release_tag = "   ".into();
+    assert!(validate_release_checklist(&cl).is_err());
+}

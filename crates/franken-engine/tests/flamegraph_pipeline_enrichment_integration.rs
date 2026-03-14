@@ -22,9 +22,9 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::flamegraph_pipeline::{
     FLAMEGRAPH_COMPONENT, FLAMEGRAPH_SCHEMA_VERSION, FLAMEGRAPH_STORAGE_INTEGRATION_POINT,
-    FlamegraphDiffEntry, FlamegraphEvidenceLink, FlamegraphKind, FlamegraphMetadata,
-    FlamegraphPipelineDecision, FlamegraphPipelineError, FlamegraphPipelineEvent, FlamegraphQuery,
-    FoldedStackSample,
+    FlamegraphArtifact, FlamegraphDiffEntry, FlamegraphEvidenceLink, FlamegraphKind,
+    FlamegraphMetadata, FlamegraphPipelineDecision, FlamegraphPipelineError,
+    FlamegraphPipelineEvent, FlamegraphPipelineRequest, FlamegraphQuery, FoldedStackSample,
 };
 
 // ===========================================================================
@@ -724,4 +724,301 @@ fn flamegraph_metadata_with_baseline() {
     };
     let v: serde_json::Value = serde_json::to_value(&fm).unwrap();
     assert_eq!(v["baseline_benchmark_run_id"], "baseline1");
+}
+
+// ===========================================================================
+// 19) FlamegraphPipelineRequest — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_flamegraph_pipeline_request() {
+    let req = FlamegraphPipelineRequest {
+        trace_id: "t1".into(),
+        decision_id: "d1".into(),
+        policy_id: "p1".into(),
+        benchmark_run_id: "run1".into(),
+        optimization_decision_id: "o1".into(),
+        workload_id: "wl1".into(),
+        benchmark_profile: "prof1".into(),
+        config_fingerprint: "fp1".into(),
+        git_commit: "abc123".into(),
+        generated_at_utc: "2026-03-13T00:00:00Z".into(),
+        cpu_folded_stacks: "main;foo 10\n".into(),
+        allocation_folded_stacks: "main;bar 5\n".into(),
+        baseline_benchmark_run_id: Some("base_run".into()),
+        baseline_cpu_folded_stacks: Some("main;foo 8\n".into()),
+        baseline_allocation_folded_stacks: Some("main;bar 3\n".into()),
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    let rt: FlamegraphPipelineRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(req, rt);
+}
+
+// ===========================================================================
+// 20) FlamegraphPipelineRequest — JSON field-name stability
+// ===========================================================================
+
+#[test]
+fn json_fields_flamegraph_pipeline_request() {
+    let req = FlamegraphPipelineRequest {
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        benchmark_run_id: "r".into(),
+        optimization_decision_id: "o".into(),
+        workload_id: "w".into(),
+        benchmark_profile: "bp".into(),
+        config_fingerprint: "cf".into(),
+        git_commit: "gc".into(),
+        generated_at_utc: "ts".into(),
+        cpu_folded_stacks: "main 1\n".into(),
+        allocation_folded_stacks: "main 1\n".into(),
+        baseline_benchmark_run_id: None,
+        baseline_cpu_folded_stacks: None,
+        baseline_allocation_folded_stacks: None,
+    };
+    let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "benchmark_run_id",
+        "optimization_decision_id",
+        "workload_id",
+        "benchmark_profile",
+        "config_fingerprint",
+        "git_commit",
+        "generated_at_utc",
+        "cpu_folded_stacks",
+        "allocation_folded_stacks",
+        "baseline_benchmark_run_id",
+        "baseline_cpu_folded_stacks",
+        "baseline_allocation_folded_stacks",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "FlamegraphPipelineRequest missing field: {key}"
+        );
+    }
+}
+
+// ===========================================================================
+// 21) FlamegraphArtifact — JSON field-name stability
+// ===========================================================================
+
+#[test]
+fn json_fields_flamegraph_artifact() {
+    let artifact = FlamegraphArtifact {
+        schema_version: FLAMEGRAPH_SCHEMA_VERSION.into(),
+        artifact_id: "fg-test123".into(),
+        kind: FlamegraphKind::Cpu,
+        metadata: FlamegraphMetadata {
+            benchmark_run_id: "run1".into(),
+            baseline_benchmark_run_id: None,
+            workload_id: "wl1".into(),
+            benchmark_profile: "prof1".into(),
+            config_fingerprint: "fp1".into(),
+            git_commit: "abc".into(),
+            generated_at_utc: "2026-01-01T00:00:00Z".into(),
+        },
+        evidence_link: FlamegraphEvidenceLink {
+            trace_id: "t".into(),
+            decision_id: "d".into(),
+            policy_id: "p".into(),
+            benchmark_run_id: "r".into(),
+            optimization_decision_id: "o".into(),
+            evidence_node_id: "n".into(),
+        },
+        folded_stacks: vec![FoldedStackSample {
+            stack: "main".into(),
+            sample_count: 10,
+        }],
+        folded_stacks_text: "main 10\n".into(),
+        svg: "<svg><rect/><text/></svg>".into(),
+        total_samples: 10,
+        diff_from_artifact_id: None,
+        diff_entries: vec![],
+        warnings: vec![],
+        storage_integration_point: FLAMEGRAPH_STORAGE_INTEGRATION_POINT.into(),
+    };
+    let v: serde_json::Value = serde_json::to_value(&artifact).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "schema_version",
+        "artifact_id",
+        "kind",
+        "metadata",
+        "evidence_link",
+        "folded_stacks",
+        "folded_stacks_text",
+        "svg",
+        "total_samples",
+        "diff_from_artifact_id",
+        "diff_entries",
+        "warnings",
+        "storage_integration_point",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "FlamegraphArtifact missing field: {key}"
+        );
+    }
+}
+
+// ===========================================================================
+// 22) FlamegraphPipelineDecision — JSON field-name stability
+// ===========================================================================
+
+#[test]
+fn json_fields_flamegraph_pipeline_decision() {
+    let d = FlamegraphPipelineDecision {
+        pipeline_id: "p1".into(),
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        outcome: "pass".into(),
+        error_code: None,
+        rollback_required: false,
+        storage_backend: "test".into(),
+        storage_integration_point: FLAMEGRAPH_STORAGE_INTEGRATION_POINT.into(),
+        artifacts: vec![],
+        store_keys: vec![],
+        events: vec![],
+    };
+    let v: serde_json::Value = serde_json::to_value(&d).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "pipeline_id",
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "outcome",
+        "error_code",
+        "rollback_required",
+        "storage_backend",
+        "storage_integration_point",
+        "artifacts",
+        "store_keys",
+        "events",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "FlamegraphPipelineDecision missing field: {key}"
+        );
+    }
+}
+
+// ===========================================================================
+// 23) FlamegraphPipelineError — StorageFailure requires_rollback true
+// ===========================================================================
+
+#[test]
+fn pipeline_error_storage_failure_requires_rollback() {
+    use frankenengine_engine::storage_adapter::StorageError;
+    let e = FlamegraphPipelineError::StorageFailure(StorageError::BackendUnavailable {
+        backend: "test".into(),
+        detail: "unavailable".into(),
+    });
+    assert!(e.requires_rollback());
+}
+
+// ===========================================================================
+// 24) FlamegraphPipelineError — StorageFailure stable_code is FE-FLAME-1007
+// ===========================================================================
+
+#[test]
+fn pipeline_error_storage_failure_stable_code() {
+    use frankenengine_engine::storage_adapter::StorageError;
+    let e = FlamegraphPipelineError::StorageFailure(StorageError::NotFound {
+        store: frankenengine_engine::storage_adapter::StoreKind::BenchmarkLedger,
+        key: "k".into(),
+    });
+    assert_eq!(e.stable_code(), "FE-FLAME-1007");
+}
+
+// ===========================================================================
+// 25) FlamegraphPipelineError — InvalidSvg display contains kind string
+// ===========================================================================
+
+#[test]
+fn pipeline_error_invalid_svg_display_contains_kind() {
+    for kind in [
+        FlamegraphKind::Cpu,
+        FlamegraphKind::Allocation,
+        FlamegraphKind::DiffCpu,
+        FlamegraphKind::DiffAllocation,
+    ] {
+        let e = FlamegraphPipelineError::InvalidSvg { kind };
+        let s = e.to_string();
+        assert!(
+            s.contains(kind.as_str()),
+            "InvalidSvg display should contain kind `{}`: got `{s}`",
+            kind.as_str()
+        );
+    }
+}
+
+// ===========================================================================
+// 26) FlamegraphQuery — serde with all fields populated
+// ===========================================================================
+
+#[test]
+fn serde_roundtrip_flamegraph_query_all_fields() {
+    let q = FlamegraphQuery {
+        benchmark_run_id: Some("run1".into()),
+        workload_id: Some("wl1".into()),
+        git_commit: Some("abc123".into()),
+        kind: Some(FlamegraphKind::DiffCpu),
+        decision_id: Some("d1".into()),
+        trace_id: Some("t1".into()),
+        limit: Some(50),
+    };
+    let json = serde_json::to_string(&q).unwrap();
+    let rt: FlamegraphQuery = serde_json::from_str(&json).unwrap();
+    assert_eq!(q, rt);
+    // Also verify JSON field names
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "benchmark_run_id",
+        "workload_id",
+        "git_commit",
+        "kind",
+        "decision_id",
+        "trace_id",
+        "limit",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "FlamegraphQuery missing field: {key}"
+        );
+    }
+}
+
+// ===========================================================================
+// 27) FlamegraphPipelineDecision — rollback_required true roundtrip
+// ===========================================================================
+
+#[test]
+fn pipeline_decision_rollback_required_roundtrip() {
+    let d = FlamegraphPipelineDecision {
+        pipeline_id: "p1".into(),
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        outcome: "fail".into(),
+        error_code: Some("FE-FLAME-1007".into()),
+        rollback_required: true,
+        storage_backend: "test".into(),
+        storage_integration_point: FLAMEGRAPH_STORAGE_INTEGRATION_POINT.into(),
+        artifacts: vec![],
+        store_keys: vec![],
+        events: vec![],
+    };
+    let json = serde_json::to_string(&d).unwrap();
+    let rt: FlamegraphPipelineDecision = serde_json::from_str(&json).unwrap();
+    assert_eq!(d, rt);
+    assert!(rt.rollback_required);
+    assert!(!rt.is_success());
 }

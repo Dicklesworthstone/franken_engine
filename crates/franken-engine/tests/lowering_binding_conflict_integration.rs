@@ -895,3 +895,348 @@ fn mixed_imports_and_exports_with_references() {
         "mixed import/export/ref should succeed: {result:?}"
     );
 }
+
+// =========================================================================
+// 13. SemanticValidationResult – Default impl and mutable API
+// =========================================================================
+
+#[test]
+fn test_semantic_validation_result_default_equals_new() {
+    let via_default = SemanticValidationResult::default();
+    let via_new = SemanticValidationResult::new();
+    assert_eq!(via_default, via_new);
+}
+
+#[test]
+fn test_semantic_validation_result_is_valid_empty() {
+    let result = SemanticValidationResult::new();
+    assert!(result.is_valid());
+    assert_eq!(result.error_count(), 0);
+}
+
+#[test]
+fn test_semantic_validation_result_add_error_increments_count() {
+    let mut result = SemanticValidationResult::new();
+    assert!(result.is_valid());
+    result.add_error(SemanticError::new(
+        SemanticErrorCode::DuplicateLetConstDeclaration,
+        Some("x".to_string()),
+        None,
+    ));
+    assert!(!result.is_valid());
+    assert_eq!(result.error_count(), 1);
+    result.add_error(SemanticError::new(
+        SemanticErrorCode::ConstWithoutInitializer,
+        Some("y".to_string()),
+        None,
+    ));
+    assert_eq!(result.error_count(), 2);
+}
+
+#[test]
+fn test_semantic_validation_result_clone_and_eq() {
+    let mut r = SemanticValidationResult::new();
+    r.add_error(SemanticError::new(
+        SemanticErrorCode::VarConflictsWithLexical,
+        Some("z".to_string()),
+        None,
+    ));
+    let r2 = r.clone();
+    assert_eq!(r, r2);
+}
+
+// =========================================================================
+// 14. SemanticError Clone/Debug/PartialEq/serde
+// =========================================================================
+
+#[test]
+fn test_semantic_error_clone_eq() {
+    let e = SemanticError::new(
+        SemanticErrorCode::LexicalConflictsWithVar,
+        Some("a".to_string()),
+        Some(span()),
+    );
+    let e2 = e.clone();
+    assert_eq!(e, e2);
+}
+
+#[test]
+fn test_semantic_error_debug_non_empty() {
+    let e = SemanticError::new(SemanticErrorCode::DuplicateImportBinding, None, None);
+    let debug = format!("{e:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("DuplicateImportBinding"));
+}
+
+#[test]
+fn test_semantic_error_serde_roundtrip_with_span() {
+    let e = SemanticError::new(
+        SemanticErrorCode::UndeclaredExportBinding,
+        Some("foo".to_string()),
+        Some(span()),
+    );
+    let json = serde_json::to_string(&e).expect("serialize SemanticError");
+    let back: SemanticError = serde_json::from_str(&json).expect("deserialize SemanticError");
+    assert_eq!(e, back);
+}
+
+#[test]
+fn test_semantic_error_serde_roundtrip_no_span_no_name() {
+    let e = SemanticError::new(SemanticErrorCode::IllegalBreak, None, None);
+    let json = serde_json::to_string(&e).unwrap();
+    let back: SemanticError = serde_json::from_str(&json).unwrap();
+    assert_eq!(e, back);
+}
+
+// =========================================================================
+// 15. SemanticErrorCode – as_str and stable_diagnostic_code coverage
+// =========================================================================
+
+#[test]
+fn test_semantic_error_code_as_str_distinct() {
+    let mut strs: Vec<&str> = SemanticErrorCode::ALL.iter().map(|c| c.as_str()).collect();
+    let orig_len = strs.len();
+    strs.sort_unstable();
+    strs.dedup();
+    assert_eq!(strs.len(), orig_len, "all as_str values must be distinct");
+}
+
+#[test]
+fn test_semantic_error_code_stable_diagnostic_code_all_prefixed() {
+    for code in &SemanticErrorCode::ALL {
+        let diag = code.stable_diagnostic_code();
+        assert!(
+            diag.starts_with("FE-SEM-"),
+            "stable_diagnostic_code must start with FE-SEM-, got: {diag}"
+        );
+    }
+}
+
+#[test]
+fn test_semantic_error_code_diagnostic_category_coverage() {
+    // Every variant must return a valid category (no panic).
+    for code in &SemanticErrorCode::ALL {
+        let _ = code.diagnostic_category();
+    }
+}
+
+// =========================================================================
+// 16. SemanticDiagnosticCategory serde roundtrip
+// =========================================================================
+
+#[test]
+fn test_semantic_diagnostic_category_serde_roundtrip() {
+    let categories = [
+        SemanticDiagnosticCategory::Binding,
+        SemanticDiagnosticCategory::Module,
+        SemanticDiagnosticCategory::StrictMode,
+        SemanticDiagnosticCategory::Label,
+        SemanticDiagnosticCategory::ControlFlow,
+        SemanticDiagnosticCategory::ContextRestriction,
+    ];
+    for cat in &categories {
+        let json = serde_json::to_string(cat).expect("serialize category");
+        let back: SemanticDiagnosticCategory =
+            serde_json::from_str(&json).expect("deserialize category");
+        assert_eq!(*cat, back, "roundtrip failed for {cat:?}");
+    }
+}
+
+// =========================================================================
+// 17. LoweringContext serde roundtrip and Clone/Debug
+// =========================================================================
+
+#[test]
+fn test_lowering_context_serde_roundtrip() {
+    let ctx = LoweringContext::new("trace-1", "decision-1", "policy-1");
+    let json = serde_json::to_string(&ctx).expect("serialize LoweringContext");
+    let back: LoweringContext = serde_json::from_str(&json).expect("deserialize LoweringContext");
+    assert_eq!(ctx, back);
+}
+
+#[test]
+fn test_lowering_context_clone_debug() {
+    let ctx = LoweringContext::new("t", "d", "p");
+    let ctx2 = ctx.clone();
+    assert_eq!(ctx, ctx2);
+    let debug = format!("{ctx:?}");
+    assert!(debug.contains("LoweringContext"));
+}
+
+// =========================================================================
+// 18. EmptyIr0Body error path
+// =========================================================================
+
+#[test]
+fn test_empty_body_is_err() {
+    let tree = make_tree(ParseGoal::Script, vec![]);
+    let ir0 = Ir0Module::from_syntax_tree(tree, "empty.js");
+    let result = lower_ir0_to_ir1(&ir0);
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        LoweringPipelineError::EmptyIr0Body
+    ));
+}
+
+#[test]
+fn test_empty_body_ir3_pipeline_also_fails() {
+    let tree = make_tree(ParseGoal::Script, vec![]);
+    let ir0 = Ir0Module::from_syntax_tree(tree, "empty3.js");
+    let ctx = LoweringContext::new("t", "d", "p");
+    let result = lower_ir0_to_ir3(&ir0, &ctx);
+    assert!(result.is_err());
+}
+
+// =========================================================================
+// 19. Binding name in error captures the correct name
+// =========================================================================
+
+#[test]
+fn test_duplicate_let_error_captures_binding_name() {
+    let result = lower(
+        ParseGoal::Script,
+        vec![
+            var_decl(
+                VariableDeclarationKind::Let,
+                "myVar",
+                Some(Expression::NumericLiteral(1)),
+            ),
+            var_decl(
+                VariableDeclarationKind::Let,
+                "myVar",
+                Some(Expression::NumericLiteral(2)),
+            ),
+        ],
+        "dup_named.js",
+    );
+    let err = result.unwrap_err();
+    if let LoweringPipelineError::SemanticViolation(sem) = err {
+        assert_eq!(sem.binding_name.as_deref(), Some("myVar"));
+    } else {
+        panic!("expected SemanticViolation");
+    }
+}
+
+#[test]
+fn test_const_no_init_error_captures_binding_name() {
+    let result = lower(
+        ParseGoal::Script,
+        vec![var_decl(VariableDeclarationKind::Const, "K", None)],
+        "const_name.js",
+    );
+    let err = result.unwrap_err();
+    if let LoweringPipelineError::SemanticViolation(sem) = err {
+        assert_eq!(sem.binding_name.as_deref(), Some("K"));
+    } else {
+        panic!("expected SemanticViolation");
+    }
+}
+
+// =========================================================================
+// 20. SemanticValidationResult taxonomy_version is stable
+// =========================================================================
+
+#[test]
+fn test_semantic_validation_result_taxonomy_version_stable() {
+    let r = SemanticValidationResult::new();
+    assert_eq!(
+        r.taxonomy_version,
+        "franken-engine.static-semantics.taxonomy.v1"
+    );
+}
+
+// =========================================================================
+// 21. Lowering error: import conflict captures correct error code
+// =========================================================================
+
+#[test]
+fn test_import_then_const_same_name_is_import_error() {
+    let result = lower(
+        ParseGoal::Module,
+        vec![
+            import_stmt(Some("mod"), "source"),
+            var_decl(
+                VariableDeclarationKind::Const,
+                "mod",
+                Some(Expression::NumericLiteral(99)),
+            ),
+        ],
+        "import_const.mjs",
+    );
+    assert!(result.is_err());
+    if let Err(LoweringPipelineError::SemanticViolation(sem)) = result {
+        assert_eq!(sem.code, SemanticErrorCode::DuplicateImportBinding);
+    } else {
+        panic!("expected DuplicateImportBinding");
+    }
+}
+
+// =========================================================================
+// 22. Multi-binding within same let declaration must not self-conflict
+// =========================================================================
+
+#[test]
+fn test_multi_let_declarators_distinct_names_no_conflict() {
+    // `let a = 1, b = 2, c = 3;` — all distinct, must succeed.
+    let result = lower(
+        ParseGoal::Script,
+        vec![multi_decl(
+            VariableDeclarationKind::Let,
+            &[
+                ("alpha", Some(Expression::NumericLiteral(1))),
+                ("beta", Some(Expression::NumericLiteral(2))),
+                ("gamma", Some(Expression::NumericLiteral(3))),
+            ],
+        )],
+        "multi_let_distinct.js",
+    );
+    assert!(
+        result.is_ok(),
+        "distinct multi-let must succeed: {result:?}"
+    );
+}
+
+// =========================================================================
+// 23. LoweringPipelineOutput witnesses and events shape
+// =========================================================================
+
+#[test]
+fn test_full_pipeline_output_witnesses_all_have_pass_id() {
+    let tree = make_tree(
+        ParseGoal::Module,
+        vec![
+            import_stmt(Some("React"), "react"),
+            export_default(Expression::Identifier("React".to_string())),
+        ],
+    );
+    let ir0 = Ir0Module::from_syntax_tree(tree, "witnesses.mjs");
+    let ctx = LoweringContext::new("trace-w", "dec-w", "pol-w");
+    let output = lower_ir0_to_ir3(&ir0, &ctx).expect("pipeline must succeed");
+    for w in &output.witnesses {
+        assert!(
+            !w.pass_id.is_empty(),
+            "every PassWitness must have a non-empty pass_id"
+        );
+    }
+}
+
+#[test]
+fn test_full_pipeline_events_contain_trace_id() {
+    let tree = make_tree(
+        ParseGoal::Script,
+        vec![var_decl(
+            VariableDeclarationKind::Const,
+            "PI",
+            Some(Expression::NumericLiteral(3)),
+        )],
+    );
+    let ir0 = Ir0Module::from_syntax_tree(tree, "events.js");
+    let ctx = LoweringContext::new("my-trace-id", "my-decision", "my-policy");
+    let output = lower_ir0_to_ir3(&ir0, &ctx).expect("pipeline must succeed");
+    for ev in &output.events {
+        assert_eq!(ev.trace_id, "my-trace-id");
+        assert_eq!(ev.decision_id, "my-decision");
+        assert_eq!(ev.policy_id, "my-policy");
+    }
+}

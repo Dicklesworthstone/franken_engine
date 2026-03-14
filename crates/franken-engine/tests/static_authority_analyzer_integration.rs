@@ -26,7 +26,7 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::static_authority_analyzer::{
     AnalysisCache, AnalysisCacheKey, AnalysisConfig, AnalysisError, AnalysisMethod, Capability,
     EffectEdge, EffectGraph, EffectNode, EffectNodeKind, ManifestIntents, PerCapabilityEvidence,
-    PrecisionEstimate, StaticAuthorityAnalyzer,
+    PrecisionEstimate, StaticAnalysisReport, StaticAuthorityAnalyzer,
 };
 
 // ---------------------------------------------------------------------------
@@ -1047,4 +1047,597 @@ fn analysis_cache_key_ord_and_hash() {
     set.insert(key2.clone());
     set.insert(key1.clone()); // duplicate
     assert_eq!(set.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Error Display formatting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_analysis_error_display_extension_mismatch() {
+    let err = AnalysisError::ExtensionMismatch {
+        graph_ext: "ext-graph".into(),
+        manifest_ext: "ext-manifest".into(),
+    };
+    let s = err.to_string();
+    assert!(
+        s.contains("ext-graph"),
+        "expected graph_ext in display: {s}"
+    );
+    assert!(
+        s.contains("ext-manifest"),
+        "expected manifest_ext in display: {s}"
+    );
+    assert!(
+        s.contains("mismatch"),
+        "expected 'mismatch' in display: {s}"
+    );
+}
+
+#[test]
+fn test_analysis_error_display_empty_effect_graph() {
+    let err = AnalysisError::EmptyEffectGraph {
+        extension_id: "ext-empty-display".into(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("empty"), "expected 'empty' in display: {s}");
+    assert!(
+        s.contains("ext-empty-display"),
+        "expected extension_id in display: {s}"
+    );
+}
+
+#[test]
+fn test_analysis_error_display_no_entry_node() {
+    let err = AnalysisError::NoEntryNode {
+        extension_id: "ext-noentry-display".into(),
+    };
+    let s = err.to_string();
+    assert!(
+        s.contains("no entry node"),
+        "expected 'no entry node' in display: {s}"
+    );
+    assert!(
+        s.contains("ext-noentry-display"),
+        "expected extension_id in display: {s}"
+    );
+}
+
+#[test]
+fn test_analysis_error_display_timed_out() {
+    let err = AnalysisError::TimedOut {
+        extension_id: "ext-timeout".into(),
+        elapsed_ns: 200_000_000_000,
+        budget_ns: 60_000_000_000,
+    };
+    let s = err.to_string();
+    assert!(
+        s.contains("timed out"),
+        "expected 'timed out' in display: {s}"
+    );
+    assert!(
+        s.contains("ext-timeout"),
+        "expected extension_id in display: {s}"
+    );
+    assert!(
+        s.contains("200000000000"),
+        "expected elapsed_ns in display: {s}"
+    );
+    assert!(
+        s.contains("60000000000"),
+        "expected budget_ns in display: {s}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AnalysisMethod Display formatting
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_analysis_method_display_all_variants() {
+    assert_eq!(
+        AnalysisMethod::LatticeReachability.to_string(),
+        "lattice_reachability"
+    );
+    assert_eq!(
+        AnalysisMethod::ManifestFallback.to_string(),
+        "manifest_fallback"
+    );
+    assert_eq!(
+        AnalysisMethod::TimeoutFallback.to_string(),
+        "timeout_fallback"
+    );
+    assert_eq!(
+        AnalysisMethod::ExcludedDeadPath.to_string(),
+        "excluded_dead_path"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Capability Display and as_str
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_capability_display_and_as_str() {
+    let c = cap("net_send");
+    assert_eq!(c.to_string(), "net_send");
+    assert_eq!(c.as_str(), "net_send");
+}
+
+#[test]
+fn test_capability_debug_format() {
+    let c = cap("fs_write");
+    let debug_str = format!("{c:?}");
+    assert!(
+        debug_str.contains("fs_write"),
+        "Debug should include capability name: {debug_str}"
+    );
+}
+
+#[test]
+fn test_capability_clone_and_eq() {
+    let c1 = cap("crypto_sign");
+    let c2 = c1.clone();
+    assert_eq!(c1, c2);
+    assert_ne!(c1, cap("other"));
+}
+
+// ---------------------------------------------------------------------------
+// Error paths: extension mismatch, empty graph, no entry node
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_analyze_returns_err_on_extension_mismatch() {
+    let graph = simple_graph(); // extension_id = "ext-simple"
+    let manifest = ManifestIntents {
+        extension_id: "ext-different".into(),
+        declared_capabilities: [cap("fs_read")].into(),
+        optional_capabilities: BTreeSet::new(),
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let result = analyzer.analyze(&graph, &manifest, SecurityEpoch::from_raw(1), 1_000);
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        AnalysisError::ExtensionMismatch {
+            graph_ext,
+            manifest_ext,
+        } => {
+            assert_eq!(graph_ext, "ext-simple");
+            assert_eq!(manifest_ext, "ext-different");
+        }
+        other => panic!("expected ExtensionMismatch, got {other}"),
+    }
+}
+
+#[test]
+fn test_analyze_returns_err_on_empty_graph() {
+    let graph = EffectGraph::new("ext-empty-err");
+    let manifest = ManifestIntents {
+        extension_id: "ext-empty-err".into(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let result = analyzer.analyze(&graph, &manifest, SecurityEpoch::from_raw(1), 1_000);
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        AnalysisError::EmptyEffectGraph { extension_id } => {
+            assert_eq!(extension_id, "ext-empty-err");
+        }
+        other => panic!("expected EmptyEffectGraph, got {other}"),
+    }
+}
+
+#[test]
+fn test_analyze_returns_err_on_no_entry_node() {
+    let mut graph = EffectGraph::new("ext-no-entry");
+    graph.add_node(computation_node("c1"));
+    graph.add_node(exit_node("x"));
+    graph.add_edge(edge("c1", "x"));
+    let manifest = ManifestIntents {
+        extension_id: "ext-no-entry".into(),
+        declared_capabilities: BTreeSet::new(),
+        optional_capabilities: BTreeSet::new(),
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let result = analyzer.analyze(&graph, &manifest, SecurityEpoch::from_raw(1), 1_000);
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        AnalysisError::NoEntryNode { extension_id } => {
+            assert_eq!(extension_id, "ext-no-entry");
+        }
+        other => panic!("expected NoEntryNode, got {other}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AnalysisError is std::error::Error for all variants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_analysis_error_std_error_extension_mismatch() {
+    let err: Box<dyn std::error::Error> = Box::new(AnalysisError::ExtensionMismatch {
+        graph_ext: "ga".into(),
+        manifest_ext: "mb".into(),
+    });
+    assert!(err.to_string().contains("mismatch"));
+}
+
+#[test]
+fn test_analysis_error_std_error_no_entry_node() {
+    let err: Box<dyn std::error::Error> = Box::new(AnalysisError::NoEntryNode {
+        extension_id: "ext-ne".into(),
+    });
+    assert!(err.to_string().contains("no entry node"));
+}
+
+#[test]
+fn test_analysis_error_std_error_timed_out() {
+    let err: Box<dyn std::error::Error> = Box::new(AnalysisError::TimedOut {
+        extension_id: "ext-to".into(),
+        elapsed_ns: 120_000_000_000,
+        budget_ns: 60_000_000_000,
+    });
+    assert!(err.to_string().contains("timed out"));
+}
+
+// ---------------------------------------------------------------------------
+// AnalysisCache: zero-capacity cache rejects all inserts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_analysis_cache_zero_capacity_stays_empty() {
+    let mut cache = AnalysisCache::new(0);
+    let key = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"g"),
+        manifest_hash: ContentHash::compute(b"m"),
+        path_sensitive: false,
+    };
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(1),
+            1_000,
+        )
+        .unwrap();
+    cache.insert(key.clone(), report);
+    assert!(cache.is_empty());
+    assert_eq!(cache.len(), 0);
+    assert!(cache.get(&key).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// AnalysisCache: eviction when at capacity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_analysis_cache_evicts_oldest_when_at_capacity() {
+    let mut cache = AnalysisCache::new(2);
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(1),
+            1_000,
+        )
+        .unwrap();
+
+    let key_a = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"aa"),
+        manifest_hash: ContentHash::compute(b"m1"),
+        path_sensitive: false,
+    };
+    let key_b = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"bb"),
+        manifest_hash: ContentHash::compute(b"m2"),
+        path_sensitive: false,
+    };
+    let key_c = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"cc"),
+        manifest_hash: ContentHash::compute(b"m3"),
+        path_sensitive: false,
+    };
+
+    cache.insert(key_a.clone(), report.clone());
+    cache.insert(key_b.clone(), report.clone());
+    assert_eq!(cache.len(), 2);
+
+    // Inserting a third entry should evict the oldest (key_a).
+    cache.insert(key_c.clone(), report.clone());
+    assert_eq!(cache.len(), 2);
+    assert!(
+        cache.get(&key_a).is_none(),
+        "key_a should have been evicted"
+    );
+    assert!(cache.get(&key_b).is_some());
+    assert!(cache.get(&key_c).is_some());
+}
+
+// ---------------------------------------------------------------------------
+// AnalysisCache: clear removes all entries
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_analysis_cache_clear_empties_cache() {
+    let mut cache = AnalysisCache::new(10);
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(1),
+            1_000,
+        )
+        .unwrap();
+    let key = AnalysisCacheKey {
+        effect_graph_hash: ContentHash::compute(b"x"),
+        manifest_hash: ContentHash::compute(b"y"),
+        path_sensitive: false,
+    };
+    cache.insert(key.clone(), report);
+    assert_eq!(cache.len(), 1);
+    cache.clear();
+    assert!(cache.is_empty());
+    assert_eq!(cache.len(), 0);
+    assert!(cache.get(&key).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// EffectGraph serde round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_effect_graph_serde_roundtrip() {
+    let graph = complex_graph();
+    let json = serde_json::to_string(&graph).unwrap();
+    let restored: EffectGraph = serde_json::from_str(&json).unwrap();
+    assert_eq!(graph, restored);
+    assert_eq!(restored.nodes.len(), graph.nodes.len());
+    assert_eq!(restored.edges.len(), graph.edges.len());
+}
+
+// ---------------------------------------------------------------------------
+// EffectNodeKind variants: serde and equality
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_effect_node_kind_serde_all_variants() {
+    let kinds: Vec<EffectNodeKind> = vec![
+        EffectNodeKind::Entry,
+        EffectNodeKind::HostcallSite {
+            capability: cap("fs_read"),
+        },
+        EffectNodeKind::ControlFlow,
+        EffectNodeKind::Computation,
+        EffectNodeKind::Exit,
+    ];
+    for kind in &kinds {
+        let json = serde_json::to_string(kind).unwrap();
+        let restored: EffectNodeKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(*kind, restored, "serde roundtrip failed for {kind:?}");
+    }
+}
+
+#[test]
+fn test_effect_node_kind_clone_and_debug() {
+    let kind = EffectNodeKind::HostcallSite {
+        capability: cap("net_send"),
+    };
+    let cloned = kind.clone();
+    assert_eq!(kind, cloned);
+    let debug_str = format!("{kind:?}");
+    assert!(
+        debug_str.contains("HostcallSite"),
+        "Debug should mention variant: {debug_str}"
+    );
+    assert!(
+        debug_str.contains("net_send"),
+        "Debug should include capability: {debug_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// PrecisionEstimate: clone and debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_precision_estimate_clone_and_debug() {
+    let pe = PrecisionEstimate {
+        upper_bound_size: 3,
+        manifest_declared_size: 5,
+        ratio_millionths: 600_000,
+        excluded_by_path_sensitivity: 0,
+    };
+    let cloned = pe.clone();
+    assert_eq!(pe, cloned);
+    let debug_str = format!("{pe:?}");
+    assert!(
+        debug_str.contains("600000"),
+        "Debug should include ratio: {debug_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// StaticAnalysisReport: Clone/Debug/serde round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_static_analysis_report_clone_and_debug() {
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(1),
+            5_000,
+        )
+        .unwrap();
+    let cloned = report.clone();
+    assert_eq!(report, cloned);
+    let debug_str = format!("{report:?}");
+    assert!(
+        debug_str.contains("ext-simple"),
+        "Debug should include extension_id: {debug_str}"
+    );
+}
+
+#[test]
+fn test_static_analysis_report_serde_roundtrip() {
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let report = analyzer
+        .analyze(
+            &simple_graph(),
+            &simple_manifest(),
+            SecurityEpoch::from_raw(7),
+            9_999,
+        )
+        .unwrap();
+    let json = serde_json::to_string(&report).unwrap();
+    let restored: StaticAnalysisReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, restored);
+    assert_eq!(restored.extension_id, "ext-simple");
+    assert_eq!(restored.epoch, SecurityEpoch::from_raw(7));
+    assert_eq!(restored.timestamp_ns, 9_999);
+}
+
+// ---------------------------------------------------------------------------
+// ManifestIntents: Clone/Debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_manifest_intents_clone_and_debug() {
+    let manifest = ManifestIntents {
+        extension_id: "ext-clone-test".into(),
+        declared_capabilities: [cap("fs_read"), cap("fs_write")].into(),
+        optional_capabilities: [cap("net_send")].into(),
+    };
+    let cloned = manifest.clone();
+    assert_eq!(manifest, cloned);
+    let debug_str = format!("{manifest:?}");
+    assert!(
+        debug_str.contains("ext-clone-test"),
+        "Debug includes extension_id: {debug_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AnalysisConfig: Clone/Debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_analysis_config_clone_and_debug() {
+    let config = AnalysisConfig {
+        time_budget_ns: 30_000_000,
+        path_sensitive: true,
+        zone: "debug-zone".into(),
+    };
+    let cloned = config.clone();
+    assert_eq!(config, cloned);
+    let debug_str = format!("{config:?}");
+    assert!(
+        debug_str.contains("debug-zone"),
+        "Debug includes zone: {debug_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Multiple entry nodes: both contribute reachable capabilities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_multiple_entry_nodes_both_contribute() {
+    let mut graph = EffectGraph::new("ext-multi-entry");
+    graph.add_node(entry_node("e1"));
+    graph.add_node(entry_node("e2"));
+    graph.add_node(hostcall_node("h_read", "fs_read"));
+    graph.add_node(hostcall_node("h_write", "fs_write"));
+    graph.add_node(exit_node("x1"));
+    graph.add_node(exit_node("x2"));
+    graph.add_edge(edge("e1", "h_read"));
+    graph.add_edge(edge("h_read", "x1"));
+    graph.add_edge(edge("e2", "h_write"));
+    graph.add_edge(edge("h_write", "x2"));
+
+    let manifest = ManifestIntents {
+        extension_id: "ext-multi-entry".into(),
+        declared_capabilities: [cap("fs_read"), cap("fs_write")].into(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let report = analyzer
+        .analyze(&graph, &manifest, SecurityEpoch::from_raw(1), 3_000)
+        .unwrap();
+
+    assert!(report.requires_capability(&cap("fs_read")));
+    assert!(report.requires_capability(&cap("fs_write")));
+    assert_eq!(report.upper_bound_capabilities.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Precision ratio for over-approximation: upper bound > manifest
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_precision_ratio_over_approximation() {
+    // Graph has fs_read + admin_access; manifest only declares fs_read.
+    let mut graph = EffectGraph::new("ext-overapprox");
+    graph.add_node(entry_node("e"));
+    graph.add_node(hostcall_node("h1", "fs_read"));
+    graph.add_node(hostcall_node("h2", "admin_access"));
+    graph.add_node(exit_node("x"));
+    graph.add_edge(edge("e", "h1"));
+    graph.add_edge(edge("h1", "h2"));
+    graph.add_edge(edge("h2", "x"));
+
+    let manifest = ManifestIntents {
+        extension_id: "ext-overapprox".into(),
+        declared_capabilities: [cap("fs_read")].into(),
+        optional_capabilities: BTreeSet::new(),
+    };
+
+    let analyzer = StaticAuthorityAnalyzer::new(default_config());
+    let report = analyzer
+        .analyze(&graph, &manifest, SecurityEpoch::from_raw(1), 2_000)
+        .unwrap();
+
+    // upper_bound=2, manifest=1 -> ratio = 2_000_000
+    assert_eq!(report.precision.upper_bound_size, 2);
+    assert_eq!(report.precision.manifest_declared_size, 1);
+    assert_eq!(report.precision.ratio_millionths, 2_000_000);
+}
+
+// ---------------------------------------------------------------------------
+// derive_report_id is deterministic
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_derive_report_id_is_deterministic() {
+    let hash_g = ContentHash::compute(b"graph-data");
+    let hash_m = ContentHash::compute(b"manifest-data");
+    let id1 = StaticAnalysisReport::derive_report_id("ext-det", &hash_g, &hash_m, 12345, "z1");
+    let id2 = StaticAnalysisReport::derive_report_id("ext-det", &hash_g, &hash_m, 12345, "z1");
+    assert!(id1.is_ok());
+    assert_eq!(id1.unwrap(), id2.unwrap());
+}
+
+#[test]
+fn test_derive_report_id_differs_on_timestamp() {
+    let hash_g = ContentHash::compute(b"graph-ts");
+    let hash_m = ContentHash::compute(b"manifest-ts");
+    let id1 = StaticAnalysisReport::derive_report_id("ext-ts", &hash_g, &hash_m, 100, "zone");
+    let id2 = StaticAnalysisReport::derive_report_id("ext-ts", &hash_g, &hash_m, 200, "zone");
+    assert_ne!(id1.unwrap(), id2.unwrap());
+}
+
+#[test]
+fn test_derive_report_id_differs_on_zone() {
+    let hash_g = ContentHash::compute(b"graph-zone");
+    let hash_m = ContentHash::compute(b"manifest-zone");
+    let id1 = StaticAnalysisReport::derive_report_id("ext-z", &hash_g, &hash_m, 1, "zone-a");
+    let id2 = StaticAnalysisReport::derive_report_id("ext-z", &hash_g, &hash_m, 1, "zone-b");
+    assert_ne!(id1.unwrap(), id2.unwrap());
 }

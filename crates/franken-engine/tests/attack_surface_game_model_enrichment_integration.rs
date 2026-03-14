@@ -601,3 +601,607 @@ fn action_space_action_count() {
     assert_eq!(space.action_count(), 2);
     assert_eq!(space.admissible_actions().len(), 1);
 }
+
+// ===========================================================================
+// 23) LossTensor::total_loss — sums across all dimensions
+// ===========================================================================
+
+#[test]
+fn test_loss_tensor_total_loss_sums_dimensions() {
+    let entries = vec![
+        LossEntry {
+            attacker_action: ActionId("atk".into()),
+            defender_action: ActionId("def".into()),
+            dimension: LossDimension::UserHarm,
+            loss_millionths: 300_000,
+        },
+        LossEntry {
+            attacker_action: ActionId("atk".into()),
+            defender_action: ActionId("def".into()),
+            dimension: LossDimension::PerformanceCost,
+            loss_millionths: 200_000,
+        },
+        LossEntry {
+            attacker_action: ActionId("atk".into()),
+            defender_action: ActionId("def".into()),
+            dimension: LossDimension::AvailabilityCost,
+            loss_millionths: 100_000,
+        },
+    ];
+    let tensor = LossTensor::from_entries(Subsystem::Runtime, entries);
+    assert_eq!(
+        tensor.total_loss(&ActionId("atk".into()), &ActionId("def".into())),
+        600_000
+    );
+}
+
+// ===========================================================================
+// 24) LossTensor::total_loss — returns zero for unknown pair
+// ===========================================================================
+
+#[test]
+fn test_loss_tensor_total_loss_unknown_pair_is_zero() {
+    let entries = vec![LossEntry {
+        attacker_action: ActionId("atk".into()),
+        defender_action: ActionId("def".into()),
+        dimension: LossDimension::UserHarm,
+        loss_millionths: 500_000,
+    }];
+    let tensor = LossTensor::from_entries(Subsystem::Compiler, entries);
+    assert_eq!(
+        tensor.total_loss(&ActionId("unknown".into()), &ActionId("def".into())),
+        0
+    );
+}
+
+// ===========================================================================
+// 25) LossTensor::total_loss — handles negative loss entries (benefit)
+// ===========================================================================
+
+#[test]
+fn test_loss_tensor_total_loss_negative_entries() {
+    let entries = vec![
+        LossEntry {
+            attacker_action: ActionId("atk".into()),
+            defender_action: ActionId("def".into()),
+            dimension: LossDimension::FalsePositiveCost,
+            loss_millionths: 500_000,
+        },
+        LossEntry {
+            attacker_action: ActionId("atk".into()),
+            defender_action: ActionId("def".into()),
+            dimension: LossDimension::EvidenceIntegrityCost,
+            loss_millionths: -200_000,
+        },
+    ];
+    let tensor = LossTensor::from_entries(Subsystem::EvidencePipeline, entries);
+    assert_eq!(
+        tensor.total_loss(&ActionId("atk".into()), &ActionId("def".into())),
+        300_000
+    );
+}
+
+// ===========================================================================
+// 26) LossTensor::minimax_defender — single pair returns that defender
+// ===========================================================================
+
+#[test]
+fn test_loss_tensor_minimax_defender_single_pair() {
+    let entries = vec![LossEntry {
+        attacker_action: ActionId("atk".into()),
+        defender_action: ActionId("def".into()),
+        dimension: LossDimension::UserHarm,
+        loss_millionths: 400_000,
+    }];
+    let tensor = LossTensor::from_entries(Subsystem::Runtime, entries);
+    let result = tensor.minimax_defender();
+    assert_eq!(result, Some(ActionId("def".into())));
+}
+
+// ===========================================================================
+// 27) LossTensor::minimax_defender — empty tensor returns None
+// ===========================================================================
+
+#[test]
+fn test_loss_tensor_minimax_defender_empty_returns_none() {
+    let tensor = LossTensor::from_entries(Subsystem::Runtime, vec![]);
+    assert!(tensor.minimax_defender().is_none());
+}
+
+// ===========================================================================
+// 28) LossTensor::minimax_defender — picks defender with lower max loss
+// ===========================================================================
+
+#[test]
+fn test_loss_tensor_minimax_defender_picks_lower_max_loss() {
+    // def-A: max attacker loss = 900_000
+    // def-B: max attacker loss = 300_000  ← minimax chooses this
+    let entries = vec![
+        LossEntry {
+            attacker_action: ActionId("atk".into()),
+            defender_action: ActionId("def-A".into()),
+            dimension: LossDimension::UserHarm,
+            loss_millionths: 900_000,
+        },
+        LossEntry {
+            attacker_action: ActionId("atk".into()),
+            defender_action: ActionId("def-B".into()),
+            dimension: LossDimension::UserHarm,
+            loss_millionths: 300_000,
+        },
+    ];
+    let tensor = LossTensor::from_entries(Subsystem::Runtime, entries);
+    assert_eq!(tensor.minimax_defender(), Some(ActionId("def-B".into())));
+}
+
+// ===========================================================================
+// 29) AdmissibleActionAutomaton::admissible_actions — excludes forbidden
+// ===========================================================================
+
+#[test]
+fn test_automaton_admissible_actions_excludes_forbidden() {
+    let auto = AdmissibleActionAutomaton {
+        subsystem: Subsystem::ControlPlane,
+        constraints: vec![HardConstraint {
+            constraint_id: "c1".into(),
+            description: "forbid d1".into(),
+            forbidden_actions: BTreeSet::from([ActionId("d1".into())]),
+            active_conditions: vec![],
+        }],
+        all_defender_actions: BTreeSet::from([
+            ActionId("d1".into()),
+            ActionId("d2".into()),
+            ActionId("d3".into()),
+        ]),
+    };
+    let admissible = auto.admissible_actions();
+    assert!(!admissible.contains(&ActionId("d1".into())));
+    assert!(admissible.contains(&ActionId("d2".into())));
+    assert!(admissible.contains(&ActionId("d3".into())));
+    assert_eq!(admissible.len(), 2);
+}
+
+// ===========================================================================
+// 30) AdmissibleActionAutomaton::constraint_count — counts constraints
+// ===========================================================================
+
+#[test]
+fn test_automaton_constraint_count_matches_vec_len() {
+    let auto = AdmissibleActionAutomaton {
+        subsystem: Subsystem::ExtensionHost,
+        constraints: vec![
+            HardConstraint {
+                constraint_id: "c1".into(),
+                description: "d".into(),
+                forbidden_actions: BTreeSet::new(),
+                active_conditions: vec![],
+            },
+            HardConstraint {
+                constraint_id: "c2".into(),
+                description: "e".into(),
+                forbidden_actions: BTreeSet::new(),
+                active_conditions: vec![],
+            },
+        ],
+        all_defender_actions: BTreeSet::new(),
+    };
+    assert_eq!(auto.constraint_count(), 2);
+}
+
+// ===========================================================================
+// 31) AdmissibleActionAutomaton::is_admissible — not in set returns false
+// ===========================================================================
+
+#[test]
+fn test_automaton_is_admissible_action_not_in_set() {
+    let auto = AdmissibleActionAutomaton {
+        subsystem: Subsystem::Compiler,
+        constraints: vec![],
+        all_defender_actions: BTreeSet::from([ActionId("d1".into())]),
+    };
+    assert!(!auto.is_admissible(&ActionId("nonexistent".into())));
+}
+
+// ===========================================================================
+// 32) GameModel::admissible_count — correct count with constraint
+// ===========================================================================
+
+#[test]
+fn test_game_model_admissible_count_with_constraint() {
+    let model = GameModelBuilder::new(Subsystem::Runtime, test_epoch())
+        .attacker_action(StrategicAction {
+            action_id: ActionId("atk-1".into()),
+            player: Player::Attacker,
+            subsystem: Subsystem::Runtime,
+            description: "attack".into(),
+            admissible: true,
+            constraints: vec![],
+        })
+        .defender_action(StrategicAction {
+            action_id: ActionId("def-1".into()),
+            player: Player::Defender,
+            subsystem: Subsystem::Runtime,
+            description: "defend-1".into(),
+            admissible: true,
+            constraints: vec![],
+        })
+        .defender_action(StrategicAction {
+            action_id: ActionId("def-2".into()),
+            player: Player::Defender,
+            subsystem: Subsystem::Runtime,
+            description: "defend-2".into(),
+            admissible: true,
+            constraints: vec![],
+        })
+        .constraint(HardConstraint {
+            constraint_id: "c1".into(),
+            description: "forbid def-1".into(),
+            forbidden_actions: BTreeSet::from([ActionId("def-1".into())]),
+            active_conditions: vec![],
+        })
+        .build();
+    // def-2 is admissible, def-1 is forbidden
+    assert_eq!(model.admissible_count(), 1);
+}
+
+// ===========================================================================
+// 33) GameModel::minimax_recommendation — returns Some for model with entries
+// ===========================================================================
+
+#[test]
+fn test_game_model_minimax_recommendation_present() {
+    let model = simple_game_model();
+    // simple_game_model has one attacker/defender pair with a loss entry
+    let rec = model.minimax_recommendation();
+    assert!(rec.is_some());
+}
+
+// ===========================================================================
+// 34) GameModel serde roundtrip — full model serializes and deserializes
+// ===========================================================================
+
+#[test]
+fn test_serde_roundtrip_game_model() {
+    let model = simple_game_model();
+    let json = serde_json::to_string(&model).unwrap();
+    let rt: GameModel = serde_json::from_str(&json).unwrap();
+    assert_eq!(model, rt);
+}
+
+// ===========================================================================
+// 35) GameModel::clone — clone is equal to original
+// ===========================================================================
+
+#[test]
+fn test_game_model_clone_equals_original() {
+    let model = simple_game_model();
+    let cloned = model.clone();
+    assert_eq!(model, cloned);
+}
+
+// ===========================================================================
+// 36) generate_report — empty models slice produces zero counts
+// ===========================================================================
+
+#[test]
+fn test_generate_report_empty_models() {
+    let report = generate_report(&[], &test_epoch());
+    assert_eq!(report.total_models, 0);
+    assert_eq!(report.total_attacker_actions, 0);
+    assert_eq!(report.total_defender_actions, 0);
+    assert_eq!(report.total_constraints, 0);
+    assert!(report.subsystem_summaries.is_empty());
+}
+
+// ===========================================================================
+// 37) generate_report — multiple models aggregate correctly
+// ===========================================================================
+
+#[test]
+fn test_generate_report_multiple_models_aggregate() {
+    let m1 = GameModelBuilder::new(Subsystem::Runtime, test_epoch())
+        .attacker_action(StrategicAction {
+            action_id: ActionId("atk-r1".into()),
+            player: Player::Attacker,
+            subsystem: Subsystem::Runtime,
+            description: "r-attack".into(),
+            admissible: true,
+            constraints: vec![],
+        })
+        .build();
+    let m2 = GameModelBuilder::new(Subsystem::Compiler, test_epoch())
+        .attacker_action(StrategicAction {
+            action_id: ActionId("atk-c1".into()),
+            player: Player::Attacker,
+            subsystem: Subsystem::Compiler,
+            description: "c-attack".into(),
+            admissible: true,
+            constraints: vec![],
+        })
+        .attacker_action(StrategicAction {
+            action_id: ActionId("atk-c2".into()),
+            player: Player::Attacker,
+            subsystem: Subsystem::Compiler,
+            description: "c-attack-2".into(),
+            admissible: true,
+            constraints: vec![],
+        })
+        .build();
+    let report = generate_report(&[m1, m2], &test_epoch());
+    assert_eq!(report.total_models, 2);
+    assert_eq!(report.total_attacker_actions, 3);
+    assert_eq!(report.total_defender_actions, 0);
+}
+
+// ===========================================================================
+// 38) generate_report — subsystem_summaries keyed by subsystem name
+// ===========================================================================
+
+#[test]
+fn test_generate_report_subsystem_summary_keys() {
+    let model = simple_game_model();
+    let report = generate_report(&[model], &test_epoch());
+    assert!(report.subsystem_summaries.contains_key("runtime"));
+}
+
+// ===========================================================================
+// 39) SubsystemSummary — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn test_serde_roundtrip_subsystem_summary() {
+    use frankenengine_engine::attack_surface_game_model::SubsystemSummary;
+    let summary = SubsystemSummary {
+        subsystem: "runtime".into(),
+        attacker_actions: 3,
+        defender_actions: 2,
+        admissible_actions: 1,
+        constraints: 1,
+        minimax_recommendation: Some("def-B".into()),
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let rt: SubsystemSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, rt);
+}
+
+// ===========================================================================
+// 40) LossTensor — content_hash differs across subsystems
+// ===========================================================================
+
+#[test]
+fn test_loss_tensor_hash_differs_by_subsystem() {
+    let entries = vec![LossEntry {
+        attacker_action: ActionId("atk".into()),
+        defender_action: ActionId("def".into()),
+        dimension: LossDimension::UserHarm,
+        loss_millionths: 1_000_000,
+    }];
+    let t1 = LossTensor::from_entries(Subsystem::Runtime, entries.clone());
+    let t2 = LossTensor::from_entries(Subsystem::Compiler, entries);
+    assert_ne!(t1.content_hash, t2.content_hash);
+}
+
+// ===========================================================================
+// 41) LossTensor — lookup across multiple entries picks correct one
+// ===========================================================================
+
+#[test]
+fn test_loss_tensor_lookup_multiple_entries_correct_match() {
+    let entries = vec![
+        LossEntry {
+            attacker_action: ActionId("atk-1".into()),
+            defender_action: ActionId("def-1".into()),
+            dimension: LossDimension::UserHarm,
+            loss_millionths: 100_000,
+        },
+        LossEntry {
+            attacker_action: ActionId("atk-2".into()),
+            defender_action: ActionId("def-1".into()),
+            dimension: LossDimension::UserHarm,
+            loss_millionths: 700_000,
+        },
+        LossEntry {
+            attacker_action: ActionId("atk-1".into()),
+            defender_action: ActionId("def-2".into()),
+            dimension: LossDimension::PerformanceCost,
+            loss_millionths: 50_000,
+        },
+    ];
+    let tensor = LossTensor::from_entries(Subsystem::ControlPlane, entries);
+    assert_eq!(
+        tensor.lookup(
+            &ActionId("atk-2".into()),
+            &ActionId("def-1".into()),
+            LossDimension::UserHarm
+        ),
+        Some(700_000)
+    );
+    assert_eq!(
+        tensor.lookup(
+            &ActionId("atk-1".into()),
+            &ActionId("def-2".into()),
+            LossDimension::PerformanceCost
+        ),
+        Some(50_000)
+    );
+    // wrong dimension → None
+    assert!(
+        tensor
+            .lookup(
+                &ActionId("atk-1".into()),
+                &ActionId("def-1".into()),
+                LossDimension::AvailabilityCost
+            )
+            .is_none()
+    );
+}
+
+// ===========================================================================
+// 42) GameModel — content_hash non-empty
+// ===========================================================================
+
+#[test]
+fn test_game_model_content_hash_non_empty() {
+    let model = simple_game_model();
+    assert!(!model.content_hash.is_empty());
+}
+
+// ===========================================================================
+// 43) GameModelBuilder — with constraint increases constraint_count
+// ===========================================================================
+
+#[test]
+fn test_builder_with_constraint_increases_constraint_count() {
+    let model = GameModelBuilder::new(Subsystem::Compiler, test_epoch())
+        .constraint(HardConstraint {
+            constraint_id: "c1".into(),
+            description: "first".into(),
+            forbidden_actions: BTreeSet::new(),
+            active_conditions: vec!["cond-a".into()],
+        })
+        .constraint(HardConstraint {
+            constraint_id: "c2".into(),
+            description: "second".into(),
+            forbidden_actions: BTreeSet::new(),
+            active_conditions: vec![],
+        })
+        .build();
+    assert_eq!(model.automaton.constraint_count(), 2);
+}
+
+// ===========================================================================
+// 44) model_id differs by epoch
+// ===========================================================================
+
+#[test]
+fn test_model_id_differs_by_epoch() {
+    let id1 = GameModel::compute_model_id(&Subsystem::Runtime, &SecurityEpoch::from_raw(1));
+    let id2 = GameModel::compute_model_id(&Subsystem::Runtime, &SecurityEpoch::from_raw(2));
+    assert_ne!(id1, id2);
+}
+
+// ===========================================================================
+// 45) generate_report — report_hash non-empty and stable
+// ===========================================================================
+
+#[test]
+fn test_generate_report_hash_non_empty_and_stable() {
+    let model = simple_game_model();
+    let r1 = generate_report(std::slice::from_ref(&model), &test_epoch());
+    let r2 = generate_report(std::slice::from_ref(&model), &test_epoch());
+    assert!(!r1.report_hash.is_empty());
+    assert_eq!(r1.report_hash, r2.report_hash);
+}
+
+// ===========================================================================
+// 46) ActionId PartialEq / Ord
+// ===========================================================================
+
+#[test]
+fn test_action_id_partial_eq_and_ord() {
+    let a = ActionId("alpha".into());
+    let b = ActionId("beta".into());
+    let a2 = ActionId("alpha".into());
+    assert_eq!(a, a2);
+    assert_ne!(a, b);
+    assert!(a < b);
+}
+
+// ===========================================================================
+// 47) HardConstraint — multiple forbidden actions all checked
+// ===========================================================================
+
+#[test]
+fn test_hard_constraint_multiple_forbidden() {
+    let auto = AdmissibleActionAutomaton {
+        subsystem: Subsystem::EvidencePipeline,
+        constraints: vec![HardConstraint {
+            constraint_id: "c1".into(),
+            description: "forbid several".into(),
+            forbidden_actions: BTreeSet::from([
+                ActionId("d1".into()),
+                ActionId("d2".into()),
+                ActionId("d3".into()),
+            ]),
+            active_conditions: vec!["epoch-high".into()],
+        }],
+        all_defender_actions: BTreeSet::from([
+            ActionId("d1".into()),
+            ActionId("d2".into()),
+            ActionId("d3".into()),
+            ActionId("d4".into()),
+        ]),
+    };
+    assert!(!auto.is_admissible(&ActionId("d1".into())));
+    assert!(!auto.is_admissible(&ActionId("d2".into())));
+    assert!(!auto.is_admissible(&ActionId("d3".into())));
+    assert!(auto.is_admissible(&ActionId("d4".into())));
+    assert_eq!(auto.admissible_actions().len(), 1);
+}
+
+// ===========================================================================
+// 48) Subsystem ordering is deterministic (Ord)
+// ===========================================================================
+
+#[test]
+fn test_subsystem_ord_deterministic() {
+    let mut subsystems = vec![
+        Subsystem::Runtime,
+        Subsystem::Compiler,
+        Subsystem::EvidencePipeline,
+        Subsystem::ControlPlane,
+        Subsystem::ExtensionHost,
+    ];
+    subsystems.sort();
+    // After sort, the vec should equal itself sorted again
+    let sorted_again = {
+        let mut v = subsystems.clone();
+        v.sort();
+        v
+    };
+    assert_eq!(subsystems, sorted_again);
+}
+
+// ===========================================================================
+// 49) ActionSpace serde roundtrip
+// ===========================================================================
+
+#[test]
+fn test_serde_roundtrip_action_space() {
+    let space = ActionSpace {
+        player: Player::Attacker,
+        subsystem: Subsystem::ControlPlane,
+        actions: vec![StrategicAction {
+            action_id: ActionId("exploit-policy".into()),
+            player: Player::Attacker,
+            subsystem: Subsystem::ControlPlane,
+            description: "policy bypass".into(),
+            admissible: true,
+            constraints: vec!["no-epoch-rollback".into()],
+        }],
+    };
+    let json = serde_json::to_string(&space).unwrap();
+    let rt: ActionSpace = serde_json::from_str(&json).unwrap();
+    assert_eq!(space, rt);
+}
+
+// ===========================================================================
+// 50) AdmissibleActionAutomaton serde roundtrip
+// ===========================================================================
+
+#[test]
+fn test_serde_roundtrip_admissible_action_automaton() {
+    let auto = AdmissibleActionAutomaton {
+        subsystem: Subsystem::ExtensionHost,
+        constraints: vec![HardConstraint {
+            constraint_id: "c1".into(),
+            description: "no unload during exec".into(),
+            forbidden_actions: BTreeSet::from([ActionId("unload".into())]),
+            active_conditions: vec!["executing".into()],
+        }],
+        all_defender_actions: BTreeSet::from([ActionId("pause".into()), ActionId("unload".into())]),
+    };
+    let json = serde_json::to_string(&auto).unwrap();
+    let rt: AdmissibleActionAutomaton = serde_json::from_str(&json).unwrap();
+    assert_eq!(auto, rt);
+}

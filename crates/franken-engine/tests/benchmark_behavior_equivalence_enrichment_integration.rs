@@ -590,6 +590,489 @@ fn enrichment_owner_route_aggregation_dedup_workloads() {
     assert_eq!(report.owner_routes[0].workload_ids.len(), 1);
 }
 
+// ===== PearlTower enrichment =====
+
+// =========================================================================
+// R. Serde roundtrip for key types
+// =========================================================================
+
+#[test]
+fn enrichment_behavior_equivalence_class_serde_roundtrip_all_variants() {
+    let variants = [
+        BehaviorEquivalenceClass::Equivalent,
+        BehaviorEquivalenceClass::SemanticMismatch,
+        BehaviorEquivalenceClass::UnsupportedFeature,
+        BehaviorEquivalenceClass::InfraFailure,
+        BehaviorEquivalenceClass::BenchmarkNoise,
+        BehaviorEquivalenceClass::ShippedPathDrift,
+    ];
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let back: BehaviorEquivalenceClass = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, back, "serde roundtrip failed for {variant:?}");
+    }
+}
+
+#[test]
+fn enrichment_evidence_surface_serde_roundtrip_all_variants() {
+    for variant in [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly] {
+        let json = serde_json::to_string(&variant).unwrap();
+        let back: EvidenceSurface = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, back);
+    }
+}
+
+#[test]
+fn enrichment_publication_disposition_serde_roundtrip_all_variants() {
+    let variants = [
+        PublicationDisposition::PublicationEligible,
+        PublicationDisposition::NonPublicationEvidence,
+        PublicationDisposition::Blocked,
+    ];
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let back: PublicationDisposition = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, back);
+    }
+}
+
+#[test]
+fn enrichment_owner_route_hint_serde_roundtrip_all_variants() {
+    let variants = [
+        OwnerRouteHint::RuntimeSemantics,
+        OwnerRouteHint::ModuleInterop,
+        OwnerRouteHint::TypeScriptNormalization,
+        OwnerRouteHint::ShippedPathParity,
+        OwnerRouteHint::BenchmarkHarness,
+        OwnerRouteHint::BenchmarkCorpus,
+        OwnerRouteHint::DocsContract,
+    ];
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let back: OwnerRouteHint = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, back);
+    }
+}
+
+#[test]
+fn enrichment_observation_with_repro_command_serde_roundtrip() {
+    let observation = BehaviorEquivalenceObservation::new(
+        "repro_roundtrip",
+        ParityTarget::V8Isolate,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::BenchmarkHarness,
+    )
+    .with_output_equivalence(false)
+    .with_minimized_repro_command("frankenctl bench --repro repro_roundtrip");
+    let json = serde_json::to_string(&observation).unwrap();
+    let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap();
+    assert_eq!(observation, back);
+    assert_eq!(
+        back.minimized_repro_command.as_deref(),
+        Some("frankenctl bench --repro repro_roundtrip")
+    );
+}
+
+// =========================================================================
+// S. Edge cases (empty inputs, boundary values, single-element)
+// =========================================================================
+
+#[test]
+fn enrichment_empty_observations_report_has_no_blockers() {
+    let report = build_report("trace-empty", "dec-empty", POLICY_ID, &[]);
+    assert!(report.records.is_empty());
+    assert!(report.owner_routes.is_empty());
+    assert!(!report.has_publication_blockers());
+    assert_eq!(report.schema_version, SCHEMA_VERSION);
+    assert_eq!(report.component, COMPONENT);
+}
+
+#[test]
+fn enrichment_single_equivalent_observation_report() {
+    let single = vec![BehaviorEquivalenceObservation::new(
+        "solo",
+        ParityTarget::Bun,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::BenchmarkCorpus,
+    )];
+    let report = build_report("t-solo", "d-solo", POLICY_ID, &single);
+    assert_eq!(report.records.len(), 1);
+    assert!(report.owner_routes.is_empty());
+    assert!(!report.has_publication_blockers());
+    assert_eq!(
+        report.records[0].classification,
+        BehaviorEquivalenceClass::Equivalent
+    );
+    assert_eq!(
+        report.records[0].publication_disposition,
+        PublicationDisposition::PublicationEligible
+    );
+}
+
+#[test]
+fn enrichment_single_failing_observation_report_has_one_route() {
+    let single = vec![
+        BehaviorEquivalenceObservation::new(
+            "solo_fail",
+            ParityTarget::Deno,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::RuntimeSemantics,
+        )
+        .with_output_equivalence(false),
+    ];
+    let report = build_report("t-solo-fail", "d-solo-fail", POLICY_ID, &single);
+    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.owner_routes.len(), 1);
+    assert!(report.has_publication_blockers());
+}
+
+#[test]
+fn enrichment_empty_detail_string_allowed_in_observation() {
+    let observation = BehaviorEquivalenceObservation::new(
+        "empty_detail",
+        ParityTarget::NodeJs,
+        EvidenceSurface::LibraryOnly,
+        OwnerRouteHint::ModuleInterop,
+    );
+    assert!(observation.detail.is_empty());
+    let record = build_record(&observation);
+    assert!(record.detail.is_empty());
+}
+
+#[test]
+fn enrichment_boundary_workload_id_whitespace_preserved() {
+    // Workload IDs with surrounding whitespace must be passed through unchanged.
+    let wid = "  workload with spaces  ";
+    let observation = BehaviorEquivalenceObservation::new(
+        wid,
+        ParityTarget::NodeJs,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::BenchmarkCorpus,
+    );
+    assert_eq!(observation.workload_id, wid);
+    let record = build_record(&observation);
+    assert_eq!(record.workload_id, wid);
+}
+
+// =========================================================================
+// T. Deterministic output verification (same inputs → same output)
+// =========================================================================
+
+#[test]
+fn enrichment_build_record_hash_deterministic_across_calls() {
+    let observation = BehaviorEquivalenceObservation::new(
+        "det_hash",
+        ParityTarget::NodeJs,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::RuntimeSemantics,
+    )
+    .with_output_equivalence(false)
+    .with_detail("determinism check");
+    let r1 = build_record(&observation);
+    let r2 = build_record(&observation);
+    let r3 = build_record(&observation);
+    assert_eq!(r1.record_hash, r2.record_hash);
+    assert_eq!(r2.record_hash, r3.record_hash);
+}
+
+#[test]
+fn enrichment_build_report_jsonl_deterministic_across_calls() {
+    let observations = vec![
+        obs(
+            "alpha",
+            EvidenceSurface::ShippedPath,
+            true,
+            true,
+            true,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        obs(
+            "beta",
+            EvidenceSurface::LibraryOnly,
+            false,
+            true,
+            true,
+            false,
+            OwnerRouteHint::ModuleInterop,
+        ),
+    ];
+    let r1 = build_report("trace-det", "dec-det", POLICY_ID, &observations);
+    let r2 = build_report("trace-det", "dec-det", POLICY_ID, &observations);
+    assert_eq!(
+        r1.benchmark_parity_verdict_jsonl().unwrap(),
+        r2.benchmark_parity_verdict_jsonl().unwrap()
+    );
+    assert_eq!(
+        r1.divergence_owner_route_json().unwrap(),
+        r2.divergence_owner_route_json().unwrap()
+    );
+}
+
+#[test]
+fn enrichment_record_hash_differs_when_workload_id_differs() {
+    let make_obs = |wid: &str| {
+        BehaviorEquivalenceObservation::new(
+            wid,
+            ParityTarget::NodeJs,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::RuntimeSemantics,
+        )
+    };
+    let r1 = build_record(&make_obs("wk_a"));
+    let r2 = build_record(&make_obs("wk_b"));
+    assert_ne!(r1.record_hash, r2.record_hash);
+}
+
+#[test]
+fn enrichment_record_hash_differs_when_surface_differs() {
+    let make_obs = |surface| {
+        BehaviorEquivalenceObservation::new(
+            "same_wk",
+            ParityTarget::NodeJs,
+            surface,
+            OwnerRouteHint::RuntimeSemantics,
+        )
+    };
+    let r1 = build_record(&make_obs(EvidenceSurface::ShippedPath));
+    let r2 = build_record(&make_obs(EvidenceSurface::LibraryOnly));
+    assert_ne!(r1.record_hash, r2.record_hash);
+}
+
+#[test]
+fn enrichment_record_hash_differs_when_repro_command_present_vs_absent() {
+    let base = BehaviorEquivalenceObservation::new(
+        "repro_hash_check",
+        ParityTarget::NodeJs,
+        EvidenceSurface::ShippedPath,
+        OwnerRouteHint::BenchmarkHarness,
+    )
+    .with_output_equivalence(false);
+    let with_repro = base.clone().with_minimized_repro_command("cmd repro");
+    let r1 = build_record(&base);
+    let r2 = build_record(&with_repro);
+    assert_ne!(r1.record_hash, r2.record_hash);
+}
+
+// =========================================================================
+// U. Clone/Debug derive verification
+// =========================================================================
+
+#[test]
+fn enrichment_clone_derive_all_enum_variants() {
+    let s1 = EvidenceSurface::ShippedPath;
+    let s2 = s1;
+    assert_eq!(s1, s2);
+
+    let c1 = BehaviorEquivalenceClass::ShippedPathDrift;
+    let c2 = c1;
+    assert_eq!(c1, c2);
+
+    let p1 = PublicationDisposition::NonPublicationEvidence;
+    let p2 = p1;
+    assert_eq!(p1, p2);
+
+    let h1 = OwnerRouteHint::BenchmarkCorpus;
+    let h2 = h1;
+    assert_eq!(h1, h2);
+}
+
+#[test]
+fn enrichment_debug_format_nonempty_for_all_enum_variants() {
+    let surfaces = [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly];
+    for v in surfaces {
+        assert!(!format!("{v:?}").is_empty());
+    }
+
+    let classes = [
+        BehaviorEquivalenceClass::Equivalent,
+        BehaviorEquivalenceClass::SemanticMismatch,
+        BehaviorEquivalenceClass::UnsupportedFeature,
+        BehaviorEquivalenceClass::InfraFailure,
+        BehaviorEquivalenceClass::BenchmarkNoise,
+        BehaviorEquivalenceClass::ShippedPathDrift,
+    ];
+    for v in classes {
+        assert!(!format!("{v:?}").is_empty());
+    }
+
+    let dispositions = [
+        PublicationDisposition::PublicationEligible,
+        PublicationDisposition::NonPublicationEvidence,
+        PublicationDisposition::Blocked,
+    ];
+    for v in dispositions {
+        assert!(!format!("{v:?}").is_empty());
+    }
+}
+
+#[test]
+fn enrichment_report_clone_preserves_record_count() {
+    let observations = vec![
+        obs(
+            "c1",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            true,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        obs(
+            "c2",
+            EvidenceSurface::LibraryOnly,
+            true,
+            true,
+            true,
+            false,
+            OwnerRouteHint::ModuleInterop,
+        ),
+    ];
+    let report = build_report("t-clone", "d-clone", POLICY_ID, &observations);
+    let cloned = report.clone();
+    assert_eq!(report.records.len(), cloned.records.len());
+    assert_eq!(report.owner_routes.len(), cloned.owner_routes.len());
+    assert_eq!(report, cloned);
+}
+
+// =========================================================================
+// V. Field invariant checks
+// =========================================================================
+
+#[test]
+fn enrichment_owner_route_fields_nonempty_for_all_hints() {
+    let hints = [
+        OwnerRouteHint::RuntimeSemantics,
+        OwnerRouteHint::ModuleInterop,
+        OwnerRouteHint::TypeScriptNormalization,
+        OwnerRouteHint::ShippedPathParity,
+        OwnerRouteHint::BenchmarkHarness,
+        OwnerRouteHint::BenchmarkCorpus,
+        OwnerRouteHint::DocsContract,
+    ];
+    let non_equivalent_class = BehaviorEquivalenceClass::SemanticMismatch;
+    for hint in hints {
+        let route = route_owner(non_equivalent_class, hint).unwrap();
+        assert!(
+            !route.owner_bead_id.is_empty(),
+            "owner_bead_id empty for {hint:?}"
+        );
+        assert!(!route.component.is_empty(), "component empty for {hint:?}");
+        assert!(!route.rationale.is_empty(), "rationale empty for {hint:?}");
+        assert!(
+            route.owner_bead_id.starts_with("bd-"),
+            "bead_id doesn't start with bd- for {hint:?}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_divergence_owner_route_workload_ids_sorted() {
+    // Workload IDs in the aggregated route must be in sorted order (BTreeSet dedup).
+    let observations = vec![
+        obs(
+            "zeta",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            true,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        obs(
+            "alpha",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            true,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+        obs(
+            "mu",
+            EvidenceSurface::ShippedPath,
+            false,
+            true,
+            true,
+            false,
+            OwnerRouteHint::RuntimeSemantics,
+        ),
+    ];
+    let report = build_report("t-sort", "d-sort", POLICY_ID, &observations);
+    assert_eq!(report.owner_routes.len(), 1);
+    let ids = &report.owner_routes[0].workload_ids;
+    assert_eq!(ids.len(), 3);
+    // BTreeSet ordering means alpha < mu < zeta.
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(*ids, sorted);
+}
+
+#[test]
+fn enrichment_report_schema_version_and_component_always_set() {
+    let report = build_report("any-trace", "any-dec", "any-policy", &[]);
+    assert_eq!(report.schema_version, SCHEMA_VERSION);
+    assert!(!report.schema_version.is_empty());
+    assert_eq!(report.component, COMPONENT);
+    assert!(!report.component.is_empty());
+    assert_eq!(report.policy_id, "any-policy");
+    assert_eq!(report.trace_id, "any-trace");
+    assert_eq!(report.decision_id, "any-dec");
+}
+
+#[test]
+fn enrichment_owner_route_hint_bead_id_starts_with_bd() {
+    let hints = [
+        OwnerRouteHint::RuntimeSemantics,
+        OwnerRouteHint::ModuleInterop,
+        OwnerRouteHint::TypeScriptNormalization,
+        OwnerRouteHint::ShippedPathParity,
+        OwnerRouteHint::BenchmarkHarness,
+        OwnerRouteHint::BenchmarkCorpus,
+        OwnerRouteHint::DocsContract,
+    ];
+    for hint in hints {
+        assert!(
+            hint.owner_bead_id().starts_with("bd-"),
+            "owner_bead_id for {hint:?} should start with 'bd-'"
+        );
+        assert!(
+            !hint.component().is_empty(),
+            "component for {hint:?} should be non-empty"
+        );
+        assert!(
+            !hint.as_str().is_empty(),
+            "as_str for {hint:?} should be non-empty"
+        );
+    }
+}
+
+#[test]
+fn enrichment_evidence_surface_as_str_nonempty_and_snake_case() {
+    for surface in [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly] {
+        let s = surface.as_str();
+        assert!(!s.is_empty());
+        assert!(s.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+    }
+}
+
+#[test]
+fn enrichment_equivalence_class_as_str_nonempty_and_snake_case() {
+    let classes = [
+        BehaviorEquivalenceClass::Equivalent,
+        BehaviorEquivalenceClass::SemanticMismatch,
+        BehaviorEquivalenceClass::UnsupportedFeature,
+        BehaviorEquivalenceClass::InfraFailure,
+        BehaviorEquivalenceClass::BenchmarkNoise,
+        BehaviorEquivalenceClass::ShippedPathDrift,
+    ];
+    for class in classes {
+        let s = class.as_str();
+        assert!(!s.is_empty());
+        assert!(s.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+    }
+}
+
 // =========================================================================
 // Q. Report with all classification types
 // =========================================================================

@@ -847,3 +847,229 @@ fn rgc_911b_operator_verification_commands_reference_correct_contract() {
         "operator verification must not point back to /tmp-backed target dirs"
     );
 }
+
+// ===== PearlTower enrichment =====
+
+#[test]
+fn enrichment_contract_serde_roundtrip_via_json_value() {
+    // Parse the real contract JSON into a serde_json::Value and back to string,
+    // then re-parse as SupportSurfaceContract — verifies Deserialize is stable.
+    let original: serde_json::Value =
+        serde_json::from_str(CONTRACT_JSON).expect("contract must parse as Value");
+    let re_serialized = serde_json::to_string(&original).expect("re-serialize must succeed");
+    let contract: SupportSurfaceContract =
+        serde_json::from_str(&re_serialized).expect("roundtrip contract must parse");
+    assert_eq!(contract.schema_version, CONTRACT_SCHEMA_VERSION);
+    assert_eq!(contract.bead_id, "bd-1lsy.10.11.2");
+    assert!(!contract.surface_rows.is_empty());
+}
+
+#[test]
+fn enrichment_mode_matrix_serde_roundtrip_via_json_value() {
+    // Same roundtrip check for the mode matrix document.
+    let original: serde_json::Value =
+        serde_json::from_str(MODE_MATRIX_JSON).expect("mode matrix must parse as Value");
+    let re_serialized = serde_json::to_string(&original).expect("re-serialize must succeed");
+    let matrix: SupportSurfaceModeMatrix =
+        serde_json::from_str(&re_serialized).expect("roundtrip mode matrix must parse");
+    assert_eq!(matrix.schema_version, MODE_MATRIX_SCHEMA_VERSION);
+    assert!(!matrix.modes.is_empty());
+    assert!(!matrix.surface_mode_rows.is_empty());
+}
+
+#[test]
+fn enrichment_cross_schema_bead_ids_are_distinct_per_document() {
+    // The contract bead_id and the mode matrix generated_by may share the same
+    // bead but must be self-consistent: contract bead_id equals mode matrix generated_by,
+    // and both carry the same well-formed prefix.
+    let contract = parse_contract();
+    let matrix: serde_json::Value =
+        serde_json::from_str(MODE_MATRIX_JSON).expect("mode matrix must parse as Value");
+    let matrix_generated_by = matrix["generated_by"]
+        .as_str()
+        .expect("mode matrix generated_by must be a string");
+    // Both must start with the standard bead-id prefix "bd-"
+    assert!(
+        contract.bead_id.starts_with("bd-"),
+        "contract bead_id must start with 'bd-': {}",
+        contract.bead_id
+    );
+    assert!(
+        matrix_generated_by.starts_with("bd-"),
+        "mode matrix generated_by must start with 'bd-': {matrix_generated_by}"
+    );
+    // They should refer to the same originating bead
+    assert_eq!(
+        contract.bead_id, matrix_generated_by,
+        "contract bead_id and mode matrix generated_by must agree"
+    );
+}
+
+#[test]
+fn enrichment_cross_schema_schema_versions_carry_vendor_prefix() {
+    // All schema_version strings across both documents must begin with the
+    // project vendor prefix "franken-engine."
+    let contract = parse_contract();
+    let matrix = parse_mode_matrix();
+    assert!(
+        contract.schema_version.starts_with("franken-engine."),
+        "contract schema_version must carry vendor prefix: {}",
+        contract.schema_version
+    );
+    assert!(
+        matrix.schema_version.starts_with("franken-engine."),
+        "mode matrix schema_version must carry vendor prefix: {}",
+        matrix.schema_version
+    );
+    // gate_runner manifest schema version must also carry the prefix
+    assert!(
+        contract
+            .gate_runner
+            .manifest_schema_version
+            .starts_with("franken-engine."),
+        "gate_runner manifest_schema_version must carry vendor prefix: {}",
+        contract.gate_runner.manifest_schema_version
+    );
+}
+
+#[test]
+fn enrichment_no_duplicate_entries_in_allowed_support_statuses() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for status in &contract.allowed_support_statuses {
+        assert!(
+            seen.insert(status.as_str()),
+            "duplicate entry in allowed_support_statuses: {status}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_no_duplicate_entries_in_required_log_keys() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for key in &contract.required_log_keys {
+        assert!(
+            seen.insert(key.as_str()),
+            "duplicate entry in required_log_keys: {key}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_no_duplicate_entries_in_required_artifacts() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for artifact in &contract.required_artifacts {
+        assert!(
+            seen.insert(artifact.as_str()),
+            "duplicate entry in required_artifacts: {artifact}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_no_duplicate_entries_in_source_inputs() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for input in &contract.source_inputs {
+        assert!(
+            seen.insert(input.as_str()),
+            "duplicate entry in source_inputs: {input}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_no_duplicate_mode_ids_in_mode_matrix() {
+    let matrix = parse_mode_matrix();
+    let mut seen = BTreeSet::new();
+    for mode in &matrix.modes {
+        assert!(
+            seen.insert(mode.mode_id.as_str()),
+            "duplicate mode_id in modes list: {}",
+            mode.mode_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_edge_case_surface_row_evidence_sources_nonempty() {
+    // Boundary: every surface row, regardless of status, must have at least one
+    // evidence source — an empty slice is an editorial gap.
+    let contract = parse_contract();
+    for row in &contract.surface_rows {
+        assert!(
+            !row.evidence_sources.is_empty(),
+            "surface row {} has zero evidence sources",
+            row.surface_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_edge_case_waiver_age_boundary_within_one_month() {
+    // Boundary value check: max_waiver_age_hours must never exceed 720 (30 days).
+    let contract = parse_contract();
+    for row in &contract.surface_rows {
+        if let Some(hours) = row.fallback_policy.max_waiver_age_hours {
+            assert!(
+                hours >= 1,
+                "max_waiver_age_hours must be >= 1 for {}",
+                row.surface_id
+            );
+            assert!(
+                hours <= 720,
+                "max_waiver_age_hours must be <= 720 for {}: got {hours}",
+                row.surface_id
+            );
+        }
+    }
+}
+
+#[test]
+fn enrichment_clone_debug_derive_contract_types() {
+    // Exercises the Clone and Debug derives on the main contract types to confirm
+    // they compile and produce non-empty output.
+    let contract = parse_contract();
+
+    let contract_clone = contract.clone();
+    assert_eq!(contract, contract_clone);
+    let debug_str = format!("{contract:?}");
+    assert!(!debug_str.is_empty());
+
+    if let Some(row) = contract.surface_rows.first() {
+        let row_clone = row.clone();
+        assert_eq!(row, &row_clone);
+        let row_debug = format!("{row:?}");
+        assert!(!row_debug.is_empty());
+
+        let policy_clone = row.fallback_policy.clone();
+        assert_eq!(row.fallback_policy, policy_clone);
+        let policy_debug = format!("{:?}", row.fallback_policy);
+        assert!(!policy_debug.is_empty());
+
+        if let Some(ref diag) = row.user_visible_diagnostic {
+            let diag_clone = diag.clone();
+            assert_eq!(diag, &diag_clone);
+            let diag_debug = format!("{diag:?}");
+            assert!(!diag_debug.is_empty());
+        }
+    }
+
+    let matrix = parse_mode_matrix();
+    let matrix_clone = matrix.clone();
+    assert_eq!(matrix, matrix_clone);
+    let matrix_debug = format!("{matrix:?}");
+    assert!(!matrix_debug.is_empty());
+
+    if let Some(mode) = matrix.modes.first() {
+        let mode_clone = mode.clone();
+        assert_eq!(mode, &mode_clone);
+    }
+
+    if let Some(smr) = matrix.surface_mode_rows.first() {
+        let smr_clone = smr.clone();
+        assert_eq!(smr, &smr_clone);
+    }
+}

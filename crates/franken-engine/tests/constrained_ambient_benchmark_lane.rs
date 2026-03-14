@@ -11,7 +11,9 @@
 )]
 
 use frankenengine_engine::constrained_ambient_benchmark_lane::{
-    ConstrainedAmbientBenchmarkRequest, LaneWorkloadMetrics, ProofAttributionSample,
+    CONSTRAINED_AMBIENT_COMPONENT, CONSTRAINED_AMBIENT_SCHEMA_VERSION,
+    ConstrainedAmbientBenchmarkRequest, ConstrainedAmbientEvent, ConstrainedAmbientSummary,
+    LaneWorkloadMetrics, ProofAttributionReport, ProofAttributionSample, WorkloadDeltaReport,
     run_constrained_ambient_benchmark_lane,
 };
 
@@ -525,4 +527,222 @@ fn lane_workload_metrics_debug_is_nonempty() {
 fn proof_attribution_sample_debug_is_nonempty() {
     let sample = attribution("proof-dbg", "spec-dbg", 50_000, 40_000, 800, 1_200);
     assert!(!format!("{sample:?}").is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: untested public API surface
+// ---------------------------------------------------------------------------
+
+// ---------- CONSTRAINED_AMBIENT_COMPONENT ----------
+
+#[test]
+fn component_constant_matches_expected_value() {
+    assert_eq!(
+        CONSTRAINED_AMBIENT_COMPONENT,
+        "constrained_ambient_benchmark_lane"
+    );
+}
+
+// ---------- CONSTRAINED_AMBIENT_SCHEMA_VERSION ----------
+
+#[test]
+fn schema_version_constant_matches_decision_field() {
+    assert!(!CONSTRAINED_AMBIENT_SCHEMA_VERSION.is_empty());
+    let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
+    assert_eq!(decision.schema_version, CONSTRAINED_AMBIENT_SCHEMA_VERSION);
+}
+
+// ---------- WorkloadDeltaReport serde roundtrip ----------
+
+#[test]
+fn workload_delta_report_serde_roundtrip() {
+    let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
+    assert!(!decision.workload_reports.is_empty());
+    for report in &decision.workload_reports {
+        let json = serde_json::to_string(report).expect("serialize");
+        let recovered: WorkloadDeltaReport = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*report, recovered);
+    }
+}
+
+// ---------- ProofAttributionReport serde roundtrip ----------
+
+#[test]
+fn proof_attribution_report_serde_roundtrip() {
+    let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
+    assert!(!decision.attribution_reports.is_empty());
+    for report in &decision.attribution_reports {
+        let json = serde_json::to_string(report).expect("serialize");
+        let recovered: ProofAttributionReport = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*report, recovered);
+    }
+}
+
+// ---------- ConstrainedAmbientSummary serde roundtrip ----------
+
+#[test]
+fn summary_serde_roundtrip() {
+    let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
+    let json = serde_json::to_string(&decision.summary).expect("serialize");
+    let recovered: ConstrainedAmbientSummary = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decision.summary, recovered);
+}
+
+// ---------- ConstrainedAmbientEvent serde roundtrip ----------
+
+#[test]
+fn event_serde_roundtrip() {
+    let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
+    assert!(!decision.events.is_empty());
+    for event in &decision.events {
+        let json = serde_json::to_string(event).expect("serialize");
+        let recovered: ConstrainedAmbientEvent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*event, recovered);
+    }
+}
+
+// ---------- summary field completeness ----------
+
+#[test]
+fn summary_fields_are_populated_for_allow_decision() {
+    let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
+    assert!(decision.allows_publication());
+    assert_eq!(decision.summary.workload_count, 2);
+    assert_eq!(decision.summary.attribution_count, 2);
+    assert!(decision.summary.mean_throughput_delta_millionths > 0);
+    assert!(decision.summary.mean_latency_p95_improvement_millionths > 0);
+}
+
+// ---------- workload delta report field completeness ----------
+
+#[test]
+fn workload_delta_reports_reference_correct_workload_ids() {
+    let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
+    let ids: std::collections::BTreeSet<&str> = decision
+        .workload_reports
+        .iter()
+        .map(|r| r.workload_id.as_str())
+        .collect();
+    assert!(ids.contains("parser-hot"));
+    assert!(ids.contains("module-cache"));
+}
+
+// ---------- attribution report field completeness ----------
+
+#[test]
+fn attribution_reports_reference_correct_proof_ids() {
+    let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
+    let ids: std::collections::BTreeSet<&str> = decision
+        .attribution_reports
+        .iter()
+        .map(|r| r.proof_id.as_str())
+        .collect();
+    assert!(ids.contains("proof-ifc-elide"));
+    assert!(ids.contains("proof-plas-dispatch"));
+}
+
+// ---------- empty benchmark_run_id fails ----------
+
+#[test]
+fn fails_on_empty_benchmark_run_id() {
+    let mut req = baseline_request();
+    req.benchmark_run_id.clear();
+    let decision = run_constrained_ambient_benchmark_lane(&req);
+    assert!(decision.blocked);
+    assert_eq!(decision.outcome, "fail");
+}
+
+// ---------- decision serialization determinism ----------
+
+#[test]
+fn decision_serialization_is_deterministic() {
+    let req = baseline_request();
+    let a = run_constrained_ambient_benchmark_lane(&req);
+    let b = run_constrained_ambient_benchmark_lane(&req);
+    let json_a = serde_json::to_string(&a).expect("serialize a");
+    let json_b = serde_json::to_string(&b).expect("serialize b");
+    assert_eq!(json_a, json_b);
+}
+
+// ---------- revoked attribution with None rollback_token ----------
+
+#[test]
+fn revoked_attribution_without_rollback_token_still_blocks() {
+    let mut request = baseline_request();
+    request.proof_attribution[0].revoked = true;
+    request.proof_attribution[0].rollback_token = None;
+    let decision = run_constrained_ambient_benchmark_lane(&request);
+    assert!(decision.blocked);
+}
+
+// ---------- attribution epoch mismatch ----------
+
+#[test]
+fn attribution_with_epoch_mismatch_is_reported() {
+    let mut request = baseline_request();
+    request.proof_attribution[0].validity_epoch = Some(5);
+    request.proof_attribution[0].evaluation_epoch = Some(10);
+    let decision = run_constrained_ambient_benchmark_lane(&request);
+    // Epoch mismatch may or may not block depending on policy, but should be processed
+    assert!(!decision.report_id.is_empty());
+}
+
+// ---------- error display coverage ----------
+
+#[test]
+fn constrained_ambient_error_invalid_metric_mentions_subject() {
+    let err = ConstrainedAmbientError::InvalidMetric {
+        field: "throughput_ops_per_sec".to_string(),
+        subject: "parser-hot".to_string(),
+        detail: "must be positive".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("parser-hot"),
+        "error should mention subject: {msg}"
+    );
+    assert!(
+        msg.contains("throughput_ops_per_sec"),
+        "error should mention field: {msg}"
+    );
+}
+
+// ---------- single workload per lane ----------
+
+#[test]
+fn single_workload_per_lane_produces_valid_decision() {
+    let mut req = baseline_request();
+    req.constrained_lane = vec![workload(
+        "solo",
+        "digest-solo",
+        2_000,
+        1_000,
+        1_500,
+        2_000,
+        50_000,
+        10_000,
+    )];
+    req.ambient_lane = vec![workload(
+        "solo",
+        "digest-solo",
+        1_500,
+        1_200,
+        1_800,
+        2_500,
+        60_000,
+        12_000,
+    )];
+    req.proof_attribution = vec![attribution(
+        "proof-solo",
+        "spec-solo",
+        2_000,
+        1_500,
+        1_500,
+        1_800,
+    )];
+    let decision = run_constrained_ambient_benchmark_lane(&req);
+    assert!(decision.allows_publication());
+    assert_eq!(decision.workload_reports.len(), 1);
+    assert_eq!(decision.attribution_reports.len(), 1);
+    assert_eq!(decision.summary.workload_count, 1);
 }

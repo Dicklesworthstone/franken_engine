@@ -884,3 +884,701 @@ fn plas_release_gate_input_serde_round_trip() {
     assert_eq!(input.decision_id, recovered.decision_id);
     assert_eq!(input.extensions.len(), recovered.extensions.len());
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: Clone / Debug / PartialEq / ordering / edge cases
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_plas_release_gate_input_clone_and_eq() {
+    let (input, _) = base_gate_fixture();
+    let cloned = input.clone();
+    assert_eq!(input, cloned);
+}
+
+#[test]
+fn test_plas_release_gate_input_debug_non_empty() {
+    let (input, _) = base_gate_fixture();
+    assert!(!format!("{input:?}").is_empty());
+}
+
+#[test]
+fn test_plas_escrow_replay_evidence_clone_and_eq() {
+    let evidence = PlasEscrowReplayEvidence {
+        receipt_id: "r-clone-01".to_string(),
+        replay_decision_kind: "grant".to_string(),
+        replay_outcome: "allow".to_string(),
+        replay_policy_id: "policy-clone-01".to_string(),
+        deterministic_replay: true,
+        replay_trace_id: "trace-clone-01".to_string(),
+    };
+    let cloned = evidence.clone();
+    assert_eq!(evidence, cloned);
+}
+
+#[test]
+fn test_plas_escrow_replay_evidence_debug_non_empty() {
+    let evidence = PlasEscrowReplayEvidence {
+        receipt_id: "r-dbg".to_string(),
+        replay_decision_kind: "grant".to_string(),
+        replay_outcome: "allow".to_string(),
+        replay_policy_id: "p-dbg".to_string(),
+        deterministic_replay: false,
+        replay_trace_id: "t-dbg".to_string(),
+    };
+    assert!(!format!("{evidence:?}").is_empty());
+}
+
+#[test]
+fn test_plas_finding_clone_and_eq() {
+    let finding = PlasReleaseGateFinding {
+        code: PlasReleaseGateFailureCode::RevocationWitnessMissing,
+        extension_id: "ext-finding-clone".to_string(),
+        receipt_id: Some("rcpt-clone".to_string()),
+        detail: "revocation witness missing detail".to_string(),
+    };
+    let cloned = finding.clone();
+    assert_eq!(finding, cloned);
+}
+
+#[test]
+fn test_plas_finding_debug_non_empty() {
+    let finding = PlasReleaseGateFinding {
+        code: PlasReleaseGateFailureCode::MissingCapabilityWitness,
+        extension_id: "ext-dbg".to_string(),
+        receipt_id: None,
+        detail: "debug detail".to_string(),
+    };
+    assert!(!format!("{finding:?}").is_empty());
+}
+
+#[test]
+fn test_plas_log_event_clone_and_eq() {
+    let log = PlasReleaseGateLogEvent {
+        trace_id: "t-log-clone".to_string(),
+        decision_id: "d-log-clone".to_string(),
+        policy_id: "p-log-clone".to_string(),
+        component: "plas_release_gate".to_string(),
+        event: "cohort_activation".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        extension_id: Some("ext-log-clone".to_string()),
+        receipt_id: None,
+        capability: Some("fs.read".to_string()),
+    };
+    let cloned = log.clone();
+    assert_eq!(log, cloned);
+}
+
+#[test]
+fn test_trust_anchors_debug_non_empty() {
+    let (_, trust_anchors) = base_gate_fixture();
+    assert!(!format!("{trust_anchors:?}").is_empty());
+}
+
+#[test]
+fn test_trust_anchors_clone_and_eq() {
+    let (_, ta) = base_gate_fixture();
+    let cloned = ta.clone();
+    assert_eq!(ta, cloned);
+}
+
+#[test]
+fn test_failure_code_ordering_in_btreeset() {
+    let mut set = BTreeSet::new();
+    set.insert(PlasReleaseGateFailureCode::AmbientAuthorityDetected);
+    set.insert(PlasReleaseGateFailureCode::CohortPlasNotActive);
+    set.insert(PlasReleaseGateFailureCode::CohortPlasNotActive); // duplicate
+    set.insert(PlasReleaseGateFailureCode::RevocationWitnessMissing);
+    assert_eq!(set.len(), 3);
+    // Smallest (earliest declared) should come first
+    let first = *set.iter().next().unwrap();
+    assert_eq!(first, PlasReleaseGateFailureCode::CohortPlasNotActive);
+}
+
+#[test]
+fn test_activation_mode_as_str_uniqueness() {
+    let mut strs = BTreeSet::new();
+    for mode in [
+        PlasActivationMode::Active,
+        PlasActivationMode::Shadow,
+        PlasActivationMode::AuditOnly,
+        PlasActivationMode::Disabled,
+    ] {
+        assert!(strs.insert(mode.as_str()), "duplicate as_str for {mode:?}");
+    }
+    assert_eq!(strs.len(), 4);
+}
+
+#[test]
+fn test_gate_rejects_duplicate_extension_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    // Clone the first extension and push it again — same extension_id
+    let dup = input.extensions[0].clone();
+    input.extensions.push(dup);
+    let err = evaluate_plas_release_gate(&input, &trust_anchors).expect_err("should fail");
+    assert!(
+        matches!(err, PlasReleaseGateError::InvalidInput { ref detail } if detail.contains("duplicate"))
+    );
+}
+
+#[test]
+fn test_gate_rejects_whitespace_only_policy_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.policy_id = "  \t  ".to_string();
+    let err = evaluate_plas_release_gate(&input, &trust_anchors).expect_err("should fail");
+    assert!(matches!(err, PlasReleaseGateError::InvalidInput { .. }));
+    assert!(err.to_string().contains("policy_id"));
+}
+
+#[test]
+fn test_gate_rejects_whitespace_only_trace_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.trace_id = " \n ".to_string();
+    let err = evaluate_plas_release_gate(&input, &trust_anchors).expect_err("should fail");
+    assert!(matches!(err, PlasReleaseGateError::InvalidInput { .. }));
+    assert!(err.to_string().contains("trace_id"));
+}
+
+#[test]
+fn test_decision_artifact_pass_true_serde_round_trip() {
+    let (input, trust_anchors) = base_gate_fixture();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(artifact.pass, "base fixture must pass for this test");
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    let recovered: PlasReleaseGateDecisionArtifact =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(artifact, recovered);
+    assert!(recovered.pass);
+    assert!(recovered.findings.is_empty());
+}
+
+#[test]
+fn test_decision_artifact_clone_and_eq() {
+    let (input, trust_anchors) = base_gate_fixture();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    let cloned = artifact.clone();
+    assert_eq!(artifact, cloned);
+}
+
+#[test]
+fn test_decision_artifact_debug_non_empty() {
+    let (input, trust_anchors) = base_gate_fixture();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!format!("{artifact:?}").is_empty());
+}
+
+#[test]
+fn test_gate_decision_hash_sensitive_to_decision_id() {
+    let (mut input1, trust_anchors) = base_gate_fixture();
+    let mut input2 = input1.clone();
+    input1.decision_id = "decision-alpha".to_string();
+    input2.decision_id = "decision-beta".to_string();
+    let r1 = evaluate_plas_release_gate(&input1, &trust_anchors).expect("eval 1");
+    let r2 = evaluate_plas_release_gate(&input2, &trust_anchors).expect("eval 2");
+    assert_ne!(r1.decision_hash, r2.decision_hash);
+}
+
+#[test]
+fn test_gate_ambient_authority_finding_has_no_receipt_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0]
+        .active_capabilities
+        .insert(Capability::new("storage.admin"));
+
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    let ambient = artifact
+        .findings
+        .iter()
+        .find(|f| f.code == PlasReleaseGateFailureCode::AmbientAuthorityDetected)
+        .expect("ambient authority finding");
+    // AmbientAuthorityDetected findings do not include a receipt_id
+    assert!(ambient.receipt_id.is_none());
+}
+
+#[test]
+fn test_gate_checked_grant_count_matches_grants_processed() {
+    let (input, trust_anchors) = base_gate_fixture();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    // base_gate_fixture has 2 grants and 1 revocation
+    assert_eq!(artifact.checked_grants, 2);
+    assert_eq!(artifact.checked_revocations, 1);
+}
+
+#[test]
+fn test_plas_log_event_serde_round_trip_all_none_options() {
+    let log = PlasReleaseGateLogEvent {
+        trace_id: "t-none".to_string(),
+        decision_id: "d-none".to_string(),
+        policy_id: "p-none".to_string(),
+        component: "plas_release_gate".to_string(),
+        event: "release_gate_decision".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        extension_id: None,
+        receipt_id: None,
+        capability: None,
+    };
+    let json = serde_json::to_string(&log).expect("serialize");
+    let recovered: PlasReleaseGateLogEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(log, recovered);
+    assert!(recovered.error_code.is_none());
+    assert!(recovered.extension_id.is_none());
+    assert!(recovered.receipt_id.is_none());
+    assert!(recovered.capability.is_none());
+}
+
+#[test]
+fn test_plas_release_gate_error_source_is_none() {
+    use std::error::Error;
+    let err1 = PlasReleaseGateError::InvalidInput {
+        detail: "x".to_string(),
+    };
+    let err2 = PlasReleaseGateError::Serialization {
+        detail: "y".to_string(),
+    };
+    assert!(err1.source().is_none());
+    assert!(err2.source().is_none());
+}
+
+#[test]
+fn test_gate_logs_decision_id_matches_input() {
+    let (input, trust_anchors) = base_gate_fixture();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    for log in &artifact.logs {
+        assert_eq!(log.decision_id, input.decision_id);
+    }
+}
+
+#[test]
+fn test_gate_finding_extension_id_non_empty() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].activation_mode = PlasActivationMode::Shadow;
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.findings.is_empty());
+    for finding in &artifact.findings {
+        assert!(!finding.extension_id.is_empty());
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment batch 3: receipt validation, witness field checks,
+// replay field mismatches, multi-finding accumulation,
+// normalization, log structure, revocation edge cases
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn gate_rejects_grant_receipt_with_wrong_extension_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0].receipt.extension_id = extension_id("wrong-extension");
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness
+            && f.detail.contains("extension_id")
+    }));
+}
+
+#[test]
+fn gate_rejects_grant_receipt_with_zero_timestamp() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0].receipt.timestamp_ns = 0;
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness
+            && f.detail.contains("timestamp")
+    }));
+}
+
+#[test]
+fn gate_rejects_grant_receipt_with_wrong_decision_kind() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0].receipt.decision_kind = "revoke".to_string();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness
+            && f.detail.contains("decision_kind")
+    }));
+}
+
+#[test]
+fn gate_rejects_grant_receipt_with_empty_outcome() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0].receipt.outcome = String::new();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness
+            && f.detail.contains("outcome")
+    }));
+}
+
+#[test]
+fn gate_rejects_grant_receipt_with_wrong_policy_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0].receipt.policy_id = "wrong-policy".to_string();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness
+            && f.detail.contains("policy_id")
+    }));
+}
+
+#[test]
+fn gate_rejects_grant_receipt_with_mismatched_capability() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0].receipt.capability = Some(Capability::new("net.outbound"));
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness
+            && f.detail.contains("capability")
+    }));
+}
+
+#[test]
+fn gate_rejects_grant_receipt_with_empty_receipt_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0].receipt.receipt_id = String::new();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(
+        artifact
+            .findings
+            .iter()
+            .any(|f| { f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness })
+    );
+}
+
+#[test]
+fn gate_rejects_revocation_receipt_with_wrong_extension_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].revocations[0].receipt.extension_id = extension_id("bad-ext");
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::RevocationEscrowEventMissing
+            && f.detail.contains("extension_id")
+    }));
+}
+
+#[test]
+fn gate_rejects_revocation_receipt_with_zero_timestamp() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].revocations[0].receipt.timestamp_ns = 0;
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::RevocationEscrowEventMissing
+            && f.detail.contains("timestamp")
+    }));
+}
+
+#[test]
+fn gate_rejects_revocation_receipt_with_grant_decision_kind() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].revocations[0].receipt.decision_kind = "grant".to_string();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::RevocationEscrowEventMissing
+            && f.detail.contains("decision_kind")
+    }));
+}
+
+#[test]
+fn gate_rejects_revocation_receipt_with_wrong_policy_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].revocations[0].receipt.policy_id = "bad-policy".to_string();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::RevocationEscrowEventMissing
+            && f.detail.contains("policy_id")
+    }));
+}
+
+#[test]
+fn gate_flags_revocation_without_corresponding_grant() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    // Clear all grants so the revocation has no matching grant capability
+    input.extensions[0].grants.clear();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::RevocationEscrowEventMissing
+            && f.detail.contains("no corresponding grant")
+    }));
+}
+
+#[test]
+fn gate_rejects_witness_with_mismatched_extension_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0]
+        .witness_artifact
+        .witness
+        .extension_id = extension_id("alien-extension");
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness
+            && f.detail.contains("missing required grant fields")
+    }));
+}
+
+#[test]
+fn gate_rejects_witness_with_zero_timestamp_ns() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0]
+        .witness_artifact
+        .witness
+        .timestamp_ns = 0;
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(
+        artifact
+            .findings
+            .iter()
+            .any(|f| { f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness })
+    );
+}
+
+#[test]
+fn gate_rejects_witness_with_empty_signature_bundle() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0]
+        .witness_artifact
+        .signature_bundle
+        .clear();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(
+        artifact
+            .findings
+            .iter()
+            .any(|f| { f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness })
+    );
+}
+
+#[test]
+fn gate_rejects_witness_with_empty_required_capabilities() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0]
+        .witness_artifact
+        .witness
+        .required_capabilities
+        .clear();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(
+        artifact
+            .findings
+            .iter()
+            .any(|f| { f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness })
+    );
+}
+
+#[test]
+fn gate_rejects_replay_with_mismatched_policy_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0]
+        .replay_evidence
+        .as_mut()
+        .expect("replay evidence")
+        .replay_policy_id = "rogue-policy".to_string();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(
+        artifact
+            .findings
+            .iter()
+            .any(|f| { f.code == PlasReleaseGateFailureCode::EscrowReplayMismatch })
+    );
+}
+
+#[test]
+fn gate_rejects_replay_with_mismatched_receipt_id() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0]
+        .replay_evidence
+        .as_mut()
+        .expect("replay evidence")
+        .receipt_id = "wrong-receipt".to_string();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(
+        artifact
+            .findings
+            .iter()
+            .any(|f| { f.code == PlasReleaseGateFailureCode::EscrowReplayMismatch })
+    );
+}
+
+#[test]
+fn gate_passes_when_active_capabilities_is_empty() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].active_capabilities.clear();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(artifact.pass);
+    assert!(artifact.findings.is_empty());
+}
+
+#[test]
+fn multiple_ambient_authority_findings_for_multiple_untraced_capabilities() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0]
+        .active_capabilities
+        .insert(Capability::new("net.connect"));
+    input.extensions[0]
+        .active_capabilities
+        .insert(Capability::new("env.read"));
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    let ambient_count = artifact
+        .findings
+        .iter()
+        .filter(|f| f.code == PlasReleaseGateFailureCode::AmbientAuthorityDetected)
+        .count();
+    assert!(
+        ambient_count >= 2,
+        "expected at least 2, got {ambient_count}"
+    );
+}
+
+#[test]
+fn findings_are_sorted_by_code_then_extension_then_receipt() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].activation_mode = PlasActivationMode::Shadow;
+    input.extensions[0]
+        .active_capabilities
+        .insert(Capability::new("rogue.cap"));
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    for window in artifact.findings.windows(2) {
+        let ord = window[0]
+            .code
+            .cmp(&window[1].code)
+            .then(window[0].extension_id.cmp(&window[1].extension_id))
+            .then(window[0].receipt_id.cmp(&window[1].receipt_id));
+        assert!(ord.is_le(), "findings must be sorted");
+    }
+}
+
+#[test]
+fn grant_witness_validation_logs_have_extension_receipt_capability() {
+    let (input, trust_anchors) = base_gate_fixture();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    let grant_logs: Vec<_> = artifact
+        .logs
+        .iter()
+        .filter(|l| l.event == "grant_witness_validation")
+        .collect();
+    assert!(!grant_logs.is_empty());
+    for log in &grant_logs {
+        assert!(log.extension_id.is_some(), "grant log missing extension_id");
+        assert!(log.receipt_id.is_some(), "grant log missing receipt_id");
+        assert!(log.capability.is_some(), "grant log missing capability");
+    }
+}
+
+#[test]
+fn revocation_validation_logs_have_extension_receipt_capability() {
+    let (input, trust_anchors) = base_gate_fixture();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    let revocation_logs: Vec<_> = artifact
+        .logs
+        .iter()
+        .filter(|l| l.event == "revocation_round_trip_validation")
+        .collect();
+    assert!(!revocation_logs.is_empty());
+    for log in &revocation_logs {
+        assert!(
+            log.extension_id.is_some(),
+            "revocation log missing extension_id"
+        );
+        assert!(
+            log.receipt_id.is_some(),
+            "revocation log missing receipt_id"
+        );
+        assert!(
+            log.capability.is_some(),
+            "revocation log missing capability"
+        );
+    }
+}
+
+#[test]
+fn whitespace_in_trace_id_is_normalized_preserving_semantics() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.trace_id = "  trace-padded  ".to_string();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(artifact.pass);
+    let last_log = artifact.logs.last().expect("last log");
+    assert_eq!(last_log.trace_id, "trace-padded");
+}
+
+#[test]
+fn whitespace_only_trace_id_is_rejected_after_normalization() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.trace_id = " \t \n ".to_string();
+    let err = evaluate_plas_release_gate(&input, &trust_anchors).expect_err("should fail");
+    assert!(matches!(err, PlasReleaseGateError::InvalidInput { .. }));
+}
+
+#[test]
+fn decision_hash_differs_between_passing_and_failing_gate() {
+    let (input, trust_anchors) = base_gate_fixture();
+    let pass_artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("pass eval");
+    assert!(pass_artifact.pass);
+
+    let (mut fail_input, _) = base_gate_fixture();
+    fail_input.extensions[0].activation_mode = PlasActivationMode::Shadow;
+    let fail_artifact = evaluate_plas_release_gate(&fail_input, &trust_anchors).expect("fail eval");
+    assert!(!fail_artifact.pass);
+
+    assert_ne!(pass_artifact.decision_hash, fail_artifact.decision_hash);
+}
+
+#[test]
+fn revocation_witness_with_tampered_synthesizer_signature_fails() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].revocations[0]
+        .witness_artifact
+        .witness
+        .synthesizer_signature = vec![0xDE; 64];
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(
+        artifact
+            .findings
+            .iter()
+            .any(|f| { f.code == PlasReleaseGateFailureCode::RevocationWitnessMissing })
+    );
+}
+
+#[test]
+fn grant_receipt_with_none_capability_fails_validation() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].grants[0].receipt.capability = None;
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::MissingCapabilityWitness
+            && f.detail.contains("capability")
+    }));
+}
+
+#[test]
+fn revocation_receipt_with_empty_outcome_fails() {
+    let (mut input, trust_anchors) = base_gate_fixture();
+    input.extensions[0].revocations[0].receipt.outcome = String::new();
+    let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
+    assert!(!artifact.pass);
+    assert!(artifact.findings.iter().any(|f| {
+        f.code == PlasReleaseGateFailureCode::RevocationEscrowEventMissing
+            && f.detail.contains("outcome")
+    }));
+}

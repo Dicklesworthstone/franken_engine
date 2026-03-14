@@ -31,10 +31,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::galaxy_brain_explainability::{
     ConstraintInteraction, CounterfactualOutcome, DecisionDomain, DecisionExplanation,
     ExplainabilityReport, ExplainedAlternative, ExplanationBuilder, ExplanationIndex,
-    GoverningEquation, RejectionReason, RiskBreakdown, SCHEMA_VERSION, VerbosityLevel,
+    FallbackExplanationInput, GoverningEquation, LaneRoutingExplanationInput, RejectionReason,
+    RiskBreakdown, SCHEMA_VERSION, VerbosityLevel, explain_fallback, explain_lane_routing,
     generate_report,
 };
-use frankenengine_engine::runtime_decision_theory::{LaneAction, LaneId, RegimeLabel};
+use frankenengine_engine::runtime_decision_theory::{
+    DemotionReason, LaneAction, LaneId, RegimeLabel,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -662,4 +665,257 @@ fn enrichment_debug_nonempty_all_types() {
 fn enrichment_schema_version_nonempty() {
     assert!(!SCHEMA_VERSION.is_empty());
     assert!(SCHEMA_VERSION.contains("galaxy-brain"));
+}
+
+// =========================================================================
+// L. explain_lane_routing convenience function
+// =========================================================================
+
+#[test]
+fn enrichment_explain_lane_routing_produces_valid_explanation() {
+    let input = LaneRoutingExplanationInput {
+        decision_id: "lr-1".to_string(),
+        epoch: epoch(5),
+        regime: RegimeLabel::Normal,
+        chosen_lane: lane("fast"),
+        chosen_loss_millionths: 50_000,
+        alternatives: vec![ExplainedAlternative {
+            action: LaneAction::RouteTo(lane("slow")),
+            expected_loss_millionths: 100_000,
+            rejection_reason: RejectionReason::HigherLoss,
+            detail: "slow lane has higher loss".to_string(),
+        }],
+        equations: vec![simple_equation("cvar", 400_000, Some(500_000), false)],
+        verbosity: VerbosityLevel::Standard,
+    };
+    let expl = explain_lane_routing(input).unwrap();
+    assert_eq!(expl.domain, DecisionDomain::LaneRouting);
+    assert_eq!(expl.chosen_action, LaneAction::RouteTo(lane("fast")));
+    assert_eq!(expl.chosen_loss_millionths, 50_000);
+    assert_eq!(expl.alternatives.len(), 1);
+    assert_eq!(expl.equations.len(), 1);
+    assert!(expl.rationale.contains("fast"));
+    assert_eq!(expl.regime, RegimeLabel::Normal);
+    assert_eq!(expl.epoch, epoch(5));
+}
+
+#[test]
+fn enrichment_explain_lane_routing_elevated_regime() {
+    let input = LaneRoutingExplanationInput {
+        decision_id: "lr-elevated".to_string(),
+        epoch: epoch(10),
+        regime: RegimeLabel::Elevated,
+        chosen_lane: lane("safe"),
+        chosen_loss_millionths: 10_000,
+        alternatives: Vec::new(),
+        equations: Vec::new(),
+        verbosity: VerbosityLevel::GalaxyBrain,
+    };
+    let expl = explain_lane_routing(input).unwrap();
+    assert_eq!(expl.regime, RegimeLabel::Elevated);
+    assert_eq!(expl.verbosity, VerbosityLevel::GalaxyBrain);
+    assert!(!expl.rationale.is_empty());
+    assert!(expl.alternatives.is_empty());
+}
+
+// =========================================================================
+// M. explain_fallback convenience function
+// =========================================================================
+
+#[test]
+fn enrichment_explain_fallback_produces_valid_explanation() {
+    let input = FallbackExplanationInput {
+        decision_id: "fb-1".to_string(),
+        epoch: epoch(7),
+        regime: RegimeLabel::Attack,
+        from_lane: lane("fast"),
+        reason: DemotionReason::CvarExceeded,
+        equations: vec![simple_equation("cvar", 900_000, Some(500_000), true)],
+        constraints: vec![ConstraintInteraction {
+            constraint_id: "max-cvar".to_string(),
+            description: "CVaR must stay under 0.5".to_string(),
+            binding: true,
+            slack_millionths: 0,
+        }],
+        verbosity: VerbosityLevel::Standard,
+    };
+    let expl = explain_fallback(input).unwrap();
+    assert_eq!(expl.domain, DecisionDomain::Fallback);
+    assert!(expl.rationale.contains("Demoted"));
+    assert!(expl.rationale.contains("fast"));
+    assert_eq!(expl.equations.len(), 1);
+    assert_eq!(expl.constraints.len(), 1);
+    assert!(expl.has_binding_constraint());
+    assert_eq!(expl.regime, RegimeLabel::Attack);
+}
+
+#[test]
+fn enrichment_explain_fallback_guardrail_triggered() {
+    let input = FallbackExplanationInput {
+        decision_id: "fb-guard".to_string(),
+        epoch: epoch(3),
+        regime: RegimeLabel::Normal,
+        from_lane: lane("optimized"),
+        reason: DemotionReason::GuardrailTriggered,
+        equations: Vec::new(),
+        constraints: Vec::new(),
+        verbosity: VerbosityLevel::Minimal,
+    };
+    let expl = explain_fallback(input).unwrap();
+    assert_eq!(expl.domain, DecisionDomain::Fallback);
+    assert_eq!(expl.verbosity, VerbosityLevel::Minimal);
+    assert!(expl.rationale.contains("GuardrailTriggered"));
+    assert!(expl.constraints.is_empty());
+}
+
+// =========================================================================
+// N. CounterfactualOutcome and ExplainedAlternative serde roundtrips
+// =========================================================================
+
+#[test]
+fn enrichment_counterfactual_outcome_serde_roundtrip() {
+    let cf = CounterfactualOutcome {
+        action: LaneAction::SuspendAdaptive,
+        predicted_loss_millionths: 5_000,
+        loss_delta_millionths: -45_000,
+        would_trigger_guardrail: true,
+        narrative: "suspending adaptive would trigger guardrail".to_string(),
+    };
+    let json = serde_json::to_string(&cf).unwrap();
+    let restored: CounterfactualOutcome = serde_json::from_str(&json).unwrap();
+    assert_eq!(cf, restored);
+}
+
+#[test]
+fn enrichment_explained_alternative_serde_roundtrip() {
+    let alt = ExplainedAlternative {
+        action: LaneAction::Demote {
+            from_lane: lane("fast"),
+            reason: DemotionReason::DriftDetected,
+        },
+        expected_loss_millionths: 300_000,
+        rejection_reason: RejectionReason::RegimeRestriction,
+        detail: "regime does not allow demotion here".to_string(),
+    };
+    let json = serde_json::to_string(&alt).unwrap();
+    let restored: ExplainedAlternative = serde_json::from_str(&json).unwrap();
+    assert_eq!(alt, restored);
+}
+
+// =========================================================================
+// O. Report field coverage — binding, non-normal, confidence, alternatives
+// =========================================================================
+
+#[test]
+fn enrichment_report_binding_and_non_normal_counts() {
+    let mut idx = ExplanationIndex::new();
+
+    // Decision 1: Normal regime, no binding constraints
+    idx.insert(build_minimal_explanation(
+        "dec-1",
+        DecisionDomain::LaneRouting,
+    ));
+
+    // Decision 2: Elevated regime with binding constraint
+    let expl2 = ExplanationBuilder::new("dec-2".to_string(), epoch(1), DecisionDomain::Security)
+        .regime(RegimeLabel::Elevated)
+        .chosen(LaneAction::FallbackSafe, 0)
+        .confidence(800_000)
+        .constraint(ConstraintInteraction {
+            constraint_id: "c1".to_string(),
+            description: "binding".to_string(),
+            binding: true,
+            slack_millionths: 0,
+        })
+        .alternative(ExplainedAlternative {
+            action: LaneAction::RouteTo(lane("fast")),
+            expected_loss_millionths: 200_000,
+            rejection_reason: RejectionReason::HigherLoss,
+            detail: "higher loss".to_string(),
+        })
+        .build()
+        .unwrap();
+    idx.insert(expl2);
+
+    // Decision 3: Attack regime, no binding, with confidence
+    let expl3 = ExplanationBuilder::new("dec-3".to_string(), epoch(1), DecisionDomain::Governance)
+        .regime(RegimeLabel::Attack)
+        .chosen(LaneAction::SuspendAdaptive, 0)
+        .confidence(600_000)
+        .build()
+        .unwrap();
+    idx.insert(expl3);
+
+    let report = generate_report(&idx, &epoch(1));
+    assert_eq!(report.total_explained, 3);
+    assert_eq!(report.binding_constraint_count, 1);
+    assert_eq!(report.non_normal_regime_count, 2);
+    // Average confidence is computed by the implementation — verify it's reasonable
+    assert!(report.average_confidence_millionths > 0);
+    assert!(report.average_confidence_millionths <= 1_000_000);
+    // Verbosity counts should include "standard" (all 3 default to standard)
+    assert!(report.verbosity_counts.contains_key("standard"));
+    // Content hash should be non-empty
+    assert!(!report.content_hash.is_empty());
+}
+
+#[test]
+fn enrichment_report_content_hash_deterministic() {
+    let mut idx = ExplanationIndex::new();
+    idx.insert(build_minimal_explanation("dec-1", DecisionDomain::Fallback));
+
+    let report1 = generate_report(&idx, &epoch(1));
+    let report2 = generate_report(&idx, &epoch(1));
+    assert_eq!(report1.content_hash, report2.content_hash);
+    assert_eq!(report1, report2);
+}
+
+// =========================================================================
+// P. ExplanationIndex serde roundtrip and overwrite behavior
+// =========================================================================
+
+#[test]
+fn enrichment_index_serde_roundtrip() {
+    let mut idx = ExplanationIndex::new();
+    idx.insert(build_minimal_explanation(
+        "dec-1",
+        DecisionDomain::LaneRouting,
+    ));
+    idx.insert(build_minimal_explanation("dec-2", DecisionDomain::Security));
+
+    let json = serde_json::to_string(&idx).unwrap();
+    let restored: ExplanationIndex = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.len(), 2);
+    assert!(restored.get_by_decision("dec-1").is_some());
+    assert!(restored.get_by_decision("dec-2").is_some());
+}
+
+#[test]
+fn enrichment_index_insert_same_decision_id_overwrites() {
+    let mut idx = ExplanationIndex::new();
+    let expl1 = ExplanationBuilder::new("dec-dup".to_string(), epoch(1), DecisionDomain::Security)
+        .chosen(LaneAction::FallbackSafe, 10_000)
+        .rationale("first".to_string())
+        .build()
+        .unwrap();
+    let id1 = expl1.explanation_id.clone();
+    idx.insert(expl1);
+    assert_eq!(idx.len(), 1);
+
+    // Same decision_id, same epoch, same domain → same compute_id → overwrite
+    let expl2 = ExplanationBuilder::new("dec-dup".to_string(), epoch(1), DecisionDomain::Security)
+        .chosen(LaneAction::SuspendAdaptive, 20_000)
+        .rationale("second".to_string())
+        .build()
+        .unwrap();
+    let id2 = expl2.explanation_id.clone();
+    assert_eq!(id1, id2);
+    idx.insert(expl2);
+
+    // Still 1 entry — the overwrite replaced the old one
+    assert_eq!(idx.len(), 1);
+    let retrieved = idx.get_by_decision("dec-dup").unwrap();
+    assert_eq!(retrieved.rationale, "second");
+    assert_eq!(retrieved.chosen_action, LaneAction::SuspendAdaptive);
 }

@@ -26,10 +26,12 @@ use frankenengine_engine::capability_token::PrincipalId;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::SigningKey;
+use frankenengine_engine::signature_preimage::VerificationKey;
 use frankenengine_engine::threshold_signing::{
     CreateThresholdPolicyInput, ShareHolderId, ShareRefreshResult, ThresholdCeremony,
-    ThresholdError, ThresholdEventType, ThresholdScope, ThresholdSigningPolicy,
-    threshold_ceremony_schema_id, threshold_policy_schema, threshold_policy_schema_id,
+    ThresholdError, ThresholdEvent, ThresholdEventType, ThresholdResult, ThresholdScope,
+    ThresholdSigningPolicy, refresh_shares, threshold_ceremony_schema_id, threshold_policy_schema,
+    threshold_policy_schema_id,
 };
 
 // ---------------------------------------------------------------------------
@@ -520,4 +522,405 @@ fn enrichment_debug_nonempty_all_types() {
         )
         .is_empty()
     );
+}
+
+// =========================================================================
+// M. ThresholdSigningPolicy — serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_policy_serde_roundtrip() {
+    let k = keys(3);
+    let policy = make_policy(2, &k);
+    let json = serde_json::to_string(&policy).unwrap();
+    let restored: ThresholdSigningPolicy = serde_json::from_str(&json).unwrap();
+    assert_eq!(policy.policy_id, restored.policy_id);
+    assert_eq!(policy.principal_id, restored.principal_id);
+    assert_eq!(policy.threshold_k, restored.threshold_k);
+    assert_eq!(policy.total_n, restored.total_n);
+    assert_eq!(policy.authorized_shares, restored.authorized_shares);
+    assert_eq!(policy.scoped_operations, restored.scoped_operations);
+    assert_eq!(policy.epoch, restored.epoch);
+    assert_eq!(policy.zone, restored.zone);
+}
+
+// =========================================================================
+// N. ThresholdSigningPolicy — clone independence
+// =========================================================================
+
+#[test]
+fn enrichment_policy_clone_independence() {
+    let k = keys(3);
+    let policy = make_policy(2, &k);
+    let cloned = policy.clone();
+    // Mutating the clone's public fields should not affect the original.
+    // We verify deep equality first, then confirm they are independent objects.
+    assert_eq!(policy.policy_id, cloned.policy_id);
+    assert_eq!(policy.zone, cloned.zone);
+    // Drop clone; original still accessible.
+    drop(cloned);
+    assert_eq!(policy.threshold_k, 2);
+}
+
+// =========================================================================
+// O. ThresholdCeremony — serde roundtrip (before any submissions)
+// =========================================================================
+
+#[test]
+fn enrichment_ceremony_serde_roundtrip_empty() {
+    let k = keys(3);
+    let policy = make_policy(2, &k);
+    let ceremony = ThresholdCeremony::new(
+        &policy,
+        ThresholdScope::EmergencyRevocation,
+        b"preimage-serde",
+        DeterministicTimestamp(100),
+    )
+    .unwrap();
+    let json = serde_json::to_string(&ceremony).unwrap();
+    let restored: ThresholdCeremony = serde_json::from_str(&json).unwrap();
+    assert_eq!(ceremony.ceremony_id, restored.ceremony_id);
+    assert_eq!(ceremony.scope, restored.scope);
+    assert_eq!(ceremony.threshold_k, restored.threshold_k);
+    assert_eq!(ceremony.preimage_hash, restored.preimage_hash);
+    assert_eq!(
+        ceremony.signatures_collected(),
+        restored.signatures_collected()
+    );
+}
+
+// =========================================================================
+// P. ThresholdCeremony — clone independence after submissions
+// =========================================================================
+
+#[test]
+fn enrichment_ceremony_clone_independence_after_submit() {
+    let k = keys(3);
+    let policy = make_policy(2, &k);
+    let mut ceremony = ThresholdCeremony::new(
+        &policy,
+        ThresholdScope::EmergencyRevocation,
+        b"clone-test",
+        DeterministicTimestamp(200),
+    )
+    .unwrap();
+    ceremony
+        .submit_partial(&k[0], b"clone-test", DeterministicTimestamp(201))
+        .unwrap();
+
+    let cloned = ceremony.clone();
+    assert_eq!(cloned.signatures_collected(), 1);
+    assert_eq!(ceremony.ceremony_id, cloned.ceremony_id);
+
+    // Mutate original further; clone is unaffected.
+    ceremony
+        .submit_partial(&k[1], b"clone-test", DeterministicTimestamp(202))
+        .unwrap();
+    assert_eq!(ceremony.signatures_collected(), 2);
+    assert_eq!(cloned.signatures_collected(), 1);
+}
+
+// =========================================================================
+// Q. Schema idempotency — same call twice yields identical results
+// =========================================================================
+
+#[test]
+fn enrichment_schema_idempotent_across_calls() {
+    let s1 = threshold_policy_schema();
+    let s2 = threshold_policy_schema();
+    assert_eq!(s1, s2);
+
+    let sid1 = threshold_policy_schema_id();
+    let sid2 = threshold_policy_schema_id();
+    assert_eq!(sid1, sid2);
+
+    let csid1 = threshold_ceremony_schema_id();
+    let csid2 = threshold_ceremony_schema_id();
+    assert_eq!(csid1, csid2);
+}
+
+// =========================================================================
+// R. ThresholdScope — serde roundtrip all variants
+// =========================================================================
+
+#[test]
+fn enrichment_threshold_scope_serde_all_variants() {
+    for scope in ThresholdScope::ALL {
+        let json = serde_json::to_string(scope).unwrap();
+        let restored: ThresholdScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(*scope, restored);
+    }
+}
+
+// =========================================================================
+// S. ThresholdScope — Display produces expected strings
+// =========================================================================
+
+#[test]
+fn enrichment_threshold_scope_display_strings() {
+    assert_eq!(
+        ThresholdScope::EmergencyRevocation.to_string(),
+        "emergency_revocation"
+    );
+    assert_eq!(ThresholdScope::KeyRotation.to_string(), "key_rotation");
+    assert_eq!(
+        ThresholdScope::AuthoritySetChange.to_string(),
+        "authority_set_change"
+    );
+    assert_eq!(
+        ThresholdScope::PolicyCheckpoint.to_string(),
+        "policy_checkpoint"
+    );
+}
+
+// =========================================================================
+// T. Policy — is_authorized for all holders and a rogue
+// =========================================================================
+
+#[test]
+fn enrichment_policy_is_authorized_checks() {
+    let k = keys(4);
+    let policy = make_policy(2, &k);
+    // All four holders should be authorized.
+    for key in &k {
+        let holder = ShareHolderId::from_verification_key(&key.verification_key());
+        assert!(policy.is_authorized(&holder));
+    }
+    // A rogue holder should not be authorized.
+    let rogue = ShareHolderId([0xFF; 32]);
+    assert!(!policy.is_authorized(&rogue));
+}
+
+// =========================================================================
+// U. Policy — field validation after construction
+// =========================================================================
+
+#[test]
+fn enrichment_policy_fields_after_creation() {
+    let k = keys(5);
+    let policy = make_policy(3, &k);
+    assert_eq!(policy.threshold_k, 3);
+    assert_eq!(policy.total_n, 5);
+    assert_eq!(policy.authorized_shares.len(), 5);
+    assert_eq!(policy.scoped_operations.len(), 4);
+    assert_eq!(policy.epoch, SecurityEpoch::from_raw(1));
+    assert_eq!(policy.zone, "test-zone");
+    assert_eq!(policy.principal_id, principal());
+    // policy_id should be non-zero
+    assert!(!policy.policy_id.as_bytes().iter().all(|b| *b == 0));
+}
+
+// =========================================================================
+// V. Ceremony — over-threshold (all n submit, more than k)
+// =========================================================================
+
+#[test]
+fn enrichment_ceremony_over_threshold_all_submit() {
+    let k = keys(4);
+    let policy = make_policy(2, &k);
+    let mut ceremony = ThresholdCeremony::new(
+        &policy,
+        ThresholdScope::EmergencyRevocation,
+        b"over-threshold",
+        DeterministicTimestamp(0),
+    )
+    .unwrap();
+
+    // Submit all 4 of 4 (threshold is 2).
+    for (i, key) in k.iter().enumerate() {
+        ceremony
+            .submit_partial(key, b"over-threshold", DeterministicTimestamp(i as u64 + 1))
+            .unwrap();
+    }
+    assert!(ceremony.is_threshold_met());
+    assert_eq!(ceremony.signatures_collected(), 4);
+
+    let result = ceremony.finalize(b"over-threshold").unwrap();
+    assert_eq!(result.signatures.len(), 4);
+    result.verify(b"over-threshold").unwrap();
+}
+
+// =========================================================================
+// W. Ceremony — drain_events captures ceremony lifecycle
+// =========================================================================
+
+#[test]
+fn enrichment_ceremony_drain_events_lifecycle() {
+    let k = keys(3);
+    let policy = make_policy(2, &k);
+    let mut ceremony = ThresholdCeremony::new(
+        &policy,
+        ThresholdScope::EmergencyRevocation,
+        b"events-data",
+        DeterministicTimestamp(0),
+    )
+    .unwrap();
+
+    // After creation, there should be exactly one CeremonyInitiated event.
+    let events = ceremony.drain_events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0].event_type,
+        ThresholdEventType::CeremonyInitiated { .. }
+    ));
+
+    // After drain, events should be empty.
+    let empty = ceremony.drain_events();
+    assert!(empty.is_empty());
+
+    // Submit a partial and drain again.
+    ceremony
+        .submit_partial(&k[0], b"events-data", DeterministicTimestamp(1))
+        .unwrap();
+    let events2 = ceremony.drain_events();
+    assert_eq!(events2.len(), 1);
+    assert!(matches!(
+        &events2[0].event_type,
+        ThresholdEventType::PartialSignatureSubmitted { .. }
+    ));
+
+    // Submit second partial and finalize — both generate events.
+    ceremony
+        .submit_partial(&k[1], b"events-data", DeterministicTimestamp(2))
+        .unwrap();
+    ceremony.finalize(b"events-data").unwrap();
+    let events3 = ceremony.drain_events();
+    assert_eq!(events3.len(), 2); // PartialSignatureSubmitted + CeremonyFinalized
+    assert!(matches!(
+        &events3[1].event_type,
+        ThresholdEventType::CeremonyFinalized { .. }
+    ));
+}
+
+// =========================================================================
+// X. ThresholdEvent — serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_threshold_event_serde_roundtrip() {
+    let event = ThresholdEvent {
+        event_type: ThresholdEventType::CeremonyInitiated {
+            scope: ThresholdScope::PolicyCheckpoint,
+            threshold_k: 3,
+            total_authorized: 5,
+        },
+        ceremony_id: frankenengine_engine::engine_object_id::EngineObjectId([0xCC; 32]),
+        zone: "serde-zone".to_string(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: ThresholdEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, restored);
+}
+
+// =========================================================================
+// Y. ThresholdResult — serde roundtrip and verify
+// =========================================================================
+
+#[test]
+fn enrichment_threshold_result_serde_roundtrip() {
+    let k = keys(3);
+    let policy = make_policy(2, &k);
+    let mut ceremony = ThresholdCeremony::new(
+        &policy,
+        ThresholdScope::EmergencyRevocation,
+        b"result-serde",
+        DeterministicTimestamp(0),
+    )
+    .unwrap();
+    ceremony
+        .submit_partial(&k[0], b"result-serde", DeterministicTimestamp(1))
+        .unwrap();
+    ceremony
+        .submit_partial(&k[1], b"result-serde", DeterministicTimestamp(2))
+        .unwrap();
+    let result = ceremony.finalize(b"result-serde").unwrap();
+
+    let json = serde_json::to_string(&result).unwrap();
+    let restored: ThresholdResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(result, restored);
+    // Restored result should also verify correctly.
+    restored.verify(b"result-serde").unwrap();
+}
+
+// =========================================================================
+// Z. refresh_shares — integration roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_refresh_shares_integration() {
+    let k = keys(3);
+    let policy = make_policy(2, &k);
+    let new_keys = (0..3)
+        .map(|i| {
+            let mut bytes = [0u8; 32];
+            bytes[0] = (i + 100) as u8;
+            SigningKey::from_bytes(bytes)
+        })
+        .collect::<Vec<_>>();
+    let new_vks: Vec<VerificationKey> = new_keys.iter().map(|sk| sk.verification_key()).collect();
+
+    let (new_policy, refresh_result) =
+        refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(10)).unwrap();
+    assert_eq!(new_policy.threshold_k, 2);
+    assert_eq!(new_policy.total_n, 3);
+    assert_ne!(new_policy.policy_id, policy.policy_id);
+    assert_eq!(new_policy.epoch, SecurityEpoch::from_raw(10));
+    assert_eq!(refresh_result.old_shares.len(), 3);
+    assert_eq!(refresh_result.new_shares.len(), 3);
+
+    // Old holders should not be in new policy.
+    for key in &k {
+        let holder = ShareHolderId::from_verification_key(&key.verification_key());
+        assert!(!new_policy.is_authorized(&holder));
+    }
+    // New holders should be authorized.
+    for key in &new_keys {
+        let holder = ShareHolderId::from_verification_key(&key.verification_key());
+        assert!(new_policy.is_authorized(&holder));
+    }
+}
+
+// =========================================================================
+// AA. Policy determinism — same inputs yield same policy_id
+// =========================================================================
+
+#[test]
+fn enrichment_policy_deterministic_id() {
+    let k = keys(4);
+    let p1 = make_policy(3, &k);
+    let p2 = make_policy(3, &k);
+    assert_eq!(p1.policy_id, p2.policy_id);
+    assert_eq!(p1.authorized_shares, p2.authorized_shares);
+}
+
+// =========================================================================
+// AB. Ceremony — unauthorized submission emits event
+// =========================================================================
+
+#[test]
+fn enrichment_ceremony_unauthorized_emits_event() {
+    let k = keys(3);
+    let policy = make_policy(2, &k);
+    let mut ceremony = ThresholdCeremony::new(
+        &policy,
+        ThresholdScope::EmergencyRevocation,
+        b"unauthorized-test",
+        DeterministicTimestamp(0),
+    )
+    .unwrap();
+
+    // Drain init event.
+    let _ = ceremony.drain_events();
+
+    let rogue_key = SigningKey::from_bytes([0xFF; 32]);
+    let result =
+        ceremony.submit_partial(&rogue_key, b"unauthorized-test", DeterministicTimestamp(1));
+    assert!(result.is_err());
+
+    let events = ceremony.drain_events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0].event_type,
+        ThresholdEventType::UnauthorizedSubmission { .. }
+    ));
 }

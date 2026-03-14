@@ -833,3 +833,420 @@ fn budget_exhaustion_event_fields() {
     assert_eq!(e.loop_site, LoopSite::GcSweep);
     assert_eq!(e.trace_id, "trace-budget");
 }
+
+// ---------------------------------------------------------------------------
+// New enrichment tests — batch 4
+// ---------------------------------------------------------------------------
+
+// Token: multiple independent clones all share the same flag
+#[test]
+fn test_multiple_token_clones_share_state() {
+    let t0 = CancellationToken::new();
+    let t1 = t0.clone();
+    let t2 = t0.clone();
+    let t3 = t1.clone();
+    assert!(!t0.is_cancelled());
+    assert!(!t1.is_cancelled());
+    assert!(!t2.is_cancelled());
+    assert!(!t3.is_cancelled());
+    t2.cancel();
+    assert!(t0.is_cancelled());
+    assert!(t1.is_cancelled());
+    assert!(t2.is_cancelled());
+    assert!(t3.is_cancelled());
+}
+
+// Token: cancel/reset cycle is repeatable
+#[test]
+fn test_token_cancel_reset_cycle_multiple_times() {
+    let token = CancellationToken::new();
+    for _ in 0..5 {
+        assert!(!token.is_cancelled());
+        token.cancel();
+        assert!(token.is_cancelled());
+        token.reset();
+    }
+    assert!(!token.is_cancelled());
+}
+
+// Guard: periodic event iteration_count resets between consecutive periods
+#[test]
+fn test_periodic_iteration_count_resets_between_periods() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::BytecodeDispatch,
+        "dispatch",
+        "trace-period",
+        DensityConfig {
+            max_iterations: 4,
+            max_total_iterations: 1_000,
+        },
+        token,
+    );
+    // First period: 4 ticks
+    for _ in 0..4 {
+        guard.tick();
+    }
+    guard.check();
+    // Second period: 4 more ticks
+    for _ in 0..4 {
+        guard.tick();
+    }
+    guard.check();
+
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 2);
+    // Both periods should report iteration_count of 4
+    assert_eq!(events[0].iteration_count, 4);
+    assert_eq!(events[1].iteration_count, 4);
+    // Total grows cumulatively
+    assert_eq!(events[0].total_iterations, 4);
+    assert_eq!(events[1].total_iterations, 8);
+}
+
+// Guard: interleaved explicit and periodic events preserve ordering
+#[test]
+fn test_interleaved_explicit_and_periodic_events_ordering() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::IrLowering,
+        "lowerer",
+        "trace-interleave",
+        DensityConfig {
+            max_iterations: 5,
+            max_total_iterations: 1_000,
+        },
+        token,
+    );
+    // 3 ticks, then explicit checkpoint
+    for _ in 0..3 {
+        guard.tick();
+    }
+    guard.explicit_checkpoint();
+    // 5 more ticks triggers periodic
+    for _ in 0..5 {
+        guard.tick();
+    }
+    guard.check();
+
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].reason, CheckpointReason::Explicit);
+    assert_eq!(events[1].reason, CheckpointReason::Periodic);
+    // Explicit fired after 3 ticks; periodic fired after 5 more ticks
+    assert_eq!(events[0].iteration_count, 3);
+    assert_eq!(events[1].iteration_count, 5);
+}
+
+// Guard: explicit_checkpoint on a cancelled guard emits Drain, not Continue
+#[test]
+fn test_explicit_checkpoint_cancelled_emits_drain_action() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::ModuleVerify,
+        "verifier",
+        "trace-explicit-cancel",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 1_000,
+        },
+        token.clone(),
+    );
+    for _ in 0..3 {
+        guard.tick();
+    }
+    token.cancel();
+    let action = guard.explicit_checkpoint();
+    assert_eq!(action, CheckpointAction::Drain);
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].reason, CheckpointReason::Explicit);
+    assert_eq!(events[0].action, CheckpointAction::Drain);
+}
+
+// Guard: budget = 0 aborts immediately after first tick
+#[test]
+fn test_budget_zero_aborts_after_first_tick() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::GcScanning,
+        "gc",
+        "trace-zero-budget",
+        DensityConfig {
+            max_iterations: 1_000,
+            max_total_iterations: 0,
+        },
+        token,
+    );
+    guard.tick();
+    let action = guard.check();
+    assert_eq!(action, CheckpointAction::Abort);
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].reason, CheckpointReason::BudgetExhausted);
+}
+
+// Guard: event_count increments correctly with mixed checkpoint types
+#[test]
+fn test_event_count_increments_for_mixed_checkpoint_types() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::PolicyIteration,
+        "policy",
+        "trace-mixed",
+        DensityConfig {
+            max_iterations: 5,
+            max_total_iterations: 1_000,
+        },
+        token,
+    );
+    // Periodic event
+    for _ in 0..5 {
+        guard.tick();
+    }
+    guard.check();
+    assert_eq!(guard.event_count(), 1);
+    // Explicit event
+    guard.explicit_checkpoint();
+    assert_eq!(guard.event_count(), 2);
+    // Drain clears
+    guard.drain_events();
+    assert_eq!(guard.event_count(), 0);
+}
+
+// Coverage: clone is independent of original
+#[test]
+fn test_coverage_clone_independence() {
+    let mut original = CheckpointCoverage::new();
+    original.register("bytecode_dispatch");
+    let mut cloned = original.clone();
+    // Registering on clone should not affect original
+    cloned.register("gc_scanning");
+    assert_eq!(original.covered_count(), 1);
+    assert_eq!(cloned.covered_count(), 2);
+    assert!(!original.coverage_contains("gc_scanning"));
+}
+
+// Coverage: all mandatory site names are in the uncovered list initially
+#[test]
+fn test_coverage_new_uncovered_contains_all_mandatory() {
+    let cov = CheckpointCoverage::new();
+    let uncov = cov.uncovered();
+    let mandatory = [
+        "bytecode_dispatch",
+        "gc_scanning",
+        "gc_sweep",
+        "policy_iteration",
+        "contract_evaluation",
+        "replay_step",
+        "module_decode",
+        "module_verify",
+        "ir_lowering",
+        "ir_compilation",
+    ];
+    for site in &mandatory {
+        assert!(uncov.contains(&site.to_string()), "missing: {site}");
+    }
+}
+
+// Coverage: serde roundtrip on fully covered tracker
+#[test]
+fn test_coverage_full_serde_roundtrip() {
+    let mut cov = CheckpointCoverage::new();
+    for site in cov.uncovered() {
+        cov.register(&site);
+    }
+    assert!(cov.all_covered());
+    let json = serde_json::to_string(&cov).unwrap();
+    let restored: CheckpointCoverage = serde_json::from_str(&json).unwrap();
+    assert_eq!(cov, restored);
+    assert!(restored.all_covered());
+    assert_eq!(restored.covered_count(), 10);
+}
+
+// LoopSite: custom site with unicode content serializes and displays correctly
+#[test]
+fn test_loop_site_custom_unicode_serde_and_display() {
+    let site = LoopSite::Custom("αβγ_loop".to_string());
+    let json = serde_json::to_string(&site).unwrap();
+    let restored: LoopSite = serde_json::from_str(&json).unwrap();
+    assert_eq!(site, restored);
+    assert_eq!(site.to_string(), "custom:αβγ_loop");
+}
+
+// CheckpointEvent: empty trace_id and component round-trip cleanly
+#[test]
+fn test_checkpoint_event_empty_strings_serde() {
+    let event = CheckpointEvent {
+        trace_id: String::new(),
+        component: String::new(),
+        loop_site: LoopSite::GcSweep,
+        iteration_count: 0,
+        total_iterations: 0,
+        reason: CheckpointReason::Explicit,
+        action: CheckpointAction::Continue,
+        timestamp_virtual: 0,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: CheckpointEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, restored);
+    assert!(restored.trace_id.is_empty());
+    assert!(restored.component.is_empty());
+}
+
+// DensityConfig: PartialEq distinguishes different configs
+#[test]
+fn test_density_config_partial_eq_distinguishes_values() {
+    let a = DensityConfig {
+        max_iterations: 10,
+        max_total_iterations: 100,
+    };
+    let b = DensityConfig {
+        max_iterations: 20,
+        max_total_iterations: 100,
+    };
+    let c = DensityConfig {
+        max_iterations: 10,
+        max_total_iterations: 200,
+    };
+    assert_ne!(a, b);
+    assert_ne!(a, c);
+    assert_ne!(b, c);
+    assert_eq!(a, a.clone());
+}
+
+// Guard: virtual_time and total_iterations stay in sync across periodic checkpoints
+#[test]
+fn test_virtual_time_and_total_iterations_in_sync_across_periods() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::ContractEvaluation,
+        "evaluator",
+        "trace-sync",
+        DensityConfig {
+            max_iterations: 7,
+            max_total_iterations: 1_000,
+        },
+        token,
+    );
+    for n in 1..=21u64 {
+        guard.tick();
+        guard.check();
+        assert_eq!(guard.virtual_time(), n);
+        assert_eq!(guard.total_iterations(), n);
+    }
+}
+
+// Guard: check() immediately after construction (no ticks) returns Continue
+#[test]
+fn test_check_immediately_after_construction_returns_continue() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::ReplayStep,
+        "replay",
+        "trace-empty",
+        DensityConfig {
+            max_iterations: 10,
+            max_total_iterations: 100,
+        },
+        token,
+    );
+    let action = guard.check();
+    assert_eq!(action, CheckpointAction::Continue);
+    assert_eq!(guard.event_count(), 0);
+    assert_eq!(guard.total_iterations(), 0);
+}
+
+// Guard: after cancel+drain, reset token allows normal operation again
+#[test]
+fn test_guard_continues_after_token_reset_post_cancel() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::ModuleDecode,
+        "decoder",
+        "trace-reset",
+        DensityConfig {
+            max_iterations: 5,
+            max_total_iterations: 1_000,
+        },
+        token.clone(),
+    );
+    guard.tick();
+    token.cancel();
+    let action = guard.check();
+    assert_eq!(action, CheckpointAction::Drain);
+    guard.drain_events();
+
+    // Reset token and continue
+    token.reset();
+    for _ in 0..5 {
+        guard.tick();
+    }
+    let action2 = guard.check();
+    // Periodic checkpoint should fire (5 ticks since last reset of iterations_since_checkpoint)
+    assert_eq!(action2, CheckpointAction::Continue);
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].reason, CheckpointReason::Periodic);
+}
+
+// CheckpointAction: Debug output contains the variant name
+#[test]
+fn test_checkpoint_action_debug_contains_variant_name() {
+    assert!(format!("{:?}", CheckpointAction::Continue).contains("Continue"));
+    assert!(format!("{:?}", CheckpointAction::Drain).contains("Drain"));
+    assert!(format!("{:?}", CheckpointAction::Abort).contains("Abort"));
+}
+
+// CheckpointReason: sorted order in BTreeSet matches declaration order
+#[test]
+fn test_checkpoint_reason_btreeset_order() {
+    use std::collections::BTreeSet;
+    let mut set = BTreeSet::new();
+    set.insert(CheckpointReason::Explicit);
+    set.insert(CheckpointReason::BudgetExhausted);
+    set.insert(CheckpointReason::CancelPending);
+    set.insert(CheckpointReason::Periodic);
+    let ordered: Vec<_> = set.into_iter().collect();
+    assert_eq!(ordered[0], CheckpointReason::Periodic);
+    assert_eq!(ordered[1], CheckpointReason::CancelPending);
+    assert_eq!(ordered[2], CheckpointReason::BudgetExhausted);
+    assert_eq!(ordered[3], CheckpointReason::Explicit);
+}
+
+// LoopSite: all non-Custom variants are less than Custom in Ord
+#[test]
+fn test_loop_site_non_custom_all_less_than_custom() {
+    let custom = LoopSite::Custom(String::new());
+    let non_custom = [
+        LoopSite::BytecodeDispatch,
+        LoopSite::GcScanning,
+        LoopSite::GcSweep,
+        LoopSite::PolicyIteration,
+        LoopSite::ContractEvaluation,
+        LoopSite::ReplayStep,
+        LoopSite::ModuleDecode,
+        LoopSite::ModuleVerify,
+        LoopSite::IrLowering,
+        LoopSite::IrCompilation,
+    ];
+    for site in &non_custom {
+        assert!(site < &custom, "{site} should be less than Custom");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper method added for test_coverage_clone_independence
+// (Uses the public API — coverage field is private; use uncovered() proxy)
+// ---------------------------------------------------------------------------
+trait CoverageExt {
+    fn coverage_contains(&self, site: &str) -> bool;
+}
+
+impl CoverageExt for CheckpointCoverage {
+    fn coverage_contains(&self, site: &str) -> bool {
+        // A site is "known covered" if it is NOT in the uncovered list
+        // and it IS counted in covered_count
+        !self.uncovered().contains(&site.to_string()) && self.covered_count() > 0
+    }
+}

@@ -12,8 +12,9 @@
 )]
 
 use frankenengine_engine::parser_evidence_indexer::{
-    CorrelationKey, EvidenceIndexerError, IndexedParserEvent, PARSER_EVIDENCE_INDEX_SCHEMA_V1,
-    ParserEvidenceIndexBuilder, ParserRunArtifactRef, SchemaMigrationStep,
+    AppliedSchemaMigration, CorrelatedRegression, CorrelationKey, EvidenceIndexerError,
+    IndexedParserEvent, PARSER_EVIDENCE_INDEX_SCHEMA_V1, ParserEvidenceIndexBuilder,
+    ParserRunArtifactRef, SchemaMigrationBoundary, SchemaMigrationStep, SchemaVersionTag,
 };
 
 fn manifest(run_id: &str, schema_version: &str, replay_command: &str) -> serde_json::Value {
@@ -689,4 +690,236 @@ fn correlation_key_equality() {
     };
     let key2 = key1.clone();
     assert_eq!(key1, key2);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: untested public API
+// ---------------------------------------------------------------------------
+
+// ---------- SchemaVersionTag::parse ----------
+
+#[test]
+fn schema_version_tag_parse_valid() {
+    let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v1").unwrap();
+    assert_eq!(tag.family, "franken-engine.parser-log-event");
+    assert_eq!(tag.major, 1);
+}
+
+#[test]
+fn schema_version_tag_parse_higher_version() {
+    let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v42").unwrap();
+    assert_eq!(tag.major, 42);
+}
+
+#[test]
+fn schema_version_tag_parse_empty_family_is_error() {
+    let err = SchemaVersionTag::parse(".v1").expect_err("empty family");
+    assert!(matches!(err, EvidenceIndexerError::InvalidSchemaVersion(_)));
+}
+
+#[test]
+fn schema_version_tag_parse_no_version_suffix_is_error() {
+    let err = SchemaVersionTag::parse("franken-engine.parser-log-event").expect_err("no .v");
+    assert!(matches!(err, EvidenceIndexerError::InvalidSchemaVersion(_)));
+}
+
+#[test]
+fn schema_version_tag_parse_non_numeric_major_is_error() {
+    let err = SchemaVersionTag::parse("family.vabc").expect_err("non-numeric major");
+    assert!(matches!(err, EvidenceIndexerError::InvalidSchemaVersion(_)));
+}
+
+#[test]
+fn schema_version_tag_serde_roundtrip() {
+    let tag = SchemaVersionTag::parse("franken-engine.parser-evidence-index.v1").unwrap();
+    let json = serde_json::to_string(&tag).expect("serialize");
+    let recovered: SchemaVersionTag = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(tag, recovered);
+}
+
+#[test]
+fn schema_version_tag_ordering() {
+    let v1 = SchemaVersionTag::parse("franken-engine.parser-log-event.v1").unwrap();
+    let v2 = SchemaVersionTag::parse("franken-engine.parser-log-event.v2").unwrap();
+    assert!(v1 < v2);
+}
+
+// ---------- AppliedSchemaMigration serde roundtrip ----------
+
+#[test]
+fn applied_schema_migration_serde_roundtrip() {
+    let migration = AppliedSchemaMigration {
+        migration_id: "mig-v1-v2".to_string(),
+        from_schema: "family.v1".to_string(),
+        to_schema: "family.v2".to_string(),
+        affected_records: 42,
+    };
+    let json = serde_json::to_string(&migration).expect("serialize");
+    let recovered: AppliedSchemaMigration = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(migration, recovered);
+}
+
+// ---------- SchemaMigrationBoundary serde roundtrip ----------
+
+#[test]
+fn schema_migration_boundary_serde_roundtrip() {
+    let boundary = SchemaMigrationBoundary {
+        run_id: "run-boundary".to_string(),
+        sequence: 5,
+        from_schema: "family.v1".to_string(),
+        to_schema: "family.v2".to_string(),
+    };
+    let json = serde_json::to_string(&boundary).expect("serialize");
+    let recovered: SchemaMigrationBoundary = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(boundary, recovered);
+}
+
+// ---------- CorrelatedRegression serde roundtrip ----------
+
+#[test]
+fn correlated_regression_serde_roundtrip() {
+    let regression = CorrelatedRegression {
+        key: CorrelationKey {
+            component: "parser".to_string(),
+            event: "drift".to_string(),
+            scenario_id: Some("s1".to_string()),
+            error_code: Some("E001".to_string()),
+            outcome: "fail".to_string(),
+        },
+        run_count: 3,
+        occurrence_count: 5,
+        run_ids: vec![
+            "run-a".to_string(),
+            "run-b".to_string(),
+            "run-c".to_string(),
+        ],
+        trace_ids: vec!["t-a".to_string(), "t-b".to_string()],
+        replay_commands: vec!["./replay_a.sh".to_string()],
+        severity: "high".to_string(),
+    };
+    let json = serde_json::to_string(&regression).expect("serialize");
+    let recovered: CorrelatedRegression = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(regression, recovered);
+}
+
+// ---------- CorrelatedRegression field completeness ----------
+
+#[test]
+fn correlated_regression_from_e2e_has_complete_fields() {
+    let mut builder = ParserEvidenceIndexBuilder::new();
+    builder
+        .add_run(
+            &manifest(
+                "run-field-a",
+                "franken-engine.parser-evidence-index.run.v1",
+                "./replay_a.sh",
+            ),
+            "a/manifest.json",
+            "a/events.jsonl",
+            "a/commands.txt",
+        )
+        .unwrap();
+    builder
+        .add_run(
+            &manifest(
+                "run-field-b",
+                "franken-engine.parser-evidence-index.run.v1",
+                "./replay_b.sh",
+            ),
+            "b/manifest.json",
+            "b/events.jsonl",
+            "b/commands.txt",
+        )
+        .unwrap();
+
+    let event_a = r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"ta","decision_id":"da","policy_id":"p","component":"parser","event":"drift_detected","outcome":"fail","error_code":"FE-001","scenario_id":"fixture-x"}"#;
+    let event_b = r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"tb","decision_id":"db","policy_id":"p","component":"parser","event":"drift_detected","outcome":"fail","error_code":"FE-001","scenario_id":"fixture-x"}"#;
+    builder.add_events_jsonl("run-field-a", event_a).unwrap();
+    builder.add_events_jsonl("run-field-b", event_b).unwrap();
+
+    let index = builder.build();
+    let clusters = index.correlate_regressions();
+    assert_eq!(clusters.len(), 1);
+    let cluster = &clusters[0];
+    assert_eq!(cluster.run_count, 2);
+    assert_eq!(cluster.occurrence_count, 2);
+    assert_eq!(cluster.run_ids.len(), 2);
+    assert!(!cluster.trace_ids.is_empty());
+    assert!(!cluster.replay_commands.is_empty());
+    assert!(!cluster.severity.is_empty());
+}
+
+// ---------- validate_event_schema_compatibility ----------
+
+#[test]
+fn validate_event_schema_compatible_when_all_same_version() {
+    let mut builder = ParserEvidenceIndexBuilder::new();
+    builder
+        .add_run(
+            &manifest(
+                "run-compat",
+                "franken-engine.parser-evidence-index.run.v1",
+                "./replay.sh",
+            ),
+            "c/manifest.json",
+            "c/events.jsonl",
+            "c/commands.txt",
+        )
+        .unwrap();
+    builder
+        .add_events_jsonl(
+            "run-compat",
+            r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass","error_code":null}"#,
+        )
+        .unwrap();
+
+    let index = builder.build();
+    let result = index.validate_event_schema_compatibility("franken-engine.parser-log-event.v1");
+    assert!(result.is_ok());
+}
+
+// ---------- migration returns applied migration records ----------
+
+#[test]
+fn migration_returns_correct_applied_migration_records() {
+    let mut builder = ParserEvidenceIndexBuilder::new();
+    builder
+        .add_run(
+            &manifest(
+                "run-mig-record",
+                "franken-engine.parser-evidence-index.run.v1",
+                "./replay.sh",
+            ),
+            "mr/manifest.json",
+            "mr/events.jsonl",
+            "mr/commands.txt",
+        )
+        .unwrap();
+    builder
+        .add_events_jsonl(
+            "run-mig-record",
+            r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass","error_code":null}"#,
+        )
+        .unwrap();
+
+    let mut index = builder.build();
+    let receipts = index
+        .migrate_event_schemas(
+            "franken-engine.parser-log-event.v2",
+            &[SchemaMigrationStep {
+                migration_id: "mig-v1-v2".to_string(),
+                from_schema: "franken-engine.parser-log-event.v1".to_string(),
+                to_schema: "franken-engine.parser-log-event.v2".to_string(),
+            }],
+        )
+        .unwrap();
+
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].migration_id, "mig-v1-v2");
+    assert_eq!(
+        receipts[0].from_schema,
+        "franken-engine.parser-log-event.v1"
+    );
+    assert_eq!(receipts[0].to_schema, "franken-engine.parser-log-event.v2");
+    assert_eq!(receipts[0].affected_records, 1);
 }

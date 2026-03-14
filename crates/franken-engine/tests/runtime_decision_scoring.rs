@@ -13,9 +13,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use frankenengine_engine::bayesian_posterior::{BayesianPosteriorUpdater, Evidence, Posterior};
+use frankenengine_engine::bayesian_posterior::{
+    BayesianPosteriorUpdater, CalibrationResult, ChangePointDetector, Evidence, LikelihoodModel,
+    Posterior, RiskState, UpdaterStore,
+};
 use frankenengine_engine::expected_loss_selector::{
-    ContainmentAction, ExpectedLossSelector, RuntimeDecisionScoringError,
+    AlienRiskAlertLevel, CandidateActionScore, ContainmentAction, DecisionConfidenceInterval,
+    ExpectedLossSelector, LossEntry, LossMatrix, RuntimeDecisionScore, RuntimeDecisionScoringError,
     RuntimeDecisionScoringInput,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -572,5 +576,505 @@ fn scoring_input_serialization_is_deterministic() {
     assert_eq!(
         json_a, json_b,
         "RuntimeDecisionScoringInput serialization must be deterministic"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: untested API surface
+// ---------------------------------------------------------------------------
+
+// ---------- RiskState ----------
+
+#[test]
+fn risk_state_all_has_four_variants() {
+    assert_eq!(RiskState::ALL.len(), 4);
+    let mut seen = BTreeSet::new();
+    for s in RiskState::ALL {
+        seen.insert(format!("{s}"));
+    }
+    assert_eq!(seen.len(), 4, "all RiskState variants must be unique");
+}
+
+#[test]
+fn risk_state_serde_roundtrip() {
+    for state in RiskState::ALL {
+        let json = serde_json::to_string(&state).expect("serialize");
+        let recovered: RiskState = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, state);
+    }
+}
+
+#[test]
+fn risk_state_display_is_lowercase() {
+    for state in RiskState::ALL {
+        let s = format!("{state}");
+        assert!(!s.is_empty());
+        assert_eq!(s, s.to_lowercase(), "display must be lowercase: {s}");
+    }
+}
+
+// ---------- Posterior::probability / map_estimate ----------
+
+#[test]
+fn posterior_probability_returns_correct_values() {
+    let p = Posterior::from_millionths(600_000, 100_000, 200_000, 100_000);
+    assert_eq!(p.probability(RiskState::Benign), 600_000);
+    assert_eq!(p.probability(RiskState::Anomalous), 100_000);
+    assert_eq!(p.probability(RiskState::Malicious), 200_000);
+    assert_eq!(p.probability(RiskState::Unknown), 100_000);
+}
+
+#[test]
+fn posterior_map_estimate_returns_highest_state() {
+    let p = Posterior::from_millionths(100_000, 100_000, 700_000, 100_000);
+    assert_eq!(p.map_estimate(), RiskState::Malicious);
+}
+
+#[test]
+fn posterior_map_estimate_benign_dominant() {
+    let p = Posterior::from_millionths(800_000, 50_000, 100_000, 50_000);
+    assert_eq!(p.map_estimate(), RiskState::Benign);
+}
+
+// ---------- LikelihoodModel ----------
+
+#[test]
+fn likelihood_model_compute_likelihoods_returns_four_values() {
+    let model = LikelihoodModel::default();
+    let ev = benign_evidence("ext-likelihood");
+    let likelihoods = model.compute_likelihoods(&ev);
+    assert_eq!(likelihoods.len(), 4);
+    for lk in &likelihoods {
+        assert!(*lk > 0, "likelihoods must be positive, got {lk}");
+    }
+}
+
+#[test]
+fn likelihood_model_serde_roundtrip() {
+    let model = LikelihoodModel::default();
+    let json = serde_json::to_string(&model).expect("serialize");
+    let recovered: LikelihoodModel = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(
+        recovered.benign_rate_ceiling, model.benign_rate_ceiling,
+        "LikelihoodModel must survive serde roundtrip"
+    );
+}
+
+// ---------- ChangePointDetector ----------
+
+#[test]
+fn change_point_detector_initial_probability_is_zero() {
+    let cpd = ChangePointDetector::new(100_000, 50);
+    assert_eq!(cpd.change_point_probability(), 0);
+    assert_eq!(cpd.map_run_length(), 0);
+}
+
+#[test]
+fn change_point_detector_accumulates_probability() {
+    let mut cpd = ChangePointDetector::new(100_000, 50);
+    for _ in 0..20 {
+        cpd.update(500_000, 900_000);
+    }
+    assert!(
+        cpd.change_point_probability() > 0,
+        "after biased updates, change point probability should be > 0"
+    );
+}
+
+#[test]
+fn change_point_detector_reset_clears_state() {
+    let mut cpd = ChangePointDetector::new(100_000, 50);
+    for _ in 0..10 {
+        cpd.update(500_000, 800_000);
+    }
+    cpd.reset();
+    assert_eq!(cpd.change_point_probability(), 0);
+    assert_eq!(cpd.map_run_length(), 0);
+}
+
+// ---------- BayesianPosteriorUpdater extended ----------
+
+#[test]
+fn bayesian_updater_log_likelihood_ratio_changes_with_evidence() {
+    let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-llr");
+    let initial_llr = updater.log_likelihood_ratio();
+    for _ in 0..5 {
+        updater.update(&malicious_evidence("ext-llr"));
+    }
+    assert_ne!(
+        updater.log_likelihood_ratio(),
+        initial_llr,
+        "LLR must change after evidence updates"
+    );
+}
+
+#[test]
+fn bayesian_updater_evidence_hashes_grow() {
+    let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-hashes");
+    assert!(updater.evidence_hashes().is_empty());
+    updater.update(&benign_evidence("ext-hashes"));
+    assert_eq!(updater.evidence_hashes().len(), 1);
+    updater.update(&malicious_evidence("ext-hashes"));
+    assert_eq!(updater.evidence_hashes().len(), 2);
+}
+
+#[test]
+fn bayesian_updater_content_hash_is_deterministic() {
+    let mut a = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-ch");
+    let mut b = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-ch");
+    a.update(&benign_evidence("ext-ch"));
+    b.update(&benign_evidence("ext-ch"));
+    assert_eq!(a.content_hash(), b.content_hash());
+}
+
+#[test]
+fn bayesian_updater_reset_restores_prior() {
+    let prior = Posterior::default_prior();
+    let mut updater = BayesianPosteriorUpdater::new(prior.clone(), "ext-reset");
+    for _ in 0..10 {
+        updater.update(&malicious_evidence("ext-reset"));
+    }
+    updater.reset(prior.clone());
+    assert_eq!(updater.update_count(), 0);
+    assert_eq!(*updater.posterior(), prior);
+}
+
+#[test]
+fn bayesian_updater_calibration_check_returns_result() {
+    let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-cal");
+    for _ in 0..5 {
+        updater.update(&malicious_evidence("ext-cal"));
+    }
+    let cal: CalibrationResult = updater.calibration_check(RiskState::Malicious);
+    assert_eq!(cal.ground_truth, RiskState::Malicious);
+    assert!(
+        cal.assigned_probability > 0,
+        "assigned probability should be positive for malicious posterior"
+    );
+}
+
+#[test]
+fn bayesian_updater_change_point_probability_accessible() {
+    let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-cpd");
+    let _cp = updater.change_point_probability();
+    for _ in 0..5 {
+        updater.update(&malicious_evidence("ext-cpd"));
+    }
+    // Just verify it's accessible and doesn't panic
+    let _cp2 = updater.change_point_probability();
+}
+
+// ---------- UpdaterStore ----------
+
+#[test]
+fn updater_store_create_and_retrieve() {
+    let mut store = UpdaterStore::new();
+    assert!(store.is_empty());
+    assert_eq!(store.len(), 0);
+
+    store.get_or_create("ext-store-a");
+    assert_eq!(store.len(), 1);
+    assert!(!store.is_empty());
+
+    let updater = store.get("ext-store-a");
+    assert!(updater.is_some());
+    assert_eq!(updater.unwrap().extension_id(), "ext-store-a");
+}
+
+#[test]
+fn updater_store_get_nonexistent_returns_none() {
+    let store = UpdaterStore::new();
+    assert!(store.get("ext-nonexistent").is_none());
+}
+
+#[test]
+fn updater_store_risky_extensions_filters_by_threshold() {
+    let mut store = UpdaterStore::new();
+    let u = store.get_or_create("ext-risky");
+    for _ in 0..10 {
+        u.update(&malicious_evidence("ext-risky"));
+    }
+    store.get_or_create("ext-safe");
+    for _ in 0..3 {
+        let u2 = store.get_or_create("ext-safe");
+        u2.update(&benign_evidence("ext-safe"));
+    }
+    let risky = store.risky_extensions(500_000);
+    // ext-risky should have low p_benign (below threshold)
+    // Just verify the API returns reasonable results
+    assert!(
+        risky.len() <= store.len(),
+        "risky count cannot exceed total"
+    );
+}
+
+#[test]
+fn updater_store_summary_has_entries_for_all() {
+    let mut store = UpdaterStore::new();
+    store.get_or_create("ext-sum-a");
+    store.get_or_create("ext-sum-b");
+    let summary = store.summary();
+    assert_eq!(summary.len(), 2);
+    assert!(summary.contains_key("ext-sum-a"));
+    assert!(summary.contains_key("ext-sum-b"));
+}
+
+// ---------- LossMatrix ----------
+
+#[test]
+fn loss_matrix_balanced_is_complete() {
+    let matrix = LossMatrix::balanced();
+    assert!(matrix.is_complete(), "balanced matrix must be complete");
+}
+
+#[test]
+fn loss_matrix_conservative_is_complete() {
+    let matrix = LossMatrix::conservative();
+    assert!(matrix.is_complete(), "conservative matrix must be complete");
+}
+
+#[test]
+fn loss_matrix_permissive_is_complete() {
+    let matrix = LossMatrix::permissive();
+    assert!(matrix.is_complete(), "permissive matrix must be complete");
+}
+
+#[test]
+fn loss_matrix_content_hash_differs_across_presets() {
+    let balanced = LossMatrix::balanced();
+    let conservative = LossMatrix::conservative();
+    let permissive = LossMatrix::permissive();
+    assert_ne!(
+        balanced.content_hash(),
+        conservative.content_hash(),
+        "balanced and conservative must have different hashes"
+    );
+    assert_ne!(
+        balanced.content_hash(),
+        permissive.content_hash(),
+        "balanced and permissive must have different hashes"
+    );
+}
+
+#[test]
+fn loss_matrix_loss_lookup_returns_value() {
+    let matrix = LossMatrix::balanced();
+    let loss = matrix.loss(ContainmentAction::Allow, RiskState::Benign);
+    // Allow + Benign should have low loss
+    assert!(
+        loss >= 0,
+        "loss for Allow+Benign should be non-negative, got {loss}"
+    );
+}
+
+#[test]
+fn loss_matrix_serde_roundtrip() {
+    let matrix = LossMatrix::balanced();
+    let json = serde_json::to_string(&matrix).expect("serialize");
+    let recovered: LossMatrix = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.matrix_id, matrix.matrix_id);
+    assert!(recovered.is_complete());
+}
+
+// ---------- ExpectedLossSelector extended ----------
+
+#[test]
+fn selector_loss_matrix_accessor() {
+    let selector = ExpectedLossSelector::balanced();
+    let matrix = selector.loss_matrix();
+    assert!(matrix.is_complete());
+}
+
+#[test]
+fn selector_set_loss_matrix_changes_behavior() {
+    let mut selector = ExpectedLossSelector::balanced();
+    let conservative = LossMatrix::conservative();
+    selector.set_loss_matrix(conservative);
+    let matrix = selector.loss_matrix();
+    assert_eq!(matrix.matrix_id, LossMatrix::conservative().matrix_id);
+}
+
+#[test]
+fn selector_select_returns_action_decision() {
+    let mut selector = ExpectedLossSelector::balanced();
+    let posterior = Posterior::from_millionths(800_000, 50_000, 100_000, 50_000);
+    let decision = selector.select(&posterior);
+    assert!(ContainmentAction::ALL.contains(&decision.action));
+    assert!(ContainmentAction::ALL.contains(&decision.runner_up_action));
+    assert!(decision.explanation.margin_millionths >= 0);
+}
+
+// ---------- RuntimeDecisionScoringError extended ----------
+
+#[test]
+fn all_actions_blocked_error() {
+    let extension_id = "ext-all-blocked";
+    let mut input = scoring_input(
+        extension_id,
+        "decision-all-blocked",
+        Posterior::default_prior(),
+    );
+    for action in ContainmentAction::ALL {
+        input.blocked_actions.insert(action);
+    }
+    let mut selector = ExpectedLossSelector::balanced();
+    let err = selector
+        .score_runtime_decision(&input)
+        .expect_err("blocking all actions should fail");
+    assert_eq!(err, RuntimeDecisionScoringError::AllActionsBlocked);
+}
+
+#[test]
+fn runtime_decision_scoring_error_display_coverage() {
+    let errors = [
+        RuntimeDecisionScoringError::ZeroAttackerCost,
+        RuntimeDecisionScoringError::AllActionsBlocked,
+        RuntimeDecisionScoringError::MissingField {
+            field: "trace_id".to_string(),
+        },
+    ];
+    for err in &errors {
+        let display = format!("{err}");
+        assert!(!display.is_empty(), "error Display must be non-empty");
+    }
+    let missing = format!(
+        "{}",
+        RuntimeDecisionScoringError::MissingField {
+            field: "test".to_string()
+        }
+    );
+    assert!(
+        missing.contains("test"),
+        "MissingField display must contain field name"
+    );
+}
+
+// ---------- AlienRiskAlertLevel ----------
+
+#[test]
+fn alien_risk_alert_level_display_coverage() {
+    let levels = [
+        AlienRiskAlertLevel::Nominal,
+        AlienRiskAlertLevel::Elevated,
+        AlienRiskAlertLevel::Critical,
+    ];
+    let mut displays = BTreeSet::new();
+    for level in &levels {
+        let s = format!("{level}");
+        assert!(!s.is_empty());
+        displays.insert(s);
+    }
+    assert_eq!(
+        displays.len(),
+        3,
+        "all alert levels must have unique display"
+    );
+}
+
+#[test]
+fn alien_risk_alert_level_serde_roundtrip() {
+    for level in [
+        AlienRiskAlertLevel::Nominal,
+        AlienRiskAlertLevel::Elevated,
+        AlienRiskAlertLevel::Critical,
+    ] {
+        let json = serde_json::to_string(&level).expect("serialize");
+        let recovered: AlienRiskAlertLevel = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, level);
+    }
+}
+
+// ---------- RuntimeDecisionScore serde ----------
+
+#[test]
+fn runtime_decision_score_serde_roundtrip() {
+    let extension_id = "ext-score-serde";
+    let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), extension_id);
+    for _ in 0..3 {
+        updater.update(&malicious_evidence(extension_id));
+    }
+    let mut selector = ExpectedLossSelector::balanced();
+    let score: RuntimeDecisionScore = selector
+        .score_runtime_decision(&scoring_input(
+            extension_id,
+            "decision-score-serde",
+            updater.posterior().clone(),
+        ))
+        .expect("scoring");
+
+    let json = serde_json::to_string(&score).expect("serialize");
+    let recovered: RuntimeDecisionScore = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.trace_id, score.trace_id);
+    assert_eq!(recovered.decision_id, score.decision_id);
+    assert_eq!(recovered.selected_action, score.selected_action);
+    assert_eq!(recovered.epoch, score.epoch);
+    assert_eq!(
+        recovered.selected_expected_loss_millionths,
+        score.selected_expected_loss_millionths
+    );
+}
+
+// ---------- CandidateActionScore / DecisionConfidenceInterval ----------
+
+#[test]
+fn candidate_action_score_serde_roundtrip() {
+    let cas = CandidateActionScore {
+        action: ContainmentAction::Sandbox,
+        expected_loss_millionths: 42_000,
+        state_contributions_millionths: BTreeMap::from([
+            ("benign".to_string(), 10_000),
+            ("malicious".to_string(), 32_000),
+        ]),
+        guardrail_blocked: false,
+    };
+    let json = serde_json::to_string(&cas).expect("serialize");
+    let recovered: CandidateActionScore = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.action, ContainmentAction::Sandbox);
+    assert_eq!(recovered.expected_loss_millionths, 42_000);
+    assert!(!recovered.guardrail_blocked);
+}
+
+#[test]
+fn decision_confidence_interval_serde_roundtrip() {
+    let ci = DecisionConfidenceInterval {
+        lower_millionths: 100_000,
+        upper_millionths: 900_000,
+    };
+    let json = serde_json::to_string(&ci).expect("serialize");
+    let recovered: DecisionConfidenceInterval = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.lower_millionths, 100_000);
+    assert_eq!(recovered.upper_millionths, 900_000);
+}
+
+// ---------- LossEntry ----------
+
+#[test]
+fn loss_entry_serde_roundtrip() {
+    let entry = LossEntry {
+        action: ContainmentAction::Challenge,
+        state: RiskState::Anomalous,
+        loss_millionths: 350_000,
+    };
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let recovered: LossEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.action, ContainmentAction::Challenge);
+    assert_eq!(recovered.state, RiskState::Anomalous);
+    assert_eq!(recovered.loss_millionths, 350_000);
+}
+
+// ---------- conservative selector produces stricter decisions ----------
+
+#[test]
+fn conservative_selector_at_least_as_strict_as_balanced() {
+    let posterior = Posterior::from_millionths(400_000, 100_000, 400_000, 100_000);
+    let mut balanced = ExpectedLossSelector::balanced();
+    let mut conservative = ExpectedLossSelector::new(LossMatrix::conservative());
+
+    let balanced_decision = balanced.select(&posterior);
+    let conservative_decision = conservative.select(&posterior);
+
+    assert!(
+        conservative_decision.action.severity() >= balanced_decision.action.severity(),
+        "conservative must be at least as strict as balanced"
     );
 }

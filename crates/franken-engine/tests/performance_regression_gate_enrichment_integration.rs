@@ -604,3 +604,354 @@ fn enrichment_default_policy_serde_roundtrip() {
     let back: RegressionGatePolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(policy, back);
 }
+
+// =========================================================================
+// W. Zero baseline triggers Critical with BASELINE error code
+// =========================================================================
+
+#[test]
+fn enrichment_zero_baseline_yields_critical_baseline_error() {
+    let obs = RegressionObservation::new(
+        "w-zero",
+        "scenario",
+        "sha256:meta",
+        0,
+        500_000,
+        5_000,
+        Some("c1".into()),
+    );
+    let input = mk_input(vec![obs], Vec::new());
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    assert!(report.blocking);
+    assert_eq!(report.highest_severity, RegressionSeverity::Critical);
+    assert_eq!(report.regressions.len(), 1);
+    assert!(report.regressions[0].error_code.contains("BASELINE"));
+    assert_eq!(report.regressions[0].severity, RegressionSeverity::Critical);
+    assert_eq!(report.regressions[0].status, RegressionStatus::Active);
+}
+
+// =========================================================================
+// X. Missing metadata hash triggers High with INTEGRITY error code
+// =========================================================================
+
+#[test]
+fn enrichment_empty_metadata_hash_yields_high_integrity_error() {
+    let obs = RegressionObservation::new("w-meta", "scenario", "", 100_000, 130_000, 10_000, None);
+    let input = mk_input(vec![obs], Vec::new());
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    assert!(report.blocking);
+    assert_eq!(report.regressions.len(), 1);
+    assert!(report.regressions[0].error_code.contains("INTEGRITY"));
+    assert_eq!(report.regressions[0].severity, RegressionSeverity::High);
+}
+
+#[test]
+fn enrichment_whitespace_only_metadata_hash_yields_integrity_error() {
+    let obs = RegressionObservation::new(
+        "w-ws", "scenario", "   \t  ", 100_000, 130_000, 10_000, None,
+    );
+    let input = mk_input(vec![obs], Vec::new());
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    assert!(report.blocking);
+    assert!(report.regressions[0].error_code.contains("INTEGRITY"));
+}
+
+// =========================================================================
+// Y. Expired waiver on blocking regression emits WAIVER error
+// =========================================================================
+
+#[test]
+fn enrichment_expired_waiver_on_blocking_regression_emits_waiver_error() {
+    // 6% regression (High) with expired waiver → blocking + WAIVER error finding
+    let waiver = RegressionWaiver::new("w-exp", "w-a", "oncall", 1_600_000_000, "expired");
+    let input = mk_input(vec![mk_obs("w-a", 100_000, 106_000, 10_000)], vec![waiver]);
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    assert!(report.blocking);
+    // Should have 2 findings: original + waiver-expired
+    assert_eq!(report.regressions.len(), 2);
+    let waiver_finding = report
+        .regressions
+        .iter()
+        .find(|f| f.error_code.contains("WAIVER"));
+    assert!(waiver_finding.is_some());
+    let wf = waiver_finding.unwrap();
+    assert_eq!(wf.status, RegressionStatus::Active);
+    assert_eq!(wf.waiver_id.as_deref(), Some("w-exp"));
+    assert_eq!(wf.waiver_owner.as_deref(), Some("oncall"));
+    assert_eq!(wf.waiver_expires_at_unix_seconds, Some(1_600_000_000));
+}
+
+// =========================================================================
+// Z. Expired waiver on non-blocking warning: no WAIVER error emitted
+// =========================================================================
+
+#[test]
+fn enrichment_expired_waiver_on_warning_does_not_emit_waiver_error() {
+    // 3% regression (Warning, non-blocking) with expired waiver
+    // The is_blocking() check means WAIVER error is only emitted for High/Critical
+    let waiver = RegressionWaiver::new("w-exp", "w-a", "oncall", 1_600_000_000, "expired");
+    let input = mk_input(vec![mk_obs("w-a", 100_000, 103_000, 10_000)], vec![waiver]);
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    // Warning is NOT blocking, so expired waiver is treated as waived
+    assert!(!report.blocking);
+    assert_eq!(report.regressions.len(), 1);
+    assert_eq!(report.regressions[0].status, RegressionStatus::Waived);
+    assert!(!report.regressions[0].error_code.contains("WAIVER"));
+}
+
+// =========================================================================
+// AA. max_culprits = 0 yields empty culprit ranking
+// =========================================================================
+
+#[test]
+fn enrichment_max_culprits_zero_yields_empty_ranking() {
+    let policy = RegressionGatePolicy {
+        max_culprits: 0,
+        ..default_policy()
+    };
+    let input = mk_input(vec![mk_obs("w-a", 100_000, 200_000, 5_000)], Vec::new());
+    let report = evaluate_performance_regression_gate(&input, &policy);
+    assert!(report.blocking);
+    assert!(!report.regressions.is_empty());
+    assert!(report.culprit_ranking.is_empty());
+}
+
+// =========================================================================
+// AB. Culprit ranking capped at max_culprits
+// =========================================================================
+
+#[test]
+fn enrichment_culprit_ranking_capped_at_max() {
+    let policy = RegressionGatePolicy {
+        max_culprits: 2,
+        ..default_policy()
+    };
+    let input = mk_input(
+        vec![
+            mk_obs("w-a", 100_000, 200_000, 5_000),
+            mk_obs("w-b", 100_000, 150_000, 10_000),
+            mk_obs("w-c", 100_000, 140_000, 15_000),
+        ],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &policy);
+    assert_eq!(report.culprit_ranking.len(), 2);
+    assert_eq!(report.culprit_ranking[0].rank, 1);
+    assert_eq!(report.culprit_ranking[1].rank, 2);
+}
+
+// =========================================================================
+// AC. Full RegressionGateReport serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_full_report_serde_roundtrip() {
+    let input = mk_input(
+        vec![
+            mk_obs("w-a", 100_000, 200_000, 5_000),
+            mk_obs("w-b", 100_000, 103_000, 10_000),
+        ],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    let json = serde_json::to_string(&report).unwrap();
+    let back: frankenengine_engine::performance_regression_gate::RegressionGateReport =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(report, back);
+}
+
+// =========================================================================
+// AD. RegressionGateInput serde roundtrip with waivers default
+// =========================================================================
+
+#[test]
+fn enrichment_input_serde_roundtrip_with_waivers() {
+    let input = mk_input(
+        vec![mk_obs("w-a", 100_000, 200_000, 5_000)],
+        vec![RegressionWaiver::new(
+            "w-1",
+            "w-a",
+            "oncall",
+            1_800_000_000,
+            "test",
+        )],
+    );
+    let json = serde_json::to_string(&input).unwrap();
+    let back: RegressionGateInput = serde_json::from_str(&json).unwrap();
+    assert_eq!(input, back);
+}
+
+#[test]
+fn enrichment_input_serde_roundtrip_no_waivers_default() {
+    // Without waivers in JSON, serde(default) should produce empty vec
+    let input = mk_input(vec![mk_obs("w-a", 100_000, 100_000, 5_000)], Vec::new());
+    let json = serde_json::to_string(&input).unwrap();
+    // Remove waivers from JSON to test default behavior
+    let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let mut map = val.as_object().unwrap().clone();
+    map.remove("waivers");
+    let stripped = serde_json::to_string(&map).unwrap();
+    let back: RegressionGateInput = serde_json::from_str(&stripped).unwrap();
+    assert!(back.waivers.is_empty());
+    assert_eq!(back.trace_id, "trace-test");
+}
+
+// =========================================================================
+// AE. RegressionWaiver serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_waiver_serde_roundtrip() {
+    let waiver = RegressionWaiver::new("w-42", "wl-alpha", "sre-team", 1_800_000_000, "noisy host");
+    let json = serde_json::to_string(&waiver).unwrap();
+    let back: RegressionWaiver = serde_json::from_str(&json).unwrap();
+    assert_eq!(waiver, back);
+}
+
+// =========================================================================
+// AF. RegressionGateError stable_code returns expected codes
+// =========================================================================
+
+#[test]
+fn enrichment_error_stable_code_serialization() {
+    let err = RegressionGateError::Serialization("boom".into());
+    assert!(err.stable_code().contains("SERIALIZATION"));
+}
+
+#[test]
+fn enrichment_error_stable_code_report_write() {
+    let err = RegressionGateError::ReportWrite {
+        path: "/tmp/x".to_string(),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
+    };
+    assert!(err.stable_code().contains("REPORT"));
+}
+
+// =========================================================================
+// AG. Gate decision log is always the last log entry
+// =========================================================================
+
+#[test]
+fn enrichment_gate_decision_log_is_last_entry() {
+    // Non-blocking case
+    let input1 = mk_input(vec![mk_obs("w-a", 100_000, 100_000, 5_000)], Vec::new());
+    let report1 = evaluate_performance_regression_gate(&input1, &default_policy());
+    let last1 = report1.logs.last().unwrap();
+    assert_eq!(last1.event, "gate_decision");
+    assert_eq!(last1.outcome, "promote");
+
+    // Blocking case
+    let input2 = mk_input(vec![mk_obs("w-a", 100_000, 200_000, 5_000)], Vec::new());
+    let report2 = evaluate_performance_regression_gate(&input2, &default_policy());
+    let last2 = report2.logs.last().unwrap();
+    assert_eq!(last2.event, "gate_decision");
+    assert_eq!(last2.outcome, "hold");
+}
+
+// =========================================================================
+// AH. Determinism: same input permutation produces identical output
+// =========================================================================
+
+#[test]
+fn enrichment_determinism_under_observation_permutation() {
+    let policy = default_policy();
+    let obs_a = mk_obs("w-c", 100_000, 140_000, 12_000);
+    let obs_b = mk_obs("w-a", 100_000, 130_000, 10_000);
+    let obs_c = mk_obs("w-b", 100_000, 111_000, 20_000);
+    let input_forward = mk_input(
+        vec![obs_a.clone(), obs_b.clone(), obs_c.clone()],
+        Vec::new(),
+    );
+    let input_reversed = mk_input(vec![obs_c, obs_b, obs_a], Vec::new());
+    let report_f = evaluate_performance_regression_gate(&input_forward, &policy);
+    let report_r = evaluate_performance_regression_gate(&input_reversed, &policy);
+    assert_eq!(report_f.regressions, report_r.regressions);
+    assert_eq!(report_f.culprit_ranking, report_r.culprit_ranking);
+    assert_eq!(report_f.blocking, report_r.blocking);
+    assert_eq!(report_f.highest_severity, report_r.highest_severity);
+}
+
+// =========================================================================
+// AI. Mixed severities: highest active determines report severity
+// =========================================================================
+
+#[test]
+fn enrichment_mixed_severities_highest_active_wins() {
+    let input = mk_input(
+        vec![
+            mk_obs("w-warn", 100_000, 103_000, 10_000), // Warning (3%)
+            mk_obs("w-high", 100_000, 106_000, 10_000), // High (6%)
+            mk_obs("w-crit", 100_000, 200_000, 10_000), // Critical (100%)
+        ],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    assert!(report.blocking);
+    assert_eq!(report.highest_severity, RegressionSeverity::Critical);
+    assert_eq!(report.severity, RegressionSeverity::Critical);
+    assert_eq!(report.regressions.len(), 3);
+}
+
+// =========================================================================
+// AJ. CulpritCandidate full serde roundtrip with all fields populated
+// =========================================================================
+
+#[test]
+fn enrichment_culprit_candidate_full_serde_roundtrip() {
+    let candidate = CulpritCandidate {
+        rank: 3,
+        workload_id: "w-full".to_string(),
+        severity: RegressionSeverity::Critical,
+        score: 3_100_995_000,
+        regression_millionths: 100_000,
+        p_value_millionths: 5_000,
+        error_codes: vec!["FE-RGC-703-REGRESSION-0004".to_string()],
+        commit_id: Some("abc123".to_string()),
+    };
+    let json = serde_json::to_string(&candidate).unwrap();
+    let back: CulpritCandidate = serde_json::from_str(&json).unwrap();
+    assert_eq!(candidate, back);
+    assert!(json.contains("error_codes")); // non-empty, should be serialized
+    assert!(json.contains("commit_id"));
+}
+
+// =========================================================================
+// AK. Observation improvement (observed < baseline) produces no finding
+// =========================================================================
+
+#[test]
+fn enrichment_improvement_no_finding() {
+    let obs = RegressionObservation::new(
+        "w-fast",
+        "scenario",
+        "sha256:meta",
+        100_000,
+        90_000, // improvement: 10% faster
+        5_000,
+        Some("c1".into()),
+    );
+    let input = mk_input(vec![obs], Vec::new());
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    assert!(!report.blocking);
+    assert!(report.regressions.is_empty());
+    assert!(report.culprit_ranking.is_empty());
+    assert_eq!(report.highest_severity, RegressionSeverity::None);
+}
+
+// =========================================================================
+// AL. Report component and schema_version are correct
+// =========================================================================
+
+#[test]
+fn enrichment_report_component_and_schema_version() {
+    let input = mk_input(vec![mk_obs("w-a", 100_000, 100_000, 5_000)], Vec::new());
+    let report = evaluate_performance_regression_gate(&input, &default_policy());
+    assert_eq!(report.component, PERFORMANCE_REGRESSION_GATE_COMPONENT);
+    assert_eq!(
+        report.schema_version,
+        PERFORMANCE_REGRESSION_GATE_SCHEMA_VERSION
+    );
+    assert_eq!(report.trace_id, "trace-test");
+    assert_eq!(report.decision_id, "decision-test");
+    assert_eq!(report.policy_id, "policy-test");
+}

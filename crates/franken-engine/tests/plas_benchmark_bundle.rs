@@ -12,8 +12,10 @@
 )]
 
 use frankenengine_engine::plas_benchmark_bundle::{
-    PLAS_BENCHMARK_BUNDLE_SCHEMA_VERSION, PlasBenchmarkBundleError, PlasBenchmarkBundleRequest,
-    PlasBenchmarkCohort, PlasBenchmarkCohortSummary, PlasBenchmarkExtensionSample,
+    PLAS_BENCHMARK_BUNDLE_COMPONENT, PLAS_BENCHMARK_BUNDLE_SCHEMA_VERSION,
+    PlasBenchmarkBundleDecision, PlasBenchmarkBundleError, PlasBenchmarkBundleEvent,
+    PlasBenchmarkBundleRequest, PlasBenchmarkCohort, PlasBenchmarkCohortSummary,
+    PlasBenchmarkExtensionResult, PlasBenchmarkExtensionSample, PlasBenchmarkOverallSummary,
     PlasBenchmarkThresholds, PlasBenchmarkTrendPoint, build_plas_benchmark_bundle,
 };
 
@@ -478,4 +480,285 @@ fn sample_with_false_deny_exceeding_benign_requests_rejected() {
         msg.contains("benign_false_deny_count"),
         "error should mention benign_false_deny_count: {msg}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: untested public API surface
+// ---------------------------------------------------------------------------
+
+// ---------- PLAS_BENCHMARK_BUNDLE_COMPONENT ----------
+
+#[test]
+fn component_constant_matches_expected_value() {
+    assert_eq!(PLAS_BENCHMARK_BUNDLE_COMPONENT, "plas_benchmark_bundle");
+}
+
+// ---------- PlasBenchmarkCohort::as_str ----------
+
+#[test]
+fn cohort_as_str_covers_all_variants() {
+    assert_eq!(PlasBenchmarkCohort::Simple.as_str(), "simple");
+    assert_eq!(PlasBenchmarkCohort::Complex.as_str(), "complex");
+    assert_eq!(PlasBenchmarkCohort::HighRisk.as_str(), "high_risk");
+    assert_eq!(PlasBenchmarkCohort::Boundary.as_str(), "boundary");
+}
+
+// ---------- PlasBenchmarkCohort::all ----------
+
+#[test]
+fn cohort_all_returns_exactly_four_variants() {
+    let all = PlasBenchmarkCohort::all();
+    assert_eq!(all.len(), 4);
+    let set: std::collections::BTreeSet<_> = all.iter().copied().collect();
+    assert_eq!(set.len(), 4, "all() variants must be unique");
+}
+
+// ---------- request validation: empty string fields ----------
+
+#[test]
+fn empty_trace_id_rejected() {
+    let mut req = request_with_samples(representative_samples());
+    req.trace_id = String::new();
+    let err = build_plas_benchmark_bundle(&req).expect_err("empty trace_id");
+    assert!(err.to_string().contains("trace_id"));
+}
+
+#[test]
+fn empty_decision_id_rejected() {
+    let mut req = request_with_samples(representative_samples());
+    req.decision_id = String::new();
+    let err = build_plas_benchmark_bundle(&req).expect_err("empty decision_id");
+    assert!(err.to_string().contains("decision_id"));
+}
+
+#[test]
+fn empty_policy_id_rejected() {
+    let mut req = request_with_samples(representative_samples());
+    req.policy_id = String::new();
+    let err = build_plas_benchmark_bundle(&req).expect_err("empty policy_id");
+    assert!(err.to_string().contains("policy_id"));
+}
+
+#[test]
+fn empty_benchmark_run_id_rejected() {
+    let mut req = request_with_samples(representative_samples());
+    req.benchmark_run_id = String::new();
+    let err = build_plas_benchmark_bundle(&req).expect_err("empty benchmark_run_id");
+    assert!(err.to_string().contains("benchmark_run_id"));
+}
+
+// ---------- sample validation: zero fields ----------
+
+#[test]
+fn sample_with_empty_extension_id_rejected() {
+    let mut samples = representative_samples();
+    samples[0].extension_id = String::new();
+    let err = build_plas_benchmark_bundle(&request_with_samples(samples))
+        .expect_err("empty extension_id");
+    assert!(err.to_string().contains("extension_id"));
+}
+
+#[test]
+fn sample_with_zero_empirically_required_capability_count_rejected() {
+    let mut samples = representative_samples();
+    samples[0].empirically_required_capability_count = 0;
+    let err = build_plas_benchmark_bundle(&request_with_samples(samples))
+        .expect_err("zero empirically_required_capability_count");
+    assert!(
+        err.to_string()
+            .contains("empirically_required_capability_count")
+    );
+}
+
+#[test]
+fn sample_with_zero_manual_authoring_time_rejected() {
+    let mut samples = representative_samples();
+    samples[0].manual_authoring_time_ms = 0;
+    let err = build_plas_benchmark_bundle(&request_with_samples(samples))
+        .expect_err("zero manual_authoring_time_ms");
+    assert!(err.to_string().contains("manual_authoring_time_ms"));
+}
+
+#[test]
+fn sample_with_zero_benign_request_count_rejected() {
+    let mut samples = representative_samples();
+    samples[0].benign_request_count = 0;
+    let err = build_plas_benchmark_bundle(&request_with_samples(samples))
+        .expect_err("zero benign_request_count");
+    assert!(err.to_string().contains("benign_request_count"));
+}
+
+#[test]
+fn sample_with_zero_observation_window_rejected() {
+    let mut samples = representative_samples();
+    samples[0].observation_window_ns = 0;
+    let err = build_plas_benchmark_bundle(&request_with_samples(samples))
+        .expect_err("zero observation_window_ns");
+    assert!(err.to_string().contains("observation_window_ns"));
+}
+
+// ---------- threshold validation edge cases ----------
+
+#[test]
+fn threshold_false_deny_rate_exceeding_million_rejected() {
+    let mut req = request_with_samples(representative_samples());
+    req.thresholds = Some(PlasBenchmarkThresholds {
+        max_false_deny_rate_millionths: 1_000_001,
+        ..PlasBenchmarkThresholds::default()
+    });
+    let err = build_plas_benchmark_bundle(&req).expect_err("false deny rate > 1M");
+    assert!(err.to_string().contains("max_false_deny_rate_millionths"));
+}
+
+#[test]
+fn threshold_witness_coverage_exceeding_million_rejected() {
+    let mut req = request_with_samples(representative_samples());
+    req.thresholds = Some(PlasBenchmarkThresholds {
+        min_witness_coverage_millionths: 1_000_001,
+        ..PlasBenchmarkThresholds::default()
+    });
+    assert!(build_plas_benchmark_bundle(&req).is_err());
+}
+
+#[test]
+fn threshold_zero_escrow_event_rate_rejected() {
+    let mut req = request_with_samples(representative_samples());
+    req.thresholds = Some(PlasBenchmarkThresholds {
+        max_escrow_event_rate_per_hour_millionths: Some(0),
+        ..PlasBenchmarkThresholds::default()
+    });
+    let err = build_plas_benchmark_bundle(&req).expect_err("zero escrow rate");
+    assert!(
+        err.to_string()
+            .contains("max_escrow_event_rate_per_hour_millionths")
+    );
+}
+
+// ---------- serde roundtrips for output types ----------
+
+#[test]
+fn extension_result_serde_roundtrip() {
+    let req = request_with_samples(representative_samples());
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    for result in &decision.extension_results {
+        let json = serde_json::to_string(result).expect("serialize");
+        let recovered: PlasBenchmarkExtensionResult =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*result, recovered);
+    }
+}
+
+#[test]
+fn overall_summary_serde_roundtrip() {
+    let req = request_with_samples(representative_samples());
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    let json = serde_json::to_string(&decision.overall_summary).expect("serialize");
+    let recovered: PlasBenchmarkOverallSummary = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decision.overall_summary, recovered);
+}
+
+#[test]
+fn bundle_decision_serde_roundtrip() {
+    let req = request_with_samples(representative_samples());
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    let json = serde_json::to_string(&decision).expect("serialize");
+    let recovered: PlasBenchmarkBundleDecision = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decision, recovered);
+}
+
+#[test]
+fn bundle_event_serde_roundtrip() {
+    let req = request_with_samples(representative_samples());
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    assert!(!decision.events.is_empty());
+    for event in &decision.events {
+        let json = serde_json::to_string(event).expect("serialize");
+        let recovered: PlasBenchmarkBundleEvent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*event, recovered);
+    }
+}
+
+// ---------- no trend regression when no history ----------
+
+#[test]
+fn no_trend_regression_when_no_historical_runs() {
+    let req = request_with_samples(representative_samples());
+    assert!(req.historical_runs.is_empty());
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    assert!(!decision.trend_regression_detected);
+}
+
+// ---------- markdown report with blockers ----------
+
+#[test]
+fn markdown_report_with_blockers_contains_blockers_section() {
+    let mut samples = representative_samples();
+    samples.retain(|s| s.cohort != PlasBenchmarkCohort::Boundary);
+    let req = request_with_samples(samples);
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    assert!(!decision.publish_allowed);
+    let md = decision.to_markdown_report();
+    assert!(
+        md.contains("## Blockers"),
+        "markdown must show Blockers section"
+    );
+    assert!(md.contains("DENY"), "markdown must show DENY gate");
+}
+
+// ---------- cohort summary pass flags ----------
+
+#[test]
+fn cohort_summaries_all_pass_for_representative_samples() {
+    let req = request_with_samples(representative_samples());
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    for summary in &decision.cohort_summaries {
+        assert!(
+            summary.pass,
+            "cohort {:?} should pass with representative samples",
+            summary.cohort
+        );
+        assert!(summary.over_privilege_ratio_threshold_pass);
+        assert!(summary.false_deny_rate_threshold_pass);
+        assert!(summary.witness_coverage_threshold_pass);
+    }
+}
+
+// ---------- overall summary field completeness ----------
+
+#[test]
+fn overall_summary_extension_count_matches_samples() {
+    let req = request_with_samples(representative_samples());
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    assert_eq!(decision.overall_summary.extension_count, 4);
+    assert_eq!(decision.overall_summary.cohorts_present.len(), 4);
+    assert!(decision.overall_summary.required_cohorts_present);
+    assert!(decision.overall_summary.over_privilege_ratio_threshold_pass);
+    assert!(decision.overall_summary.false_deny_rate_threshold_pass);
+    assert!(decision.overall_summary.witness_coverage_threshold_pass);
+}
+
+// ---------- events have component field ----------
+
+#[test]
+fn all_events_have_component_field_set() {
+    let req = request_with_samples(representative_samples());
+    let decision = build_plas_benchmark_bundle(&req).expect("build");
+    for event in &decision.events {
+        assert_eq!(
+            event.component, PLAS_BENCHMARK_BUNDLE_COMPONENT,
+            "event component must match PLAS_BENCHMARK_BUNDLE_COMPONENT"
+        );
+    }
+}
+
+// ---------- decision serialization is deterministic ----------
+
+#[test]
+fn decision_serialization_is_deterministic() {
+    let req = request_with_samples(representative_samples());
+    let a = build_plas_benchmark_bundle(&req).expect("build a");
+    let b = build_plas_benchmark_bundle(&req).expect("build b");
+    let json_a = serde_json::to_string(&a).expect("serialize a");
+    let json_b = serde_json::to_string(&b).expect("serialize b");
+    assert_eq!(json_a, json_b);
 }

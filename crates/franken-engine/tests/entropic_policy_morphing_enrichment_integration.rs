@@ -1675,12 +1675,12 @@ fn enrichment_constants_max_entropy_greater_than_min() {
 
 #[test]
 fn enrichment_constants_default_budget_at_least_one() {
-    assert!(DEFAULT_TRANSITION_BUDGET >= 1);
+    const { assert!(DEFAULT_TRANSITION_BUDGET >= 1) };
 }
 
 #[test]
 fn enrichment_constants_cooldown_at_least_one() {
-    assert!(FALLBACK_COOLDOWN_STEPS >= 1);
+    const { assert!(FALLBACK_COOLDOWN_STEPS >= 1) };
 }
 
 // ---------------------------------------------------------------------------

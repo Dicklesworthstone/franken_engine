@@ -30,7 +30,8 @@ use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::session_hostcall_channel::{
     AeadAlgorithm, DataPlaneDirection, SequencePolicy, SessionConfig, SessionHandshake,
-    SessionHostcallChannel, SharedSendInput, derive_deterministic_aead_nonce,
+    SessionHostcallChannel, SharedSendInput, build_aead_associated_data,
+    derive_deterministic_aead_nonce,
 };
 use frankenengine_engine::signature_preimage::SigningKey;
 
@@ -755,4 +756,283 @@ fn collect_files_returns_sorted_paths() {
         };
         assert_eq!(files, sorted, "collect_files must return sorted paths");
     }
+}
+
+// ---------- enrichment: nonce derivation determinism and AEAD ----------
+
+#[test]
+fn derive_deterministic_aead_nonce_same_inputs_same_output() {
+    let key = [0x42u8; 32];
+    let n1 = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::ExtensionToHost,
+        7,
+        AeadAlgorithm::ChaCha20Poly1305,
+    )
+    .unwrap();
+    let n2 = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::ExtensionToHost,
+        7,
+        AeadAlgorithm::ChaCha20Poly1305,
+    )
+    .unwrap();
+    assert_eq!(
+        n1.as_bytes(),
+        n2.as_bytes(),
+        "deterministic nonce must be stable"
+    );
+}
+
+#[test]
+fn derive_deterministic_aead_nonce_different_directions_differ() {
+    let key = [0xAB; 32];
+    let ext_to_host = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::ExtensionToHost,
+        1,
+        AeadAlgorithm::Aes256Gcm,
+    )
+    .unwrap();
+    let host_to_ext = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::HostToExtension,
+        1,
+        AeadAlgorithm::Aes256Gcm,
+    )
+    .unwrap();
+    assert_ne!(
+        ext_to_host.as_bytes(),
+        host_to_ext.as_bytes(),
+        "direction must differentiate nonces"
+    );
+}
+
+#[test]
+fn derive_deterministic_aead_nonce_algorithm_determines_length() {
+    let key = [0x01; 32];
+    let chacha = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::ExtensionToHost,
+        0,
+        AeadAlgorithm::ChaCha20Poly1305,
+    )
+    .unwrap();
+    assert_eq!(chacha.as_bytes().len(), 12);
+
+    let aes = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::ExtensionToHost,
+        0,
+        AeadAlgorithm::Aes256Gcm,
+    )
+    .unwrap();
+    assert_eq!(aes.as_bytes().len(), 12);
+
+    let xchacha = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::ExtensionToHost,
+        0,
+        AeadAlgorithm::XChaCha20Poly1305,
+    )
+    .unwrap();
+    assert_eq!(xchacha.as_bytes().len(), 24);
+}
+
+#[test]
+fn derive_deterministic_aead_nonce_different_sequences_differ() {
+    let key = [0x77; 32];
+    let n1 = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::ExtensionToHost,
+        0,
+        AeadAlgorithm::ChaCha20Poly1305,
+    )
+    .unwrap();
+    let n2 = derive_deterministic_aead_nonce(
+        &key,
+        DataPlaneDirection::ExtensionToHost,
+        1,
+        AeadAlgorithm::ChaCha20Poly1305,
+    )
+    .unwrap();
+    assert_ne!(
+        n1.as_bytes(),
+        n2.as_bytes(),
+        "different sequences must yield different nonces"
+    );
+}
+
+// ---------- enrichment: build_aead_associated_data ----------
+
+#[test]
+fn build_aead_associated_data_determinism() {
+    let ad1 = build_aead_associated_data("session-1", "hostcall", 0);
+    let ad2 = build_aead_associated_data("session-1", "hostcall", 0);
+    assert_eq!(ad1, ad2, "associated data must be deterministic");
+}
+
+#[test]
+fn build_aead_associated_data_different_sessions_differ() {
+    let ad1 = build_aead_associated_data("session-alpha", "hostcall", 0);
+    let ad2 = build_aead_associated_data("session-beta", "hostcall", 0);
+    assert_ne!(ad1, ad2, "different session IDs must produce different AD");
+}
+
+#[test]
+fn build_aead_associated_data_different_flags_differ() {
+    let ad1 = build_aead_associated_data("sess", "msg", 0);
+    let ad2 = build_aead_associated_data("sess", "msg", 1);
+    assert_ne!(ad1, ad2, "different flags must produce different AD");
+}
+
+// ---------- enrichment: CanonicalValue I64, Bool, Null roundtrips ----------
+
+#[test]
+fn canonical_value_i64_encode_decode_roundtrip() {
+    for val in [0i64, -1, 1, i64::MIN, i64::MAX] {
+        let cv = CanonicalValue::I64(val);
+        let encoded = encode_value(&cv);
+        let decoded = decode_value(&encoded).expect("decode I64");
+        assert_eq!(cv, decoded);
+    }
+}
+
+#[test]
+fn canonical_value_bool_encode_decode_roundtrip() {
+    for val in [true, false] {
+        let cv = CanonicalValue::Bool(val);
+        let encoded = encode_value(&cv);
+        let decoded = decode_value(&encoded).expect("decode Bool");
+        assert_eq!(cv, decoded);
+    }
+}
+
+#[test]
+fn canonical_value_null_encode_decode_roundtrip() {
+    let cv = CanonicalValue::Null;
+    let encoded = encode_value(&cv);
+    let decoded = decode_value(&encoded).expect("decode Null");
+    assert_eq!(cv, decoded);
+}
+
+// ---------- enrichment: SessionConfig serde roundtrip and clone independence ----------
+
+#[test]
+fn session_config_serde_roundtrip() {
+    let config = SessionConfig {
+        max_lifetime_ticks: 999,
+        max_messages: 500,
+        max_buffered_messages: 32,
+        sequence_policy: SequencePolicy::Strict,
+        replay_drop_threshold: 5,
+        replay_drop_window_ticks: 200,
+    };
+    let json = serde_json::to_string(&config).expect("serialize SessionConfig");
+    let recovered: SessionConfig = serde_json::from_str(&json).expect("deserialize SessionConfig");
+    assert_eq!(config, recovered);
+}
+
+#[test]
+fn session_config_clone_independence() {
+    let config = SessionConfig {
+        max_lifetime_ticks: 100,
+        max_messages: 50,
+        max_buffered_messages: 10,
+        sequence_policy: SequencePolicy::Monotonic,
+        replay_drop_threshold: 3,
+        replay_drop_window_ticks: 100,
+    };
+    let mut cloned = config.clone();
+    cloned.max_lifetime_ticks = 9999;
+    cloned.max_messages = 1;
+    assert_eq!(cloned.max_lifetime_ticks, 9999);
+    assert_eq!(cloned.max_messages, 1);
+    assert_eq!(
+        config.max_lifetime_ticks, 100,
+        "original must not be affected by clone mutation"
+    );
+    assert_eq!(config.max_messages, 50);
+}
+
+// ---------- enrichment: mutate_token clone independence ----------
+
+#[test]
+fn mutate_token_clone_independence() {
+    let data: Vec<u8> = (0..64).collect();
+    if let Some(token) = build_token(&data) {
+        let mut cloned = token.clone();
+        mutate_token(&mut cloned, &data);
+        // Original token must remain unchanged
+        assert_eq!(token.zone, "test-zone");
+        // Cloned token should have been mutated (zone gets rewritten by opcode 5)
+        // At minimum, signature bits should differ due to XOR mutations
+        let original_sig = token.signature.clone();
+        let mutated_sig = cloned.signature.clone();
+        assert_ne!(
+            original_sig, mutated_sig,
+            "mutated clone must differ from original"
+        );
+    }
+}
+
+// ---------- enrichment: run_decode_program boundary at 31 bytes ----------
+
+#[test]
+fn run_decode_program_handles_exactly_31_bytes_below_schema_threshold() {
+    // 31 bytes is just below the 32-byte threshold for the schema path
+    let data: Vec<u8> = (0..31).collect();
+    run_decode_program(&data);
+}
+
+// ---------- enrichment: make_id with single-byte data (extreme wrapping) ----------
+
+#[test]
+fn make_id_single_byte_data_wraps_consistently() {
+    let data = [0xCC];
+    let id1 = make_id("wrap", &data, 0);
+    let id2 = make_id("wrap", &data, 0);
+    assert_eq!(id1, id2, "same input must produce same id");
+    // With single byte, all 8 chars map to the same value
+    let suffix = &id1["wrap-".len()..];
+    let chars: Vec<char> = suffix.chars().collect();
+    assert!(
+        chars.iter().all(|c| *c == chars[0]),
+        "single-byte input should yield uniform suffix"
+    );
+}
+
+// ---------- enrichment: run_handshake_program with all-0xFF data ----------
+
+#[test]
+fn run_handshake_program_handles_max_byte_input() {
+    // All 0xFF — exercises maximum values for config fields
+    let data = vec![0xFF; 128];
+    run_handshake_program(&data);
+}
+
+// ---------- enrichment: SessionHandshake serde roundtrip ----------
+
+#[test]
+fn session_handshake_serde_roundtrip() {
+    let handshake = SessionHandshake {
+        session_id: "sess-test-42".to_string(),
+        extension_id: "ext-abc".to_string(),
+        host_id: "host-xyz".to_string(),
+        extension_nonce: 12345,
+        host_nonce: 67890,
+        timestamp_ticks: 999,
+        trace_id: "trace-001".to_string(),
+    };
+    let json = serde_json::to_string(&handshake).expect("serialize handshake");
+    let recovered: SessionHandshake = serde_json::from_str(&json).expect("deserialize handshake");
+    assert_eq!(handshake, recovered);
+}
+
+// ---------- enrichment: run_token_program with all 0xFF data ----------
+
+#[test]
+fn run_token_program_handles_all_max_byte_data() {
+    let data = vec![0xFF; 64];
+    run_token_program(&data);
 }

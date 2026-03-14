@@ -696,3 +696,433 @@ fn large_batch_mixed_kinds_lifecycle() {
     assert_eq!(summary.superseded_count, 2);
     assert_eq!(summary.expired_count, 10);
 }
+
+// ===========================================================================
+// Additional edge-case and API coverage tests
+// ===========================================================================
+
+#[test]
+fn test_lifecycle_event_kind_display_values() {
+    assert_eq!(LifecycleEventKind::Promoted.to_string(), "promoted");
+    assert_eq!(LifecycleEventKind::Revoked.to_string(), "revoked");
+    assert_eq!(LifecycleEventKind::Superseded.to_string(), "superseded");
+    assert_eq!(LifecycleEventKind::Expired.to_string(), "expired");
+    assert_eq!(LifecycleEventKind::Refused.to_string(), "refused");
+}
+
+#[test]
+fn test_lifecycle_event_kind_is_terminal_boundaries() {
+    assert!(!LifecycleEventKind::Promoted.is_terminal());
+    assert!(!LifecycleEventKind::Refused.is_terminal());
+    assert!(LifecycleEventKind::Revoked.is_terminal());
+    assert!(LifecycleEventKind::Superseded.is_terminal());
+    assert!(LifecycleEventKind::Expired.is_terminal());
+    // Exactly 3 terminal kinds
+    let terminal_count = LifecycleEventKind::ALL
+        .iter()
+        .filter(|k| k.is_terminal())
+        .count();
+    assert_eq!(terminal_count, 3);
+}
+
+#[test]
+fn test_lifecycle_event_kind_clone_and_partial_eq() {
+    let k = LifecycleEventKind::Superseded;
+    let k2 = k;
+    assert_eq!(k, k2);
+    assert_ne!(k, LifecycleEventKind::Refused);
+}
+
+#[test]
+fn test_refusal_reason_display_insufficient_strength() {
+    let r = RefusalReason::InsufficientStrength {
+        actual: LawStrength::Heuristic,
+        minimum: LawStrength::Proved,
+    };
+    let s = r.to_string();
+    assert!(s.contains("heuristic"));
+    assert!(s.contains("proved"));
+}
+
+#[test]
+fn test_refusal_reason_display_insufficient_confidence() {
+    let r = RefusalReason::InsufficientConfidence {
+        actual_millionths: 400_000,
+        minimum_millionths: 800_000,
+    };
+    let s = r.to_string();
+    assert!(s.contains("400000"));
+    assert!(s.contains("800000"));
+}
+
+#[test]
+fn test_refusal_reason_display_previously_revoked() {
+    let r = RefusalReason::PreviouslyRevoked {
+        law_id: "my-revoked-law".to_string(),
+    };
+    let s = r.to_string();
+    assert!(s.contains("my-revoked-law"));
+}
+
+#[test]
+fn test_refusal_reason_display_duplicate_law() {
+    let r = RefusalReason::DuplicateLaw {
+        existing_law_id: "law-existing".to_string(),
+    };
+    let s = r.to_string();
+    assert!(s.contains("law-existing"));
+}
+
+#[test]
+fn test_refusal_reason_display_no_valid_targets() {
+    let r = RefusalReason::NoValidTargets {
+        kind: CandidateKind::NormalForm,
+    };
+    let s = r.to_string();
+    assert!(!s.is_empty());
+    assert!(s.contains("NormalForm"));
+}
+
+#[test]
+fn test_lifecycle_error_display_all_variants() {
+    let cases = vec![
+        (
+            LifecycleError::LawNotFound {
+                law_id: "x".to_string(),
+            },
+            "law not found",
+        ),
+        (
+            LifecycleError::AlreadyPromoted {
+                law_id: "y".to_string(),
+            },
+            "already promoted",
+        ),
+        (
+            LifecycleError::AlreadyRevoked {
+                law_id: "z".to_string(),
+            },
+            "already revoked",
+        ),
+        (
+            LifecycleError::InvalidConfig {
+                detail: "bad".to_string(),
+            },
+            "invalid config",
+        ),
+        (
+            LifecycleError::PromotionError {
+                detail: "fail".to_string(),
+            },
+            "promotion error",
+        ),
+    ];
+    for (err, expected_fragment) in &cases {
+        let s = err.to_string();
+        assert!(
+            s.contains(expected_fragment),
+            "Expected '{expected_fragment}' in '{s}'"
+        );
+    }
+}
+
+#[test]
+fn test_lifecycle_error_clone_and_eq() {
+    let e = LifecycleError::LawNotFound {
+        law_id: "abc".to_string(),
+    };
+    let e2 = e.clone();
+    assert_eq!(e, e2);
+    assert_ne!(
+        e,
+        LifecycleError::AlreadyRevoked {
+            law_id: "abc".to_string()
+        }
+    );
+}
+
+#[test]
+fn test_lifecycle_config_default_values() {
+    let cfg = LifecycleConfig::default();
+    assert_eq!(cfg.min_auto_strength, LawStrength::Conditional);
+    assert_eq!(cfg.min_auto_confidence_millionths, 800_000);
+    assert_eq!(cfg.expiration_window_epochs, 10);
+    assert!(cfg.auto_route_by_kind);
+    assert!(!cfg.allow_heuristic);
+}
+
+#[test]
+fn test_lifecycle_config_debug_contains_field_names() {
+    let cfg = LifecycleConfig::default();
+    let dbg = format!("{cfg:?}");
+    assert!(dbg.contains("min_auto_strength"));
+    assert!(dbg.contains("expiration_window_epochs"));
+}
+
+#[test]
+fn test_refusal_reason_clone_preserves_data() {
+    let original = RefusalReason::InsufficientConfidence {
+        actual_millionths: 500_000,
+        minimum_millionths: 900_000,
+    };
+    let cloned = original.clone();
+    assert_eq!(original, cloned);
+}
+
+#[test]
+fn test_refusal_reason_serde_no_valid_targets() {
+    let r = RefusalReason::NoValidTargets {
+        kind: CandidateKind::SideCondition,
+    };
+    let json = serde_json::to_string(&r).unwrap();
+    let back: RefusalReason = serde_json::from_str(&json).unwrap();
+    assert_eq!(r, back);
+}
+
+#[test]
+fn test_promote_at_epoch_boundary_expiration() {
+    // Law promoted at epoch 0, window=10, expire check at epoch 11 (just past window)
+    let config = LifecycleConfig {
+        expiration_window_epochs: 10,
+        ..LifecycleConfig::default()
+    };
+    let mut p = LifecyclePipeline::new(config, epoch(0));
+    let c = test_candidate("boundary-exp", CandidateKind::Invariant);
+    let r = accepted_result("boundary-exp", CandidateKind::Invariant);
+    p.promote_law(&c, &r);
+
+    // At exactly window (10), not expired
+    let events = p.expire_stale_laws(epoch(10));
+    assert!(events.is_empty(), "Should not expire at exactly window");
+
+    // At window+1 (11), expired
+    let events = p.expire_stale_laws(epoch(11));
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, LifecycleEventKind::Expired);
+}
+
+#[test]
+fn test_promote_law_confidence_below_threshold_refused() {
+    let config = LifecycleConfig {
+        min_auto_confidence_millionths: 900_000,
+        ..LifecycleConfig::default()
+    };
+    let mut p = LifecyclePipeline::new(config, epoch(10));
+    let c = test_candidate("lowconf-1", CandidateKind::Invariant);
+    // accepted=false triggers InsufficientConfidence
+    let hash_data = "lowconf_result";
+    let r = frankenengine_engine::law_proof_refutation::ProofCampaignResult {
+        candidate_id: "lowconf-1".to_string(),
+        candidate_kind: CandidateKind::Invariant,
+        final_verdict: frankenengine_engine::law_proof_refutation::ProofVerdict::Proved,
+        aggregate_confidence_millionths: 850_000,
+        attempts: Vec::new(),
+        refutation_witness_ids: Vec::new(),
+        accepted: false,
+        rationale: "not enough confidence".to_string(),
+        campaign_epoch: epoch(10),
+        result_hash: frankenengine_engine::hash_tiers::ContentHash::compute(hash_data.as_bytes()),
+    };
+    let event = p.promote_law(&c, &r);
+    assert_eq!(event.kind, LifecycleEventKind::Refused);
+    let reason = event.refusal_reason.unwrap();
+    assert!(matches!(
+        reason,
+        RefusalReason::InsufficientConfidence { .. }
+    ));
+}
+
+#[test]
+fn test_revoke_then_promote_same_candidate_refused() {
+    let mut p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    let c = test_candidate("revthen-1", CandidateKind::Invariant);
+    let r = accepted_result("revthen-1", CandidateKind::Invariant);
+
+    // First promote succeeds
+    let e1 = p.promote_law(&c, &r);
+    assert_eq!(e1.kind, LifecycleEventKind::Promoted);
+
+    // Revoke it
+    p.revoke_law("law-revthen-1", "regression");
+
+    // Attempting to promote again (duplicate) returns Refused with DuplicateLaw
+    let e2 = p.promote_law(&c, &r);
+    assert_eq!(e2.kind, LifecycleEventKind::Refused);
+    // DuplicateLaw fires because candidate_id matches existing accepted law
+    assert!(matches!(
+        e2.refusal_reason.unwrap(),
+        RefusalReason::DuplicateLaw { .. }
+    ));
+}
+
+#[test]
+fn test_summary_serde_roundtrip() {
+    let mut p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(5));
+    let c = test_candidate("sumser-1", CandidateKind::Invariant);
+    let r = accepted_result("sumser-1", CandidateKind::Invariant);
+    p.promote_law(&c, &r);
+    p.revoke_law("law-sumser-1", "test");
+    let summary = p.summary_report();
+
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: frankenengine_engine::law_promotion_lifecycle::LifecycleSummary =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(summary.total_accepted, back.total_accepted);
+    assert_eq!(summary.revoked_count, back.revoked_count);
+    assert_eq!(
+        summary.receipts_by_target.len(),
+        back.receipts_by_target.len()
+    );
+}
+
+#[test]
+fn test_routing_decision_display_contains_law_id() {
+    let mut p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    let c = test_candidate("displaw-1", CandidateKind::NormalForm);
+    let r = accepted_result("displaw-1", CandidateKind::NormalForm);
+    p.promote_law(&c, &r);
+
+    let routing = p.routing_for("law-displaw-1").unwrap();
+    let display = format!("{routing}");
+    assert!(display.contains("law-displaw-1"));
+    assert!(display.contains("NormalForm"));
+}
+
+#[test]
+fn test_lifecycle_event_display_format() {
+    let mut p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    let c = test_candidate("evtdisp-1", CandidateKind::Invariant);
+    let r = accepted_result("evtdisp-1", CandidateKind::Invariant);
+    let event = p.promote_law(&c, &r);
+
+    let display = format!("{event}");
+    assert!(display.contains("LifecycleEvent"));
+    assert!(display.contains("law-evtdisp-1"));
+    assert!(display.contains("promoted"));
+}
+
+#[test]
+fn test_supersede_idempotent_second_call_returns_none() {
+    let mut p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    let c = test_candidate("supidem-1", CandidateKind::Invariant);
+    let r = accepted_result("supidem-1", CandidateKind::Invariant);
+    p.promote_law(&c, &r);
+
+    let e1 = p.supersede_law("law-supidem-1", "law-new", "better");
+    assert!(e1.is_some());
+
+    let e2 = p.supersede_law("law-supidem-1", "law-new", "better");
+    assert!(e2.is_none());
+}
+
+#[test]
+fn test_events_for_returns_all_events_for_law() {
+    let mut p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    let c = test_candidate("evtsfor-1", CandidateKind::Invariant);
+    let r = accepted_result("evtsfor-1", CandidateKind::Invariant);
+    p.promote_law(&c, &r);
+    p.revoke_law("law-evtsfor-1", "test");
+
+    let events = p.events_for("law-evtsfor-1");
+    assert_eq!(events.len(), 2);
+    // First event is Promoted, second is Revoked
+    assert_eq!(events[0].kind, LifecycleEventKind::Promoted);
+    assert_eq!(events[1].kind, LifecycleEventKind::Revoked);
+}
+
+#[test]
+fn test_empty_batch_promotion_no_panic() {
+    use frankenengine_engine::law_proof_refutation::{
+        ProofCampaignConfig, ProofRefutationPipeline,
+    };
+    let candidates: Vec<frankenengine_engine::law_mining::LawCandidate> = Vec::new();
+    let config = ProofCampaignConfig::default();
+    let proof_pipeline = ProofRefutationPipeline::new(config, epoch(10));
+
+    let mut lc = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    lc.promote_batch(&candidates, &proof_pipeline);
+
+    assert_eq!(lc.lifecycle_events.len(), 0);
+    assert_eq!(lc.accepted_laws.len(), 0);
+}
+
+#[test]
+fn test_pipeline_schema_version_and_bead_id() {
+    let p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    assert_eq!(
+        p.schema_version,
+        "franken-engine.law-promotion-lifecycle.v1"
+    );
+    assert_eq!(p.bead_id, "bd-1lsy.9.10.3");
+}
+
+#[test]
+fn test_summary_total_receipts_matches_receipt_list() {
+    let mut p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    // Invariant = 4 receipts, SideCondition = 2, NormalForm = 2 => 8 total
+    for (id, kind) in [
+        ("tr-inv", CandidateKind::Invariant),
+        ("tr-sc", CandidateKind::SideCondition),
+        ("tr-nf", CandidateKind::NormalForm),
+    ] {
+        let c = test_candidate(id, kind);
+        let r = accepted_result(id, kind);
+        p.promote_law(&c, &r);
+    }
+
+    let summary = p.summary_report();
+    assert_eq!(summary.total_receipts, p.promotion_pipeline.receipts.len());
+    assert_eq!(summary.total_receipts, 8);
+}
+
+#[test]
+fn test_allow_heuristic_config_promotes_low_confidence() {
+    // With allow_heuristic=true and low confidence, Heuristic strength is allowed
+    let config = LifecycleConfig {
+        allow_heuristic: true,
+        min_auto_strength: LawStrength::Heuristic,
+        min_auto_confidence_millionths: 100_000,
+        ..LifecycleConfig::default()
+    };
+    let mut p = LifecyclePipeline::new(config, epoch(10));
+    let c = test_candidate("heuristic-allow", CandidateKind::Invariant);
+    // Inconclusive verdict with low confidence -> Heuristic strength
+    let r = frankenengine_engine::law_proof_refutation::ProofCampaignResult {
+        candidate_id: "heuristic-allow".to_string(),
+        candidate_kind: CandidateKind::Invariant,
+        final_verdict: frankenengine_engine::law_proof_refutation::ProofVerdict::Inconclusive,
+        aggregate_confidence_millionths: 400_000,
+        attempts: Vec::new(),
+        refutation_witness_ids: Vec::new(),
+        accepted: true,
+        rationale: "inconclusive but accepted".to_string(),
+        campaign_epoch: epoch(10),
+        result_hash: frankenengine_engine::hash_tiers::ContentHash::compute(b"heuristic_result"),
+    };
+    let event = p.promote_law(&c, &r);
+    assert_eq!(event.kind, LifecycleEventKind::Promoted);
+}
+
+#[test]
+fn test_target_breakdown_active_count_decreases_on_revoke() {
+    let mut p = LifecyclePipeline::new(LifecycleConfig::default(), epoch(10));
+    let c = test_candidate("activecount-1", CandidateKind::Invariant);
+    let r = accepted_result("activecount-1", CandidateKind::Invariant);
+    p.promote_law(&c, &r);
+
+    let before = p.summary_report();
+    // All 4 targets should have 1 active receipt each
+    for tb in &before.receipts_by_target {
+        if tb.receipt_count > 0 {
+            assert_eq!(tb.active_count, 1);
+        }
+    }
+
+    p.revoke_law("law-activecount-1", "test");
+
+    let after = p.summary_report();
+    // After revoke, no receipts should be active
+    for tb in &after.receipts_by_target {
+        assert_eq!(tb.active_count, 0);
+    }
+}

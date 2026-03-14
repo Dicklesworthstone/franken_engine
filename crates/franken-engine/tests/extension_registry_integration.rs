@@ -986,3 +986,901 @@ fn manifest_compute_artifacts_root_deterministic() {
     assert_eq!(root1, root2);
     assert_eq!(root1, m.artifacts_root_hash);
 }
+
+// ---------------------------------------------------------------------------
+// Clone / Debug / PartialEq on value types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_package_version_clone_debug_eq() {
+    let v = PackageVersion::new(3, 2, 1);
+    let v2 = v;
+    assert_eq!(v, v2);
+    let dbg = format!("{v:?}");
+    assert!(dbg.contains("3"));
+    assert!(dbg.contains("2"));
+    assert!(dbg.contains("1"));
+}
+
+#[test]
+fn test_package_version_copy_semantics() {
+    let v = PackageVersion::new(5, 4, 3);
+    let v2 = v; // Copy
+    let v3 = v; // Still usable
+    assert_eq!(v2, v3);
+}
+
+#[test]
+fn test_artifact_entry_clone_eq() {
+    let a = artifact("hello.fir");
+    let b = a.clone();
+    assert_eq!(a, b);
+    let dbg = format!("{a:?}");
+    assert!(dbg.contains("hello.fir"));
+}
+
+#[test]
+fn test_capability_declaration_clone_eq_ord() {
+    let c1 = capability("net:outbound");
+    let c2 = capability("fs:read");
+    let c3 = c1.clone();
+    assert_eq!(c1, c3);
+    assert_ne!(c1, c2);
+    // CapabilityDeclaration implements Ord — can sort
+    let mut caps = vec![c1.clone(), c2.clone()];
+    caps.sort();
+    assert!(caps[0].name <= caps[1].name);
+}
+
+#[test]
+fn test_build_descriptor_clone_eq_debug() {
+    let bd1 = build_descriptor();
+    let bd2 = bd1.clone();
+    assert_eq!(bd1, bd2);
+    let dbg = format!("{bd1:?}");
+    assert!(dbg.contains("toolchain_version"));
+}
+
+#[test]
+fn test_extension_manifest_clone_eq_debug() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let m1 = manifest("testorg", "ext", v, &pub_id, &vk);
+    let m2 = m1.clone();
+    assert_eq!(m1, m2);
+    let dbg = format!("{m1:?}");
+    assert!(dbg.contains("testorg"));
+}
+
+#[test]
+fn test_registry_error_clone_eq_debug() {
+    let e = RegistryError::SignatureInvalid {
+        reason: "bad".to_string(),
+    };
+    let e2 = e.clone();
+    assert_eq!(e, e2);
+    let dbg = format!("{e:?}");
+    assert!(dbg.contains("SignatureInvalid"));
+}
+
+#[test]
+fn test_registry_event_type_clone_copy_debug_eq() {
+    let et = RegistryEventType::PackageRevoked;
+    let et2 = et;
+    assert_eq!(et, et2);
+    let dbg = format!("{et:?}");
+    assert!(dbg.contains("PackageRevoked"));
+}
+
+#[test]
+fn test_event_outcome_clone_copy_debug_eq() {
+    let o = EventOutcome::Success;
+    let o2 = o;
+    assert_eq!(o, o2);
+    assert_ne!(o, EventOutcome::Denied);
+    let dbg = format!("{o:?}");
+    assert!(dbg.contains("Success"));
+}
+
+// ---------------------------------------------------------------------------
+// PackageQuery Default and serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_package_query_default_values() {
+    let q = PackageQuery::default();
+    assert!(q.scope.is_none());
+    assert!(q.name.is_none());
+    assert!(q.publisher_id.is_none());
+    assert!(!q.include_revoked);
+    assert_eq!(q.limit, 100);
+}
+
+#[test]
+fn test_package_query_clone_eq_debug() {
+    let q1 = PackageQuery {
+        scope: Some("myorg".to_string()),
+        name: Some("ext".to_string()),
+        publisher_id: None,
+        include_revoked: true,
+        limit: 50,
+    };
+    let q2 = q1.clone();
+    assert_eq!(q1, q2);
+    let dbg = format!("{q1:?}");
+    assert!(dbg.contains("myorg"));
+}
+
+#[test]
+fn test_package_query_serde_roundtrip() {
+    let q = PackageQuery {
+        scope: Some("orga".to_string()),
+        name: None,
+        publisher_id: None,
+        include_revoked: true,
+        limit: 25,
+    };
+    let json = serde_json::to_string(&q).unwrap();
+    let q2: PackageQuery = serde_json::from_str(&json).unwrap();
+    assert_eq!(q, q2);
+    assert_eq!(q2.limit, 25);
+    assert!(q2.include_revoked);
+}
+
+// ---------------------------------------------------------------------------
+// Serde roundtrips for individual types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_package_version_serde_roundtrip() {
+    let v = PackageVersion::new(7, 8, 9);
+    let json = serde_json::to_string(&v).unwrap();
+    let v2: PackageVersion = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, v2);
+}
+
+#[test]
+fn test_artifact_entry_serde_roundtrip() {
+    let a = ArtifactEntry {
+        path: "lib/core.fir".to_string(),
+        content_hash: ContentHash::compute(b"core-data"),
+        size_bytes: 8192,
+        mime_type: None,
+    };
+    let json = serde_json::to_string(&a).unwrap();
+    let a2: ArtifactEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(a, a2);
+    assert!(a2.mime_type.is_none());
+}
+
+#[test]
+fn test_artifact_entry_with_mime_serde() {
+    let a = artifact("main.wasm");
+    let json = serde_json::to_string(&a).unwrap();
+    let a2: ArtifactEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(a, a2);
+    assert_eq!(a2.mime_type.as_deref(), Some("application/octet-stream"));
+}
+
+#[test]
+fn test_capability_declaration_serde_roundtrip() {
+    let c = CapabilityDeclaration {
+        name: "fs:write:/var/data".to_string(),
+        justification: "writes audit records".to_string(),
+        optional: true,
+    };
+    let json = serde_json::to_string(&c).unwrap();
+    let c2: CapabilityDeclaration = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, c2);
+    assert!(c2.optional);
+}
+
+#[test]
+fn test_build_descriptor_serde_roundtrip() {
+    let bd = build_descriptor();
+    let json = serde_json::to_string(&bd).unwrap();
+    let bd2: BuildDescriptor = serde_json::from_str(&json).unwrap();
+    assert_eq!(bd, bd2);
+    assert!(bd2.reproducible);
+}
+
+#[test]
+fn test_registry_error_serde_roundtrip() {
+    let err = RegistryError::PackageNotFound {
+        scope: "myscope".to_string(),
+        name: "mypkg".to_string(),
+        version: PackageVersion::new(2, 1, 0),
+    };
+    let json = serde_json::to_string(&err).unwrap();
+    let err2: RegistryError = serde_json::from_str(&json).unwrap();
+    assert_eq!(err, err2);
+}
+
+#[test]
+fn test_registry_event_type_serde_roundtrip() {
+    let all = [
+        RegistryEventType::PublisherRegistered,
+        RegistryEventType::PublisherRevoked,
+        RegistryEventType::ScopeClaimed,
+        RegistryEventType::PackagePublished,
+        RegistryEventType::PackageQueried,
+        RegistryEventType::PackageVerified,
+        RegistryEventType::PackageRevoked,
+        RegistryEventType::VerificationFailed,
+        RegistryEventType::RevocationPropagated,
+    ];
+    for et in &all {
+        let json = serde_json::to_string(et).unwrap();
+        let et2: RegistryEventType = serde_json::from_str(&json).unwrap();
+        assert_eq!(*et, et2);
+    }
+}
+
+#[test]
+fn test_event_outcome_serde_roundtrip() {
+    for o in [
+        EventOutcome::Success,
+        EventOutcome::Denied,
+        EventOutcome::Error,
+    ] {
+        let json = serde_json::to_string(&o).unwrap();
+        let o2: EventOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(o, o2);
+    }
+}
+
+#[test]
+fn test_package_key_serde_roundtrip() {
+    let k = PackageKey {
+        scope: "theorg".to_string(),
+        name: "the-ext".to_string(),
+        version: PackageVersion::new(1, 2, 3),
+    };
+    let json = serde_json::to_string(&k).unwrap();
+    let k2: PackageKey = serde_json::from_str(&json).unwrap();
+    assert_eq!(k, k2);
+    assert_eq!(k2.scope, "theorg");
+}
+
+#[test]
+fn test_verification_result_serde_roundtrip() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let m = manifest("testorg", "ext", v, &pub_id, &vk);
+    publish(&mut reg, &m, &sk).unwrap();
+    let vr = reg.verify_package("testorg", "ext", v).unwrap();
+    let json = serde_json::to_string(&vr).unwrap();
+    let vr2: frankenengine_engine::extension_registry::VerificationResult =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(vr.valid, vr2.valid);
+    assert_eq!(vr.package_id, vr2.package_id);
+    assert_eq!(vr.signature_valid, vr2.signature_valid);
+    assert_eq!(vr.errors.len(), vr2.errors.len());
+}
+
+// ---------------------------------------------------------------------------
+// BuildDescriptor validate() edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_build_descriptor_validate_empty_toolchain_fails() {
+    let mut bd = build_descriptor();
+    bd.toolchain_version = String::new();
+    let result = bd.validate();
+    assert!(matches!(
+        result,
+        Err(RegistryError::BuildDescriptorIncomplete { .. })
+    ));
+}
+
+#[test]
+fn test_build_descriptor_validate_passes_nonempty_toolchain() {
+    let bd = build_descriptor();
+    assert!(bd.validate().is_ok());
+}
+
+#[test]
+fn test_build_descriptor_content_hash_differs_on_different_inputs() {
+    let mut bd1 = build_descriptor();
+    let mut bd2 = build_descriptor();
+    bd2.toolchain_version = "2.0.0".to_string();
+    bd1.reproducible = false;
+    assert_ne!(bd1.content_hash(), bd2.content_hash());
+}
+
+#[test]
+fn test_build_descriptor_content_hash_changes_with_flag() {
+    let bd1 = build_descriptor();
+    let mut bd2 = build_descriptor();
+    bd2.build_flags.push("--opt-level=3".to_string());
+    assert_ne!(bd1.content_hash(), bd2.content_hash());
+}
+
+#[test]
+fn test_build_descriptor_non_reproducible_differs() {
+    let mut bd1 = build_descriptor();
+    let mut bd2 = build_descriptor();
+    bd1.reproducible = false;
+    bd2.reproducible = true;
+    assert_ne!(bd1.content_hash(), bd2.content_hash());
+}
+
+// ---------------------------------------------------------------------------
+// Manifest validate_structure() edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_manifest_validate_empty_name_fails() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let mut m = manifest("testorg", "ext", v, &pub_id, &vk);
+    m.name = String::new();
+    // Recompute artifacts root so only name-related check fails
+    m.artifacts_root_hash = m.compute_artifacts_root();
+    let result = m.validate_structure();
+    assert!(matches!(result, Err(RegistryError::InvalidName { .. })));
+}
+
+#[test]
+fn test_manifest_validate_name_too_long_fails() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let mut m = manifest("testorg", "ext", v, &pub_id, &vk);
+    m.name = "a".repeat(129);
+    m.artifacts_root_hash = m.compute_artifacts_root();
+    let result = m.validate_structure();
+    assert!(matches!(result, Err(RegistryError::InvalidName { .. })));
+}
+
+#[test]
+fn test_manifest_validate_name_max_len_passes() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let mut m = manifest("testorg", "ext", v, &pub_id, &vk);
+    m.name = "a".repeat(128);
+    m.artifacts_root_hash = m.compute_artifacts_root();
+    assert!(m.validate_structure().is_ok());
+}
+
+#[test]
+fn test_manifest_validate_name_special_char_fails() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let mut m = manifest("testorg", "ext", v, &pub_id, &vk);
+    m.name = "bad name!".to_string();
+    m.artifacts_root_hash = m.compute_artifacts_root();
+    let result = m.validate_structure();
+    assert!(matches!(result, Err(RegistryError::InvalidName { .. })));
+}
+
+// ---------------------------------------------------------------------------
+// Publisher identity edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_get_publisher_returns_identity() {
+    let (reg, pub_id, _, vk) = setup();
+    let pub_entry = reg.get_publisher(&pub_id).unwrap();
+    assert_eq!(pub_entry.id, pub_id);
+    assert_eq!(pub_entry.display_name, "TestOrg");
+    assert_eq!(pub_entry.verification_key, vk);
+    assert!(!pub_entry.revoked);
+    assert!(pub_entry.revoked_at.is_none());
+    assert!(pub_entry.revocation_reason.is_none());
+}
+
+#[test]
+fn test_get_publisher_unknown_returns_none() {
+    let reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    assert!(reg.get_publisher(&EngineObjectId([99; 32])).is_none());
+}
+
+#[test]
+fn test_publisher_revoked_flag_set_on_revoke() {
+    let (mut reg, pub_id, _, _) = setup();
+    reg.revoke_publisher(pub_id.clone(), "key exposure")
+        .unwrap();
+    let pub_entry = reg.get_publisher(&pub_id).unwrap();
+    assert!(pub_entry.revoked);
+    assert!(pub_entry.revoked_at.is_some());
+    assert_eq!(pub_entry.revocation_reason.as_deref(), Some("key exposure"));
+}
+
+#[test]
+fn test_is_publisher_active_false_after_revoke() {
+    let (mut reg, pub_id, _, _) = setup();
+    assert!(reg.is_publisher_active(&pub_id));
+    reg.revoke_publisher(pub_id.clone(), "expired").unwrap();
+    assert!(!reg.is_publisher_active(&pub_id));
+}
+
+#[test]
+fn test_is_publisher_active_unknown_id_returns_false() {
+    let reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    assert!(!reg.is_publisher_active(&EngineObjectId([88; 32])));
+}
+
+#[test]
+fn test_publisher_owned_scopes_populated() {
+    let (reg, pub_id, _, _) = setup();
+    let pub_entry = reg.get_publisher(&pub_id).unwrap();
+    assert!(pub_entry.owned_scopes.contains("testorg"));
+}
+
+// ---------------------------------------------------------------------------
+// Revoked publisher cannot claim scope or publish
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_revoked_publisher_cannot_claim_scope() {
+    let (mut reg, pub_id, _, _) = setup();
+    reg.revoke_publisher(pub_id.clone(), "revoked").unwrap();
+    let result = reg.claim_scope(pub_id, "newscope");
+    assert!(matches!(
+        result,
+        Err(RegistryError::PublisherRevoked { .. })
+    ));
+}
+
+#[test]
+fn test_revoked_publisher_cannot_publish() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    reg.revoke_publisher(pub_id.clone(), "revoked").unwrap();
+    let v = PackageVersion::new(1, 0, 0);
+    let m = manifest("testorg", "ext", v, &pub_id, &vk);
+    let result = publish(&mut reg, &m, &sk);
+    assert!(matches!(
+        result,
+        Err(RegistryError::PublisherRevoked { .. })
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Scope ownership edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_scope_claim_by_nonexistent_publisher_fails() {
+    let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    let fake_id = EngineObjectId([33; 32]);
+    let result = reg.claim_scope(fake_id, "newscope");
+    assert!(matches!(
+        result,
+        Err(RegistryError::PublisherNotFound { .. })
+    ));
+}
+
+#[test]
+fn test_scope_claim_conflict_other_publisher_fails() {
+    let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    let sk_a = signing_key(7);
+    let vk_a = vk_from(&sk_a);
+    let pub_a = reg.register_publisher("OrgA", vk_a).unwrap();
+    reg.claim_scope(pub_a.clone(), "shared").unwrap();
+
+    let sk_b = signing_key(13);
+    let vk_b = vk_from(&sk_b);
+    let pub_b = reg.register_publisher("OrgB", vk_b).unwrap();
+    let result = reg.claim_scope(pub_b, "shared");
+    assert!(matches!(result, Err(RegistryError::ScopeNotOwned { .. })));
+}
+
+#[test]
+fn test_publisher_owns_scope_false_for_unclaimed() {
+    let (reg, pub_id, _, _) = setup();
+    assert!(!reg.publisher_owns_scope(&pub_id, "unclaimed-scope"));
+}
+
+// ---------------------------------------------------------------------------
+// Audit event structure
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_audit_events_method_consistent_with_export() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let m = manifest("testorg", "ext", v, &pub_id, &vk);
+    publish(&mut reg, &m, &sk).unwrap();
+
+    let via_events = reg.events();
+    let via_export = reg.export_audit_log();
+    assert_eq!(via_events.len(), via_export.len());
+    for (a, b) in via_events.iter().zip(via_export.iter()) {
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+fn test_audit_events_have_timestamp() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    reg.advance_tick(DeterministicTimestamp(999));
+    let v = PackageVersion::new(1, 0, 0);
+    let m = manifest("testorg", "ext", v, &pub_id, &vk);
+    publish(&mut reg, &m, &sk).unwrap();
+
+    let events = reg.export_audit_log();
+    let publish_event = events
+        .iter()
+        .find(|e| e.event_type == RegistryEventType::PackagePublished)
+        .unwrap();
+    assert_eq!(publish_event.timestamp, DeterministicTimestamp(999));
+}
+
+#[test]
+fn test_scope_claim_event_recorded() {
+    let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    let sk = signing_key(7);
+    let vk = vk_from(&sk);
+    let pub_id = reg.register_publisher("Org", vk).unwrap();
+    let before = reg.audit_event_count();
+    reg.claim_scope(pub_id, "newscope").unwrap();
+    let events = reg.export_audit_log();
+    let scope_events: Vec<_> = events[before..]
+        .iter()
+        .filter(|e| e.event_type == RegistryEventType::ScopeClaimed)
+        .collect();
+    assert_eq!(scope_events.len(), 1);
+    assert_eq!(scope_events[0].scope.as_deref(), Some("newscope"));
+    assert_eq!(scope_events[0].outcome, EventOutcome::Success);
+}
+
+#[test]
+fn test_publisher_revoke_event_recorded() {
+    let (mut reg, pub_id, _, _) = setup();
+    let before = reg.audit_event_count();
+    reg.revoke_publisher(pub_id.clone(), "security").unwrap();
+    let events = reg.export_audit_log();
+    let revoke_event = events[before..]
+        .iter()
+        .find(|e| e.event_type == RegistryEventType::PublisherRevoked)
+        .unwrap();
+    assert_eq!(revoke_event.publisher_id, Some(pub_id));
+    assert_eq!(revoke_event.outcome, EventOutcome::Success);
+}
+
+// ---------------------------------------------------------------------------
+// RegistryEvent serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_registry_event_serde_roundtrip() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let m = manifest("testorg", "ext", v, &pub_id, &vk);
+    publish(&mut reg, &m, &sk).unwrap();
+
+    let events = reg.export_audit_log();
+    for event in events {
+        let json = serde_json::to_string(event).unwrap();
+        let event2: frankenengine_engine::extension_registry::RegistryEvent =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(event.event_type, event2.event_type);
+        assert_eq!(event.outcome, event2.outcome);
+        assert_eq!(event.component, event2.component);
+        assert_eq!(event.timestamp, event2.timestamp);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SignedPackage::derive_package_id
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_derive_package_id_consistent_with_publish() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    let v = PackageVersion::new(2, 0, 0);
+    let m = manifest("testorg", "ext2", v, &pub_id, &vk);
+    let id_from_publish = publish(&mut reg, &m, &sk).unwrap();
+    let id_from_derive = SignedPackage::derive_package_id(&m).unwrap();
+    assert_eq!(id_from_publish, id_from_derive);
+}
+
+// ---------------------------------------------------------------------------
+// PackageVersion ordering exhaustive
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_package_version_major_wins_ordering() {
+    let v_major = PackageVersion::new(2, 0, 0);
+    let v_minor = PackageVersion::new(1, 99, 99);
+    assert!(v_major > v_minor);
+}
+
+#[test]
+fn test_package_version_minor_wins_over_patch() {
+    let v1 = PackageVersion::new(1, 2, 0);
+    let v2 = PackageVersion::new(1, 1, 99);
+    assert!(v1 > v2);
+}
+
+#[test]
+fn test_package_version_equality() {
+    let v1 = PackageVersion::new(4, 5, 6);
+    let v2 = PackageVersion::new(4, 5, 6);
+    assert_eq!(v1, v2);
+    assert!(v1 >= v2);
+    assert!(v1 <= v2);
+}
+
+// ---------------------------------------------------------------------------
+// PackageKey ordering (BTreeMap key correctness)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_package_key_ord_btreemap() {
+    let mut m: BTreeMap<PackageKey, &str> = BTreeMap::new();
+    m.insert(
+        PackageKey {
+            scope: "b".to_string(),
+            name: "x".to_string(),
+            version: PackageVersion::new(1, 0, 0),
+        },
+        "second",
+    );
+    m.insert(
+        PackageKey {
+            scope: "a".to_string(),
+            name: "x".to_string(),
+            version: PackageVersion::new(1, 0, 0),
+        },
+        "first",
+    );
+    let keys: Vec<_> = m.keys().collect();
+    assert_eq!(keys[0].scope, "a");
+    assert_eq!(keys[1].scope, "b");
+}
+
+// ---------------------------------------------------------------------------
+// Search: name-only filter across scopes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_search_name_filter_across_scopes() {
+    let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    let sk_a = signing_key(7);
+    let vk_a = vk_from(&sk_a);
+    let pub_a = reg.register_publisher("A", vk_a.clone()).unwrap();
+    reg.claim_scope(pub_a.clone(), "scope-a").unwrap();
+
+    let sk_b = signing_key(13);
+    let vk_b = vk_from(&sk_b);
+    let pub_b = reg.register_publisher("B", vk_b.clone()).unwrap();
+    reg.claim_scope(pub_b.clone(), "scope-b").unwrap();
+
+    let v = PackageVersion::new(1, 0, 0);
+    publish(
+        &mut reg,
+        &manifest("scope-a", "shared-name", v, &pub_a, &vk_a),
+        &sk_a,
+    )
+    .unwrap();
+    publish(
+        &mut reg,
+        &manifest("scope-b", "shared-name", v, &pub_b, &vk_b),
+        &sk_b,
+    )
+    .unwrap();
+    publish(
+        &mut reg,
+        &manifest("scope-a", "other-name", v, &pub_a, &vk_a),
+        &sk_a,
+    )
+    .unwrap();
+
+    let results = reg.search(&PackageQuery {
+        name: Some("shared-name".to_string()),
+        ..PackageQuery::default()
+    });
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        assert_eq!(r.manifest.name, "shared-name");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// List versions sorted
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_list_versions_returns_all_present_versions() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    let versions = [
+        PackageVersion::new(1, 0, 0),
+        PackageVersion::new(2, 0, 0),
+        PackageVersion::new(1, 5, 3),
+    ];
+    for &v in &versions {
+        let m = manifest("testorg", "ext", v, &pub_id, &vk);
+        publish(&mut reg, &m, &sk).unwrap();
+    }
+    let listed = reg.list_versions("testorg", "ext");
+    assert_eq!(listed.len(), 3);
+    // All versions present (order not guaranteed by list_versions)
+    for &v in &versions {
+        assert!(listed.contains(&v));
+    }
+}
+
+#[test]
+fn test_list_versions_empty_for_unknown_package() {
+    let reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    assert!(reg.list_versions("noscope", "noname").is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Dependency field in manifest
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_manifest_with_dependencies_serde_roundtrip() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let mut m = manifest("testorg", "ext", v, &pub_id, &vk);
+    m.dependencies
+        .insert("@testorg/base".to_string(), PackageVersion::new(0, 9, 1));
+    m.dependencies
+        .insert("@testorg/util".to_string(), PackageVersion::new(1, 2, 0));
+    let json = serde_json::to_string(&m).unwrap();
+    let m2: ExtensionManifest = serde_json::from_str(&json).unwrap();
+    assert_eq!(m, m2);
+    assert_eq!(m2.dependencies.len(), 2);
+}
+
+#[test]
+fn test_manifest_unsigned_bytes_differs_with_dependency() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let m1 = manifest("testorg", "ext", v, &pub_id, &vk);
+    let mut m2 = m1.clone();
+    m2.dependencies
+        .insert("@other/dep".to_string(), PackageVersion::new(0, 1, 0));
+    assert_ne!(m1.unsigned_bytes(), m2.unsigned_bytes());
+}
+
+// ---------------------------------------------------------------------------
+// is_package_revoked for nonexistent returns false
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_is_package_revoked_nonexistent_returns_false() {
+    let reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    assert!(!reg.is_package_revoked("no", "pkg", PackageVersion::new(1, 0, 0)));
+}
+
+// ---------------------------------------------------------------------------
+// advance_tick does not go backwards (registry just stores it)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_advance_tick_monotonic_stored() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    reg.advance_tick(DeterministicTimestamp(1000));
+    let v1 = PackageVersion::new(1, 0, 0);
+    let m1 = manifest("testorg", "ext", v1, &pub_id, &vk);
+    publish(&mut reg, &m1, &sk).unwrap();
+
+    reg.advance_tick(DeterministicTimestamp(2000));
+    let v2 = PackageVersion::new(1, 0, 1);
+    let m2 = manifest("testorg", "ext", v2, &pub_id, &vk);
+    publish(&mut reg, &m2, &sk).unwrap();
+
+    let pkg1 = reg.get_package("testorg", "ext", v1).unwrap();
+    let pkg2 = reg.get_package("testorg", "ext", v2).unwrap();
+    assert_eq!(pkg1.published_at, DeterministicTimestamp(1000));
+    assert_eq!(pkg2.published_at, DeterministicTimestamp(2000));
+    assert!(pkg1.published_at < pkg2.published_at);
+}
+
+// ---------------------------------------------------------------------------
+// packages_affected_by_publisher_revocation: empty for unknown publisher
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_packages_affected_by_unknown_publisher_empty() {
+    let reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+    let fake_id = EngineObjectId([77; 32]);
+    let affected = reg.packages_affected_by_publisher_revocation(&fake_id);
+    assert!(affected.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Search with limit=0 returns nothing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_search_with_zero_limit_returns_empty() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let m = manifest("testorg", "ext", v, &pub_id, &vk);
+    publish(&mut reg, &m, &sk).unwrap();
+    let results = reg.search(&PackageQuery {
+        limit: 0,
+        ..PackageQuery::default()
+    });
+    assert!(results.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// RegistryError Display messages contain key fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_error_display_contains_context() {
+    let err = RegistryError::PackageAlreadyExists {
+        scope: "myscope".to_string(),
+        name: "mypkg".to_string(),
+        version: PackageVersion::new(3, 1, 4),
+    };
+    let s = format!("{err}");
+    assert!(s.contains("myscope"));
+    assert!(s.contains("mypkg"));
+    assert!(s.contains("3.1.4"));
+}
+
+#[test]
+fn test_error_display_content_hash_mismatch_contains_artifact() {
+    let err = RegistryError::ContentHashMismatch {
+        artifact_name: "critical.wasm".to_string(),
+        expected: ContentHash::compute(b"exp"),
+        actual: ContentHash::compute(b"act"),
+    };
+    let s = format!("{err}");
+    assert!(s.contains("critical.wasm"));
+}
+
+#[test]
+fn test_error_display_scope_not_owned_contains_scope() {
+    let err = RegistryError::ScopeNotOwned {
+        scope: "forbidden-scope".to_string(),
+        publisher_id: EngineObjectId([0; 32]),
+    };
+    let s = format!("{err}");
+    assert!(s.contains("forbidden-scope"));
+}
+
+// ---------------------------------------------------------------------------
+// RegistryEventType Display for all variants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_registry_event_type_display_all() {
+    let cases = [
+        (RegistryEventType::PublisherRevoked, "publisher_revoked"),
+        (RegistryEventType::ScopeClaimed, "scope_claimed"),
+        (RegistryEventType::PackageQueried, "package_queried"),
+        (RegistryEventType::PackageVerified, "package_verified"),
+        (RegistryEventType::VerificationFailed, "verification_failed"),
+        (
+            RegistryEventType::RevocationPropagated,
+            "revocation_propagated",
+        ),
+    ];
+    for (et, expected) in &cases {
+        assert_eq!(format!("{et}"), *expected);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Optional license field
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_manifest_no_license_serde_roundtrip() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let mut m = manifest("testorg", "ext", v, &pub_id, &vk);
+    m.license = None;
+    let json = serde_json::to_string(&m).unwrap();
+    let m2: ExtensionManifest = serde_json::from_str(&json).unwrap();
+    assert!(m2.license.is_none());
+}
+
+#[test]
+fn test_manifest_unsigned_bytes_differs_with_vs_without_license() {
+    let (_, pub_id, _, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+    let m_with = manifest("testorg", "ext", v, &pub_id, &vk);
+    let mut m_without = m_with.clone();
+    m_without.license = None;
+    assert_ne!(m_with.unsigned_bytes(), m_without.unsigned_bytes());
+}

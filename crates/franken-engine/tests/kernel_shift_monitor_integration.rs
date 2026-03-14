@@ -481,3 +481,232 @@ fn report_serde_roundtrip() {
     let back: AggregateShiftReport = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: edge cases, cross-validation, large-scale, hash stability
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mmd_zero_mmd_is_no_shift() {
+    let c = config(WorkloadDimension::ComputeIntensity);
+    let r = MmdResult::compute(WorkloadDimension::ComputeIntensity, 0, &c, 256, 256);
+    assert_eq!(r.verdict, ShiftVerdict::NoShift);
+    assert!(!r.is_significant());
+    assert!(!r.is_marginal());
+    assert_eq!(r.mmd_millionths, 0);
+}
+
+#[test]
+fn mmd_with_asymmetric_sample_counts() {
+    let c = config(WorkloadDimension::AllocationPattern);
+    let r = MmdResult::compute(WorkloadDimension::AllocationPattern, 80_000, &c, 1, 10_000);
+    assert_eq!(r.reference_sample_count, 1);
+    assert_eq!(r.live_sample_count, 10_000);
+    assert!(r.is_marginal());
+}
+
+#[test]
+fn mmd_result_fields_match_config() {
+    let c = config(WorkloadDimension::HostcallProfile);
+    let r = MmdResult::compute(WorkloadDimension::HostcallProfile, 50_000, &c, 128, 64);
+    assert_eq!(r.dimension, WorkloadDimension::HostcallProfile);
+    assert_eq!(r.threshold_millionths, c.mmd_threshold_millionths);
+    assert_eq!(
+        r.marginal_threshold_millionths,
+        c.marginal_threshold_millionths
+    );
+    assert_eq!(r.kernel, c.kernel);
+    assert_eq!(r.reference_sample_count, 128);
+    assert_eq!(r.live_sample_count, 64);
+}
+
+#[test]
+fn config_default_for_each_dimension_sets_dimension() {
+    for d in WorkloadDimension::ALL {
+        let c = MonitorConfig::default_for(*d);
+        assert_eq!(c.dimension, *d);
+        assert!(c.window_size >= MIN_WINDOW_SIZE);
+        assert!(c.marginal_threshold_millionths < c.mmd_threshold_millionths);
+    }
+}
+
+#[test]
+fn report_multiple_significant_dimensions() {
+    let results = vec![
+        measured(WorkloadDimension::ComputeIntensity, 200_000),
+        measured(WorkloadDimension::AllocationPattern, 300_000),
+        measured(WorkloadDimension::ModuleGraphShape, 250_000),
+    ];
+    let r = report(results);
+    assert_eq!(r.aggregate_verdict, ShiftVerdict::SignificantShift);
+    assert_eq!(r.significant_count, 3);
+    assert_eq!(r.marginal_count, 0);
+    let shifted = r.significantly_shifted_dimensions();
+    assert_eq!(shifted.len(), 3);
+}
+
+#[test]
+fn report_max_monitors_count() {
+    let results: Vec<_> = WorkloadDimension::ALL
+        .iter()
+        .map(|d| measured(*d, 5_000))
+        .collect();
+    let r = report(results);
+    assert_eq!(r.monitor_count(), WorkloadDimension::ALL.len());
+    assert_eq!(r.measured_count(), WorkloadDimension::ALL.len());
+    assert_eq!(r.abstained_count, 0);
+    assert!(r.monitor_count() <= MAX_MONITORS);
+}
+
+#[test]
+fn report_coverage_full_when_all_measured() {
+    let results: Vec<_> = WorkloadDimension::ALL
+        .iter()
+        .map(|d| measured(*d, 5_000))
+        .collect();
+    let r = report(results);
+    assert_eq!(r.coverage_millionths(), 1_000_000);
+}
+
+#[test]
+fn report_coverage_half_when_half_abstained() {
+    let all = WorkloadDimension::ALL;
+    let results: Vec<_> = all
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            if i < all.len() / 2 {
+                measured(*d, 5_000)
+            } else {
+                abstained(*d)
+            }
+        })
+        .collect();
+    let r = report(results);
+    let half_count = all.len() / 2;
+    assert_eq!(r.measured_count(), half_count);
+    assert_eq!(r.abstained_count, all.len() - half_count);
+    // coverage should be close to 500_000 (50%)
+    let expected = (half_count as u64).saturating_mul(1_000_000) / all.len() as u64;
+    assert_eq!(r.coverage_millionths(), expected);
+}
+
+#[test]
+fn report_different_epoch_different_hash() {
+    let results = vec![measured(WorkloadDimension::ComputeIntensity, 50_000)];
+    let r1 = AggregateShiftReport::new(SecurityEpoch::from_raw(1), results.clone());
+    let r2 = AggregateShiftReport::new(SecurityEpoch::from_raw(2), results);
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn shifted_dimensions_cross_validated_with_result_for() {
+    let results = vec![
+        measured(WorkloadDimension::ComputeIntensity, 200_000),
+        measured(WorkloadDimension::AllocationPattern, 5_000),
+        measured(WorkloadDimension::ModuleGraphShape, 150_000),
+        abstained(WorkloadDimension::GcPressureProfile),
+    ];
+    let r = report(results);
+    let shifted = r.significantly_shifted_dimensions();
+    for dim in &shifted {
+        let result = r
+            .result_for(*dim)
+            .expect("result must exist for shifted dim");
+        assert_eq!(result.verdict(), Some(ShiftVerdict::SignificantShift));
+    }
+    // non-shifted measured dimensions must not be in shifted set
+    for dim in WorkloadDimension::ALL {
+        if let Some(result) = r.result_for(*dim)
+            && result.verdict() != Some(ShiftVerdict::SignificantShift)
+        {
+            assert!(!shifted.contains(dim));
+        }
+    }
+}
+
+#[test]
+fn kernel_kind_display_matches_as_str() {
+    for k in KernelKind::ALL {
+        assert_eq!(k.to_string(), k.as_str());
+    }
+}
+
+#[test]
+fn shift_verdict_display_matches_as_str() {
+    for v in ShiftVerdict::ALL {
+        assert_eq!(v.to_string(), v.as_str());
+    }
+}
+
+#[test]
+fn abstention_all_variants_serde_roundtrip() {
+    let all = vec![
+        MonitorAbstention::InsufficientSamples {
+            available: 10,
+            required: 32,
+        },
+        MonitorAbstention::UncalibratedBandwidth,
+        MonitorAbstention::EmptyReferenceDistribution,
+        MonitorAbstention::IncompleteWindow {
+            filled: 20,
+            window_size: 256,
+        },
+        MonitorAbstention::DisabledByPolicy,
+    ];
+    for a in &all {
+        let json = serde_json::to_string(a).unwrap();
+        let back: MonitorAbstention = serde_json::from_str(&json).unwrap();
+        assert_eq!(*a, back);
+    }
+}
+
+#[test]
+fn abstention_tags_all_nonempty() {
+    let all = vec![
+        MonitorAbstention::InsufficientSamples {
+            available: 0,
+            required: 1,
+        },
+        MonitorAbstention::UncalibratedBandwidth,
+        MonitorAbstention::EmptyReferenceDistribution,
+        MonitorAbstention::IncompleteWindow {
+            filled: 0,
+            window_size: 1,
+        },
+        MonitorAbstention::DisabledByPolicy,
+    ];
+    for a in &all {
+        assert!(!a.tag().is_empty());
+    }
+}
+
+#[test]
+fn mmd_result_clone_eq() {
+    let c = config(WorkloadDimension::StringOperationProfile);
+    let r = MmdResult::compute(
+        WorkloadDimension::StringOperationProfile,
+        70_000,
+        &c,
+        100,
+        100,
+    );
+    let cloned = r.clone();
+    assert_eq!(r, cloned);
+}
+
+#[test]
+fn monitor_result_abstained_reason_preserved_in_serde() {
+    let r = MonitorResult::Abstained {
+        dimension: WorkloadDimension::ControlFlowComplexity,
+        reason: MonitorAbstention::DisabledByPolicy,
+    };
+    let json = serde_json::to_string(&r).unwrap();
+    let back: MonitorResult = serde_json::from_str(&json).unwrap();
+    if let MonitorResult::Abstained { dimension, reason } = back {
+        assert_eq!(dimension, WorkloadDimension::ControlFlowComplexity);
+        assert_eq!(reason, MonitorAbstention::DisabledByPolicy);
+    } else {
+        panic!("expected Abstained variant");
+    }
+}

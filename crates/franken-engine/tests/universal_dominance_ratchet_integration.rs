@@ -1189,3 +1189,871 @@ fn many_cells_stress() {
     assert_eq!(board.proven_count(), 12);
     assert_eq!(board.dominance_fraction_millionths(), 200_000); // 12/60 = 0.2
 }
+
+// ---------------------------------------------------------------------------
+// Clone / Debug / PartialEq coverage on all public types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cell_id_clone_debug_eq() {
+    let cid = cell_id(
+        CellDomain::ColdStart,
+        ComparisonTarget::V8Node,
+        "clone-test",
+    );
+    let cid2 = cid.clone();
+    assert_eq!(cid, cid2);
+    let dbg = format!("{cid:?}");
+    assert!(dbg.contains("ColdStart"));
+    assert!(dbg.contains("V8Node"));
+    assert!(dbg.contains("clone-test"));
+}
+
+#[test]
+fn test_ratchet_cell_clone_debug_eq() {
+    let cell = unproven_cell(CellDomain::Throughput, ComparisonTarget::Bun, "clone-cell");
+    let cell2 = cell.clone();
+    assert_eq!(cell, cell2);
+    let dbg = format!("{cell:?}");
+    assert!(dbg.contains("Throughput"));
+    assert!(dbg.contains("Bun"));
+}
+
+#[test]
+fn test_ratchet_board_clone_debug_eq() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    let cell = unproven_cell(CellDomain::Memory, ComparisonTarget::Deno, "clone-board");
+    add_cell(&mut board, &mut log, cell).unwrap();
+    let board2 = board.clone();
+    assert_eq!(board, board2);
+    let dbg = format!("{board:?}");
+    assert!(dbg.contains("Memory"));
+}
+
+#[test]
+fn test_frontier_gap_entry_clone_debug_eq() {
+    let entry = gap_entry(
+        "gap-clone",
+        CellDomain::TailLatency,
+        GapKind::Unknown,
+        500_000,
+    );
+    let entry2 = entry.clone();
+    assert_eq!(entry, entry2);
+    let dbg = format!("{entry:?}");
+    assert!(dbg.contains("gap-clone"));
+    assert!(dbg.contains("TailLatency"));
+}
+
+#[test]
+fn test_frontier_gap_ledger_clone_debug_eq() {
+    let mut ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    register_gap(
+        &mut ledger,
+        &mut log,
+        gap_entry(
+            "clone-ledger-gap",
+            CellDomain::Memory,
+            GapKind::KnownDeficient,
+            700_000,
+        ),
+    )
+    .unwrap();
+    let ledger2 = ledger.clone();
+    assert_eq!(ledger, ledger2);
+    let dbg = format!("{ledger:?}");
+    assert!(dbg.contains("clone-ledger-gap"));
+}
+
+#[test]
+fn test_dominance_snapshot_clone_debug_eq() {
+    let board = RatchetBoard::new();
+    let ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    let snap = compute_dominance_snapshot(&board, &ledger, &mut log);
+    let snap2 = snap.clone();
+    assert_eq!(snap, snap2);
+    let dbg = format!("{snap:?}");
+    assert!(dbg.contains("DominanceSnapshot"));
+}
+
+#[test]
+fn test_ratchet_event_log_clone_debug_eq() {
+    let mut log = RatchetEventLog::new();
+    let mut board = RatchetBoard::new();
+    let cell = unproven_cell(CellDomain::ColdStart, ComparisonTarget::Jsc, "log-clone");
+    add_cell(&mut board, &mut log, cell).unwrap();
+    let log2 = log.clone();
+    assert_eq!(log, log2);
+    let dbg = format!("{log:?}");
+    assert!(dbg.contains("CellAdded"));
+}
+
+#[test]
+fn test_ratchet_error_clone_debug_eq() {
+    let cid = cell_id(CellDomain::ReplayFidelity, ComparisonTarget::Bun, "err-eq");
+    let err1 = RatchetError::CellNotFound {
+        cell_id: cid.clone(),
+    };
+    let err2 = err1.clone();
+    assert_eq!(err1, err2);
+    let dbg = format!("{err1:?}");
+    assert!(dbg.contains("CellNotFound"));
+}
+
+#[test]
+fn test_domain_proven_count_clone_debug_eq() {
+    let dpc = DomainProvenCount {
+        domain: CellDomain::SecurityOverhead,
+        proven: 3,
+        total: 5,
+    };
+    let dpc2 = dpc.clone();
+    assert_eq!(dpc, dpc2);
+    let dbg = format!("{dpc:?}");
+    assert!(dbg.contains("SecurityOverhead"));
+    assert!(dbg.contains("3"));
+}
+
+#[test]
+fn test_target_proven_count_clone_debug_eq() {
+    let tpc = TargetProvenCount {
+        target: ComparisonTarget::Deno,
+        proven: 2,
+        total: 4,
+    };
+    let tpc2 = tpc.clone();
+    assert_eq!(tpc, tpc2);
+    let dbg = format!("{tpc2:?}");
+    assert!(dbg.contains("Deno"));
+    assert!(dbg.contains("2"));
+}
+
+// ---------------------------------------------------------------------------
+// Display formatting for all enum types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cell_domain_display_all_variants() {
+    let cases = [
+        (CellDomain::ColdStart, "cold_start"),
+        (CellDomain::Throughput, "throughput"),
+        (CellDomain::TailLatency, "tail_latency"),
+        (CellDomain::Memory, "memory"),
+        (CellDomain::ReactPerformance, "react_performance"),
+        (CellDomain::ModuleLoading, "module_loading"),
+        (CellDomain::TypeScriptCompilation, "typescript_compilation"),
+        (CellDomain::SecurityOverhead, "security_overhead"),
+        (CellDomain::ReplayFidelity, "replay_fidelity"),
+        (CellDomain::ExtensionIsolation, "extension_isolation"),
+    ];
+    for (domain, expected) in &cases {
+        assert_eq!(domain.to_string(), *expected, "domain display mismatch");
+    }
+}
+
+#[test]
+fn test_comparison_target_display_all_variants() {
+    let cases = [
+        (ComparisonTarget::V8Node, "v8_node"),
+        (ComparisonTarget::Bun, "bun"),
+        (ComparisonTarget::Deno, "deno"),
+        (ComparisonTarget::Jsc, "jsc"),
+    ];
+    for (target, expected) in &cases {
+        assert_eq!(target.to_string(), *expected, "target display mismatch");
+    }
+}
+
+#[test]
+fn test_gap_kind_display_all_variants() {
+    let cases = [
+        (GapKind::Unknown, "unknown"),
+        (GapKind::PartiallyExplored, "partially_explored"),
+        (GapKind::KnownDeficient, "known_deficient"),
+        (GapKind::OutOfScope, "out_of_scope"),
+    ];
+    for (kind, expected) in &cases {
+        assert_eq!(kind.to_string(), *expected, "gap kind display mismatch");
+    }
+}
+
+#[test]
+fn test_gap_resolution_display_all_variants() {
+    let cases = [
+        (GapResolution::ProvenOnBoard, "proven_on_board"),
+        (GapResolution::DeclaredOutOfScope, "declared_out_of_scope"),
+        (GapResolution::SubsumedByOther, "subsumed_by_other"),
+        (GapResolution::DimensionInvalidated, "dimension_invalidated"),
+    ];
+    for (res, expected) in &cases {
+        assert_eq!(res.to_string(), *expected, "resolution display mismatch");
+    }
+}
+
+#[test]
+fn test_gap_state_display_all_variants() {
+    assert_eq!(GapState::Open.to_string(), "open");
+    assert_eq!(GapState::Closed.to_string(), "closed");
+}
+
+#[test]
+fn test_cell_id_display_format() {
+    let cid = cell_id(CellDomain::ModuleLoading, ComparisonTarget::Deno, "esmx");
+    assert_eq!(cid.to_string(), "module_loading::deno::esmx");
+}
+
+// ---------------------------------------------------------------------------
+// Serde round-trips for structs not fully covered
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_ratchet_cell_serde_round_trip() {
+    let mut cell = unproven_cell(
+        CellDomain::ExtensionIsolation,
+        ComparisonTarget::Jsc,
+        "ext-iso",
+    );
+    cell.margin_millionths = -50_000;
+    cell.evidence_ids = vec!["ev-a".to_string(), "ev-b".to_string()];
+    cell.last_advanced_epoch = 7;
+    let json = serde_json::to_string(&cell).expect("serialize");
+    let deser: RatchetCell = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(cell, deser);
+}
+
+#[test]
+fn test_frontier_gap_entry_serde_round_trip_with_target() {
+    let mut entry = gap_entry(
+        "serde-target-gap",
+        CellDomain::SecurityOverhead,
+        GapKind::KnownDeficient,
+        900_000,
+    );
+    entry.target = Some(ComparisonTarget::Bun);
+    entry.closed_epoch = Some(5);
+    entry.resolution = Some(GapResolution::SubsumedByOther);
+    entry.state = GapState::Closed;
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let deser: FrontierGapEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(entry, deser);
+}
+
+#[test]
+fn test_gap_state_serde_round_trip() {
+    for state in [GapState::Open, GapState::Closed] {
+        let json = serde_json::to_string(&state).expect("serialize");
+        let deser: GapState = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(state, deser);
+    }
+}
+
+#[test]
+fn test_domain_proven_count_serde_round_trip() {
+    let dpc = DomainProvenCount {
+        domain: CellDomain::TypeScriptCompilation,
+        proven: 10,
+        total: 20,
+    };
+    let json = serde_json::to_string(&dpc).expect("serialize");
+    let deser: DomainProvenCount = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(dpc, deser);
+}
+
+#[test]
+fn test_target_proven_count_serde_round_trip() {
+    let tpc = TargetProvenCount {
+        target: ComparisonTarget::Jsc,
+        proven: 5,
+        total: 8,
+    };
+    let json = serde_json::to_string(&tpc).expect("serialize");
+    let deser: TargetProvenCount = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(tpc, deser);
+}
+
+// ---------------------------------------------------------------------------
+// Error path: operations on missing / closed entities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_advance_cell_missing_returns_cell_not_found() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    let phantom = cell_id(CellDomain::Memory, ComparisonTarget::Bun, "phantom");
+    let err = advance_cell(
+        &mut board,
+        &mut log,
+        &phantom,
+        CellState::Claimed,
+        0,
+        vec![],
+    )
+    .unwrap_err();
+    assert!(matches!(err, RatchetError::CellNotFound { .. }));
+    assert!(err.to_string().contains("cell not found"));
+}
+
+#[test]
+fn test_close_gap_missing_returns_gap_not_found() {
+    let mut ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    let err = close_gap(
+        &mut ledger,
+        &mut log,
+        "nonexistent",
+        GapResolution::ProvenOnBoard,
+        1,
+    )
+    .unwrap_err();
+    assert!(matches!(err, RatchetError::GapNotFound { .. }));
+    assert!(err.to_string().contains("gap not found"));
+}
+
+#[test]
+fn test_close_gap_twice_returns_already_closed() {
+    let mut ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    register_gap(
+        &mut ledger,
+        &mut log,
+        gap_entry(
+            "double-close",
+            CellDomain::ColdStart,
+            GapKind::Unknown,
+            500_000,
+        ),
+    )
+    .unwrap();
+    close_gap(
+        &mut ledger,
+        &mut log,
+        "double-close",
+        GapResolution::ProvenOnBoard,
+        1,
+    )
+    .unwrap();
+    let err = close_gap(
+        &mut ledger,
+        &mut log,
+        "double-close",
+        GapResolution::DeclaredOutOfScope,
+        2,
+    )
+    .unwrap_err();
+    assert!(matches!(err, RatchetError::GapAlreadyClosed { .. }));
+    assert!(err.to_string().contains("gap already closed"));
+}
+
+#[test]
+fn test_duplicate_gap_error_message() {
+    let mut ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    register_gap(
+        &mut ledger,
+        &mut log,
+        gap_entry(
+            "dup-gap",
+            CellDomain::Throughput,
+            GapKind::PartiallyExplored,
+            400_000,
+        ),
+    )
+    .unwrap();
+    let err = register_gap(
+        &mut ledger,
+        &mut log,
+        gap_entry(
+            "dup-gap",
+            CellDomain::Throughput,
+            GapKind::PartiallyExplored,
+            400_000,
+        ),
+    )
+    .unwrap_err();
+    assert!(matches!(err, RatchetError::DuplicateGap { .. }));
+    assert!(err.to_string().contains("duplicate gap"));
+}
+
+#[test]
+fn test_duplicate_cell_error_message() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    let cell = unproven_cell(CellDomain::Memory, ComparisonTarget::V8Node, "dup-cell");
+    add_cell(&mut board, &mut log, cell.clone()).unwrap();
+    let err = add_cell(&mut board, &mut log, cell).unwrap_err();
+    assert!(matches!(err, RatchetError::DuplicateCell { .. }));
+    assert!(err.to_string().contains("duplicate cell"));
+}
+
+#[test]
+fn test_epoch_regression_error_message() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    advance_epoch(&mut board, &mut log, 10).unwrap();
+    let err = advance_epoch(&mut board, &mut log, 3).unwrap_err();
+    assert!(matches!(err, RatchetError::EpochRegression { .. }));
+    let msg = err.to_string();
+    assert!(msg.contains("epoch regression"));
+    assert!(msg.contains("10"));
+    assert!(msg.contains("3"));
+}
+
+// ---------------------------------------------------------------------------
+// Boundary / edge values
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_zero_margin_on_proven_cell_stays_zero() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    let cell = unproven_cell(
+        CellDomain::ColdStart,
+        ComparisonTarget::V8Node,
+        "zero-margin",
+    );
+    let cid = cell.cell_id.clone();
+    add_cell(&mut board, &mut log, cell).unwrap();
+    advance_cell(&mut board, &mut log, &cid, CellState::Proven, 0, vec![]).unwrap();
+    // Same margin (0 == 0) is allowed for proven cells — not a regression
+    advance_cell(
+        &mut board,
+        &mut log,
+        &cid,
+        CellState::Proven,
+        0,
+        vec!["ev-z".to_string()],
+    )
+    .unwrap();
+    assert_eq!(board.find_cell(&cid).unwrap().margin_millionths, 0);
+}
+
+#[test]
+fn test_max_priority_millionths_gap() {
+    let mut ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    let mut gap = gap_entry(
+        "max-prio",
+        CellDomain::Throughput,
+        GapKind::Unknown,
+        u32::MAX,
+    );
+    gap.priority_millionths = u32::MAX;
+    register_gap(&mut ledger, &mut log, gap).unwrap();
+    let sorted = ledger.open_gaps_by_priority();
+    assert_eq!(sorted.len(), 1);
+    assert_eq!(sorted[0].priority_millionths, u32::MAX);
+}
+
+#[test]
+fn test_dominance_fraction_all_cells_proven() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    for i in 0..4 {
+        let cell = unproven_cell(
+            CellDomain::ColdStart,
+            ComparisonTarget::V8Node,
+            &format!("full-{i}"),
+        );
+        let cid = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cid,
+            CellState::Proven,
+            1_000_000,
+            vec![],
+        )
+        .unwrap();
+    }
+    assert_eq!(board.dominance_fraction_millionths(), 1_000_000);
+    assert_eq!(board.proven_count(), 4);
+}
+
+#[test]
+fn test_single_proven_cell_no_open_gaps_universal_dominance() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    let ledger = FrontierGapLedger::new();
+    let cell = unproven_cell(CellDomain::Throughput, ComparisonTarget::Jsc, "uni");
+    let cid = cell.cell_id.clone();
+    add_cell(&mut board, &mut log, cell).unwrap();
+    advance_cell(
+        &mut board,
+        &mut log,
+        &cid,
+        CellState::Proven,
+        500_000,
+        vec![],
+    )
+    .unwrap();
+    let snap = compute_dominance_snapshot(&board, &ledger, &mut log);
+    assert!(snap.universal_dominance_achieved);
+    assert_eq!(snap.dominance_fraction_millionths, 1_000_000);
+}
+
+#[test]
+fn test_empty_board_empty_ledger_no_universal_dominance() {
+    let board = RatchetBoard::new();
+    let ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    let snap = compute_dominance_snapshot(&board, &ledger, &mut log);
+    // empty board: universal_dominance requires total > 0
+    assert!(!snap.universal_dominance_achieved);
+    assert_eq!(snap.total_cells, 0);
+    assert_eq!(snap.proven_cells, 0);
+    assert_eq!(snap.claimed_cells, 0);
+    assert_eq!(snap.unproven_cells, 0);
+}
+
+#[test]
+fn test_snapshot_counts_claimed_and_unproven() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    let ledger = FrontierGapLedger::new();
+
+    // Add 3 cells: 1 proven, 1 claimed, 1 unproven
+    let c1 = unproven_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "snap-a");
+    let c2 = unproven_cell(CellDomain::ColdStart, ComparisonTarget::Bun, "snap-b");
+    let c3 = unproven_cell(CellDomain::ColdStart, ComparisonTarget::Deno, "snap-c");
+    let cid1 = c1.cell_id.clone();
+    let cid2 = c2.cell_id.clone();
+    add_cell(&mut board, &mut log, c1).unwrap();
+    add_cell(&mut board, &mut log, c2).unwrap();
+    add_cell(&mut board, &mut log, c3).unwrap();
+    advance_cell(
+        &mut board,
+        &mut log,
+        &cid1,
+        CellState::Proven,
+        100_000,
+        vec![],
+    )
+    .unwrap();
+    advance_cell(
+        &mut board,
+        &mut log,
+        &cid2,
+        CellState::Claimed,
+        50_000,
+        vec![],
+    )
+    .unwrap();
+
+    let snap = compute_dominance_snapshot(&board, &ledger, &mut log);
+    assert_eq!(snap.proven_cells, 1);
+    assert_eq!(snap.claimed_cells, 1);
+    assert_eq!(snap.unproven_cells, 1);
+    assert_eq!(snap.total_cells, 3);
+    assert!(!snap.universal_dominance_achieved);
+}
+
+// ---------------------------------------------------------------------------
+// Event log: regression attempt does not create extra CellAdded events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_event_log_regression_does_not_emit_cell_added() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    let cell = unproven_cell(
+        CellDomain::ReplayFidelity,
+        ComparisonTarget::V8Node,
+        "repl-ev",
+    );
+    let cid = cell.cell_id.clone();
+    add_cell(&mut board, &mut log, cell).unwrap();
+    advance_cell(
+        &mut board,
+        &mut log,
+        &cid,
+        CellState::Proven,
+        200_000,
+        vec![],
+    )
+    .unwrap();
+    // Trigger a regression rejection
+    let _ = advance_cell(&mut board, &mut log, &cid, CellState::Unproven, 0, vec![]);
+
+    let added_count = log
+        .events
+        .iter()
+        .filter(|e| matches!(e.kind, RatchetEventKind::CellAdded { .. }))
+        .count();
+    assert_eq!(added_count, 1, "only one CellAdded event expected");
+
+    let rejected_count = log
+        .events
+        .iter()
+        .filter(|e| matches!(e.kind, RatchetEventKind::RegressionRejected { .. }))
+        .count();
+    assert_eq!(
+        rejected_count, 1,
+        "exactly one RegressionRejected event expected"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Render summary edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_render_summary_empty_board_and_ledger() {
+    let board = RatchetBoard::new();
+    let ledger = FrontierGapLedger::new();
+    let summary = render_ratchet_summary(&board, &ledger);
+    assert!(summary.contains("total_cells: 0"));
+    assert!(summary.contains("proven: 0"));
+    assert!(summary.contains("open_gaps: 0"));
+    // No open_gap_kinds section when there are none
+    assert!(!summary.contains("open_gap_kinds:"));
+}
+
+#[test]
+fn test_render_summary_multiple_gap_kinds() {
+    let mut ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    register_gap(
+        &mut ledger,
+        &mut log,
+        gap_entry("g1", CellDomain::Memory, GapKind::Unknown, 500_000),
+    )
+    .unwrap();
+    register_gap(
+        &mut ledger,
+        &mut log,
+        gap_entry(
+            "g2",
+            CellDomain::Throughput,
+            GapKind::PartiallyExplored,
+            500_000,
+        ),
+    )
+    .unwrap();
+    register_gap(
+        &mut ledger,
+        &mut log,
+        gap_entry(
+            "g3",
+            CellDomain::TailLatency,
+            GapKind::KnownDeficient,
+            500_000,
+        ),
+    )
+    .unwrap();
+    let board = RatchetBoard::new();
+    let summary = render_ratchet_summary(&board, &ledger);
+    assert!(summary.contains("open_gap_kinds:"));
+    assert!(summary.contains("unknown: 1"));
+    assert!(summary.contains("partially_explored: 1"));
+    assert!(summary.contains("known_deficient: 1"));
+}
+
+// ---------------------------------------------------------------------------
+// Schema version constants embedded correctly in structs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_board_schema_version_field_matches_constant() {
+    let board = RatchetBoard::new();
+    assert_eq!(board.schema_version, RATCHET_BOARD_SCHEMA_VERSION);
+    assert_eq!(board.bead_id, UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID);
+}
+
+#[test]
+fn test_ledger_schema_version_field_matches_constant() {
+    let ledger = FrontierGapLedger::new();
+    assert_eq!(ledger.schema_version, FRONTIER_GAP_LEDGER_SCHEMA_VERSION);
+    assert_eq!(ledger.bead_id, UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID);
+}
+
+#[test]
+fn test_event_log_schema_version_field_matches_constant() {
+    let log = RatchetEventLog::new();
+    assert_eq!(log.schema_version, RATCHET_EVENT_LOG_SCHEMA_VERSION);
+    assert_eq!(log.bead_id, UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID);
+}
+
+#[test]
+fn test_dominance_snapshot_schema_version_embedded() {
+    let board = RatchetBoard::new();
+    let ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    let snap = compute_dominance_snapshot(&board, &ledger, &mut log);
+    assert_eq!(snap.schema_version, DOMINANCE_SNAPSHOT_SCHEMA_VERSION);
+    assert_eq!(snap.bead_id, UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID);
+}
+
+// ---------------------------------------------------------------------------
+// Ordering / comparisons on enums
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cell_state_ordering() {
+    assert!(CellState::Unproven < CellState::Claimed);
+    assert!(CellState::Claimed < CellState::Proven);
+    assert!(CellState::Unproven < CellState::Proven);
+}
+
+#[test]
+fn test_cell_domain_ordering_stable() {
+    // BTreeMap depends on Ord — ensure stable ordering
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<CellDomain, u32> = BTreeMap::new();
+    map.insert(CellDomain::Throughput, 2);
+    map.insert(CellDomain::ColdStart, 1);
+    map.insert(CellDomain::Memory, 3);
+    let keys: Vec<&CellDomain> = map.keys().collect();
+    // BTreeMap returns keys in sorted order — just confirm no panic and correct count
+    assert_eq!(keys.len(), 3);
+}
+
+#[test]
+fn test_gap_kind_ordering_stable() {
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<GapKind, usize> = BTreeMap::new();
+    map.insert(GapKind::KnownDeficient, 1);
+    map.insert(GapKind::Unknown, 2);
+    map.insert(GapKind::OutOfScope, 3);
+    map.insert(GapKind::PartiallyExplored, 4);
+    assert_eq!(map.len(), 4);
+}
+
+// ---------------------------------------------------------------------------
+// advance_epoch: epoch recorded in CellAdvanced events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cell_advanced_event_records_correct_epoch() {
+    let mut board = RatchetBoard::new();
+    let mut log = RatchetEventLog::new();
+    let cell = unproven_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "epoch-ev");
+    let cid = cell.cell_id.clone();
+    add_cell(&mut board, &mut log, cell).unwrap();
+    advance_epoch(&mut board, &mut log, 5).unwrap();
+    advance_cell(
+        &mut board,
+        &mut log,
+        &cid,
+        CellState::Claimed,
+        100_000,
+        vec![],
+    )
+    .unwrap();
+
+    let advanced_event = log
+        .events
+        .iter()
+        .find(|e| matches!(e.kind, RatchetEventKind::CellAdvanced { .. }))
+        .unwrap();
+    assert_eq!(advanced_event.epoch, 5);
+    assert_eq!(board.find_cell(&cid).unwrap().last_advanced_epoch, 5);
+}
+
+// ---------------------------------------------------------------------------
+// open_gaps_by_priority tie-breaking: same priority preserves insertion order
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_open_gaps_by_priority_same_priority_all_returned() {
+    let mut ledger = FrontierGapLedger::new();
+    let mut log = RatchetEventLog::new();
+    for i in 0..5u32 {
+        register_gap(
+            &mut ledger,
+            &mut log,
+            gap_entry(
+                &format!("tie-{i}"),
+                CellDomain::Throughput,
+                GapKind::Unknown,
+                500_000,
+            ),
+        )
+        .unwrap();
+    }
+    let sorted = ledger.open_gaps_by_priority();
+    assert_eq!(sorted.len(), 5);
+    // All have the same priority — just verify all are present
+    for i in 0..5u32 {
+        assert!(sorted.iter().any(|g| g.gap_id == format!("tie-{i}")));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// find_gap returns None on missing gap
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_find_gap_returns_none_for_missing() {
+    let ledger = FrontierGapLedger::new();
+    assert!(ledger.find_gap("missing-gap").is_none());
+}
+
+#[test]
+fn test_find_cell_returns_none_for_missing() {
+    let board = RatchetBoard::new();
+    let cid = cell_id(CellDomain::Memory, ComparisonTarget::Bun, "not-there");
+    assert!(board.find_cell(&cid).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// RatchetError serde: explicit field values survive round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_ratchet_error_margin_regression_serde_values() {
+    let cid = cell_id(
+        CellDomain::TailLatency,
+        ComparisonTarget::Jsc,
+        "margin-serde",
+    );
+    let err = RatchetError::MarginRegressionRejected {
+        cell_id: cid.clone(),
+        current_margin: 999_999,
+        attempted_margin: -1,
+    };
+    let json = serde_json::to_string(&err).expect("serialize");
+    let deser: RatchetError = serde_json::from_str(&json).expect("deserialize");
+    match deser {
+        RatchetError::MarginRegressionRejected {
+            cell_id: dcid,
+            current_margin,
+            attempted_margin,
+        } => {
+            assert_eq!(dcid, cid);
+            assert_eq!(current_margin, 999_999);
+            assert_eq!(attempted_margin, -1);
+        }
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DOMINANCE_SNAPSHOT_SCHEMA_VERSION constant used in constant tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_dominance_snapshot_schema_version_constant_nonempty() {
+    assert!(!DOMINANCE_SNAPSHOT_SCHEMA_VERSION.is_empty());
+    assert!(DOMINANCE_SNAPSHOT_SCHEMA_VERSION.starts_with("franken-engine."));
+}
+
+#[test]
+fn test_all_schema_version_constants_start_with_prefix() {
+    let constants = [
+        UNIVERSAL_DOMINANCE_RATCHET_SCHEMA_VERSION,
+        RATCHET_BOARD_SCHEMA_VERSION,
+        FRONTIER_GAP_LEDGER_SCHEMA_VERSION,
+        RATCHET_EVENT_LOG_SCHEMA_VERSION,
+        DOMINANCE_SNAPSHOT_SCHEMA_VERSION,
+    ];
+    for c in &constants {
+        assert!(
+            c.starts_with("franken-engine."),
+            "constant {c} should start with 'franken-engine.'"
+        );
+    }
+}

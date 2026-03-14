@@ -9,13 +9,13 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::dark_matter_saturation_gate::{
-    BoardSaturationVerdict, BoardState, BurndownObservation, BurndownTracker,
-    ConfigViolation, DarkMatterEstimate, DarkMatterEvidence, DarkMatterRegion,
-    DarkMatterRegionKind, DecisionReceipt, FreshnessReason, FreshnessVerdict,
-    RatchetWideningReason, RatchetWideningVerdict, SaturationConfig, SaturationGateEvaluator,
-    SaturationReason, COMPONENT, DARK_MATTER_GATE_BEAD_ID, DARK_MATTER_GATE_SCHEMA_VERSION,
+    BoardSaturationVerdict, BoardState, BurndownObservation, BurndownTracker, COMPONENT,
+    ConfigViolation, DARK_MATTER_GATE_BEAD_ID, DARK_MATTER_GATE_SCHEMA_VERSION,
     DEFAULT_MAX_STALENESS_HOURS, DEFAULT_MIN_BURNDOWN_VELOCITY, DEFAULT_MIN_OBSERVATIONS,
-    DEFAULT_RATCHET_WIDENING_CEILING, DEFAULT_SATURATION_THRESHOLD,
+    DEFAULT_RATCHET_WIDENING_CEILING, DEFAULT_SATURATION_THRESHOLD, DarkMatterEstimate,
+    DarkMatterEvidence, DarkMatterRegion, DarkMatterRegionKind, DecisionReceipt, FreshnessReason,
+    FreshnessVerdict, RatchetWideningReason, RatchetWideningVerdict, SaturationConfig,
+    SaturationGateEvaluator, SaturationReason,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -146,9 +146,19 @@ fn enrichment_config_clone_independence() {
 #[test]
 fn enrichment_estimate_clone_independence() {
     let mut a = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-    a.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
+    a.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
     let b = a.clone();
-    a.add_region(make_region("r2", DarkMatterRegionKind::UnverifiedInterleaving, 50_000, false));
+    a.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        50_000,
+        false,
+    ));
     assert_eq!(a.total_region_count(), 2);
     assert_eq!(b.total_region_count(), 1);
 }
@@ -229,7 +239,12 @@ fn enrichment_board_state_serde_all_variants() {
 
 #[test]
 fn enrichment_region_serde_roundtrip() {
-    let r = make_region("gc_reentry", DarkMatterRegionKind::UnobservedInteraction, 50_000, false);
+    let r = make_region(
+        "gc_reentry",
+        DarkMatterRegionKind::UnobservedInteraction,
+        50_000,
+        false,
+    );
     let json = serde_json::to_string(&r).unwrap();
     let back: DarkMatterRegion = serde_json::from_str(&json).unwrap();
     assert_eq!(back, r);
@@ -237,7 +252,12 @@ fn enrichment_region_serde_roundtrip() {
 
 #[test]
 fn enrichment_region_retired_serde_roundtrip() {
-    let r = make_region("retired_r", DarkMatterRegionKind::UntestedErrorRecovery, 75_000, true);
+    let r = make_region(
+        "retired_r",
+        DarkMatterRegionKind::UntestedErrorRecovery,
+        75_000,
+        true,
+    );
     let json = serde_json::to_string(&r).unwrap();
     let back: DarkMatterRegion = serde_json::from_str(&json).unwrap();
     assert_eq!(back, r);
@@ -260,8 +280,18 @@ fn enrichment_observation_serde_roundtrip() {
 #[test]
 fn enrichment_estimate_serde_roundtrip() {
     let mut e = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
-    e.add_region(make_region("r2", DarkMatterRegionKind::UnverifiedInterleaving, 30_000, true));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        30_000,
+        true,
+    ));
     let json = serde_json::to_string(&e).unwrap();
     let back: DarkMatterEstimate = serde_json::from_str(&json).unwrap();
     assert_eq!(back, e);
@@ -331,14 +361,20 @@ fn enrichment_ratchet_verdict_serde_roundtrip() {
 
 #[test]
 fn enrichment_saturation_verdict_serde_roundtrip() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let v = eval.evaluate_saturation(1500);
     let json = serde_json::to_string(&v).unwrap();
     let back: BoardSaturationVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(back.state, v.state);
-    assert_eq!(back.dark_matter_fraction_millionths, v.dark_matter_fraction_millionths);
+    assert_eq!(
+        back.dark_matter_fraction_millionths,
+        v.dark_matter_fraction_millionths
+    );
 }
 
 #[test]
@@ -375,7 +411,10 @@ fn enrichment_evidence_serde_roundtrip() {
 
 #[test]
 fn enrichment_evaluator_serde_roundtrip() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let json = serde_json::to_string(&eval).unwrap();
@@ -403,7 +442,9 @@ fn enrichment_freshness_reason_serde_all_variants() {
 fn enrichment_ratchet_reason_serde_all_variants() {
     let variants: Vec<RatchetWideningReason> = vec![
         RatchetWideningReason::BelowCeiling,
-        RatchetWideningReason::AboveCeiling { excess_millionths: 50_000 },
+        RatchetWideningReason::AboveCeiling {
+            excess_millionths: 50_000,
+        },
         RatchetWideningReason::BoardStale,
         RatchetWideningReason::InsufficientData,
     ];
@@ -438,7 +479,12 @@ fn enrichment_board_state_display_all_variants() {
 
 #[test]
 fn enrichment_region_display_active() {
-    let r = make_region("gc_reentry", DarkMatterRegionKind::UnobservedInteraction, 50_000, false);
+    let r = make_region(
+        "gc_reentry",
+        DarkMatterRegionKind::UnobservedInteraction,
+        50_000,
+        false,
+    );
     let s = r.to_string();
     assert!(s.contains("gc_reentry"));
     assert!(s.contains("active"));
@@ -446,7 +492,12 @@ fn enrichment_region_display_active() {
 
 #[test]
 fn enrichment_region_display_retired() {
-    let r = make_region("old_path", DarkMatterRegionKind::UntestedCodePath, 100_000, true);
+    let r = make_region(
+        "old_path",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        true,
+    );
     let s = r.to_string();
     assert!(s.contains("old_path"));
     assert!(s.contains("retired"));
@@ -517,7 +568,9 @@ fn enrichment_ratchet_verdict_display_blocked() {
         permitted: false,
         dark_matter_fraction_millionths: 300_000,
         ceiling_millionths: 150_000,
-        reason: RatchetWideningReason::AboveCeiling { excess_millionths: 150_000 },
+        reason: RatchetWideningReason::AboveCeiling {
+            excess_millionths: 150_000,
+        },
         epoch: SecurityEpoch::from_raw(1),
         verdict_at_epoch_secs: 5000,
     };
@@ -528,32 +581,52 @@ fn enrichment_ratchet_verdict_display_blocked() {
 #[test]
 fn enrichment_freshness_reason_display_all() {
     assert_eq!(FreshnessReason::WithinWindow.to_string(), "within_window");
-    assert_eq!(FreshnessReason::NoObservations.to_string(), "no_observations");
+    assert_eq!(
+        FreshnessReason::NoObservations.to_string(),
+        "no_observations"
+    );
     let ex = FreshnessReason::ExceedsWindow { hours_over: 48 };
     assert!(ex.to_string().contains("48"));
 }
 
 #[test]
 fn enrichment_ratchet_reason_display_all() {
-    assert_eq!(RatchetWideningReason::BelowCeiling.to_string(), "below_ceiling");
+    assert_eq!(
+        RatchetWideningReason::BelowCeiling.to_string(),
+        "below_ceiling"
+    );
     assert_eq!(RatchetWideningReason::BoardStale.to_string(), "board_stale");
-    assert_eq!(RatchetWideningReason::InsufficientData.to_string(), "insufficient_data");
-    let ab = RatchetWideningReason::AboveCeiling { excess_millionths: 75_000 };
+    assert_eq!(
+        RatchetWideningReason::InsufficientData.to_string(),
+        "insufficient_data"
+    );
+    let ab = RatchetWideningReason::AboveCeiling {
+        excess_millionths: 75_000,
+    };
     assert!(ab.to_string().contains("75000"));
 }
 
 #[test]
 fn enrichment_saturation_reason_display_all() {
-    let high_dm = SaturationReason::HighDarkMatterFraction { fraction_millionths: 400_000 };
+    let high_dm = SaturationReason::HighDarkMatterFraction {
+        fraction_millionths: 400_000,
+    };
     assert!(high_dm.to_string().contains("400000"));
 
-    let neg = SaturationReason::NegativeBurndown { velocity_millionths: 50_000 };
+    let neg = SaturationReason::NegativeBurndown {
+        velocity_millionths: 50_000,
+    };
     assert!(neg.to_string().contains("50000"));
 
-    let insuff_vel = SaturationReason::InsufficientBurndownVelocity { velocity_millionths: 10_000 };
+    let insuff_vel = SaturationReason::InsufficientBurndownVelocity {
+        velocity_millionths: 10_000,
+    };
     assert!(insuff_vel.to_string().contains("10000"));
 
-    let insuff_obs = SaturationReason::InsufficientObservations { count: 3, required: 10 };
+    let insuff_obs = SaturationReason::InsufficientObservations {
+        count: 3,
+        required: 10,
+    };
     let s = insuff_obs.to_string();
     assert!(s.contains('3') || s.contains("10"));
 
@@ -596,10 +669,19 @@ fn enrichment_receipt_display() {
 #[test]
 fn enrichment_saturation_reason_display_nonempty() {
     let reasons: Vec<SaturationReason> = vec![
-        SaturationReason::HighDarkMatterFraction { fraction_millionths: 500_000 },
-        SaturationReason::NegativeBurndown { velocity_millionths: 10_000 },
-        SaturationReason::InsufficientBurndownVelocity { velocity_millionths: 5_000 },
-        SaturationReason::InsufficientObservations { count: 2, required: 10 },
+        SaturationReason::HighDarkMatterFraction {
+            fraction_millionths: 500_000,
+        },
+        SaturationReason::NegativeBurndown {
+            velocity_millionths: 10_000,
+        },
+        SaturationReason::InsufficientBurndownVelocity {
+            velocity_millionths: 5_000,
+        },
+        SaturationReason::InsufficientObservations {
+            count: 2,
+            required: 10,
+        },
         SaturationReason::LowDarkMatterWithPositiveBurndown,
         SaturationReason::InvalidConfiguration {
             violations: vec![ConfigViolation {
@@ -657,7 +739,10 @@ fn enrichment_config_debug() {
 
 #[test]
 fn enrichment_evaluator_debug() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(3, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     assert!(!format!("{eval:?}").is_empty());
@@ -691,7 +776,10 @@ fn enrichment_ratchet_verdict_debug() {
 
 #[test]
 fn enrichment_decision_receipt_debug() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let receipt = eval.evaluate(1500);
@@ -719,9 +807,18 @@ fn enrichment_evidence_debug() {
 fn enrichment_config_default_valid() {
     let config = SaturationConfig::default();
     assert!(config.validate().is_empty());
-    assert_eq!(config.saturation_threshold_millionths, DEFAULT_SATURATION_THRESHOLD);
-    assert_eq!(config.ratchet_widening_ceiling_millionths, DEFAULT_RATCHET_WIDENING_CEILING);
-    assert_eq!(config.min_burndown_velocity_millionths, DEFAULT_MIN_BURNDOWN_VELOCITY);
+    assert_eq!(
+        config.saturation_threshold_millionths,
+        DEFAULT_SATURATION_THRESHOLD
+    );
+    assert_eq!(
+        config.ratchet_widening_ceiling_millionths,
+        DEFAULT_RATCHET_WIDENING_CEILING
+    );
+    assert_eq!(
+        config.min_burndown_velocity_millionths,
+        DEFAULT_MIN_BURNDOWN_VELOCITY
+    );
     assert_eq!(config.min_observations, DEFAULT_MIN_OBSERVATIONS);
     assert_eq!(config.max_staleness_hours, DEFAULT_MAX_STALENESS_HOURS);
 }
@@ -747,10 +844,10 @@ fn enrichment_component_populated() {
 
 #[test]
 fn enrichment_default_threshold_values() {
-    assert!(DEFAULT_SATURATION_THRESHOLD <= MILLION);
-    assert!(DEFAULT_RATCHET_WIDENING_CEILING <= MILLION);
-    assert!(DEFAULT_MIN_OBSERVATIONS > 0);
-    assert!(DEFAULT_MAX_STALENESS_HOURS > 0);
+    const { assert!(DEFAULT_SATURATION_THRESHOLD <= MILLION) };
+    const { assert!(DEFAULT_RATCHET_WIDENING_CEILING <= MILLION) };
+    const { assert!(DEFAULT_MIN_OBSERVATIONS > 0) };
+    const { assert!(DEFAULT_MAX_STALENESS_HOURS > 0) };
 }
 
 // ===========================================================================
@@ -800,7 +897,12 @@ fn enrichment_region_content_hash_varies_by_id() {
 #[test]
 fn enrichment_region_content_hash_varies_by_kind() {
     let r1 = make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false);
-    let r2 = make_region("r1", DarkMatterRegionKind::UnverifiedInterleaving, 100_000, false);
+    let r2 = make_region(
+        "r1",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        100_000,
+        false,
+    );
     assert_ne!(r1.content_hash(), r2.content_hash());
 }
 
@@ -836,7 +938,12 @@ fn enrichment_estimate_empty() {
 #[test]
 fn enrichment_estimate_single_active() {
     let mut e = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
     assert_eq!(e.active_mass(), 100_000);
     assert_eq!(e.retired_mass(), 0);
     assert_eq!(e.dark_matter_fraction(), 100_000);
@@ -846,9 +953,24 @@ fn enrichment_estimate_single_active() {
 #[test]
 fn enrichment_estimate_mixed_active_retired() {
     let mut e = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
-    e.add_region(make_region("r2", DarkMatterRegionKind::UntestedCodePath, 50_000, true));
-    e.add_region(make_region("r3", DarkMatterRegionKind::UnverifiedInterleaving, 30_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UntestedCodePath,
+        50_000,
+        true,
+    ));
+    e.add_region(make_region(
+        "r3",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        30_000,
+        false,
+    ));
     assert_eq!(e.active_mass(), 130_000);
     assert_eq!(e.retired_mass(), 50_000);
     assert_eq!(e.active_region_count(), 2);
@@ -874,19 +996,50 @@ fn enrichment_estimate_effective_mass_with_weight() {
 #[test]
 fn enrichment_estimate_mass_by_kind() {
     let mut e = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
-    e.add_region(make_region("r2", DarkMatterRegionKind::UntestedCodePath, 50_000, true));
-    e.add_region(make_region("r3", DarkMatterRegionKind::UnverifiedInterleaving, 30_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UntestedCodePath,
+        50_000,
+        true,
+    ));
+    e.add_region(make_region(
+        "r3",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        30_000,
+        false,
+    ));
     let by_kind = e.mass_by_kind();
-    assert_eq!(by_kind[&DarkMatterRegionKind::UntestedCodePath], (100_000, 50_000));
-    assert_eq!(by_kind[&DarkMatterRegionKind::UnverifiedInterleaving], (30_000, 0));
+    assert_eq!(
+        by_kind[&DarkMatterRegionKind::UntestedCodePath],
+        (100_000, 50_000)
+    );
+    assert_eq!(
+        by_kind[&DarkMatterRegionKind::UnverifiedInterleaving],
+        (30_000, 0)
+    );
 }
 
 #[test]
 fn enrichment_estimate_add_region_overwrites_duplicate() {
     let mut e = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
-    e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 200_000, false));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
+    e.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        200_000,
+        false,
+    ));
     assert_eq!(e.total_region_count(), 1);
     assert_eq!(e.active_mass(), 200_000);
 }
@@ -895,7 +1048,12 @@ fn enrichment_estimate_add_region_overwrites_duplicate() {
 fn enrichment_estimate_content_hash_deterministic() {
     let build = || {
         let mut e = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-        e.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
+        e.add_region(make_region(
+            "r1",
+            DarkMatterRegionKind::UntestedCodePath,
+            100_000,
+            false,
+        ));
         e
     };
     assert_eq!(build().content_hash(), build().content_hash());
@@ -904,9 +1062,19 @@ fn enrichment_estimate_content_hash_deterministic() {
 #[test]
 fn enrichment_estimate_content_hash_varies() {
     let mut e1 = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-    e1.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false));
+    e1.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        100_000,
+        false,
+    ));
     let mut e2 = DarkMatterEstimate::new(MILLION, SecurityEpoch::from_raw(1), 1000);
-    e2.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 200_000, false));
+    e2.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        200_000,
+        false,
+    ));
     assert_ne!(e1.content_hash(), e2.content_hash());
 }
 
@@ -1213,47 +1381,84 @@ fn enrichment_evaluator_saturated() {
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::Saturated);
-    assert!(verdict.reasons.iter().any(|r| matches!(r, SaturationReason::LowDarkMatterWithPositiveBurndown)));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::LowDarkMatterWithPositiveBurndown))
+    );
 }
 
 #[test]
 fn enrichment_evaluator_scope_limited_high_dm() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 500_000, 5_000, 15_000);
     let eval = make_evaluator(500_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(r, SaturationReason::HighDarkMatterFraction { .. })));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::HighDarkMatterFraction { .. }))
+    );
 }
 
 #[test]
 fn enrichment_evaluator_scope_limited_negative_burndown() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 20_000, 5_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(r, SaturationReason::NegativeBurndown { .. })));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::NegativeBurndown { .. }))
+    );
 }
 
 #[test]
 fn enrichment_evaluator_scope_limited_insufficient_observations() {
-    let config = SaturationConfig { min_observations: 10, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 10,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(3, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(r, SaturationReason::InsufficientObservations { .. })));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::InsufficientObservations { .. }))
+    );
 }
 
 #[test]
 fn enrichment_evaluator_scope_limited_invalid_config() {
-    let config = SaturationConfig { min_observations: 0, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 0,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(r, SaturationReason::InvalidConfiguration { .. })));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::InvalidConfiguration { .. }))
+    );
 }
 
 #[test]
@@ -1267,12 +1472,20 @@ fn enrichment_evaluator_scope_limited_velocity_below_minimum() {
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_saturation(2000);
     assert_eq!(verdict.state, BoardState::ScopeLimited);
-    assert!(verdict.reasons.iter().any(|r| matches!(r, SaturationReason::InsufficientBurndownVelocity { .. })));
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|r| matches!(r, SaturationReason::InsufficientBurndownVelocity { .. }))
+    );
 }
 
 #[test]
 fn enrichment_evaluator_saturation_verdict_content_hash_deterministic() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let v1 = eval.evaluate_saturation(1500);
@@ -1318,7 +1531,10 @@ fn enrichment_evaluator_stale_board() {
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_freshness(8600);
     assert!(!verdict.is_fresh);
-    assert!(matches!(verdict.reason, FreshnessReason::ExceedsWindow { .. }));
+    assert!(matches!(
+        verdict.reason,
+        FreshnessReason::ExceedsWindow { .. }
+    ));
 }
 
 #[test]
@@ -1356,7 +1572,10 @@ fn enrichment_ratchet_permitted_low_dm() {
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_ratchet_widening(1500);
     assert!(verdict.permitted);
-    assert!(matches!(verdict.reason, RatchetWideningReason::BelowCeiling));
+    assert!(matches!(
+        verdict.reason,
+        RatchetWideningReason::BelowCeiling
+    ));
 }
 
 #[test]
@@ -1370,7 +1589,10 @@ fn enrichment_ratchet_blocked_high_dm() {
     let eval = make_evaluator(300_000, MILLION, obs, config);
     let verdict = eval.evaluate_ratchet_widening(1500);
     assert!(!verdict.permitted);
-    assert!(matches!(verdict.reason, RatchetWideningReason::AboveCeiling { .. }));
+    assert!(matches!(
+        verdict.reason,
+        RatchetWideningReason::AboveCeiling { .. }
+    ));
 }
 
 #[test]
@@ -1397,12 +1619,18 @@ fn enrichment_ratchet_blocked_insufficient_data() {
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let verdict = eval.evaluate_ratchet_widening(1500);
     assert!(!verdict.permitted);
-    assert!(matches!(verdict.reason, RatchetWideningReason::InsufficientData));
+    assert!(matches!(
+        verdict.reason,
+        RatchetWideningReason::InsufficientData
+    ));
 }
 
 #[test]
 fn enrichment_ratchet_content_hash_deterministic() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let v1 = eval.evaluate_ratchet_widening(1500);
@@ -1431,7 +1659,10 @@ fn enrichment_full_pipeline_saturated() {
 
 #[test]
 fn enrichment_full_pipeline_scope_limited() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 500_000, 5_000, 15_000);
     let eval = make_evaluator(500_000, MILLION, obs, config);
     let receipt = eval.evaluate(1500);
@@ -1454,7 +1685,10 @@ fn enrichment_full_pipeline_stale_overrides_saturated() {
 
 #[test]
 fn enrichment_full_pipeline_receipt_hash_deterministic() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let r1 = eval.evaluate(1500);
@@ -1464,7 +1698,10 @@ fn enrichment_full_pipeline_receipt_hash_deterministic() {
 
 #[test]
 fn enrichment_full_pipeline_receipt_hash_varies_on_time() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let r1 = eval.evaluate(1500);
@@ -1494,7 +1731,10 @@ fn enrichment_evidence_emitted_correctly() {
 
 #[test]
 fn enrichment_evidence_estimate_summary() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let evidence = eval.emit_evidence(1500);
@@ -1506,7 +1746,10 @@ fn enrichment_evidence_estimate_summary() {
 
 #[test]
 fn enrichment_evidence_burndown_metrics() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let evidence = eval.emit_evidence(1500);
@@ -1516,7 +1759,10 @@ fn enrichment_evidence_burndown_metrics() {
 
 #[test]
 fn enrichment_evidence_content_hash_deterministic() {
-    let config = SaturationConfig { min_observations: 3, ..SaturationConfig::default() };
+    let config = SaturationConfig {
+        min_observations: 3,
+        ..SaturationConfig::default()
+    };
     let obs = make_observations(5, 1000, 100, 100_000, 5_000, 15_000);
     let eval = make_evaluator(100_000, MILLION, obs, config);
     let e1 = eval.emit_evidence(1500);
@@ -1545,9 +1791,24 @@ fn enrichment_evidence_stale_board_state() {
 fn enrichment_evaluator_multiple_regions() {
     let epoch = SecurityEpoch::from_raw(1);
     let mut estimate = DarkMatterEstimate::new(MILLION, epoch, 1000);
-    estimate.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 50_000, false));
-    estimate.add_region(make_region("r2", DarkMatterRegionKind::UnverifiedInterleaving, 30_000, false));
-    estimate.add_region(make_region("r3", DarkMatterRegionKind::UntestedErrorRecovery, 20_000, true));
+    estimate.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        50_000,
+        false,
+    ));
+    estimate.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        30_000,
+        false,
+    ));
+    estimate.add_region(make_region(
+        "r3",
+        DarkMatterRegionKind::UntestedErrorRecovery,
+        20_000,
+        true,
+    ));
     let config = SaturationConfig {
         min_observations: 3,
         min_burndown_velocity_millionths: 10_000,
@@ -1567,8 +1828,18 @@ fn enrichment_evaluator_multiple_regions() {
 fn enrichment_evidence_with_multiple_kinds() {
     let epoch = SecurityEpoch::from_raw(1);
     let mut estimate = DarkMatterEstimate::new(MILLION, epoch, 1000);
-    estimate.add_region(make_region("r1", DarkMatterRegionKind::UntestedCodePath, 50_000, false));
-    estimate.add_region(make_region("r2", DarkMatterRegionKind::UnverifiedInterleaving, 30_000, false));
+    estimate.add_region(make_region(
+        "r1",
+        DarkMatterRegionKind::UntestedCodePath,
+        50_000,
+        false,
+    ));
+    estimate.add_region(make_region(
+        "r2",
+        DarkMatterRegionKind::UnverifiedInterleaving,
+        30_000,
+        false,
+    ));
     let config = SaturationConfig {
         min_observations: 3,
         min_burndown_velocity_millionths: 10_000,
@@ -1582,8 +1853,18 @@ fn enrichment_evidence_with_multiple_kinds() {
     let eval = SaturationGateEvaluator::new(config, estimate, tracker);
     let evidence = eval.emit_evidence(1500);
     assert!(!evidence.estimate_summary.mass_by_kind.is_empty());
-    assert!(evidence.estimate_summary.mass_by_kind.contains_key("untested_code_path"));
-    assert!(evidence.estimate_summary.mass_by_kind.contains_key("unverified_interleaving"));
+    assert!(
+        evidence
+            .estimate_summary
+            .mass_by_kind
+            .contains_key("untested_code_path")
+    );
+    assert!(
+        evidence
+            .estimate_summary
+            .mass_by_kind
+            .contains_key("unverified_interleaving")
+    );
 }
 
 // ===========================================================================

@@ -779,3 +779,287 @@ fn policy_with_zero_min_invocations_per_path_accepts_all_paths() {
         "all profiled paths should become candidates with zero min_invocations and relaxed policy"
     );
 }
+
+// ---------- TierUpCandidate::candidate_id ----------
+
+#[test]
+fn tier_up_candidate_id_is_deterministic() {
+    let program = cached_hot_loop_program();
+    let policy = TierUpPolicy {
+        min_total_steps: 1,
+        min_invocations_per_path: 1,
+        min_cache_hit_rate_millionths: 0,
+        max_candidates: 10,
+        profile_top_k: 16,
+        require_cache_signal: false,
+        ..TierUpPolicy::default()
+    };
+
+    let mut vm = BytecodeVm::new("trace-cand-id", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    assert!(!decision.selected_candidates.is_empty());
+    let candidate = &decision.selected_candidates[0];
+    let id_a = candidate.candidate_id("trace-cand-id");
+    let id_b = candidate.candidate_id("trace-cand-id");
+    assert_eq!(id_a, id_b);
+    assert!(id_a.starts_with("tc-"));
+    assert!(id_a.len() > 3);
+}
+
+#[test]
+fn tier_up_candidate_id_changes_with_different_trace_id() {
+    let program = cached_hot_loop_program();
+    let policy = TierUpPolicy {
+        min_total_steps: 1,
+        min_invocations_per_path: 1,
+        min_cache_hit_rate_millionths: 0,
+        max_candidates: 10,
+        profile_top_k: 16,
+        require_cache_signal: false,
+        ..TierUpPolicy::default()
+    };
+
+    let mut vm = BytecodeVm::new("trace-cand-id-diff", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    assert!(!decision.selected_candidates.is_empty());
+    let candidate = &decision.selected_candidates[0];
+    let id_a = candidate.candidate_id("trace-alpha");
+    let id_b = candidate.candidate_id("trace-beta");
+    assert_ne!(id_a, id_b);
+}
+
+// ---------- HotPathSample fields ----------
+
+#[test]
+fn hot_path_sample_fields_are_populated() {
+    let program = cached_hot_loop_program();
+    let mut vm = BytecodeVm::new("trace-sample-fields", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let profile = build_hot_path_profile(&report, 8);
+
+    assert!(!profile.top_paths.is_empty());
+    for sample in &profile.top_paths {
+        assert!(!sample.opcode.is_empty(), "opcode must be non-empty");
+        assert!(sample.invocations > 0, "invocations must be positive");
+    }
+}
+
+#[test]
+fn hot_path_sample_cache_fields_for_cached_program() {
+    let program = cached_hot_loop_program();
+    let mut vm = BytecodeVm::new("trace-cache-fields", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let profile = build_hot_path_profile(&report, 16);
+
+    // The cached_hot_loop_program uses LoadPropCached, so at least one sample
+    // should have cache observations
+    let has_cache_obs = profile
+        .top_paths
+        .iter()
+        .any(|s| s.cache_hits + s.cache_misses > 0);
+    assert!(
+        has_cache_obs,
+        "cached program should produce samples with cache observations"
+    );
+}
+
+#[test]
+fn hot_path_sample_serde_roundtrip() {
+    let program = cached_hot_loop_program();
+    let mut vm = BytecodeVm::new("trace-sample-serde", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let profile = build_hot_path_profile(&report, 4);
+
+    for sample in &profile.top_paths {
+        let json = serde_json::to_string(sample).expect("serialize");
+        let recovered: frankenengine_engine::tier_up_profiler::HotPathSample =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, *sample);
+    }
+}
+
+// ---------- HotPathProfile::observed_instruction_events ----------
+
+#[test]
+fn hot_path_profile_observed_instruction_events_is_positive() {
+    let program = cached_hot_loop_program();
+    let mut vm = BytecodeVm::new("trace-obs-events", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let profile = build_hot_path_profile(&report, 8);
+
+    assert!(
+        profile.observed_instruction_events > 0,
+        "observed_instruction_events must be positive for a non-trivial program"
+    );
+    assert!(profile.observed_instruction_events <= profile.total_steps);
+}
+
+// ---------- TierUpDecision::profile ----------
+
+#[test]
+fn tier_up_decision_embeds_profile() {
+    let program = cached_hot_loop_program();
+    let policy = TierUpPolicy {
+        min_total_steps: 4,
+        min_invocations_per_path: 1,
+        ..TierUpPolicy::default()
+    };
+    let mut vm = BytecodeVm::new("trace-embed-profile", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    assert!(!decision.profile.profile_hash.is_empty());
+    assert_eq!(decision.profile.trace_id, "trace-embed-profile");
+    assert!(decision.profile.total_steps > 0);
+}
+
+// ---------- TierUpRejection serde ----------
+
+#[test]
+fn tier_up_rejection_serde_roundtrip() {
+    let program = arithmetic_loop_program();
+    let policy = TierUpPolicy {
+        min_total_steps: 1,
+        min_invocations_per_path: 999,
+        min_cache_hit_rate_millionths: 0,
+        require_cache_signal: false,
+        ..TierUpPolicy::default()
+    };
+    let mut vm = BytecodeVm::new("trace-reject-serde", 8, 128);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    assert!(!decision.rejected_paths.is_empty());
+    for rejection in &decision.rejected_paths {
+        let json = serde_json::to_string(rejection).expect("serialize");
+        let recovered: frankenengine_engine::tier_up_profiler::TierUpRejection =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, *rejection);
+    }
+}
+
+// ---------- TierUpCandidate serde ----------
+
+#[test]
+fn tier_up_candidate_serde_roundtrip() {
+    let program = cached_hot_loop_program();
+    let policy = TierUpPolicy {
+        min_total_steps: 1,
+        min_invocations_per_path: 1,
+        min_cache_hit_rate_millionths: 0,
+        max_candidates: 10,
+        profile_top_k: 16,
+        require_cache_signal: false,
+        ..TierUpPolicy::default()
+    };
+    let mut vm = BytecodeVm::new("trace-cand-serde", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    assert!(!decision.selected_candidates.is_empty());
+    for candidate in &decision.selected_candidates {
+        let json = serde_json::to_string(candidate).expect("serialize");
+        let recovered: frankenengine_engine::tier_up_profiler::TierUpCandidate =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, *candidate);
+    }
+}
+
+// ---------- TierUpDecisionEvent serde ----------
+
+#[test]
+fn tier_up_decision_event_serde_roundtrip() {
+    let program = cached_hot_loop_program();
+    let policy = TierUpPolicy {
+        min_total_steps: 4,
+        min_invocations_per_path: 1,
+        ..TierUpPolicy::default()
+    };
+    let mut vm = BytecodeVm::new("trace-event-serde", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    assert!(!decision.events.is_empty());
+    for event in &decision.events {
+        let json = serde_json::to_string(event).expect("serialize");
+        let recovered: frankenengine_engine::tier_up_profiler::TierUpDecisionEvent =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, *event);
+    }
+}
+
+// ---------- TierUpCandidate rationale ----------
+
+#[test]
+fn tier_up_candidate_rationale_is_nonempty() {
+    let program = cached_hot_loop_program();
+    let policy = TierUpPolicy {
+        min_total_steps: 1,
+        min_invocations_per_path: 1,
+        min_cache_hit_rate_millionths: 0,
+        max_candidates: 10,
+        profile_top_k: 16,
+        require_cache_signal: false,
+        ..TierUpPolicy::default()
+    };
+    let mut vm = BytecodeVm::new("trace-rationale", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    for candidate in &decision.selected_candidates {
+        assert!(
+            !candidate.rationale.is_empty(),
+            "candidate rationale must be non-empty"
+        );
+    }
+}
+
+// ---------- TierUpDecision policy_hash ----------
+
+#[test]
+fn tier_up_decision_policy_hash_matches_input_policy() {
+    let program = arithmetic_loop_program();
+    let policy = TierUpPolicy::default();
+    let mut vm = BytecodeVm::new("trace-polhash", 8, 128);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    assert_eq!(
+        decision.policy_hash,
+        policy.policy_hash(),
+        "decision policy_hash must match the input policy"
+    );
+}
+
+// ---------- large top_k doesn't panic ----------
+
+#[test]
+fn build_hot_path_profile_with_very_large_top_k_succeeds() {
+    let program = cached_hot_loop_program();
+    let mut vm = BytecodeVm::new("trace-large-topk", 12, 256);
+    let report = vm.execute(&program).expect("execute");
+    let profile = build_hot_path_profile(&report, 10_000);
+    assert!(!profile.profile_hash.is_empty());
+    // top_paths should not exceed the number of distinct instruction addresses
+    assert!(profile.top_paths.len() <= 10_000);
+}
+
+// ---------- Decision schema_version is stable ----------
+
+#[test]
+fn tier_up_decision_schema_version_matches_constant() {
+    let program = arithmetic_loop_program();
+    let policy = TierUpPolicy::default();
+    let mut vm = BytecodeVm::new("trace-sv-check", 8, 128);
+    let report = vm.execute(&program).expect("execute");
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+
+    assert_eq!(
+        decision.schema_version,
+        frankenengine_engine::tier_up_profiler::TIER_UP_POLICY_SCHEMA_VERSION
+    );
+}

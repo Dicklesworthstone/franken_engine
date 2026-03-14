@@ -803,21 +803,26 @@ fn publish_scorecard_deterministic_for_same_request() {
 }
 
 #[test]
-fn scorecard_with_zero_attested_receipts_is_critical() {
+fn scorecard_with_zero_attested_receipts_is_rejected() {
     let mut request = baseline_request();
     request.attested_receipts.clear();
 
     let mut governance_ledger = ledger();
-    let publication = publish_governance_scorecard(
+    let result = publish_governance_scorecard(
         &request,
         &signing_key(),
         &mut governance_ledger,
         GovernanceActor::System("test".to_string()),
-    )
-    .expect("publication should succeed");
+    );
 
-    assert_eq!(publication.outcome, GovernanceScorecardOutcome::Critical);
-    assert!(!publication.blockers.is_empty());
+    // Empty receipts are rejected at validation, not scored
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("attested_receipts")
+    );
 }
 
 #[test]
@@ -864,4 +869,582 @@ fn cross_repo_conformance_input_serde_roundtrip() {
         recovered.failure_class_distribution,
         request.conformance.failure_class_distribution
     );
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment batch: validation error paths, clone independence,
+// scorecard_run_id override, summary serde, markdown sections,
+// threshold validation, Debug distinctness
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn validation_rejects_empty_trace_id() {
+    let mut request = baseline_request();
+    request.trace_id = "".to_string();
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.stable_code(), "FE-GOV-SCORE-3001");
+    assert!(err.to_string().contains("trace_id"));
+}
+
+#[test]
+fn validation_rejects_empty_decision_id() {
+    let mut request = baseline_request();
+    request.decision_id = " ".to_string(); // whitespace-only
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("decision_id"));
+}
+
+#[test]
+fn validation_rejects_empty_policy_id() {
+    let mut request = baseline_request();
+    request.policy_id = "".to_string();
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn validation_rejects_zero_generated_at_ns() {
+    let mut request = baseline_request();
+    request.generated_at_ns = 0;
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("generated_at_ns"));
+}
+
+#[test]
+fn validation_rejects_duplicate_receipt_ids() {
+    let mut request = baseline_request();
+    request.attested_receipts.push(AttestedReceiptObservation {
+        receipt_id: "r-001".to_string(), // duplicate of first
+        high_impact: true,
+        attestation_binding_valid: true,
+        timestamp_ns: 99,
+    });
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("duplicate"));
+}
+
+#[test]
+fn validation_rejects_empty_receipt_id() {
+    let mut request = baseline_request();
+    request.attested_receipts[0].receipt_id = "".to_string();
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("receipt_id"));
+}
+
+#[test]
+fn validation_rejects_no_high_impact_receipts() {
+    let mut request = baseline_request();
+    for receipt in &mut request.attested_receipts {
+        receipt.high_impact = false;
+    }
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("high-impact"));
+}
+
+#[test]
+fn validation_rejects_zero_measurement_window() {
+    let mut request = baseline_request();
+    request.privacy_budget.measurement_window_ns = 0;
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("measurement_window_ns")
+    );
+}
+
+#[test]
+fn validation_rejects_empty_conformance_release_id() {
+    let mut request = baseline_request();
+    request.conformance.release_id = "".to_string();
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("release_id"));
+}
+
+#[test]
+fn validation_rejects_matrix_health_cell_count_mismatch() {
+    let mut request = baseline_request();
+    // passed_cells + failed_cells != total_cells
+    request.conformance.matrix_health.total_cells = 100;
+    request.conformance.matrix_health.passed_cells = 50;
+    request.conformance.matrix_health.failed_cells = 10;
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("matrix_health"));
+}
+
+#[test]
+fn validation_rejects_threshold_coverage_over_million() {
+    let mut request = baseline_request();
+    request.thresholds = Some(GovernanceScorecardThresholds {
+        min_attested_receipt_coverage_millionths: 2_000_000,
+        ..GovernanceScorecardThresholds::default()
+    });
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn validation_rejects_warn_exhaustion_zero() {
+    let mut request = baseline_request();
+    request.thresholds = Some(GovernanceScorecardThresholds {
+        warn_privacy_exhaustion_within_ns: Some(0),
+        ..GovernanceScorecardThresholds::default()
+    });
+
+    let mut governance_ledger = ledger();
+    let result = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    );
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("warn_privacy_exhaustion_within_ns")
+    );
+}
+
+#[test]
+fn scorecard_run_id_overrides_derived_id() {
+    let mut request = baseline_request();
+    request.scorecard_run_id = "custom-run-42".to_string();
+
+    let mut governance_ledger = ledger();
+    let publication = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication");
+
+    assert_eq!(publication.scorecard_id, "custom-run-42");
+}
+
+#[test]
+fn publication_clone_independence() {
+    let request = baseline_request();
+    let mut governance_ledger = ledger();
+    let publication = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication");
+
+    let mut cloned = publication.clone();
+    cloned.outcome = GovernanceScorecardOutcome::Critical;
+    cloned.blockers.push("injected".to_string());
+    cloned.scorecard_id = "mutated".to_string();
+
+    // Original is unaffected
+    assert_eq!(publication.outcome, GovernanceScorecardOutcome::Healthy);
+    assert!(publication.blockers.is_empty());
+    assert_ne!(publication.scorecard_id, "mutated");
+}
+
+#[test]
+fn outcome_debug_display_distinctness() {
+    let variants = [
+        GovernanceScorecardOutcome::Healthy,
+        GovernanceScorecardOutcome::Warning,
+        GovernanceScorecardOutcome::Critical,
+    ];
+    let debug_strs: Vec<String> = variants.iter().map(|v| format!("{v:?}")).collect();
+    // All debug representations must be distinct
+    for i in 0..debug_strs.len() {
+        for j in (i + 1)..debug_strs.len() {
+            assert_ne!(debug_strs[i], debug_strs[j]);
+        }
+    }
+    // as_str values must also be distinct from each other
+    let as_strs: Vec<&str> = variants.iter().map(|v| v.as_str()).collect();
+    for i in 0..as_strs.len() {
+        for j in (i + 1)..as_strs.len() {
+            assert_ne!(as_strs[i], as_strs[j]);
+        }
+    }
+}
+
+#[test]
+fn markdown_report_contains_blockers_and_warnings_sections() {
+    let mut request = baseline_request();
+    // Cause a warning via privacy near-term exhaustion
+    request.privacy_budget.accountant = {
+        let mut accountant = BudgetAccountant::new(AccountantConfig {
+            epsilon_per_epoch_millionths: 1_000_000,
+            delta_per_epoch_millionths: 100_000,
+            lifetime_epsilon_budget_millionths: 10_000_000,
+            lifetime_delta_budget_millionths: 1_000_000,
+            composition_method: CompositionMethod::Basic,
+            epoch: SecurityEpoch::from_raw(7),
+            zone: "zone-governance-scorecard".to_string(),
+            now_ns: 1_720_000_000_000_000_000,
+        })
+        .expect("accountant");
+        accountant
+            .consume(850_000, 85_000, "heavy-load", 2_000_000_000)
+            .expect("consume");
+        accountant
+    };
+    request.thresholds = Some(GovernanceScorecardThresholds {
+        warn_privacy_exhaustion_within_ns: Some(7 * 24 * 3_600_000_000_000),
+        ..GovernanceScorecardThresholds::default()
+    });
+    // Also cause a blocker via low attested receipt coverage
+    request.attested_receipts[1].attestation_binding_valid = false;
+
+    let mut governance_ledger = ledger();
+    let publication = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication");
+
+    let md = publication.to_markdown_report();
+    assert!(md.contains("## Blockers"));
+    assert!(md.contains("## Warnings"));
+    assert!(md.contains("## Dimensions"));
+    assert!(md.contains("## Trend"));
+    assert!(md.contains("CRITICAL"));
+}
+
+#[test]
+fn version_specific_failures_exceeding_threshold_blocks() {
+    let mut request = baseline_request();
+    request.conformance.matrix_health.version_specific_failures = 10;
+    // Keep total consistent
+    request.conformance.matrix_health.total_cells = 20;
+    request.conformance.matrix_health.passed_cells = 10;
+    request.conformance.matrix_health.failed_cells = 10;
+
+    let mut governance_ledger = ledger();
+    let publication = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication");
+
+    assert_eq!(publication.outcome, GovernanceScorecardOutcome::Critical);
+    assert!(!publication.blockers.is_empty());
+    assert!(
+        publication
+            .blockers
+            .iter()
+            .any(|b| b.contains("conformance"))
+    );
+}
+
+#[test]
+fn multiple_historical_trend_points_sorted_by_timestamp() {
+    let mut request = baseline_request();
+    let base_ts = request.generated_at_ns;
+    // Add points out of order
+    request.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "third".to_string(),
+        generated_at_ns: base_ts.saturating_sub(1),
+        attested_receipt_coverage_millionths: 1_000_000,
+        privacy_epoch_consumption_millionths: 200_000,
+        moonshot_override_frequency_millionths: 50_000,
+        conformance_pass_rate_millionths: 1_000_000,
+        outcome: GovernanceScorecardOutcome::Healthy,
+    });
+    request.historical.push(GovernanceScorecardTrendPoint {
+        scorecard_id: "first".to_string(),
+        generated_at_ns: base_ts.saturating_sub(100),
+        attested_receipt_coverage_millionths: 1_000_000,
+        privacy_epoch_consumption_millionths: 100_000,
+        moonshot_override_frequency_millionths: 30_000,
+        conformance_pass_rate_millionths: 1_000_000,
+        outcome: GovernanceScorecardOutcome::Healthy,
+    });
+
+    let mut governance_ledger = ledger();
+    let publication = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication");
+
+    // Trend should be sorted by generated_at_ns ascending, current point is last
+    assert!(publication.trend.len() >= 3);
+    for i in 1..publication.trend.len() {
+        assert!(
+            publication.trend[i].generated_at_ns >= publication.trend[i - 1].generated_at_ns,
+            "trend not sorted at index {i}"
+        );
+    }
+}
+
+#[test]
+fn attested_receipt_coverage_summary_serde_roundtrip() {
+    use frankenengine_engine::governance_scorecard::AttestedReceiptCoverageSummary;
+
+    let summary = AttestedReceiptCoverageSummary {
+        high_impact_total: 10,
+        high_impact_with_valid_attestation: 9,
+        high_impact_missing_or_invalid_attestation: 1,
+        coverage_millionths: 900_000,
+        threshold_pass: true,
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: AttestedReceiptCoverageSummary =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(summary, recovered);
+}
+
+#[test]
+fn moonshot_governor_decision_summary_serde_roundtrip() {
+    use frankenengine_engine::governance_scorecard::MoonshotGovernorDecisionSummary;
+
+    let summary = MoonshotGovernorDecisionSummary {
+        total_decisions: 50,
+        override_count: 3,
+        kill_count: 2,
+        override_frequency_millionths: 60_000,
+        kill_rate_millionths: 40_000,
+        mean_time_to_decision_ns: Some(5_000_000_000),
+        active_moonshots: 8,
+        paused_moonshots: 2,
+        killed_moonshots: 1,
+        threshold_pass: true,
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: MoonshotGovernorDecisionSummary =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(summary, recovered);
+}
+
+#[test]
+fn cross_repo_conformance_stability_summary_serde_roundtrip() {
+    use frankenengine_engine::governance_scorecard::CrossRepoConformanceStabilitySummary;
+
+    let summary = CrossRepoConformanceStabilitySummary {
+        release_id: "rel-2026.03".to_string(),
+        total_cells: 100,
+        passed_cells: 95,
+        failed_cells: 5,
+        pass_rate_millionths: 950_000,
+        universal_failures: 0,
+        version_specific_failures: 5,
+        outstanding_exemptions: 0,
+        failure_class_distribution: BTreeMap::from([
+            ("behavioral".to_string(), 3),
+            ("observability".to_string(), 2),
+        ]),
+        threshold_pass: true,
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: CrossRepoConformanceStabilitySummary =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(summary, recovered);
+}
+
+#[test]
+fn event_count_matches_expected_for_healthy_scorecard() {
+    let request = baseline_request();
+    let mut governance_ledger = ledger();
+    let publication = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication");
+
+    // Expected events: started + 4 dimension evals + trend_regression_check + ledger_append + decision
+    assert!(
+        publication.events.len() >= 7,
+        "expected at least 7 events, got {}",
+        publication.events.len()
+    );
+
+    // Verify event names are present
+    let event_names: Vec<&str> = publication
+        .events
+        .iter()
+        .map(|e| e.event.as_str())
+        .collect();
+    assert!(event_names.contains(&"governance_scorecard_started"));
+    assert!(event_names.contains(&"attested_receipt_coverage_evaluated"));
+    assert!(event_names.contains(&"privacy_budget_health_evaluated"));
+    assert!(event_names.contains(&"moonshot_governor_evaluated"));
+    assert!(event_names.contains(&"cross_repo_conformance_evaluated"));
+    assert!(event_names.contains(&"trend_regression_check"));
+    assert!(event_names.contains(&"governance_scorecard_ledger_append"));
+    assert!(event_names.contains(&"governance_scorecard_decision"));
+}
+
+#[test]
+fn ledger_sequence_increments_across_publications() {
+    let request = baseline_request();
+    let mut governance_ledger = ledger();
+
+    let pub1 = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication 1");
+
+    let mut request2 = baseline_request();
+    request2.trace_id = "trace-2".to_string();
+    request2.decision_id = "decision-2".to_string();
+
+    let pub2 = publish_governance_scorecard(
+        &request2,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication 2");
+
+    assert_eq!(pub1.ledger_sequence, 1);
+    assert_eq!(pub2.ledger_sequence, 2);
+    assert_eq!(governance_ledger.entries().len(), 2);
+}
+
+#[test]
+fn artifact_hash_hex_is_valid_hex_string() {
+    let request = baseline_request();
+    let mut governance_ledger = ledger();
+    let publication = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication");
+
+    // SHA-256 hex should be 64 characters, all hex digits
+    assert_eq!(publication.artifact_hash_hex.len(), 64);
+    assert!(
+        publication
+            .artifact_hash_hex
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+    );
+}
+
+#[test]
+fn healthy_publication_has_no_error_codes_in_dimension_events() {
+    let request = baseline_request();
+    let mut governance_ledger = ledger();
+    let publication = publish_governance_scorecard(
+        &request,
+        &signing_key(),
+        &mut governance_ledger,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication");
+
+    for event in &publication.events {
+        if event.event.contains("evaluated") {
+            assert!(
+                event.error_code.is_none(),
+                "healthy scorecard should have no error codes on dimension events, found on: {}",
+                event.event
+            );
+        }
+    }
 }

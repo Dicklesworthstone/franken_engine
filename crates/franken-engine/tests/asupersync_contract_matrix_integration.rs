@@ -15,8 +15,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::asupersync_contract_matrix::{
-    AsupersyncSurface, BEAD_ID, COMPONENT, CompatibilityDisposition, ContractFailureCode,
-    DEFAULT_ASUPERSYNC_ROOT, FAILURE_CODE_SCHEMA_VERSION, SCHEMA_VERSION,
+    AsupersyncContractCompatMatrix, AsupersyncSurface, BEAD_ID, COMPONENT,
+    CompatibilityDisposition, ContractFailureCode, DEFAULT_ASUPERSYNC_ROOT,
+    FAILURE_CODE_SCHEMA_VERSION, SCHEMA_VERSION, VersionDriftFailureCatalog,
     build_asupersync_contract_matrix, build_asupersync_contract_matrix_with_generated_at,
     canonical_failure_code_catalog, default_asupersync_root, write_asupersync_contract_bundle,
 };
@@ -637,5 +638,266 @@ fn bundle_events_are_valid_json_lines() {
         let event: serde_json::Value =
             serde_json::from_str(line).expect("each event must be valid JSON");
         assert_eq!(event["component"], COMPONENT);
+    }
+}
+
+// ===== PearlTower enrichment =====
+
+#[test]
+fn enrichment_asupersync_surface_serde_roundtrip_all_variants() {
+    for surface in AsupersyncSurface::all() {
+        let json = serde_json::to_string(surface).expect("serialize surface");
+        let decoded: AsupersyncSurface = serde_json::from_str(&json).expect("deserialize surface");
+        assert_eq!(decoded, *surface, "serde roundtrip failed for {surface}");
+    }
+}
+
+#[test]
+fn enrichment_compatibility_disposition_serde_roundtrip_all_variants() {
+    let variants = [
+        CompatibilityDisposition::Compatible,
+        CompatibilityDisposition::VersionDrift,
+        CompatibilityDisposition::MissingCapability,
+        CompatibilityDisposition::BridgeIncompatible,
+    ];
+    for d in &variants {
+        let json = serde_json::to_string(d).expect("serialize disposition");
+        let decoded: CompatibilityDisposition =
+            serde_json::from_str(&json).expect("deserialize disposition");
+        assert_eq!(decoded, *d, "serde roundtrip failed for {d}");
+    }
+}
+
+#[test]
+fn enrichment_contract_failure_code_serde_roundtrip_all_variants() {
+    for code in ContractFailureCode::all() {
+        let json = serde_json::to_string(code).expect("serialize failure code");
+        let decoded: ContractFailureCode =
+            serde_json::from_str(&json).expect("deserialize failure code");
+        assert_eq!(decoded, *code, "serde roundtrip failed for {code}");
+    }
+}
+
+#[test]
+fn enrichment_matrix_serde_full_roundtrip_preserves_all_fields() {
+    let root = default_asupersync_root();
+    let matrix = build_asupersync_contract_matrix_with_generated_at(
+        &root,
+        1_700_000_000_000,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("build matrix");
+    let json = serde_json::to_string(&matrix).expect("serialize matrix");
+    let decoded: AsupersyncContractCompatMatrix =
+        serde_json::from_str(&json).expect("deserialize matrix");
+    assert_eq!(
+        decoded, matrix,
+        "full matrix serde roundtrip must be lossless"
+    );
+    assert_eq!(decoded.schema_version, matrix.schema_version);
+    assert_eq!(decoded.bead_id, matrix.bead_id);
+    assert_eq!(decoded.generated_at_unix_ms, matrix.generated_at_unix_ms);
+    assert_eq!(
+        decoded.compatibility_cells.len(),
+        matrix.compatibility_cells.len()
+    );
+    assert_eq!(decoded.releases.len(), matrix.releases.len());
+}
+
+#[test]
+fn enrichment_matrix_cells_have_unique_surfaces() {
+    let root = default_asupersync_root();
+    let matrix = build_asupersync_contract_matrix_with_generated_at(
+        &root,
+        1_700_000_000_000,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("build matrix");
+    let mut seen = std::collections::BTreeSet::new();
+    for cell in &matrix.compatibility_cells {
+        assert!(
+            seen.insert(cell.surface),
+            "duplicate surface {} in compatibility cells",
+            cell.surface
+        );
+    }
+    assert_eq!(seen.len(), 4);
+}
+
+#[test]
+fn enrichment_matrix_cells_surface_matches_release_surface() {
+    let root = default_asupersync_root();
+    let matrix = build_asupersync_contract_matrix_with_generated_at(
+        &root,
+        1_700_000_000_000,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("build matrix");
+    // Every cell's crate_name must also appear in releases under the same surface
+    for cell in &matrix.compatibility_cells {
+        let matching_release = matrix.releases.iter().find(|r| r.surface == cell.surface);
+        assert!(
+            matching_release.is_some(),
+            "no release entry for surface {}",
+            cell.surface
+        );
+        let release = matching_release.unwrap();
+        assert_eq!(
+            release.crate_name, cell.crate_name,
+            "release crate_name mismatch for surface {}",
+            cell.surface
+        );
+    }
+}
+
+#[test]
+fn enrichment_releases_have_unique_surfaces() {
+    let root = default_asupersync_root();
+    let matrix = build_asupersync_contract_matrix_with_generated_at(
+        &root,
+        1_700_000_000_000,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("build matrix");
+    let mut seen = std::collections::BTreeSet::new();
+    for release in &matrix.releases {
+        assert!(
+            seen.insert(release.surface),
+            "duplicate surface {} in releases",
+            release.surface
+        );
+    }
+    assert_eq!(seen.len(), 4);
+}
+
+#[test]
+fn enrichment_failure_code_all_variants_have_unique_as_str_values() {
+    let mut seen = std::collections::BTreeSet::new();
+    for code in ContractFailureCode::all() {
+        let s = code.as_str();
+        assert!(
+            seen.insert(s),
+            "duplicate as_str() value '{s}' across ContractFailureCode variants"
+        );
+    }
+    assert_eq!(seen.len(), ContractFailureCode::all().len());
+}
+
+#[test]
+fn enrichment_surface_all_variants_have_unique_as_str_values() {
+    let mut seen = std::collections::BTreeSet::new();
+    for surface in AsupersyncSurface::all() {
+        let s = surface.as_str();
+        assert!(
+            seen.insert(s),
+            "duplicate as_str() value '{s}' across AsupersyncSurface variants"
+        );
+    }
+    assert_eq!(seen.len(), AsupersyncSurface::all().len());
+}
+
+#[test]
+fn enrichment_clone_debug_for_surface_and_disposition() {
+    let surface = AsupersyncSurface::KernelContext;
+    let cloned = surface;
+    assert_eq!(surface, cloned);
+    let debug_str = format!("{surface:?}");
+    assert!(debug_str.contains("KernelContext"));
+
+    let disposition = CompatibilityDisposition::VersionDrift;
+    let cloned_d = disposition;
+    assert_eq!(disposition, cloned_d);
+    let debug_d = format!("{disposition:?}");
+    assert!(debug_d.contains("VersionDrift"));
+}
+
+#[test]
+fn enrichment_clone_debug_for_contract_failure_code() {
+    for code in ContractFailureCode::all() {
+        let cloned = *code;
+        assert_eq!(*code, cloned);
+        let debug_str = format!("{code:?}");
+        assert!(
+            !debug_str.is_empty(),
+            "Debug output must not be empty for {code}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_catalog_failure_code_as_str_values_are_snake_case() {
+    for code in ContractFailureCode::all() {
+        let s = code.as_str();
+        // snake_case: only lowercase letters, digits, and underscores
+        assert!(
+            s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "ContractFailureCode::as_str() '{s}' is not snake_case"
+        );
+        assert!(
+            !s.starts_with('_'),
+            "as_str() must not start with underscore: {s}"
+        );
+        assert!(
+            !s.ends_with('_'),
+            "as_str() must not end with underscore: {s}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_compatible_plus_incompatible_equals_total_cells() {
+    let root = default_asupersync_root();
+    let matrix = build_asupersync_contract_matrix_with_generated_at(
+        &root,
+        1_700_000_000_000,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("build matrix");
+    assert_eq!(
+        matrix.compatible_surface_count + matrix.incompatible_surface_count,
+        matrix.compatibility_cells.len(),
+        "compatible + incompatible must equal total cell count"
+    );
+}
+
+#[test]
+fn enrichment_different_timestamps_produce_different_report_hashes() {
+    let root = default_asupersync_root();
+    let m1 = build_asupersync_contract_matrix_with_generated_at(
+        &root,
+        1_700_000_000_001,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("build m1");
+    let m2 = build_asupersync_contract_matrix_with_generated_at(
+        &root,
+        1_700_000_000_002,
+        SecurityEpoch::GENESIS,
+    )
+    .expect("build m2");
+    assert_ne!(
+        m1.report_hash, m2.report_hash,
+        "different timestamps must yield different report hashes"
+    );
+}
+
+#[test]
+fn enrichment_catalog_serde_full_roundtrip() {
+    let catalog = canonical_failure_code_catalog();
+    let json = serde_json::to_string(&catalog).expect("serialize catalog");
+    let decoded: VersionDriftFailureCatalog =
+        serde_json::from_str(&json).expect("deserialize catalog");
+    assert_eq!(decoded.schema_version, catalog.schema_version);
+    assert_eq!(decoded.bead_id, catalog.bead_id);
+    assert_eq!(decoded.failure_codes.len(), catalog.failure_codes.len());
+    for (orig, dec) in catalog
+        .failure_codes
+        .iter()
+        .zip(decoded.failure_codes.iter())
+    {
+        assert_eq!(orig.code, dec.code);
+        assert_eq!(orig.description, dec.description);
+        assert_eq!(orig.remediation, dec.remediation);
     }
 }

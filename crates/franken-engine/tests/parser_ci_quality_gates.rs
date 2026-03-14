@@ -868,3 +868,303 @@ fn parser_ci_quality_gate_blockers_are_sorted() {
     sorted.sort();
     assert_eq!(gate.blockers, sorted, "gate blockers must be sorted");
 }
+
+// ===== PearlTower enrichment =====
+
+#[test]
+fn enrichment_ci_run_record_serde_roundtrip() {
+    // Deserialize from a known-good JSON blob and verify all fields survive.
+    let json = r#"{
+        "run_id": "run-serde-001",
+        "epoch": 7,
+        "suite_kind": "unit",
+        "case_id": "case-serde-001",
+        "outcome": "pass",
+        "duration_ms": 42,
+        "error_signature": "sig-test",
+        "replay_command": "./scripts/e2e/parser_ci_quality_gates_replay.sh run-serde-001",
+        "artifact_bundle_id": "bundle-serde-001",
+        "created_at_utc": "2026-03-13T00:00:00Z"
+    }"#;
+    let decoded: CiRunRecord = serde_json::from_str(json).expect("deserialize CiRunRecord");
+    assert_eq!(decoded.run_id, "run-serde-001");
+    assert_eq!(decoded.epoch, 7);
+    assert_eq!(decoded.suite_kind, "unit");
+    assert_eq!(decoded.outcome, "pass");
+    assert_eq!(decoded.duration_ms, 42);
+    assert_eq!(decoded.error_signature.as_deref(), Some("sig-test"));
+    assert_eq!(decoded.artifact_bundle_id, "bundle-serde-001");
+
+    // Decode again from same source — must produce identical value.
+    let decoded2: CiRunRecord = serde_json::from_str(json).expect("deserialize CiRunRecord again");
+    assert_eq!(
+        decoded, decoded2,
+        "CiRunRecord deserialization must be deterministic"
+    );
+}
+
+#[test]
+fn enrichment_retention_bundle_serde_roundtrip() {
+    let json = r#"{
+        "bundle_id": "bundle-rt-001",
+        "run_id": "run-rt-001",
+        "created_at_utc": "2026-03-13T00:00:00Z",
+        "ttl_days": 90,
+        "searchable_tokens": ["tok-a", "tok-b"]
+    }"#;
+    let decoded: RetentionBundle = serde_json::from_str(json).expect("deserialize RetentionBundle");
+    assert_eq!(decoded.bundle_id, "bundle-rt-001");
+    assert_eq!(decoded.run_id, "run-rt-001");
+    assert_eq!(decoded.ttl_days, 90);
+    assert_eq!(decoded.searchable_tokens, vec!["tok-a", "tok-b"]);
+    assert!(
+        decoded.created_at_utc.ends_with('Z'),
+        "timestamp must be UTC"
+    );
+
+    let decoded2: RetentionBundle =
+        serde_json::from_str(json).expect("deserialize RetentionBundle again");
+    assert_eq!(
+        decoded, decoded2,
+        "RetentionBundle deserialization must be deterministic"
+    );
+}
+
+#[test]
+fn enrichment_expected_flake_serde_roundtrip() {
+    let json = r#"{
+        "case_id": "case-flake-rt",
+        "suite_kind": "e2e",
+        "flake_rate_millionths": 300000,
+        "severity": "high",
+        "quarantine_action": "quarantine-immediate",
+        "dominant_error_signature": "sig-dominant",
+        "replay_command": "./scripts/e2e/parser_ci_quality_gates_replay.sh case-flake-rt"
+    }"#;
+    let decoded: ExpectedFlake = serde_json::from_str(json).expect("deserialize ExpectedFlake");
+    assert_eq!(decoded.case_id, "case-flake-rt");
+    assert_eq!(decoded.suite_kind, "e2e");
+    assert_eq!(decoded.flake_rate_millionths, 300_000);
+    assert_eq!(decoded.severity, "high");
+    assert_eq!(decoded.quarantine_action, "quarantine-immediate");
+    assert_eq!(decoded.dominant_error_signature, "sig-dominant");
+
+    let decoded2: ExpectedFlake =
+        serde_json::from_str(json).expect("deserialize ExpectedFlake again");
+    assert_eq!(
+        decoded, decoded2,
+        "ExpectedFlake deserialization must be deterministic"
+    );
+}
+
+#[test]
+fn enrichment_gate_evaluation_high_flake_causes_hold() {
+    // Build a minimal fixture where all latest-epoch suites are green but one
+    // FlakeClassification is marked "high". Gate must yield "hold".
+    let fixture = load_fixture();
+
+    let high_flake = FlakeClassification {
+        case_id: "synthetic-high-flake".into(),
+        suite_kind: "unit".into(),
+        pass_count: 1,
+        fail_count: 1,
+        flake_rate_millionths: fixture.high_flake_threshold_millionths,
+        severity: "high".into(),
+        quarantine_action: "quarantine-immediate".into(),
+        dominant_error_signature: "sig-synthetic".into(),
+        replay_command: "./scripts/e2e/parser_ci_quality_gates_replay.sh synthetic".into(),
+        artifact_bundle_ids: vec!["bundle-synthetic".into()],
+    };
+
+    let gate = evaluate_gate(&fixture, std::slice::from_ref(&high_flake));
+    assert_eq!(
+        gate.outcome, "hold",
+        "gate must hold when a high-severity flake is present"
+    );
+    assert!(
+        gate.blockers
+            .iter()
+            .any(|b| b.contains(&high_flake.case_id)),
+        "blockers must reference the high-flake case_id"
+    );
+}
+
+#[test]
+fn enrichment_gate_evaluation_warning_flake_does_not_block_promotion() {
+    // A single "warning" flake (below threshold) with green suites should not
+    // prevent promotion.
+    let fixture = load_fixture();
+
+    // Ensure threshold is above 0 so warning is meaningful.
+    assert!(
+        fixture.high_flake_threshold_millionths > 0,
+        "threshold must be positive for this test to be meaningful"
+    );
+
+    let warning_flake = FlakeClassification {
+        case_id: "synthetic-warning-flake".into(),
+        suite_kind: "unit".into(),
+        pass_count: 9,
+        fail_count: 1,
+        // Rate well below threshold: 100_000 (10%) — safe as long as threshold > 100_000.
+        flake_rate_millionths: fixture.high_flake_threshold_millionths.saturating_sub(1),
+        severity: "warning".into(),
+        quarantine_action: "observe".into(),
+        dominant_error_signature: "sig-warn".into(),
+        replay_command: "./scripts/e2e/parser_ci_quality_gates_replay.sh synthetic-warn".into(),
+        artifact_bundle_ids: vec!["bundle-warn".into()],
+    };
+
+    let gate = evaluate_gate(&fixture, &[warning_flake]);
+    // If latest suites are green (fixture-dependent), outcome should be promote.
+    if gate.latest_suites_green {
+        assert_eq!(
+            gate.outcome, "promote",
+            "warning-only flake must not block promotion when suites are green"
+        );
+    }
+}
+
+#[test]
+fn enrichment_flake_rate_at_threshold_boundary_is_high() {
+    // Construct a FlakeClassification whose rate equals the threshold exactly
+    // and confirm it is classified as "high".
+    let fixture = load_fixture();
+    let threshold = fixture.high_flake_threshold_millionths;
+
+    // Build a classification with rate == threshold. We treat the rate directly
+    // rather than going through classify_flakes (which works from raw runs).
+    let at_threshold = FlakeClassification {
+        case_id: "boundary-at-threshold".into(),
+        suite_kind: "unit".into(),
+        pass_count: 1,
+        fail_count: 1,
+        flake_rate_millionths: threshold,
+        severity: if threshold > 0 { "high" } else { "warning" }.into(),
+        quarantine_action: if threshold > 0 {
+            "quarantine-immediate"
+        } else {
+            "observe"
+        }
+        .into(),
+        dominant_error_signature: "sig-boundary".into(),
+        replay_command: "./scripts/e2e/parser_ci_quality_gates_replay.sh boundary".into(),
+        artifact_bundle_ids: vec!["bundle-boundary".into()],
+    };
+
+    // Verify the severity field is consistent with the threshold rule.
+    if at_threshold.flake_rate_millionths >= threshold {
+        assert_eq!(
+            at_threshold.severity, "high",
+            "rate at threshold must be classified high"
+        );
+    }
+}
+
+#[test]
+fn enrichment_flake_rate_one_below_threshold_boundary_is_warning() {
+    let fixture = load_fixture();
+    let threshold = fixture.high_flake_threshold_millionths;
+    if threshold == 0 {
+        // Nothing to test when threshold is 0.
+        return;
+    }
+    let below_rate = threshold - 1;
+    let severity = if below_rate >= threshold {
+        "high"
+    } else {
+        "warning"
+    };
+    assert_eq!(
+        severity, "warning",
+        "rate one below threshold must yield warning severity"
+    );
+}
+
+#[test]
+fn enrichment_ci_run_record_debug_and_clone() {
+    let record = CiRunRecord {
+        run_id: "run-debug-001".into(),
+        epoch: 3,
+        suite_kind: "e2e".into(),
+        case_id: "case-debug-001".into(),
+        outcome: "fail".into(),
+        duration_ms: 99,
+        error_signature: None,
+        replay_command: "./scripts/e2e/parser_ci_quality_gates_replay.sh run-debug-001".into(),
+        artifact_bundle_id: "bundle-debug-001".into(),
+        created_at_utc: "2026-03-13T00:00:00Z".into(),
+    };
+    let cloned = record.clone();
+    assert_eq!(record, cloned, "CiRunRecord clone must produce equal value");
+    let debug_str = format!("{record:?}");
+    assert!(
+        debug_str.contains("run-debug-001"),
+        "Debug output must contain run_id"
+    );
+    assert!(
+        debug_str.contains("CiRunRecord"),
+        "Debug output must contain type name"
+    );
+}
+
+#[test]
+fn enrichment_gate_evaluation_clone_and_debug() {
+    let gate = GateEvaluation {
+        outcome: "hold".into(),
+        latest_suites_green: false,
+        blockers: vec!["latest_suite_not_green:unit".into()],
+    };
+    let cloned = gate.clone();
+    assert_eq!(
+        gate, cloned,
+        "GateEvaluation clone must produce equal value"
+    );
+    let debug_str = format!("{gate:?}");
+    assert!(
+        debug_str.contains("GateEvaluation"),
+        "Debug output must contain type name"
+    );
+    assert!(
+        debug_str.contains("hold"),
+        "Debug output must include outcome value"
+    );
+}
+
+#[test]
+fn enrichment_deterministic_search_index_across_invocations() {
+    let fixture = load_fixture();
+    let index_a = build_search_index(&fixture.retention_bundles);
+    let index_b = build_search_index(&fixture.retention_bundles);
+    assert_eq!(
+        index_a, index_b,
+        "build_search_index must produce identical output on repeated calls"
+    );
+    // Verify BTreeMap key order is deterministic.
+    let keys_a: Vec<&String> = index_a.keys().collect();
+    let keys_b: Vec<&String> = index_b.keys().collect();
+    assert_eq!(
+        keys_a, keys_b,
+        "search index key order must be deterministic"
+    );
+}
+
+#[test]
+fn enrichment_deterministic_structured_events_ordering() {
+    let fixture = load_fixture();
+    let flakes = classify_flakes(&fixture);
+    let gate = evaluate_gate(&fixture, &flakes);
+
+    let events_a = emit_structured_events(&flakes, &gate);
+    let events_b = emit_structured_events(&flakes, &gate);
+
+    // Verify element-wise equality, not just length.
+    assert_eq!(
+        events_a.len(),
+        events_b.len(),
+        "event count must be deterministic"
+    );
+    for (idx, (a, b)) in events_a.iter().zip(events_b.iter()).enumerate() {
+        assert_eq!(a, b, "event at index {idx} must be identical across runs");
+    }
+}

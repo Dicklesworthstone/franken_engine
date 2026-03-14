@@ -767,3 +767,311 @@ fn governance_rationale_debug_is_nonempty() {
     };
     assert!(!format!("{rationale:?}").is_empty());
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: error variants, out-of-order timestamps,
+// report serde, ledger serde, GovernanceLogEvent fields
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn governance_ledger_error_all_codes_are_unique() {
+    use frankenengine_engine::portfolio_governor::governance_audit_ledger::GovernanceLedgerError;
+    let errors: Vec<GovernanceLedgerError> = vec![
+        GovernanceLedgerError::InvalidConfig {
+            reason: "test".into(),
+        },
+        GovernanceLedgerError::InvalidInput {
+            field: "f".into(),
+            reason: "r".into(),
+        },
+        GovernanceLedgerError::DuplicateDecisionId {
+            decision_id: "d".into(),
+        },
+        GovernanceLedgerError::OutOfOrderTimestamp {
+            previous_ns: 1,
+            new_ns: 0,
+        },
+        GovernanceLedgerError::SerializationFailed { reason: "s".into() },
+        GovernanceLedgerError::HashChainMismatch { sequence: 0 },
+        GovernanceLedgerError::SignatureMismatch { sequence: 0 },
+        GovernanceLedgerError::EntryHashMismatch { sequence: 0 },
+        GovernanceLedgerError::EmptyLedger,
+    ];
+
+    let mut codes = BTreeSet::new();
+    for err in &errors {
+        let code = err.code();
+        assert!(codes.insert(code), "duplicate error code: {code}");
+        assert!(
+            !err.to_string().is_empty(),
+            "Display must be non-empty for {code}"
+        );
+    }
+    assert_eq!(codes.len(), 9, "expected 9 unique error codes");
+}
+
+#[test]
+fn governance_ledger_error_serde_roundtrip() {
+    use frankenengine_engine::portfolio_governor::governance_audit_ledger::GovernanceLedgerError;
+    let errors: Vec<GovernanceLedgerError> = vec![
+        GovernanceLedgerError::InvalidConfig {
+            reason: "bad config".into(),
+        },
+        GovernanceLedgerError::DuplicateDecisionId {
+            decision_id: "dup-42".into(),
+        },
+        GovernanceLedgerError::EmptyLedger,
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).expect("serialize");
+        let recovered: GovernanceLedgerError = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*err, recovered);
+    }
+}
+
+#[test]
+fn out_of_order_timestamp_append_fails() {
+    let mut ledger = ledger();
+
+    let d1 = GovernorDecision {
+        decision_id: "ooo-1".to_string(),
+        moonshot_id: "moon-ooo".to_string(),
+        kind: GovernorDecisionKind::Promote {
+            from: MoonshotStage::Research,
+            to: MoonshotStage::Shadow,
+        },
+        scorecard: sample_scorecard(),
+        timestamp_ns: 500,
+        epoch: SecurityEpoch::from_raw(3),
+        rationale: "gate met".to_string(),
+    };
+    ledger
+        .append_governor_decision(
+            &d1,
+            GovernanceActor::System("gov".to_string()),
+            vec![],
+            Some(10),
+        )
+        .expect("first append");
+
+    let d2 = GovernorDecision {
+        decision_id: "ooo-2".to_string(),
+        moonshot_id: "moon-ooo".to_string(),
+        kind: GovernorDecisionKind::Hold {
+            reason: "signal drop".to_string(),
+        },
+        scorecard: sample_scorecard(),
+        timestamp_ns: 100,
+        epoch: SecurityEpoch::from_raw(3),
+        rationale: "hold".to_string(),
+    };
+    let err = ledger
+        .append_governor_decision(
+            &d2,
+            GovernanceActor::System("gov".to_string()),
+            vec![],
+            Some(10),
+        )
+        .expect_err("out-of-order timestamp must fail");
+
+    assert_eq!(err.code(), "FE-GOV-LED-0004");
+    assert!(err.to_string().contains("500"));
+    assert!(err.to_string().contains("100"));
+}
+
+#[test]
+fn governance_report_serde_roundtrip() {
+    let mut ledger = ledger();
+
+    for i in 0u64..4 {
+        let decision = GovernorDecision {
+            decision_id: format!("rpt-serde-{i}"),
+            moonshot_id: "moon-rpt-serde".to_string(),
+            kind: GovernorDecisionKind::Promote {
+                from: MoonshotStage::Research,
+                to: MoonshotStage::Shadow,
+            },
+            scorecard: sample_scorecard(),
+            timestamp_ns: 100 + i * 200,
+            epoch: SecurityEpoch::from_raw(3),
+            rationale: "gate met".to_string(),
+        };
+        ledger
+            .append_governor_decision(
+                &decision,
+                GovernanceActor::System("gov".to_string()),
+                vec![],
+                Some(10),
+            )
+            .expect("append");
+    }
+
+    let report = ledger.governance_report(0, 1_000, 250).expect("report");
+    let json = serde_json::to_string(&report).expect("serialize report");
+    let recovered: frankenengine_engine::portfolio_governor::governance_audit_ledger::GovernanceReport =
+        serde_json::from_str(&json).expect("deserialize report");
+    assert_eq!(recovered.total_decisions, report.total_decisions);
+    assert_eq!(recovered.override_count, report.override_count);
+    assert_eq!(recovered.kill_count, report.kill_count);
+}
+
+#[test]
+fn governance_log_event_fields_are_populated_on_success() {
+    let mut ledger = ledger();
+
+    let decision = GovernorDecision {
+        decision_id: "evt-check".to_string(),
+        moonshot_id: "moon-evt".to_string(),
+        kind: GovernorDecisionKind::Promote {
+            from: MoonshotStage::Research,
+            to: MoonshotStage::Shadow,
+        },
+        scorecard: sample_scorecard(),
+        timestamp_ns: 100,
+        epoch: SecurityEpoch::from_raw(3),
+        rationale: "gate met".to_string(),
+    };
+    ledger
+        .append_governor_decision(
+            &decision,
+            GovernanceActor::System("gov".to_string()),
+            vec!["artifact://evt".to_string()],
+            Some(10),
+        )
+        .expect("append");
+
+    let events = ledger.events();
+    assert!(!events.is_empty());
+    let event = &events[0];
+    assert_eq!(event.component, "governance_audit_ledger");
+    assert_eq!(event.event, "append_decision");
+    assert_eq!(event.outcome, "accepted");
+    assert!(event.error_code.is_none());
+    assert_eq!(event.decision_id, "evt-check");
+    assert!(!event.trace_id.is_empty());
+    assert!(!event.policy_id.is_empty());
+}
+
+#[test]
+fn governance_audit_ledger_serde_roundtrip() {
+    let mut ledger = ledger();
+
+    let decision = GovernorDecision {
+        decision_id: "led-serde".to_string(),
+        moonshot_id: "moon-led".to_string(),
+        kind: GovernorDecisionKind::Promote {
+            from: MoonshotStage::Research,
+            to: MoonshotStage::Shadow,
+        },
+        scorecard: sample_scorecard(),
+        timestamp_ns: 100,
+        epoch: SecurityEpoch::from_raw(3),
+        rationale: "gate met".to_string(),
+    };
+    ledger
+        .append_governor_decision(
+            &decision,
+            GovernanceActor::System("gov".to_string()),
+            vec![],
+            Some(10),
+        )
+        .expect("append");
+
+    let json = serde_json::to_string(&ledger).expect("serialize ledger");
+    let recovered: GovernanceAuditLedger = serde_json::from_str(&json).expect("deserialize ledger");
+    assert_eq!(recovered.entries().len(), 1);
+    assert_eq!(recovered.entries()[0].decision_id, "led-serde");
+    recovered
+        .verify_chain()
+        .expect("chain should verify after serde");
+}
+
+#[test]
+fn governance_decision_type_all_variants_display_unique() {
+    let variants = [
+        GovernanceDecisionType::Promote,
+        GovernanceDecisionType::Hold,
+        GovernanceDecisionType::Kill,
+        GovernanceDecisionType::Pause,
+        GovernanceDecisionType::Resume,
+        GovernanceDecisionType::Override,
+    ];
+    let mut display_strings = BTreeSet::new();
+    for dt in &variants {
+        let s = dt.to_string();
+        assert!(!s.is_empty());
+        assert!(
+            display_strings.insert(s.clone()),
+            "duplicate Display for {dt:?}"
+        );
+    }
+    assert_eq!(display_strings.len(), 6);
+}
+
+#[test]
+fn governance_ledger_entry_hash_and_signature_are_nonempty() {
+    let mut ledger = ledger();
+
+    let decision = GovernorDecision {
+        decision_id: "hash-check".to_string(),
+        moonshot_id: "moon-hash".to_string(),
+        kind: GovernorDecisionKind::Promote {
+            from: MoonshotStage::Research,
+            to: MoonshotStage::Shadow,
+        },
+        scorecard: sample_scorecard(),
+        timestamp_ns: 100,
+        epoch: SecurityEpoch::from_raw(3),
+        rationale: "gate met".to_string(),
+    };
+    ledger
+        .append_governor_decision(
+            &decision,
+            GovernanceActor::System("gov".to_string()),
+            vec![],
+            Some(10),
+        )
+        .expect("append");
+
+    let entry = ledger.latest_entry().expect("should have entry");
+    assert!(!entry.entry_hash.is_empty());
+    assert!(!entry.signature.is_empty());
+    assert_eq!(entry.decision_id, "hash-check");
+}
+
+#[test]
+fn governance_report_portfolio_health_trend_populated() {
+    let mut ledger = ledger();
+
+    for i in 0u64..4 {
+        let decision = GovernorDecision {
+            decision_id: format!("health-{i}"),
+            moonshot_id: "moon-health".to_string(),
+            kind: GovernorDecisionKind::Promote {
+                from: MoonshotStage::Research,
+                to: MoonshotStage::Shadow,
+            },
+            scorecard: sample_scorecard(),
+            timestamp_ns: 100 + i * 200,
+            epoch: SecurityEpoch::from_raw(3),
+            rationale: "gate met".to_string(),
+        };
+        ledger
+            .append_governor_decision(
+                &decision,
+                GovernanceActor::System("gov".to_string()),
+                vec![],
+                Some(10),
+            )
+            .expect("append");
+    }
+
+    let report = ledger.governance_report(0, 1_000, 200).expect("report");
+    assert!(
+        !report.portfolio_health_trend.is_empty(),
+        "health trend should have entries"
+    );
+    for point in &report.portfolio_health_trend {
+        assert!(point.window_end_ns > point.window_start_ns);
+    }
+}

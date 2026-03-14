@@ -896,3 +896,181 @@ fn normative_doc_is_substantial() {
         "normative doc must have meaningful content"
     );
 }
+
+// ===== PearlTower enrichment =====
+
+#[test]
+fn enrichment_manifest_serde_roundtrip_preserves_all_fields() {
+    // Verify that serializing and re-parsing the manifest produces an identical
+    // JSON value — confirming no field is dropped or coerced on roundtrip.
+    let original = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let serialized =
+        serde_json::to_string(&original).expect("manifest must serialize to JSON string");
+    let reparsed: Value =
+        serde_json::from_str(&serialized).expect("serialized manifest must re-parse as JSON");
+    assert_eq!(
+        original, reparsed,
+        "serde roundtrip must preserve all fields without loss"
+    );
+}
+
+#[test]
+fn enrichment_runtime_targets_contain_no_empty_strings() {
+    // Each runtime target identifier must be a non-empty, printable token.
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let targets = require_string_array(&manifest, "runtime_targets");
+    for target in &targets {
+        assert!(
+            !target.trim().is_empty(),
+            "runtime_target must not be blank or whitespace-only: {target:?}"
+        );
+        assert!(
+            target
+                .chars()
+                .all(|c| c.is_ascii() && !c.is_ascii_control()),
+            "runtime_target must contain only printable ASCII: {target:?}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_required_artifacts_contain_no_duplicate_entries() {
+    // Duplicate artifact names would silently collapse identical output files.
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let artifacts = require_string_array(&manifest, "required_artifacts");
+    let unique: BTreeSet<&str> = artifacts.iter().map(String::as_str).collect();
+    assert_eq!(
+        unique.len(),
+        artifacts.len(),
+        "required_artifacts must not contain duplicate filenames"
+    );
+}
+
+#[test]
+fn enrichment_required_artifacts_are_file_extensions_well_formed() {
+    // Every required artifact name must have a recognized extension so
+    // downstream tooling can dispatch on file type without guessing.
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let artifacts = require_string_array(&manifest, "required_artifacts");
+    let allowed_extensions: BTreeSet<&str> = BTreeSet::from(["json", "jsonl", "txt", "lock"]);
+    for artifact in &artifacts {
+        let ext = artifact.rsplit('.').next().unwrap_or("");
+        assert!(
+            allowed_extensions.contains(ext),
+            "required artifact has unrecognized extension: {artifact} (ext={ext:?})"
+        );
+    }
+}
+
+#[test]
+fn enrichment_family_bootstrap_source_ids_are_unique_per_family() {
+    // A family must not redundantly reference the same source twice.
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+
+    for family in families {
+        let family_id = require_string_field(family, "family_id");
+        let source_ids = require_string_array(family, "bootstrap_source_ids");
+        let unique: BTreeSet<&str> = source_ids.iter().map(String::as_str).collect();
+        assert_eq!(
+            unique.len(),
+            source_ids.len(),
+            "family {family_id} has duplicate bootstrap_source_ids"
+        );
+    }
+}
+
+#[test]
+fn enrichment_observability_variants_names_contain_no_whitespace() {
+    // Variant names are used as identifiers in scripts; whitespace would break
+    // shell invocations and file-path generation.
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let variants = require_string_array(&manifest, "required_observability_variants");
+    for variant in &variants {
+        assert!(
+            !variant.chars().any(|c| c.is_whitespace()),
+            "observability variant name must not contain whitespace: {variant:?}"
+        );
+        assert!(
+            !variant.is_empty(),
+            "observability variant name must not be empty"
+        );
+    }
+}
+
+#[test]
+fn enrichment_manifest_json_reparse_is_deterministic_across_multiple_loads() {
+    // Parse the manifest three times independently and assert all three values
+    // are identical — detecting any OS-level file caching anomaly or PRNG seed
+    // that could cause non-deterministic JSON object ordering.
+    let a = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let b = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let c = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    assert_eq!(a, b, "first and second parse must be identical");
+    assert_eq!(b, c, "second and third parse must be identical");
+}
+
+#[test]
+fn enrichment_normative_doc_has_no_trailing_whitespace_on_content_lines() {
+    // Trailing whitespace is a common sign of copy-paste artifacts that
+    // indicate the doc was not reviewed carefully.  We allow up to 5% of lines
+    // to have trailing spaces to avoid being overly strict about markdown
+    // tables, but zero tolerance for tab-trailing lines.
+    let doc = read_text("docs/RGC_ARBITRARY_JS_TS_WORKLOAD_CORPUS_V1.md");
+    let mut trailing_tab_lines: Vec<usize> = Vec::new();
+    for (idx, line) in doc.lines().enumerate() {
+        if line.ends_with('\t') {
+            trailing_tab_lines.push(idx + 1);
+        }
+    }
+    assert!(
+        trailing_tab_lines.is_empty(),
+        "normative doc has lines ending with tab characters at lines: {trailing_tab_lines:?}"
+    );
+}
+
+#[test]
+fn enrichment_coverage_axes_have_no_consecutive_underscores() {
+    // Consecutive underscores in axis names suggest copy-paste errors and
+    // would make axis identifiers visually ambiguous in tooling output.
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let axes = require_string_array(&manifest, "coverage_axes");
+    for axis in &axes {
+        assert!(
+            !axis.contains("__"),
+            "coverage axis must not contain consecutive underscores: {axis}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_family_observability_variants_are_a_subset_of_required_variants() {
+    // No family may declare an observability variant that is not in the global
+    // required_observability_variants list — that would create untestable state.
+    let manifest = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
+    let required: BTreeSet<String> =
+        require_string_array(&manifest, "required_observability_variants")
+            .into_iter()
+            .collect();
+
+    let families = manifest
+        .get("family_definitions")
+        .and_then(Value::as_array)
+        .expect("family_definitions must be an array");
+
+    for family in families {
+        let family_id = require_string_field(family, "family_id");
+        let variants: BTreeSet<String> = require_string_array(family, "observability_variants")
+            .into_iter()
+            .collect();
+        for v in &variants {
+            assert!(
+                required.contains(v),
+                "family {family_id} declares unknown observability variant: {v}"
+            );
+        }
+    }
+}

@@ -755,3 +755,694 @@ fn transfer_session_new_stores_all_fields() {
     assert!(session.local_prior_hashes.is_empty());
     assert!(session.kind_rollback_epochs.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Additional edge-case / API coverage tests (15+)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_transferable_kind_all_length() {
+    // ALL contains exactly 5 variants.
+    assert_eq!(TransferableKind::ALL.len(), 5);
+}
+
+#[test]
+fn test_drift_kind_all_length() {
+    assert_eq!(DriftKind::ALL.len(), 5);
+}
+
+#[test]
+fn test_transferable_kind_display_values() {
+    assert_eq!(format!("{}", TransferableKind::RewritePack), "rewrite_pack");
+    assert_eq!(
+        format!("{}", TransferableKind::TieringPrior),
+        "tiering_prior"
+    );
+    assert_eq!(format!("{}", TransferableKind::CacheHint), "cache_hint");
+    assert_eq!(format!("{}", TransferableKind::AotArtifact), "aot_artifact");
+    assert_eq!(
+        format!("{}", TransferableKind::SpecializationGuard),
+        "specialization_guard"
+    );
+}
+
+#[test]
+fn test_drift_kind_display_values() {
+    assert_eq!(
+        format!("{}", DriftKind::PerformanceRegression),
+        "performance_regression"
+    );
+    assert_eq!(
+        format!("{}", DriftKind::CorrectnessDivergence),
+        "correctness_divergence"
+    );
+    assert_eq!(
+        format!("{}", DriftKind::TypeFeedbackMismatch),
+        "type_feedback_mismatch"
+    );
+    assert_eq!(format!("{}", DriftKind::CachePollution), "cache_pollution");
+    assert_eq!(format!("{}", DriftKind::EpochDrift), "epoch_drift");
+}
+
+#[test]
+fn test_transfer_verdict_display_values() {
+    assert_eq!(format!("{}", TransferVerdict::Accepted), "accepted");
+    assert_eq!(format!("{}", TransferVerdict::Rejected), "rejected");
+    assert_eq!(format!("{}", TransferVerdict::Deferred), "deferred");
+}
+
+#[test]
+fn test_rejection_reason_display_all_variants() {
+    use std::collections::BTreeSet;
+    let variants = [
+        TransferRejectionReason::ProximityTooLow,
+        TransferRejectionReason::BudgetExhausted,
+        TransferRejectionReason::KindBlocked,
+        TransferRejectionReason::EpochGapTooLarge,
+        TransferRejectionReason::AlreadyPresent,
+        TransferRejectionReason::RecentRollback,
+        TransferRejectionReason::InsufficientEvidence,
+    ];
+    // All display strings are distinct non-empty strings.
+    let strs: BTreeSet<String> = variants.iter().map(|r| format!("{r}")).collect();
+    assert_eq!(strs.len(), variants.len());
+    for s in &strs {
+        assert!(!s.is_empty());
+    }
+}
+
+#[test]
+fn test_rejection_reason_serde_all_variants() {
+    let variants = [
+        TransferRejectionReason::ProximityTooLow,
+        TransferRejectionReason::BudgetExhausted,
+        TransferRejectionReason::KindBlocked,
+        TransferRejectionReason::EpochGapTooLarge,
+        TransferRejectionReason::AlreadyPresent,
+        TransferRejectionReason::RecentRollback,
+        TransferRejectionReason::InsufficientEvidence,
+    ];
+    for r in &variants {
+        let json = serde_json::to_string(r).unwrap();
+        let back: TransferRejectionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(*r, back);
+    }
+}
+
+#[test]
+fn test_drift_signal_exceeds_tolerance_not_confident() {
+    // A signal that is not confident never exceeds tolerance, regardless of magnitude.
+    let signal = DriftSignal {
+        kind: DriftKind::PerformanceRegression,
+        magnitude_millionths: 1_000_000, // extremely high
+        observation_count: 100,
+        confident: false,
+        evidence_hash: ContentHash::compute(b"not-confident"),
+    };
+    assert!(!signal.exceeds_tolerance(100_000));
+    assert!(!signal.exceeds_tolerance(0));
+}
+
+#[test]
+fn test_drift_signal_exceeds_tolerance_zero_magnitude() {
+    // Zero magnitude with confident = true still does not exceed a positive tolerance.
+    let signal = DriftSignal {
+        kind: DriftKind::CachePollution,
+        magnitude_millionths: 0,
+        observation_count: 10,
+        confident: true,
+        evidence_hash: ContentHash::compute(b"zero-mag"),
+    };
+    assert!(!signal.exceeds_tolerance(1));
+    assert!(!signal.exceeds_tolerance(0));
+}
+
+#[test]
+fn test_active_transfer_worst_drift_no_signals() {
+    let transfer = ActiveTransfer {
+        candidate_key: "empty".to_string(),
+        kind: TransferableKind::CacheHint,
+        prior_hash: ContentHash::compute(b"empty"),
+        accepted_epoch: SecurityEpoch::from_raw(1),
+        drift_signals: vec![],
+        observation_count: 0,
+        rolled_back: false,
+        decision_hash: ContentHash::compute(b"d"),
+    };
+    assert_eq!(transfer.worst_drift_millionths(), 0);
+    assert!(!transfer.exceeds_tolerance(DEFAULT_DRIFT_TOLERANCE));
+    assert_eq!(transfer.confident_drift_kind_count(), 0);
+}
+
+#[test]
+fn test_active_transfer_worst_drift_only_non_confident() {
+    // Only non-confident signals — worst_drift_millionths should return 0 (filter for confident).
+    let transfer = ActiveTransfer {
+        candidate_key: "nc".to_string(),
+        kind: TransferableKind::RewritePack,
+        prior_hash: ContentHash::compute(b"nc"),
+        accepted_epoch: SecurityEpoch::from_raw(2),
+        drift_signals: vec![
+            drift(DriftKind::PerformanceRegression, 500_000, false),
+            drift(DriftKind::CachePollution, 800_000, false),
+        ],
+        observation_count: 20,
+        rolled_back: false,
+        decision_hash: ContentHash::compute(b"d"),
+    };
+    assert_eq!(transfer.worst_drift_millionths(), 0);
+    assert!(!transfer.exceeds_tolerance(100_000));
+    assert_eq!(transfer.confident_drift_kind_count(), 0);
+}
+
+#[test]
+fn test_active_transfer_worst_drift_mixed_confidence() {
+    let transfer = ActiveTransfer {
+        candidate_key: "mixed".to_string(),
+        kind: TransferableKind::TieringPrior,
+        prior_hash: ContentHash::compute(b"mixed"),
+        accepted_epoch: SecurityEpoch::from_raw(3),
+        drift_signals: vec![
+            drift(DriftKind::PerformanceRegression, 200_000, true),
+            drift(DriftKind::CachePollution, 900_000, false), // not confident
+            drift(DriftKind::EpochDrift, 300_000, true),
+        ],
+        observation_count: 30,
+        rolled_back: false,
+        decision_hash: ContentHash::compute(b"d"),
+    };
+    // Worst confident = 300_000.
+    assert_eq!(transfer.worst_drift_millionths(), 300_000);
+    assert!(transfer.exceeds_tolerance(250_000));
+    assert!(!transfer.exceeds_tolerance(300_000)); // not strictly greater
+    // Two confident distinct kinds: PerformanceRegression, EpochDrift.
+    assert_eq!(transfer.confident_drift_kind_count(), 2);
+}
+
+#[test]
+fn test_kind_transfer_stats_default_zero() {
+    let stats = KindTransferStats::default();
+    assert_eq!(stats.total, 0);
+    assert_eq!(stats.accepted, 0);
+    assert_eq!(stats.rejected, 0);
+    assert_eq!(stats.deferred, 0);
+    assert_eq!(stats.acceptance_rate_millionths(), 0);
+}
+
+#[test]
+fn test_kind_transfer_stats_full_acceptance() {
+    let stats = KindTransferStats {
+        total: 10,
+        accepted: 10,
+        rejected: 0,
+        deferred: 0,
+    };
+    assert_eq!(stats.acceptance_rate_millionths(), 1_000_000);
+}
+
+#[test]
+fn test_kind_transfer_stats_zero_accepted() {
+    let stats = KindTransferStats {
+        total: 5,
+        accepted: 0,
+        rejected: 5,
+        deferred: 0,
+    };
+    assert_eq!(stats.acceptance_rate_millionths(), 0);
+}
+
+#[test]
+fn test_transfer_report_is_healthy_no_transfers() {
+    let session = session_at_epoch(5);
+    let report = session.build_report();
+    // No candidates, no drift — healthy.
+    assert!(report.is_healthy());
+}
+
+#[test]
+fn test_transfer_report_not_healthy_high_rollback_rate() {
+    let mut session = session_at_epoch(5);
+    session.config.min_drift_observations = 1;
+
+    // Accept 3 candidates then roll all back → rollback_rate = 100%.
+    for i in 0..3u32 {
+        let c = candidate(&format!("rb{i}"), TransferableKind::RewritePack, 900_000);
+        session.evaluate_candidate(&c);
+        session.record_drift(
+            &format!("rb{i}"),
+            drift(DriftKind::CorrectnessDivergence, 500_000, true),
+        );
+        session.record_clean_observation(&format!("rb{i}"));
+        session.enforce_drift_guards();
+        // Reset cooldown so next kind can be accepted.
+        session.kind_rollback_epochs.clear();
+    }
+
+    let report = session.build_report();
+    // rollback_rate = 3/3 = 1_000_000 which is >= 300_000 → not healthy.
+    assert!(!report.is_healthy());
+}
+
+#[test]
+fn test_transfer_report_rollback_rate_computation() {
+    let mut session = session_at_epoch(5);
+    session.config.min_drift_observations = 1;
+
+    // Accept 4, roll back 1.
+    for i in 0..4u32 {
+        let c = candidate(&format!("rr{i}"), TransferableKind::CacheHint, 900_000);
+        session.evaluate_candidate(&c);
+    }
+    session.record_drift(
+        "rr0",
+        drift(DriftKind::PerformanceRegression, 400_000, true),
+    );
+    session.record_clean_observation("rr0");
+    session.enforce_drift_guards();
+
+    let report = session.build_report();
+    // rollback_rate = 1/4 = 250_000.
+    assert_eq!(report.rollback_rate_millionths(), 250_000);
+}
+
+#[test]
+fn test_record_drift_on_rolled_back_transfer_returns_false() {
+    let mut session = session_at_epoch(5);
+    session.config.min_drift_observations = 1;
+
+    let c = candidate("rolled", TransferableKind::RewritePack, 900_000);
+    session.evaluate_candidate(&c);
+    session.record_drift(
+        "rolled",
+        drift(DriftKind::PerformanceRegression, 500_000, true),
+    );
+    session.record_clean_observation("rolled");
+    session.enforce_drift_guards();
+
+    // Transfer is now rolled_back = true; further drift recording should fail.
+    assert!(!session.record_drift("rolled", drift(DriftKind::CachePollution, 200_000, true)));
+}
+
+#[test]
+fn test_record_drift_unknown_key_returns_false() {
+    let mut session = session_at_epoch(5);
+    assert!(!session.record_drift("no-such-key", drift(DriftKind::EpochDrift, 100_000, true)));
+}
+
+#[test]
+fn test_config_kind_allowed_blocked_takes_priority_over_allowed() {
+    let mut config = TransferConfig::default();
+    // Even if a kind is in the allowed list, blocked takes precedence.
+    config.allowed_kinds.insert(TransferableKind::TieringPrior);
+    config.blocked_kinds.insert(TransferableKind::TieringPrior);
+    assert!(!config.kind_allowed(TransferableKind::TieringPrior));
+}
+
+#[test]
+fn test_config_kind_allowed_not_in_allowlist_when_allowlist_nonempty() {
+    let mut config = TransferConfig::default();
+    config.allowed_kinds.insert(TransferableKind::AotArtifact);
+    // All other kinds should be rejected when allowlist is non-empty.
+    for kind in TransferableKind::ALL {
+        if *kind == TransferableKind::AotArtifact {
+            assert!(config.kind_allowed(*kind));
+        } else {
+            assert!(!config.kind_allowed(*kind));
+        }
+    }
+}
+
+#[test]
+fn test_transfer_candidate_clone_and_eq() {
+    let c = candidate("clone-test", TransferableKind::CacheHint, 750_000);
+    let c2 = c.clone();
+    assert_eq!(c, c2);
+    assert_eq!(c.candidate_key, c2.candidate_key);
+    assert_eq!(c.kind, c2.kind);
+    assert_eq!(c.proximity_score, c2.proximity_score);
+}
+
+#[test]
+fn test_transfer_candidate_serde_roundtrip() {
+    let c = TransferCandidate {
+        candidate_key: "serde-cand".to_string(),
+        kind: TransferableKind::AotArtifact,
+        donor_embedding_hash: ContentHash::compute(b"emb"),
+        prior_hash: ContentHash::compute(b"prior"),
+        proximity_score: 800_000,
+        donor_performance_estimate: 50_000,
+        donor_epoch: SecurityEpoch::from_raw(4),
+        donor_label: "donor-x".to_string(),
+    };
+    let json = serde_json::to_string(&c).unwrap();
+    let back: TransferCandidate = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, back);
+}
+
+#[test]
+fn test_drift_signal_serde_roundtrip() {
+    let s = DriftSignal {
+        kind: DriftKind::TypeFeedbackMismatch,
+        magnitude_millionths: 123_456,
+        observation_count: 42,
+        confident: true,
+        evidence_hash: ContentHash::compute(b"ev"),
+    };
+    let json = serde_json::to_string(&s).unwrap();
+    let back: DriftSignal = serde_json::from_str(&json).unwrap();
+    assert_eq!(s, back);
+}
+
+#[test]
+fn test_transfer_decision_serde_roundtrip() {
+    let d = TransferDecision {
+        candidate_key: "dec-serde".to_string(),
+        verdict: TransferVerdict::Rejected,
+        reason: Some(TransferRejectionReason::ProximityTooLow),
+        decision_hash: ContentHash::compute(b"dec"),
+        epoch: SecurityEpoch::from_raw(9),
+    };
+    let json = serde_json::to_string(&d).unwrap();
+    let back: TransferDecision = serde_json::from_str(&json).unwrap();
+    assert_eq!(d, back);
+}
+
+#[test]
+fn test_transfer_rollback_serde_roundtrip() {
+    let rb = TransferRollback {
+        candidate_key: "rb-serde".to_string(),
+        kind: TransferableKind::SpecializationGuard,
+        rollback_epoch: SecurityEpoch::from_raw(11),
+        trigger_signals: vec![drift(DriftKind::EpochDrift, 200_000, true)],
+        prior_hash: ContentHash::compute(b"prior"),
+        rollback_hash: ContentHash::compute(b"rb"),
+    };
+    let json = serde_json::to_string(&rb).unwrap();
+    let back: TransferRollback = serde_json::from_str(&json).unwrap();
+    assert_eq!(rb, back);
+}
+
+#[test]
+fn test_active_transfer_serde_roundtrip() {
+    let at = ActiveTransfer {
+        candidate_key: "at-serde".to_string(),
+        kind: TransferableKind::TieringPrior,
+        prior_hash: ContentHash::compute(b"prior"),
+        accepted_epoch: SecurityEpoch::from_raw(3),
+        drift_signals: vec![drift(DriftKind::CachePollution, 80_000, false)],
+        observation_count: 7,
+        rolled_back: false,
+        decision_hash: ContentHash::compute(b"d"),
+    };
+    let json = serde_json::to_string(&at).unwrap();
+    let back: ActiveTransfer = serde_json::from_str(&json).unwrap();
+    assert_eq!(at, back);
+}
+
+#[test]
+fn test_render_decision_summary_accepted_no_reason() {
+    let d = TransferDecision {
+        candidate_key: "acc-no-reason".to_string(),
+        verdict: TransferVerdict::Accepted,
+        reason: None,
+        decision_hash: ContentHash::compute(b"x"),
+        epoch: SecurityEpoch::from_raw(2),
+    };
+    let s = render_decision_summary(&d);
+    assert!(s.contains("[ACCEPTED]"));
+    assert!(s.contains("acc-no-reason"));
+    assert!(s.contains("2")); // epoch
+}
+
+#[test]
+fn test_render_decision_summary_rejected_with_reason() {
+    let d = TransferDecision {
+        candidate_key: "rej".to_string(),
+        verdict: TransferVerdict::Rejected,
+        reason: Some(TransferRejectionReason::EpochGapTooLarge),
+        decision_hash: ContentHash::compute(b"r"),
+        epoch: SecurityEpoch::from_raw(5),
+    };
+    let s = render_decision_summary(&d);
+    assert!(s.contains("[REJECTED]"));
+    assert!(s.contains("epoch_gap_too_large"));
+}
+
+#[test]
+fn test_render_decision_summary_deferred_recent_rollback() {
+    let d = TransferDecision {
+        candidate_key: "def-rb".to_string(),
+        verdict: TransferVerdict::Deferred,
+        reason: Some(TransferRejectionReason::RecentRollback),
+        decision_hash: ContentHash::compute(b"rb"),
+        epoch: SecurityEpoch::from_raw(7),
+    };
+    let s = render_decision_summary(&d);
+    assert!(s.contains("[DEFERRED]"));
+    assert!(s.contains("recent_rollback"));
+}
+
+#[test]
+fn test_render_rollback_summary_format() {
+    let rb = TransferRollback {
+        candidate_key: "render-rb".to_string(),
+        kind: TransferableKind::AotArtifact,
+        rollback_epoch: SecurityEpoch::from_raw(8),
+        trigger_signals: vec![drift(DriftKind::CorrectnessDivergence, 400_000, true)],
+        prior_hash: ContentHash::compute(b"p"),
+        rollback_hash: ContentHash::compute(b"rh"),
+    };
+    let s = render_rollback_summary(&rb);
+    assert!(s.contains("[ROLLBACK]"));
+    assert!(s.contains("render-rb"));
+    assert!(s.contains("aot_artifact"));
+    assert!(s.contains("8"));
+    assert!(s.contains("correctness_divergence"));
+    assert!(s.contains("400000"));
+}
+
+#[test]
+fn test_donor_epoch_newer_than_recipient_still_checked() {
+    // Donor in the future (epoch > recipient epoch): gap computed by abs difference.
+    let mut session = session_at_epoch(3);
+    session.config.max_epoch_gap = 2;
+
+    // Donor epoch = 3 (same) → gap 0 → accepted.
+    let mut c_same = candidate("same", TransferableKind::CacheHint, 900_000);
+    c_same.donor_epoch = SecurityEpoch::from_raw(3);
+    assert_eq!(
+        session.evaluate_candidate(&c_same).verdict,
+        TransferVerdict::Accepted
+    );
+
+    // Donor epoch = 6 → gap = 3 > 2 → rejected.
+    let mut c_future = candidate("future", TransferableKind::CacheHint, 900_000);
+    c_future.donor_epoch = SecurityEpoch::from_raw(6);
+    assert_eq!(
+        session.evaluate_candidate(&c_future).verdict,
+        TransferVerdict::Rejected
+    );
+}
+
+#[test]
+fn test_rollback_cooldown_boundary_exact() {
+    // Rollback cooldown = 3. After exactly 3 epochs, should still be in cooldown.
+    // After more than 3 epochs, should be out.
+    let mut session = session_at_epoch(5);
+    session.config.min_drift_observations = 1;
+    session.config.rollback_cooldown_epochs = 3;
+
+    let c = candidate("cooldown-boundary", TransferableKind::AotArtifact, 900_000);
+    session.evaluate_candidate(&c);
+    session.record_drift(
+        "cooldown-boundary",
+        drift(DriftKind::CachePollution, 300_000, true),
+    );
+    session.record_clean_observation("cooldown-boundary");
+    session.enforce_drift_guards();
+    // kind_rollback_epochs[AotArtifact] = epoch 5.
+
+    // At epoch 5, gap = 0 < 3 → still in cooldown.
+    let c2 = candidate("c2", TransferableKind::AotArtifact, 900_000);
+    assert_eq!(
+        session.evaluate_candidate(&c2).verdict,
+        TransferVerdict::Deferred
+    );
+}
+
+#[test]
+fn test_max_transfer_candidates_constant_gte_min_proximity() {
+    // Sanity check: constants are in plausible fixed-point range.
+    const {
+        assert!(MIN_PROXIMITY_SCORE > 0);
+        assert!(MIN_PROXIMITY_SCORE < 1_000_000);
+        assert!(DEFAULT_DRIFT_TOLERANCE > 0);
+        assert!(DEFAULT_DRIFT_TOLERANCE < 1_000_000);
+    }
+}
+
+#[test]
+fn test_specimen_candidate_fields() {
+    let c = specimen_candidate("sp", TransferableKind::TieringPrior, 700_000);
+    assert_eq!(c.candidate_key, "sp");
+    assert_eq!(c.kind, TransferableKind::TieringPrior);
+    assert_eq!(c.proximity_score, 700_000);
+    assert!(c.donor_performance_estimate >= 0);
+    assert_eq!(c.donor_label, "donor-sp");
+}
+
+#[test]
+fn test_specimen_drift_signal_fields() {
+    let s = specimen_drift_signal(DriftKind::EpochDrift, 50_000, false);
+    assert_eq!(s.kind, DriftKind::EpochDrift);
+    assert_eq!(s.magnitude_millionths, 50_000);
+    assert!(!s.confident);
+    assert_eq!(s.observation_count, 32);
+}
+
+#[test]
+fn test_specimen_session_fields() {
+    let s = specimen_session();
+    assert_eq!(s.session_key, "test-session");
+    assert_eq!(s.epoch.as_u64(), 5);
+    assert!(s.decisions.is_empty());
+    assert!(s.active_transfers.is_empty());
+    assert!(s.rollback_history.is_empty());
+}
+
+#[test]
+fn test_evaluate_candidate_zero_proximity() {
+    let mut session = session_at_epoch(5);
+    let mut c = candidate("zero-prox", TransferableKind::RewritePack, 0);
+    c.proximity_score = 0;
+    let d = session.evaluate_candidate(&c);
+    assert_eq!(d.verdict, TransferVerdict::Rejected);
+    assert_eq!(d.reason, Some(TransferRejectionReason::ProximityTooLow));
+}
+
+#[test]
+fn test_session_decisions_accumulate_correctly() {
+    let mut session = session_at_epoch(5);
+
+    let c1 = candidate("acc1", TransferableKind::RewritePack, 900_000);
+    let c2 = candidate("rej1", TransferableKind::CacheHint, 0); // will be rejected
+    let c3 = candidate("acc2", TransferableKind::TieringPrior, 900_000);
+
+    session.evaluate_candidate(&c1);
+    session.evaluate_candidate(&c2);
+    session.evaluate_candidate(&c3);
+
+    assert_eq!(session.decisions.len(), 3);
+    assert_eq!(session.decisions[0].verdict, TransferVerdict::Accepted);
+    assert_eq!(session.decisions[1].verdict, TransferVerdict::Rejected);
+    assert_eq!(session.decisions[2].verdict, TransferVerdict::Accepted);
+}
+
+#[test]
+fn test_report_worst_drift_reflects_active_transfers() {
+    let mut session = session_at_epoch(5);
+    session.config.min_drift_observations = 0; // no minimum so drift is tracked
+
+    let c1 = candidate("d1", TransferableKind::RewritePack, 900_000);
+    let c2 = candidate("d2", TransferableKind::CacheHint, 900_000);
+    session.evaluate_candidate(&c1);
+    session.evaluate_candidate(&c2);
+
+    session.record_drift("d1", drift(DriftKind::PerformanceRegression, 80_000, true));
+    session.record_drift("d2", drift(DriftKind::CachePollution, 120_000, true));
+
+    let report = session.build_report();
+    // worst_drift = max of worst_drift_millionths across active transfers = 120_000.
+    assert_eq!(report.worst_drift_millionths, 120_000);
+}
+
+#[test]
+fn test_report_deferred_count_matches_decisions() {
+    let mut session = session_at_epoch(5);
+    session.config.max_active_transfers = 1;
+
+    let c1 = candidate("ac", TransferableKind::RewritePack, 900_000);
+    let c2 = candidate("df1", TransferableKind::CacheHint, 900_000);
+    let c3 = candidate("df2", TransferableKind::TieringPrior, 900_000);
+
+    session.evaluate_candidate(&c1); // accepted
+    session.evaluate_candidate(&c2); // deferred (budget)
+    session.evaluate_candidate(&c3); // deferred (budget)
+
+    let report = session.build_report();
+    assert_eq!(report.accepted, 1);
+    assert_eq!(report.deferred, 2);
+    assert_eq!(report.rejected, 0);
+    assert_eq!(report.total_candidates, 3);
+}
+
+#[test]
+fn test_decision_epoch_matches_session_epoch() {
+    let mut session = session_at_epoch(42);
+    let c = candidate("epoch-check", TransferableKind::AotArtifact, 900_000);
+    let d = session.evaluate_candidate(&c);
+    assert_eq!(d.epoch.as_u64(), 42);
+}
+
+#[test]
+fn test_rollback_record_contains_correct_kind() {
+    let mut session = session_at_epoch(5);
+    session.config.min_drift_observations = 1;
+
+    let c = candidate("kind-check", TransferableKind::SpecializationGuard, 900_000);
+    session.evaluate_candidate(&c);
+    session.record_drift(
+        "kind-check",
+        drift(DriftKind::TypeFeedbackMismatch, 300_000, true),
+    );
+    session.record_clean_observation("kind-check");
+
+    let rollbacks = session.enforce_drift_guards();
+    assert_eq!(rollbacks.len(), 1);
+    assert_eq!(rollbacks[0].kind, TransferableKind::SpecializationGuard);
+    assert_eq!(rollbacks[0].rollback_epoch.as_u64(), 5);
+    assert!(!rollbacks[0].trigger_signals.is_empty());
+}
+
+#[test]
+fn test_enforce_drift_guards_below_min_observations_no_rollback() {
+    let mut session = session_at_epoch(5);
+    session.config.min_drift_observations = 100;
+
+    let c = candidate("low-obs", TransferableKind::RewritePack, 900_000);
+    session.evaluate_candidate(&c);
+    session.record_drift(
+        "low-obs",
+        drift(DriftKind::PerformanceRegression, 500_000, true),
+    );
+    // Only 1 observation (drift record counts too), needs 100.
+    assert!(session.enforce_drift_guards().is_empty());
+}
+
+#[test]
+fn test_transfer_config_serde_with_empty_sets() {
+    let config = TransferConfig::default();
+    let json = serde_json::to_string(&config).unwrap();
+    let back: TransferConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, back);
+    assert!(back.allowed_kinds.is_empty());
+    assert!(back.blocked_kinds.is_empty());
+}
+
+#[test]
+fn test_local_prior_hashes_prevent_duplicate_transfer() {
+    let mut session = session_at_epoch(5);
+    let c = candidate("dup", TransferableKind::TieringPrior, 900_000);
+
+    // Accept once.
+    let d1 = session.evaluate_candidate(&c);
+    assert_eq!(d1.verdict, TransferVerdict::Accepted);
+
+    // Manually add the prior hash to the local set to simulate it now being present.
+    session.local_prior_hashes.insert(c.prior_hash);
+
+    // Same candidate again → AlreadyPresent.
+    let d2 = session.evaluate_candidate(&c);
+    assert_eq!(d2.verdict, TransferVerdict::Rejected);
+    assert_eq!(d2.reason, Some(TransferRejectionReason::AlreadyPresent));
+}

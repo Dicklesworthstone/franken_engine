@@ -704,3 +704,375 @@ fn enrichment_binomial_ci_serde_preserves_values() {
     assert_eq!(back.lower_millionths, 123_456);
     assert_eq!(back.upper_millionths, 987_654);
 }
+
+// ===========================================================================
+// J. Public constants (4 tests)
+// ===========================================================================
+
+use frankenengine_engine::security_conformance::{
+    DEFAULT_CONFIDENCE_LEVEL, DEFAULT_FPR_MAX, DEFAULT_MALICIOUS_LATENCY_P95_MAX_MS,
+    DEFAULT_TPR_MIN, SECURITY_ATTACK_TAXONOMIES, SECURITY_CONFORMANCE_SCHEMA_VERSION,
+    SECURITY_CORPUS_MANIFEST_FILE_NAME, SECURITY_CORPUS_MANIFEST_SCHEMA_VERSION,
+    SECURITY_LABEL_FILE_NAME,
+};
+
+#[test]
+fn test_constants_label_file_name() {
+    assert_eq!(SECURITY_LABEL_FILE_NAME, "workload_label.toml");
+}
+
+#[test]
+fn test_constants_manifest_file_name() {
+    assert_eq!(SECURITY_CORPUS_MANIFEST_FILE_NAME, "corpus_manifest.toml");
+}
+
+#[test]
+fn test_constants_default_values() {
+    assert!((DEFAULT_CONFIDENCE_LEVEL - 0.95).abs() < 1e-9);
+    assert!((DEFAULT_TPR_MIN - 0.99).abs() < 1e-9);
+    assert!((DEFAULT_FPR_MAX - 0.01).abs() < 1e-9);
+    assert_eq!(DEFAULT_MALICIOUS_LATENCY_P95_MAX_MS, 250);
+}
+
+#[test]
+fn test_constants_attack_taxonomies_slice() {
+    assert_eq!(SECURITY_ATTACK_TAXONOMIES.len(), 6);
+    assert!(SECURITY_ATTACK_TAXONOMIES.contains(&"exfil"));
+    assert!(SECURITY_ATTACK_TAXONOMIES.contains(&"side_channel"));
+    // All entries match the as_str() values
+    let from_enum: BTreeSet<&str> = [
+        SecurityAttackTaxonomy::Exfil,
+        SecurityAttackTaxonomy::Escalation,
+        SecurityAttackTaxonomy::Evasion,
+        SecurityAttackTaxonomy::Dos,
+        SecurityAttackTaxonomy::SideChannel,
+        SecurityAttackTaxonomy::Staging,
+    ]
+    .iter()
+    .map(|t| t.as_str())
+    .collect();
+    let from_const: BTreeSet<&str> = SECURITY_ATTACK_TAXONOMIES.iter().copied().collect();
+    assert_eq!(from_enum, from_const);
+}
+
+// ===========================================================================
+// K. Schema version constants (2 tests)
+// ===========================================================================
+
+#[test]
+fn test_schema_version_strings_non_empty() {
+    assert!(!SECURITY_CORPUS_MANIFEST_SCHEMA_VERSION.is_empty());
+    assert!(!SECURITY_CONFORMANCE_SCHEMA_VERSION.is_empty());
+}
+
+#[test]
+fn test_schema_version_strings_distinct() {
+    assert_ne!(
+        SECURITY_CORPUS_MANIFEST_SCHEMA_VERSION,
+        SECURITY_CONFORMANCE_SCHEMA_VERSION
+    );
+}
+
+// ===========================================================================
+// L. Clone / Debug / PartialEq on structs and enums (4 tests)
+// ===========================================================================
+
+#[test]
+fn test_security_corpus_clone_debug_partialeq() {
+    let a = SecurityCorpus::Benign;
+    let b = a;
+    assert_eq!(a, b);
+    let msg = format!("{a:?}");
+    assert!(msg.contains("Benign"));
+
+    let c = SecurityCorpus::Malicious;
+    assert_ne!(a, c);
+}
+
+#[test]
+fn test_security_outcome_clone_debug_partialeq() {
+    let outcomes = [
+        SecurityOutcome::Allow,
+        SecurityOutcome::Contain,
+        SecurityOutcome::Quarantine,
+        SecurityOutcome::Terminate,
+    ];
+    for o in outcomes {
+        let cloned = o;
+        assert_eq!(o, cloned);
+        assert!(!format!("{o:?}").is_empty());
+    }
+}
+
+#[test]
+fn test_binomial_ci_clone_partialeq() {
+    let ci = BinomialConfidenceInterval {
+        lower_millionths: 100_000,
+        upper_millionths: 900_000,
+    };
+    let cloned = ci.clone();
+    assert_eq!(ci, cloned);
+    let different = BinomialConfidenceInterval {
+        lower_millionths: 100_000,
+        upper_millionths: 800_000,
+    };
+    assert_ne!(ci, different);
+}
+
+#[test]
+fn test_security_conformance_thresholds_clone_partialeq() {
+    let t = SecurityConformanceThresholds::default();
+    let cloned = t.clone();
+    assert_eq!(t, cloned);
+    let modified = SecurityConformanceThresholds {
+        malicious_latency_p95_max_ms: 999,
+        ..SecurityConformanceThresholds::default()
+    };
+    assert_ne!(t, modified);
+}
+
+// ===========================================================================
+// M. Serde roundtrips for remaining types (3 tests)
+// ===========================================================================
+
+#[test]
+fn test_security_corpus_serde_roundtrip() {
+    for corpus in [SecurityCorpus::Benign, SecurityCorpus::Malicious] {
+        let json = serde_json::to_string(&corpus).unwrap();
+        let back: SecurityCorpus = serde_json::from_str(&json).unwrap();
+        assert_eq!(corpus, back);
+    }
+}
+
+#[test]
+fn test_security_conformance_thresholds_serde_roundtrip() {
+    let t = SecurityConformanceThresholds {
+        tpr_min: "0.950000".into(),
+        fpr_max: "0.050000".into(),
+        malicious_latency_p95_max_ms: 300,
+        confidence_level_millionths: 900_000,
+    };
+    let json = serde_json::to_string(&t).unwrap();
+    let back: SecurityConformanceThresholds = serde_json::from_str(&json).unwrap();
+    assert_eq!(t, back);
+}
+
+#[test]
+fn test_observation_serde_roundtrip_with_error_code() {
+    let obs = SecurityWorkloadObservation {
+        workload_id: "w-42".into(),
+        actual_outcome: SecurityOutcome::Quarantine,
+        detection_latency_us: 77_777,
+        sentinel_posterior: 0.88,
+        policy_action: "quarantine".into(),
+        containment_action: "quarantine".into(),
+        error_code: Some("ERR_POLICY_012".into()),
+    };
+    let json = serde_json::to_string(&obs).unwrap();
+    let back: SecurityWorkloadObservation = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.error_code, Some("ERR_POLICY_012".into()));
+    assert_eq!(back.actual_outcome, SecurityOutcome::Quarantine);
+}
+
+// ===========================================================================
+// N. Error paths for evaluate_security_conformance (3 tests)
+// ===========================================================================
+
+#[test]
+fn test_evaluate_empty_records_returns_error() {
+    let result = evaluate_security_conformance(
+        &[],
+        &[benign_observation("b-1")],
+        &SecurityConformanceThresholds::default(),
+    );
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("empty"));
+}
+
+#[test]
+fn test_evaluate_duplicate_observation_returns_error() {
+    let records = vec![label_record(benign_label("b-1"))];
+    let observations = vec![benign_observation("b-1"), benign_observation("b-1")];
+    let result = evaluate_security_conformance(
+        &records,
+        &observations,
+        &SecurityConformanceThresholds::default(),
+    );
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("duplicate") || msg.contains("b-1"));
+}
+
+#[test]
+fn test_evaluate_missing_observation_returns_error() {
+    let records = vec![
+        label_record(benign_label("b-1")),
+        label_record(benign_label("b-missing")),
+    ];
+    let observations = vec![benign_observation("b-1")];
+    let result = evaluate_security_conformance(
+        &records,
+        &observations,
+        &SecurityConformanceThresholds::default(),
+    );
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("b-missing"));
+}
+
+// ===========================================================================
+// O. Label validation edge cases (4 tests)
+// ===========================================================================
+
+#[test]
+fn test_label_zero_latency_bound_fails() {
+    let mut label = benign_label("b-1");
+    label.expected_detection_latency_bound_ms = 0;
+    assert!(label.validate().is_err());
+}
+
+#[test]
+fn test_label_invalid_hex_hash_fails() {
+    let mut label = benign_label("b-1");
+    // 64 chars but uppercase — invalid
+    label.hostcall_sequence_hash = std::iter::repeat_n('A', 64).collect();
+    assert!(label.validate().is_err());
+}
+
+#[test]
+fn test_label_short_hash_fails() {
+    let mut label = benign_label("b-1");
+    label.hostcall_sequence_hash = "abc123".into();
+    assert!(label.validate().is_err());
+}
+
+#[test]
+fn test_label_malicious_allow_outcome_fails() {
+    let label = SecurityWorkloadLabel {
+        workload_id: "m-1".into(),
+        corpus: SecurityCorpus::Malicious,
+        attack_taxonomy: Some(SecurityAttackTaxonomy::Exfil),
+        expected_outcome: SecurityOutcome::Allow,
+        expected_detection_latency_bound_ms: 50,
+        hostcall_sequence_hash: hex64('a'),
+        semantic_domain: "security/malicious".into(),
+    };
+    assert!(label.validate().is_err());
+}
+
+// ===========================================================================
+// P. corpus_manifest_hash determinism and sensitivity (2 tests)
+// ===========================================================================
+
+#[test]
+fn test_corpus_manifest_hash_deterministic() {
+    let records = vec![
+        label_record(benign_label("b-1")),
+        label_record(malicious_label("m-1", SecurityAttackTaxonomy::Dos)),
+    ];
+    let h1 = corpus_manifest_hash(&records);
+    let h2 = corpus_manifest_hash(&records);
+    assert_eq!(h1, h2);
+    assert_eq!(h1.len(), 64);
+}
+
+#[test]
+fn test_corpus_manifest_hash_changes_with_different_records() {
+    let records_a = vec![label_record(benign_label("b-1"))];
+    let records_b = vec![label_record(benign_label("b-2"))];
+    assert_ne!(
+        corpus_manifest_hash(&records_a),
+        corpus_manifest_hash(&records_b)
+    );
+}
+
+// ===========================================================================
+// Q. Summary field correctness (3 tests)
+// ===========================================================================
+
+#[test]
+fn test_evaluate_summary_counts_benign_malicious() {
+    let mut records = Vec::new();
+    let mut observations = Vec::new();
+    for i in 0..3 {
+        let id = format!("b-{i}");
+        records.push(label_record(benign_label(&id)));
+        observations.push(benign_observation(&id));
+    }
+    for i in 0..5 {
+        let id = format!("m-{i}");
+        records.push(label_record(malicious_label(
+            &id,
+            SecurityAttackTaxonomy::Staging,
+        )));
+        observations.push(malicious_observation(&id));
+    }
+    let eval =
+        evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
+    assert_eq!(eval.summary.benign_total, 3);
+    assert_eq!(eval.summary.malicious_total, 5);
+}
+
+#[test]
+fn test_evaluate_summary_true_false_counts() {
+    // 2 malicious: 1 caught (TP), 1 missed (FN)
+    // 2 benign: 1 flagged (FP), 1 clean (TN)
+    let records = vec![
+        label_record(benign_label("b-ok")),
+        label_record(benign_label("b-fp")),
+        label_record(malicious_label("m-tp", SecurityAttackTaxonomy::Exfil)),
+        label_record(malicious_label("m-fn", SecurityAttackTaxonomy::Evasion)),
+    ];
+    let observations = vec![
+        benign_observation("b-ok"),
+        SecurityWorkloadObservation {
+            workload_id: "b-fp".into(),
+            actual_outcome: SecurityOutcome::Contain,
+            detection_latency_us: 5_000,
+            sentinel_posterior: 0.7,
+            policy_action: "contain".into(),
+            containment_action: "sandbox".into(),
+            error_code: None,
+        },
+        malicious_observation("m-tp"),
+        SecurityWorkloadObservation {
+            workload_id: "m-fn".into(),
+            actual_outcome: SecurityOutcome::Allow,
+            detection_latency_us: 5_000,
+            sentinel_posterior: 0.05,
+            policy_action: "allow".into(),
+            containment_action: "none".into(),
+            error_code: None,
+        },
+    ];
+    let eval =
+        evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
+    assert_eq!(eval.summary.true_positive_count, 1);
+    assert_eq!(eval.summary.false_positive_count, 1);
+    assert_eq!(eval.summary.false_negative_count, 1);
+}
+
+#[test]
+fn test_evaluate_summary_all_correct_zero_fp_fn() {
+    let mut records = Vec::new();
+    let mut observations = Vec::new();
+    for i in 0..10 {
+        let id = format!("b-{i}");
+        records.push(label_record(benign_label(&id)));
+        observations.push(benign_observation(&id));
+    }
+    for i in 0..10 {
+        let id = format!("m-{i}");
+        records.push(label_record(malicious_label(
+            &id,
+            SecurityAttackTaxonomy::Escalation,
+        )));
+        observations.push(malicious_observation(&id));
+    }
+    let eval =
+        evaluate_security_conformance(&records, &observations, &relaxed_thresholds()).unwrap();
+    assert_eq!(eval.summary.false_positive_count, 0);
+    assert_eq!(eval.summary.false_negative_count, 0);
+    assert_eq!(eval.summary.true_positive_count, 10);
+}

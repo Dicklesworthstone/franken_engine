@@ -20,12 +20,17 @@
 
 use std::collections::BTreeSet;
 
+use frankenengine_engine::engine_object_id::EngineObjectId;
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::mmr_proof::{MmrProof, ProofType};
 use frankenengine_engine::receipt_verifier_pipeline::{
-    EXIT_CODE_ATTESTATION_FAILURE, EXIT_CODE_SIGNATURE_FAILURE, EXIT_CODE_STALE_DATA,
-    EXIT_CODE_SUCCESS, EXIT_CODE_TRANSPARENCY_FAILURE, LayerCheck, LayerResult,
-    ReceiptVerifierCliInput, ReceiptVerifierPipelineError, UnifiedReceiptVerificationVerdict,
+    ConsistencyProofInput, EXIT_CODE_ATTESTATION_FAILURE, EXIT_CODE_SIGNATURE_FAILURE,
+    EXIT_CODE_STALE_DATA, EXIT_CODE_SUCCESS, EXIT_CODE_TRANSPARENCY_FAILURE, LayerCheck,
+    LayerResult, LogOperatorKey, ReceiptVerifierCliInput, ReceiptVerifierPipelineError,
+    SignedLogCheckpoint, SignerRevocationCache, UnifiedReceiptVerificationVerdict,
     VerificationFailureClass, VerifierLogEvent,
 };
+use frankenengine_engine::signature_preimage::{Signature, VerificationKey};
 
 // ===========================================================================
 // 1) Exit-code constants — exact values
@@ -683,4 +688,326 @@ fn verdict_warnings_serialize_as_json_array() {
     assert_eq!(warnings.len(), 2);
     assert_eq!(warnings[0].as_str().unwrap(), "clock-skew");
     assert_eq!(warnings[1].as_str().unwrap(), "cert-expiry-soon");
+}
+
+// ===========================================================================
+// 25) SignerRevocationCache — JSON field-name stability
+// ===========================================================================
+
+#[test]
+fn json_fields_signer_revocation_cache() {
+    let cache = SignerRevocationCache {
+        signer_key_id: EngineObjectId([0x11; 32]),
+        source: "offline-revocations".into(),
+        is_revoked: false,
+        cache_stale: true,
+    };
+    let v: serde_json::Value = serde_json::to_value(&cache).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in ["signer_key_id", "source", "is_revoked", "cache_stale"] {
+        assert!(
+            obj.contains_key(key),
+            "SignerRevocationCache missing field: {key}"
+        );
+    }
+    assert_eq!(
+        obj.len(),
+        4,
+        "SignerRevocationCache should have exactly 4 fields"
+    );
+}
+
+// ===========================================================================
+// 26) SignedLogCheckpoint — JSON field-name stability
+// ===========================================================================
+
+#[test]
+fn json_fields_signed_log_checkpoint() {
+    let ckpt = SignedLogCheckpoint {
+        checkpoint_seq: 42,
+        log_length: 100,
+        root_hash: ContentHash::compute(b"root"),
+        timestamp_ns: 1_000_000,
+        operator_key_id: "op-1".into(),
+        signature: Signature::from_bytes([0u8; 64]),
+    };
+    let v: serde_json::Value = serde_json::to_value(&ckpt).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "checkpoint_seq",
+        "log_length",
+        "root_hash",
+        "timestamp_ns",
+        "operator_key_id",
+        "signature",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "SignedLogCheckpoint missing field: {key}"
+        );
+    }
+    assert_eq!(
+        obj.len(),
+        6,
+        "SignedLogCheckpoint should have exactly 6 fields"
+    );
+}
+
+// ===========================================================================
+// 27) LogOperatorKey — JSON field-name stability
+// ===========================================================================
+
+#[test]
+fn json_fields_log_operator_key() {
+    let key = LogOperatorKey {
+        key_id: "operator-alpha".into(),
+        verification_key: VerificationKey::from_bytes([0xAA; 32]),
+        revoked: false,
+    };
+    let v: serde_json::Value = serde_json::to_value(&key).unwrap();
+    let obj = v.as_object().unwrap();
+    for field in ["key_id", "verification_key", "revoked"] {
+        assert!(
+            obj.contains_key(field),
+            "LogOperatorKey missing field: {field}"
+        );
+    }
+    assert_eq!(obj.len(), 3, "LogOperatorKey should have exactly 3 fields");
+}
+
+// ===========================================================================
+// 28) ConsistencyProofInput — JSON field-name stability
+// ===========================================================================
+
+#[test]
+fn json_fields_consistency_proof_input() {
+    let proof = ConsistencyProofInput {
+        from_root: ContentHash::compute(b"old-root"),
+        proof: MmrProof {
+            proof_type: ProofType::Consistency,
+            marker_index: 3,
+            proof_hashes: vec![],
+            root_hash: ContentHash::compute(b"new-root"),
+            stream_length: 10,
+            epoch_id: 1,
+        },
+    };
+    let v: serde_json::Value = serde_json::to_value(&proof).unwrap();
+    let obj = v.as_object().unwrap();
+    for field in ["from_root", "proof"] {
+        assert!(
+            obj.contains_key(field),
+            "ConsistencyProofInput missing field: {field}"
+        );
+    }
+    assert_eq!(
+        obj.len(),
+        2,
+        "ConsistencyProofInput should have exactly 2 fields"
+    );
+}
+
+// ===========================================================================
+// 29) VerificationFailureClass — Ord produces correct BTreeSet ordering
+// ===========================================================================
+
+#[test]
+fn verification_failure_class_btreeset_ordering() {
+    let mut set = BTreeSet::new();
+    set.insert(VerificationFailureClass::StaleData);
+    set.insert(VerificationFailureClass::Signature);
+    set.insert(VerificationFailureClass::Attestation);
+    set.insert(VerificationFailureClass::Transparency);
+
+    let ordered: Vec<_> = set.into_iter().collect();
+    assert_eq!(ordered[0], VerificationFailureClass::Signature);
+    assert_eq!(ordered[1], VerificationFailureClass::Transparency);
+    assert_eq!(ordered[2], VerificationFailureClass::Attestation);
+    assert_eq!(ordered[3], VerificationFailureClass::StaleData);
+}
+
+// ===========================================================================
+// 30) UnifiedReceiptVerificationVerdict — exact JSON field count
+// ===========================================================================
+
+#[test]
+fn unified_verdict_has_exactly_thirteen_fields() {
+    let verdict = UnifiedReceiptVerificationVerdict {
+        receipt_id: "r".into(),
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        verification_timestamp_ns: 0,
+        passed: true,
+        failure_class: None,
+        exit_code: 0,
+        signature: LayerResult {
+            passed: true,
+            error_code: None,
+            checks: vec![],
+        },
+        transparency: LayerResult {
+            passed: true,
+            error_code: None,
+            checks: vec![],
+        },
+        attestation: LayerResult {
+            passed: true,
+            error_code: None,
+            checks: vec![],
+        },
+        warnings: vec![],
+        logs: vec![],
+    };
+    let v: serde_json::Value = serde_json::to_value(&verdict).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(
+        obj.len(),
+        13,
+        "UnifiedReceiptVerificationVerdict should have exactly 13 fields"
+    );
+}
+
+// ===========================================================================
+// 31) ReceiptVerifierPipelineError — Debug contains receipt_id
+// ===========================================================================
+
+#[test]
+fn pipeline_error_debug_contains_receipt_id() {
+    let e = ReceiptVerifierPipelineError::ReceiptNotFound {
+        receipt_id: "rcpt-debug-test".to_string(),
+    };
+    let dbg = format!("{e:?}");
+    assert!(
+        dbg.contains("rcpt-debug-test"),
+        "Debug should contain receipt_id: {dbg}"
+    );
+    assert!(
+        dbg.contains("ReceiptNotFound"),
+        "Debug should contain variant name: {dbg}"
+    );
+}
+
+// ===========================================================================
+// 32) LayerResult — mixed pass/fail checks preserve order
+// ===========================================================================
+
+#[test]
+fn layer_result_mixed_checks_preserve_order() {
+    let lr = LayerResult {
+        passed: false,
+        error_code: Some("second_check_error".into()),
+        checks: vec![
+            LayerCheck {
+                check: "first_check".into(),
+                outcome: "pass".into(),
+                error_code: None,
+                detail: "ok".into(),
+            },
+            LayerCheck {
+                check: "second_check".into(),
+                outcome: "fail".into(),
+                error_code: Some("second_check_error".into()),
+                detail: "bad".into(),
+            },
+            LayerCheck {
+                check: "third_check".into(),
+                outcome: "pass".into(),
+                error_code: None,
+                detail: "recovered".into(),
+            },
+        ],
+    };
+    // Verify ordering is preserved through serde
+    let json = serde_json::to_string(&lr).unwrap();
+    let rt: LayerResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(rt.checks.len(), 3);
+    assert_eq!(rt.checks[0].check, "first_check");
+    assert_eq!(rt.checks[0].outcome, "pass");
+    assert_eq!(rt.checks[1].check, "second_check");
+    assert_eq!(rt.checks[1].outcome, "fail");
+    assert_eq!(rt.checks[2].check, "third_check");
+    assert_eq!(rt.checks[2].outcome, "pass");
+    assert!(!rt.passed);
+    assert_eq!(rt.error_code.as_deref(), Some("second_check_error"));
+}
+
+// ===========================================================================
+// 33) LayerCheck — clone produces independent value
+// ===========================================================================
+
+#[test]
+fn layer_check_clone_independence() {
+    let original = LayerCheck {
+        check: "sig_valid".into(),
+        outcome: "pass".into(),
+        error_code: None,
+        detail: "ok".into(),
+    };
+    let mut cloned = original.clone();
+    cloned.outcome = "fail".into();
+    cloned.error_code = Some("mutated".into());
+    // Original unchanged
+    assert_eq!(original.outcome, "pass");
+    assert!(original.error_code.is_none());
+    // Clone is different
+    assert_eq!(cloned.outcome, "fail");
+    assert_eq!(cloned.error_code.as_deref(), Some("mutated"));
+}
+
+// ===========================================================================
+// 34) VerifierLogEvent — exact field count stability
+// ===========================================================================
+
+#[test]
+fn verifier_log_event_has_exactly_seven_fields() {
+    let ev = VerifierLogEvent {
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: "p".into(),
+        component: "c".into(),
+        event: "e".into(),
+        outcome: "pass".into(),
+        error_code: None,
+    };
+    let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(
+        obj.len(),
+        7,
+        "VerifierLogEvent should have exactly 7 fields"
+    );
+}
+
+// ===========================================================================
+// 35) LayerCheck — exact field count stability
+// ===========================================================================
+
+#[test]
+fn layer_check_has_exactly_four_fields() {
+    let lc = LayerCheck {
+        check: "test".into(),
+        outcome: "pass".into(),
+        error_code: None,
+        detail: "ok".into(),
+    };
+    let v: serde_json::Value = serde_json::to_value(&lc).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj.len(), 4, "LayerCheck should have exactly 4 fields");
+}
+
+// ===========================================================================
+// 36) LayerResult — exact field count stability
+// ===========================================================================
+
+#[test]
+fn layer_result_has_exactly_three_fields() {
+    let lr = LayerResult {
+        passed: true,
+        error_code: None,
+        checks: vec![],
+    };
+    let v: serde_json::Value = serde_json::to_value(&lr).unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj.len(), 3, "LayerResult should have exactly 3 fields");
 }

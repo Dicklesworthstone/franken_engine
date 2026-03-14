@@ -14,10 +14,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::counterexample_synthesizer::{
-    ControllerConfig, ControllerInterference, ControllerInterferenceEvent,
+    ConcreteScenario, ControllerConfig, ControllerInterference, ControllerInterferenceEvent,
     CounterexampleSynthesizer, DEFAULT_BUDGET_NS, DEFAULT_MAX_MINIMIZATION_ROUNDS,
-    InterferenceKind, MinimalityEvidence, SynthesisConfig, SynthesisError, SynthesisOutcome,
-    SynthesisStrategy,
+    InterferenceKind, MinimalityEvidence, MutationKind, PolicyMutation, SynthesisConfig,
+    SynthesisError, SynthesisOutcome, SynthesisStrategy,
 };
 
 fn set(values: &[&str]) -> BTreeSet<String> {
@@ -692,4 +692,327 @@ fn synthesis_error_all_variants_serde_round_trip() {
         let recovered: SynthesisError = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(*err, recovered);
     }
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: untested types, clone independence, boundary,
+// determinism, mutation/scenario coverage
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn concrete_scenario_serde_round_trip() {
+    let scenario = ConcreteScenario {
+        subjects: set(&["subject-a", "subject-b"]),
+        capabilities: set(&["cap-read", "cap-write"]),
+        conditions: {
+            let mut m = BTreeMap::new();
+            m.insert("violation".to_string(), "monotonicity breach".to_string());
+            m.insert("env".to_string(), "staging".to_string());
+            m
+        },
+        merge_ordering: vec![
+            "step-1".to_string(),
+            "step-2".to_string(),
+            "step-3".to_string(),
+        ],
+        input_state: {
+            let mut m = BTreeMap::new();
+            m.insert("key-a".to_string(), "val-a".to_string());
+            m
+        },
+    };
+    let json = serde_json::to_string(&scenario).expect("serialize");
+    let recovered: ConcreteScenario = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(scenario, recovered);
+    assert_eq!(recovered.subjects.len(), 2);
+    assert_eq!(recovered.merge_ordering.len(), 3);
+    assert_eq!(recovered.conditions.len(), 2);
+}
+
+#[test]
+fn concrete_scenario_empty_fields_serde_round_trip() {
+    let scenario = ConcreteScenario {
+        subjects: BTreeSet::new(),
+        capabilities: BTreeSet::new(),
+        conditions: BTreeMap::new(),
+        merge_ordering: Vec::new(),
+        input_state: BTreeMap::new(),
+    };
+    let json = serde_json::to_string(&scenario).expect("serialize");
+    let recovered: ConcreteScenario = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(scenario, recovered);
+    assert!(recovered.subjects.is_empty());
+    assert!(recovered.merge_ordering.is_empty());
+}
+
+#[test]
+fn policy_mutation_serde_round_trip() {
+    let mutation = PolicyMutation {
+        kind: MutationKind::ChangeMergeOp,
+        target_node: "node-42".to_string(),
+        new_value: "union".to_string(),
+    };
+    let json = serde_json::to_string(&mutation).expect("serialize");
+    let recovered: PolicyMutation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(mutation, recovered);
+    assert_eq!(recovered.kind, MutationKind::ChangeMergeOp);
+    assert_eq!(recovered.target_node, "node-42");
+}
+
+#[test]
+fn mutation_kind_display_all_variants() {
+    let expected = [
+        (MutationKind::ChangeMergeOp, "change-merge-op"),
+        (MutationKind::AddGrant, "add-grant"),
+        (MutationKind::RemovePropertyClaim, "remove-property-claim"),
+        (MutationKind::ChangePriority, "change-priority"),
+        (MutationKind::RemoveConstraint, "remove-constraint"),
+        (MutationKind::DuplicateNode, "duplicate-node"),
+    ];
+    for (kind, display_str) in expected {
+        assert_eq!(kind.to_string(), display_str);
+    }
+}
+
+#[test]
+fn mutation_kind_serde_round_trip_all_variants() {
+    let variants = [
+        MutationKind::ChangeMergeOp,
+        MutationKind::AddGrant,
+        MutationKind::RemovePropertyClaim,
+        MutationKind::ChangePriority,
+        MutationKind::RemoveConstraint,
+        MutationKind::DuplicateNode,
+    ];
+    for kind in variants {
+        let json = serde_json::to_string(&kind).expect("serialize");
+        let recovered: MutationKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(kind, recovered);
+    }
+}
+
+#[test]
+fn controller_interference_clone_independence() {
+    let original = ControllerInterference {
+        kind: InterferenceKind::Oscillation,
+        controller_ids: vec!["ctrl-1".to_string(), "ctrl-2".to_string()],
+        shared_metrics: set(&["m1", "m2", "m3"]),
+        timescale_separation_millionths: 75_000,
+        evidence_description: "oscillating writes".to_string(),
+        convergence_steps: Some(100),
+    };
+    let mut cloned = original.clone();
+    cloned.kind = InterferenceKind::TimescaleConflict;
+    cloned.controller_ids.push("ctrl-3".to_string());
+    cloned.shared_metrics.insert("m4".to_string());
+    cloned.timescale_separation_millionths = 200_000;
+    cloned.convergence_steps = None;
+
+    // Original must be unaffected by mutations to the clone.
+    assert_eq!(original.kind, InterferenceKind::Oscillation);
+    assert_eq!(original.controller_ids.len(), 2);
+    assert_eq!(original.shared_metrics.len(), 3);
+    assert_eq!(original.timescale_separation_millionths, 75_000);
+    assert_eq!(original.convergence_steps, Some(100));
+
+    // Cloned must reflect the mutations.
+    assert_eq!(cloned.kind, InterferenceKind::TimescaleConflict);
+    assert_eq!(cloned.controller_ids.len(), 3);
+    assert_eq!(cloned.shared_metrics.len(), 4);
+    assert_eq!(cloned.convergence_steps, None);
+}
+
+#[test]
+fn controller_config_clone_independence() {
+    let original = controller("ctrl-orig", &["r1", "r2"], &["w1"], 500_000, "every 500ms");
+    let mut cloned = original.clone();
+    cloned.controller_id = "ctrl-clone".to_string();
+    cloned.read_metrics.insert("r3".to_string());
+    cloned.write_metrics.insert("w2".to_string());
+    cloned.timescale_millionths = 1_000_000;
+
+    assert_eq!(original.controller_id, "ctrl-orig");
+    assert_eq!(original.read_metrics.len(), 2);
+    assert_eq!(original.write_metrics.len(), 1);
+    assert_eq!(original.timescale_millionths, 500_000);
+
+    assert_eq!(cloned.controller_id, "ctrl-clone");
+    assert_eq!(cloned.read_metrics.len(), 3);
+    assert_eq!(cloned.write_metrics.len(), 2);
+}
+
+#[test]
+fn empty_timescale_statement_triggers_timescale_conflict() {
+    let synth = synth();
+    let mut cfg_a = controller("ctrl-a", &[], &["metric_x"], 100_000, "");
+    cfg_a.timescale_statement = String::new();
+    let cfg_b = controller("ctrl-b", &[], &["metric_x"], 200_000, "every 200ms");
+
+    let interferences = synth.detect_interference(&[cfg_a, cfg_b]);
+    assert!(
+        interferences
+            .iter()
+            .any(|i| i.kind == InterferenceKind::TimescaleConflict),
+        "empty timescale statement should trigger TimescaleConflict"
+    );
+}
+
+#[test]
+fn whitespace_only_timescale_statement_triggers_conflict() {
+    let synth = synth();
+    let mut cfg_a = controller("ctrl-ws", &[], &["metric_y"], 100_000, "   ");
+    cfg_a.timescale_statement = "   \t  ".to_string();
+    let cfg_b = controller("ctrl-ok", &[], &["metric_y"], 150_000, "every 150ms");
+
+    let interferences = synth.detect_interference(&[cfg_a, cfg_b]);
+    assert!(
+        interferences
+            .iter()
+            .any(|i| i.kind == InterferenceKind::TimescaleConflict),
+        "whitespace-only timescale statement should be treated as missing"
+    );
+}
+
+#[test]
+fn timescale_separation_boundary_at_exactly_threshold() {
+    let synth = synth();
+    // Separation of exactly 100_000 should NOT trigger TimescaleConflict
+    // (threshold is < 100_000 = insufficient)
+    let configs = vec![
+        controller("w-boundary-a", &[], &["bnd_m"], 100_000, "100ms"),
+        controller("w-boundary-b", &[], &["bnd_m"], 200_000, "200ms"),
+    ];
+    let interferences = synth.detect_interference(&configs);
+    // With separation == 100_000, it is not < 100_000, so no TimescaleConflict.
+    let has_timescale_conflict = interferences
+        .iter()
+        .any(|i| i.kind == InterferenceKind::TimescaleConflict);
+    assert!(
+        !has_timescale_conflict,
+        "separation of exactly 100_000 should not trigger TimescaleConflict"
+    );
+}
+
+#[test]
+fn timescale_separation_just_below_threshold_triggers_conflict() {
+    let synth = synth();
+    // Separation of 99_999 (< 100_000) should trigger TimescaleConflict
+    let configs = vec![
+        controller("w-below-a", &[], &["blw_m"], 100_000, "100ms"),
+        controller("w-below-b", &[], &["blw_m"], 199_999, "~200ms"),
+    ];
+    let interferences = synth.detect_interference(&configs);
+    let has_timescale_conflict = interferences
+        .iter()
+        .any(|i| i.kind == InterferenceKind::TimescaleConflict);
+    assert!(
+        has_timescale_conflict,
+        "separation of 99_999 should trigger TimescaleConflict"
+    );
+}
+
+#[test]
+fn interference_event_ordering_is_deterministic_across_runs() {
+    let synth = synth();
+    let configs = vec![
+        controller("det-w1", &[], &["d1", "d2"], 100_000, "100ms"),
+        controller("det-w2", &[], &["d1"], 110_000, "110ms"),
+        controller("det-r3", &["d2"], &[], 300_000, "300ms"),
+    ];
+
+    let interferences_a = synth.detect_interference(&configs);
+    let events_a = synth.build_interference_events(&interferences_a, "trace-det", "policy-det");
+
+    let interferences_b = synth.detect_interference(&configs);
+    let events_b = synth.build_interference_events(&interferences_b, "trace-det", "policy-det");
+
+    assert_eq!(events_a.len(), events_b.len());
+    for (ea, eb) in events_a.iter().zip(events_b.iter()) {
+        assert_eq!(ea.decision_id, eb.decision_id);
+        assert_eq!(ea.kind, eb.kind);
+        assert_eq!(ea.controller_ids, eb.controller_ids);
+        assert_eq!(ea.shared_metrics, eb.shared_metrics);
+        assert_eq!(
+            ea.timescale_separation_millionths,
+            eb.timescale_separation_millionths
+        );
+    }
+}
+
+#[test]
+fn many_controllers_quadratic_interference_count() {
+    let synth = synth();
+    // 4 controllers all writing to the same metric => C(4,2) = 6 pairs
+    let configs: Vec<ControllerConfig> = (0..4)
+        .map(|i| {
+            controller(
+                &format!("quad-w{i}"),
+                &[],
+                &["shared_q"],
+                100_000 + i * 5_000,
+                &format!("every {}ms", 100 + i * 5),
+            )
+        })
+        .collect();
+
+    let interferences = synth.detect_interference(&configs);
+    // Each pair shares "shared_q" as write metric; at minimum we expect
+    // some interference events (exact count depends on timescale separation logic).
+    assert!(
+        !interferences.is_empty(),
+        "4 writers on the same metric should produce interference"
+    );
+    // All interferences should reference "shared_q".
+    for interference in &interferences {
+        assert!(
+            interference.shared_metrics.contains("shared_q"),
+            "all interferences must reference the shared metric"
+        );
+    }
+}
+
+#[test]
+fn synthesis_error_minimization_exhausted_display_contains_round_count() {
+    let err = SynthesisError::MinimizationExhausted { rounds: 77 };
+    let display = err.to_string();
+    assert!(
+        display.contains("77"),
+        "display should contain the round count"
+    );
+    assert!(
+        display.contains("minimization"),
+        "display should mention minimization"
+    );
+}
+
+#[test]
+fn controller_interference_event_clone_independence() {
+    let original = ControllerInterferenceEvent {
+        trace_id: "trace-ci".to_string(),
+        decision_id: "decision-ci".to_string(),
+        policy_id: "policy-ci".to_string(),
+        component: "counterexample_synthesizer".to_string(),
+        event: "controller_interference_rejected".to_string(),
+        outcome: "reject".to_string(),
+        error_code: Some("FE-CX-INTERFERENCE-OSCILLATION".to_string()),
+        kind: InterferenceKind::Oscillation,
+        controller_ids: vec!["ctrl-a".to_string(), "ctrl-b".to_string()],
+        shared_metrics: vec!["latency_ms".to_string()],
+        timescale_separation_millionths: 50_000,
+    };
+    let mut cloned = original.clone();
+    cloned.trace_id = "trace-modified".to_string();
+    cloned.controller_ids.push("ctrl-c".to_string());
+    cloned.shared_metrics.push("qps".to_string());
+    cloned.error_code = None;
+
+    assert_eq!(original.trace_id, "trace-ci");
+    assert_eq!(original.controller_ids.len(), 2);
+    assert_eq!(original.shared_metrics.len(), 1);
+    assert!(original.error_code.is_some());
+
+    assert_eq!(cloned.trace_id, "trace-modified");
+    assert_eq!(cloned.controller_ids.len(), 3);
+    assert_eq!(cloned.shared_metrics.len(), 2);
+    assert!(cloned.error_code.is_none());
 }

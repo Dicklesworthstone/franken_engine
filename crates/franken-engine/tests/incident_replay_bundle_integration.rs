@@ -30,9 +30,10 @@ use frankenengine_engine::fleet_immune_protocol::{
 };
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::incident_replay_bundle::{
-    BUNDLE_FORMAT_VERSION, BundleArtifactKind, BundleBuilder, BundleVerifier, CheckOutcome,
-    CounterfactualResult, IncidentReplayBundle, PolicySnapshot, RedactionPolicy,
-    VerificationCategory, build_merkle_proof, compute_merkle_root, verify_merkle_proof,
+    ArtifactEntry, BUNDLE_FORMAT_VERSION, BundleArtifactKind, BundleBuilder, BundleError,
+    BundleFormatVersion, BundleVerifier, CategorySummary, CheckOutcome, CounterfactualResult,
+    IncidentReplayBundle, PolicySnapshot, RedactionPolicy, VerificationCategory, VerificationCheck,
+    build_merkle_proof, compute_merkle_root, verify_merkle_proof,
 };
 use frankenengine_engine::proof_schema::{
     OptReceipt, OptimizationClass, proof_schema_version_v1_0,
@@ -1548,4 +1549,729 @@ fn all_seven_types_integrity_after_serde() {
         sig_report.passed,
         "seven-type signature after serde: {sig_report:?}"
     );
+}
+
+// ===========================================================================
+// BundleFormatVersion — compatibility, Display, ordering, serde
+// ===========================================================================
+
+#[test]
+fn test_bundle_format_version_compatible_same() {
+    let v1_0 = BundleFormatVersion { major: 1, minor: 0 };
+    // A reader with the same version is compatible with itself.
+    assert!(v1_0.is_compatible_with(&v1_0));
+}
+
+#[test]
+fn test_bundle_format_version_reader_newer_minor_is_compatible() {
+    let bundle_ver = BundleFormatVersion { major: 1, minor: 0 };
+    let reader_ver = BundleFormatVersion { major: 1, minor: 5 };
+    // Reader's minor >= bundle minor → compatible.
+    assert!(reader_ver.is_compatible_with(&bundle_ver));
+}
+
+#[test]
+fn test_bundle_format_version_reader_older_minor_is_not_compatible() {
+    let bundle_ver = BundleFormatVersion { major: 1, minor: 3 };
+    let reader_ver = BundleFormatVersion { major: 1, minor: 1 };
+    // Reader's minor < bundle minor → incompatible.
+    assert!(!reader_ver.is_compatible_with(&bundle_ver));
+}
+
+#[test]
+fn test_bundle_format_version_major_mismatch_is_not_compatible() {
+    let bundle_ver = BundleFormatVersion { major: 2, minor: 0 };
+    let reader_ver = BundleFormatVersion { major: 1, minor: 9 };
+    assert!(!reader_ver.is_compatible_with(&bundle_ver));
+}
+
+#[test]
+fn test_bundle_format_version_display() {
+    let ver = BundleFormatVersion { major: 3, minor: 7 };
+    assert_eq!(ver.to_string(), "3.7");
+}
+
+#[test]
+fn test_bundle_format_version_serde_roundtrip() {
+    let ver = BundleFormatVersion { major: 1, minor: 0 };
+    let json = serde_json::to_string(&ver).unwrap();
+    let restored: BundleFormatVersion = serde_json::from_str(&json).unwrap();
+    assert_eq!(ver, restored);
+}
+
+#[test]
+fn test_bundle_format_version_ordering() {
+    let v1_0 = BundleFormatVersion { major: 1, minor: 0 };
+    let v1_1 = BundleFormatVersion { major: 1, minor: 1 };
+    let v2_0 = BundleFormatVersion { major: 2, minor: 0 };
+    assert!(v1_0 < v1_1);
+    assert!(v1_1 < v2_0);
+    assert!(v1_0 < v2_0);
+}
+
+#[test]
+fn test_bundle_format_version_clone_copy() {
+    let ver = BundleFormatVersion { major: 1, minor: 0 };
+    let cloned = ver;
+    assert_eq!(ver, cloned);
+}
+
+#[test]
+fn test_bundle_format_version_constant_is_1_0() {
+    assert_eq!(BUNDLE_FORMAT_VERSION.major, 1);
+    assert_eq!(BUNDLE_FORMAT_VERSION.minor, 0);
+}
+
+// ===========================================================================
+// BundleError — Debug, Display, Clone, PartialEq, serde
+// ===========================================================================
+
+#[test]
+fn test_bundle_error_empty_bundle_display() {
+    let err = BundleError::EmptyBundle;
+    assert_eq!(err.to_string(), "empty bundle");
+}
+
+#[test]
+fn test_bundle_error_signature_invalid_display() {
+    let err = BundleError::SignatureInvalid;
+    assert_eq!(err.to_string(), "bundle signature invalid");
+}
+
+#[test]
+fn test_bundle_error_integrity_failure_display() {
+    let err = BundleError::IntegrityFailure {
+        expected: "abc123".to_string(),
+        actual: "def456".to_string(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("abc123"));
+    assert!(s.contains("def456"));
+}
+
+#[test]
+fn test_bundle_error_artifact_hash_mismatch_display() {
+    let err = BundleError::ArtifactHashMismatch {
+        artifact_id: "trace:t1".to_string(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("trace:t1"));
+}
+
+#[test]
+fn test_bundle_error_replay_divergence_display() {
+    let err = BundleError::ReplayDivergence {
+        details: "5 divergence points".to_string(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("5 divergence points"));
+}
+
+#[test]
+fn test_bundle_error_receipt_invalid_display() {
+    let err = BundleError::ReceiptInvalid {
+        receipt_id: "r-99".to_string(),
+        reason: "bad sig".to_string(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("r-99"));
+    assert!(s.contains("bad sig"));
+}
+
+#[test]
+fn test_bundle_error_trace_not_found_display() {
+    let err = BundleError::TraceNotFound {
+        trace_id: "t-missing".to_string(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("t-missing"));
+}
+
+#[test]
+fn test_bundle_error_incompatible_version_display() {
+    let err = BundleError::IncompatibleVersion {
+        bundle: BundleFormatVersion { major: 2, minor: 0 },
+        reader: BundleFormatVersion { major: 1, minor: 0 },
+    };
+    let s = err.to_string();
+    assert!(s.contains("2.0"));
+    assert!(s.contains("1.0"));
+}
+
+#[test]
+fn test_bundle_error_id_derivation_display() {
+    let err = BundleError::IdDerivation("domain overflow".to_string());
+    assert!(err.to_string().contains("domain overflow"));
+}
+
+#[test]
+fn test_bundle_error_redaction_violation_display() {
+    let err = BundleError::RedactionViolation {
+        field: "merkle_root".to_string(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("merkle_root"));
+}
+
+#[test]
+fn test_bundle_error_clone_and_partialeq() {
+    let err = BundleError::EmptyBundle;
+    let cloned = err.clone();
+    assert_eq!(err, cloned);
+}
+
+#[test]
+fn test_bundle_error_serde_roundtrip_all_variants() {
+    let variants: Vec<BundleError> = vec![
+        BundleError::EmptyBundle,
+        BundleError::SignatureInvalid,
+        BundleError::IntegrityFailure {
+            expected: "a".to_string(),
+            actual: "b".to_string(),
+        },
+        BundleError::ArtifactHashMismatch {
+            artifact_id: "x".to_string(),
+        },
+        BundleError::ReplayDivergence {
+            details: "d".to_string(),
+        },
+        BundleError::ReceiptInvalid {
+            receipt_id: "r".to_string(),
+            reason: "bad".to_string(),
+        },
+        BundleError::IncompatibleVersion {
+            bundle: BundleFormatVersion { major: 2, minor: 0 },
+            reader: BundleFormatVersion { major: 1, minor: 0 },
+        },
+        BundleError::TraceNotFound {
+            trace_id: "t".to_string(),
+        },
+        BundleError::IdDerivation("e".to_string()),
+        BundleError::ReplayFailed("f".to_string()),
+        BundleError::RedactionViolation {
+            field: "g".to_string(),
+        },
+    ];
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let restored: BundleError = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, restored);
+    }
+}
+
+// ===========================================================================
+// CheckOutcome — is_pass / is_fail / is_skipped, serde
+// ===========================================================================
+
+#[test]
+fn test_check_outcome_pass_is_pass_not_fail() {
+    let outcome = CheckOutcome::Pass;
+    assert!(outcome.is_pass());
+    assert!(!outcome.is_fail());
+}
+
+#[test]
+fn test_check_outcome_fail_is_fail_not_pass() {
+    let outcome = CheckOutcome::Fail {
+        reason: "oops".to_string(),
+    };
+    assert!(outcome.is_fail());
+    assert!(!outcome.is_pass());
+}
+
+#[test]
+fn test_check_outcome_skipped_is_neither_pass_nor_fail() {
+    let outcome = CheckOutcome::Skipped {
+        reason: "redacted".to_string(),
+    };
+    assert!(!outcome.is_pass());
+    assert!(!outcome.is_fail());
+}
+
+#[test]
+fn test_check_outcome_serde_roundtrip() {
+    for outcome in [
+        CheckOutcome::Pass,
+        CheckOutcome::Fail {
+            reason: "bad".to_string(),
+        },
+        CheckOutcome::Skipped {
+            reason: "skip".to_string(),
+        },
+    ] {
+        let json = serde_json::to_string(&outcome).unwrap();
+        let restored: CheckOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, restored);
+    }
+}
+
+// ===========================================================================
+// VerificationCategory — Display, serde, ordering
+// ===========================================================================
+
+#[test]
+fn test_verification_category_display_all() {
+    assert_eq!(VerificationCategory::Integrity.to_string(), "integrity");
+    assert_eq!(
+        VerificationCategory::ArtifactHash.to_string(),
+        "artifact-hash"
+    );
+    assert_eq!(VerificationCategory::Replay.to_string(), "replay");
+    assert_eq!(
+        VerificationCategory::ReceiptChain.to_string(),
+        "receipt-chain"
+    );
+    assert_eq!(
+        VerificationCategory::Counterfactual.to_string(),
+        "counterfactual"
+    );
+    assert_eq!(
+        VerificationCategory::Compatibility.to_string(),
+        "compatibility"
+    );
+}
+
+#[test]
+fn test_verification_category_serde_roundtrip() {
+    for cat in [
+        VerificationCategory::Integrity,
+        VerificationCategory::ArtifactHash,
+        VerificationCategory::Replay,
+        VerificationCategory::ReceiptChain,
+        VerificationCategory::Counterfactual,
+        VerificationCategory::Compatibility,
+    ] {
+        let json = serde_json::to_string(&cat).unwrap();
+        let restored: VerificationCategory = serde_json::from_str(&json).unwrap();
+        assert_eq!(cat, restored);
+    }
+}
+
+// ===========================================================================
+// BundleArtifactKind — Display, serde, ordering
+// ===========================================================================
+
+#[test]
+fn test_bundle_artifact_kind_display_all() {
+    assert_eq!(BundleArtifactKind::Trace.to_string(), "trace");
+    assert_eq!(BundleArtifactKind::Evidence.to_string(), "evidence");
+    assert_eq!(BundleArtifactKind::OptReceipt.to_string(), "opt-receipt");
+    assert_eq!(
+        BundleArtifactKind::QuorumCheckpoint.to_string(),
+        "quorum-checkpoint"
+    );
+    assert_eq!(
+        BundleArtifactKind::NondeterminismLog.to_string(),
+        "nondeterminism-log"
+    );
+    assert_eq!(
+        BundleArtifactKind::CounterfactualResult.to_string(),
+        "counterfactual-result"
+    );
+    assert_eq!(
+        BundleArtifactKind::PolicySnapshot.to_string(),
+        "policy-snapshot"
+    );
+}
+
+#[test]
+fn test_bundle_artifact_kind_serde_roundtrip() {
+    for kind in [
+        BundleArtifactKind::Trace,
+        BundleArtifactKind::Evidence,
+        BundleArtifactKind::OptReceipt,
+        BundleArtifactKind::QuorumCheckpoint,
+        BundleArtifactKind::NondeterminismLog,
+        BundleArtifactKind::CounterfactualResult,
+        BundleArtifactKind::PolicySnapshot,
+    ] {
+        let json = serde_json::to_string(&kind).unwrap();
+        let restored: BundleArtifactKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(kind, restored);
+    }
+}
+
+// ===========================================================================
+// RedactionPolicy — Default, clone, serde, field mutations
+// ===========================================================================
+
+#[test]
+fn test_redaction_policy_default_all_false() {
+    let policy = RedactionPolicy::default();
+    assert!(!policy.redact_extension_ids);
+    assert!(!policy.redact_evidence_metadata);
+    assert!(!policy.redact_nondeterminism_values);
+    assert!(!policy.redact_node_ids);
+    assert!(policy.custom_redaction_keys.is_empty());
+}
+
+#[test]
+fn test_redaction_policy_clone_and_partialeq() {
+    let mut policy = RedactionPolicy::default();
+    policy.redact_node_ids = true;
+    policy.custom_redaction_keys.insert("my-field".to_string());
+    let cloned = policy.clone();
+    assert_eq!(policy, cloned);
+}
+
+#[test]
+fn test_redaction_policy_serde_roundtrip() {
+    let mut policy = RedactionPolicy::default();
+    policy.redact_extension_ids = true;
+    policy.redact_nondeterminism_values = true;
+    policy
+        .custom_redaction_keys
+        .insert("secret-field".to_string());
+
+    let json = serde_json::to_string(&policy).unwrap();
+    let restored: RedactionPolicy = serde_json::from_str(&json).unwrap();
+    assert_eq!(policy, restored);
+}
+
+#[test]
+fn test_redaction_policy_in_bundle_manifest() {
+    let mut policy = RedactionPolicy::default();
+    policy.redact_node_ids = true;
+
+    let key = test_signing_key();
+    let bundle = BundleBuilder::new(
+        "redaction-test".to_string(),
+        SecurityEpoch::from_raw(42),
+        8000,
+        "key-x".to_string(),
+        key,
+    )
+    .redaction_policy(policy.clone())
+    .trace("t1".to_string(), make_trace("t1", 1))
+    .build()
+    .unwrap();
+
+    assert!(bundle.manifest.redaction_policy.redact_node_ids);
+    assert!(!bundle.manifest.redaction_policy.redact_extension_ids);
+}
+
+// ===========================================================================
+// PolicySnapshot — Clone, Debug, serde
+// ===========================================================================
+
+#[test]
+fn test_policy_snapshot_clone_and_partialeq() {
+    let snap = make_policy_snapshot("pol-clone");
+    let cloned = snap.clone();
+    assert_eq!(snap, cloned);
+}
+
+#[test]
+fn test_policy_snapshot_serde_roundtrip() {
+    let snap = make_policy_snapshot("pol-serde");
+    let json = serde_json::to_string(&snap).unwrap();
+    let restored: PolicySnapshot = serde_json::from_str(&json).unwrap();
+    assert_eq!(snap, restored);
+}
+
+// ===========================================================================
+// BundleBuilder returns EmptyBundle error when no artifacts
+// ===========================================================================
+
+#[test]
+fn test_builder_empty_bundle_returns_error() {
+    let key = test_signing_key();
+    let result = BundleBuilder::new(
+        "empty".to_string(),
+        SecurityEpoch::from_raw(1),
+        100,
+        "key-z".to_string(),
+        key,
+    )
+    .build();
+    assert!(matches!(result, Err(BundleError::EmptyBundle)));
+}
+
+// ===========================================================================
+// Merkle root — edge cases
+// ===========================================================================
+
+#[test]
+fn test_compute_merkle_root_empty_is_deterministic() {
+    let r1 = compute_merkle_root(&[]);
+    let r2 = compute_merkle_root(&[]);
+    assert_eq!(r1, r2);
+}
+
+#[test]
+fn test_compute_merkle_root_single_leaf_is_leaf() {
+    let leaf = ContentHash::compute(b"only-leaf");
+    let root = compute_merkle_root(&[leaf]);
+    assert_eq!(root, leaf);
+}
+
+#[test]
+fn test_compute_merkle_root_power_of_two_leaves() {
+    let leaves: Vec<ContentHash> = (0u8..4).map(|i| ContentHash::compute(&[i])).collect();
+    let root = compute_merkle_root(&leaves);
+    // Deterministic across two calls.
+    let root2 = compute_merkle_root(&leaves);
+    assert_eq!(root, root2);
+    // Root differs from any single leaf.
+    for leaf in &leaves {
+        assert_ne!(root, *leaf);
+    }
+}
+
+#[test]
+fn test_compute_merkle_root_odd_leaf_count() {
+    let leaves: Vec<ContentHash> = (0u8..5).map(|i| ContentHash::compute(&[i])).collect();
+    let root = compute_merkle_root(&leaves);
+    let root2 = compute_merkle_root(&leaves);
+    assert_eq!(root, root2);
+}
+
+#[test]
+fn test_compute_merkle_root_order_matters() {
+    let a = ContentHash::compute(b"alpha");
+    let b = ContentHash::compute(b"beta");
+    let root_ab = compute_merkle_root(&[a, b]);
+    let root_ba = compute_merkle_root(&[b, a]);
+    assert_ne!(root_ab, root_ba);
+}
+
+// ===========================================================================
+// Merkle proof — edge cases
+// ===========================================================================
+
+#[test]
+fn test_build_merkle_proof_single_leaf_is_empty() {
+    let leaf = ContentHash::compute(b"solo");
+    let proof = build_merkle_proof(&[leaf], 0);
+    assert!(proof.is_empty());
+}
+
+#[test]
+fn test_build_merkle_proof_out_of_bounds_is_empty() {
+    let leaves: Vec<ContentHash> = (0u8..3).map(|i| ContentHash::compute(&[i])).collect();
+    let proof = build_merkle_proof(&leaves, 99);
+    assert!(proof.is_empty());
+}
+
+#[test]
+fn test_verify_merkle_proof_all_leaves() {
+    let leaves: Vec<ContentHash> = (0u8..6).map(|i| ContentHash::compute(&[i])).collect();
+    let root = compute_merkle_root(&leaves);
+    for (idx, leaf) in leaves.iter().enumerate() {
+        let proof = build_merkle_proof(&leaves, idx);
+        assert!(
+            verify_merkle_proof(leaf, &proof, &root),
+            "proof failed for leaf {idx}"
+        );
+    }
+}
+
+#[test]
+fn test_verify_merkle_proof_wrong_leaf_fails() {
+    let leaves: Vec<ContentHash> = (0u8..4).map(|i| ContentHash::compute(&[i])).collect();
+    let root = compute_merkle_root(&leaves);
+    let proof = build_merkle_proof(&leaves, 0);
+    let wrong_leaf = ContentHash::compute(b"wrong");
+    assert!(!verify_merkle_proof(&wrong_leaf, &proof, &root));
+}
+
+// ===========================================================================
+// BundleVerifier::Default — same as BundleVerifier::new()
+// ===========================================================================
+
+#[test]
+fn test_bundle_verifier_default_matches_new() {
+    let bundle = build_test_bundle();
+    let verifier_new = BundleVerifier::new();
+    let verifier_default = BundleVerifier::default();
+    let report_new = verifier_new.verify_integrity(&bundle, 7000);
+    let report_default = verifier_default.verify_integrity(&bundle, 7000);
+    assert_eq!(report_new.passed, report_default.passed);
+    assert_eq!(report_new.checks.len(), report_default.checks.len());
+}
+
+// ===========================================================================
+// VerificationReport — pass_count / fail_count, CategorySummary
+// ===========================================================================
+
+#[test]
+fn test_verification_report_pass_count_and_fail_count() {
+    let bundle = build_test_bundle();
+    let verifier = BundleVerifier::new();
+    let report = verifier.verify_integrity(&bundle, 7000);
+
+    assert_eq!(
+        report.pass_count() + report.fail_count(),
+        // count only Pass and Fail, not Skipped
+        report
+            .checks
+            .iter()
+            .filter(|c| c.outcome.is_pass() || c.outcome.is_fail())
+            .count() as u64
+    );
+    assert!(report.pass_count() > 0);
+    assert_eq!(report.fail_count(), 0);
+}
+
+#[test]
+fn test_verification_report_summary_has_integrity_category() {
+    let bundle = build_test_bundle();
+    let verifier = BundleVerifier::new();
+    let report = verifier.verify_integrity(&bundle, 7000);
+    assert!(report.summary.contains_key("integrity"));
+    let integrity = &report.summary["integrity"];
+    assert!(integrity.passed > 0);
+    assert_eq!(integrity.failed, 0);
+}
+
+#[test]
+fn test_category_summary_serde_roundtrip() {
+    let summary = CategorySummary {
+        passed: 5,
+        failed: 2,
+        skipped: 1,
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let restored: CategorySummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary.passed, restored.passed);
+    assert_eq!(summary.failed, restored.failed);
+    assert_eq!(summary.skipped, restored.skipped);
+}
+
+// ===========================================================================
+// BundleInspection — window, total_size, redacted_count
+// ===========================================================================
+
+#[test]
+fn test_inspect_window_matches_builder() {
+    let key = test_signing_key();
+    let bundle = BundleBuilder::new(
+        "window-inspect".to_string(),
+        SecurityEpoch::from_raw(10),
+        3000,
+        "key-w".to_string(),
+        key,
+    )
+    .window(500, 999)
+    .trace("t1".to_string(), make_trace("t1", 2))
+    .build()
+    .unwrap();
+
+    let verifier = BundleVerifier::new();
+    let inspection = verifier.inspect(&bundle);
+    assert_eq!(inspection.window, (500, 999));
+}
+
+#[test]
+fn test_inspect_total_size_nonzero_for_nonempty_bundle() {
+    let bundle = build_test_bundle();
+    let verifier = BundleVerifier::new();
+    let inspection = verifier.inspect(&bundle);
+    assert!(inspection.total_size_bytes > 0);
+}
+
+#[test]
+fn test_inspect_redacted_count_zero_for_unredacted_bundle() {
+    let bundle = build_test_bundle();
+    let verifier = BundleVerifier::new();
+    let inspection = verifier.inspect(&bundle);
+    assert_eq!(inspection.redacted_count, 0);
+}
+
+#[test]
+fn test_inspect_producer_key_id_preserved() {
+    let key = test_signing_key();
+    let bundle = BundleBuilder::new(
+        "producer-check".to_string(),
+        SecurityEpoch::from_raw(1),
+        100,
+        "my-unique-key-id".to_string(),
+        key,
+    )
+    .trace("t1".to_string(), make_trace("t1", 1))
+    .build()
+    .unwrap();
+
+    let verifier = BundleVerifier::new();
+    let inspection = verifier.inspect(&bundle);
+    assert_eq!(inspection.producer_key_id, "my-unique-key-id");
+}
+
+// ===========================================================================
+// Misc: VerificationCheck serde, ArtifactEntry serde
+// ===========================================================================
+
+#[test]
+fn test_verification_check_serde_roundtrip() {
+    let check = VerificationCheck {
+        name: "test-check".to_string(),
+        category: VerificationCategory::Integrity,
+        outcome: CheckOutcome::Pass,
+    };
+    let json = serde_json::to_string(&check).unwrap();
+    let restored: VerificationCheck = serde_json::from_str(&json).unwrap();
+    assert_eq!(check, restored);
+}
+
+#[test]
+fn test_artifact_entry_serde_roundtrip() {
+    let entry = ArtifactEntry {
+        artifact_id: "trace:t1".to_string(),
+        kind: BundleArtifactKind::Trace,
+        content_hash: ContentHash::compute(b"some-trace-data"),
+        redacted: false,
+        size_bytes: 128,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: ArtifactEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry.artifact_id, restored.artifact_id);
+    assert_eq!(entry.kind, restored.kind);
+    assert_eq!(entry.content_hash, restored.content_hash);
+    assert_eq!(entry.redacted, restored.redacted);
+    assert_eq!(entry.size_bytes, restored.size_bytes);
+}
+
+// ===========================================================================
+// verify_integrity: empty trace bundle check fails bundle-non-empty
+// (can only test via a structurally invalid bundle constructed manually)
+// ===========================================================================
+
+#[test]
+fn test_verify_receipts_no_receipts_skips() {
+    // Build a bundle with only a trace (no receipts).
+    let bundle = build_test_bundle();
+    let verifier = BundleVerifier::new();
+    let empty_keys = BTreeMap::new();
+    let report = verifier.verify_receipts(&bundle, &empty_keys, SecurityEpoch::from_raw(100), 9000);
+    // The single check should be a Skip (no receipts in bundle).
+    assert_eq!(report.checks.len(), 1);
+    assert!(matches!(
+        report.checks[0].outcome,
+        CheckOutcome::Skipped { .. }
+    ));
+}
+
+#[test]
+fn test_verify_replay_no_traces_skips() {
+    // Bundle with only a policy snapshot (no traces).
+    let key = test_signing_key();
+    let bundle = BundleBuilder::new(
+        "no-trace-replay".to_string(),
+        SecurityEpoch::from_raw(1),
+        100,
+        "key-nr".to_string(),
+        key,
+    )
+    .policy("p1".to_string(), make_policy_snapshot("p1"))
+    .build()
+    .unwrap();
+
+    let verifier = BundleVerifier::new();
+    let report = verifier.verify_replay(&bundle, 200);
+    // The first check should be skipped.
+    assert!(!report.checks.is_empty());
+    assert!(matches!(
+        report.checks[0].outcome,
+        CheckOutcome::Skipped { .. }
+    ));
 }

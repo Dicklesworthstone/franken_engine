@@ -597,3 +597,320 @@ fn retry_budget_policy_is_copy() {
     assert_eq!(policy, copied);
     assert_eq!(policy.max_retries, copied.max_retries);
 }
+
+// ---------------------------------------------------------------------------
+// New tests — edge cases, Debug formatting, Copy/Clone, invariants
+// ---------------------------------------------------------------------------
+
+// 42. Debug formatting of RetryBudgetPolicy contains field values
+#[test]
+fn test_retry_budget_policy_debug_contains_field_values() {
+    let policy = RetryBudgetPolicy::new(12, 7);
+    let dbg = format!("{policy:?}");
+    assert!(dbg.contains("12"));
+    assert!(dbg.contains("7"));
+}
+
+// 43. Debug formatting of FastPathReadSource
+#[test]
+fn test_fast_path_read_source_debug_variants() {
+    let fast = format!("{:?}", FastPathReadSource::FastPath);
+    let fall = format!("{:?}", FastPathReadSource::Fallback);
+    assert!(fast.contains("FastPath"));
+    assert!(fall.contains("Fallback"));
+}
+
+// 44. Debug formatting of FastPathFallbackReason
+#[test]
+fn test_fast_path_fallback_reason_debug_variants() {
+    let rbe = format!("{:?}", FastPathFallbackReason::RetryBudgetExceeded);
+    let uninit = format!("{:?}", FastPathFallbackReason::Uninitialized);
+    let wp = format!("{:?}", FastPathFallbackReason::WriterPressure);
+    assert!(rbe.contains("RetryBudgetExceeded"));
+    assert!(uninit.contains("Uninitialized"));
+    assert!(wp.contains("WriterPressure"));
+}
+
+// 45. Debug formatting of FastPathReadResult
+#[test]
+fn test_fast_path_read_result_debug_contains_value() {
+    let result = FastPathReadResult {
+        value: 55_u64,
+        source: FastPathReadSource::FastPath,
+        attempts: 2,
+        writer_pressure_observations: 1,
+        fallback_reason: None,
+    };
+    let dbg = format!("{result:?}");
+    assert!(dbg.contains("55"));
+    assert!(dbg.contains("FastPath"));
+}
+
+// 46. Debug formatting of FastPathTelemetry
+#[test]
+fn test_fast_path_telemetry_debug_contains_field_names() {
+    let t = FastPathTelemetry {
+        total_reads: 99,
+        fast_path_reads: 88,
+        fallback_reads: 11,
+        total_retries: 3,
+        writer_pressure_observations: 1,
+        retry_budget_fallbacks: 0,
+        uninitialized_fallbacks: 11,
+        writer_pressure_fallbacks: 0,
+        writes: 5,
+    };
+    let dbg = format!("{t:?}");
+    assert!(dbg.contains("99"));
+    assert!(dbg.contains("88"));
+}
+
+// 47. Debug formatting of SnapshotFastPath
+#[test]
+fn test_snapshot_fast_path_debug_is_non_empty() {
+    let fp = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+    let dbg = format!("{fp:?}");
+    assert!(!dbg.is_empty());
+}
+
+// 48. FastPathTelemetry Copy: can be copied without moving
+#[test]
+fn test_fast_path_telemetry_is_copy() {
+    let t = FastPathTelemetry {
+        total_reads: 5,
+        fast_path_reads: 4,
+        fallback_reads: 1,
+        total_retries: 0,
+        writer_pressure_observations: 0,
+        retry_budget_fallbacks: 0,
+        uninitialized_fallbacks: 1,
+        writer_pressure_fallbacks: 0,
+        writes: 2,
+    };
+    let t2 = t;
+    assert_eq!(t.total_reads, t2.total_reads);
+    assert_eq!(t.writes, t2.writes);
+}
+
+// 49. FastPathReadSource Copy semantics
+#[test]
+fn test_fast_path_read_source_is_copy() {
+    let src = FastPathReadSource::FastPath;
+    let src2 = src;
+    assert_eq!(src, src2);
+}
+
+// 50. FastPathFallbackReason Copy semantics
+#[test]
+fn test_fast_path_fallback_reason_is_copy() {
+    let reason = FastPathFallbackReason::RetryBudgetExceeded;
+    let reason2 = reason;
+    assert_eq!(reason, reason2);
+}
+
+// 51. FastPathReadResult Clone produces equal value
+#[test]
+fn test_fast_path_read_result_clone_equals_original() {
+    let result = FastPathReadResult {
+        value: String::from("clone-me"),
+        source: FastPathReadSource::Fallback,
+        attempts: 1,
+        writer_pressure_observations: 2,
+        fallback_reason: Some(FastPathFallbackReason::WriterPressure),
+    };
+    let cloned = result.clone();
+    assert_eq!(result, cloned);
+}
+
+// 52. RetryBudgetPolicy with zero max_retries: read still works (fast path on even sequence)
+#[test]
+fn test_retry_budget_policy_zero_max_retries_fast_path_works() {
+    let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(0, 0));
+    fp.publish(42_u64);
+    let r = fp.read_clone_or_else(|| 0);
+    // With a quiescent writer the sequence is even; zero retries still succeeds
+    assert_eq!(r.value, 42);
+    assert_eq!(r.source, FastPathReadSource::FastPath);
+}
+
+// 53. Telemetry invariant: fast_path_reads + fallback_reads == total_reads
+#[test]
+fn test_telemetry_fast_plus_fallback_equals_total() {
+    let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(3, 2));
+    // 2 uninitialized fallbacks
+    let _ = fp.read_clone_or_else(|| 0_u64);
+    let _ = fp.read_clone_or_else(|| 0_u64);
+    fp.publish(7);
+    // 3 fast-path reads
+    for _ in 0..3 {
+        let _ = fp.read_clone_or_else(|| 0);
+    }
+    let t = fp.telemetry();
+    assert_eq!(t.fast_path_reads + t.fallback_reads, t.total_reads);
+}
+
+// 54. SnapshotFastPath PartialEq is symmetric
+#[test]
+fn test_snapshot_fast_path_partial_eq_is_symmetric() {
+    let fp1: SnapshotFastPath<u64> = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 3));
+    let fp2: SnapshotFastPath<u64> = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 3));
+    assert_eq!(fp1, fp2);
+    assert_eq!(fp2, fp1);
+}
+
+// 55. SnapshotFastPath Eq reflexivity
+#[test]
+fn test_snapshot_fast_path_eq_reflexive() {
+    let fp: SnapshotFastPath<u64> = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+    assert_eq!(fp, fp);
+}
+
+// 56. RetryBudgetPolicy zero-zero is valid and serializes
+#[test]
+fn test_retry_budget_policy_zero_zero_serde() {
+    let policy = RetryBudgetPolicy::new(0, 0);
+    let json = serde_json::to_string(&policy).expect("serialize");
+    let back: RetryBudgetPolicy = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(policy, back);
+    assert_eq!(back.max_retries, 0);
+    assert_eq!(back.max_writer_pressure_observations, 0);
+}
+
+// 57. seed_if_uninitialized: seeded value reads via fast path (not fallback)
+#[test]
+fn test_seeded_value_reads_from_fast_path() {
+    let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(3, 2));
+    let seeded = fp.seed_if_uninitialized(77_u64);
+    assert!(seeded);
+    let r = fp.read_clone_or_else(|| 0);
+    assert_eq!(r.value, 77);
+    assert_eq!(r.source, FastPathReadSource::FastPath);
+    assert_eq!(r.fallback_reason, None);
+}
+
+// 58. seed does not affect total_reads telemetry counter
+#[test]
+fn test_seed_does_not_affect_total_reads_counter() {
+    let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(3, 2));
+    fp.seed_if_uninitialized(1_u64);
+    let t = fp.telemetry();
+    assert_eq!(t.total_reads, 0);
+}
+
+// 59. FastPathReadResult serde with nested Vec value
+#[test]
+fn test_fast_path_read_result_serde_with_vec_value() {
+    let result: FastPathReadResult<Vec<u32>> = FastPathReadResult {
+        value: vec![10, 20, 30],
+        source: FastPathReadSource::FastPath,
+        attempts: 0,
+        writer_pressure_observations: 0,
+        fallback_reason: None,
+    };
+    let json = serde_json::to_string(&result).expect("serialize");
+    let back: FastPathReadResult<Vec<u32>> = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(result, back);
+    assert_eq!(back.value, vec![10, 20, 30]);
+}
+
+// 60. Many sequential publishes all increment write counter correctly
+#[test]
+fn test_many_sequential_publishes_increment_writes() {
+    let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(5, 3));
+    for i in 0_u64..20 {
+        fp.publish(i);
+    }
+    let t = fp.telemetry();
+    assert_eq!(t.writes, 20);
+    let r = fp.read_clone_or_else(|| 0);
+    assert_eq!(r.value, 19); // last published value
+}
+
+// 61. FastPathTelemetry PartialEq: identical structs are equal
+#[test]
+fn test_fast_path_telemetry_partial_eq() {
+    let t1 = FastPathTelemetry {
+        total_reads: 7,
+        fast_path_reads: 5,
+        fallback_reads: 2,
+        total_retries: 1,
+        writer_pressure_observations: 0,
+        retry_budget_fallbacks: 1,
+        uninitialized_fallbacks: 1,
+        writer_pressure_fallbacks: 0,
+        writes: 3,
+    };
+    let t2 = t1;
+    assert_eq!(t1, t2);
+}
+
+// 62. RetryBudgetPolicy PartialEq reflexive
+#[test]
+fn test_retry_budget_policy_partial_eq_reflexive() {
+    let p = RetryBudgetPolicy::new(8, 4);
+    assert_eq!(p, p);
+}
+
+// 63. RetryBudgetPolicy PartialEq: different max_writer_pressure_observations are not equal
+#[test]
+fn test_retry_budget_policy_partial_eq_different_pressure() {
+    let p1 = RetryBudgetPolicy::new(5, 2);
+    let p2 = RetryBudgetPolicy::new(5, 3);
+    assert_ne!(p1, p2);
+}
+
+// 64. SnapshotFastPath PartialEq: different max_retries differ
+#[test]
+fn test_snapshot_fast_path_partial_eq_different_max_retries() {
+    let fp1: SnapshotFastPath<u64> = SnapshotFastPath::new(RetryBudgetPolicy::new(1, 2));
+    let fp2: SnapshotFastPath<u64> = SnapshotFastPath::new(RetryBudgetPolicy::new(9, 2));
+    assert_ne!(fp1, fp2);
+}
+
+// 65. Fallback closure is not called on a successful fast-path read
+#[test]
+fn test_fallback_closure_not_called_on_fast_path() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let counter = Arc::new(AtomicU32::new(0));
+    let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(3, 2));
+    fp.publish(1_u64);
+
+    let counter_clone = Arc::clone(&counter);
+    let r = fp.read_clone_or_else(|| {
+        counter_clone.fetch_add(1, Ordering::Relaxed);
+        0_u64
+    });
+    assert_eq!(r.source, FastPathReadSource::FastPath);
+    assert_eq!(counter.load(Ordering::Relaxed), 0);
+}
+
+// 66. Fallback closure is called exactly once on uninitialized read
+#[test]
+fn test_fallback_closure_called_once_on_uninitialized() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let counter = Arc::new(AtomicU32::new(0));
+    let fp: SnapshotFastPath<u64> = SnapshotFastPath::new(RetryBudgetPolicy::new(3, 2));
+
+    let counter_clone = Arc::clone(&counter);
+    let r = fp.read_clone_or_else(|| {
+        counter_clone.fetch_add(1, Ordering::Relaxed);
+        42_u64
+    });
+    assert_eq!(r.source, FastPathReadSource::Fallback);
+    assert_eq!(counter.load(Ordering::Relaxed), 1);
+    assert_eq!(r.value, 42);
+}
+
+// 67. FastPathReadResult attempts field is zero for a clean fast-path read
+#[test]
+fn test_fast_path_read_attempts_is_zero_on_clean_read() {
+    let fp = SnapshotFastPath::new(RetryBudgetPolicy::new(5, 3));
+    fp.publish(100_u64);
+    let r = fp.read_clone_or_else(|| 0);
+    assert_eq!(r.attempts, 0);
+    assert_eq!(r.writer_pressure_observations, 0);
+}

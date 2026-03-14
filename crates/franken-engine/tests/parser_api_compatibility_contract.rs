@@ -884,3 +884,375 @@ fn fixture_ergonomics_slo_keys_are_recognized() {
         "fixture must define at least one ergonomics SLO"
     );
 }
+
+// ===== PearlTower enrichment =====
+
+use frankenengine_engine::parser::{
+    ParseDiagnosticCategory, ParseDiagnosticEnvelope, ParseDiagnosticSeverity,
+    ParseDiagnosticTaxonomy, ParseEventKind, ParserMode,
+};
+
+// ---------- serde roundtrip for key types ----------
+
+#[test]
+fn enrichment_parser_mode_serde_roundtrip() {
+    let mode = ParserMode::ScalarReference;
+    let json = serde_json::to_string(&mode).expect("serialize ParserMode");
+    let recovered: ParserMode = serde_json::from_str(&json).expect("deserialize ParserMode");
+    assert_eq!(recovered, mode);
+    assert_eq!(mode.as_str(), "scalar_reference");
+}
+
+#[test]
+fn enrichment_parse_event_kind_serde_roundtrip() {
+    for kind in [
+        ParseEventKind::ParseStarted,
+        ParseEventKind::StatementParsed,
+        ParseEventKind::ParseCompleted,
+        ParseEventKind::ParseFailed,
+    ] {
+        let json = serde_json::to_string(&kind).expect("serialize ParseEventKind");
+        let recovered: ParseEventKind =
+            serde_json::from_str(&json).expect("deserialize ParseEventKind");
+        assert_eq!(recovered, kind);
+    }
+}
+
+#[test]
+fn enrichment_parse_diagnostic_category_serde_roundtrip() {
+    for category in [
+        ParseDiagnosticCategory::Input,
+        ParseDiagnosticCategory::Goal,
+        ParseDiagnosticCategory::Syntax,
+        ParseDiagnosticCategory::Encoding,
+        ParseDiagnosticCategory::Resource,
+        ParseDiagnosticCategory::System,
+    ] {
+        let json = serde_json::to_string(&category).expect("serialize ParseDiagnosticCategory");
+        let recovered: ParseDiagnosticCategory =
+            serde_json::from_str(&json).expect("deserialize ParseDiagnosticCategory");
+        assert_eq!(recovered, category);
+        assert!(!category.as_str().is_empty());
+    }
+}
+
+#[test]
+fn enrichment_parse_diagnostic_severity_serde_roundtrip() {
+    for severity in [
+        ParseDiagnosticSeverity::Error,
+        ParseDiagnosticSeverity::Fatal,
+    ] {
+        let json = serde_json::to_string(&severity).expect("serialize ParseDiagnosticSeverity");
+        let recovered: ParseDiagnosticSeverity =
+            serde_json::from_str(&json).expect("deserialize ParseDiagnosticSeverity");
+        assert_eq!(recovered, severity);
+        assert!(!severity.as_str().is_empty());
+    }
+}
+
+#[test]
+fn enrichment_parse_diagnostic_envelope_serde_roundtrip() {
+    let parser = CanonicalEs2020Parser;
+    let err = parser
+        .parse_with_options("", ParseGoal::Script, &ParserOptions::default())
+        .expect_err("empty source must fail");
+    let envelope = ParseDiagnosticEnvelope::from_parse_error(&err);
+    let json = serde_json::to_string(&envelope).expect("serialize ParseDiagnosticEnvelope");
+    let recovered: ParseDiagnosticEnvelope =
+        serde_json::from_str(&json).expect("deserialize ParseDiagnosticEnvelope");
+    assert_eq!(recovered.canonical_hash(), envelope.canonical_hash());
+    assert_eq!(recovered.parse_error_code, ParseErrorCode::EmptySource);
+}
+
+// ---------- edge cases (empty inputs, boundary values) ----------
+
+#[test]
+fn enrichment_empty_source_produces_empty_source_error() {
+    let parser = CanonicalEs2020Parser;
+    let err = parser
+        .parse_with_options("", ParseGoal::Script, &ParserOptions::default())
+        .expect_err("empty source must fail");
+    assert_eq!(err.code, ParseErrorCode::EmptySource);
+}
+
+#[test]
+fn enrichment_whitespace_only_source_is_empty_source_error() {
+    let parser = CanonicalEs2020Parser;
+    for whitespace in ["   ", "\t\n\r", "\n\n\n"] {
+        let err = parser
+            .parse_with_options(whitespace, ParseGoal::Script, &ParserOptions::default())
+            .expect_err("whitespace-only source must fail");
+        assert_eq!(
+            err.code,
+            ParseErrorCode::EmptySource,
+            "expected EmptySource for input {:?}",
+            whitespace
+        );
+    }
+}
+
+#[test]
+fn enrichment_source_bytes_budget_of_one_rejects_non_trivial_source() {
+    let parser = CanonicalEs2020Parser;
+    let mut options = ParserOptions::default();
+    options.budget.max_source_bytes = 1;
+    let err = parser
+        .parse_with_options("alpha;", ParseGoal::Script, &options)
+        .expect_err("source exceeding 1-byte budget must fail");
+    assert!(
+        matches!(
+            err.code,
+            ParseErrorCode::SourceTooLarge | ParseErrorCode::BudgetExceeded
+        ),
+        "expected SourceTooLarge or BudgetExceeded, got {:?}",
+        err.code
+    );
+}
+
+#[test]
+fn enrichment_module_goal_rejects_script_export_syntax() {
+    // `export default value` is only valid in module goal
+    let parser = CanonicalEs2020Parser;
+    let err = parser
+        .parse_with_options(
+            "export default value;",
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect_err("export default must fail in script goal");
+    assert_eq!(err.code, ParseErrorCode::InvalidGoal);
+}
+
+#[test]
+fn enrichment_single_statement_materialized_ast_has_exactly_one_node() {
+    let parser = CanonicalEs2020Parser;
+    let (_result, _ir, materialized) =
+        parser.parse_with_materialized_ast("answer;", ParseGoal::Script, &ParserOptions::default());
+    let mat = materialized.expect("single-statement parse must materialize");
+    assert_eq!(mat.statement_nodes.len(), 1);
+}
+
+// ---------- field uniqueness / invariant checks ----------
+
+#[test]
+fn enrichment_parse_error_code_as_str_values_are_unique() {
+    let strs: BTreeSet<&str> = ParseErrorCode::ALL.iter().map(|c| c.as_str()).collect();
+    assert_eq!(
+        strs.len(),
+        ParseErrorCode::ALL.len(),
+        "ParseErrorCode::as_str values must be unique"
+    );
+}
+
+#[test]
+fn enrichment_parse_error_code_stable_diagnostic_codes_are_unique() {
+    let codes: BTreeSet<&str> = ParseErrorCode::ALL
+        .iter()
+        .map(|c| c.stable_diagnostic_code())
+        .collect();
+    assert_eq!(
+        codes.len(),
+        ParseErrorCode::ALL.len(),
+        "stable_diagnostic_code values must be unique across all ParseErrorCode variants"
+    );
+}
+
+#[test]
+fn enrichment_parse_event_kind_as_str_values_are_unique() {
+    let kinds = [
+        ParseEventKind::ParseStarted,
+        ParseEventKind::StatementParsed,
+        ParseEventKind::ParseCompleted,
+        ParseEventKind::ParseFailed,
+    ];
+    let strs: BTreeSet<&str> = kinds.iter().map(|k| k.as_str()).collect();
+    assert_eq!(
+        strs.len(),
+        kinds.len(),
+        "ParseEventKind::as_str values must be unique"
+    );
+}
+
+#[test]
+fn enrichment_fixture_replay_commands_are_unique() {
+    let fixture = load_fixture();
+    let commands: BTreeSet<&str> = fixture
+        .compatibility_cases
+        .iter()
+        .map(|c| c.replay_command.as_str())
+        .collect();
+    assert_eq!(
+        commands.len(),
+        fixture.compatibility_cases.len(),
+        "each compatibility case must have a unique replay_command"
+    );
+}
+
+#[test]
+fn enrichment_parse_diagnostic_taxonomy_v1_rules_cover_all_codes() {
+    let taxonomy = ParseDiagnosticTaxonomy::v1();
+    assert_eq!(
+        taxonomy.rules.len(),
+        ParseErrorCode::ALL.len(),
+        "taxonomy v1 must have one rule per ParseErrorCode variant"
+    );
+    // Verify every code is represented exactly once
+    let covered: BTreeSet<String> = taxonomy
+        .rules
+        .iter()
+        .map(|r| r.parse_error_code.as_str().to_string())
+        .collect();
+    assert_eq!(
+        covered.len(),
+        ParseErrorCode::ALL.len(),
+        "taxonomy rules must cover all ParseErrorCode variants without duplicates"
+    );
+}
+
+// ---------- Clone/Debug derive verification ----------
+
+#[test]
+fn enrichment_parser_options_clone_is_equal() {
+    let options = ParserOptions::default();
+    let cloned = options.clone();
+    assert_eq!(
+        cloned.budget.max_source_bytes,
+        options.budget.max_source_bytes
+    );
+    assert_eq!(
+        cloned.budget.max_token_count,
+        options.budget.max_token_count
+    );
+    assert_eq!(
+        cloned.budget.max_recursion_depth,
+        options.budget.max_recursion_depth
+    );
+}
+
+#[test]
+fn enrichment_parse_event_ir_clone_preserves_canonical_hash() {
+    let parser = CanonicalEs2020Parser;
+    let (_, ir) =
+        parser.parse_with_event_ir("cloneMe;", ParseGoal::Script, &ParserOptions::default());
+    let cloned = ir.clone();
+    assert_eq!(cloned.canonical_hash(), ir.canonical_hash());
+}
+
+#[test]
+fn enrichment_parse_budget_kind_debug_is_nonempty() {
+    for kind in [
+        ParseBudgetKind::SourceBytes,
+        ParseBudgetKind::TokenCount,
+        ParseBudgetKind::RecursionDepth,
+    ] {
+        let debug_str = format!("{kind:?}");
+        assert!(!debug_str.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_parse_error_code_debug_is_nonempty() {
+    for code in ParseErrorCode::ALL {
+        let debug_str = format!("{code:?}");
+        assert!(!debug_str.is_empty());
+    }
+}
+
+// ---------- deterministic output ----------
+
+#[test]
+fn enrichment_parse_diagnostic_envelope_canonical_hash_is_deterministic() {
+    let parser = CanonicalEs2020Parser;
+    let err_a = parser
+        .parse_with_options("", ParseGoal::Script, &ParserOptions::default())
+        .expect_err("empty source must fail");
+    let err_b = parser
+        .parse_with_options("", ParseGoal::Script, &ParserOptions::default())
+        .expect_err("empty source must fail on second run");
+    let envelope_a = ParseDiagnosticEnvelope::from_parse_error(&err_a);
+    let envelope_b = ParseDiagnosticEnvelope::from_parse_error(&err_b);
+    assert_eq!(
+        envelope_a.canonical_hash(),
+        envelope_b.canonical_hash(),
+        "ParseDiagnosticEnvelope canonical hash must be deterministic"
+    );
+}
+
+#[test]
+fn enrichment_different_error_codes_produce_different_diagnostic_hashes() {
+    let parser = CanonicalEs2020Parser;
+    // EmptySource
+    let err_empty = parser
+        .parse_with_options("", ParseGoal::Script, &ParserOptions::default())
+        .expect_err("empty source must fail");
+    // InvalidGoal
+    let err_goal = parser
+        .parse_with_options(
+            "export default x;",
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect_err("invalid goal must fail");
+
+    let hash_empty = ParseDiagnosticEnvelope::from_parse_error(&err_empty).canonical_hash();
+    let hash_goal = ParseDiagnosticEnvelope::from_parse_error(&err_goal).canonical_hash();
+    assert_ne!(
+        hash_empty, hash_goal,
+        "diagnostics for distinct error codes must yield distinct canonical hashes"
+    );
+}
+
+#[test]
+fn enrichment_parse_event_ir_schema_constants_match_static_methods() {
+    use frankenengine_engine::parser::{
+        PARSE_EVENT_IR_CONTRACT_VERSION, PARSE_EVENT_IR_HASH_ALGORITHM, PARSE_EVENT_IR_HASH_PREFIX,
+        PARSE_EVENT_IR_SCHEMA_VERSION,
+    };
+    assert_eq!(
+        ParseEventIr::schema_version(),
+        PARSE_EVENT_IR_SCHEMA_VERSION
+    );
+    assert_eq!(
+        ParseEventIr::contract_version(),
+        PARSE_EVENT_IR_CONTRACT_VERSION
+    );
+    assert_eq!(
+        ParseEventIr::canonical_hash_algorithm(),
+        PARSE_EVENT_IR_HASH_ALGORITHM
+    );
+    assert_eq!(
+        ParseEventIr::canonical_hash_prefix(),
+        PARSE_EVENT_IR_HASH_PREFIX
+    );
+}
+
+#[test]
+fn enrichment_materialized_ast_is_deterministic_across_runs() {
+    let parser = CanonicalEs2020Parser;
+    let source = "alpha; beta; gamma;";
+    let (_r1, _ir1, mat1) =
+        parser.parse_with_materialized_ast(source, ParseGoal::Script, &ParserOptions::default());
+    let (_r2, _ir2, mat2) =
+        parser.parse_with_materialized_ast(source, ParseGoal::Script, &ParserOptions::default());
+    let mat1 = mat1.expect("first materialization must succeed");
+    let mat2 = mat2.expect("second materialization must succeed");
+    assert_eq!(
+        mat1.root_node_id, mat2.root_node_id,
+        "root_node_id must be deterministic across runs"
+    );
+    assert_eq!(
+        mat1.statement_nodes.len(),
+        mat2.statement_nodes.len(),
+        "statement_nodes count must be deterministic across runs"
+    );
+}
+
+#[test]
+fn enrichment_parse_event_materialization_error_code_serde_roundtrip() {
+    let code = ParseEventMaterializationErrorCode::ParseFailedEventStream;
+    let json = serde_json::to_string(&code).expect("serialize ParseEventMaterializationErrorCode");
+    let recovered: ParseEventMaterializationErrorCode =
+        serde_json::from_str(&json).expect("deserialize ParseEventMaterializationErrorCode");
+    assert_eq!(recovered, code);
+    assert!(!code.as_str().is_empty());
+}

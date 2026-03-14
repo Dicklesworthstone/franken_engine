@@ -680,3 +680,302 @@ fn enrichment_freshness_config_clone_independence() {
     let b = a.clone();
     assert_eq!(a, b);
 }
+
+// =========================================================================
+// R. is_degraded / is_fresh / staleness_gap accessors
+// =========================================================================
+
+#[test]
+fn enrichment_is_degraded_accessor_true_when_degraded() {
+    let mut ctrl = make_controller();
+    assert!(!ctrl.is_degraded());
+    assert!(ctrl.is_fresh());
+    assert_eq!(ctrl.staleness_gap(), 0);
+
+    // Push past threshold (5) to degrade.
+    ctrl.update_expected_head(10, "t-degrade");
+    assert!(ctrl.is_degraded());
+    assert!(!ctrl.is_fresh());
+    assert_eq!(ctrl.staleness_gap(), 10);
+}
+
+// =========================================================================
+// S. evaluate() in Fresh state — non-safe ops proceed
+// =========================================================================
+
+#[test]
+fn enrichment_evaluate_fresh_allows_all_operations() {
+    let mut ctrl = make_controller();
+    assert!(ctrl.is_fresh());
+
+    // Token acceptance, extension activation, and high-risk should all proceed
+    // when the controller is in the Fresh state.
+    let ops = [
+        OperationType::TokenAcceptance,
+        OperationType::ExtensionActivation,
+        OperationType::HighRiskOperation,
+    ];
+    for (i, op) in ops.iter().enumerate() {
+        let result = ctrl.evaluate(*op, &format!("t-fresh-{i}"));
+        assert!(result.is_ok(), "op {:?} should proceed in Fresh", op);
+        if let Ok(FreshnessDecision::Proceed) = result {
+            // Expected.
+        } else {
+            panic!("expected Proceed for {:?}", op);
+        }
+    }
+}
+
+// =========================================================================
+// T. evaluate() in Stale state — proceed_stale for non-safe ops
+// =========================================================================
+
+#[test]
+fn enrichment_evaluate_stale_allows_with_stale_outcome() {
+    let mut ctrl = make_controller();
+    // Gap of 3 is > 0 but <= threshold (5): Stale.
+    ctrl.update_expected_head(3, "t-stale");
+    assert_eq!(ctrl.state(), FreshnessState::Stale);
+
+    let result = ctrl.evaluate(OperationType::TokenAcceptance, "t-stale-eval");
+    assert!(result.is_ok());
+
+    let events = ctrl.drain_decision_events();
+    // Last decision event should have outcome "proceed_stale".
+    let stale_event = events.iter().find(|e| e.trace_id == "t-stale-eval");
+    assert!(stale_event.is_some());
+    assert_eq!(stale_event.unwrap().outcome, "proceed_stale");
+}
+
+// =========================================================================
+// U. drain_decision_events — accumulation and draining
+// =========================================================================
+
+#[test]
+fn enrichment_drain_decision_events_empties_buffer() {
+    let mut ctrl = make_controller();
+    ctrl.evaluate(OperationType::SafeOperation, "t-safe1")
+        .unwrap();
+    ctrl.evaluate(OperationType::HealthCheck, "t-hc1").unwrap();
+
+    let events = ctrl.drain_decision_events();
+    assert_eq!(events.len(), 2);
+
+    // Second drain should return empty.
+    let events2 = ctrl.drain_decision_events();
+    assert!(events2.is_empty());
+}
+
+// =========================================================================
+// V. evaluate_with_override — expired token error
+// =========================================================================
+
+#[test]
+fn enrichment_override_expired_token_rejected() {
+    let mut ctrl = make_controller();
+    ctrl.set_tick(5000);
+    ctrl.update_expected_head(10, "t-degrade");
+    assert!(ctrl.is_degraded());
+
+    // Create a token that expires at tick 4000 (already past).
+    let token = make_override(OperationType::ExtensionActivation, 4000);
+    let vk = operator_key().verification_key();
+
+    let result =
+        ctrl.evaluate_with_override(OperationType::ExtensionActivation, &token, &vk, "t-exp");
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("expired") || msg.contains("Expired"),
+        "error should mention expiry: {msg}"
+    );
+}
+
+// =========================================================================
+// W. evaluate_with_override — operation mismatch error
+// =========================================================================
+
+#[test]
+fn enrichment_override_operation_mismatch_rejected() {
+    let mut ctrl = make_controller();
+    ctrl.set_tick(1000);
+    ctrl.update_expected_head(10, "t-degrade");
+    assert!(ctrl.is_degraded());
+
+    // Token authorizes ExtensionActivation, but we request TokenAcceptance.
+    let token = make_override(OperationType::ExtensionActivation, 5000);
+    let vk = operator_key().verification_key();
+
+    let result =
+        ctrl.evaluate_with_override(OperationType::TokenAcceptance, &token, &vk, "t-mismatch");
+    assert!(result.is_err());
+}
+
+// =========================================================================
+// X. evaluate_with_override — unauthorized operator error
+// =========================================================================
+
+#[test]
+fn enrichment_override_unauthorized_operator_rejected() {
+    let mut ctrl = make_controller();
+    ctrl.set_tick(1000);
+    ctrl.update_expected_head(10, "t-degrade");
+    assert!(ctrl.is_degraded());
+
+    // Create an override with an operator not in authorized_operators.
+    let sk = operator_key();
+    let token = DegradedModeOverride::create(
+        OperationType::ExtensionActivation,
+        "rogue-operator",
+        "evil plan",
+        DeterministicTimestamp(5000),
+        "test-zone",
+        &sk,
+    );
+    let vk = sk.verification_key();
+
+    let result =
+        ctrl.evaluate_with_override(OperationType::ExtensionActivation, &token, &vk, "t-unauth");
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("rogue-operator"),
+        "error should name the operator: {msg}"
+    );
+}
+
+// =========================================================================
+// Y. Recovering -> Degraded regression when gap re-widens
+// =========================================================================
+
+#[test]
+fn enrichment_recovering_regresses_to_degraded_on_gap_increase() {
+    let mut ctrl = make_controller();
+    ctrl.set_tick(100);
+    // Degrade: gap = 10, threshold = 5.
+    ctrl.update_expected_head(10, "t-degrade");
+    assert_eq!(ctrl.state(), FreshnessState::Degraded);
+
+    // Catch up to enter Recovering.
+    ctrl.update_local_head(10, "t-catchup");
+    assert_eq!(ctrl.state(), FreshnessState::Recovering);
+
+    // New expected head jumps again — gap re-widens past threshold.
+    ctrl.update_expected_head(20, "t-regress");
+    assert_eq!(ctrl.state(), FreshnessState::Degraded);
+}
+
+// =========================================================================
+// Z. Stale -> Fresh shortcut when gap drops to 0
+// =========================================================================
+
+#[test]
+fn enrichment_stale_to_fresh_shortcut_on_zero_gap() {
+    let mut ctrl = make_controller();
+    // Enter Stale: gap = 3 (within threshold).
+    ctrl.update_expected_head(3, "t-stale");
+    assert_eq!(ctrl.state(), FreshnessState::Stale);
+
+    // Local catches up exactly — gap = 0 -> Fresh, skipping Degraded entirely.
+    ctrl.update_local_head(3, "t-catchup");
+    assert_eq!(ctrl.state(), FreshnessState::Fresh);
+
+    let events = ctrl.drain_state_events();
+    // Should see Fresh->Stale then Stale->Fresh, but never Degraded or Recovering.
+    for ev in &events {
+        assert_ne!(ev.from_state, FreshnessState::Degraded);
+        assert_ne!(ev.to_state, FreshnessState::Degraded);
+        assert_ne!(ev.from_state, FreshnessState::Recovering);
+        assert_ne!(ev.to_state, FreshnessState::Recovering);
+    }
+}
+
+// =========================================================================
+// AA. check_freshness return value matches state
+// =========================================================================
+
+#[test]
+fn enrichment_check_freshness_returns_current_state() {
+    let mut ctrl = make_controller();
+    let s = ctrl.check_freshness("t-cf1");
+    assert_eq!(s, FreshnessState::Fresh);
+
+    ctrl.update_expected_head(3, "t-stale");
+    let s = ctrl.check_freshness("t-cf2");
+    assert_eq!(s, FreshnessState::Stale);
+
+    ctrl.update_expected_head(10, "t-degrade");
+    let s = ctrl.check_freshness("t-cf3");
+    assert_eq!(s, FreshnessState::Degraded);
+}
+
+// =========================================================================
+// AB. DegradedModeOverride serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_degraded_mode_override_serde_roundtrip() {
+    let token = make_override(OperationType::ExtensionActivation, 5000);
+    let json = serde_json::to_string(&token).unwrap();
+    let restored: DegradedModeOverride = serde_json::from_str(&json).unwrap();
+    assert_eq!(token, restored);
+}
+
+// =========================================================================
+// AC. FreshnessConfig default values
+// =========================================================================
+
+#[test]
+fn enrichment_freshness_config_default_values() {
+    let cfg = FreshnessConfig::default();
+    assert_eq!(cfg.staleness_threshold, 5);
+    assert_eq!(cfg.holdoff_ticks, 10);
+    // Default has ExtensionActivation as override-eligible.
+    assert!(
+        cfg.override_eligible
+            .contains(&OperationType::ExtensionActivation)
+    );
+    assert_eq!(cfg.override_eligible.len(), 1);
+    // No authorized operators by default.
+    assert!(cfg.authorized_operators.is_empty());
+}
+
+// =========================================================================
+// AD. Determinism — identical inputs produce identical outcome_counts
+// =========================================================================
+
+#[test]
+fn enrichment_determinism_identical_inputs_same_outcomes() {
+    fn run_scenario() -> BTreeMap<String, u64> {
+        let mut ctrl = make_controller();
+        ctrl.set_tick(1000);
+        ctrl.update_expected_head(10, "t-degrade");
+        let _ = ctrl.evaluate(OperationType::TokenAcceptance, "t-d1");
+        let _ = ctrl.evaluate(OperationType::SafeOperation, "t-s1");
+        let _ = ctrl.evaluate(OperationType::HighRiskOperation, "t-h1");
+        ctrl.outcome_counts().clone()
+    }
+
+    use std::collections::BTreeMap;
+    let run1 = run_scenario();
+    let run2 = run_scenario();
+    assert_eq!(run1, run2);
+    // At least one denied count should exist.
+    assert!(run1.get("denied").copied().unwrap_or(0) >= 2);
+}
+
+// =========================================================================
+// AE. DegradedModeOverride clone independence
+// =========================================================================
+
+#[test]
+fn enrichment_degraded_mode_override_clone_independence() {
+    let a = make_override(OperationType::TokenAcceptance, 9000);
+    let b = a.clone();
+    assert_eq!(a, b);
+    assert_eq!(a.override_id, b.override_id);
+    assert_eq!(a.signature, b.signature);
+    assert_eq!(a.operator_id, b.operator_id);
+}

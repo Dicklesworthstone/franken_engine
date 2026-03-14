@@ -432,3 +432,277 @@ fn enrichment_stream_window_indices() {
     assert_eq!(win.end_index, 52);
     assert_eq!(win.embeddings.len(), 10);
 }
+
+// ===== PearlTower enrichment =====
+
+// =========================================================================
+// S. Serde roundtrip for MonitorConfig
+// =========================================================================
+
+#[test]
+fn enrichment_monitor_config_serde_roundtrip() {
+    let config = MonitorConfig {
+        window: WindowConfig {
+            window_size: 50,
+            slide_step: 25,
+            min_samples: 8,
+        },
+        kernel: KernelKind::Polynomial { degree: 3 },
+        significance_threshold_millionths: 200_000,
+        min_effect_size_millionths: 20_000,
+        abstention_sample_floor: 6,
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let back: MonitorConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, back);
+}
+
+// =========================================================================
+// T. Serde roundtrip for EmbeddingVector with multiple dimensions
+// =========================================================================
+
+#[test]
+fn enrichment_embedding_vector_serde_roundtrip_multidim() {
+    let ev = emb(&[0, 250_000, 500_000, 750_000, 1_000_000]);
+    let json = serde_json::to_string(&ev).unwrap();
+    let back: EmbeddingVector = serde_json::from_str(&json).unwrap();
+    assert_eq!(ev, back);
+    assert_eq!(back.dimensions.len(), 5);
+}
+
+// =========================================================================
+// U. Serde roundtrip for ShiftEvidenceManifest (no error)
+// =========================================================================
+
+#[test]
+fn enrichment_shift_evidence_manifest_no_error_serde_roundtrip() {
+    let manifest = run_shift_evidence();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let back: ShiftEvidenceManifest = serde_json::from_str(&json).unwrap();
+    assert_eq!(manifest, back);
+    assert_eq!(back.schema_version, SHIFT_MONITOR_SCHEMA_VERSION);
+    assert!(back.error.is_none());
+}
+
+// =========================================================================
+// V. Zero-sample compute_mmd_squared returns EmptyWindow error
+// =========================================================================
+
+#[test]
+fn enrichment_mmd_empty_left_returns_empty_window_error() {
+    let right = vec![emb(&[500_000])];
+    let result = compute_mmd_squared(&[], &right, &KernelKind::Linear);
+    assert!(
+        matches!(result, Err(ShiftError::EmptyWindow)),
+        "expected EmptyWindow, got {:?}",
+        result
+    );
+}
+
+#[test]
+fn enrichment_mmd_empty_right_returns_empty_window_error() {
+    let left = vec![emb(&[500_000])];
+    let result = compute_mmd_squared(&left, &[], &KernelKind::Linear);
+    assert!(
+        matches!(result, Err(ShiftError::EmptyWindow)),
+        "expected EmptyWindow, got {:?}",
+        result
+    );
+}
+
+// =========================================================================
+// W. Extreme values: max u64 dimensions don't panic
+// =========================================================================
+
+#[test]
+fn enrichment_kernel_linear_max_u64_dimensions_no_panic() {
+    let a = emb(&[u64::MAX, u64::MAX]);
+    let b = emb(&[u64::MAX, u64::MAX]);
+    // Should saturate without panicking
+    let val = compute_kernel_value(&a, &b, &KernelKind::Linear);
+    assert!(val > 0);
+}
+
+#[test]
+fn enrichment_kernel_polynomial_max_dimensions_no_panic() {
+    let a = emb(&[u64::MAX]);
+    let b = emb(&[u64::MAX]);
+    // degree 2 with max values — must saturate safely
+    let val = compute_kernel_value(&a, &b, &KernelKind::Polynomial { degree: 2 });
+    assert!(val > 0);
+}
+
+// =========================================================================
+// X. Threshold boundary: MMD exactly at threshold is NOT a shift
+// =========================================================================
+
+#[test]
+fn enrichment_detect_shift_mmd_at_threshold_is_no_shift() {
+    // Use identical distributions — MMD^2 should be 0, well below any threshold
+    let config = small_config();
+    let embs: Vec<EmbeddingVector> = (0..5).map(|i| emb(&[500_000 + i * 100])).collect();
+    let bench = build_window(StreamKind::Benchmark, embs.clone(), 0);
+    let live = build_window(StreamKind::LiveWorkload, embs, 0);
+    let cert = detect_shift(&bench, &live, &config);
+    assert!(
+        matches!(cert.verdict, ShiftVerdict::NoShift),
+        "expected NoShift for identical distributions, got {:?}",
+        cert.verdict
+    );
+    assert!(cert.mmd.is_some());
+    assert!(!cert.mmd.as_ref().unwrap().is_shifted);
+}
+
+// =========================================================================
+// Y. Abstention: total samples below floor
+// =========================================================================
+
+#[test]
+fn enrichment_detect_shift_below_abstention_floor_abstains() {
+    let config = MonitorConfig {
+        window: WindowConfig {
+            window_size: 10,
+            slide_step: 5,
+            min_samples: 3,
+        },
+        kernel: KernelKind::Linear,
+        significance_threshold_millionths: 100_000,
+        min_effect_size_millionths: 10_000,
+        abstention_sample_floor: 100, // very high floor
+    };
+    // Only 5 total samples — below the abstention_sample_floor of 100
+    let bench = build_window(StreamKind::Benchmark, vec![emb(&[500_000])], 0);
+    let live = build_window(
+        StreamKind::LiveWorkload,
+        (0..4).map(|i| emb(&[600_000 + i * 1_000])).collect(),
+        0,
+    );
+    let cert = detect_shift(&bench, &live, &config);
+    assert!(
+        matches!(cert.verdict, ShiftVerdict::Abstained { .. }),
+        "expected Abstained, got {:?}",
+        cert.verdict
+    );
+    assert!(cert.mmd.is_none());
+}
+
+// =========================================================================
+// Z. Clone and Debug verification for core types
+// =========================================================================
+
+#[test]
+fn enrichment_clone_and_debug_core_types() {
+    let config = small_config();
+    let config_clone = config.clone();
+    assert_eq!(config, config_clone);
+    assert!(!format!("{:?}", config).is_empty());
+
+    let mmd = MmdResult {
+        mmd_squared_millionths: 75_000,
+        threshold_millionths: 100_000,
+        is_shifted: false,
+        sample_count_left: 5,
+        sample_count_right: 5,
+    };
+    let mmd_clone = mmd.clone();
+    assert_eq!(mmd, mmd_clone);
+    assert!(!format!("{:?}", mmd).is_empty());
+
+    let verdict = ShiftVerdict::ShiftDetected {
+        mmd_squared: 200_000,
+    };
+    let verdict_clone = verdict.clone();
+    assert_eq!(verdict, verdict_clone);
+    assert!(!format!("{:?}", verdict).is_empty());
+}
+
+// =========================================================================
+// AA. Deterministic output: same inputs produce same certificate_hash
+// =========================================================================
+
+#[test]
+fn enrichment_detect_shift_deterministic_certificate_hash() {
+    let config = small_config();
+    let bench_embs: Vec<EmbeddingVector> = (0..5).map(|i| emb(&[300_000 + i * 200])).collect();
+    let live_embs: Vec<EmbeddingVector> = (0..5).map(|i| emb(&[700_000 + i * 200])).collect();
+
+    let bench1 = build_window(StreamKind::Benchmark, bench_embs.clone(), 0);
+    let live1 = build_window(StreamKind::LiveWorkload, live_embs.clone(), 0);
+    let cert1 = detect_shift(&bench1, &live1, &config);
+
+    let bench2 = build_window(StreamKind::Benchmark, bench_embs, 0);
+    let live2 = build_window(StreamKind::LiveWorkload, live_embs, 0);
+    let cert2 = detect_shift(&bench2, &live2, &config);
+
+    assert_eq!(
+        cert1.certificate_hash, cert2.certificate_hash,
+        "certificate_hash must be deterministic for identical inputs"
+    );
+    assert_eq!(cert1.verdict, cert2.verdict);
+}
+
+// =========================================================================
+// BB. MmdResult: is_shifted flag respects both threshold AND min_effect_size
+// =========================================================================
+
+#[test]
+fn enrichment_mmd_result_threshold_fields_populated_by_detect_shift() {
+    let config = small_config();
+    let bench = build_window(
+        StreamKind::Benchmark,
+        (0..5).map(|i| emb(&[100_000 + i * 50])).collect(),
+        0,
+    );
+    let live = build_window(
+        StreamKind::LiveWorkload,
+        (0..5).map(|i| emb(&[900_000 + i * 50])).collect(),
+        0,
+    );
+    let cert = detect_shift(&bench, &live, &config);
+    if let Some(ref mmd) = cert.mmd {
+        // threshold_millionths must be filled in by detect_shift
+        assert_eq!(
+            mmd.threshold_millionths,
+            config.significance_threshold_millionths
+        );
+        // sample counts must match window sizes
+        assert_eq!(mmd.sample_count_left, 5);
+        assert_eq!(mmd.sample_count_right, 5);
+    } else {
+        panic!("expected mmd to be Some for sufficient samples");
+    }
+}
+
+// =========================================================================
+// CC. GaussianRbf with zero bandwidth returns identity or zero
+// =========================================================================
+
+#[test]
+fn enrichment_gaussian_rbf_zero_bandwidth_identical_vectors_returns_millionths() {
+    let a = emb(&[500_000]);
+    let b = emb(&[500_000]);
+    let val = compute_kernel_value(
+        &a,
+        &b,
+        &KernelKind::GaussianRbf {
+            bandwidth_millionths: 0,
+        },
+    );
+    // Identical vectors with zero bandwidth: sq_dist==0 so returns MILLIONTHS
+    assert_eq!(val, 1_000_000);
+}
+
+#[test]
+fn enrichment_gaussian_rbf_zero_bandwidth_different_vectors_returns_zero() {
+    let a = emb(&[0]);
+    let b = emb(&[1_000_000]);
+    let val = compute_kernel_value(
+        &a,
+        &b,
+        &KernelKind::GaussianRbf {
+            bandwidth_millionths: 0,
+        },
+    );
+    // Different vectors with zero bandwidth: returns 0
+    assert_eq!(val, 0);
+}

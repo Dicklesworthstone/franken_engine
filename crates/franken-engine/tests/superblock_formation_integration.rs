@@ -10,7 +10,8 @@
     clippy::needless_borrows_for_generic_args,
     clippy::too_many_arguments,
     clippy::identity_op,
-    clippy::manual_abs_diff
+    clippy::manual_abs_diff,
+    unused_imports
 )]
 
 use frankenengine_engine::bytecode_vm::{BytecodeVm, Instruction, Program, Register, Value};
@@ -19,10 +20,11 @@ use frankenengine_engine::quickening_feedback_lattice::{
 };
 use frankenengine_engine::stage_envelope_certificate::ExecutionStage;
 use frankenengine_engine::superblock_formation::{
-    COMPONENT, CompilationRejectReason, FormationOutcome, GuardKind,
-    OPTIMIZED_TIER_PLAN_SCHEMA_VERSION, OptimizedTierBackend, OptimizedTierCompilationPlan,
-    SUPERBLOCK_SCHEMA_VERSION, SideExit, SideExitReason, Superblock, SuperblockEntry,
-    SuperblockGuard, SuperblockPolicy, TRACE_TREE_SCHEMA_VERSION, TraceTree, TraceTreeSummary,
+    COMPONENT, CompilationRejectReason, DeoptContinuation, FallbackTier, FormationDecision,
+    FormationOutcome, FormationRecord, GuardKind, OPTIMIZED_TIER_PLAN_SCHEMA_VERSION,
+    OptimizedTierBackend, OptimizedTierCompilationPlan, SUPERBLOCK_SCHEMA_VERSION, SideExit,
+    SideExitReason, Superblock, SuperblockEntry, SuperblockGuard, SuperblockPolicy,
+    TRACE_TREE_SCHEMA_VERSION, TraceTree, TraceTreeSummary, build_trace_tree, form_all_superblocks,
     form_superblock,
 };
 use frankenengine_engine::tier_up_profiler::{TierUpPolicy, evaluate_tier_up_eligibility};
@@ -871,4 +873,707 @@ fn constants_set() {
     assert!(!SUPERBLOCK_SCHEMA_VERSION.is_empty());
     assert!(!TRACE_TREE_SCHEMA_VERSION.is_empty());
     assert!(!OPTIMIZED_TIER_PLAN_SCHEMA_VERSION.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// OptimizedTierBackend and FallbackTier Display/serde/clone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_optimized_tier_backend_display() {
+    let backend = OptimizedTierBackend::Cranelift;
+    assert_eq!(format!("{backend}"), "cranelift");
+}
+
+#[test]
+fn test_optimized_tier_backend_clone_debug_eq() {
+    let b1 = OptimizedTierBackend::Cranelift;
+    let b2 = b1;
+    assert_eq!(b1, b2);
+    let dbg = format!("{b1:?}");
+    assert!(dbg.contains("Cranelift"));
+}
+
+#[test]
+fn test_optimized_tier_backend_serde_round_trip() {
+    let backend = OptimizedTierBackend::Cranelift;
+    let json = serde_json::to_string(&backend).unwrap();
+    let back: OptimizedTierBackend = serde_json::from_str(&json).unwrap();
+    assert_eq!(backend, back);
+    // snake_case serde
+    assert_eq!(json, "\"cranelift\"");
+}
+
+#[test]
+fn test_fallback_tier_display() {
+    let tier = FallbackTier::BaselineInterpreter;
+    assert_eq!(format!("{tier}"), "baseline_interpreter");
+}
+
+#[test]
+fn test_fallback_tier_clone_debug_eq() {
+    let t1 = FallbackTier::BaselineInterpreter;
+    let t2 = t1;
+    assert_eq!(t1, t2);
+    let dbg = format!("{t1:?}");
+    assert!(dbg.contains("BaselineInterpreter"));
+}
+
+#[test]
+fn test_fallback_tier_serde_round_trip() {
+    let tier = FallbackTier::BaselineInterpreter;
+    let json = serde_json::to_string(&tier).unwrap();
+    let back: FallbackTier = serde_json::from_str(&json).unwrap();
+    assert_eq!(tier, back);
+    assert_eq!(json, "\"baseline_interpreter\"");
+}
+
+// ---------------------------------------------------------------------------
+// FormationOutcome Display for all variants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_formation_outcome_display_all_variants() {
+    assert_eq!(format!("{}", FormationOutcome::Formed), "formed");
+    assert_eq!(
+        format!("{}", FormationOutcome::InsufficientHotInstructions),
+        "insufficient-hot"
+    );
+    assert_eq!(
+        format!("{}", FormationOutcome::ExceedsBlockSize),
+        "exceeds-block-size"
+    );
+    assert_eq!(
+        format!("{}", FormationOutcome::ExcessiveGuards),
+        "excessive-guards"
+    );
+    assert_eq!(
+        format!("{}", FormationOutcome::NoEligibleInstructions),
+        "no-eligible"
+    );
+}
+
+#[test]
+fn test_formation_outcome_clone_debug_eq() {
+    let o = FormationOutcome::Formed;
+    let o2 = o.clone();
+    assert_eq!(o, o2);
+    let dbg = format!("{o:?}");
+    assert!(dbg.contains("Formed"));
+}
+
+#[test]
+fn test_formation_outcome_serde_round_trip() {
+    let variants = [
+        FormationOutcome::Formed,
+        FormationOutcome::InsufficientHotInstructions,
+        FormationOutcome::ExceedsBlockSize,
+        FormationOutcome::ExcessiveGuards,
+        FormationOutcome::NoEligibleInstructions,
+    ];
+    for variant in &variants {
+        let json = serde_json::to_string(variant).unwrap();
+        let back: FormationOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, &back);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FormationRecord Clone/Debug/PartialEq/serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_formation_record_serde_round_trip_no_block() {
+    let record = FormationRecord {
+        function_id: "fn_rec_test".into(),
+        entry_offset: 0,
+        outcome: FormationOutcome::NoEligibleInstructions,
+        instructions_considered: 3,
+        instructions_included: 0,
+        guards_generated: 0,
+        tail_duplications: 0,
+        block: None,
+    };
+    let json = serde_json::to_string(&record).unwrap();
+    let back: FormationRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(record, back);
+}
+
+#[test]
+fn test_formation_record_serde_round_trip_with_block() {
+    let block = make_simple_superblock("fn_rec_block", 0);
+    let record = FormationRecord {
+        function_id: "fn_rec_block".into(),
+        entry_offset: 0,
+        outcome: FormationOutcome::Formed,
+        instructions_considered: 2,
+        instructions_included: 2,
+        guards_generated: 1,
+        tail_duplications: 0,
+        block: Some(block),
+    };
+    let json = serde_json::to_string(&record).unwrap();
+    let back: FormationRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(record, back);
+}
+
+#[test]
+fn test_formation_record_clone_debug() {
+    let offsets: Vec<(u32, &str)> = (0..3u32).map(|i| (i * 4, "mul")).collect();
+    let profile = make_hot_profile("fn_rec_clone", &offsets);
+    let policy = SuperblockPolicy::default();
+    let record = form_superblock(&profile, 0, &policy, 5);
+    let record2 = record.clone();
+    assert_eq!(record, record2);
+    let dbg = format!("{record:?}");
+    assert!(dbg.contains("fn_rec_clone"));
+}
+
+// ---------------------------------------------------------------------------
+// FormationDecision build / formed_count / rejected_count / serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_formation_decision_build_with_formed_records() {
+    let offsets: Vec<(u32, &str)> = (0..5u32).map(|i| (i * 4, "add")).collect();
+    let profile = make_hot_profile("fn_dec_formed", &offsets);
+    let policy = SuperblockPolicy::default();
+    let record = form_superblock(&profile, 0, &policy, 1);
+    let records = vec![record];
+    let decision = FormationDecision::build("fn_dec_formed", &policy, 1, records, None);
+    assert_eq!(decision.function_id, "fn_dec_formed");
+    assert_eq!(decision.formation_epoch, 1);
+    assert_eq!(decision.schema_version, SUPERBLOCK_SCHEMA_VERSION);
+    assert!(!decision.decision_hash.is_empty());
+    assert_eq!(decision.formed_count(), 1);
+    assert_eq!(decision.rejected_count(), 0);
+    assert!(decision.trace_tree_summary.is_none());
+}
+
+#[test]
+fn test_formation_decision_with_trace_tree_summary() {
+    let block = make_simple_superblock("fn_dec_tree", 0);
+    let tree = TraceTree::new("fn_dec_tree", block);
+    let policy = SuperblockPolicy::default();
+    let decision = FormationDecision::build("fn_dec_tree", &policy, 2, vec![], Some(&tree));
+    assert!(decision.trace_tree_summary.is_some());
+    let summary = decision.trace_tree_summary.unwrap();
+    assert_eq!(summary.function_id, "fn_dec_tree");
+}
+
+#[test]
+fn test_formation_decision_rejected_count() {
+    let profile = QuickeningProfile::new("fn_dec_reject");
+    let policy = SuperblockPolicy::default();
+    // offset 999 has nothing — NoEligibleInstructions
+    let r1 = form_superblock(&profile, 0, &policy, 1);
+    let r2 = form_superblock(&profile, 4, &policy, 1);
+    let decision = FormationDecision::build("fn_dec_reject", &policy, 1, vec![r1, r2], None);
+    assert_eq!(decision.formed_count(), 0);
+    assert_eq!(decision.rejected_count(), 2);
+}
+
+#[test]
+fn test_formation_decision_hash_deterministic() {
+    let policy = SuperblockPolicy::default();
+    let d1 = FormationDecision::build("fn_det", &policy, 3, vec![], None);
+    let d2 = FormationDecision::build("fn_det", &policy, 3, vec![], None);
+    assert_eq!(d1.decision_hash, d2.decision_hash);
+}
+
+#[test]
+fn test_formation_decision_hash_changes_with_epoch() {
+    let policy = SuperblockPolicy::default();
+    let d1 = FormationDecision::build("fn_epoch_diff", &policy, 1, vec![], None);
+    let d2 = FormationDecision::build("fn_epoch_diff", &policy, 2, vec![], None);
+    assert_ne!(d1.decision_hash, d2.decision_hash);
+}
+
+#[test]
+fn test_formation_decision_serde_round_trip() {
+    let policy = SuperblockPolicy::default();
+    let decision = FormationDecision::build("fn_dec_serde", &policy, 5, vec![], None);
+    let json = serde_json::to_string(&decision).unwrap();
+    let back: FormationDecision = serde_json::from_str(&json).unwrap();
+    assert_eq!(decision, back);
+}
+
+// ---------------------------------------------------------------------------
+// form_all_superblocks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_form_all_superblocks_empty_profile() {
+    let profile = QuickeningProfile::new("fn_all_empty");
+    let policy = SuperblockPolicy::default();
+    let records = form_all_superblocks(&profile, &policy, 1);
+    assert!(records.is_empty());
+}
+
+#[test]
+fn test_form_all_superblocks_with_hot_profile() {
+    let offsets: Vec<(u32, &str)> = (0..6u32).map(|i| (i * 4, "sub")).collect();
+    let profile = make_hot_profile("fn_all_hot", &offsets);
+    let policy = SuperblockPolicy::default();
+    let records = form_all_superblocks(&profile, &policy, 2);
+    assert!(!records.is_empty());
+    // At least one should be formed
+    let formed = records
+        .iter()
+        .filter(|r| r.outcome == FormationOutcome::Formed)
+        .count();
+    assert!(formed >= 1);
+}
+
+#[test]
+fn test_form_all_superblocks_no_duplicates_in_formed_offsets() {
+    use std::collections::BTreeSet;
+    let offsets: Vec<(u32, &str)> = (0..8u32).map(|i| (i * 4, "load")).collect();
+    let profile = make_hot_profile("fn_all_nodup", &offsets);
+    let policy = SuperblockPolicy::default();
+    let records = form_all_superblocks(&profile, &policy, 1);
+    // Collect all source_offsets across formed blocks
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    for record in &records {
+        if let Some(block) = &record.block {
+            for entry in &block.entries {
+                assert!(
+                    seen.insert(entry.source_offset),
+                    "offset {} covered by multiple superblocks",
+                    entry.source_offset
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// build_trace_tree
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_build_trace_tree_wraps_new() {
+    let block = make_simple_superblock("fn_btt", 0);
+    let tree = build_trace_tree("fn_btt", block);
+    assert_eq!(tree.node_count(), 1);
+    assert_eq!(tree.function_id, "fn_btt");
+    assert!(tree.tree_id.starts_with("tt-"));
+}
+
+// ---------------------------------------------------------------------------
+// TraceTreeNode Clone/Debug/PartialEq/serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_trace_tree_node_clone_debug_eq() {
+    let block = make_simple_superblock("fn_node", 0);
+    let tree = TraceTree::new("fn_node", block);
+    let node = tree.root().unwrap().clone();
+    assert_eq!(node.depth, 0);
+    let dbg = format!("{node:?}");
+    assert!(dbg.contains("depth"));
+}
+
+#[test]
+fn test_trace_tree_get_node_valid_and_invalid() {
+    let block = make_simple_superblock("fn_getnode", 0);
+    let tree = TraceTree::new("fn_getnode", block);
+    assert!(tree.get_node(0).is_some());
+    assert!(tree.get_node(1).is_none());
+    assert!(tree.get_node(usize::MAX).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// DeoptContinuation serde/Clone/Debug/PartialEq
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_deopt_continuation_serde_round_trip() {
+    let block = make_simple_superblock("fn_deopt", 0);
+    let continuations = block.deopt_continuations();
+    assert!(!continuations.is_empty());
+    let c = &continuations[0];
+    let json = serde_json::to_string(c).unwrap();
+    let back: DeoptContinuation = serde_json::from_str(&json).unwrap();
+    assert_eq!(*c, back);
+}
+
+#[test]
+fn test_deopt_continuation_checkpoint_id_format() {
+    let block = make_simple_superblock("fn_ckpt", 0);
+    let continuations = block.deopt_continuations();
+    assert!(!continuations.is_empty());
+    assert!(continuations[0].checkpoint_id.starts_with("deopt-"));
+    assert_eq!(continuations[0].checkpoint_id.len(), "deopt-".len() + 16);
+}
+
+#[test]
+fn test_deopt_continuation_fallback_tier_is_baseline() {
+    let block = make_simple_superblock("fn_deopt_tier", 0);
+    let continuations = block.deopt_continuations();
+    for c in &continuations {
+        assert_eq!(c.fallback_tier, FallbackTier::BaselineInterpreter);
+    }
+}
+
+#[test]
+fn test_deopt_continuation_clone_debug() {
+    let block = make_simple_superblock("fn_deopt_clone", 0);
+    let continuations = block.deopt_continuations();
+    assert!(!continuations.is_empty());
+    let c = continuations[0].clone();
+    let dbg = format!("{c:?}");
+    assert!(dbg.contains("checkpoint_id"));
+}
+
+// ---------------------------------------------------------------------------
+// OptimizedCompilationReject/Unit serde/Clone/Debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_compilation_reject_reason_serde_round_trip() {
+    let variants = [
+        CompilationRejectReason::TierUpIneligible,
+        CompilationRejectReason::SuperblockFormationRejected,
+        CompilationRejectReason::DuplicateCandidateOffset,
+        CompilationRejectReason::CandidateProfileMismatch,
+        CompilationRejectReason::MissingDeoptContinuations,
+    ];
+    for variant in &variants {
+        let json = serde_json::to_string(variant).unwrap();
+        let back: CompilationRejectReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, &back);
+    }
+}
+
+#[test]
+fn test_compilation_reject_reason_debug_clone() {
+    let r = CompilationRejectReason::DuplicateCandidateOffset;
+    let r2 = r.clone();
+    assert_eq!(r, r2);
+    let dbg = format!("{r:?}");
+    assert!(dbg.contains("DuplicateCandidateOffset"));
+}
+
+// ---------------------------------------------------------------------------
+// Superblock::deopt_continuations ordering
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_deopt_continuations_sorted_by_guard_position() {
+    // Build a superblock with multiple guards at different positions
+    let entries = vec![
+        SuperblockEntry {
+            position: 0,
+            source_offset: 0,
+            opcode: "load".into(),
+            is_tail_duplicate: false,
+            execution_count: 100,
+        },
+        SuperblockEntry {
+            position: 1,
+            source_offset: 4,
+            opcode: "add".into(),
+            is_tail_duplicate: false,
+            execution_count: 100,
+        },
+        SuperblockEntry {
+            position: 2,
+            source_offset: 8,
+            opcode: "store".into(),
+            is_tail_duplicate: false,
+            execution_count: 100,
+        },
+    ];
+    let exit0 = SideExit::new(0, 0, SideExitReason::TypeMismatch);
+    let exit1 = SideExit::new(4, 1, SideExitReason::ShapeMismatch);
+    let exit2 = SideExit::new(8, 2, SideExitReason::GuardFailure);
+    let guard0 = SuperblockGuard::new(
+        0,
+        0,
+        GuardKind::TypeCheck {
+            expected_type: "int".into(),
+        },
+        exit0.exit_id.clone(),
+    );
+    let guard1 = SuperblockGuard::new(
+        1,
+        4,
+        GuardKind::ShapeCheck {
+            expected_shape_id: "s1".into(),
+        },
+        exit1.exit_id.clone(),
+    );
+    let guard2 = SuperblockGuard::new(2, 8, GuardKind::OverflowCheck, exit2.exit_id.clone());
+    let block_id = Superblock::compute_block_id("fn_order", &entries);
+    let block = Superblock {
+        block_id,
+        function_id: "fn_order".into(),
+        entry_offset: 0,
+        entries,
+        guards: vec![guard2.clone(), guard0.clone(), guard1.clone()],
+        side_exits: vec![exit0, exit1, exit2],
+        tail_duplication_count: 0,
+        formation_epoch: 1,
+    };
+    let continuations = block.deopt_continuations();
+    // Should be sorted by guard_position
+    for window in continuations.windows(2) {
+        assert!(window[0].guard_position <= window[1].guard_position);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SideExit: compiled_branch field and boundary behavior
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_side_exit_compiled_branch_default_false() {
+    let exit = SideExit::new(0, 0, SideExitReason::GuardFailure);
+    assert!(!exit.compiled_branch);
+}
+
+#[test]
+fn test_side_exit_record_taken_saturating() {
+    let mut exit = SideExit::new(0, 0, SideExitReason::OverflowDetected);
+    exit.taken_count = u64::MAX;
+    exit.record_taken(); // should not panic
+    assert_eq!(exit.taken_count, u64::MAX);
+}
+
+#[test]
+fn test_side_exit_is_hot_threshold_zero() {
+    let exit = SideExit::new(0, 0, SideExitReason::TypeMismatch);
+    // taken_count=0, threshold=0: 0 >= 0 is true
+    assert!(exit.is_hot(0));
+}
+
+#[test]
+fn test_side_exit_reason_serde_round_trip() {
+    let variants = [
+        SideExitReason::GuardFailure,
+        SideExitReason::OverflowDetected,
+        SideExitReason::TypeMismatch,
+        SideExitReason::ShapeMismatch,
+        SideExitReason::IcMegamorphic,
+        SideExitReason::PrototypeInvalidated,
+        SideExitReason::UnexpectedControlFlow,
+    ];
+    for variant in &variants {
+        let json = serde_json::to_string(variant).unwrap();
+        let back: SideExitReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, &back);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SuperblockPolicy: edge values and clone/debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_policy_clone_debug() {
+    let p = SuperblockPolicy::default();
+    let p2 = p.clone();
+    assert_eq!(p, p2);
+    let dbg = format!("{p:?}");
+    assert!(dbg.contains("SuperblockPolicy"));
+}
+
+#[test]
+fn test_policy_hash_all_fields_affect_hash() {
+    let base = SuperblockPolicy::default();
+    let changed = SuperblockPolicy {
+        max_block_length: 1,
+        max_tail_duplication: 0,
+        max_trace_depth: 1,
+        max_side_exits: 1,
+        min_execution_count: 0,
+        enable_guard_factoring: false,
+        ..SuperblockPolicy::default()
+    };
+    assert_ne!(base.policy_hash(), changed.policy_hash());
+}
+
+// ---------------------------------------------------------------------------
+// Guard factoring: disabled vs enabled
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_guard_factoring_disabled_does_not_factor() {
+    let offsets: Vec<(u32, &str)> = (0..4u32).map(|i| (i * 4, "add")).collect();
+    let profile = make_hot_profile("fn_nofactor", &offsets);
+    let policy = SuperblockPolicy {
+        enable_guard_factoring: false,
+        min_execution_count: 32,
+        ..SuperblockPolicy::default()
+    };
+    let record = form_superblock(&profile, 0, &policy, 1);
+    if record.outcome == FormationOutcome::Formed {
+        let block = record.block.unwrap();
+        // Without factoring, factored_guard_count should be 0
+        assert_eq!(block.factored_guard_count(), 0);
+    }
+}
+
+#[test]
+fn test_guard_factoring_enabled_may_factor_adjacent_same_kind() {
+    // Use a profile where same-type guards are generated at adjacent positions
+    let offsets: Vec<(u32, &str)> = (0..5u32).map(|i| (i * 4, "add")).collect();
+    let profile = make_hot_profile("fn_factor_on", &offsets);
+    let policy = SuperblockPolicy {
+        enable_guard_factoring: true,
+        min_execution_count: 32,
+        ..SuperblockPolicy::default()
+    };
+    let record = form_superblock(&profile, 0, &policy, 1);
+    // Whether or not factoring fires depends on type data; just verify formation succeeds
+    assert_eq!(record.outcome, FormationOutcome::Formed);
+}
+
+// ---------------------------------------------------------------------------
+// GuardKind: Clone, Ord, Hash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_guard_kind_clone_eq() {
+    let k1 = GuardKind::TypeCheck {
+        expected_type: "str".into(),
+    };
+    let k2 = k1.clone();
+    assert_eq!(k1, k2);
+}
+
+#[test]
+fn test_guard_kind_ord() {
+    let k1 = GuardKind::IcStability { ic_offset: 0 };
+    let k2 = GuardKind::IcStability { ic_offset: 10 };
+    assert!(k1 < k2);
+}
+
+#[test]
+fn test_guard_kind_range_check_negative_bounds() {
+    let kind = GuardKind::RangeCheck {
+        lower: -1000,
+        upper: -1,
+    };
+    let display = format!("{kind}");
+    assert!(display.contains("-1000"));
+    assert!(display.contains("-1"));
+}
+
+// ---------------------------------------------------------------------------
+// SuperblockEntry Clone/Debug/PartialEq/serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_superblock_entry_serde_round_trip() {
+    let entry = SuperblockEntry {
+        position: 3,
+        source_offset: 12,
+        opcode: "jump".into(),
+        is_tail_duplicate: true,
+        execution_count: 9999,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: SuperblockEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, back);
+}
+
+#[test]
+fn test_superblock_entry_clone_debug() {
+    let entry = SuperblockEntry {
+        position: 0,
+        source_offset: 0,
+        opcode: "nop".into(),
+        is_tail_duplicate: false,
+        execution_count: 1,
+    };
+    let entry2 = entry.clone();
+    assert_eq!(entry, entry2);
+    let dbg = format!("{entry:?}");
+    assert!(dbg.contains("SuperblockEntry"));
+}
+
+// ---------------------------------------------------------------------------
+// Superblock: record_side_exit unknown ID returns false
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_record_side_exit_unknown_id_returns_false() {
+    let mut block = make_simple_superblock("fn_unknown_exit", 0);
+    let result = block.record_side_exit("nonexistent-exit-id", 1);
+    assert!(!result);
+}
+
+// ---------------------------------------------------------------------------
+// form_superblock: boundary — min_execution_count exactly at threshold
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_form_superblock_execution_count_boundary() {
+    use frankenengine_engine::quickening_feedback_lattice::QuickeningPolicy as QPolicy;
+    let q_policy = QPolicy {
+        warm_threshold: 2,
+        hot_threshold: 4,
+        min_stability_millionths: 0,
+        min_ic_hit_rate_millionths: 0,
+        max_polymorphic_types: 5,
+        deopt_resets_to_cold: false,
+    };
+    let mut profile = QuickeningProfile::new("fn_boundary");
+    // Record exactly 32 executions (= min_execution_count default)
+    for _ in 0..32 {
+        profile.record_execution(0, "add");
+        profile.record_execution(4, "sub");
+        profile.record_execution(8, "mul");
+    }
+    for _ in 0..4 {
+        profile.evaluate_all(&q_policy);
+    }
+    let policy = SuperblockPolicy {
+        min_execution_count: 32,
+        ..SuperblockPolicy::default()
+    };
+    let record = form_superblock(&profile, 0, &policy, 1);
+    // The outcome depends on whether threshold is met; just confirm no panic and valid state
+    assert!(
+        record.outcome == FormationOutcome::Formed
+            || record.outcome == FormationOutcome::InsufficientHotInstructions
+            || record.outcome == FormationOutcome::NoEligibleInstructions
+    );
+}
+
+// ---------------------------------------------------------------------------
+// TraceTree: schema_version and formation_epoch advance on extend
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_trace_tree_schema_version_constant() {
+    let block = make_simple_superblock("fn_schema", 0);
+    let tree = TraceTree::new("fn_schema", block);
+    assert_eq!(tree.schema_version, TRACE_TREE_SCHEMA_VERSION);
+}
+
+#[test]
+fn test_trace_tree_formation_epoch_advances() {
+    let b1 = make_simple_superblock("fn_epoch", 0);
+    let exit_id = b1.side_exits[0].exit_id.clone();
+    let mut tree = TraceTree::new("fn_epoch", b1);
+    assert_eq!(tree.formation_epoch, 1);
+    let b2 = make_simple_superblock("fn_epoch", 8);
+    let policy = SuperblockPolicy::default();
+    tree.extend_at_exit(0, &exit_id, b2, &policy);
+    assert_eq!(tree.formation_epoch, 2);
+}
+
+#[test]
+fn test_trace_tree_id_changes_on_extend() {
+    let b1 = make_simple_superblock("fn_tid_change", 0);
+    let exit_id = b1.side_exits[0].exit_id.clone();
+    let mut tree = TraceTree::new("fn_tid_change", b1);
+    let original_id = tree.tree_id.clone();
+    let b2 = make_simple_superblock("fn_tid_change", 8);
+    let policy = SuperblockPolicy::default();
+    tree.extend_at_exit(0, &exit_id, b2, &policy);
+    assert_ne!(tree.tree_id, original_id);
 }

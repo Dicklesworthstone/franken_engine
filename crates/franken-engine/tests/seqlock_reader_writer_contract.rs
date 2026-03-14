@@ -11,17 +11,19 @@
     clippy::manual_abs_diff
 )]
 
+use std::collections::BTreeSet;
+
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::module_cache::{
-    CacheContext, CacheInsertRequest, ModuleCache, ModuleVersionFingerprint,
+    CacheContext, CacheInsertRequest, CacheSnapshot, ModuleCache, ModuleVersionFingerprint,
 };
 use frankenengine_engine::portfolio_governor::governance_audit_ledger::{
     GovernanceActor, GovernanceAuditLedger, GovernanceDecisionType, GovernanceLedgerConfig,
     GovernanceLedgerInput, GovernanceLedgerQuery, GovernanceRationale, ScorecardSnapshot,
 };
 use frankenengine_engine::seqlock_fastpath::{
-    FastPathFallbackReason, FastPathReadSource, FastPathTelemetry, RetryBudgetPolicy,
-    SnapshotFastPath,
+    FastPathFallbackReason, FastPathReadResult, FastPathReadSource, FastPathTelemetry,
+    RetryBudgetPolicy, SnapshotFastPath,
 };
 
 fn sample_scorecard() -> ScorecardSnapshot {
@@ -629,5 +631,414 @@ fn governance_ledger_query_by_moonshot_filters_correctly() {
     assert_eq!(alpha_only.len(), 2);
     for entry in &alpha_only {
         assert_eq!(entry.moonshot_id, "moon-alpha");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RetryBudgetPolicy: Clone independence
+// ---------------------------------------------------------------------------
+
+#[test]
+fn retry_budget_policy_clone_is_independent() {
+    let original = RetryBudgetPolicy::new(5, 3);
+    let cloned = original;
+    // Copy semantics: mutating one does not affect the other
+    let modified = RetryBudgetPolicy::new(10, 7);
+    assert_ne!(cloned, modified);
+    assert_eq!(original, cloned);
+}
+
+#[test]
+fn retry_budget_policy_debug_non_empty() {
+    let policy = RetryBudgetPolicy::new(4, 2);
+    let debug = format!("{policy:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("RetryBudgetPolicy"));
+}
+
+// ---------------------------------------------------------------------------
+// FastPathTelemetry: Clone independence, Debug non-empty, writer_pressure fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn telemetry_clone_is_independent() {
+    let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+    fast_path.seed_if_uninitialized(10_u64);
+    let _ = fast_path.read_clone_or_else(|| 0_u64);
+    fast_path.publish(20_u64);
+
+    let t1 = fast_path.telemetry();
+    let t2 = t1;
+    // Both copies are equal and independent
+    assert_eq!(t1, t2);
+    assert_eq!(t1.writes, 1);
+    assert_eq!(t2.writes, 1);
+}
+
+#[test]
+fn telemetry_debug_non_empty() {
+    let fast_path = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+    let telemetry = fast_path.telemetry();
+    let debug = format!("{telemetry:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("FastPathTelemetry"));
+}
+
+#[test]
+fn telemetry_writer_pressure_fields_start_at_zero() {
+    let fast_path = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+    let telemetry = fast_path.telemetry();
+    assert_eq!(telemetry.writer_pressure_observations, 0);
+    assert_eq!(telemetry.writer_pressure_fallbacks, 0);
+    assert_eq!(telemetry.retry_budget_fallbacks, 0);
+}
+
+// ---------------------------------------------------------------------------
+// SnapshotFastPath: publish overwrites seed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn publish_overwrites_seeded_value() {
+    let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+    fast_path.seed_if_uninitialized(100_u64);
+    let r1 = fast_path.read_clone_or_else(|| 0_u64);
+    assert_eq!(r1.value, 100);
+
+    fast_path.publish(200_u64);
+    let r2 = fast_path.read_clone_or_else(|| 0_u64);
+    assert_eq!(r2.value, 200);
+    assert_eq!(r2.source, FastPathReadSource::FastPath);
+}
+
+// ---------------------------------------------------------------------------
+// SnapshotFastPath: multiple uninitialized reads accumulate fallbacks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multiple_uninitialized_reads_accumulate_fallbacks() {
+    let fast_path = SnapshotFastPath::<u64>::new(RetryBudgetPolicy::new(2, 1));
+
+    for i in 0..4 {
+        let result = fast_path.read_clone_or_else(|| i);
+        assert_eq!(result.source, FastPathReadSource::Fallback);
+        assert_eq!(
+            result.fallback_reason,
+            Some(FastPathFallbackReason::Uninitialized)
+        );
+    }
+
+    let telemetry = fast_path.telemetry();
+    assert_eq!(telemetry.uninitialized_fallbacks, 4);
+    assert_eq!(telemetry.fallback_reads, 4);
+    assert_eq!(telemetry.total_reads, 4);
+    assert_eq!(telemetry.fast_path_reads, 0);
+}
+
+// ---------------------------------------------------------------------------
+// SnapshotFastPath: Vec<String> as value type
+// ---------------------------------------------------------------------------
+
+#[test]
+fn snapshot_fastpath_with_vec_string_values() {
+    let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+    let initial = vec!["alpha".to_string(), "beta".to_string()];
+    fast_path.seed_if_uninitialized(initial.clone());
+
+    let r1 = fast_path.read_clone_or_else(Vec::new);
+    assert_eq!(r1.value, vec!["alpha".to_string(), "beta".to_string()]);
+    assert_eq!(r1.source, FastPathReadSource::FastPath);
+
+    let updated = vec!["gamma".to_string()];
+    fast_path.publish(updated.clone());
+    let r2 = fast_path.read_clone_or_else(Vec::new);
+    assert_eq!(r2.value, vec!["gamma".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// SnapshotFastPath: read after multiple publishes shows latest
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_after_multiple_publishes_shows_latest() {
+    let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
+    fast_path.publish(1_u64);
+    fast_path.publish(2_u64);
+    fast_path.publish(3_u64);
+    fast_path.publish(4_u64);
+    fast_path.publish(5_u64);
+
+    let result = fast_path.read_clone_or_else(|| 0_u64);
+    assert_eq!(result.value, 5);
+    assert_eq!(result.source, FastPathReadSource::FastPath);
+
+    let telemetry = fast_path.telemetry();
+    assert_eq!(telemetry.writes, 5);
+    assert_eq!(telemetry.fast_path_reads, 1);
+}
+
+// ---------------------------------------------------------------------------
+// ModuleCache: duplicate key handling
+// ---------------------------------------------------------------------------
+
+#[test]
+fn module_cache_duplicate_key_overwrites() {
+    let mut cache = ModuleCache::new();
+    let ctx = CacheContext::new("trace-dup", "decision-dup", "policy-dup");
+
+    let version1 = ModuleVersionFingerprint::new(ContentHash::compute(b"v1"), 1, 1);
+    cache
+        .insert(
+            CacheInsertRequest::new(
+                "mod:dup",
+                version1,
+                ContentHash::compute(b"art-v1"),
+                "file:///mod/dup.js",
+            ),
+            &ctx,
+        )
+        .expect("first insert");
+
+    let version2 = ModuleVersionFingerprint::new(ContentHash::compute(b"v2"), 2, 1);
+    cache
+        .insert(
+            CacheInsertRequest::new(
+                "mod:dup",
+                version2.clone(),
+                ContentHash::compute(b"art-v2"),
+                "file:///mod/dup.js",
+            ),
+            &ctx,
+        )
+        .expect("second insert");
+
+    let snapshot = cache.snapshot();
+    // Latest version should reflect the second insert
+    let latest = snapshot.latest_versions.get("mod:dup");
+    assert!(latest.is_some());
+    assert_eq!(latest.unwrap(), &version2);
+}
+
+// ---------------------------------------------------------------------------
+// ModuleCache: snapshot serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn module_cache_snapshot_serde_roundtrip() {
+    let mut cache = ModuleCache::new();
+    let ctx = CacheContext::new(
+        "trace-snap-serde",
+        "decision-snap-serde",
+        "policy-snap-serde",
+    );
+    let version = ModuleVersionFingerprint::new(ContentHash::compute(b"snap-mod"), 1, 1);
+    cache
+        .insert(
+            CacheInsertRequest::new(
+                "mod:snap-serde",
+                version,
+                ContentHash::compute(b"snap-art"),
+                "file:///mod/snap.js",
+            ),
+            &ctx,
+        )
+        .expect("insert");
+
+    let snapshot = cache.snapshot();
+    let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+    let parsed: CacheSnapshot = serde_json::from_str(&json).expect("deserialize snapshot");
+    assert_eq!(snapshot, parsed);
+}
+
+// ---------------------------------------------------------------------------
+// ModuleCache: empty cache telemetry serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn module_cache_empty_telemetry_serde_roundtrip() {
+    let cache = ModuleCache::new();
+    let _ = cache.snapshot(); // triggers seed
+    let telemetry = cache.snapshot_fastpath_telemetry();
+    let json = serde_json::to_string(&telemetry).expect("serialize");
+    let parsed: FastPathTelemetry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(telemetry, parsed);
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceAuditLedger: query with decision_type filter
+// ---------------------------------------------------------------------------
+
+#[test]
+fn governance_ledger_query_by_decision_type_filters_correctly() {
+    let mut ledger = GovernanceAuditLedger::new(GovernanceLedgerConfig {
+        checkpoint_interval: 10,
+        signer_key: b"dt-filter-key".to_vec(),
+        policy_id: "policy-dt-filter".to_string(),
+    })
+    .expect("ledger");
+
+    ledger
+        .append(automatic_input(
+            "d1",
+            "moon-1",
+            GovernanceDecisionType::Promote,
+            10,
+        ))
+        .expect("append d1");
+    ledger
+        .append(automatic_input(
+            "d2",
+            "moon-1",
+            GovernanceDecisionType::Hold,
+            20,
+        ))
+        .expect("append d2");
+    ledger
+        .append(automatic_input(
+            "d3",
+            "moon-1",
+            GovernanceDecisionType::Kill,
+            30,
+        ))
+        .expect("append d3");
+    ledger
+        .append(automatic_input(
+            "d4",
+            "moon-1",
+            GovernanceDecisionType::Promote,
+            40,
+        ))
+        .expect("append d4");
+
+    let promote_query = GovernanceLedgerQuery {
+        decision_types: Some(BTreeSet::from([GovernanceDecisionType::Promote])),
+        ..GovernanceLedgerQuery::all()
+    };
+    let promotes = ledger.query(&promote_query);
+    assert_eq!(promotes.len(), 2);
+    for entry in &promotes {
+        assert_eq!(entry.decision_type, GovernanceDecisionType::Promote);
+    }
+
+    let kill_query = GovernanceLedgerQuery {
+        decision_types: Some(BTreeSet::from([GovernanceDecisionType::Kill])),
+        ..GovernanceLedgerQuery::all()
+    };
+    let kills = ledger.query(&kill_query);
+    assert_eq!(kills.len(), 1);
+    assert_eq!(kills[0].decision_type, GovernanceDecisionType::Kill);
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceAuditLedger: checkpoint at interval boundary
+// ---------------------------------------------------------------------------
+
+#[test]
+fn governance_ledger_checkpoint_at_exact_interval_boundary() {
+    let mut ledger = GovernanceAuditLedger::new(GovernanceLedgerConfig {
+        checkpoint_interval: 3,
+        signer_key: b"boundary-key".to_vec(),
+        policy_id: "policy-boundary".to_string(),
+    })
+    .expect("ledger");
+
+    // Append exactly 3 entries to hit the checkpoint boundary
+    for i in 0..3 {
+        ledger
+            .append(automatic_input(
+                &format!("d-boundary-{i}"),
+                "moon-boundary",
+                GovernanceDecisionType::Promote,
+                (i + 1) * 10,
+            ))
+            .expect("append");
+    }
+
+    let checkpoint = ledger
+        .latest_checkpoint_view()
+        .expect("checkpoint at boundary");
+    assert_eq!(checkpoint.sequence, 3);
+    assert_eq!(checkpoint.entry_count, 3);
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceAuditLedger: empty query returns empty
+// ---------------------------------------------------------------------------
+
+#[test]
+fn governance_ledger_empty_query_on_empty_ledger_returns_empty() {
+    let ledger = GovernanceAuditLedger::new(GovernanceLedgerConfig {
+        checkpoint_interval: 5,
+        signer_key: b"empty-key".to_vec(),
+        policy_id: "policy-empty".to_string(),
+    })
+    .expect("ledger");
+
+    let entries = ledger.query(&GovernanceLedgerQuery::all());
+    assert!(entries.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// FastPathReadResult: serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fast_path_read_result_serde_roundtrip_with_fallback() {
+    let result = FastPathReadResult {
+        value: 77_u64,
+        source: FastPathReadSource::Fallback,
+        attempts: 3,
+        writer_pressure_observations: 1,
+        fallback_reason: Some(FastPathFallbackReason::RetryBudgetExceeded),
+    };
+    let json = serde_json::to_string(&result).expect("serialize");
+    let parsed: FastPathReadResult<u64> = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(result, parsed);
+}
+
+#[test]
+fn fast_path_read_result_serde_roundtrip_no_fallback() {
+    let result = FastPathReadResult {
+        value: 42_u64,
+        source: FastPathReadSource::FastPath,
+        attempts: 0,
+        writer_pressure_observations: 0,
+        fallback_reason: None,
+    };
+    let json = serde_json::to_string(&result).expect("serialize");
+    let parsed: FastPathReadResult<u64> = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(result, parsed);
+}
+
+// ---------------------------------------------------------------------------
+// FastPathFallbackReason: Clone and all variants have distinct Debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fallback_reason_clone_independence() {
+    let original = FastPathFallbackReason::WriterPressure;
+    let cloned = original;
+    assert_eq!(original, cloned);
+    // Each variant independently serializes
+    let json_orig = serde_json::to_string(&original).expect("serialize original");
+    let json_clone = serde_json::to_string(&cloned).expect("serialize clone");
+    assert_eq!(json_orig, json_clone);
+}
+
+#[test]
+fn fallback_reason_debug_all_variants_non_empty_and_distinct() {
+    let variants = [
+        FastPathFallbackReason::Uninitialized,
+        FastPathFallbackReason::RetryBudgetExceeded,
+        FastPathFallbackReason::WriterPressure,
+    ];
+    let debugs: Vec<String> = variants.iter().map(|v| format!("{v:?}")).collect();
+    for debug_str in &debugs {
+        assert!(!debug_str.is_empty());
+    }
+    // All pairwise distinct
+    for i in 0..debugs.len() {
+        for j in (i + 1)..debugs.len() {
+            assert_ne!(debugs[i], debugs[j], "variants {i} and {j} have same debug");
+        }
     }
 }

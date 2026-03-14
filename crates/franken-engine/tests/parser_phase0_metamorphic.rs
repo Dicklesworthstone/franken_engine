@@ -371,3 +371,253 @@ fn parser_helper_returns_parser_instance() {
     let result = p.parse("42", ParseGoal::Script);
     assert!(result.is_ok());
 }
+
+// ===== PearlTower enrichment =====
+
+use frankenengine_engine::parser::{
+    ParseBudgetKind, ParseDiagnosticCategory, ParseDiagnosticSeverity, ParseDiagnosticTaxonomy,
+    ParseErrorCode, ParserBudget, ParserMode, ParserOptions,
+};
+
+#[test]
+fn enrichment_parse_goal_serde_roundtrip_script() {
+    let original = ParseGoal::Script;
+    let json = serde_json::to_string(&original).expect("serialize ParseGoal::Script");
+    let roundtripped: ParseGoal =
+        serde_json::from_str(&json).expect("deserialize ParseGoal::Script");
+    assert_eq!(original, roundtripped);
+}
+
+#[test]
+fn enrichment_parse_goal_serde_roundtrip_module() {
+    let original = ParseGoal::Module;
+    let json = serde_json::to_string(&original).expect("serialize ParseGoal::Module");
+    let roundtripped: ParseGoal =
+        serde_json::from_str(&json).expect("deserialize ParseGoal::Module");
+    assert_eq!(original, roundtripped);
+}
+
+#[test]
+fn enrichment_syntax_tree_serde_roundtrip() {
+    let tree = parser()
+        .parse("let x = 1", ParseGoal::Script)
+        .expect("parse let x = 1");
+    let json = serde_json::to_string(&tree).expect("serialize SyntaxTree");
+    let roundtripped: SyntaxTree = serde_json::from_str(&json).expect("deserialize SyntaxTree");
+    assert_eq!(tree, roundtripped);
+}
+
+#[test]
+fn enrichment_parse_error_code_serde_roundtrip_all_variants() {
+    for code in ParseErrorCode::ALL {
+        let json = serde_json::to_string(&code).expect("serialize ParseErrorCode");
+        let roundtripped: ParseErrorCode =
+            serde_json::from_str(&json).expect("deserialize ParseErrorCode");
+        assert_eq!(code, roundtripped, "serde roundtrip failed for {code:?}");
+    }
+}
+
+#[test]
+fn enrichment_parser_options_serde_roundtrip_default() {
+    let options = ParserOptions::default();
+    let json = serde_json::to_string(&options).expect("serialize ParserOptions");
+    let roundtripped: ParserOptions =
+        serde_json::from_str(&json).expect("deserialize ParserOptions");
+    assert_eq!(options, roundtripped);
+}
+
+#[test]
+fn enrichment_parse_goal_clone_and_debug_derive() {
+    let goal = ParseGoal::Script;
+    let cloned = goal;
+    assert_eq!(goal, cloned);
+    let debug_str = format!("{goal:?}");
+    assert!(debug_str.contains("Script"));
+    let module_debug = format!("{:?}", ParseGoal::Module);
+    assert!(module_debug.contains("Module"));
+}
+
+#[test]
+fn enrichment_parser_budget_clone_and_debug_derive() {
+    let budget = ParserBudget::default();
+    let cloned = budget.clone();
+    assert_eq!(budget, cloned);
+    let debug_str = format!("{budget:?}");
+    assert!(debug_str.contains("max_source_bytes"));
+}
+
+#[test]
+fn enrichment_parse_budget_kind_debug_and_as_str_consistent() {
+    let cases = [
+        (ParseBudgetKind::SourceBytes, "source_bytes"),
+        (ParseBudgetKind::TokenCount, "token_count"),
+        (ParseBudgetKind::RecursionDepth, "recursion_depth"),
+    ];
+    for (kind, expected_str) in cases {
+        assert_eq!(kind.as_str(), expected_str);
+        let cloned = kind;
+        assert_eq!(cloned.as_str(), expected_str);
+        let debug_str = format!("{kind:?}");
+        assert!(!debug_str.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_parse_diagnostic_taxonomy_v1_covers_all_codes() {
+    let taxonomy = ParseDiagnosticTaxonomy::v1();
+    assert_eq!(taxonomy.rules.len(), ParseErrorCode::ALL.len());
+    for code in ParseErrorCode::ALL {
+        let rule = taxonomy.rule_for(code);
+        assert!(rule.is_some(), "taxonomy missing rule for {code:?}");
+        let rule = rule.unwrap();
+        assert!(!rule.diagnostic_code.is_empty());
+        assert!(!rule.message_template.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_syntax_tree_clone_preserves_canonical_hash() {
+    let tree = parser()
+        .parse("export default 1 + 2", ParseGoal::Module)
+        .expect("parse");
+    let cloned = tree.clone();
+    assert_eq!(tree.canonical_hash(), cloned.canonical_hash());
+}
+
+#[test]
+fn enrichment_parse_hash_prefix_invariant_for_all_goal_sources() {
+    let fixtures = [
+        ("x", ParseGoal::Script),
+        ("42", ParseGoal::Script),
+        ("import m from 'mod'", ParseGoal::Module),
+        ("export default null", ParseGoal::Module),
+        ("var a = 1; var b = 2;", ParseGoal::Script),
+    ];
+    for (source, goal) in fixtures {
+        let hash = parse_hash(source, goal);
+        assert!(
+            hash.starts_with("sha256:"),
+            "expected sha256: prefix for `{source}`"
+        );
+        assert!(hash.len() > 7, "hash too short for `{source}`");
+    }
+}
+
+#[test]
+fn enrichment_semantic_signature_deterministic_across_repeated_calls() {
+    let tree = parser()
+        .parse("let a = 1; let b = 2; a + b", ParseGoal::Script)
+        .expect("parse");
+    let sig1 = semantic_signature(&tree);
+    let sig2 = semantic_signature(&tree);
+    let sig3 = semantic_signature(&tree);
+    assert_eq!(sig1, sig2);
+    assert_eq!(sig2, sig3);
+}
+
+#[test]
+fn enrichment_parser_mode_serde_roundtrip() {
+    let mode = ParserMode::ScalarReference;
+    let json = serde_json::to_string(&mode).expect("serialize ParserMode");
+    let roundtripped: ParserMode = serde_json::from_str(&json).expect("deserialize ParserMode");
+    assert_eq!(mode, roundtripped);
+    assert_eq!(mode.as_str(), "scalar_reference");
+}
+
+#[test]
+fn enrichment_parse_diagnostic_category_debug_and_as_str_invariant() {
+    let cases = [
+        (ParseDiagnosticCategory::Input, "input"),
+        (ParseDiagnosticCategory::Goal, "goal"),
+        (ParseDiagnosticCategory::Syntax, "syntax"),
+        (ParseDiagnosticCategory::Encoding, "encoding"),
+        (ParseDiagnosticCategory::Resource, "resource"),
+        (ParseDiagnosticCategory::System, "system"),
+    ];
+    for (cat, expected) in cases {
+        assert_eq!(cat.as_str(), expected);
+        let cloned = cat;
+        assert_eq!(cloned, cat);
+        let debug_str = format!("{cat:?}");
+        assert!(!debug_str.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_parse_diagnostic_severity_clone_and_as_str() {
+    let error = ParseDiagnosticSeverity::Error;
+    let fatal = ParseDiagnosticSeverity::Fatal;
+    assert_eq!(error.as_str(), "error");
+    assert_eq!(fatal.as_str(), "fatal");
+    let cloned_error = error;
+    let cloned_fatal = fatal;
+    assert_eq!(cloned_error, error);
+    assert_eq!(cloned_fatal, fatal);
+}
+
+#[test]
+fn enrichment_canonical_hash_idempotent_property_across_sources() {
+    let sources = [
+        "1",
+        "true",
+        "false",
+        "null",
+        "'hello'",
+        "a + b",
+        "function f() {}",
+    ];
+    for source in sources {
+        let tree = parser()
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|e| panic!("failed to parse `{source}`: {e}"));
+        let h1 = tree.canonical_hash();
+        let h2 = tree.canonical_hash();
+        assert_eq!(h1, h2, "canonical_hash not idempotent for `{source}`");
+        assert!(h1.starts_with("sha256:"));
+    }
+}
+
+#[test]
+fn enrichment_metamorphic_comment_stripping_preserves_statement_count() {
+    // A single expression statement with trailing comment vs. without
+    // Both should yield exactly one statement in the tree body.
+    let without_comment = parser()
+        .parse("42", ParseGoal::Script)
+        .expect("parse without comment");
+    let with_comment = parser()
+        .parse("42 // trailing comment", ParseGoal::Script)
+        .expect("parse with trailing comment");
+    assert_eq!(
+        without_comment.body.len(),
+        with_comment.body.len(),
+        "comment stripping should not change body statement count"
+    );
+    // Body length must match (comments don't add statements)
+    assert_eq!(without_comment.body.len(), 1);
+    assert_eq!(with_comment.body.len(), 1);
+}
+
+#[test]
+fn enrichment_parse_goal_as_str_distinct_values() {
+    let script_str = ParseGoal::Script.as_str();
+    let module_str = ParseGoal::Module.as_str();
+    assert_ne!(script_str, module_str);
+    assert_eq!(script_str, "script");
+    assert_eq!(module_str, "module");
+}
+
+#[test]
+fn enrichment_parser_budget_default_values_are_positive() {
+    let budget = ParserBudget::default();
+    assert!(budget.max_source_bytes > 0);
+    assert!(budget.max_token_count > 0);
+    assert!(budget.max_recursion_depth > 0);
+}
+
+#[test]
+fn enrichment_syntax_tree_debug_contains_goal_info() {
+    let tree = parser().parse("x", ParseGoal::Script).expect("parse x");
+    let debug_str = format!("{tree:?}");
+    assert!(!debug_str.is_empty());
+    assert!(debug_str.contains("Script") || debug_str.contains("goal"));
+}

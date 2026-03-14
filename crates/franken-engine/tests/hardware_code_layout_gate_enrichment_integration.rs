@@ -8,12 +8,12 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::hardware_code_layout_gate::{
-    AlignmentStrategy, AlignmentTarget, CodeRegion, LayoutDecisionKind, LayoutDecisionReceipt,
-    LayoutPolicy, LayoutPolicyState, PlatformId, PlatformRule, RegionHeat, RegionId,
-    RollbackGate, RollbackReason, RollbackRecord, StallBudget, StallEvent, StallKind,
-    BEAD_ID, COMPONENT, DEFAULT_CACHE_LINE_BYTES, DEFAULT_ICACHE_MISS_THRESHOLD,
-    DEFAULT_PAGE_SIZE_BYTES, DEFAULT_REGRESSION_THRESHOLD, DEFAULT_STALL_BUDGET_CYCLES,
-    MAX_ALIGNMENT_BUDGET_BYTES, POLICY_ID, SCHEMA_VERSION,
+    AlignmentStrategy, AlignmentTarget, BEAD_ID, COMPONENT, CodeRegion, DEFAULT_CACHE_LINE_BYTES,
+    DEFAULT_ICACHE_MISS_THRESHOLD, DEFAULT_PAGE_SIZE_BYTES, DEFAULT_REGRESSION_THRESHOLD,
+    DEFAULT_STALL_BUDGET_CYCLES, LayoutDecisionKind, LayoutDecisionReceipt, LayoutPolicy,
+    LayoutPolicyState, MAX_ALIGNMENT_BUDGET_BYTES, POLICY_ID, PlatformId, PlatformRule, RegionHeat,
+    RegionId, RollbackGate, RollbackReason, RollbackRecord, SCHEMA_VERSION, StallBudget,
+    StallEvent, StallKind,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -544,20 +544,24 @@ fn enrichment_stall_budget_default() {
 
 #[test]
 fn enrichment_constants_nonempty() {
-    assert!(!SCHEMA_VERSION.is_empty());
-    assert!(!COMPONENT.is_empty());
-    assert!(!BEAD_ID.is_empty());
-    assert!(!POLICY_ID.is_empty());
+    const {
+        assert!(!SCHEMA_VERSION.is_empty());
+        assert!(!COMPONENT.is_empty());
+        assert!(!BEAD_ID.is_empty());
+        assert!(!POLICY_ID.is_empty());
+    }
 }
 
 #[test]
 fn enrichment_default_constants_reasonable() {
-    assert_eq!(DEFAULT_CACHE_LINE_BYTES, 64);
-    assert_eq!(DEFAULT_PAGE_SIZE_BYTES, 4096);
-    assert!(MAX_ALIGNMENT_BUDGET_BYTES > 0);
-    assert!(DEFAULT_STALL_BUDGET_CYCLES > 0);
-    assert!(DEFAULT_ICACHE_MISS_THRESHOLD > 0);
-    assert!(DEFAULT_REGRESSION_THRESHOLD > 0);
+    const {
+        assert!(DEFAULT_CACHE_LINE_BYTES == 64);
+        assert!(DEFAULT_PAGE_SIZE_BYTES == 4096);
+        assert!(MAX_ALIGNMENT_BUDGET_BYTES > 0);
+        assert!(DEFAULT_STALL_BUDGET_CYCLES > 0);
+        assert!(DEFAULT_ICACHE_MISS_THRESHOLD > 0);
+        assert!(DEFAULT_REGRESSION_THRESHOLD > 0);
+    }
 }
 
 // -----------------------------------------------------------------------

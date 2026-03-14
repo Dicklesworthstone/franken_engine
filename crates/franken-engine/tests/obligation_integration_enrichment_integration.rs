@@ -684,3 +684,337 @@ fn enrichment_multiple_categories_tracked_separately() {
     assert_eq!(stats[&TwoPhaseCategory::PermissionGrant].aborted, 1);
     assert_eq!(stats[&TwoPhaseCategory::StateMutation].started, 1);
 }
+
+// =========================================================================
+// P. detect_leaks lifecycle — running cell yields no leaks, closed cell does
+// =========================================================================
+
+#[test]
+fn enrichment_detect_leaks_no_leaks_while_running() {
+    let mut cell = ExecutionCell::new("ext-dl", CellKind::Extension, "trace-dl");
+    let mut tracker = ObligationTracker::default();
+
+    tracker
+        .begin_operation(
+            &mut cell,
+            "op-run",
+            TwoPhaseCategory::ResourceAlloc,
+            "alloc",
+        )
+        .unwrap();
+
+    // Cell still running — detect_leaks must return empty
+    let leaks = tracker.detect_leaks(&cell);
+    assert!(leaks.is_empty());
+    assert!(!tracker.has_leaks());
+    assert_eq!(tracker.active_count(), 1);
+}
+
+#[test]
+fn enrichment_detect_leaks_after_close_finds_pending() {
+    use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
+    use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline};
+
+    let mut cell = ExecutionCell::new("ext-dlc", CellKind::Extension, "trace-dlc");
+    let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(200));
+    let mut tracker = ObligationTracker::default();
+
+    tracker
+        .begin_operation(
+            &mut cell,
+            "op-p1",
+            TwoPhaseCategory::PermissionGrant,
+            "grant",
+        )
+        .unwrap();
+    tracker
+        .begin_operation(
+            &mut cell,
+            "op-p2",
+            TwoPhaseCategory::EvidenceCommit,
+            "evidence",
+        )
+        .unwrap();
+    // Commit one so only one leaks
+    tracker.commit_operation(&mut cell, "op-p1").unwrap();
+
+    cell.close(
+        &mut cx,
+        CancelReason::OperatorShutdown,
+        DrainDeadline { max_ticks: 5 },
+    )
+    .unwrap();
+
+    let leaks = tracker.detect_leaks(&cell);
+    assert_eq!(leaks.len(), 1);
+    assert_eq!(leaks[0].operation_id, "op-p2");
+    assert_eq!(leaks[0].category, TwoPhaseCategory::EvidenceCommit);
+    assert!(tracker.has_leaks());
+}
+
+// =========================================================================
+// Q. should_fail_run: lab vs production policy
+// =========================================================================
+
+#[test]
+fn enrichment_should_fail_run_lab_with_leaks() {
+    use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
+    use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline};
+
+    let mut cell = ExecutionCell::new("ext-lab", CellKind::Extension, "trace-lab");
+    let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(200));
+    let mut tracker = ObligationTracker::lab();
+
+    tracker
+        .begin_operation(
+            &mut cell,
+            "op-lab",
+            TwoPhaseCategory::StateMutation,
+            "mutate",
+        )
+        .unwrap();
+
+    cell.close(
+        &mut cx,
+        CancelReason::OperatorShutdown,
+        DrainDeadline { max_ticks: 5 },
+    )
+    .unwrap();
+
+    tracker.detect_leaks(&cell);
+    assert!(tracker.should_fail_run());
+}
+
+#[test]
+fn enrichment_should_fail_run_production_with_leaks_false() {
+    use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
+    use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline};
+
+    let mut cell = ExecutionCell::new("ext-prod", CellKind::Extension, "trace-prod");
+    let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(200));
+    let mut tracker = ObligationTracker::default(); // Production policy
+
+    tracker
+        .begin_operation(
+            &mut cell,
+            "op-prod",
+            TwoPhaseCategory::StateMutation,
+            "mutate",
+        )
+        .unwrap();
+
+    cell.close(
+        &mut cx,
+        CancelReason::OperatorShutdown,
+        DrainDeadline { max_ticks: 5 },
+    )
+    .unwrap();
+
+    tracker.detect_leaks(&cell);
+    // Production policy: has_leaks is true, but should_fail_run is false
+    assert!(tracker.has_leaks());
+    assert!(!tracker.should_fail_run());
+}
+
+// =========================================================================
+// R. Abort on nonexistent operation
+// =========================================================================
+
+#[test]
+fn enrichment_abort_nonexistent_operation_returns_not_found() {
+    let mut cell = ExecutionCell::new("ext-anf", CellKind::Extension, "trace-anf");
+    let mut tracker = ObligationTracker::default();
+
+    let err = tracker
+        .abort_operation(&mut cell, "does-not-exist")
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        ObligationIntegrationError::OperationNotFound { .. }
+    ));
+    assert_eq!(err.error_code(), "obligation_operation_not_found");
+}
+
+// =========================================================================
+// S. Double abort rejected
+// =========================================================================
+
+#[test]
+fn enrichment_double_abort_rejected() {
+    let mut cell = ExecutionCell::new("ext-da", CellKind::Extension, "trace-da");
+    let mut tracker = ObligationTracker::default();
+
+    tracker
+        .begin_operation(&mut cell, "op-da", TwoPhaseCategory::ResourceAlloc, "alloc")
+        .unwrap();
+    tracker.abort_operation(&mut cell, "op-da").unwrap();
+
+    let err = tracker.abort_operation(&mut cell, "op-da").unwrap_err();
+    assert!(matches!(
+        err,
+        ObligationIntegrationError::AlreadyResolved { .. }
+    ));
+}
+
+// =========================================================================
+// T. get_operation returns None for missing
+// =========================================================================
+
+#[test]
+fn enrichment_get_operation_none_for_missing() {
+    let tracker = ObligationTracker::default();
+    assert!(tracker.get_operation("nonexistent-op").is_none());
+}
+
+// =========================================================================
+// U. total_count vs active_count after resolution
+// =========================================================================
+
+#[test]
+fn enrichment_total_vs_active_count_diverges_after_resolution() {
+    let mut cell = ExecutionCell::new("ext-cnt", CellKind::Extension, "trace-cnt");
+    let mut tracker = ObligationTracker::default();
+
+    tracker
+        .begin_operation(&mut cell, "op-c1", TwoPhaseCategory::ResourceAlloc, "a1")
+        .unwrap();
+    tracker
+        .begin_operation(&mut cell, "op-c2", TwoPhaseCategory::PermissionGrant, "g1")
+        .unwrap();
+    tracker
+        .begin_operation(&mut cell, "op-c3", TwoPhaseCategory::StateMutation, "m1")
+        .unwrap();
+
+    assert_eq!(tracker.active_count(), 3);
+    assert_eq!(tracker.total_count(), 3);
+
+    tracker.commit_operation(&mut cell, "op-c1").unwrap();
+    tracker.abort_operation(&mut cell, "op-c2").unwrap();
+
+    // total stays 3, active drops to 1
+    assert_eq!(tracker.total_count(), 3);
+    assert_eq!(tracker.active_count(), 1);
+}
+
+// =========================================================================
+// V. Event field correctness (component, cell_kind, trace_id)
+// =========================================================================
+
+#[test]
+fn enrichment_event_fields_correctly_populated() {
+    let mut cell = ExecutionCell::new("ext-ef", CellKind::Session, "trace-ef");
+    let mut tracker = ObligationTracker::default();
+
+    tracker
+        .begin_operation(
+            &mut cell,
+            "op-ef",
+            TwoPhaseCategory::EvidenceCommit,
+            "commit evidence",
+        )
+        .unwrap();
+
+    let events = tracker.events();
+    assert_eq!(events.len(), 1);
+    let ev = &events[0];
+    assert_eq!(ev.cell_id, "ext-ef");
+    assert_eq!(ev.cell_kind, CellKind::Session);
+    assert_eq!(ev.trace_id, "trace-ef");
+    assert_eq!(ev.operation_id, "op-ef");
+    assert_eq!(ev.category, TwoPhaseCategory::EvidenceCommit);
+    assert_eq!(ev.component, "obligation_integration");
+    assert_eq!(ev.event, "begin");
+    assert_eq!(ev.outcome, "phase1_active");
+    assert_eq!(ev.phase, OperationPhase::Phase1Active);
+}
+
+// =========================================================================
+// W. Determinism: identical operations yield identical event sequences
+// =========================================================================
+
+#[test]
+fn enrichment_deterministic_event_sequence() {
+    fn run_scenario() -> Vec<(String, String, String)> {
+        let mut cell = ExecutionCell::new("ext-det", CellKind::Extension, "trace-det");
+        let mut tracker = ObligationTracker::default();
+
+        tracker
+            .begin_operation(&mut cell, "op-a", TwoPhaseCategory::ResourceAlloc, "alloc")
+            .unwrap();
+        tracker
+            .begin_operation(
+                &mut cell,
+                "op-b",
+                TwoPhaseCategory::PermissionGrant,
+                "grant",
+            )
+            .unwrap();
+        tracker.commit_operation(&mut cell, "op-a").unwrap();
+        tracker.abort_operation(&mut cell, "op-b").unwrap();
+
+        tracker
+            .events()
+            .iter()
+            .map(|e| (e.operation_id.clone(), e.event.clone(), e.outcome.clone()))
+            .collect()
+    }
+
+    let run1 = run_scenario();
+    let run2 = run_scenario();
+    assert_eq!(run1, run2);
+    assert_eq!(run1.len(), 4); // begin, begin, commit, abort
+}
+
+// =========================================================================
+// X. Display format content validation (not just distinctness)
+// =========================================================================
+
+#[test]
+fn enrichment_display_format_contains_expected_text() {
+    let err_not_running = ObligationIntegrationError::CellNotRunning {
+        cell_id: "my-cell".to_string(),
+        current_state: RegionState::Closed,
+    };
+    let display = err_not_running.to_string();
+    assert!(display.contains("my-cell"));
+    assert!(display.contains("closed"));
+
+    let err_not_found = ObligationIntegrationError::OperationNotFound {
+        operation_id: "op-xyz".to_string(),
+    };
+    assert!(err_not_found.to_string().contains("op-xyz"));
+
+    let err_resolved = ObligationIntegrationError::AlreadyResolved {
+        operation_id: "op-res".to_string(),
+        current_phase: OperationPhase::Committed,
+    };
+    let display_resolved = err_resolved.to_string();
+    assert!(display_resolved.contains("op-res"));
+    assert!(display_resolved.contains("committed"));
+
+    let err_dup = ObligationIntegrationError::DuplicateOperation {
+        operation_id: "op-dup".to_string(),
+    };
+    assert!(err_dup.to_string().contains("op-dup"));
+
+    let err_cell = ObligationIntegrationError::CellError {
+        message: "internal failure".to_string(),
+    };
+    assert!(err_cell.to_string().contains("internal failure"));
+}
+
+// =========================================================================
+// Y. ObligationTracker::new constructor with explicit policy
+// =========================================================================
+
+#[test]
+fn enrichment_tracker_new_with_explicit_policy() {
+    let tracker_lab = ObligationTracker::new(LeakPolicy::Lab);
+    assert_eq!(tracker_lab.leak_policy(), LeakPolicy::Lab);
+    assert_eq!(tracker_lab.active_count(), 0);
+    assert_eq!(tracker_lab.total_count(), 0);
+    assert!(tracker_lab.events().is_empty());
+
+    let tracker_prod = ObligationTracker::new(LeakPolicy::Production);
+    assert_eq!(tracker_prod.leak_policy(), LeakPolicy::Production);
+}

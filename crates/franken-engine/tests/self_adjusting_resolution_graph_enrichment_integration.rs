@@ -17,9 +17,10 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::self_adjusting_resolution_graph::{
     BEAD_ID, COMPONENT, DependencyEdge, EdgeKind, InvalidationReceipt, InvalidationScope,
-    MILLIONTHS, ModuleNode, POLICY_ID, ResolutionGraphError, RollbackCheckpoint, SCHEMA_VERSION,
-    add_module, build_graph, compute_affected_set, create_checkpoint, detect_cycles,
-    invalidate_module, remove_module,
+    MILLIONTHS, ModuleNode, POLICY_ID, ResolutionGraph, ResolutionGraphError, RollbackCheckpoint,
+    SCHEMA_VERSION, add_edge, add_module, build_graph, compute_affected_set, connected_component,
+    create_checkpoint, detect_cycles, franken_engine_resolution_manifest, graph_depth,
+    invalidate_module, remove_module, topological_order, verify_checkpoint,
 };
 
 fn make_node(id: &str) -> ModuleNode {
@@ -510,4 +511,441 @@ fn enrichment_module_node_hash_sensitivity_to_content() {
 fn enrichment_graph_epoch_starts_at_genesis() {
     let graph = build_graph(vec![make_node("a")], vec![], vec!["a".to_string()]).unwrap();
     assert_eq!(graph.epoch, SecurityEpoch::GENESIS);
+}
+
+// ===== PearlTower enrichment =====
+
+// =========================================================================
+// T. Serde roundtrip for ResolutionGraph
+// =========================================================================
+
+#[test]
+fn enrichment_resolution_graph_serde_roundtrip() {
+    let graph = build_graph(
+        vec![make_node("a"), make_node("b"), make_node("c")],
+        vec![
+            make_edge("a", "b", EdgeKind::StaticImport),
+            make_edge("b", "c", EdgeKind::TypeOnly),
+        ],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let json = serde_json::to_string(&graph).unwrap();
+    let back: ResolutionGraph = serde_json::from_str(&json).unwrap();
+    assert_eq!(graph, back);
+    assert_eq!(back.node_count(), 3);
+    assert_eq!(back.edge_count(), 2);
+}
+
+// =========================================================================
+// U. ModuleNode serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_module_node_serde_roundtrip() {
+    let node = make_node("serde-test-node");
+    let json = serde_json::to_string(&node).unwrap();
+    let back: ModuleNode = serde_json::from_str(&json).unwrap();
+    assert_eq!(node, back);
+    assert_eq!(back.node_id, "serde-test-node");
+    assert_eq!(back.version, "1.0.0");
+}
+
+// =========================================================================
+// V. Graph node uniqueness — duplicate node_id is rejected
+// =========================================================================
+
+#[test]
+fn enrichment_graph_node_uniqueness_rejects_duplicate_id() {
+    let node_a1 = make_node("dup");
+    let node_a2 = make_node("dup"); // same id
+    let result = build_graph(vec![node_a1, node_a2], vec![], vec![]);
+    assert!(
+        matches!(result, Err(ResolutionGraphError::InternalError(_))),
+        "expected InternalError for duplicate node_id"
+    );
+}
+
+// =========================================================================
+// W. Edge consistency — edges referencing absent nodes are rejected
+// =========================================================================
+
+#[test]
+fn enrichment_edge_consistency_rejects_missing_source() {
+    let result = build_graph(
+        vec![make_node("b")],
+        vec![make_edge("ghost", "b", EdgeKind::StaticImport)],
+        vec!["b".to_string()],
+    );
+    assert!(
+        matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))),
+        "expected ModuleNotFound for absent source"
+    );
+}
+
+#[test]
+fn enrichment_edge_consistency_rejects_missing_target() {
+    let result = build_graph(
+        vec![make_node("a")],
+        vec![make_edge("a", "nowhere", EdgeKind::DynamicImport)],
+        vec!["a".to_string()],
+    );
+    assert!(
+        matches!(result, Err(ResolutionGraphError::ModuleNotFound(_))),
+        "expected ModuleNotFound for absent target"
+    );
+}
+
+// =========================================================================
+// X. Empty graph — no nodes, no edges, no roots
+// =========================================================================
+
+#[test]
+fn enrichment_empty_graph_build_succeeds() {
+    let graph = build_graph(vec![], vec![], vec![]).unwrap();
+    assert_eq!(graph.node_count(), 0);
+    assert_eq!(graph.edge_count(), 0);
+    assert!(graph.root_modules.is_empty());
+    // detect_cycles on empty graph returns no cycles
+    let cycles = detect_cycles(&graph);
+    assert!(cycles.is_empty());
+    // graph_depth on empty graph returns 0
+    let depth = graph_depth(&graph).unwrap();
+    assert_eq!(depth, 0);
+}
+
+// =========================================================================
+// Y. Single-node graph properties
+// =========================================================================
+
+#[test]
+fn enrichment_single_node_graph_properties() {
+    let graph = build_graph(vec![make_node("solo")], vec![], vec!["solo".to_string()]).unwrap();
+    assert_eq!(graph.node_count(), 1);
+    assert_eq!(graph.edge_count(), 0);
+    // No cycles in a single node with no edges
+    assert!(detect_cycles(&graph).is_empty());
+    // Depth is 0 — no edges
+    assert_eq!(graph_depth(&graph).unwrap(), 0);
+    // Topological order contains the sole node
+    let order = topological_order(&graph).unwrap();
+    assert_eq!(order, vec!["solo".to_string()]);
+    // connected_component of the single node is just itself
+    let comp = connected_component(&graph, "solo").unwrap();
+    assert_eq!(comp.len(), 1);
+    assert!(comp.contains("solo"));
+    // invalidation: only itself affected
+    let receipt = invalidate_module(&graph, "solo").unwrap();
+    assert_eq!(receipt.scope, InvalidationScope::SingleModule);
+    assert_eq!(receipt.affected_modules.len(), 1);
+}
+
+// =========================================================================
+// Z. Deterministic ordering — identical inputs yield identical graph_id and hash
+// =========================================================================
+
+#[test]
+fn enrichment_deterministic_ordering_identical_inputs() {
+    let build = || {
+        build_graph(
+            vec![make_node("x"), make_node("y"), make_node("z")],
+            vec![
+                make_edge("x", "y", EdgeKind::StaticImport),
+                make_edge("y", "z", EdgeKind::Reexport),
+            ],
+            vec!["x".to_string()],
+        )
+        .unwrap()
+    };
+    let g1 = build();
+    let g2 = build();
+    assert_eq!(g1.graph_id, g2.graph_id);
+    assert_eq!(g1.content_hash, g2.content_hash);
+}
+
+// =========================================================================
+// AA. Topological order for a linear chain
+// =========================================================================
+
+#[test]
+fn enrichment_topological_order_linear_chain() {
+    // a -> b -> c (a imports b, b imports c)
+    let graph = build_graph(
+        vec![make_node("a"), make_node("b"), make_node("c")],
+        vec![
+            make_edge("a", "b", EdgeKind::StaticImport),
+            make_edge("b", "c", EdgeKind::StaticImport),
+        ],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let order = topological_order(&graph).unwrap();
+    // "a" must come before "b", "b" before "c"
+    let pos_a = order.iter().position(|s| s == "a").unwrap();
+    let pos_b = order.iter().position(|s| s == "b").unwrap();
+    let pos_c = order.iter().position(|s| s == "c").unwrap();
+    assert!(pos_a < pos_b);
+    assert!(pos_b < pos_c);
+    assert_eq!(order.len(), 3);
+}
+
+// =========================================================================
+// AB. Topological order fails on cycle
+// =========================================================================
+
+#[test]
+fn enrichment_topological_order_fails_on_cycle() {
+    let graph = build_graph(
+        vec![make_node("p"), make_node("q")],
+        vec![
+            make_edge("p", "q", EdgeKind::StaticImport),
+            make_edge("q", "p", EdgeKind::StaticImport),
+        ],
+        vec!["p".to_string()],
+    )
+    .unwrap();
+    let result = topological_order(&graph);
+    assert_eq!(result, Err(ResolutionGraphError::CycleDetected));
+}
+
+// =========================================================================
+// AC. connected_component returns full set for connected graph
+// =========================================================================
+
+#[test]
+fn enrichment_connected_component_full_graph() {
+    // a <-> b <-> c (undirected connectivity)
+    let graph = build_graph(
+        vec![make_node("a"), make_node("b"), make_node("c")],
+        vec![
+            make_edge("a", "b", EdgeKind::StaticImport),
+            make_edge("b", "c", EdgeKind::StaticImport),
+        ],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let comp = connected_component(&graph, "a").unwrap();
+    assert_eq!(comp.len(), 3);
+    assert!(comp.contains("a"));
+    assert!(comp.contains("b"));
+    assert!(comp.contains("c"));
+}
+
+#[test]
+fn enrichment_connected_component_isolated_nodes() {
+    // a and b are not connected
+    let graph = build_graph(
+        vec![make_node("a"), make_node("b")],
+        vec![],
+        vec!["a".to_string(), "b".to_string()],
+    )
+    .unwrap();
+    let comp_a = connected_component(&graph, "a").unwrap();
+    assert_eq!(comp_a.len(), 1);
+    assert!(comp_a.contains("a"));
+    assert!(!comp_a.contains("b"));
+}
+
+#[test]
+fn enrichment_connected_component_missing_node_errors() {
+    let graph = build_graph(vec![make_node("a")], vec![], vec!["a".to_string()]).unwrap();
+    let result = connected_component(&graph, "nonexistent");
+    assert!(matches!(
+        result,
+        Err(ResolutionGraphError::ModuleNotFound(_))
+    ));
+}
+
+// =========================================================================
+// AD. verify_checkpoint — matches current graph state
+// =========================================================================
+
+#[test]
+fn enrichment_verify_checkpoint_matches_current_state() {
+    let graph = build_graph(
+        vec![make_node("a"), make_node("b")],
+        vec![make_edge("a", "b", EdgeKind::SideEffect)],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let checkpoint = create_checkpoint(&graph);
+    let matches = verify_checkpoint(&graph, &checkpoint).unwrap();
+    assert!(matches, "fresh checkpoint must match current graph");
+}
+
+#[test]
+fn enrichment_verify_checkpoint_detects_stale_after_mutation() {
+    let mut graph = build_graph(
+        vec![make_node("a"), make_node("b")],
+        vec![make_edge("a", "b", EdgeKind::StaticImport)],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let checkpoint = create_checkpoint(&graph);
+    // Mutate the graph
+    add_module(&mut graph, make_node("c")).unwrap();
+    let matches = verify_checkpoint(&graph, &checkpoint).unwrap();
+    assert!(!matches, "checkpoint must not match after mutation");
+}
+
+// =========================================================================
+// AE. add_edge increases edge count and recomputes hash
+// =========================================================================
+
+#[test]
+fn enrichment_add_edge_increases_count_and_changes_hash() {
+    let mut graph = build_graph(
+        vec![make_node("a"), make_node("b")],
+        vec![],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let hash_before = graph.content_hash;
+    add_edge(&mut graph, make_edge("a", "b", EdgeKind::DynamicImport)).unwrap();
+    assert_eq!(graph.edge_count(), 1);
+    assert_ne!(graph.content_hash, hash_before);
+}
+
+#[test]
+fn enrichment_add_edge_rejects_duplicate() {
+    let mut graph = build_graph(
+        vec![make_node("a"), make_node("b")],
+        vec![make_edge("a", "b", EdgeKind::StaticImport)],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let result = add_edge(&mut graph, make_edge("a", "b", EdgeKind::StaticImport));
+    assert_eq!(result, Err(ResolutionGraphError::DuplicateEdge));
+}
+
+// =========================================================================
+// AF. graph_depth for multi-level chain
+// =========================================================================
+
+#[test]
+fn enrichment_graph_depth_multi_level_chain() {
+    // a -> b -> c -> d: depth should be 3
+    let graph = build_graph(
+        vec![
+            make_node("a"),
+            make_node("b"),
+            make_node("c"),
+            make_node("d"),
+        ],
+        vec![
+            make_edge("a", "b", EdgeKind::StaticImport),
+            make_edge("b", "c", EdgeKind::StaticImport),
+            make_edge("c", "d", EdgeKind::StaticImport),
+        ],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let depth = graph_depth(&graph).unwrap();
+    assert_eq!(depth, 3);
+}
+
+// =========================================================================
+// AG. franken_engine_resolution_manifest produces deterministic canonical graph
+// =========================================================================
+
+#[test]
+fn enrichment_franken_engine_resolution_manifest_deterministic() {
+    let m1 = franken_engine_resolution_manifest();
+    let m2 = franken_engine_resolution_manifest();
+    assert_eq!(m1.graph_id, m2.graph_id);
+    assert_eq!(m1.content_hash, m2.content_hash);
+    assert_eq!(m1.node_count(), m2.node_count());
+    assert_eq!(m1.edge_count(), m2.edge_count());
+    // Must have at least one root
+    assert!(!m1.root_modules.is_empty());
+}
+
+#[test]
+fn enrichment_franken_engine_resolution_manifest_serde_roundtrip() {
+    let manifest = franken_engine_resolution_manifest();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let back: ResolutionGraph = serde_json::from_str(&json).unwrap();
+    assert_eq!(manifest, back);
+}
+
+// =========================================================================
+// AH. Clone/Debug derive verification for ResolutionGraph and RollbackCheckpoint
+// =========================================================================
+
+#[test]
+fn enrichment_clone_debug_resolution_graph() {
+    let graph = build_graph(
+        vec![make_node("x"), make_node("y")],
+        vec![make_edge("x", "y", EdgeKind::Conditional)],
+        vec!["x".to_string()],
+    )
+    .unwrap();
+    let cloned = graph.clone();
+    assert_eq!(graph, cloned);
+    assert!(!format!("{graph:?}").is_empty());
+}
+
+#[test]
+fn enrichment_clone_debug_rollback_checkpoint() {
+    let graph = build_graph(
+        vec![make_node("u"), make_node("v")],
+        vec![make_edge("u", "v", EdgeKind::Reexport)],
+        vec!["u".to_string()],
+    )
+    .unwrap();
+    let checkpoint = create_checkpoint(&graph);
+    let cloned = checkpoint.clone();
+    assert_eq!(checkpoint, cloned);
+    assert!(!format!("{checkpoint:?}").is_empty());
+}
+
+// =========================================================================
+// AI. DependencyEdge compute_hash is order-sensitive for conditions
+// =========================================================================
+
+#[test]
+fn enrichment_dependency_edge_hash_condition_order_sensitive() {
+    let edge1 = DependencyEdge {
+        source: "a".to_string(),
+        target: "b".to_string(),
+        kind: EdgeKind::Conditional,
+        conditions: vec!["import".to_string(), "node".to_string()],
+    };
+    let edge2 = DependencyEdge {
+        source: "a".to_string(),
+        target: "b".to_string(),
+        kind: EdgeKind::Conditional,
+        conditions: vec!["node".to_string(), "import".to_string()],
+    };
+    // Different condition order → different hash
+    assert_ne!(edge1.compute_hash(), edge2.compute_hash());
+}
+
+// =========================================================================
+// AJ. InvalidationReceipt recomputed + skipped counts are consistent
+// =========================================================================
+
+#[test]
+fn enrichment_invalidation_receipt_counts_consistent() {
+    // Chain: a -> b -> c, invalidating "b" affects b (itself) + a (dependent)
+    let graph = build_graph(
+        vec![make_node("a"), make_node("b"), make_node("c")],
+        vec![
+            make_edge("a", "b", EdgeKind::StaticImport),
+            make_edge("b", "c", EdgeKind::StaticImport),
+        ],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let receipt = invalidate_module(&graph, "b").unwrap();
+    // recomputed_count == affected_modules.len()
+    assert_eq!(
+        receipt.recomputed_count,
+        receipt.affected_modules.len() as u64
+    );
+    // recomputed + skipped == total node count
+    assert_eq!(
+        receipt.recomputed_count + receipt.skipped_count,
+        graph.node_count() as u64,
+    );
 }

@@ -1718,6 +1718,6 @@ fn default_max_chunk_bytes_is_power_of_two() {
 #[test]
 fn min_sufficiency_score_is_fixed_point() {
     assert_eq!(MIN_SUFFICIENCY_SCORE, 800_000);
-    assert!(MIN_SUFFICIENCY_SCORE > 0);
-    assert!(MIN_SUFFICIENCY_SCORE < 1_000_000);
+    const { assert!(MIN_SUFFICIENCY_SCORE > 0) };
+    const { assert!(MIN_SUFFICIENCY_SCORE < 1_000_000) };
 }

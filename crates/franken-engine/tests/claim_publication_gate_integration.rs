@@ -23,7 +23,7 @@ use frankenengine_engine::claim_publication_gate::{
     ALL_SURFACES, AnnotatedVerdict, CLAIM_PUBLICATION_GATE_BEAD_ID,
     CLAIM_PUBLICATION_GATE_SCHEMA_VERSION, FrontierGapDisclosure, GateDecision,
     MAX_PUBLISHABLE_STALENESS_HOURS, PublicationGateError, PublicationGateEvaluation,
-    PublicationSurface, RiskSeverity, SurfaceRoutingConfig, evaluate_publication_gate,
+    PublicationSurface, RiskFlag, RiskSeverity, SurfaceRoutingConfig, evaluate_publication_gate,
     render_publication_gate_summary, route_verdict_to_surfaces,
 };
 
@@ -653,4 +653,402 @@ fn mixed_verdicts_across_domains() {
         react,
         GateDecision::Approved | GateDecision::ApprovedWithCaveats { .. }
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Display trait coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_publication_surface_display_all_variants() {
+    assert_eq!(PublicationSurface::Docs.to_string(), "docs");
+    assert_eq!(PublicationSurface::Rollout.to_string(), "rollout");
+    assert_eq!(PublicationSurface::Ga.to_string(), "ga");
+    assert_eq!(PublicationSurface::React.to_string(), "react");
+    assert_eq!(PublicationSurface::Supremacy.to_string(), "supremacy");
+}
+
+#[test]
+fn test_gate_decision_display_approved() {
+    let d = GateDecision::Approved;
+    assert_eq!(d.to_string(), "approved");
+}
+
+#[test]
+fn test_gate_decision_display_approved_with_caveats() {
+    let d = GateDecision::ApprovedWithCaveats {
+        caveat_ids: vec!["c1".to_string(), "c2".to_string()],
+    };
+    assert!(d.to_string().contains("approved_with_caveats(2)"));
+}
+
+#[test]
+fn test_gate_decision_display_require_operator_guidance() {
+    let d = GateDecision::RequireOperatorGuidance {
+        reason: "gaps block ga".to_string(),
+    };
+    assert!(d.to_string().contains("require_operator_guidance"));
+    assert!(d.to_string().contains("gaps block ga"));
+}
+
+#[test]
+fn test_gate_decision_display_rejected() {
+    let d = GateDecision::Rejected {
+        reason: "no evidence".to_string(),
+    };
+    assert!(d.to_string().contains("rejected"));
+    assert!(d.to_string().contains("no evidence"));
+}
+
+#[test]
+fn test_risk_severity_display_all_variants() {
+    assert_eq!(RiskSeverity::Info.to_string(), "info");
+    assert_eq!(RiskSeverity::Warning.to_string(), "warning");
+    assert_eq!(RiskSeverity::Critical.to_string(), "critical");
+}
+
+#[test]
+fn test_publication_gate_error_display_empty_verdicts() {
+    let e = PublicationGateError::EmptyVerdicts;
+    assert!(e.to_string().contains("no verdicts"));
+}
+
+#[test]
+fn test_publication_gate_error_display_unknown_domain() {
+    let e = PublicationGateError::UnknownDomain {
+        domain: "frobnicator".to_string(),
+    };
+    assert!(e.to_string().contains("frobnicator"));
+    assert!(e.to_string().contains("unknown domain"));
+}
+
+#[test]
+fn test_publication_gate_error_display_invalid_config() {
+    let e = PublicationGateError::InvalidConfig {
+        reason: "bad staleness".to_string(),
+    };
+    assert!(e.to_string().contains("bad staleness"));
+}
+
+#[test]
+fn test_publication_gate_evaluation_display() {
+    let verdicts = vec![av(entitled_verdict("c1"), "compatibility", "shipped_fact")];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 7)
+        .expect("evaluate");
+    let s = eval.to_string();
+    assert!(s.contains("epoch=7"));
+    assert!(s.contains("approved="));
+    assert!(s.contains("flags="));
+}
+
+// ---------------------------------------------------------------------------
+// Clone/Debug/PartialEq coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_publication_surface_clone_eq() {
+    let s1 = PublicationSurface::Ga;
+    let s2 = s1.clone();
+    assert_eq!(s1, s2);
+}
+
+#[test]
+fn test_risk_severity_ordering() {
+    assert!(RiskSeverity::Info < RiskSeverity::Warning);
+    assert!(RiskSeverity::Warning < RiskSeverity::Critical);
+    assert!(RiskSeverity::Info < RiskSeverity::Critical);
+}
+
+#[test]
+fn test_publication_surface_ordering() {
+    // ALL_SURFACES defines canonical order; Ord must agree
+    let mut surfaces = vec![
+        PublicationSurface::Supremacy,
+        PublicationSurface::Ga,
+        PublicationSurface::Docs,
+    ];
+    surfaces.sort();
+    // After sort, Docs < Ga < Supremacy (alphabetical serde snake_case backed by derive)
+    // Just check the sort is stable and produces a consistent result
+    let sorted_once = surfaces.clone();
+    surfaces.sort();
+    assert_eq!(sorted_once, surfaces);
+}
+
+#[test]
+fn test_frontier_gap_disclosure_display() {
+    let g = gap("gap-42", "compat", vec![PublicationSurface::Ga]);
+    let s = g.to_string();
+    assert!(s.contains("gap-42"));
+    assert!(s.contains("compat"));
+}
+
+#[test]
+fn test_risk_flag_display() {
+    let f = RiskFlag {
+        flag_id: "stale-1".to_string(),
+        severity: RiskSeverity::Warning,
+        surface: PublicationSurface::Ga,
+        description: "staleness exceeded".to_string(),
+    };
+    let s = f.to_string();
+    assert!(s.contains("stale-1"));
+    assert!(s.contains("warning"));
+    assert!(s.contains("ga"));
+}
+
+#[test]
+fn test_publishable_claim_display() {
+    let verdicts = vec![av(
+        entitled_verdict("atom-7"),
+        "compatibility",
+        "shipped_fact",
+    )];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    let claims = eval.surface_claims.get("docs").expect("docs claims");
+    let display = claims[0].to_string();
+    assert!(display.contains("atom-7"));
+    assert!(display.contains("docs"));
+}
+
+// ---------------------------------------------------------------------------
+// Serde: individual struct round-trips
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_gate_decision_serde_variants() {
+    let variants = vec![
+        GateDecision::Approved,
+        GateDecision::ApprovedWithCaveats {
+            caveat_ids: vec!["x".to_string()],
+        },
+        GateDecision::RequireOperatorGuidance {
+            reason: "needs review".to_string(),
+        },
+        GateDecision::Rejected {
+            reason: "failed".to_string(),
+        },
+    ];
+    for d in &variants {
+        let json = serde_json::to_string(d).expect("serialize");
+        let back: GateDecision = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(d, &back);
+    }
+}
+
+#[test]
+fn test_risk_severity_serde_round_trip() {
+    for sev in &[
+        RiskSeverity::Info,
+        RiskSeverity::Warning,
+        RiskSeverity::Critical,
+    ] {
+        let json = serde_json::to_string(sev).expect("serialize");
+        let back: RiskSeverity = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(sev, &back);
+    }
+}
+
+#[test]
+fn test_publication_surface_serde_round_trip() {
+    for surface in &ALL_SURFACES {
+        let json = serde_json::to_string(surface).expect("serialize");
+        let back: PublicationSurface = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(surface, &back);
+    }
+}
+
+#[test]
+fn test_publication_gate_error_serde_round_trip() {
+    let errors = vec![
+        PublicationGateError::EmptyVerdicts,
+        PublicationGateError::UnknownDomain {
+            domain: "x".to_string(),
+        },
+        PublicationGateError::InvalidConfig {
+            reason: "y".to_string(),
+        },
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).expect("serialize");
+        let back: PublicationGateError = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(e, &back);
+    }
+}
+
+#[test]
+fn test_annotated_verdict_serde_round_trip() {
+    let v = av(entitled_verdict("at-99"), "react", "shipped_fact");
+    let json = serde_json::to_string(&v).expect("serialize");
+    let back: AnnotatedVerdict = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(v, back);
+}
+
+// ---------------------------------------------------------------------------
+// Support_surface domain routing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_route_support_surface_to_docs_and_rollout() {
+    let config = SurfaceRoutingConfig::default();
+    let verdict = av(entitled_verdict("ss1"), "support_surface", "shipped_fact");
+    let surfaces = route_verdict_to_surfaces(&verdict, &config);
+    assert_eq!(surfaces.len(), 2);
+    assert!(surfaces.contains(&PublicationSurface::Docs));
+    assert!(surfaces.contains(&PublicationSurface::Rollout));
+    assert!(!surfaces.contains(&PublicationSurface::Ga));
+}
+
+#[test]
+fn test_shipped_surface_domain_routes_to_docs_rollout_ga() {
+    let config = SurfaceRoutingConfig::default();
+    let verdict = av(
+        entitled_verdict("ship-x"),
+        "shipped_surface",
+        "shipped_fact",
+    );
+    let surfaces = route_verdict_to_surfaces(&verdict, &config);
+    assert_eq!(surfaces.len(), 3);
+    assert!(surfaces.contains(&PublicationSurface::Docs));
+    assert!(surfaces.contains(&PublicationSurface::Rollout));
+    assert!(surfaces.contains(&PublicationSurface::Ga));
+}
+
+// ---------------------------------------------------------------------------
+// Tier boundary: React requires shipped_fact
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_scoped_observed_excluded_from_react() {
+    let verdicts = vec![av(entitled_verdict("r1"), "react", "scoped_observed")];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    let react_claims = eval.surface_claims.get("react");
+    assert!(react_claims.is_none() || react_claims.is_some_and(|c| c.is_empty()));
+}
+
+#[test]
+fn test_frontier_ambition_excluded_from_react() {
+    let verdicts = vec![av(entitled_verdict("r2"), "react", "frontier_ambition")];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    let react_claims = eval.surface_claims.get("react");
+    assert!(react_claims.is_none() || react_claims.is_some_and(|c| c.is_empty()));
+}
+
+// ---------------------------------------------------------------------------
+// Staleness: exact boundary values
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_exactly_at_supremacy_staleness_limit_passes() {
+    // Supremacy limit is 72h; staleness == 72 should still pass (not exceed)
+    let verdicts = vec![stale_av(
+        entitled_verdict("s-boundary"),
+        "supremacy",
+        "shipped_fact",
+        72,
+    )];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    let sup_claims = eval.surface_claims.get("supremacy");
+    assert!(sup_claims.is_some_and(|c| !c.is_empty()));
+}
+
+#[test]
+fn test_one_over_supremacy_staleness_limit_rejected() {
+    // staleness == 73 should be rejected (exceeds 72h limit)
+    let verdicts = vec![stale_av(
+        entitled_verdict("s-over"),
+        "supremacy",
+        "shipped_fact",
+        73,
+    )];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    let sup_claims = eval.surface_claims.get("supremacy");
+    assert!(sup_claims.is_none() || sup_claims.is_some_and(|c| c.is_empty()));
+    // Stale flag must exist
+    let stale_flags: Vec<_> = eval
+        .risk_flags
+        .iter()
+        .filter(|f| f.description.contains("staleness"))
+        .collect();
+    assert!(!stale_flags.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Summary: guidance_required_surfaces counter
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_guidance_required_surfaces_counter() {
+    let verdicts = vec![av(entitled_verdict("c1"), "compatibility", "shipped_fact")];
+    let gaps = vec![
+        gap("g1", "compat", vec![PublicationSurface::Ga]),
+        gap("g2", "react", vec![PublicationSurface::React]),
+    ];
+    let eval = evaluate_publication_gate(&verdicts, &gaps, &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    assert!(eval.summary.guidance_required_surfaces >= 1);
+}
+
+// ---------------------------------------------------------------------------
+// render_publication_gate_summary content coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_render_summary_contains_risk_flag_count() {
+    let verdicts = vec![av(
+        counterexample_verdict("c1"),
+        "compatibility",
+        "shipped_fact",
+    )];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    let summary = render_publication_gate_summary(&eval);
+    assert!(summary.contains("risk_flags:"));
+}
+
+#[test]
+fn test_render_summary_contains_schema_version() {
+    let verdicts = vec![av(entitled_verdict("c1"), "compatibility", "shipped_fact")];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    let summary = render_publication_gate_summary(&eval);
+    assert!(summary.contains("schema_version:"));
+    assert!(summary.contains("claim-publication-gate"));
+}
+
+// ---------------------------------------------------------------------------
+// Multiple gaps blocking the same surface
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_multiple_gaps_blocking_same_surface_all_tracked() {
+    let verdicts = vec![av(entitled_verdict("c1"), "compatibility", "shipped_fact")];
+    let gaps = vec![
+        gap("g1", "compat", vec![PublicationSurface::Ga]),
+        gap("g2", "compat", vec![PublicationSurface::Ga]),
+    ];
+    let eval = evaluate_publication_gate(&verdicts, &gaps, &SurfaceRoutingConfig::default(), 1)
+        .expect("evaluate");
+    let ga = eval.gate_decisions.get("ga").expect("ga");
+    assert!(matches!(ga, GateDecision::RequireOperatorGuidance { .. }));
+    assert_eq!(eval.summary.frontier_gap_count, 2);
+}
+
+// ---------------------------------------------------------------------------
+// PublicationGateEvaluation bead/schema identity fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_evaluation_schema_and_bead_fields() {
+    let verdicts = vec![av(entitled_verdict("c1"), "compatibility", "shipped_fact")];
+    let eval = evaluate_publication_gate(&verdicts, &[], &SurfaceRoutingConfig::default(), 5)
+        .expect("evaluate");
+    assert_eq!(eval.schema_version, CLAIM_PUBLICATION_GATE_SCHEMA_VERSION);
+    assert_eq!(eval.bead_id, CLAIM_PUBLICATION_GATE_BEAD_ID);
+    assert_eq!(eval.evaluated_epoch, 5);
 }

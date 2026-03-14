@@ -15,9 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct WaiverRecord {
     waiver_id: String,
     approved_by: String,
@@ -25,7 +25,7 @@ struct WaiverRecord {
     rationale: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct DriftRecord {
     drift_id: String,
     fixture_id: String,
@@ -37,7 +37,7 @@ struct DriftRecord {
     waiver: Option<WaiverRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct EvidenceVector {
     lane_id: String,
     status: String,
@@ -45,7 +45,7 @@ struct EvidenceVector {
     replay_command: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct ExpectedGate {
     expected_outcome: String,
     expected_unresolved_high_count: usize,
@@ -54,7 +54,7 @@ struct ExpectedGate {
     expected_failing_fixture_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct ReplayScenario {
     scenario_id: String,
     replay_command: String,
@@ -62,7 +62,7 @@ struct ReplayScenario {
     expected_outcome: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct ParserCorrectnessPromotionGateFixture {
     schema_version: String,
     gate_version: String,
@@ -811,5 +811,313 @@ fn emit_structured_event_replay_pointers_are_deduplicated() {
         pointers.len(),
         unique.len(),
         "replay_pointers must already be deduplicated"
+    );
+}
+
+// ===== PearlTower enrichment =====
+
+#[test]
+fn enrichment_waiver_record_clone_preserves_all_fields() {
+    let waiver = WaiverRecord {
+        waiver_id: "w-clone-test".to_string(),
+        approved_by: "team-security".to_string(),
+        remediation_due_utc: "2027-06-15T12:00:00Z".to_string(),
+        rationale: "accepted risk during migration window".to_string(),
+    };
+    let cloned = waiver.clone();
+    assert_eq!(cloned.waiver_id, waiver.waiver_id);
+    assert_eq!(cloned.approved_by, waiver.approved_by);
+    assert_eq!(cloned.remediation_due_utc, waiver.remediation_due_utc);
+    assert_eq!(cloned.rationale, waiver.rationale);
+    assert_eq!(cloned, waiver);
+}
+
+#[test]
+fn enrichment_drift_record_clone_and_debug_roundtrip() {
+    let waiver = WaiverRecord {
+        waiver_id: "w-debug".to_string(),
+        approved_by: "sec-lead".to_string(),
+        remediation_due_utc: "2028-01-01T00:00:00Z".to_string(),
+        rationale: "mitigated by separate control".to_string(),
+    };
+    let drift = make_drift("d-debug", "high", "waived", Some(waiver));
+    let cloned = drift.clone();
+    assert_eq!(cloned, drift);
+    let debug_str = format!("{drift:?}");
+    assert!(debug_str.contains("d-debug"));
+    assert!(debug_str.contains("high"));
+    assert!(debug_str.contains("waived"));
+}
+
+#[test]
+fn enrichment_gate_evaluation_clone_preserves_equality() {
+    let fixture = make_fixture(vec![
+        make_drift("d1", "critical", "open", None),
+        make_drift("d2", "high", "open", None),
+    ]);
+    let eval = evaluate_gate(&fixture);
+    let cloned = eval.clone();
+    assert_eq!(eval.outcome, cloned.outcome);
+    assert_eq!(eval.unresolved_high_count, cloned.unresolved_high_count);
+    assert_eq!(eval.waiver_count, cloned.waiver_count);
+    assert_eq!(eval.blockers, cloned.blockers);
+    assert_eq!(eval.failing_fixture_ids, cloned.failing_fixture_ids);
+    assert_eq!(eval, cloned);
+}
+
+#[test]
+fn enrichment_gate_evaluation_debug_contains_outcome_and_counts() {
+    let fixture = make_fixture(vec![make_drift("d1", "high", "open", None)]);
+    let eval = evaluate_gate(&fixture);
+    let debug_str = format!("{eval:?}");
+    assert!(debug_str.contains("hold"));
+    assert!(debug_str.contains("unresolved_high_count"));
+    assert!(debug_str.contains("waiver_count"));
+}
+
+#[test]
+fn enrichment_serde_roundtrip_waiver_record() {
+    let waiver = WaiverRecord {
+        waiver_id: "w-serde-1".to_string(),
+        approved_by: "approver-x".to_string(),
+        remediation_due_utc: "2027-03-15T08:00:00Z".to_string(),
+        rationale: "low exposure during freeze".to_string(),
+    };
+    let json = serde_json::to_string(&waiver).expect("serialize WaiverRecord");
+    let decoded: WaiverRecord = serde_json::from_str(&json).expect("deserialize WaiverRecord");
+    assert_eq!(decoded, waiver);
+}
+
+#[test]
+fn enrichment_serde_roundtrip_drift_record_with_waiver() {
+    let waiver = WaiverRecord {
+        waiver_id: "w-rt".to_string(),
+        approved_by: "eng-director".to_string(),
+        remediation_due_utc: "2027-09-01T00:00:00Z".to_string(),
+        rationale: "accepted by risk board".to_string(),
+    };
+    let drift = make_drift("d-rt", "critical", "waived", Some(waiver));
+    let json = serde_json::to_string(&drift).expect("serialize DriftRecord");
+    let decoded: DriftRecord = serde_json::from_str(&json).expect("deserialize DriftRecord");
+    assert_eq!(decoded, drift);
+}
+
+#[test]
+fn enrichment_serde_roundtrip_drift_record_no_waiver() {
+    let drift = make_drift("d-no-waiver", "high", "open", None);
+    let json = serde_json::to_string(&drift).expect("serialize DriftRecord");
+    let decoded: DriftRecord = serde_json::from_str(&json).expect("deserialize DriftRecord");
+    assert_eq!(decoded, drift);
+    assert!(decoded.waiver.is_none());
+}
+
+#[test]
+fn enrichment_evaluate_gate_deterministic_with_multiple_drifts_and_lanes() {
+    let mut fixture = make_fixture(vec![
+        make_drift("d3", "critical", "open", None),
+        make_drift("d1", "high", "open", None),
+        make_drift("d2", "medium", "open", None),
+    ]);
+    fixture.required_evidence_lanes = vec!["lane_b".to_string(), "lane_a".to_string()];
+    fixture.evidence_vectors.push(EvidenceVector {
+        lane_id: "lane_a".to_string(),
+        status: "pass".to_string(),
+        artifact_manifest: "path/run_manifest.json".to_string(),
+        replay_command: "./scripts/e2e/lane_a.sh".to_string(),
+    });
+    let eval1 = evaluate_gate(&fixture);
+    let eval2 = evaluate_gate(&fixture);
+    assert_eq!(eval1, eval2, "gate evaluation must be fully deterministic");
+    assert_eq!(eval1.outcome, "hold");
+}
+
+#[test]
+fn enrichment_evaluate_gate_only_high_and_critical_cause_unresolved_blocker() {
+    let fixture = make_fixture(vec![
+        make_drift("d-low", "low", "open", None),
+        make_drift("d-med", "medium", "open", None),
+        make_drift("d-high", "high", "open", None),
+        make_drift("d-crit", "critical", "open", None),
+    ]);
+    let eval = evaluate_gate(&fixture);
+    assert_eq!(eval.unresolved_high_count, 2);
+    assert!(eval.blockers.iter().any(|b| b.contains("d-high")));
+    assert!(eval.blockers.iter().any(|b| b.contains("d-crit")));
+    assert!(!eval.blockers.iter().any(|b| b.contains("d-low")));
+    assert!(!eval.blockers.iter().any(|b| b.contains("d-med")));
+}
+
+#[test]
+fn enrichment_evaluate_gate_all_resolved_and_waived_promote() {
+    let waiver = WaiverRecord {
+        waiver_id: "w-ok".to_string(),
+        approved_by: "sec-team".to_string(),
+        remediation_due_utc: "2027-06-01T00:00:00Z".to_string(),
+        rationale: "full remediation planned".to_string(),
+    };
+    let fixture = make_fixture(vec![
+        make_drift("d1", "critical", "resolved", None),
+        make_drift("d2", "high", "waived", Some(waiver)),
+        make_drift("d3", "low", "open", None),
+    ]);
+    let eval = evaluate_gate(&fixture);
+    assert_eq!(eval.outcome, "promote");
+    assert!(eval.blockers.is_empty());
+    assert_eq!(eval.unresolved_high_count, 0);
+    assert_eq!(eval.waiver_count, 1);
+}
+
+#[test]
+fn enrichment_evaluate_gate_evidence_missing_status_is_specific_lane() {
+    let mut fixture = make_fixture(vec![]);
+    fixture.required_evidence_lanes = vec!["lane_present".to_string(), "lane_absent".to_string()];
+    fixture.evidence_vectors.push(EvidenceVector {
+        lane_id: "lane_present".to_string(),
+        status: "pass".to_string(),
+        artifact_manifest: "path/run_manifest.json".to_string(),
+        replay_command: "./scripts/e2e/present.sh".to_string(),
+    });
+    let eval = evaluate_gate(&fixture);
+    assert_eq!(eval.outcome, "hold");
+    let missing_blockers: Vec<&String> = eval
+        .blockers
+        .iter()
+        .filter(|b| b.contains("evidence_missing"))
+        .collect();
+    assert_eq!(missing_blockers.len(), 1);
+    assert!(missing_blockers[0].contains("lane_absent"));
+    assert!(!eval.blockers.iter().any(|b| b.contains("lane_present")));
+}
+
+#[test]
+fn enrichment_emit_structured_event_drift_inventory_contains_all_drift_ids() {
+    let fixture = make_fixture(vec![
+        make_drift("d-alpha", "high", "open", None),
+        make_drift("d-beta", "low", "resolved", None),
+        make_drift("d-gamma", "critical", "open", None),
+    ]);
+    let eval = evaluate_gate(&fixture);
+    let event = emit_structured_event(&fixture, &eval);
+    let inventory = event
+        .get("drift_inventory")
+        .and_then(serde_json::Value::as_array)
+        .expect("drift_inventory must be array");
+    let ids: BTreeSet<&str> = inventory
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(ids.contains("d-alpha"));
+    assert!(ids.contains("d-beta"));
+    assert!(ids.contains("d-gamma"));
+    assert_eq!(ids.len(), 3);
+}
+
+#[test]
+fn enrichment_emit_structured_event_waiver_inventory_only_waived_drifts() {
+    let waiver_a = WaiverRecord {
+        waiver_id: "w-inv-a".to_string(),
+        approved_by: "admin".to_string(),
+        remediation_due_utc: "2027-01-01T00:00:00Z".to_string(),
+        rationale: "scheduled".to_string(),
+    };
+    let waiver_b = WaiverRecord {
+        waiver_id: "w-inv-b".to_string(),
+        approved_by: "director".to_string(),
+        remediation_due_utc: "2028-06-01T00:00:00Z".to_string(),
+        rationale: "risk accepted".to_string(),
+    };
+    let fixture = make_fixture(vec![
+        make_drift("d1", "high", "waived", Some(waiver_a)),
+        make_drift("d2", "critical", "open", None),
+        make_drift("d3", "low", "waived", Some(waiver_b)),
+    ]);
+    let eval = evaluate_gate(&fixture);
+    let event = emit_structured_event(&fixture, &eval);
+    let waiver_inv = event
+        .get("waiver_inventory")
+        .and_then(serde_json::Value::as_array)
+        .expect("waiver_inventory must be array");
+    let waiver_ids: BTreeSet<&str> = waiver_inv
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(waiver_ids.contains("w-inv-a"));
+    assert!(waiver_ids.contains("w-inv-b"));
+    assert_eq!(waiver_ids.len(), 2);
+}
+
+#[test]
+fn enrichment_collect_waiver_issues_both_missing_fields_and_invalid_date_on_same_drift() {
+    // A waiver with empty fields AND a remediation_due_utc before detected_at_utc triggers both issues
+    let waiver_both_bad = WaiverRecord {
+        waiver_id: "".to_string(),
+        approved_by: "".to_string(),
+        remediation_due_utc: "2025-06-01T00:00:00Z".to_string(), // before detected_at_utc "2026-01-01T00:00:00Z"
+        rationale: "".to_string(),
+    };
+    let fixture = make_fixture(vec![make_drift(
+        "d-both",
+        "high",
+        "waived",
+        Some(waiver_both_bad),
+    )]);
+    let issues = collect_waiver_issues(&fixture);
+    // Both missing_fields and invalid_due_date should be reported
+    assert!(issues.iter().any(|i| i.contains("missing_fields")));
+    assert!(issues.iter().any(|i| i.contains("invalid_due_date")));
+}
+
+#[test]
+fn enrichment_gate_evaluation_no_failing_fixture_ids_when_all_resolved() {
+    let fixture = make_fixture(vec![
+        make_drift("d1", "critical", "resolved", None),
+        make_drift("d2", "high", "resolved", None),
+    ]);
+    let eval = evaluate_gate(&fixture);
+    assert_eq!(eval.outcome, "promote");
+    assert!(eval.failing_fixture_ids.is_empty());
+    assert!(eval.blockers.is_empty());
+}
+
+#[test]
+fn enrichment_fixture_serde_roundtrip_schema_version_preserved() {
+    let fixture = make_fixture(vec![]);
+    let json = serde_json::to_string(&fixture).expect("serialize fixture");
+    let decoded: ParserCorrectnessPromotionGateFixture =
+        serde_json::from_str(&json).expect("deserialize fixture");
+    assert_eq!(decoded.schema_version, fixture.schema_version);
+    assert_eq!(decoded.gate_version, fixture.gate_version);
+    assert_eq!(decoded.high_severity_levels, fixture.high_severity_levels);
+}
+
+#[test]
+fn enrichment_evidence_vector_missing_status_produces_evidence_not_green_blocker() {
+    let mut fixture = make_fixture(vec![]);
+    fixture.required_evidence_lanes = vec!["lane_q".to_string()];
+    fixture.evidence_vectors.push(EvidenceVector {
+        lane_id: "lane_q".to_string(),
+        status: "missing".to_string(),
+        artifact_manifest: "path/run_manifest.json".to_string(),
+        replay_command: "./scripts/e2e/missing.sh".to_string(),
+    });
+    let eval = evaluate_gate(&fixture);
+    assert_eq!(eval.outcome, "hold");
+    assert!(
+        eval.blockers
+            .iter()
+            .any(|b| b.contains("evidence_not_green:lane_q:missing"))
+    );
+}
+
+#[test]
+fn enrichment_multiple_calls_to_emit_structured_event_are_identical() {
+    let fixture = make_fixture(vec![make_drift("d1", "high", "open", None)]);
+    let eval = evaluate_gate(&fixture);
+    let event1 = emit_structured_event(&fixture, &eval);
+    let event2 = emit_structured_event(&fixture, &eval);
+    assert_eq!(
+        event1.to_string(),
+        event2.to_string(),
+        "structured event output must be deterministic across repeated calls"
     );
 }

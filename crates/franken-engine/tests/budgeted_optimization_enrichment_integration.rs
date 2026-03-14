@@ -23,9 +23,10 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::budgeted_optimization::{
     BudgetEnvelope, BudgetKind, BudgetLimit, BudgetedOptimizationStack, CampaignStatus,
-    EGraphSnapshot, ExtractionPolicy, ExtractionResult, InterferenceKind, OptimizationCampaign,
-    OptimizationError, OptimizationEvent, OptimizationEventKind, OptimizationSummary,
-    RewriteFamily, RewriteRule, RollbackArtifact, SaturationOutcome,
+    EGraphSnapshot, ExtractionPolicy, ExtractionResult, InterferenceCheck, InterferenceKind,
+    OPTIMIZATION_SCHEMA_VERSION, OptimizationCampaign, OptimizationError, OptimizationEvent,
+    OptimizationEventKind, OptimizationSummary, RewriteFamily, RewriteRule, RollbackArtifact,
+    SaturationOutcome,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 
@@ -518,4 +519,322 @@ fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", BudgetEnvelope::production()).is_empty());
     assert!(!format!("{:?}", BudgetedOptimizationStack::new()).is_empty());
     assert!(!format!("{:?}", campaign("test")).is_empty());
+}
+
+// =========================================================================
+// V. RewriteRule — serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_rewrite_rule_serde_roundtrip() {
+    let r = rule("alpha-1", RewriteFamily::EffectHoisting);
+    let json = serde_json::to_string(&r).unwrap();
+    let restored: RewriteRule = serde_json::from_str(&json).unwrap();
+    assert_eq!(r, restored);
+}
+
+// =========================================================================
+// W. BudgetEnvelope — most_constrained returns highest utilization
+// =========================================================================
+
+#[test]
+fn enrichment_budget_envelope_most_constrained() {
+    let mut env = BudgetEnvelope::production();
+    // Consume most of the saturation iterations budget (1000 max)
+    env.consume(BudgetKind::SaturationIterations, 999);
+    let most = env.most_constrained().unwrap();
+    assert_eq!(most.kind, BudgetKind::SaturationIterations);
+    assert_eq!(most.utilization_millionths(), 999_000);
+}
+
+// =========================================================================
+// X. Campaign — families() collects distinct rewrite families
+// =========================================================================
+
+#[test]
+fn enrichment_campaign_families_collects_distinct() {
+    let mut c = campaign("fam-test");
+    c.add_rule(rule("r1", RewriteFamily::AlgebraicSimplification))
+        .unwrap();
+    c.add_rule(rule("r2", RewriteFamily::DeadCodeElimination))
+        .unwrap();
+    c.add_rule(rule("r3", RewriteFamily::AlgebraicSimplification))
+        .unwrap();
+    let families = c.families();
+    assert_eq!(families.len(), 2);
+    assert!(families.contains(&RewriteFamily::AlgebraicSimplification));
+    assert!(families.contains(&RewriteFamily::DeadCodeElimination));
+}
+
+// =========================================================================
+// Y. Stack — interference check with overlapping families detects conflict
+// =========================================================================
+
+#[test]
+fn enrichment_stack_interference_overlapping_families_detected() {
+    let mut stack = BudgetedOptimizationStack::new();
+
+    let mut c1 = campaign("opt-a");
+    c1.add_rule(rule("r1", RewriteFamily::AlgebraicSimplification))
+        .unwrap();
+    c1.add_rule(rule("r2", RewriteFamily::DeadCodeElimination))
+        .unwrap();
+    stack.register_campaign(c1).unwrap();
+
+    let mut c2 = campaign("opt-b");
+    c2.add_rule(rule("r3", RewriteFamily::AlgebraicSimplification))
+        .unwrap();
+    stack.register_campaign(c2).unwrap();
+
+    let check = stack.check_interference("opt-a", "opt-b");
+    assert_eq!(check.kind, InterferenceKind::RewriteConflict);
+    assert!(check.blocking);
+    assert!(check.detail.contains("algebraic_simplification"));
+}
+
+// =========================================================================
+// Z. Stack — record_saturation + record_extraction through stack
+// =========================================================================
+
+#[test]
+fn enrichment_stack_record_saturation_and_extraction_full_lifecycle() {
+    let mut stack = BudgetedOptimizationStack::new();
+    stack.register_campaign(campaign("life")).unwrap();
+
+    stack.record_saturation("life", egraph_snap()).unwrap();
+    let c = stack.get_campaign("life").unwrap();
+    assert_eq!(c.status, CampaignStatus::Extracting);
+    assert!(c.egraph_snapshot.is_some());
+
+    stack.record_extraction("life", extraction()).unwrap();
+    let c = stack.get_campaign("life").unwrap();
+    assert_eq!(c.status, CampaignStatus::Completed);
+    assert!(c.is_successful());
+}
+
+// =========================================================================
+// AA. Stack — campaigns_by_status filters correctly
+// =========================================================================
+
+#[test]
+fn enrichment_stack_campaigns_by_status_filters() {
+    let mut stack = BudgetedOptimizationStack::new();
+
+    let mut c1 = campaign("done-1");
+    c1.record_saturation(egraph_snap());
+    c1.record_extraction(extraction());
+    stack.register_campaign(c1).unwrap();
+
+    let mut c2 = campaign("failed-1");
+    c2.record_failure();
+    stack.register_campaign(c2).unwrap();
+
+    stack.register_campaign(campaign("pending-1")).unwrap();
+
+    let completed = stack.campaigns_by_status(CampaignStatus::Completed);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].id, "done-1");
+
+    let failed = stack.campaigns_by_status(CampaignStatus::Failed);
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].id, "failed-1");
+
+    let pending = stack.campaigns_by_status(CampaignStatus::Pending);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, "pending-1");
+}
+
+// =========================================================================
+// AB. OptimizationError — Display all variants distinct
+// =========================================================================
+
+#[test]
+fn enrichment_optimization_error_display_all_distinct() {
+    let errors = [
+        OptimizationError::RuleLimitExceeded { count: 2, max: 1 },
+        OptimizationError::DuplicateRule("r1".to_string()),
+        OptimizationError::CampaignLimitExceeded { count: 65, max: 64 },
+        OptimizationError::DuplicateCampaign("c1".to_string()),
+        OptimizationError::BudgetExhausted {
+            kind: BudgetKind::TimeMs,
+        },
+        OptimizationError::InterferenceBlocking(InterferenceCheck {
+            campaign_a: "a".to_string(),
+            campaign_b: "b".to_string(),
+            kind: InterferenceKind::RewriteConflict,
+            detail: String::new(),
+            blocking: true,
+        }),
+        OptimizationError::UnsoundRewrite {
+            rule_id: "u1".to_string(),
+        },
+        OptimizationError::RollbackFailed {
+            campaign_id: "c1".to_string(),
+            detail: "oops".to_string(),
+        },
+    ];
+    let strings: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
+    assert_eq!(strings.len(), 8);
+}
+
+// =========================================================================
+// AC. Clone independence — BudgetedOptimizationStack
+// =========================================================================
+
+#[test]
+fn enrichment_stack_clone_independence() {
+    let mut stack = BudgetedOptimizationStack::new();
+    stack.register_campaign(campaign("orig")).unwrap();
+    let mut cloned = stack.clone();
+    cloned.register_campaign(campaign("extra")).unwrap();
+    assert_eq!(stack.campaign_count(), 1);
+    assert_eq!(cloned.campaign_count(), 2);
+}
+
+// =========================================================================
+// AD. BudgetEnvelope — serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_budget_envelope_serde_roundtrip() {
+    let mut env = BudgetEnvelope::production();
+    env.consume(BudgetKind::TimeMs, 1234);
+    let json = serde_json::to_string(&env).unwrap();
+    let restored: BudgetEnvelope = serde_json::from_str(&json).unwrap();
+    assert_eq!(env, restored);
+}
+
+// =========================================================================
+// AE. RewriteFamily — Display all variants distinct
+// =========================================================================
+
+#[test]
+fn enrichment_rewrite_family_display_all_distinct() {
+    let families = [
+        RewriteFamily::AlgebraicSimplification,
+        RewriteFamily::DeadCodeElimination,
+        RewriteFamily::CommonSubexpression,
+        RewriteFamily::PartialEvaluation,
+        RewriteFamily::MemoizationBoundary,
+        RewriteFamily::EffectHoisting,
+        RewriteFamily::HookSlotFusion,
+        RewriteFamily::SignalGraphOptimization,
+        RewriteFamily::Incrementalization,
+        RewriteFamily::DomUpdateBatching,
+        RewriteFamily::Custom,
+    ];
+    let strings: BTreeSet<String> = families.iter().map(|f| f.to_string()).collect();
+    assert_eq!(strings.len(), 11);
+}
+
+// =========================================================================
+// AF. Stack — schema_version matches constant
+// =========================================================================
+
+#[test]
+fn enrichment_stack_schema_version_matches_constant() {
+    let stack = BudgetedOptimizationStack::new();
+    assert_eq!(stack.schema_version, OPTIMIZATION_SCHEMA_VERSION);
+}
+
+// =========================================================================
+// AG. Stack — record_saturation on unknown campaign errors
+// =========================================================================
+
+#[test]
+fn enrichment_stack_record_saturation_unknown_campaign_errors() {
+    let mut stack = BudgetedOptimizationStack::new();
+    let err = stack.record_saturation("ghost", egraph_snap()).unwrap_err();
+    assert!(err.to_string().contains("duplicate campaign"));
+}
+
+// =========================================================================
+// AH. BudgetedOptimizationStack — default equals new
+// =========================================================================
+
+#[test]
+fn enrichment_stack_default_equals_new() {
+    let a = BudgetedOptimizationStack::new();
+    let b = BudgetedOptimizationStack::default();
+    assert_eq!(a, b);
+}
+
+// =========================================================================
+// AI. Stack — summary gain aggregates only successful campaigns
+// =========================================================================
+
+#[test]
+fn enrichment_summary_gain_only_from_successful() {
+    let mut stack = BudgetedOptimizationStack::new();
+
+    // Successful campaign with gain
+    let mut c1 = campaign("winner");
+    c1.expected_gain_millionths = 500_000;
+    c1.record_saturation(egraph_snap());
+    c1.record_extraction(extraction());
+    stack.register_campaign(c1).unwrap();
+
+    // Failed campaign — gain should NOT count
+    let mut c2 = campaign("loser");
+    c2.expected_gain_millionths = 999_000;
+    c2.record_failure();
+    stack.register_campaign(c2).unwrap();
+
+    let summary = stack.summary();
+    assert_eq!(summary.total_gain_millionths, 500_000);
+}
+
+// =========================================================================
+// AJ. InterferenceCheck — serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_interference_check_serde_roundtrip() {
+    let check = InterferenceCheck {
+        campaign_a: "alpha".to_string(),
+        campaign_b: "beta".to_string(),
+        kind: InterferenceKind::SemanticInterference,
+        detail: "semantic conflict on node 42".to_string(),
+        blocking: true,
+    };
+    let json = serde_json::to_string(&check).unwrap();
+    let restored: InterferenceCheck = serde_json::from_str(&json).unwrap();
+    assert_eq!(check, restored);
+}
+
+// =========================================================================
+// AK. BudgetEnvelope — consume on missing kind returns true (unlimited)
+// =========================================================================
+
+#[test]
+fn enrichment_budget_envelope_consume_missing_kind_returns_true() {
+    let mut env = BudgetEnvelope {
+        limits: std::collections::BTreeMap::new(),
+    };
+    // Empty envelope — no limits defined — consume should return true
+    assert!(env.consume(BudgetKind::TimeMs, 999_999));
+}
+
+// =========================================================================
+// AL. Stack — interference_checks accumulates all checks
+// =========================================================================
+
+#[test]
+fn enrichment_stack_interference_checks_accumulates() {
+    let mut stack = BudgetedOptimizationStack::new();
+
+    let mut c1 = campaign("x");
+    c1.add_rule(rule("r1", RewriteFamily::AlgebraicSimplification))
+        .unwrap();
+    stack.register_campaign(c1).unwrap();
+
+    let mut c2 = campaign("y");
+    c2.add_rule(rule("r2", RewriteFamily::DeadCodeElimination))
+        .unwrap();
+    stack.register_campaign(c2).unwrap();
+
+    stack.check_interference("x", "y");
+    stack.check_interference("y", "x");
+
+    assert_eq!(stack.interference_checks().len(), 2);
 }

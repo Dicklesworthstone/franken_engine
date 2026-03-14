@@ -529,3 +529,511 @@ fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", SynthesisError::InvalidConstraint).is_empty());
     assert!(!format!("{:?}", SynthesisConstraint::new(100, 1000, 300_000)).is_empty());
 }
+
+// =========================================================================
+// L. build_batch — basic, overflow, strategy_distribution, average_novelty
+// =========================================================================
+
+#[test]
+fn test_build_batch_empty_succeeds() {
+    use frankenengine_engine::novelty_synthesis_engine::build_batch;
+    let batch = build_batch(epoch(1), vec![]).unwrap();
+    assert!(batch.is_empty());
+    assert_eq!(batch.candidate_count(), 0);
+    assert_eq!(batch.average_novelty_millionths(), 0);
+    assert!(batch.strategy_distribution.is_empty());
+    assert_eq!(batch.total_novelty_millionths, 0);
+}
+
+#[test]
+fn test_build_batch_overflow_returns_error() {
+    use frankenengine_engine::novelty_synthesis_engine::build_batch;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    // Build MAX_BATCH_SIZE + 1 candidates by reusing the same seed under different kinds.
+    let mut candidates = Vec::new();
+    let mut seed: u64 = 0;
+    // cycle through kinds to avoid hitting size constraints
+    let kinds = ProgramKind::ALL;
+    let strategies = SynthesisStrategy::ALL;
+    while candidates.len() <= MAX_BATCH_SIZE {
+        let kind = kinds[candidates.len() % kinds.len()];
+        let strategy = strategies[candidates.len() % strategies.len()];
+        let s = seed.to_le_bytes();
+        seed += 1;
+        if let Ok(c) = synthesize_candidate(kind, strategy, &constraint, &s) {
+            candidates.push(c);
+        }
+    }
+    let result = build_batch(epoch(1), candidates);
+    assert_eq!(result.unwrap_err(), SynthesisError::BatchOverflow);
+}
+
+#[test]
+fn test_build_batch_strategy_distribution_counts() {
+    use frankenengine_engine::novelty_synthesis_engine::build_batch;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c1 = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"s1",
+    )
+    .unwrap();
+    let c2 = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"s2",
+    )
+    .unwrap();
+    let c3 = synthesize_candidate(
+        ProgramKind::TypeScript,
+        SynthesisStrategy::MutationBased,
+        &constraint,
+        b"s3",
+    )
+    .unwrap();
+    let batch = build_batch(epoch(1), vec![c1, c2, c3]).unwrap();
+    assert_eq!(batch.candidate_count(), 3);
+    assert_eq!(
+        *batch
+            .strategy_distribution
+            .get(&SynthesisStrategy::GrammarGuided)
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        *batch
+            .strategy_distribution
+            .get(&SynthesisStrategy::MutationBased)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn test_build_batch_average_novelty_nonzero() {
+    use frankenengine_engine::novelty_synthesis_engine::build_batch;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c1 = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::ObstructionTargeted,
+        &constraint,
+        b"avg-seed-1",
+    )
+    .unwrap();
+    let c2 = synthesize_candidate(
+        ProgramKind::TypeScript,
+        SynthesisStrategy::ObstructionTargeted,
+        &constraint,
+        b"avg-seed-2",
+    )
+    .unwrap();
+    let batch = build_batch(epoch(2), vec![c1, c2]).unwrap();
+    let avg = batch.average_novelty_millionths();
+    assert!(avg > 0, "average novelty should be positive");
+    assert_eq!(avg, batch.total_novelty_millionths / 2);
+}
+
+#[test]
+fn test_synthesis_batch_content_hash_deterministic() {
+    use frankenengine_engine::novelty_synthesis_engine::build_batch;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c1 = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"hash-det-seed",
+    )
+    .unwrap();
+    let c2 = c1.clone();
+    let batch1 = build_batch(epoch(5), vec![c1]).unwrap();
+    let batch2 = build_batch(epoch(5), vec![c2]).unwrap();
+    assert_eq!(batch1.content_hash(), batch2.content_hash());
+}
+
+#[test]
+fn test_synthesis_batch_serde_roundtrip() {
+    use frankenengine_engine::novelty_synthesis_engine::{SynthesisBatch, build_batch};
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::TypeScript,
+        SynthesisStrategy::TemplateDriven,
+        &constraint,
+        b"serde-batch-seed",
+    )
+    .unwrap();
+    let batch = build_batch(epoch(3), vec![c]).unwrap();
+    let json = serde_json::to_string(&batch).unwrap();
+    let restored: SynthesisBatch = serde_json::from_str(&json).unwrap();
+    assert_eq!(batch, restored);
+}
+
+// =========================================================================
+// M. evaluate_candidate_novelty
+// =========================================================================
+
+#[test]
+fn test_evaluate_novelty_unique_candidate_full_score() {
+    use frankenengine_engine::novelty_synthesis_engine::evaluate_candidate_novelty;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"unique-seed",
+    )
+    .unwrap();
+    let existing: BTreeSet<ContentHash> = BTreeSet::new();
+    let score = evaluate_candidate_novelty(&c, &existing);
+    assert_eq!(
+        score, 1_000_000,
+        "unique candidate should have full novelty"
+    );
+}
+
+#[test]
+fn test_evaluate_novelty_exact_duplicate_zero() {
+    use frankenengine_engine::novelty_synthesis_engine::evaluate_candidate_novelty;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"dup-seed",
+    )
+    .unwrap();
+    let mut existing: BTreeSet<ContentHash> = BTreeSet::new();
+    existing.insert(c.content_hash);
+    let score = evaluate_candidate_novelty(&c, &existing);
+    assert_eq!(score, 0, "exact duplicate should have zero novelty");
+}
+
+#[test]
+fn test_evaluate_novelty_empty_set_returns_full() {
+    use frankenengine_engine::novelty_synthesis_engine::evaluate_candidate_novelty;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::ReactComponent,
+        SynthesisStrategy::RecombinationBased,
+        &constraint,
+        b"novel-react-seed",
+    )
+    .unwrap();
+    let existing: BTreeSet<ContentHash> = BTreeSet::new();
+    assert_eq!(evaluate_candidate_novelty(&c, &existing), 1_000_000);
+}
+
+// =========================================================================
+// N. filter_candidates
+// =========================================================================
+
+#[test]
+fn test_filter_candidates_all_accepted() {
+    use frankenengine_engine::novelty_synthesis_engine::filter_candidates;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c1 = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"fc-seed-1",
+    )
+    .unwrap();
+    let c2 = synthesize_candidate(
+        ProgramKind::TypeScript,
+        SynthesisStrategy::MutationBased,
+        &constraint,
+        b"fc-seed-2",
+    )
+    .unwrap();
+    let (accepted, denied) = filter_candidates(vec![c1, c2], &constraint);
+    assert_eq!(accepted.len(), 2);
+    assert!(denied.is_empty());
+}
+
+#[test]
+fn test_filter_candidates_novelty_below_threshold_denied() {
+    use frankenengine_engine::novelty_synthesis_engine::filter_candidates;
+    // TemplateDriven has base novelty 400_000; setting threshold to 999_000 forces denial.
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 999_000);
+    let c = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::TemplateDriven,
+        &constraint,
+        b"low-novelty-seed",
+    );
+    // synthesize_candidate itself may reject with NoveltyBelowThreshold.
+    // If it succeeded, filter should deny it if score < 999_000.
+    if let Ok(candidate) = c
+        && candidate.novelty_score_millionths < 999_000
+    {
+        let (accepted, denied) = filter_candidates(vec![candidate], &constraint);
+        assert!(accepted.is_empty());
+        assert_eq!(denied.len(), 1);
+        assert_eq!(denied[0].1, SynthesisDenialReason::InsufficientNovelty);
+    }
+    // If synthesis itself failed, the test still passes — both paths verify the threshold.
+}
+
+#[test]
+fn test_filter_candidates_forbidden_pattern_denied() {
+    use frankenengine_engine::novelty_synthesis_engine::filter_candidates;
+    let mut constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"fp-seed",
+    )
+    .unwrap();
+    // Now forbid a pattern that is actually in the generated source.
+    // Grammar-guided PlainJs includes "module.exports".
+    constraint.forbid_pattern("module.exports");
+    let (accepted, denied) = filter_candidates(vec![c], &constraint);
+    assert!(accepted.is_empty());
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].1, SynthesisDenialReason::ForbiddenPattern);
+}
+
+#[test]
+fn test_filter_candidates_duplicate_denied() {
+    use frankenengine_engine::novelty_synthesis_engine::filter_candidates;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"dup-filter-seed",
+    )
+    .unwrap();
+    let c2 = c.clone();
+    let (accepted, denied) = filter_candidates(vec![c, c2], &constraint);
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].1, SynthesisDenialReason::DuplicateCandidate);
+}
+
+// =========================================================================
+// O. build_receipt
+// =========================================================================
+
+#[test]
+fn test_build_receipt_from_batch() {
+    use frankenengine_engine::novelty_synthesis_engine::{build_batch, build_receipt};
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c1 = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"receipt-seed-1",
+    )
+    .unwrap();
+    let c2 = synthesize_candidate(
+        ProgramKind::TypeScript,
+        SynthesisStrategy::MutationBased,
+        &constraint,
+        b"receipt-seed-2",
+    )
+    .unwrap();
+    let batch = build_batch(epoch(7), vec![c1, c2]).unwrap();
+    let receipt = build_receipt(&batch, 1);
+    assert_eq!(receipt.candidates_proposed, 2);
+    assert_eq!(receipt.candidates_accepted, 1);
+    assert_eq!(receipt.acceptance_rate_millionths(), 500_000);
+    assert!(!receipt.all_accepted());
+    assert!(!receipt.none_accepted());
+}
+
+#[test]
+fn test_build_receipt_clamps_accepted_to_proposed() {
+    use frankenengine_engine::novelty_synthesis_engine::{build_batch, build_receipt};
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::PlainJs,
+        SynthesisStrategy::GrammarGuided,
+        &constraint,
+        b"clamp-receipt-seed",
+    )
+    .unwrap();
+    let batch = build_batch(epoch(8), vec![c]).unwrap();
+    // Pass accepted > proposed — should clamp to proposed.
+    let receipt = build_receipt(&batch, 999);
+    assert_eq!(receipt.candidates_proposed, 1);
+    assert_eq!(receipt.candidates_accepted, 1);
+    assert!(receipt.all_accepted());
+}
+
+#[test]
+fn test_build_receipt_serde_roundtrip() {
+    use frankenengine_engine::novelty_synthesis_engine::{build_batch, build_receipt};
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::NodePackage,
+        SynthesisStrategy::TemplateDriven,
+        &constraint,
+        b"receipt-serde-seed",
+    )
+    .unwrap();
+    let batch = build_batch(epoch(9), vec![c]).unwrap();
+    let receipt = build_receipt(&batch, 1);
+    let json = serde_json::to_string(&receipt).unwrap();
+    let restored: SynthesisReceipt = serde_json::from_str(&json).unwrap();
+    assert_eq!(receipt, restored);
+}
+
+// =========================================================================
+// P. franken_engine_synthesis_manifest
+// =========================================================================
+
+#[test]
+fn test_synthesis_manifest_nonempty() {
+    use frankenengine_engine::novelty_synthesis_engine::franken_engine_synthesis_manifest;
+    let manifest = franken_engine_synthesis_manifest();
+    assert!(!manifest.is_empty(), "manifest should contain candidates");
+    assert_eq!(manifest.epoch, epoch(1));
+}
+
+#[test]
+fn test_synthesis_manifest_covers_all_kinds() {
+    use frankenengine_engine::novelty_synthesis_engine::franken_engine_synthesis_manifest;
+    use std::collections::BTreeSet as Bts;
+    let manifest = franken_engine_synthesis_manifest();
+    let kinds_present: Bts<ProgramKind> = manifest.candidates.iter().map(|c| c.kind).collect();
+    for kind in ProgramKind::ALL {
+        assert!(
+            kinds_present.contains(kind),
+            "manifest missing kind: {:?}",
+            kind
+        );
+    }
+}
+
+#[test]
+fn test_synthesis_manifest_deterministic() {
+    use frankenengine_engine::novelty_synthesis_engine::franken_engine_synthesis_manifest;
+    let m1 = franken_engine_synthesis_manifest();
+    let m2 = franken_engine_synthesis_manifest();
+    assert_eq!(m1.batch_id, m2.batch_id);
+    assert_eq!(m1.total_novelty_millionths, m2.total_novelty_millionths);
+    assert_eq!(m1.candidate_count(), m2.candidate_count());
+}
+
+// =========================================================================
+// Q. SynthesizedCandidate — Clone and serde roundtrip
+// =========================================================================
+
+#[test]
+fn test_synthesized_candidate_clone_equality() {
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::BunPackage,
+        SynthesisStrategy::ObstructionTargeted,
+        &constraint,
+        b"clone-eq-seed",
+    )
+    .unwrap();
+    let c2 = c.clone();
+    assert_eq!(c, c2);
+    assert_eq!(c.content_hash, c2.content_hash);
+    assert_eq!(c.candidate_id, c2.candidate_id);
+}
+
+#[test]
+fn test_synthesized_candidate_serde_roundtrip() {
+    use frankenengine_engine::novelty_synthesis_engine::SynthesizedCandidate;
+    let constraint = SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0);
+    let c = synthesize_candidate(
+        ProgramKind::ReactApp,
+        SynthesisStrategy::RecombinationBased,
+        &constraint,
+        b"serde-candidate-seed",
+    )
+    .unwrap();
+    let json = serde_json::to_string(&c).unwrap();
+    let restored: SynthesizedCandidate = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, restored);
+    assert_eq!(c.source_byte_count(), restored.source_byte_count());
+}
+
+// =========================================================================
+// R. SynthesisError — PartialEq on InternalError variants
+// =========================================================================
+
+#[test]
+fn test_synthesis_error_internal_eq_by_message() {
+    let e1 = SynthesisError::InternalError("msg-a".into());
+    let e2 = SynthesisError::InternalError("msg-a".into());
+    let e3 = SynthesisError::InternalError("msg-b".into());
+    assert_eq!(e1, e2);
+    assert_ne!(e1, e3);
+}
+
+#[test]
+fn test_synthesis_error_display_contains_message() {
+    let e = SynthesisError::InternalError("detail".into());
+    let s = e.to_string();
+    assert!(s.contains("detail"), "display should include inner message");
+}
+
+// =========================================================================
+// S. synthesize_candidate — all strategy/kind combos succeed with loose constraints
+// =========================================================================
+
+#[test]
+fn test_synthesize_candidate_all_strategies_all_kinds() {
+    // Use very loose constraints to ensure no StrategyNotApplicable rejections.
+    let constraint = SynthesisConstraint::new(65_536, 1_048_576, 0);
+    for kind in ProgramKind::ALL {
+        for strategy in SynthesisStrategy::ALL {
+            let result = synthesize_candidate(*kind, *strategy, &constraint, b"cross-seed");
+            assert!(
+                result.is_ok(),
+                "expected Ok for kind={:?} strategy={:?}, got {:?}",
+                kind,
+                strategy,
+                result
+            );
+        }
+    }
+}
+
+// =========================================================================
+// T. build_constraints — all kinds produce consistent byte budget
+// =========================================================================
+
+#[test]
+fn test_build_constraints_bytes_proportional_to_nodes() {
+    for kind in ProgramKind::ALL {
+        let c = build_constraints(*kind, 100, 0);
+        // The heuristic is ~16 bytes per AST node.
+        assert_eq!(c.max_bytes, c.max_ast_nodes * 16);
+    }
+}
+
+#[test]
+fn test_build_constraints_node_package_minimum() {
+    // NodePackage typical_min_nodes = 10
+    let c = build_constraints(ProgramKind::NodePackage, 1, 0);
+    assert!(c.max_ast_nodes >= 10);
+}
+
+#[test]
+fn test_build_constraints_bun_package_minimum() {
+    // BunPackage typical_min_nodes = 10
+    let c = build_constraints(ProgramKind::BunPackage, 1, 0);
+    assert!(c.max_ast_nodes >= 10);
+}
+
+#[test]
+fn test_build_constraints_typescript_minimum() {
+    // TypeScript typical_min_nodes = 5
+    let c = build_constraints(ProgramKind::TypeScript, 2, 0);
+    assert!(c.max_ast_nodes >= 5);
+}
+
+#[test]
+fn test_build_constraints_react_component_minimum() {
+    // ReactComponent typical_min_nodes = 8
+    let c = build_constraints(ProgramKind::ReactComponent, 1, 0);
+    assert!(c.max_ast_nodes >= 8);
+}

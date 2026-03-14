@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::capability::trust_zone::{
-    CrossZoneReferenceChecker, CrossZoneReferenceRequest, ReferenceType, TrustZoneError,
-    ZoneHierarchy,
+    CrossZoneReferenceChecker, CrossZoneReferenceRequest, ReferenceType, TrustZoneClass,
+    TrustZoneError, ZoneEventOutcome, ZoneEventType, ZoneHierarchy,
 };
 
 fn capset(caps: &[RuntimeCapability]) -> BTreeSet<RuntimeCapability> {
@@ -541,4 +541,151 @@ fn zone_hierarchy_standard_serialized_length_exceeds_minimum() {
         "serialized hierarchy should be >50 chars, got {}",
         json.len()
     );
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: TrustZoneClass, ZoneEventType, ZoneEventOutcome,
+// derive_zone_scoped_object_id, zone zones(), error serde
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn trust_zone_class_ordered_has_four_elements() {
+    assert_eq!(TrustZoneClass::ORDERED.len(), 4);
+}
+
+#[test]
+fn trust_zone_class_as_str_values_are_unique() {
+    let mut seen = BTreeSet::new();
+    for class in TrustZoneClass::ORDERED {
+        let s = class.as_str();
+        assert!(!s.is_empty());
+        assert!(seen.insert(s), "duplicate as_str: {s}");
+    }
+    assert_eq!(seen.len(), 4);
+}
+
+#[test]
+fn trust_zone_class_serde_roundtrip() {
+    for class in TrustZoneClass::ORDERED {
+        let json = serde_json::to_string(&class).expect("serialize");
+        let recovered: TrustZoneClass = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered.as_str(), class.as_str());
+    }
+}
+
+#[test]
+fn trust_zone_class_default_ceiling_is_nonempty() {
+    for class in TrustZoneClass::ORDERED {
+        let ceiling = class.default_ceiling();
+        assert!(
+            !ceiling.is_empty(),
+            "{} must have a non-empty default ceiling",
+            class.as_str()
+        );
+    }
+}
+
+#[test]
+fn trust_zone_class_owner_ceiling_is_superset_of_community() {
+    let owner = TrustZoneClass::Owner.default_ceiling();
+    let community = TrustZoneClass::Community.default_ceiling();
+    assert!(
+        community.is_subset(&owner),
+        "community ceiling must be a subset of owner ceiling"
+    );
+}
+
+#[test]
+fn zone_event_type_serde_roundtrip() {
+    for evt in [
+        ZoneEventType::Assignment,
+        ZoneEventType::CeilingCheck,
+        ZoneEventType::ZoneTransition,
+        ZoneEventType::CrossZoneReference,
+    ] {
+        let json = serde_json::to_string(&evt).expect("serialize");
+        let recovered: ZoneEventType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, evt);
+    }
+}
+
+#[test]
+fn zone_event_outcome_serde_roundtrip() {
+    for outcome in [
+        ZoneEventOutcome::Pass,
+        ZoneEventOutcome::Allowed,
+        ZoneEventOutcome::Assigned,
+        ZoneEventOutcome::Migrated,
+        ZoneEventOutcome::CeilingExceeded,
+        ZoneEventOutcome::Denied,
+    ] {
+        let json = serde_json::to_string(&outcome).expect("serialize");
+        let recovered: ZoneEventOutcome = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, outcome);
+    }
+}
+
+#[test]
+fn zone_hierarchy_standard_has_at_least_four_zones() {
+    let hierarchy = ZoneHierarchy::standard("test-zones", 1).expect("hierarchy");
+    let json = serde_json::to_string(&hierarchy).expect("serialize");
+    // Standard hierarchy creates owner, private, team, community
+    for zone in ["owner", "private", "team", "community"] {
+        assert!(json.contains(zone), "hierarchy must contain {zone} zone");
+    }
+}
+
+#[test]
+fn trust_zone_error_serde_roundtrip() {
+    let errors: Vec<TrustZoneError> = vec![
+        TrustZoneError::ZoneMissing {
+            zone_name: "missing".into(),
+        },
+        TrustZoneError::ZoneAlreadyExists {
+            zone_name: "existing".into(),
+        },
+        TrustZoneError::CrossZoneAuthorityLeak {
+            source_zone: "a".into(),
+            target_zone: "b".into(),
+        },
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).expect("serialize");
+        let recovered: TrustZoneError = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*err, recovered);
+    }
+}
+
+#[test]
+fn zone_hierarchy_entity_assignment_records_event() {
+    let mut hierarchy = ZoneHierarchy::standard("test-assign-evt", 1).expect("hierarchy");
+    let events_before = hierarchy.events().len();
+    hierarchy
+        .assign_entity("ext-evt", "community", "trace-assign-evt")
+        .expect("assign");
+    assert!(
+        hierarchy.events().len() > events_before,
+        "entity assignment must record an event"
+    );
+    let event = hierarchy.events().last().expect("event");
+    assert_eq!(event.trace_id, "trace-assign-evt");
+    assert_eq!(event.event, ZoneEventType::Assignment);
+    assert_eq!(event.outcome, ZoneEventOutcome::Assigned);
+}
+
+#[test]
+fn enforce_ceiling_records_event() {
+    let mut hierarchy = ZoneHierarchy::standard("test-ceiling-evt", 1).expect("hierarchy");
+    let events_before = hierarchy.events().len();
+    let requested = capset(&[RuntimeCapability::VmDispatch]);
+    hierarchy
+        .enforce_ceiling("owner", &requested, "trace-ceiling-evt")
+        .expect("ceiling should pass");
+    assert!(
+        hierarchy.events().len() > events_before,
+        "ceiling check must record an event"
+    );
+    let event = hierarchy.events().last().expect("event");
+    assert_eq!(event.event, ZoneEventType::CeilingCheck);
+    assert_eq!(event.outcome, ZoneEventOutcome::Pass);
 }

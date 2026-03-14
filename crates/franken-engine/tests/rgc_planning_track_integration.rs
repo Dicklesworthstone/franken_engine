@@ -477,3 +477,178 @@ fn doc_json_emitted_artifacts_cover_all_bundle_files() {
         );
     }
 }
+
+// ===== PearlTower enrichment =====
+
+#[test]
+fn enrichment_scope_contract_snapshot_serde_roundtrip() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let scope = &bundle.scope_contract_snapshot;
+    let json = serde_json::to_string(scope).expect("serialize scope_contract_snapshot");
+    let restored: serde_json::Value = serde_json::from_str(&json).expect("parse scope json");
+    assert_eq!(
+        restored["schema_version"].as_str().unwrap(),
+        SCOPE_CONTRACT_SCHEMA_VERSION
+    );
+    assert_eq!(restored["bead_id"].as_str().unwrap(), BEAD_ID);
+    assert_eq!(restored["track"]["id"].as_str().unwrap(), "RGC-010");
+    assert!(restored["open_bead_ids"].is_array());
+    assert!(restored["milestone_evidence_links"].is_array());
+}
+
+#[test]
+fn enrichment_risk_acceptance_ledger_serde_roundtrip() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let ledger = &bundle.risk_acceptance_ledger;
+    let json = serde_json::to_string(ledger).expect("serialize risk_acceptance_ledger");
+    let restored: serde_json::Value = serde_json::from_str(&json).expect("parse ledger json");
+    assert_eq!(
+        restored["schema_version"].as_str().unwrap(),
+        RISK_ACCEPTANCE_LEDGER_SCHEMA_VERSION
+    );
+    assert_eq!(restored["bead_id"].as_str().unwrap(), BEAD_ID);
+    assert!(restored["entries"].is_array());
+    assert!(restored["fail_closed_on_stale_review"].as_bool().unwrap());
+    assert!(restored["stale_threshold_days"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn enrichment_milestone_gatebook_serde_roundtrip() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let gatebook = &bundle.milestone_gatebook;
+    let json = serde_json::to_string(gatebook).expect("serialize milestone_gatebook");
+    let restored: serde_json::Value = serde_json::from_str(&json).expect("parse gatebook json");
+    assert_eq!(
+        restored["schema_version"].as_str().unwrap(),
+        MILESTONE_GATEBOOK_SCHEMA_VERSION
+    );
+    assert_eq!(restored["bead_id"].as_str().unwrap(), BEAD_ID);
+    assert!(restored["milestones"].is_array());
+    assert!(restored["dependency_order_preserved"].as_bool().unwrap());
+    assert!(restored["all_cargo_commands_rch_backed"].as_bool().unwrap());
+}
+
+#[test]
+fn enrichment_risk_id_uniqueness_invariant() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let ledger = &bundle.risk_acceptance_ledger;
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in &ledger.entries {
+        assert!(
+            seen.insert(entry.risk_id.clone()),
+            "duplicate risk_id found: {}",
+            entry.risk_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_milestone_id_uniqueness_invariant() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let gatebook = &bundle.milestone_gatebook;
+    let mut seen = std::collections::BTreeSet::new();
+    for milestone in &gatebook.milestones {
+        assert!(
+            seen.insert(milestone.milestone.clone()),
+            "duplicate milestone id found: {}",
+            milestone.milestone
+        );
+    }
+}
+
+#[test]
+fn enrichment_blocker_class_id_uniqueness_invariant() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let mut seen = std::collections::BTreeSet::new();
+    for bc in &bundle.milestone_gatebook.blocker_classes {
+        assert!(
+            seen.insert(bc.class_id.clone()),
+            "duplicate blocker class_id: {}",
+            bc.class_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_bundle_clone_produces_equal_value() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let cloned = bundle.clone();
+    assert_eq!(bundle.schema_version, cloned.schema_version);
+    assert_eq!(bundle.bead_id, cloned.bead_id);
+    assert_eq!(bundle.report_hash, cloned.report_hash);
+    assert_eq!(
+        bundle.scope_contract_snapshot.open_bead_ids,
+        cloned.scope_contract_snapshot.open_bead_ids
+    );
+    assert_eq!(
+        bundle.risk_acceptance_ledger.entries.len(),
+        cloned.risk_acceptance_ledger.entries.len()
+    );
+    assert_eq!(
+        bundle.milestone_gatebook.milestones.len(),
+        cloned.milestone_gatebook.milestones.len()
+    );
+}
+
+#[test]
+fn enrichment_bundle_debug_contains_schema_version() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let debug_str = format!("{bundle:?}");
+    assert!(
+        debug_str.contains("schema_version"),
+        "Debug output must contain field name 'schema_version'"
+    );
+    assert!(
+        debug_str.contains("franken-engine"),
+        "Debug output must contain schema prefix"
+    );
+}
+
+#[test]
+fn enrichment_different_timestamps_produce_different_generated_at_utc() {
+    let ts1 = 1_772_467_200_000_u64;
+    let ts2 = 1_772_553_600_000_u64; // 24 hours later
+    let b1 = build_rgc_planning_track_bundle_with_generated_at(ts1).expect("build ts1");
+    let b2 = build_rgc_planning_track_bundle_with_generated_at(ts2).expect("build ts2");
+    assert_ne!(
+        b1.generated_at_utc, b2.generated_at_utc,
+        "different timestamps must yield different generated_at_utc strings"
+    );
+    assert_ne!(
+        b1.generated_at_unix_ms, b2.generated_at_unix_ms,
+        "unix_ms fields must differ"
+    );
+    assert_ne!(
+        b1.report_hash, b2.report_hash,
+        "different timestamps must yield different report hashes"
+    );
+}
+
+#[test]
+fn enrichment_risk_level_field_is_nonempty_and_recognized() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let recognized_levels = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+    for entry in &bundle.risk_acceptance_ledger.entries {
+        let level = entry.risk_level.to_uppercase();
+        assert!(
+            !entry.risk_level.is_empty(),
+            "risk_level must not be empty for {}",
+            entry.risk_id
+        );
+        assert!(
+            recognized_levels.contains(&level.as_str()),
+            "unrecognized risk_level '{}' for {}",
+            entry.risk_level,
+            entry.risk_id
+        );
+    }
+}

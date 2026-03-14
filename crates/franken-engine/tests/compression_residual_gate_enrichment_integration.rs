@@ -14,8 +14,7 @@ use frankenengine_engine::compression_residual_gate::{
     ClaimBlockingReason, ClaimSurface, CompressionClaimVerdict, CompressionPassKind,
     CompressionPassResult, CompressionResidualError, CompressionResidualGate, DecisionReceipt,
     GateConfig, GateInput, GateSummary, HiddenExpansionRecord, LedgerAppendInput, ResidualLedger,
-    ReversibilityCheck, SupportCostRecord, build_artifact_record,
-    build_pass_result,
+    ReversibilityCheck, SupportCostRecord, build_artifact_record, build_pass_result,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;

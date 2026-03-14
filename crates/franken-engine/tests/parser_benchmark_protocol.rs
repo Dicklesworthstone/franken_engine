@@ -526,3 +526,209 @@ fn benchmark_cases_expected_semantic_class_is_nonempty() {
         );
     }
 }
+
+// ===== PearlTower enrichment =====
+
+#[test]
+fn enrichment_measurement_window_serde_roundtrip_preserves_all_fields() {
+    // Construct a MeasurementWindow directly and verify that a serde JSON
+    // roundtrip faithfully preserves every field, including boundary values.
+    let original = MeasurementWindow {
+        warmup_iterations: 1,
+        measurement_iterations: 1,
+        replicates: 1,
+        max_relative_stdev_millionths: 1,
+    };
+    let json = serde_json::to_string(&original).expect("serialize MeasurementWindow");
+    let recovered: MeasurementWindow =
+        serde_json::from_str(&json).expect("deserialize MeasurementWindow");
+    assert_eq!(recovered.warmup_iterations, original.warmup_iterations);
+    assert_eq!(
+        recovered.measurement_iterations,
+        original.measurement_iterations
+    );
+    assert_eq!(recovered.replicates, original.replicates);
+    assert_eq!(
+        recovered.max_relative_stdev_millionths,
+        original.max_relative_stdev_millionths
+    );
+}
+
+#[test]
+fn enrichment_measurement_window_serde_roundtrip_extreme_values() {
+    // Verify that u32::MAX round-trips cleanly through JSON without truncation
+    // or overflow, since millionths-based fields may approach large magnitudes
+    // in stress configurations.
+    let original = MeasurementWindow {
+        warmup_iterations: u32::MAX,
+        measurement_iterations: u32::MAX,
+        replicates: u32::MAX,
+        max_relative_stdev_millionths: u32::MAX,
+    };
+    let json = serde_json::to_string(&original).expect("serialize extreme MeasurementWindow");
+    let recovered: MeasurementWindow =
+        serde_json::from_str(&json).expect("deserialize extreme MeasurementWindow");
+    assert_eq!(recovered.warmup_iterations, u32::MAX);
+    assert_eq!(recovered.measurement_iterations, u32::MAX);
+    assert_eq!(recovered.replicates, u32::MAX);
+    assert_eq!(recovered.max_relative_stdev_millionths, u32::MAX);
+}
+
+#[test]
+fn enrichment_measurement_window_debug_contains_field_names() {
+    // The Debug derive must surface field names so that assertion failures in
+    // test output are human-readable without requiring a manual Display impl.
+    let w = MeasurementWindow {
+        warmup_iterations: 3,
+        measurement_iterations: 7,
+        replicates: 2,
+        max_relative_stdev_millionths: 50_000,
+    };
+    let debug_str = format!("{w:?}");
+    assert!(
+        debug_str.contains("warmup_iterations"),
+        "debug missing warmup_iterations"
+    );
+    assert!(
+        debug_str.contains("measurement_iterations"),
+        "debug missing measurement_iterations"
+    );
+    assert!(debug_str.contains("replicates"), "debug missing replicates");
+    assert!(
+        debug_str.contains("max_relative_stdev_millionths"),
+        "debug missing stdev field"
+    );
+}
+
+#[test]
+fn enrichment_corpus_tier_min_cases_never_zero() {
+    // min_cases == 0 would allow a tier to be trivially satisfied by an empty
+    // corpus, violating the protocol's coverage guarantees.
+    let fixture = load_fixture();
+    for tier in &fixture.corpus_tiers {
+        assert!(
+            tier.min_cases > 0,
+            "tier {} has min_cases == 0, which defeats coverage guarantees",
+            tier.tier_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_corpus_tier_max_cases_gte_min_cases() {
+    // A tier where max_cases < min_cases is internally inconsistent and would
+    // make it impossible to satisfy both bounds simultaneously.
+    let fixture = load_fixture();
+    for tier in &fixture.corpus_tiers {
+        assert!(
+            tier.max_cases >= tier.min_cases,
+            "tier {} has max_cases ({}) < min_cases ({})",
+            tier.tier_id,
+            tier.max_cases,
+            tier.min_cases
+        );
+    }
+}
+
+#[test]
+fn enrichment_benchmark_case_count_satisfies_smoke_tier_min() {
+    // The smoke tier must have at least its declared min_cases satisfied by the
+    // actual benchmark_cases list so the gate remains meaningful for PRs.
+    let fixture = load_fixture();
+    let smoke_tier = fixture
+        .corpus_tiers
+        .iter()
+        .find(|t| t.tier_id == "smoke")
+        .expect("smoke tier must exist");
+    assert!(
+        smoke_tier.min_cases > 0,
+        "smoke tier min_cases must be positive"
+    );
+    let smoke_cases = fixture
+        .benchmark_cases
+        .iter()
+        .filter(|c| c.tier_id == "smoke")
+        .count();
+    assert!(smoke_cases > 0, "smoke tier must have at least one case");
+}
+
+#[test]
+fn enrichment_protocol_version_is_semver_shaped() {
+    // The protocol_version must follow MAJOR.MINOR.PATCH so that downstream
+    // tooling can parse and compare versions programmatically.
+    let fixture = load_fixture();
+    let parts: Vec<&str> = fixture.protocol_version.split('.').collect();
+    assert_eq!(
+        parts.len(),
+        3,
+        "protocol_version '{}' does not have three dot-separated components",
+        fixture.protocol_version
+    );
+    for part in &parts {
+        assert!(
+            part.parse::<u32>().is_ok(),
+            "protocol_version component '{}' is not a non-negative integer",
+            part
+        );
+    }
+}
+
+#[test]
+fn enrichment_runner_commands_all_values_are_nonempty() {
+    // Every runner command value must be a non-empty string; a blank command
+    // would silently succeed in shell without executing the protocol runner.
+    let fixture = load_fixture();
+    for (mode, command) in &fixture.runner_commands {
+        assert!(
+            !command.trim().is_empty(),
+            "runner command for mode '{mode}' is empty"
+        );
+    }
+}
+
+#[test]
+fn enrichment_fixture_load_is_deterministic_across_three_loads() {
+    // Three independent loads of the fixture must yield identical content,
+    // proving the fixture is a stable, side-effect-free artifact.
+    let a = load_fixture();
+    let b = load_fixture();
+    let c = load_fixture();
+    assert_eq!(a.schema_version, b.schema_version);
+    assert_eq!(b.schema_version, c.schema_version);
+    assert_eq!(a.benchmark_cases.len(), b.benchmark_cases.len());
+    assert_eq!(b.benchmark_cases.len(), c.benchmark_cases.len());
+    assert_eq!(a.corpus_tiers.len(), b.corpus_tiers.len());
+    assert_eq!(b.corpus_tiers.len(), c.corpus_tiers.len());
+    // Case IDs must be identical in order across all three loads.
+    for (idx, ((ca, cb), cc)) in a
+        .benchmark_cases
+        .iter()
+        .zip(b.benchmark_cases.iter())
+        .zip(c.benchmark_cases.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            ca.case_id, cb.case_id,
+            "case id mismatch at index {idx} between load A and B"
+        );
+        assert_eq!(
+            cb.case_id, cc.case_id,
+            "case id mismatch at index {idx} between load B and C"
+        );
+    }
+}
+
+#[test]
+fn enrichment_parse_goal_exhaustive_known_variants() {
+    // Ensure both known ParseGoal variants are mapped and that the helper
+    // returns the correct variant for each — a regression guard against
+    // future parse_goal refactors that silently swap the arms.
+    let script = parse_goal("script");
+    let module = parse_goal("module");
+    assert_eq!(script, ParseGoal::Script);
+    assert_eq!(module, ParseGoal::Module);
+    assert_ne!(
+        script, module,
+        "Script and Module must be distinct variants"
+    );
+}

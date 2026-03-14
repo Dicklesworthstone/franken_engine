@@ -37,6 +37,12 @@ Required policy ID:
 
 - `policy-parser-operator-developer-runbook-v1`
 
+All heavy Rust checks and tests for this lane run through `rch`.
+
+The runbook wrapper defaults remote builds into a repo-local namespaced target
+directory (`target_rch_parser_operator_developer_runbook_<mode>_<pid>`) so
+fresh-operator drills do not depend on fragile `/tmp` worker state.
+
 ## Fresh-Operator Dry Run
 
 Run from repository root:
@@ -50,6 +56,7 @@ Expected artifacts:
 - `artifacts/parser_operator_developer_runbook/<timestamp>/run_manifest.json`
 - `artifacts/parser_operator_developer_runbook/<timestamp>/events.jsonl`
 - `artifacts/parser_operator_developer_runbook/<timestamp>/commands.txt`
+- `artifacts/parser_operator_developer_runbook/<timestamp>/step_logs/step_*.log`
 
 ## Replay-First Troubleshooting Decision Tree
 
@@ -112,5 +119,6 @@ One-command replay wrapper:
 cat artifacts/parser_operator_developer_runbook/<timestamp>/run_manifest.json
 cat artifacts/parser_operator_developer_runbook/<timestamp>/events.jsonl
 cat artifacts/parser_operator_developer_runbook/<timestamp>/commands.txt
+cat artifacts/parser_operator_developer_runbook/<timestamp>/step_logs/step_000.log
 ./scripts/e2e/parser_operator_developer_runbook_replay.sh ci
 ```

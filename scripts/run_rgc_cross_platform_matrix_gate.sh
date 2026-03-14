@@ -42,6 +42,16 @@ macos_x64_manifest="${RGC_CROSS_PLATFORM_MACOS_X64_MANIFEST:-}"
 macos_arm64_manifest="${RGC_CROSS_PLATFORM_MACOS_ARM64_MANIFEST:-}"
 windows_x64_manifest="${RGC_CROSS_PLATFORM_WINDOWS_X64_MANIFEST:-}"
 windows_arm64_manifest="${RGC_CROSS_PLATFORM_WINDOWS_ARM64_MANIFEST:-}"
+manifest_set_root="${RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT:-artifacts/rgc_cross_platform_matrix_inputs}"
+auto_discover_manifests="${RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS:-1}"
+
+linux_x64_manifest_source="missing"
+linux_arm64_manifest_source="missing"
+macos_x64_manifest_source="missing"
+macos_arm64_manifest_source="missing"
+windows_x64_manifest_source="missing"
+windows_arm64_manifest_source="missing"
+auto_discovered_manifest_set_dir=""
 
 mkdir -p "$run_dir"
 : >"$matrix_deltas_path"
@@ -233,6 +243,156 @@ target_manifest_path() {
       echo ""
       ;;
   esac
+}
+
+target_manifest_var_name() {
+  local target_id="$1"
+  case "$target_id" in
+    linux-x64)
+      echo "linux_x64_manifest"
+      ;;
+    linux-arm64)
+      echo "linux_arm64_manifest"
+      ;;
+    macos-x64)
+      echo "macos_x64_manifest"
+      ;;
+    macos-arm64)
+      echo "macos_arm64_manifest"
+      ;;
+    windows-x64)
+      echo "windows_x64_manifest"
+      ;;
+    windows-arm64)
+      echo "windows_arm64_manifest"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+target_manifest_source_var_name() {
+  local target_id="$1"
+  case "$target_id" in
+    linux-x64)
+      echo "linux_x64_manifest_source"
+      ;;
+    linux-arm64)
+      echo "linux_arm64_manifest_source"
+      ;;
+    macos-x64)
+      echo "macos_x64_manifest_source"
+      ;;
+    macos-arm64)
+      echo "macos_arm64_manifest_source"
+      ;;
+    windows-x64)
+      echo "windows_x64_manifest_source"
+      ;;
+    windows-arm64)
+      echo "windows_arm64_manifest_source"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+target_manifest_filename() {
+  local target_id="$1"
+  printf '%s.run_manifest.json\n' "$target_id"
+}
+
+set_target_manifest_resolution() {
+  local target_id="$1"
+  local manifest_path="$2"
+  local source="$3"
+  local path_var source_var
+
+  path_var="$(target_manifest_var_name "$target_id")"
+  source_var="$(target_manifest_source_var_name "$target_id")"
+
+  if [[ -n "$path_var" ]]; then
+    printf -v "$path_var" '%s' "$manifest_path"
+  fi
+  if [[ -n "$source_var" ]]; then
+    printf -v "$source_var" '%s' "$source"
+  fi
+}
+
+resolve_explicit_target_manifest_sources() {
+  local target_id path_var current_value
+
+  for target_id in "${target_ids[@]}"; do
+    path_var="$(target_manifest_var_name "$target_id")"
+    current_value="${!path_var:-}"
+    if [[ -n "$current_value" ]]; then
+      set_target_manifest_resolution "$target_id" "$current_value" "env"
+    else
+      set_target_manifest_resolution "$target_id" "" "missing"
+    fi
+  done
+}
+
+manifest_set_has_required_targets() {
+  local set_dir="$1"
+  local target_id required_target candidate_path
+
+  for target_id in "${target_ids[@]}"; do
+    required_target="$(target_required "$target_id")"
+    if [[ "$required_target" != "true" ]]; then
+      continue
+    fi
+    candidate_path="${set_dir}/$(target_manifest_filename "$target_id")"
+    if [[ ! -f "$candidate_path" ]]; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+find_latest_complete_manifest_set_dir() {
+  local candidate_dir
+
+  if [[ "$auto_discover_manifests" != "1" || ! -d "$manifest_set_root" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r candidate_dir; do
+    [[ -z "$candidate_dir" ]] && continue
+    if manifest_set_has_required_targets "$candidate_dir"; then
+      printf '%s\n' "$candidate_dir"
+      return 0
+    fi
+  done < <(find "$manifest_set_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r)
+}
+
+auto_discover_target_manifests() {
+  local target_id source_var candidate_path
+
+  resolve_explicit_target_manifest_sources
+
+  if [[ "$auto_discover_manifests" != "1" ]]; then
+    return 0
+  fi
+
+  auto_discovered_manifest_set_dir="$(find_latest_complete_manifest_set_dir || true)"
+  if [[ -z "$auto_discovered_manifest_set_dir" ]]; then
+    return 0
+  fi
+
+  for target_id in "${target_ids[@]}"; do
+    source_var="$(target_manifest_source_var_name "$target_id")"
+    if [[ "${!source_var:-missing}" == "env" ]]; then
+      continue
+    fi
+    candidate_path="${auto_discovered_manifest_set_dir}/$(target_manifest_filename "$target_id")"
+    if [[ -f "$candidate_path" ]]; then
+      set_target_manifest_resolution "$target_id" "$candidate_path" "auto_discovered"
+    fi
+  done
 }
 
 ensure_rch_ready() {
@@ -486,6 +646,90 @@ append_delta_row() {
     }' >>"$matrix_deltas_path"
 }
 
+matrix_manifest_exists_json() {
+  local manifest_path="$1"
+  if [[ -n "$manifest_path" && -f "$manifest_path" ]]; then
+    echo true
+  else
+    echo false
+  fi
+}
+
+build_matrix_inputs_json() {
+  local linux_x64_exists linux_arm64_exists macos_x64_exists
+  local macos_arm64_exists windows_x64_exists windows_arm64_exists
+
+  linux_x64_exists="$(matrix_manifest_exists_json "$linux_x64_manifest")"
+  linux_arm64_exists="$(matrix_manifest_exists_json "$linux_arm64_manifest")"
+  macos_x64_exists="$(matrix_manifest_exists_json "$macos_x64_manifest")"
+  macos_arm64_exists="$(matrix_manifest_exists_json "$macos_arm64_manifest")"
+  windows_x64_exists="$(matrix_manifest_exists_json "$windows_x64_manifest")"
+  windows_arm64_exists="$(matrix_manifest_exists_json "$windows_arm64_manifest")"
+
+  jq -n \
+    --arg manifest_set_root "$manifest_set_root" \
+    --argjson auto_discover_manifests "$( [[ "$auto_discover_manifests" == "1" ]] && echo true || echo false )" \
+    --arg auto_discovered_manifest_set_dir "$auto_discovered_manifest_set_dir" \
+    --arg linux_x64_manifest "$linux_x64_manifest" \
+    --arg linux_x64_source "$linux_x64_manifest_source" \
+    --argjson linux_x64_exists "$linux_x64_exists" \
+    --arg linux_arm64_manifest "$linux_arm64_manifest" \
+    --arg linux_arm64_source "$linux_arm64_manifest_source" \
+    --argjson linux_arm64_exists "$linux_arm64_exists" \
+    --arg macos_x64_manifest "$macos_x64_manifest" \
+    --arg macos_x64_source "$macos_x64_manifest_source" \
+    --argjson macos_x64_exists "$macos_x64_exists" \
+    --arg macos_arm64_manifest "$macos_arm64_manifest" \
+    --arg macos_arm64_source "$macos_arm64_manifest_source" \
+    --argjson macos_arm64_exists "$macos_arm64_exists" \
+    --arg windows_x64_manifest "$windows_x64_manifest" \
+    --arg windows_x64_source "$windows_x64_manifest_source" \
+    --argjson windows_x64_exists "$windows_x64_exists" \
+    --arg windows_arm64_manifest "$windows_arm64_manifest" \
+    --arg windows_arm64_source "$windows_arm64_manifest_source" \
+    --argjson windows_arm64_exists "$windows_arm64_exists" \
+    '{
+      manifest_set_root: $manifest_set_root,
+      auto_discover_manifests: $auto_discover_manifests,
+      auto_discovered_manifest_set_dir: (
+        if $auto_discovered_manifest_set_dir == "" then null else $auto_discovered_manifest_set_dir end
+      ),
+      manifest_filename_template: "<target-id>.run_manifest.json",
+      targets: {
+        "linux-x64": {
+          path: (if $linux_x64_manifest == "" then null else $linux_x64_manifest end),
+          source: $linux_x64_source,
+          exists: $linux_x64_exists
+        },
+        "linux-arm64": {
+          path: (if $linux_arm64_manifest == "" then null else $linux_arm64_manifest end),
+          source: $linux_arm64_source,
+          exists: $linux_arm64_exists
+        },
+        "macos-x64": {
+          path: (if $macos_x64_manifest == "" then null else $macos_x64_manifest end),
+          source: $macos_x64_source,
+          exists: $macos_x64_exists
+        },
+        "macos-arm64": {
+          path: (if $macos_arm64_manifest == "" then null else $macos_arm64_manifest end),
+          source: $macos_arm64_source,
+          exists: $macos_arm64_exists
+        },
+        "windows-x64": {
+          path: (if $windows_x64_manifest == "" then null else $windows_x64_manifest end),
+          source: $windows_x64_source,
+          exists: $windows_x64_exists
+        },
+        "windows-arm64": {
+          path: (if $windows_arm64_manifest == "" then null else $windows_arm64_manifest end),
+          source: $windows_arm64_source,
+          exists: $windows_arm64_exists
+        }
+      }
+    }'
+}
+
 load_baseline_summary() {
   baseline_manifest="$(target_manifest_path "linux-x64")"
   if [[ -n "$baseline_manifest" && -f "$baseline_manifest" ]]; then
@@ -523,6 +767,17 @@ evaluate_target() {
     if [[ "$required_target" == "true" && "$target_id" != "linux-x64" ]]; then
       required_target_missing_count=$((required_target_missing_count + 1))
     fi
+    delta_class="candidate_target_input_missing"
+    severity="warning"
+    reason="candidate target manifest input missing"
+    if [[ "$required_target" == "true" ]]; then
+      delta_class="missing_target_input"
+      severity="critical"
+      reason="required target manifest input missing"
+      critical_delta_count=$((critical_delta_count + 1))
+    else
+      warning_delta_count=$((warning_delta_count + 1))
+    fi
     append_delta_row \
       "$target_id" \
       "$target_os_name" \
@@ -535,10 +790,9 @@ evaluate_target() {
       "unknown" \
       "unknown" \
       "unknown" \
-      "missing_target_input" \
-      "critical" \
-      "required target manifest input missing"
-    critical_delta_count=$((critical_delta_count + 1))
+      "$delta_class" \
+      "$severity" \
+      "$reason"
     return
   fi
 
@@ -642,7 +896,9 @@ evaluate_matrix() {
 
 write_matrix_summary() {
   local target_deltas_json
+  local matrix_inputs_json
   target_deltas_json="$(jq -s '.' "$matrix_deltas_path")"
+  matrix_inputs_json="$(build_matrix_inputs_json)"
 
   jq -n \
     --arg schema_version "franken-engine.rgc-cross-platform-matrix.summary.v1" \
@@ -659,6 +915,7 @@ write_matrix_summary() {
     --argjson required_target_missing_count "$required_target_missing_count" \
     --argjson critical_delta_count "$critical_delta_count" \
     --argjson warning_delta_count "$warning_delta_count" \
+    --argjson matrix_inputs "$matrix_inputs_json" \
     --argjson target_deltas "$target_deltas_json" \
     '{
       schema_version: $schema_version,
@@ -673,6 +930,7 @@ write_matrix_summary() {
       required_target_missing_count: $required_target_missing_count,
       critical_delta_count: $critical_delta_count,
       warning_delta_count: $warning_delta_count,
+      matrix_inputs: $matrix_inputs,
       replay_command: $replay_command,
       matrix_eval_error: (if $matrix_eval_error == "" then null else $matrix_eval_error end),
       target_deltas: $target_deltas
@@ -718,6 +976,7 @@ run_mode() {
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
+  local matrix_inputs_json
 
   if [[ "$manifest_written" == true ]]; then
     return
@@ -741,6 +1000,7 @@ write_manifest() {
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
   write_matrix_summary
+  matrix_inputs_json="$(build_matrix_inputs_json)"
 
   {
     echo "{\"schema_version\":\"franken-engine.rgc-cross-platform-matrix.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"gate_completed\",\"target_id\":\"all\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json}}"
@@ -771,6 +1031,8 @@ write_manifest() {
     echo "  \"cargo_target_dir\": \"${target_dir}\","
     echo "  \"rch_exec_timeout_seconds\": ${rch_timeout_seconds},"
     echo "  \"strict_matrix\": ${strict_matrix},"
+    echo "  \"manifest_set_root\": \"$(parser_frontier_json_escape "${manifest_set_root}")\","
+    echo "  \"auto_discover_manifests\": $([[ "$auto_discover_manifests" == "1" ]] && echo true || echo false),"
     echo "  \"trace_id\": \"${trace_id}\","
     echo "  \"decision_id\": \"${decision_id}\","
     echo "  \"policy_id\": \"${policy_id}\","
@@ -789,6 +1051,7 @@ write_manifest() {
     if [[ -n "$matrix_eval_error" ]]; then
       echo "  \"matrix_eval_error\": \"$(parser_frontier_json_escape "${matrix_eval_error}")\","
     fi
+    echo "  \"matrix_inputs\": ${matrix_inputs_json},"
     echo '  "deterministic_environment": {'
     parser_frontier_emit_manifest_environment_fields "    " "null"
     echo '  },'
@@ -844,6 +1107,8 @@ write_manifest() {
 if [[ "$mode" == "matrix" || "$require_matrix" == "1" ]]; then
   strict_matrix=true
 fi
+
+auto_discover_target_manifests
 
 main_exit=0
 run_mode || main_exit=$?

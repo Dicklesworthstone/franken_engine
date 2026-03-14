@@ -14,7 +14,7 @@
       "expected_policy_action": "deny",
       "expected_containment_state": "running",
       "expected_outcome": "pass",
-      "command_template": "frankenctl verify security --scenario capability-hostcall-deny --seed 4101",
+      "command_template": "./scripts/run_rgc_security_enforcement_verification_pack.sh test",
       "requires_replay": true
     },
     {
@@ -26,7 +26,7 @@
       "expected_policy_action": "quarantine",
       "expected_containment_state": "quarantined",
       "expected_outcome": "pass",
-      "command_template": "frankenctl verify security --scenario ifc-untrusted-declassify-block --seed 4102",
+      "command_template": "./scripts/run_rgc_security_enforcement_verification_pack.sh test",
       "requires_replay": true
     },
     {
@@ -38,7 +38,7 @@
       "expected_policy_action": "terminate",
       "expected_containment_state": "terminated",
       "expected_outcome": "pass",
-      "command_template": "frankenctl verify security --scenario containment-escalation-kill-switch --seed 4103",
+      "command_template": "./scripts/run_rgc_security_enforcement_verification_pack.sh test",
       "requires_replay": true
     }
   ]

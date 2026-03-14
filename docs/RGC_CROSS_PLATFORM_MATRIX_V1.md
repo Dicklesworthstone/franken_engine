@@ -17,7 +17,7 @@ The matrix is evidence-first:
 ## Contract Version
 
 - `schema_version`: `franken-engine.rgc-cross-platform-matrix.v1`
-- `contract_version`: `1.0.0`
+- `contract_version`: `1.1.0`
 - `policy_id`: `policy-rgc-cross-platform-matrix-v1`
 
 ## Matrix Dimensions
@@ -43,6 +43,7 @@ Deterministic classes:
 - `workflow_behavior_drift` (`critical`): outcome or error code diverged.
 - `unexplained_digest_drift` (`critical`): digest mismatch without explanation.
 - `missing_target_input` (`critical`): target manifest input missing.
+- `candidate_target_input_missing` (`warning`): candidate-tier target manifest input missing.
 - `missing_baseline_input` (`critical`): baseline manifest missing.
 
 Strict mode fails closed when required-target critical drift remains unresolved.
@@ -88,6 +89,16 @@ Manifest inputs are provided by environment variables:
 - `RGC_CROSS_PLATFORM_WINDOWS_X64_MANIFEST`
 - `RGC_CROSS_PLATFORM_WINDOWS_ARM64_MANIFEST`
 
+If per-target env vars are absent and `RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS=1`
+(default), the gate scans `RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT` (default:
+`artifacts/rgc_cross_platform_matrix_inputs`) for the latest complete manifest
+set using the filename contract:
+
+- `<target-id>.run_manifest.json`
+
+Resolved matrix input provenance is recorded as `env`, `auto_discovered`, or
+`missing` in both `matrix_summary.json` and `run_manifest.json`.
+
 ## Required Artifacts
 
 Each run emits:
@@ -110,5 +121,9 @@ rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_cross_platform_matrix \
 
 ./scripts/run_rgc_cross_platform_matrix_gate.sh check
 ./scripts/run_rgc_cross_platform_matrix_gate.sh ci
+
+RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT=artifacts/rgc_cross_platform_matrix_inputs \
+  ./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix
+
 ./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix
 ```

@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.rgc-cross-platform-matrix.v1",
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "bead_id": "bd-1lsy.11.13",
   "policy_id": "policy-rgc-cross-platform-matrix-v1",
   "required_log_keys": [
@@ -120,6 +120,11 @@
       "description": "Required per-target manifest input was not provided."
     },
     {
+      "class_id": "candidate_target_input_missing",
+      "severity": "warning",
+      "description": "Candidate-tier target manifest input was not provided, so matrix evaluation remains informative but non-blocking."
+    },
+    {
       "class_id": "missing_baseline_input",
       "severity": "critical",
       "description": "Baseline linux-x64 manifest missing, so pairwise comparison is invalid."
@@ -129,13 +134,23 @@
     "script": "scripts/run_rgc_cross_platform_matrix_gate.sh",
     "replay_wrapper": "scripts/e2e/rgc_cross_platform_matrix_replay.sh",
     "strict_mode": "mode=matrix or RGC_CROSS_PLATFORM_REQUIRE_MATRIX=1",
-    "manifest_schema_version": "franken-engine.rgc-cross-platform-matrix.run-manifest.v1"
+    "manifest_schema_version": "franken-engine.rgc-cross-platform-matrix.run-manifest.v1",
+    "manifest_set_root_env": "RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT",
+    "auto_discover_toggle_env": "RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS",
+    "auto_discover_mode": "scan the latest complete manifest set when per-target env vars are absent",
+    "manifest_filename_template": "<target-id>.run_manifest.json",
+    "matrix_input_sources": [
+      "env",
+      "auto_discovered",
+      "missing"
+    ]
   },
   "operator_verification": [
     "jq empty docs/rgc_cross_platform_matrix_v1.json",
     "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_cross_platform_matrix cargo test -p frankenengine-engine --test rgc_cross_platform_matrix",
     "./scripts/run_rgc_cross_platform_matrix_gate.sh check",
     "./scripts/run_rgc_cross_platform_matrix_gate.sh ci",
+    "RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT=artifacts/rgc_cross_platform_matrix_inputs ./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix",
     "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix"
   ]
 }

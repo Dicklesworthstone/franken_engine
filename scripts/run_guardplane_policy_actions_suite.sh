@@ -5,16 +5,18 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
-  echo "error: rch is required for this suite" >&2
+  echo "error: rch is required for guardplane policy actions heavy commands" >&2
   exit 1
 fi
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_guardplane_policy_actions_${timestamp}}"
+uid="$(id -u)"
+run_stamp="${timestamp}_uid${uid}_${mode}_$$"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/.rch_target/guardplane_policy_actions_uid${uid}_${mode}_${timestamp}_$$}"
 artifact_root="${GUARDPLANE_POLICY_ACTIONS_ARTIFACT_ROOT:-artifacts/guardplane_policy_actions_suite}"
-run_dir="$artifact_root/$timestamp"
+run_dir="${artifact_root}/${run_stamp}"
 manifest_path="$run_dir/run_manifest.json"
 events_path="$run_dir/events.jsonl"
 commands_path="$run_dir/commands.txt"
@@ -41,8 +43,8 @@ if [[ "$containment_log_env_path" != /* ]]; then
   containment_log_env_path="$root_dir/$containment_log_env_path"
 fi
 
-trace_id="trace-guardplane-policy-actions-${timestamp}"
-decision_id="decision-guardplane-policy-actions-${timestamp}"
+trace_id="trace-guardplane-policy-actions-${run_stamp}"
+decision_id="decision-guardplane-policy-actions-${run_stamp}"
 policy_id="policy-guardplane-policy-actions-v1"
 component="guardplane_policy_actions_suite"
 
@@ -263,6 +265,8 @@ run_mode() {
         cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_safe_mode_fallback_escalates_nominal_challenge_to_sandbox_on_denial -- --exact
       run_step "cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence -- --exact" \
         cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence -- --exact
+      run_step "cargo test -p frankenengine-extension-host --lib guardplane_policy_actions_runner_script_uses_unique_repo_local_namespaces" \
+        cargo test -p frankenengine-extension-host --lib guardplane_policy_actions_runner_script_uses_unique_repo_local_namespaces
       run_guardplane_artifact_capture_step
       ;;
     clippy)
@@ -288,6 +292,8 @@ run_mode() {
         cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_safe_mode_fallback_escalates_nominal_challenge_to_sandbox_on_denial -- --exact
       run_step "cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence -- --exact" \
         cargo test -p frankenengine-extension-host --test delegate_cell_edge_cases guardplane_decision_logs_are_replay_stable_for_mixed_fault_sequence -- --exact
+      run_step "cargo test -p frankenengine-extension-host --lib guardplane_policy_actions_runner_script_uses_unique_repo_local_namespaces" \
+        cargo test -p frankenengine-extension-host --lib guardplane_policy_actions_runner_script_uses_unique_repo_local_namespaces
       run_guardplane_artifact_capture_step
       run_step "cargo clippy -p frankenengine-extension-host --lib -- -D warnings" \
         cargo clippy -p frankenengine-extension-host --lib -- -D warnings

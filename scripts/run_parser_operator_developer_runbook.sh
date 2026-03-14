@@ -12,12 +12,15 @@ toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 artifact_root="${PARSER_OPERATOR_DEVELOPER_RUNBOOK_ARTIFACT_ROOT:-artifacts/parser_operator_developer_runbook}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-# Default to a per-run target dir to avoid cross-agent cargo lock contention.
-target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_parser_operator_developer_runbook_${timestamp}}"
+# Default to a repo-local per-run target dir to avoid cross-agent cargo lock
+# contention without relying on fragile /tmp-backed worker state.
+target_namespace="${mode}_$$"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_parser_operator_developer_runbook_${target_namespace}}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
+step_logs_dir="${run_dir}/step_logs"
 
 trace_id="trace-parser-operator-developer-runbook-${timestamp}"
 decision_id="decision-parser-operator-developer-runbook-${timestamp}"
@@ -28,7 +31,7 @@ replay_command="./scripts/e2e/parser_operator_developer_runbook_replay.sh ${mode
 drill_replay_a="./scripts/e2e/parser_error_recovery_adversarial_replay.sh"
 drill_replay_b="./scripts/e2e/parser_user_impact_regression_alarms_replay.sh"
 
-mkdir -p "$run_dir"
+mkdir -p "$run_dir" "$step_logs_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for parser operator/developer runbook heavy commands" >&2
@@ -84,6 +87,7 @@ rch_reject_artifact_retrieval_failure() {
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
+step_log_index=0
 
 run_step() {
   local command_text="$1"
@@ -92,7 +96,8 @@ run_step() {
 
   commands_run+=("$command_text")
   echo "==> $command_text"
-  log_path="$(mktemp)"
+  log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
+  step_log_index=$((step_log_index + 1))
 
   if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
     remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
@@ -100,20 +105,17 @@ run_step() {
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" \
         | tee -a "$log_path"
     else
-      rm -f "$log_path"
       failed_command="$command_text"
       return 1
     fi
   fi
 
   if ! rch_reject_local_fallback "$log_path"; then
-    rm -f "$log_path"
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
   fi
 
   if ! rch_reject_artifact_retrieval_failure "$log_path"; then
-    rm -f "$log_path"
     failed_command="${command_text} (rch-artifact-retrieval-failed)"
     return 1
   fi
@@ -121,12 +123,9 @@ run_step() {
   # rch may occasionally return a success status while remote reported a non-zero exit.
   remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
   if [[ -n "$remote_exit_code" && "$remote_exit_code" != "0" ]]; then
-    rm -f "$log_path"
     failed_command="${command_text} (remote-exit=${remote_exit_code})"
     return 1
   fi
-
-  rm -f "$log_path"
 }
 
 run_local_step() {
@@ -248,6 +247,7 @@ write_manifest() {
     echo "    \"manifest\": \"${manifest_path}\","
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
+    echo "    \"step_logs\": \"${step_logs_dir}\","
     echo '    "contract_doc": "docs/PARSER_OPERATOR_DEVELOPER_RUNBOOK.md",'
     echo '    "fixture": "crates/franken-engine/tests/fixtures/parser_operator_developer_runbook_v1.json",'
     echo '    "tests": "crates/franken-engine/tests/parser_operator_developer_runbook.rs",'
@@ -257,6 +257,7 @@ write_manifest() {
     echo "    \"cat ${manifest_path}\","
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
+    echo "    \"cat ${step_logs_dir}/step_000.log\","
     echo "    \"${replay_command}\""
     echo "  ]"
     echo "}"

@@ -125,6 +125,11 @@ Run gate (`rch` backed):
 ./scripts/run_rgc_execution_waves_coordination_suite.sh ci
 ```
 
+The runner defaults heavy `CARGO_TARGET_DIR` output to the repo-local path
+`.rch_target/rgc_execution_waves_uid<uid>_<mode>_<timestamp>_<pid>` rather than
+shared `/tmp` state or a timestamp-only namespace, so parallel agent runs do
+not collide on the same second.
+
 Replay wrapper:
 
 ```bash

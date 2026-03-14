@@ -69,6 +69,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required to materialize contract artifacts" >&2
+  exit 2
+fi
+
 if [[ -n "$scenario_filter" ]]; then
   case "$scenario_filter" in
     *[!a-zA-Z0-9_]*)
@@ -90,17 +95,13 @@ if [[ -n "$scenario_filter" ]]; then
 fi
 
 target_namespace="${mode}_${scenario_filter:-suite}_$$"
-target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_rgc_v8_supremacy_claim_contract_${target_namespace}}"
+uid="$(id -u)"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_v8_supremacy_claim_contract_uid${uid}_${target_namespace}}"
 
 mkdir -p "$run_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for V8 supremacy claim contract heavy commands" >&2
-  exit 2
-fi
-
-if ! command -v jq >/dev/null 2>&1; then
-  echo "jq is required to materialize contract artifacts" >&2
   exit 2
 fi
 
@@ -149,8 +150,11 @@ run_step() {
   } &
   monitor_pid=$!
 
-  wait "$rch_pid"
-  status=$?
+  if wait "$rch_pid"; then
+    status=0
+  else
+    status=$?
+  fi
   wait "$monitor_pid" || true
 
   rm -f "$stream_path"

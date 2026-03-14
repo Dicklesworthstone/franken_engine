@@ -37,7 +37,7 @@ Environment overrides:
 - `METAMORPHIC_SEED` (default `1`)
 - `METAMORPHIC_RELATIONS` (optional comma-separated enabled relation IDs; example: `parser_whitespace_invariance,ir_lowering_determinism`)
 - `RUSTUP_TOOLCHAIN` (default `nightly`)
-- `CARGO_TARGET_DIR` (default `/tmp/rch_target_franken_engine_metamorphic`)
+- `CARGO_TARGET_DIR` (default `${workspace_root}/target_rch_metamorphic_uid<uid>`; repo-local under the workspace root, not `/tmp`)
 
 Relation filter semantics:
 - Filters are passed as repeated `--relation` arguments to the runner.

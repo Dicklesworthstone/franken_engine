@@ -12,7 +12,8 @@ toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-2}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-target_dir="${CARGO_TARGET_DIR:-${root_dir}/.rch_target/rgc_execution_waves_${timestamp}}"
+uid="$(id -u)"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/.rch_target/rgc_execution_waves_uid${uid}_${mode}_${timestamp}_$$}"
 artifact_root="${RGC_EXECUTION_WAVES_ARTIFACT_ROOT:-artifacts/rgc_execution_waves_coordination}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
@@ -77,6 +78,8 @@ declare -a commands_run=()
 declare -a step_log_paths=()
 failed_command=""
 manifest_written=false
+dry_run_attempted=false
+dry_run_validated=false
 
 run_step() {
   local command_text="$1"
@@ -147,8 +150,10 @@ run_mode() {
         cargo clippy -p frankenengine-engine --test rgc_execution_waves_enrichment_integration -- -D warnings || return $?
       ;;
     dry-run)
+      dry_run_attempted=true
       run_step "cargo test -p frankenengine-engine --test rgc_execution_waves_integration -- --exact rgc_execution_waves_dry_run_emits_required_coordination_events" \
         cargo test -p frankenengine-engine --test rgc_execution_waves_integration -- --exact rgc_execution_waves_dry_run_emits_required_coordination_events || return $?
+      dry_run_validated=true
       ;;
     ci)
       run_step "cargo check -p frankenengine-engine --test rgc_execution_waves_integration" \
@@ -163,8 +168,10 @@ run_mode() {
         cargo clippy -p frankenengine-engine --test rgc_execution_waves_integration -- -D warnings || return $?
       run_step "cargo clippy -p frankenengine-engine --test rgc_execution_waves_enrichment_integration -- -D warnings" \
         cargo clippy -p frankenengine-engine --test rgc_execution_waves_enrichment_integration -- -D warnings || return $?
+      dry_run_attempted=true
       run_step "cargo test -p frankenengine-engine --test rgc_execution_waves_integration -- --exact rgc_execution_waves_dry_run_emits_required_coordination_events" \
         cargo test -p frankenengine-engine --test rgc_execution_waves_integration -- --exact rgc_execution_waves_dry_run_emits_required_coordination_events || return $?
+      dry_run_validated=true
       ;;
     *)
       echo "usage: $0 [check|test|clippy|dry-run|ci]" >&2
@@ -176,6 +183,7 @@ run_mode() {
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
+  local dry_run_outcome dry_run_error_code_json
 
   if [[ "$manifest_written" == true ]]; then
     return
@@ -200,7 +208,16 @@ write_manifest() {
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
   {
-    echo "{\"schema_version\":\"franken-engine.rgc-coordination.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"protocol_dry_run_validated\",\"outcome\":\"pass\",\"error_code\":null}"
+    if [[ "$dry_run_attempted" == true ]]; then
+      if [[ "$dry_run_validated" == true ]]; then
+        dry_run_outcome="pass"
+        dry_run_error_code_json="null"
+      else
+        dry_run_outcome="fail"
+        dry_run_error_code_json='"FE-RGC-EXECUTION-WAVES-0001"'
+      fi
+      echo "{\"schema_version\":\"franken-engine.rgc-coordination.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"protocol_dry_run_validated\",\"outcome\":\"${dry_run_outcome}\",\"error_code\":${dry_run_error_code_json}}"
+    fi
     echo "{\"schema_version\":\"franken-engine.rgc-coordination.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"gate_completed\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json}}"
   } >"$events_path"
 

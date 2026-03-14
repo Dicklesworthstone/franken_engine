@@ -338,7 +338,7 @@ write_report() {
 
 write_manifest() {
   local exit_code="${1:-0}"
-  local outcome git_commit dirty_worktree_json error_code_json
+  local outcome git_commit dirty_worktree_json error_code_json contract_operator_verification_json
 
   if [[ "$manifest_written" == true ]]; then
     return
@@ -355,6 +355,7 @@ write_manifest() {
 
   write_report "$outcome"
   jq -n --arg trace_id "$trace_id" '[$trace_id]' >"$trace_ids_path"
+  contract_operator_verification_json="$(jq '.operator_verification' "$contract_json")"
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
   if [[ -z "$(git status --short --untracked-files=normal 2>/dev/null)" ]]; then
@@ -405,6 +406,7 @@ write_manifest() {
     --arg failed_command "$failed_command" \
     --argjson dirty_worktree "$dirty_worktree_json" \
     --argjson rch_exec_timeout_seconds "$rch_timeout_seconds" \
+    --argjson contract_operator_verification "$contract_operator_verification_json" \
     --argjson commands_run "$(json_array_from_args "${commands_run[@]}")" \
     '{
       schema_version: $schema_version,
@@ -444,9 +446,8 @@ write_manifest() {
         ("cat " + $trace_ids),
         ("cat " + $report),
         "jq empty docs/support_surface_contract.json",
-        "jq empty docs/support_surface_mode_matrix.json",
-        $replay_command
-      ]
+        "jq empty docs/support_surface_mode_matrix.json"
+      ] + $contract_operator_verification
     }' >"$manifest_path"
 
   echo "rgc support-surface contract manifest: ${manifest_path}"
@@ -454,9 +455,9 @@ write_manifest() {
 }
 
 main_exit=0
+copy_contract_artifacts
 validate_source_inputs || main_exit=$?
 if [[ "$main_exit" -eq 0 ]]; then
-  copy_contract_artifacts
   run_mode || main_exit=$?
 fi
 write_manifest "$main_exit"

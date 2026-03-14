@@ -138,6 +138,11 @@ Canonical command:
 ./scripts/run_rgc_v8_supremacy_claim_contract.sh ci
 ```
 
+The runner defaults heavy `CARGO_TARGET_DIR` output to the repo-local path
+`target_rch_rgc_v8_supremacy_claim_contract_uid<uid>_<mode>_<scenario>_<pid>`
+rather than `/tmp`, so rch-backed verification does not depend on ephemeral
+temp-root state.
+
 Modes:
 
 - `check`: compile the focused contract test target

@@ -105,6 +105,10 @@ Heavy verification remains `rch`-only:
 ./scripts/e2e/supremacy_cell_matrix_replay.sh ci
 ```
 
+The runner defaults heavy `CARGO_TARGET_DIR` output to the repo-local path
+`target_rch_supremacy_cell_matrix_uid<uid>` rather than `/tmp`, so remote
+artifact replay does not depend on ephemeral temp-root state.
+
 Artifacts are emitted under `artifacts/supremacy_cell_matrix/<timestamp>/` and
 must include:
 

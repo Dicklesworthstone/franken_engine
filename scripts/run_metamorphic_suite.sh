@@ -6,7 +6,7 @@ cd "$root_dir"
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_metamorphic_uid$(id -u)}"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_metamorphic_uid$(id -u)}"
 pairs="${METAMORPHIC_PAIRS:-1000}"
 seed="${METAMORPHIC_SEED:-1}"
 relation_filter_csv="${METAMORPHIC_RELATIONS:-}"

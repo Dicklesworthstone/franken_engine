@@ -13,6 +13,7 @@
     clippy::manual_abs_diff
 )]
 
+use frankenengine_engine::frankenlab_gap_matrix as canonical_gap_matrix;
 use frankenengine_engine::frankenlab_surface_gap_matrix::*;
 
 // ---------------------------------------------------------------------------
@@ -59,7 +60,16 @@ fn constant_bead_id() {
 fn constant_schema_version() {
     assert_eq!(
         GAP_MATRIX_SCHEMA_VERSION,
-        "frankenengine.frankenlab-gap-matrix.v1"
+        "franken-engine.frankenlab-gap-matrix.v1"
+    );
+}
+
+#[test]
+fn canonical_and_surface_gap_matrix_modules_share_external_identity() {
+    assert_eq!(BEAD_ID, canonical_gap_matrix::GAP_MATRIX_BEAD_ID);
+    assert_eq!(
+        GAP_MATRIX_SCHEMA_VERSION,
+        canonical_gap_matrix::GAP_MATRIX_SCHEMA_VERSION
     );
 }
 

@@ -541,3 +541,314 @@ fn projection_from_release_claim_tags_covers_all_cases() {
         );
     }
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment batch: clone/debug, serde edge cases, invariant
+// checks, field validation, projection properties
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn compatibility_matrix_clone_preserves_equality() {
+    let matrix = parse_matrix();
+    let cloned = matrix.clone();
+    assert_eq!(matrix, cloned);
+    assert_eq!(matrix.cases.len(), cloned.cases.len());
+    assert_eq!(matrix.dimensions, cloned.dimensions);
+}
+
+#[test]
+fn compatibility_matrix_debug_contains_schema_version() {
+    let matrix = parse_matrix();
+    let debug_str = format!("{:?}", matrix);
+    assert!(
+        debug_str.contains("schema_version"),
+        "Debug output should contain schema_version field"
+    );
+    assert!(
+        debug_str.contains(&matrix.schema_version),
+        "Debug output should contain schema version value"
+    );
+}
+
+#[test]
+fn compatibility_case_clone_preserves_all_fields() {
+    let matrix = parse_matrix();
+    for case in &matrix.cases {
+        let cloned = case.clone();
+        assert_eq!(case.case_id, cloned.case_id);
+        assert_eq!(case.api_family, cloned.api_family);
+        assert_eq!(case.surface, cloned.surface);
+        assert_eq!(case.react18_status, cloned.react18_status);
+        assert_eq!(case.react19_status, cloned.react19_status);
+        assert_eq!(case.browser_constraints, cloned.browser_constraints);
+        assert_eq!(case.compatibility_route, cloned.compatibility_route);
+        assert_eq!(
+            case.deterministic_fallback_required,
+            cloned.deterministic_fallback_required
+        );
+        assert_eq!(case.risk_level, cloned.risk_level);
+        assert_eq!(case.behavior_notes, cloned.behavior_notes);
+        assert_eq!(case.test_selector_tags, cloned.test_selector_tags);
+        assert_eq!(case.release_claim_tags, cloned.release_claim_tags);
+    }
+}
+
+#[test]
+fn matrix_log_event_serde_roundtrip_with_all_fields_populated() {
+    let event = MatrixLogEvent {
+        schema_version: "franken-engine.parser-log-event.v1".to_string(),
+        trace_id: "trace-roundtrip-full".to_string(),
+        decision_id: "decision-roundtrip-full".to_string(),
+        policy_id: "policy-frx-cross-version-compat-v1".to_string(),
+        component: "frx_cross_version_compatibility_matrix".to_string(),
+        event: "matrix_case_validated".to_string(),
+        scenario_id: "scenario-full".to_string(),
+        outcome: "pass".to_string(),
+        error_code: Some("FE-COMPAT-999".to_string()),
+        replay_command: REPLAY_COMMAND.to_string(),
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let rt: MatrixLogEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(event, rt);
+    assert!(json.contains("FE-COMPAT-999"));
+    assert!(json.contains(REPLAY_COMMAND));
+}
+
+#[test]
+fn matrix_log_event_deserialize_from_known_json() {
+    let json = r#"{
+        "schema_version": "v1",
+        "trace_id": "t-known",
+        "decision_id": "d-known",
+        "policy_id": "p-known",
+        "component": "test_component",
+        "event": "test_event",
+        "scenario_id": "s-known",
+        "outcome": "fail",
+        "error_code": "ERR-42",
+        "replay_command": "./run.sh"
+    }"#;
+    let event: MatrixLogEvent = serde_json::from_str(json).expect("deserialize known json");
+    assert_eq!(event.trace_id, "t-known");
+    assert_eq!(event.outcome, "fail");
+    assert_eq!(event.error_code, Some("ERR-42".to_string()));
+}
+
+#[test]
+fn matrix_log_event_deserialize_null_error_code() {
+    let json = r#"{
+        "schema_version": "v1",
+        "trace_id": "t-null",
+        "decision_id": "d-null",
+        "policy_id": "p-null",
+        "component": "c",
+        "event": "e",
+        "scenario_id": "s-null",
+        "outcome": "pass",
+        "error_code": null,
+        "replay_command": "./replay.sh"
+    }"#;
+    let event: MatrixLogEvent = serde_json::from_str(json).expect("deserialize null error_code");
+    assert_eq!(event.error_code, None);
+}
+
+#[test]
+fn matrix_log_event_clone_and_debug() {
+    let event = MatrixLogEvent {
+        schema_version: "v1".to_string(),
+        trace_id: "t-debug".to_string(),
+        decision_id: "d-debug".to_string(),
+        policy_id: "p-debug".to_string(),
+        component: "comp".to_string(),
+        event: "evt".to_string(),
+        scenario_id: "scen".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        replay_command: "./r.sh".to_string(),
+    };
+    let cloned = event.clone();
+    assert_eq!(event, cloned);
+    let debug = format!("{:?}", event);
+    assert!(debug.contains("t-debug"));
+    assert!(debug.contains("MatrixLogEvent"));
+}
+
+#[test]
+fn matrix_log_event_jsonl_batch_serialization() {
+    let events: Vec<MatrixLogEvent> = (0..5)
+        .map(|i| MatrixLogEvent {
+            schema_version: "v1".to_string(),
+            trace_id: format!("trace-batch-{i}"),
+            decision_id: format!("decision-batch-{i}"),
+            policy_id: "policy-batch".to_string(),
+            component: "batch_comp".to_string(),
+            event: "batch_event".to_string(),
+            scenario_id: format!("scenario-batch-{i}"),
+            outcome: if i % 2 == 0 { "pass" } else { "fail" }.to_string(),
+            error_code: if i % 2 == 1 {
+                Some(format!("ERR-{i}"))
+            } else {
+                None
+            },
+            replay_command: REPLAY_COMMAND.to_string(),
+        })
+        .collect();
+
+    let lines: Vec<String> = events
+        .iter()
+        .map(|e| serde_json::to_string(e).expect("serialize"))
+        .collect();
+
+    assert_eq!(lines.len(), 5);
+    for (i, line) in lines.iter().enumerate() {
+        let rt: MatrixLogEvent = serde_json::from_str(line).expect("deserialize line");
+        assert_eq!(rt, events[i]);
+    }
+}
+
+#[test]
+fn projection_from_test_selector_tags_covers_all_cases() {
+    let matrix = parse_matrix();
+    let projection = projection_from_tags(&matrix.cases, |c| &c.test_selector_tags);
+    let all_case_ids: BTreeSet<_> = matrix.cases.iter().map(|c| c.case_id.clone()).collect();
+    let covered: BTreeSet<_> = projection.values().flatten().cloned().collect();
+    for case_id in &all_case_ids {
+        assert!(
+            covered.contains(case_id),
+            "case {case_id} not covered by any test_selector_tag"
+        );
+    }
+}
+
+#[test]
+fn browser_constraints_reference_declared_browsers() {
+    let matrix = parse_matrix();
+    let declared: BTreeSet<_> = matrix.dimensions.browsers.iter().cloned().collect();
+    for case in &matrix.cases {
+        for constraint in &case.browser_constraints {
+            assert!(
+                declared.contains(constraint),
+                "case {} references undeclared browser constraint: {}",
+                case.case_id,
+                constraint
+            );
+        }
+    }
+}
+
+#[test]
+fn api_families_in_cases_match_declared_dimensions() {
+    let matrix = parse_matrix();
+    let declared: BTreeSet<_> = matrix.dimensions.api_families.iter().cloned().collect();
+    for case in &matrix.cases {
+        assert!(
+            declared.contains(&case.api_family),
+            "case {} uses undeclared api_family: {}",
+            case.case_id,
+            case.api_family
+        );
+    }
+}
+
+#[test]
+fn matrix_dimensions_have_no_duplicates() {
+    let matrix = parse_matrix();
+
+    let rv_set: BTreeSet<_> = matrix.dimensions.react_versions.iter().collect();
+    assert_eq!(rv_set.len(), matrix.dimensions.react_versions.len());
+
+    let br_set: BTreeSet<_> = matrix.dimensions.browsers.iter().collect();
+    assert_eq!(br_set.len(), matrix.dimensions.browsers.len());
+
+    let af_set: BTreeSet<_> = matrix.dimensions.api_families.iter().collect();
+    assert_eq!(af_set.len(), matrix.dimensions.api_families.len());
+
+    let cr_set: BTreeSet<_> = matrix.dimensions.compatibility_routes.iter().collect();
+    assert_eq!(cr_set.len(), matrix.dimensions.compatibility_routes.len());
+}
+
+#[test]
+fn matrix_dimensions_clone_preserves_equality() {
+    let matrix = parse_matrix();
+    let dims = matrix.dimensions.clone();
+    assert_eq!(matrix.dimensions, dims);
+    assert_eq!(
+        matrix.dimensions.react_versions.len(),
+        dims.react_versions.len()
+    );
+    assert_eq!(matrix.dimensions.browsers.len(), dims.browsers.len());
+}
+
+#[test]
+fn high_risk_cases_require_deterministic_fallback() {
+    let matrix = parse_matrix();
+    for case in &matrix.cases {
+        if case.risk_level == "critical" {
+            assert!(
+                case.deterministic_fallback_required,
+                "critical-risk case {} should require deterministic fallback",
+                case.case_id
+            );
+        }
+    }
+}
+
+#[test]
+fn matrix_log_event_equality_distinguishes_different_trace_ids() {
+    let base = MatrixLogEvent {
+        schema_version: "v1".to_string(),
+        trace_id: "trace-a".to_string(),
+        decision_id: "d".to_string(),
+        policy_id: "p".to_string(),
+        component: "c".to_string(),
+        event: "e".to_string(),
+        scenario_id: "s".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        replay_command: "./r.sh".to_string(),
+    };
+    let mut different = base.clone();
+    different.trace_id = "trace-b".to_string();
+    assert_ne!(base, different);
+}
+
+#[test]
+fn matrix_case_ids_have_consistent_prefix() {
+    let matrix = parse_matrix();
+    if matrix.cases.is_empty() {
+        return;
+    }
+    // Extract the prefix pattern from the first case_id (everything before the last hyphen-number)
+    let first_id = &matrix.cases[0].case_id;
+    let prefix = first_id
+        .rfind('-')
+        .map(|pos| &first_id[..pos])
+        .unwrap_or(first_id.as_str());
+    for case in &matrix.cases {
+        assert!(
+            case.case_id.starts_with(prefix),
+            "case_id {} does not share prefix {} with first case",
+            case.case_id,
+            prefix
+        );
+    }
+}
+
+#[test]
+fn projection_tag_keys_are_nonempty_strings() {
+    let matrix = parse_matrix();
+    let test_proj = projection_from_tags(&matrix.cases, |c| &c.test_selector_tags);
+    for key in test_proj.keys() {
+        assert!(
+            !key.trim().is_empty(),
+            "empty tag key in test_selector projection"
+        );
+    }
+    let release_proj = projection_from_tags(&matrix.cases, |c| &c.release_claim_tags);
+    for key in release_proj.keys() {
+        assert!(
+            !key.trim().is_empty(),
+            "empty tag key in release_claim projection"
+        );
+    }
+}

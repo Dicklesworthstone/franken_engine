@@ -928,3 +928,533 @@ fn emit_structured_events_gate_report_event_is_present() {
         assert_eq!(ge.schema_version, FLAKE_WORKFLOW_EVENT_SCHEMA_VERSION);
     }
 }
+
+// ---------- new enrichment tests ----------
+
+#[test]
+fn flake_severity_as_str_warning() {
+    use test_flake_quarantine_workflow::FlakeSeverity;
+    assert_eq!(FlakeSeverity::Warning.as_str(), "warning");
+}
+
+#[test]
+fn flake_severity_as_str_high() {
+    use test_flake_quarantine_workflow::FlakeSeverity;
+    assert_eq!(FlakeSeverity::High.as_str(), "high");
+}
+
+#[test]
+fn flake_severity_display_matches_as_str() {
+    use test_flake_quarantine_workflow::FlakeSeverity;
+    for sev in [FlakeSeverity::Warning, FlakeSeverity::High] {
+        assert_eq!(format!("{sev}"), sev.as_str());
+    }
+}
+
+#[test]
+fn quarantine_action_display_matches_as_str() {
+    use test_flake_quarantine_workflow::QuarantineAction;
+    for action in [
+        QuarantineAction::Observe,
+        QuarantineAction::QuarantineImmediate,
+    ] {
+        assert_eq!(format!("{action}"), action.as_str());
+    }
+}
+
+#[test]
+fn quarantine_action_as_str_observe() {
+    use test_flake_quarantine_workflow::QuarantineAction;
+    assert_eq!(QuarantineAction::Observe.as_str(), "observe");
+}
+
+#[test]
+fn quarantine_action_as_str_quarantine_immediate() {
+    use test_flake_quarantine_workflow::QuarantineAction;
+    assert_eq!(
+        QuarantineAction::QuarantineImmediate.as_str(),
+        "quarantine-immediate"
+    );
+}
+
+#[test]
+fn flake_severity_serde_roundtrip() {
+    use test_flake_quarantine_workflow::FlakeSeverity;
+    for sev in [FlakeSeverity::Warning, FlakeSeverity::High] {
+        let json = serde_json::to_string(&sev).expect("serialize");
+        let recovered: FlakeSeverity = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, sev);
+    }
+}
+
+#[test]
+fn quarantine_action_serde_roundtrip() {
+    use test_flake_quarantine_workflow::QuarantineAction;
+    for action in [
+        QuarantineAction::Observe,
+        QuarantineAction::QuarantineImmediate,
+    ] {
+        let json = serde_json::to_string(&action).expect("serialize");
+        let recovered: QuarantineAction = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, action);
+    }
+}
+
+#[test]
+fn flake_run_record_serde_preserves_all_fields() {
+    let record = FlakeRunRecord {
+        run_id: "r-99".to_string(),
+        epoch: 77,
+        suite_kind: "unit".to_string(),
+        scenario_id: "scenario-x".to_string(),
+        outcome: "fail".to_string(),
+        error_signature: Some("panic:timeout".to_string()),
+        replay_command_ci: "rch exec -- cargo test --exact scenario_x".to_string(),
+        replay_command_local: "cargo test --exact scenario_x".to_string(),
+        artifact_bundle_id: "bundle-99".to_string(),
+        related_unit_suites: vec!["unit_x".to_string(), "unit_y".to_string()],
+        root_cause_hypothesis_artifacts: vec!["hyp-a".to_string()],
+        seed: 54321,
+    };
+    let json = serde_json::to_string(&record).expect("serialize");
+    let recovered: FlakeRunRecord = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.run_id, record.run_id);
+    assert_eq!(recovered.epoch, record.epoch);
+    assert_eq!(recovered.suite_kind, record.suite_kind);
+    assert_eq!(recovered.scenario_id, record.scenario_id);
+    assert_eq!(recovered.outcome, record.outcome);
+    assert_eq!(recovered.error_signature, record.error_signature);
+    assert_eq!(recovered.replay_command_ci, record.replay_command_ci);
+    assert_eq!(recovered.replay_command_local, record.replay_command_local);
+    assert_eq!(recovered.artifact_bundle_id, record.artifact_bundle_id);
+    assert_eq!(recovered.related_unit_suites, record.related_unit_suites);
+    assert_eq!(
+        recovered.root_cause_hypothesis_artifacts,
+        record.root_cause_hypothesis_artifacts
+    );
+    assert_eq!(recovered.seed, record.seed);
+}
+
+#[test]
+fn flake_run_record_clone_is_independent() {
+    let original = sample_runs().into_iter().next().expect("at least one run");
+    let mut cloned = original.clone();
+    cloned.run_id = "changed-run-id".to_string();
+    assert_ne!(original.run_id, cloned.run_id);
+}
+
+#[test]
+fn flake_policy_clone_is_independent() {
+    let original = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 200_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    let mut cloned = original.clone();
+    cloned.quarantine_ttl_epochs = 99;
+    assert_ne!(original.quarantine_ttl_epochs, cloned.quarantine_ttl_epochs);
+}
+
+#[test]
+fn quarantine_records_with_owner_pass_validation() {
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 200_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    let flakes = classify_flakes(&sample_runs(), &policy);
+    let mut owners = BTreeMap::new();
+    owners.insert(
+        "e2e::scenario-router-fallback".to_string(),
+        "infra-oncall".to_string(),
+    );
+    let quarantines = build_quarantine_records(&flakes, &owners, 10, &policy);
+    let violations = validate_quarantine_records(&quarantines, 10);
+    assert!(
+        violations.is_empty(),
+        "owner-bound quarantine records must pass validation: {violations:?}"
+    );
+}
+
+#[test]
+fn quarantine_record_serde_roundtrip() {
+    use test_flake_quarantine_workflow::{QuarantineRecord, QuarantineStatus};
+    let record = QuarantineRecord {
+        suite_kind: "e2e".to_string(),
+        scenario_id: "scenario-alpha".to_string(),
+        owner: "team-alpha".to_string(),
+        owner_bound: true,
+        opened_epoch: 5,
+        expires_epoch: 8,
+        status: QuarantineStatus::Active,
+        reason: "high_flake_rate:e2e::scenario-alpha".to_string(),
+        linked_reproducer_bundle_id: "bundle-alpha".to_string(),
+    };
+    let json = serde_json::to_string(&record).expect("serialize");
+    let recovered: QuarantineRecord = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.suite_kind, record.suite_kind);
+    assert_eq!(recovered.scenario_id, record.scenario_id);
+    assert_eq!(recovered.owner, record.owner);
+    assert_eq!(recovered.owner_bound, record.owner_bound);
+    assert_eq!(recovered.opened_epoch, record.opened_epoch);
+    assert_eq!(recovered.expires_epoch, record.expires_epoch);
+    assert_eq!(recovered.reason, record.reason);
+    assert_eq!(
+        recovered.linked_reproducer_bundle_id,
+        record.linked_reproducer_bundle_id
+    );
+}
+
+#[test]
+fn epoch_burden_point_serde_roundtrip() {
+    use test_flake_quarantine_workflow::EpochBurdenPoint;
+    let point = EpochBurdenPoint {
+        epoch: 42,
+        total_cases: 10,
+        flaky_cases: 3,
+        high_severity_cases: 1,
+        flake_burden_millionths: 300_000,
+        high_severity_burden_millionths: 100_000,
+    };
+    let json = serde_json::to_string(&point).expect("serialize");
+    let recovered: EpochBurdenPoint = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.epoch, point.epoch);
+    assert_eq!(recovered.total_cases, point.total_cases);
+    assert_eq!(recovered.flaky_cases, point.flaky_cases);
+    assert_eq!(recovered.high_severity_cases, point.high_severity_cases);
+    assert_eq!(
+        recovered.flake_burden_millionths,
+        point.flake_burden_millionths
+    );
+    assert_eq!(
+        recovered.high_severity_burden_millionths,
+        point.high_severity_burden_millionths
+    );
+}
+
+#[test]
+fn gate_confidence_report_no_flakes_promotes() {
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 200_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    // All passes — no flake classifications
+    let runs: Vec<FlakeRunRecord> = (0..4)
+        .map(|i| FlakeRunRecord {
+            run_id: format!("stable-{i}"),
+            epoch: 5,
+            suite_kind: "e2e".to_string(),
+            scenario_id: "scenario-stable".to_string(),
+            outcome: "pass".to_string(),
+            error_signature: None,
+            replay_command_ci: "rch exec -- cargo test --exact stable".to_string(),
+            replay_command_local: "cargo test --exact stable".to_string(),
+            artifact_bundle_id: format!("bundle-st-{i}"),
+            related_unit_suites: vec!["unit_stable".to_string()],
+            root_cause_hypothesis_artifacts: vec!["hyp-stable".to_string()],
+            seed: 7,
+        })
+        .collect();
+    let flakes = classify_flakes(&runs, &policy);
+    assert!(flakes.is_empty());
+    let report = evaluate_gate_confidence(&runs, &flakes, &policy);
+    assert_eq!(
+        report.promotion_outcome, "promote",
+        "no flakes should yield promote outcome"
+    );
+    assert!(report.blockers.is_empty());
+}
+
+#[test]
+fn flake_workflow_failure_code_starts_with_fe() {
+    assert!(
+        FLAKE_WORKFLOW_FAILURE_CODE.starts_with("FE-"),
+        "failure code must be namespaced with FE- prefix"
+    );
+}
+
+#[test]
+fn classify_flakes_warning_severity_for_low_flake_rate() {
+    // 1 fail out of 10 total = 100_000 millionths, which is below high (500_000) but at/above warning (100_000)
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 900_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    let mut runs: Vec<FlakeRunRecord> = (0..9)
+        .map(|i| FlakeRunRecord {
+            run_id: format!("pass-low-{i}"),
+            epoch: 20,
+            suite_kind: "e2e".to_string(),
+            scenario_id: "scenario-low-flake".to_string(),
+            outcome: "pass".to_string(),
+            error_signature: None,
+            replay_command_ci: "rch exec -- cargo test --exact low_flake".to_string(),
+            replay_command_local: "cargo test --exact low_flake".to_string(),
+            artifact_bundle_id: format!("bundle-low-{i}"),
+            related_unit_suites: vec!["unit_low".to_string()],
+            root_cause_hypothesis_artifacts: vec!["hyp-low".to_string()],
+            seed: 111,
+        })
+        .collect();
+    runs.push(FlakeRunRecord {
+        run_id: "fail-low-0".to_string(),
+        epoch: 20,
+        suite_kind: "e2e".to_string(),
+        scenario_id: "scenario-low-flake".to_string(),
+        outcome: "fail".to_string(),
+        error_signature: Some("panic:low".to_string()),
+        replay_command_ci: "rch exec -- cargo test --exact low_flake".to_string(),
+        replay_command_local: "cargo test --exact low_flake".to_string(),
+        artifact_bundle_id: "bundle-low-fail".to_string(),
+        related_unit_suites: vec!["unit_low".to_string()],
+        root_cause_hypothesis_artifacts: vec!["hyp-low".to_string()],
+        seed: 111,
+    });
+    let flakes = classify_flakes(&runs, &policy);
+    // 1 pass-min out of 10 → 100_000 millionths ≥ warning threshold → should classify as Warning
+    assert_eq!(flakes.len(), 1);
+    use test_flake_quarantine_workflow::FlakeSeverity;
+    assert_eq!(flakes[0].severity, FlakeSeverity::Warning);
+    assert_eq!(flakes[0].pass_count + flakes[0].fail_count, 10);
+}
+
+#[test]
+fn validate_flake_linkage_reports_empty_for_valid_flakes() {
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 200_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    let flakes = classify_flakes(&sample_runs(), &policy);
+    assert!(!flakes.is_empty());
+    let violations = validate_flake_linkage(&flakes);
+    assert!(
+        violations.is_empty(),
+        "sample flakes must pass linkage validation: {violations:?}"
+    );
+}
+
+#[test]
+fn gate_confidence_report_debug_is_nonempty() {
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 200_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    let flakes = classify_flakes(&sample_runs(), &policy);
+    let report = evaluate_gate_confidence(&sample_runs(), &flakes, &policy);
+    let debug = format!("{report:?}");
+    assert!(!debug.is_empty());
+}
+
+#[test]
+fn flake_policy_thresholds_order_invariant() {
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 50_000,
+        high_flake_threshold_millionths: 300_000,
+        quarantine_ttl_epochs: 5,
+        max_flake_burden_millionths: 250_000,
+        trend_stability_epsilon_millionths: 5_000,
+    };
+    assert!(
+        policy.warning_flake_threshold_millionths <= policy.high_flake_threshold_millionths,
+        "warning threshold must not exceed high threshold"
+    );
+}
+
+#[test]
+fn flake_classification_pass_fail_counts_match_sample() {
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 200_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    let flakes = classify_flakes(&sample_runs(), &policy);
+    assert_eq!(flakes.len(), 1);
+    let flake = &flakes[0];
+    // sample_runs has 2 passes and 2 fails for scenario-router-fallback
+    assert_eq!(flake.pass_count, 2);
+    assert_eq!(flake.fail_count, 2);
+    assert_eq!(flake.pass_count + flake.fail_count, 4);
+}
+
+#[test]
+fn flake_workflow_event_serde_roundtrip() {
+    use test_flake_quarantine_workflow::FlakeWorkflowEvent;
+    let event = FlakeWorkflowEvent {
+        schema_version: FLAKE_WORKFLOW_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: "trace-serde-test".to_string(),
+        decision_id: "decision-serde-test-e2e::scenario-x".to_string(),
+        policy_id: "policy-serde-test".to_string(),
+        component: FLAKE_WORKFLOW_COMPONENT.to_string(),
+        event: "flake_classified".to_string(),
+        outcome: "high".to_string(),
+        error_code: Some(FLAKE_WORKFLOW_FAILURE_CODE.to_string()),
+        suite_kind: "e2e".to_string(),
+        scenario_id: "scenario-x".to_string(),
+        flake_rate_millionths: Some(600_000),
+        replay_command_ci: "rch exec -- cargo test --exact scenario_x".to_string(),
+        replay_command_local: "cargo test --exact scenario_x".to_string(),
+        quarantine_owner: Some("oncall-x".to_string()),
+        quarantine_expires_epoch: Some(15),
+        impacted_unit_suites: vec!["unit_x".to_string()],
+        root_cause_hypothesis_artifacts: vec!["hyp-x".to_string()],
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let recovered: FlakeWorkflowEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.schema_version, event.schema_version);
+    assert_eq!(recovered.trace_id, event.trace_id);
+    assert_eq!(recovered.decision_id, event.decision_id);
+    assert_eq!(recovered.policy_id, event.policy_id);
+    assert_eq!(recovered.component, event.component);
+    assert_eq!(recovered.event, event.event);
+    assert_eq!(recovered.outcome, event.outcome);
+    assert_eq!(recovered.error_code, event.error_code);
+    assert_eq!(recovered.flake_rate_millionths, event.flake_rate_millionths);
+    assert_eq!(recovered.quarantine_owner, event.quarantine_owner);
+    assert_eq!(
+        recovered.quarantine_expires_epoch,
+        event.quarantine_expires_epoch
+    );
+    assert_eq!(recovered.impacted_unit_suites, event.impacted_unit_suites);
+    assert_eq!(
+        recovered.root_cause_hypothesis_artifacts,
+        event.root_cause_hypothesis_artifacts
+    );
+}
+
+#[test]
+fn emit_structured_events_flake_classified_carries_error_code_for_high_severity() {
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 200_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    let flakes = classify_flakes(&sample_runs(), &policy);
+    let quarantines = build_quarantine_records(&flakes, &BTreeMap::new(), 12, &policy);
+    let report = evaluate_gate_confidence(&sample_runs(), &flakes, &policy);
+
+    let events = emit_structured_events(
+        "trace-ec",
+        "decision-ec",
+        "policy-ec",
+        &flakes,
+        &quarantines,
+        &report,
+    );
+
+    use test_flake_quarantine_workflow::FlakeSeverity;
+    for flake in &flakes {
+        if flake.severity == FlakeSeverity::High {
+            let key = format!("e2e::{}", flake.scenario_id);
+            let matched = events
+                .iter()
+                .find(|e| e.event == "flake_classified" && e.scenario_id == flake.scenario_id);
+            if let Some(event) = matched {
+                assert_eq!(
+                    event.error_code.as_deref(),
+                    Some(FLAKE_WORKFLOW_FAILURE_CODE),
+                    "high severity flake event for {key} must carry failure code"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn multiple_scenarios_each_produce_independent_flake_records() {
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: 3,
+        max_flake_burden_millionths: 900_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    // Build two independent scenarios with flake patterns
+    let mut runs = Vec::new();
+    for scenario in ["scenario-alpha", "scenario-beta"] {
+        for (i, outcome) in ["pass", "fail"].iter().enumerate() {
+            runs.push(FlakeRunRecord {
+                run_id: format!("{scenario}-run-{i}"),
+                epoch: 30,
+                suite_kind: "e2e".to_string(),
+                scenario_id: scenario.to_string(),
+                outcome: outcome.to_string(),
+                error_signature: if *outcome == "fail" {
+                    Some(format!("panic:{scenario}"))
+                } else {
+                    None
+                },
+                replay_command_ci: format!("rch exec -- cargo test --exact {scenario}"),
+                replay_command_local: format!("cargo test --exact {scenario}"),
+                artifact_bundle_id: format!("bundle-{scenario}-{i}"),
+                related_unit_suites: vec![format!("unit_{scenario}")],
+                root_cause_hypothesis_artifacts: vec![format!("hyp-{scenario}")],
+                seed: 999,
+            });
+        }
+    }
+    let flakes = classify_flakes(&runs, &policy);
+    assert_eq!(flakes.len(), 2, "each scenario should yield its own flake");
+    let ids: BTreeSet<_> = flakes.iter().map(|f| f.scenario_id.as_str()).collect();
+    assert!(ids.contains("scenario-alpha"));
+    assert!(ids.contains("scenario-beta"));
+}
+
+#[test]
+fn quarantine_ttl_respected_in_expiry_calculation() {
+    let ttl: u32 = 7;
+    let current_epoch: u32 = 100;
+    let policy = FlakePolicy {
+        warning_flake_threshold_millionths: 100_000,
+        high_flake_threshold_millionths: 500_000,
+        quarantine_ttl_epochs: ttl,
+        max_flake_burden_millionths: 200_000,
+        trend_stability_epsilon_millionths: 10_000,
+    };
+    let flakes = classify_flakes(&sample_runs(), &policy);
+    let mut owners = BTreeMap::new();
+    owners.insert(
+        "e2e::scenario-router-fallback".to_string(),
+        "team-x".to_string(),
+    );
+    let quarantines = build_quarantine_records(&flakes, &owners, current_epoch, &policy);
+    for qr in &quarantines {
+        assert_eq!(
+            qr.expires_epoch,
+            current_epoch + ttl,
+            "expiry must be opened_epoch + ttl"
+        );
+    }
+}
+
+#[test]
+fn contract_json_required_run_fields_has_no_duplicates() {
+    let path = repo_root().join("docs/frx_flake_quarantine_workflow_v1.json");
+    let contract: FlakeWorkflowContract = load_json(&path);
+    let fields = &contract.flake_detection.required_run_fields;
+    let unique: BTreeSet<_> = fields.iter().collect();
+    assert_eq!(
+        unique.len(),
+        fields.len(),
+        "required_run_fields must not contain duplicates"
+    );
+}

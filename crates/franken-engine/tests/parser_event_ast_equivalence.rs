@@ -791,3 +791,570 @@ fn parity_cases_all_have_tamper_kind_none() {
         }
     }
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment batch: source-module types, serde, Display, Ord,
+// canonical hashing, edge cases, inventory contract semantics
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn corpus_tier_serde_round_trip_all_variants() {
+    use frankenengine_engine::parser_event_ast_equivalence::CorpusTier;
+    for tier in CorpusTier::ALL {
+        let json = serde_json::to_string(tier).expect("serialize");
+        let recovered: CorpusTier = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*tier, recovered);
+        // Verify snake_case encoding
+        let raw: String = serde_json::from_str(&json).expect("deserialize as string");
+        assert_eq!(raw, tier.as_str());
+    }
+}
+
+#[test]
+fn corpus_tier_display_matches_as_str() {
+    use frankenengine_engine::parser_event_ast_equivalence::CorpusTier;
+    for tier in CorpusTier::ALL {
+        assert_eq!(format!("{tier}"), tier.as_str());
+    }
+}
+
+#[test]
+fn corpus_tier_ordering_core_lt_edge_lt_adversarial() {
+    use frankenengine_engine::parser_event_ast_equivalence::CorpusTier;
+    assert!(CorpusTier::Core < CorpusTier::Edge);
+    assert!(CorpusTier::Edge < CorpusTier::Adversarial);
+    assert!(CorpusTier::Core < CorpusTier::Adversarial);
+}
+
+#[test]
+fn corpus_tier_clone_and_copy() {
+    use frankenengine_engine::parser_event_ast_equivalence::CorpusTier;
+    let tier = CorpusTier::Edge;
+    let cloned = tier.clone();
+    let copied = tier;
+    assert_eq!(cloned, copied);
+    assert_eq!(tier, CorpusTier::Edge);
+}
+
+#[test]
+fn corpus_tier_btreemap_key_ordering() {
+    use frankenengine_engine::parser_event_ast_equivalence::CorpusTier;
+    use std::collections::BTreeMap;
+    let mut map = BTreeMap::new();
+    map.insert(CorpusTier::Adversarial, 3);
+    map.insert(CorpusTier::Core, 1);
+    map.insert(CorpusTier::Edge, 2);
+    let keys: Vec<_> = map.keys().collect();
+    assert_eq!(
+        keys,
+        vec![
+            &CorpusTier::Core,
+            &CorpusTier::Edge,
+            &CorpusTier::Adversarial
+        ]
+    );
+}
+
+#[test]
+fn tamper_kind_serde_round_trip_all_variants() {
+    use frankenengine_engine::parser_event_ast_equivalence::TamperKind;
+    for kind in TamperKind::ALL {
+        let json = serde_json::to_string(kind).expect("serialize");
+        let recovered: TamperKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(*kind, recovered);
+        let raw: String = serde_json::from_str(&json).expect("deserialize as string");
+        assert_eq!(raw, kind.as_str());
+    }
+}
+
+#[test]
+fn tamper_kind_display_matches_as_str() {
+    use frankenengine_engine::parser_event_ast_equivalence::TamperKind;
+    for kind in TamperKind::ALL {
+        assert_eq!(format!("{kind}"), kind.as_str());
+    }
+}
+
+#[test]
+fn tamper_kind_ordering_none_lt_statement_hash() {
+    use frankenengine_engine::parser_event_ast_equivalence::TamperKind;
+    assert!(TamperKind::None < TamperKind::StatementHash);
+    assert!(TamperKind::StatementHash < TamperKind::EventDeletion);
+    assert!(TamperKind::EventDeletion < TamperKind::SequenceReorder);
+}
+
+#[test]
+fn equivalence_verdict_serde_round_trip_all_variants() {
+    use frankenengine_engine::parser_event_ast_equivalence::EquivalenceVerdict;
+    for v in [EquivalenceVerdict::Pass, EquivalenceVerdict::Fail] {
+        let json = serde_json::to_string(&v).expect("serialize");
+        let recovered: EquivalenceVerdict = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(v, recovered);
+    }
+}
+
+#[test]
+fn equivalence_verdict_display_matches_as_str() {
+    use frankenengine_engine::parser_event_ast_equivalence::EquivalenceVerdict;
+    assert_eq!(format!("{}", EquivalenceVerdict::Pass), "pass");
+    assert_eq!(format!("{}", EquivalenceVerdict::Fail), "fail");
+}
+
+#[test]
+fn equivalence_specimen_serde_round_trip() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        EquivalenceSpecimen, equivalence_corpus,
+    };
+    let corpus = equivalence_corpus();
+    for spec in &corpus {
+        let json = serde_json::to_string(spec).expect("serialize specimen");
+        let recovered: EquivalenceSpecimen =
+            serde_json::from_str(&json).expect("deserialize specimen");
+        assert_eq!(spec.specimen_id, recovered.specimen_id);
+        assert_eq!(spec.goal, recovered.goal);
+        assert_eq!(spec.corpus_tier, recovered.corpus_tier);
+        assert_eq!(spec.tamper_kind, recovered.tamper_kind);
+        assert_eq!(spec.expect_parity, recovered.expect_parity);
+        assert_eq!(
+            spec.expected_statement_count,
+            recovered.expected_statement_count
+        );
+    }
+}
+
+#[test]
+fn specimen_evidence_serde_round_trip_all_fields() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        CorpusTier, EquivalenceVerdict, SpecimenEvidence, TamperKind,
+    };
+    let ev = SpecimenEvidence {
+        specimen_id: "test_specimen".to_string(),
+        corpus_tier: CorpusTier::Edge,
+        tamper_kind: TamperKind::StatementHash,
+        verdict: EquivalenceVerdict::Fail,
+        event_ir_hash: "sha256:abcd1234".to_string(),
+        materialized_ast_hash: Some("sha256:deadbeef".to_string()),
+        original_ast_hash: Some("sha256:cafebabe".to_string()),
+        parse_error_code: None,
+        materialization_error_code: Some("statement_hash_mismatch".to_string()),
+        statement_count: 3,
+        hash_parity: false,
+        replay_stable: true,
+    };
+    let json = serde_json::to_string(&ev).expect("serialize");
+    let recovered: SpecimenEvidence = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(ev.specimen_id, recovered.specimen_id);
+    assert_eq!(ev.corpus_tier, recovered.corpus_tier);
+    assert_eq!(ev.tamper_kind, recovered.tamper_kind);
+    assert_eq!(ev.verdict, recovered.verdict);
+    assert_eq!(ev.event_ir_hash, recovered.event_ir_hash);
+    assert_eq!(ev.materialized_ast_hash, recovered.materialized_ast_hash);
+    assert_eq!(ev.original_ast_hash, recovered.original_ast_hash);
+    assert_eq!(ev.parse_error_code, recovered.parse_error_code);
+    assert_eq!(
+        ev.materialization_error_code,
+        recovered.materialization_error_code
+    );
+    assert_eq!(ev.statement_count, recovered.statement_count);
+    assert_eq!(ev.hash_parity, recovered.hash_parity);
+    assert_eq!(ev.replay_stable, recovered.replay_stable);
+}
+
+#[test]
+fn specimen_evidence_canonical_hash_changes_with_different_verdicts() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        CorpusTier, EquivalenceVerdict, SpecimenEvidence, TamperKind,
+    };
+    let base = SpecimenEvidence {
+        specimen_id: "canonical_diff_test".to_string(),
+        corpus_tier: CorpusTier::Core,
+        tamper_kind: TamperKind::None,
+        verdict: EquivalenceVerdict::Pass,
+        event_ir_hash: "sha256:0000".to_string(),
+        materialized_ast_hash: None,
+        original_ast_hash: None,
+        parse_error_code: None,
+        materialization_error_code: None,
+        statement_count: 1,
+        hash_parity: true,
+        replay_stable: true,
+    };
+    let mut altered = base.clone();
+    altered.verdict = EquivalenceVerdict::Fail;
+    assert_ne!(base.canonical_hash(), altered.canonical_hash());
+}
+
+#[test]
+fn specimen_evidence_canonical_bytes_nonempty() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        CorpusTier, EquivalenceVerdict, SpecimenEvidence, TamperKind,
+    };
+    let ev = SpecimenEvidence {
+        specimen_id: "bytes_test".to_string(),
+        corpus_tier: CorpusTier::Adversarial,
+        tamper_kind: TamperKind::EventDeletion,
+        verdict: EquivalenceVerdict::Fail,
+        event_ir_hash: "sha256:ff".to_string(),
+        materialized_ast_hash: None,
+        original_ast_hash: None,
+        parse_error_code: None,
+        materialization_error_code: Some("statement_count_mismatch".to_string()),
+        statement_count: 0,
+        hash_parity: false,
+        replay_stable: false,
+    };
+    let bytes = ev.canonical_bytes();
+    assert!(!bytes.is_empty());
+}
+
+#[test]
+fn equivalence_inventory_contract_satisfied_logic() {
+    use frankenengine_engine::parser_event_ast_equivalence::{EquivalenceInventory, TierSummary};
+    use std::collections::BTreeMap;
+
+    // Satisfied: total > 0, failed == 0, replay_stable_count == total
+    let mut per_tier = BTreeMap::new();
+    per_tier.insert(
+        "core".to_string(),
+        TierSummary {
+            total: 5,
+            passed: 5,
+            failed: 0,
+        },
+    );
+    let inv = EquivalenceInventory {
+        schema_version: "v1".to_string(),
+        component: "test".to_string(),
+        policy_id: "policy".to_string(),
+        total: 5,
+        passed: 5,
+        failed: 0,
+        parity_verified: 3,
+        tamper_detected: 2,
+        replay_stable_count: 5,
+        per_tier,
+        evidence: vec![],
+    };
+    assert!(inv.contract_satisfied());
+}
+
+#[test]
+fn equivalence_inventory_contract_not_satisfied_when_failed_nonzero() {
+    use frankenengine_engine::parser_event_ast_equivalence::{EquivalenceInventory, TierSummary};
+    use std::collections::BTreeMap;
+
+    let mut per_tier = BTreeMap::new();
+    per_tier.insert(
+        "core".to_string(),
+        TierSummary {
+            total: 5,
+            passed: 4,
+            failed: 1,
+        },
+    );
+    let inv = EquivalenceInventory {
+        schema_version: "v1".to_string(),
+        component: "test".to_string(),
+        policy_id: "policy".to_string(),
+        total: 5,
+        passed: 4,
+        failed: 1,
+        parity_verified: 3,
+        tamper_detected: 1,
+        replay_stable_count: 5,
+        per_tier,
+        evidence: vec![],
+    };
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn equivalence_inventory_contract_not_satisfied_when_empty() {
+    use frankenengine_engine::parser_event_ast_equivalence::EquivalenceInventory;
+    use std::collections::BTreeMap;
+
+    let inv = EquivalenceInventory {
+        schema_version: "v1".to_string(),
+        component: "test".to_string(),
+        policy_id: "policy".to_string(),
+        total: 0,
+        passed: 0,
+        failed: 0,
+        parity_verified: 0,
+        tamper_detected: 0,
+        replay_stable_count: 0,
+        per_tier: BTreeMap::new(),
+        evidence: vec![],
+    };
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn equivalence_inventory_contract_not_satisfied_when_replay_unstable() {
+    use frankenengine_engine::parser_event_ast_equivalence::{EquivalenceInventory, TierSummary};
+    use std::collections::BTreeMap;
+
+    let mut per_tier = BTreeMap::new();
+    per_tier.insert(
+        "core".to_string(),
+        TierSummary {
+            total: 5,
+            passed: 5,
+            failed: 0,
+        },
+    );
+    let inv = EquivalenceInventory {
+        schema_version: "v1".to_string(),
+        component: "test".to_string(),
+        policy_id: "policy".to_string(),
+        total: 5,
+        passed: 5,
+        failed: 0,
+        parity_verified: 3,
+        tamper_detected: 2,
+        replay_stable_count: 4, // != total
+        per_tier,
+        evidence: vec![],
+    };
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn equivalence_inventory_serde_round_trip_full() {
+    use frankenengine_engine::parser_event_ast_equivalence::run_equivalence_corpus;
+    let inventory = run_equivalence_corpus();
+    let json = serde_json::to_string_pretty(&inventory).expect("serialize");
+    let recovered: frankenengine_engine::parser_event_ast_equivalence::EquivalenceInventory =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(inventory, recovered);
+}
+
+#[test]
+fn equivalence_inventory_canonical_hash_prefix_and_length() {
+    use frankenengine_engine::parser_event_ast_equivalence::run_equivalence_corpus;
+    let inventory = run_equivalence_corpus();
+    let hash = inventory.canonical_hash();
+    assert!(hash.starts_with("sha256:"));
+    // sha256 hex = 64 chars + "sha256:" prefix = 71 chars
+    assert_eq!(hash.len(), 71);
+}
+
+#[test]
+fn equivalence_run_manifest_serde_round_trip_full() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        build_manifest, run_equivalence_corpus,
+    };
+    let inventory = run_equivalence_corpus();
+    let manifest = build_manifest(
+        &inventory,
+        "trace-serde-test",
+        "decision-serde-test",
+        vec!["path/a.json".to_string(), "path/b.json".to_string()],
+    );
+    let json = serde_json::to_string(&manifest).expect("serialize");
+    let recovered: frankenengine_engine::parser_event_ast_equivalence::EquivalenceRunManifest =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(manifest, recovered);
+}
+
+#[test]
+fn equivalence_run_manifest_canonical_hash_changes_with_different_trace() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        build_manifest, run_equivalence_corpus,
+    };
+    let inventory = run_equivalence_corpus();
+    let m1 = build_manifest(&inventory, "trace-a", "decision-a", vec![]);
+    let m2 = build_manifest(&inventory, "trace-b", "decision-a", vec![]);
+    assert_ne!(m1.canonical_hash(), m2.canonical_hash());
+}
+
+#[test]
+fn equivalence_run_manifest_uses_constants() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        BEAD_ID, COMPONENT, MANIFEST_SCHEMA_VERSION, POLICY_ID, build_manifest,
+        run_equivalence_corpus,
+    };
+    let inventory = run_equivalence_corpus();
+    let manifest = build_manifest(&inventory, "t", "d", vec![]);
+    assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
+    assert_eq!(manifest.policy_id, POLICY_ID);
+    assert_eq!(manifest.component, COMPONENT);
+    assert_eq!(manifest.bead_id, BEAD_ID);
+}
+
+#[test]
+fn equivalence_event_serde_round_trip() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        EquivalenceEvent, generate_events, run_equivalence_corpus,
+    };
+    let inventory = run_equivalence_corpus();
+    let events = generate_events(&inventory);
+    for event in &events {
+        let json = serde_json::to_string(event).expect("serialize event");
+        let recovered: EquivalenceEvent = serde_json::from_str(&json).expect("deserialize event");
+        assert_eq!(event.specimen_id, recovered.specimen_id);
+        assert_eq!(event.outcome, recovered.outcome);
+        assert_eq!(event.error_code, recovered.error_code);
+        assert_eq!(event.schema_version, recovered.schema_version);
+    }
+}
+
+#[test]
+fn generate_events_outcomes_match_evidence_verdicts() {
+    use frankenengine_engine::parser_event_ast_equivalence::{
+        generate_events, run_equivalence_corpus,
+    };
+    let inventory = run_equivalence_corpus();
+    let events = generate_events(&inventory);
+    for (event, ev) in events.iter().zip(inventory.evidence.iter()) {
+        assert_eq!(event.outcome, ev.verdict.as_str());
+        assert_eq!(event.specimen_id, ev.specimen_id);
+        assert_eq!(event.corpus_tier, ev.corpus_tier.as_str());
+    }
+}
+
+#[test]
+fn tier_summary_serde_round_trip() {
+    use frankenengine_engine::parser_event_ast_equivalence::TierSummary;
+    let ts = TierSummary {
+        total: 10,
+        passed: 7,
+        failed: 3,
+    };
+    let json = serde_json::to_string(&ts).expect("serialize");
+    let recovered: TierSummary = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(ts, recovered);
+}
+
+#[test]
+fn tier_summary_debug_is_nonempty() {
+    use frankenengine_engine::parser_event_ast_equivalence::TierSummary;
+    let ts = TierSummary {
+        total: 0,
+        passed: 0,
+        failed: 0,
+    };
+    let dbg = format!("{ts:?}");
+    assert!(dbg.contains("TierSummary"));
+}
+
+#[test]
+fn fixture_tamper_cases_have_expected_materialization_error() {
+    let fixture = load_fixture();
+    for case in &fixture.cases {
+        if case.tamper_kind != "none" {
+            assert!(
+                case.expected_materialization_error_code.is_some(),
+                "tamper case {} should have expected_materialization_error_code",
+                case.case_id
+            );
+        }
+    }
+}
+
+#[test]
+fn fixture_failure_cases_with_parse_error_have_zero_statement_count() {
+    let fixture = load_fixture();
+    for case in &fixture.cases {
+        // Cases that expect a parse error should have statement_count=0
+        // (the source never successfully parsed).
+        if case.expected_parse_error_code.is_some() {
+            assert_eq!(
+                case.expect_statement_count, 0,
+                "failure case {} with parse error should have expect_statement_count=0 but got {}",
+                case.case_id, case.expect_statement_count
+            );
+        }
+    }
+}
+
+#[test]
+fn structured_events_decision_id_prefix() {
+    let fixture = load_fixture();
+    let events = emit_structured_events(&fixture);
+    for event in &events {
+        let decision_id = event["decision_id"].as_str().unwrap();
+        assert!(
+            decision_id.starts_with("decision-parser-event-ast-equivalence-"),
+            "decision_id should have expected prefix: {decision_id}"
+        );
+    }
+}
+
+#[test]
+fn structured_events_policy_id_is_consistent() {
+    let fixture = load_fixture();
+    let events = emit_structured_events(&fixture);
+    for event in &events {
+        let policy_id = event["policy_id"].as_str().unwrap();
+        assert_eq!(policy_id, "policy-parser-event-ast-equivalence-v1");
+    }
+}
+
+#[test]
+fn structured_events_component_field_is_gate() {
+    let fixture = load_fixture();
+    let events = emit_structured_events(&fixture);
+    for event in &events {
+        let component = event["component"].as_str().unwrap();
+        assert_eq!(component, "parser_event_ast_equivalence_gate");
+    }
+}
+
+#[test]
+fn fixture_replay_scenario_ids_are_unique() {
+    let fixture = load_fixture();
+    let mut ids = std::collections::BTreeSet::new();
+    for scenario in &fixture.replay_scenarios {
+        assert!(
+            ids.insert(scenario.scenario_id.clone()),
+            "duplicate replay scenario id: {}",
+            scenario.scenario_id
+        );
+    }
+}
+
+#[test]
+fn fixture_cases_goals_are_script_or_module() {
+    let fixture = load_fixture();
+    for case in &fixture.cases {
+        assert!(
+            case.goal == "script" || case.goal == "module",
+            "unexpected goal in case {}: {}",
+            case.case_id,
+            case.goal
+        );
+    }
+}
+
+#[test]
+fn equivalence_corpus_source_module_covers_all_tamper_kinds() {
+    use frankenengine_engine::parser_event_ast_equivalence::{TamperKind, equivalence_corpus};
+    let corpus = equivalence_corpus();
+    let observed: std::collections::BTreeSet<_> = corpus.iter().map(|s| s.tamper_kind).collect();
+    for kind in TamperKind::ALL {
+        assert!(
+            observed.contains(kind),
+            "corpus missing tamper kind: {kind}"
+        );
+    }
+}
+
+#[test]
+fn run_corpus_all_evidence_replay_stable() {
+    use frankenengine_engine::parser_event_ast_equivalence::run_equivalence_corpus;
+    let inventory = run_equivalence_corpus();
+    for ev in &inventory.evidence {
+        assert!(
+            ev.replay_stable,
+            "specimen {} should be replay stable",
+            ev.specimen_id
+        );
+    }
+}
+
+#[test]
+fn constants_fixed_one_is_million() {
+    use frankenengine_engine::parser_event_ast_equivalence::FIXED_ONE;
+    assert_eq!(FIXED_ONE, 1_000_000);
+}

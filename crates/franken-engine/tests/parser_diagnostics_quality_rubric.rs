@@ -784,3 +784,240 @@ fn fixture_baseline_scores_are_within_million() {
         );
     }
 }
+
+// ---------- ScoreDimension field validation ----------
+
+#[test]
+fn score_dimension_description_is_nonempty() {
+    let fixture = load_fixture();
+    for dim in &fixture.score_dimensions {
+        assert!(
+            !dim.description.trim().is_empty(),
+            "dimension `{}` has empty description",
+            dim.dimension_id
+        );
+    }
+}
+
+#[test]
+fn score_dimension_weight_is_nonzero() {
+    let fixture = load_fixture();
+    for dim in &fixture.score_dimensions {
+        assert!(
+            dim.weight_millionths > 0,
+            "dimension `{}` has zero weight",
+            dim.dimension_id
+        );
+    }
+}
+
+// ---------- RubricCase field validation ----------
+
+#[test]
+fn rubric_case_replay_commands_contain_test_name() {
+    let fixture = load_fixture();
+    for case in &fixture.cases {
+        assert!(
+            case.replay_command
+                .contains("parser_diagnostics_quality_rubric"),
+            "case `{}` replay command missing test name: {}",
+            case.case_id,
+            case.replay_command
+        );
+    }
+}
+
+#[test]
+fn rubric_case_expected_diagnostic_codes_are_nonempty() {
+    let fixture = load_fixture();
+    for case in &fixture.cases {
+        assert!(
+            !case.expected_diagnostic_code.trim().is_empty(),
+            "case `{}` has empty expected_diagnostic_code",
+            case.case_id
+        );
+    }
+}
+
+#[test]
+fn rubric_case_sources_are_nonempty() {
+    let fixture = load_fixture();
+    for case in &fixture.cases {
+        assert!(
+            !case.source.is_empty(),
+            "case `{}` has empty source",
+            case.case_id
+        );
+    }
+}
+
+// ---------- weighted_composite_score edge cases ----------
+
+#[test]
+fn rubric_weighted_composite_unequal_weights() {
+    let dims = vec![
+        ScoreDimension {
+            dimension_id: "a".to_string(),
+            description: "dim a".to_string(),
+            weight_millionths: 750_000,
+        },
+        ScoreDimension {
+            dimension_id: "b".to_string(),
+            description: "dim b".to_string(),
+            weight_millionths: 250_000,
+        },
+    ];
+    let mut scores = BTreeMap::new();
+    scores.insert("a".to_string(), 1_000_000_u32);
+    scores.insert("b".to_string(), 0_u32);
+    assert_eq!(weighted_composite_score(&scores, &dims), 750_000);
+}
+
+#[test]
+fn rubric_weighted_composite_three_dimensions() {
+    let dims = vec![
+        ScoreDimension {
+            dimension_id: "a".to_string(),
+            description: "dim a".to_string(),
+            weight_millionths: 333_334,
+        },
+        ScoreDimension {
+            dimension_id: "b".to_string(),
+            description: "dim b".to_string(),
+            weight_millionths: 333_333,
+        },
+        ScoreDimension {
+            dimension_id: "c".to_string(),
+            description: "dim c".to_string(),
+            weight_millionths: 333_333,
+        },
+    ];
+    let mut scores = BTreeMap::new();
+    scores.insert("a".to_string(), 1_000_000_u32);
+    scores.insert("b".to_string(), 1_000_000_u32);
+    scores.insert("c".to_string(), 1_000_000_u32);
+    let result = weighted_composite_score(&scores, &dims);
+    // Should be very close to 1_000_000 (rounding may differ by 1)
+    assert!((999_999..=1_000_000).contains(&result));
+}
+
+// ---------- evaluate_all_cases determinism ----------
+
+#[test]
+fn evaluate_all_cases_returns_same_count_as_fixture() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    assert_eq!(evaluations.len(), fixture.cases.len());
+}
+
+#[test]
+fn evaluate_all_cases_all_hashes_start_with_sha256() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    for eval in &evaluations {
+        assert!(
+            eval.diagnostic_hash.starts_with("sha256:"),
+            "case `{}` hash missing sha256 prefix: {}",
+            eval.case_id,
+            eval.diagnostic_hash
+        );
+    }
+}
+
+#[test]
+fn evaluate_all_cases_case_ids_match_fixture() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    let eval_ids: Vec<&str> = evaluations.iter().map(|e| e.case_id.as_str()).collect();
+    let fixture_ids: Vec<&str> = fixture.cases.iter().map(|c| c.case_id.as_str()).collect();
+    assert_eq!(eval_ids, fixture_ids);
+}
+
+// ---------- build_structured_log field completeness ----------
+
+#[test]
+fn structured_log_component_is_rubric() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    for eval in &evaluations {
+        let log = build_structured_log(eval);
+        assert_eq!(
+            log["component"].as_str().unwrap(),
+            "parser_diagnostics_quality_rubric"
+        );
+    }
+}
+
+#[test]
+fn structured_log_event_is_case_evaluated() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    let log = build_structured_log(&evaluations[0]);
+    assert_eq!(log["event"].as_str().unwrap(), "diagnostics_case_evaluated");
+}
+
+#[test]
+fn structured_log_outcome_is_pass() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    for eval in &evaluations {
+        let log = build_structured_log(eval);
+        assert_eq!(log["outcome"].as_str().unwrap(), "pass");
+    }
+}
+
+#[test]
+fn structured_log_error_code_is_null() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    for eval in &evaluations {
+        let log = build_structured_log(eval);
+        assert!(log["error_code"].is_null());
+    }
+}
+
+// ---------- aggregate_scores cross-cutting ----------
+
+#[test]
+fn aggregate_scores_all_values_within_million() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    let aggregate = aggregate_scores(&evaluations, &fixture.score_dimensions);
+    for (key, value) in &aggregate {
+        assert!(
+            *value <= 1_000_000,
+            "aggregate `{key}` exceeds 1_000_000: {value}"
+        );
+    }
+}
+
+#[test]
+fn aggregate_scores_keys_cover_all_dimensions_plus_composite() {
+    let fixture = load_fixture();
+    let evaluations = evaluate_all_cases(&fixture);
+    let aggregate = aggregate_scores(&evaluations, &fixture.score_dimensions);
+    assert_eq!(
+        aggregate.len(),
+        fixture.score_dimensions.len() + 1,
+        "aggregate should have one key per dimension plus composite"
+    );
+}
+
+// ---------- fixture structural invariants ----------
+
+#[test]
+fn fixture_max_regression_is_reasonable() {
+    let fixture = load_fixture();
+    assert!(
+        fixture.max_allowed_regression_millionths <= 200_000,
+        "max allowed regression seems too generous: {}",
+        fixture.max_allowed_regression_millionths
+    );
+}
+
+#[test]
+fn fixture_structured_log_keys_are_unique() {
+    let fixture = load_fixture();
+    let set: BTreeSet<_> = fixture.structured_log_required_keys.iter().collect();
+    assert_eq!(set.len(), fixture.structured_log_required_keys.len());
+}

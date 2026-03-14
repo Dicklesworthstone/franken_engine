@@ -12,10 +12,10 @@
 )]
 
 use frankenengine_engine::ts_normalization::{
-    CapabilityIntent, NormalizationDecision, NormalizationEvent, SourceMapEntry, TsCompilerOptions,
-    TsIngestionError, TsIngestionErrorCode, TsIngestionEvent, TsNormalizationConfig,
-    TsNormalizationError, TsNormalizationOutput, TsNormalizationWitness,
-    normalize_typescript_to_es2020,
+    CapabilityIntent, NormalizationDecision, NormalizationEvent, SourceIngestionSummary,
+    SourceLanguage, SourceMapEntry, TsCompilerOptions, TsIngestionError, TsIngestionErrorCode,
+    TsIngestionEvent, TsNormalizationConfig, TsNormalizationError, TsNormalizationOutput,
+    TsNormalizationWitness, classify_source_language, normalize_typescript_to_es2020,
 };
 
 #[test]
@@ -631,4 +631,195 @@ fn ts_ingestion_error_code_serde_roundtrip() {
     let json = serde_json::to_string(&code).expect("serialize");
     let recovered: TsIngestionErrorCode = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(recovered.stable_code(), code.stable_code());
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: PearlTower 2026-03-14 — source language, defaults,
+// ingestion error codes, classify, serde
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn source_language_default_is_javascript() {
+    assert_eq!(SourceLanguage::default(), SourceLanguage::JavaScript);
+}
+
+#[test]
+fn source_language_as_str_both_variants() {
+    assert_eq!(SourceLanguage::JavaScript.as_str(), "javascript");
+    assert_eq!(SourceLanguage::TypeScript.as_str(), "typescript");
+}
+
+#[test]
+fn source_language_serde_roundtrip() {
+    for lang in [SourceLanguage::JavaScript, SourceLanguage::TypeScript] {
+        let json = serde_json::to_string(&lang).expect("serialize");
+        let recovered: SourceLanguage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(lang, recovered);
+    }
+}
+
+#[test]
+fn classify_source_language_ts_extension() {
+    assert_eq!(
+        classify_source_language(Some("module.ts"), ""),
+        SourceLanguage::TypeScript
+    );
+    assert_eq!(
+        classify_source_language(Some("component.tsx"), ""),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn classify_source_language_js_extension() {
+    assert_eq!(
+        classify_source_language(Some("index.js"), ""),
+        SourceLanguage::JavaScript
+    );
+    assert_eq!(
+        classify_source_language(Some("app.mjs"), ""),
+        SourceLanguage::JavaScript
+    );
+}
+
+#[test]
+fn classify_source_language_none_label_defaults_to_javascript() {
+    assert_eq!(
+        classify_source_language(None, "const x = 1;"),
+        SourceLanguage::JavaScript
+    );
+}
+
+#[test]
+fn ts_compiler_options_default_values() {
+    let opts = TsCompilerOptions::default();
+    assert!(opts.strict);
+    assert_eq!(opts.target, "es2020");
+    assert_eq!(opts.module, "esnext");
+    assert_eq!(opts.jsx, "react-jsx");
+}
+
+#[test]
+fn ts_compiler_options_serde_roundtrip() {
+    let opts = TsCompilerOptions::default();
+    let json = serde_json::to_string(&opts).expect("serialize");
+    let recovered: TsCompilerOptions = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(opts, recovered);
+}
+
+#[test]
+fn source_ingestion_summary_default_values() {
+    let summary = SourceIngestionSummary::default();
+    assert_eq!(summary.source_language, SourceLanguage::JavaScript);
+    assert!(!summary.normalization_applied);
+    assert_eq!(summary.ts_decision_count, 0);
+    assert_eq!(summary.ts_capability_intent_count, 0);
+}
+
+#[test]
+fn source_ingestion_summary_serde_roundtrip() {
+    let summary = SourceIngestionSummary {
+        source_language: SourceLanguage::TypeScript,
+        normalization_applied: true,
+        original_source_hash: "sha256:abc".to_string(),
+        normalized_source_hash: "sha256:def".to_string(),
+        ts_decision_count: 5,
+        ts_capability_intent_count: 2,
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: SourceIngestionSummary = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(summary, recovered);
+}
+
+#[test]
+fn ts_ingestion_error_code_stable_code_all_variants() {
+    let codes = [
+        TsIngestionErrorCode::NormalizationFailed,
+        TsIngestionErrorCode::ParseFailed,
+        TsIngestionErrorCode::LoweringFailed,
+        TsIngestionErrorCode::CapabilityContractFailed,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for code in codes {
+        let stable = code.stable_code();
+        assert!(
+            stable.starts_with("FE-TSINGEST-"),
+            "code {stable} wrong prefix"
+        );
+        assert!(seen.insert(stable), "duplicate stable code: {stable}");
+    }
+    assert_eq!(seen.len(), 4);
+}
+
+#[test]
+fn ts_ingestion_error_code_stage_all_variants() {
+    let cases = [
+        (TsIngestionErrorCode::NormalizationFailed, "normalization"),
+        (TsIngestionErrorCode::ParseFailed, "parse"),
+        (TsIngestionErrorCode::LoweringFailed, "lowering"),
+        (
+            TsIngestionErrorCode::CapabilityContractFailed,
+            "capability_contract",
+        ),
+    ];
+    for (code, expected_stage) in cases {
+        assert_eq!(code.stage(), expected_stage, "wrong stage for {code:?}");
+    }
+}
+
+#[test]
+fn ts_ingestion_error_code_serde_roundtrip_all_variants() {
+    for code in [
+        TsIngestionErrorCode::NormalizationFailed,
+        TsIngestionErrorCode::ParseFailed,
+        TsIngestionErrorCode::LoweringFailed,
+        TsIngestionErrorCode::CapabilityContractFailed,
+    ] {
+        let json = serde_json::to_string(&code).expect("serialize");
+        let recovered: TsIngestionErrorCode = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(code, recovered);
+    }
+}
+
+#[test]
+fn ts_ingestion_error_serde_roundtrip() {
+    let err = TsIngestionError {
+        code: TsIngestionErrorCode::ParseFailed,
+        stage: "parse".to_string(),
+        message: "unexpected EOF".to_string(),
+        events: vec![TsIngestionEvent {
+            trace_id: "t-1".to_string(),
+            decision_id: "d-1".to_string(),
+            policy_id: "p-1".to_string(),
+            component: "ts_ingestion_lane".to_string(),
+            event: "parse_failed".to_string(),
+            outcome: "error".to_string(),
+            error_code: Some("FE-TSINGEST-0002".to_string()),
+        }],
+    };
+    let json = serde_json::to_string(&err).expect("serialize");
+    let recovered: TsIngestionError = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(err, recovered);
+}
+
+#[test]
+fn ts_normalization_error_display_all_variants() {
+    let errors: Vec<TsNormalizationError> = vec![
+        TsNormalizationError::EmptySource,
+        TsNormalizationError::UnsupportedSyntax {
+            feature: "decorators on functions",
+        },
+        TsNormalizationError::UnsupportedCompilerOption {
+            option: "target",
+            value: "es5".to_string(),
+        },
+    ];
+    for err in &errors {
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "Display must be non-empty for {err:?}");
+    }
+    // Verify each variant contains relevant info
+    assert!(errors[0].to_string().contains("empty") || errors[0].to_string().contains("Empty"));
+    assert!(errors[1].to_string().contains("decorators"));
+    assert!(errors[2].to_string().contains("target"));
 }

@@ -574,3 +574,234 @@ fn gate_blocker_display_benchmark_sniffing() {
     let s = b.to_string();
     assert!(s.contains("adaptive"), "should contain detail: {s}");
 }
+
+// ===========================================================================
+// 16) RuntimeId — all() and serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_runtime_id_all_nonempty() {
+    let all = RuntimeId::all();
+    assert!(!all.is_empty());
+    for r in all {
+        assert!(!r.as_str().is_empty());
+    }
+}
+
+#[test]
+fn enrichment_runtime_id_serde_all() {
+    for r in RuntimeId::all() {
+        let json = serde_json::to_string(r).unwrap();
+        let back: RuntimeId = serde_json::from_str(&json).unwrap();
+        assert_eq!(*r, back);
+    }
+}
+
+// ===========================================================================
+// 17) BenchmarkCategory — all() and serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_benchmark_category_all_nonempty() {
+    let all = BenchmarkCategory::all();
+    assert!(!all.is_empty());
+}
+
+#[test]
+fn enrichment_benchmark_category_serde_all() {
+    for c in BenchmarkCategory::all() {
+        let json = serde_json::to_string(c).unwrap();
+        let back: BenchmarkCategory = serde_json::from_str(&json).unwrap();
+        assert_eq!(*c, back);
+    }
+}
+
+#[test]
+fn enrichment_benchmark_category_as_str_unique() {
+    let strs: BTreeSet<&str> = BenchmarkCategory::all()
+        .iter()
+        .map(|c| c.as_str())
+        .collect();
+    assert_eq!(strs.len(), BenchmarkCategory::all().len());
+}
+
+// ===========================================================================
+// 18) GateOutcome — serde and predicates
+// ===========================================================================
+
+#[test]
+fn enrichment_gate_outcome_serde_all() {
+    for o in [GateOutcome::Pass, GateOutcome::Fail] {
+        let json = serde_json::to_string(&o).unwrap();
+        let back: GateOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(o, back);
+    }
+}
+
+#[test]
+fn enrichment_gate_outcome_is_pass() {
+    assert!(GateOutcome::Pass.is_pass());
+    assert!(!GateOutcome::Fail.is_pass());
+}
+
+// ===========================================================================
+// 19) Constants
+// ===========================================================================
+
+#[test]
+fn enrichment_constants_values() {
+    assert!(!GATE_COMPONENT.is_empty());
+    assert!(!GATE_SCHEMA_VERSION.is_empty());
+    assert!(DEFAULT_MAX_CV_MILLIONTHS > 0);
+    assert!(DEFAULT_MIN_RUNS_PER_BENCHMARK > 0);
+    assert!(!REQUIRED_CATEGORIES.is_empty());
+}
+
+// ===========================================================================
+// 20) MethodologyAudit — is_complete and missing_sections
+// ===========================================================================
+
+#[test]
+fn enrichment_methodology_audit_complete() {
+    let audit = MethodologyAudit {
+        selection_rationale: true,
+        warmup_policy: true,
+        gc_jit_settling: true,
+        statistical_treatment: true,
+        known_limitations: true,
+        peer_reviewed: true,
+        reviewer_ids: vec!["r1".into()],
+    };
+    assert!(audit.is_complete());
+    assert!(audit.missing_sections().is_empty());
+}
+
+#[test]
+fn enrichment_methodology_audit_missing_warmup() {
+    let audit = MethodologyAudit {
+        selection_rationale: true,
+        warmup_policy: false,
+        gc_jit_settling: true,
+        statistical_treatment: true,
+        known_limitations: true,
+        peer_reviewed: false,
+        reviewer_ids: Vec::new(),
+    };
+    assert!(!audit.is_complete());
+    let missing = audit.missing_sections();
+    assert!(missing.contains(&"warmup_policy"));
+    assert_eq!(missing.len(), 1);
+}
+
+// ===========================================================================
+// 21) ArtifactBundleAudit — is_complete and missing_artifacts
+// ===========================================================================
+
+#[test]
+fn enrichment_artifact_bundle_audit_complete() {
+    let audit = ArtifactBundleAudit {
+        raw_timing_data: true,
+        environment_fingerprint: true,
+        run_manifest: true,
+        replay_script: true,
+        dependency_manifests: true,
+        bundle_hash: ContentHash::compute(b"bundle"),
+    };
+    assert!(audit.is_complete());
+    assert!(audit.missing_artifacts().is_empty());
+}
+
+#[test]
+fn enrichment_artifact_bundle_audit_missing_script() {
+    let audit = ArtifactBundleAudit {
+        raw_timing_data: true,
+        environment_fingerprint: true,
+        run_manifest: true,
+        replay_script: false,
+        dependency_manifests: true,
+        bundle_hash: ContentHash::compute(b"bundle"),
+    };
+    assert!(!audit.is_complete());
+    let missing = audit.missing_artifacts();
+    assert!(missing.contains(&"replay_script"));
+}
+
+// ===========================================================================
+// 22) GateError — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_gate_error_serde() {
+    let errors = [
+        GateError::EmptyBenchmarks,
+        GateError::InvalidFingerprint {
+            detail: "cpu mismatch".into(),
+        },
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: GateError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*e, back);
+    }
+}
+
+// ===========================================================================
+// 23) GateLogEntry — serde + clone
+// ===========================================================================
+
+#[test]
+fn enrichment_gate_log_entry_clone_debug() {
+    let entry = GateLogEntry {
+        trace_id: "t".to_string(),
+        component: GATE_COMPONENT.to_string(),
+        benchmark_id: Some("bench-1".to_string()),
+        runtime: Some(RuntimeId::FrankenEngine),
+        variant: None,
+        event: "gate_evaluation".to_string(),
+        outcome: "pass".to_string(),
+        wall_time_ns: Some(100),
+        memory_peak_bytes: Some(1024),
+        error_code: None,
+    };
+    let cloned = entry.clone();
+    assert_eq!(entry, cloned);
+    assert!(!format!("{:?}", entry).is_empty());
+}
+
+// ===========================================================================
+// 24) ReproducibilityResult — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_reproducibility_result_serde() {
+    let r = ReproducibilityResult {
+        benchmark_id: "bench-1".to_string(),
+        runtime: RuntimeId::FrankenEngine,
+        original_ns: 100_000,
+        replay_ns: 101_000,
+        deviation_millionths: 10_000,
+        within_tolerance: true,
+    };
+    let json = serde_json::to_string(&r).unwrap();
+    let back: ReproducibilityResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(r, back);
+}
+
+// ===========================================================================
+// 25) CategorySummary — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_category_summary_serde() {
+    let s = CategorySummary {
+        category: BenchmarkCategory::Startup,
+        benchmark_count: 5,
+        vs_node_delta_millionths: 50_000,
+        vs_bun_delta_millionths: -20_000,
+        vs_node_memory_delta_millionths: 30_000,
+        vs_bun_memory_delta_millionths: -10_000,
+    };
+    let json = serde_json::to_string(&s).unwrap();
+    let back: CategorySummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(s, back);
+}

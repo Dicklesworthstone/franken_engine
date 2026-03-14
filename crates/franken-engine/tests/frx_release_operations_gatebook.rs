@@ -860,3 +860,363 @@ fn frx_09_2_contract_track_name_contains_release_operations() {
         contract.track.name
     );
 }
+
+#[test]
+fn frx_09_2_clone_equality_for_all_sub_structs() {
+    let contract = parse_contract();
+    let cloned = contract.clone();
+    assert_eq!(contract, cloned);
+    assert_eq!(contract.track, cloned.track);
+    assert_eq!(
+        contract.consumes_cut_line_artifacts,
+        cloned.consumes_cut_line_artifacts
+    );
+    assert_eq!(
+        contract.release_packet_channels,
+        cloned.release_packet_channels
+    );
+    assert_eq!(contract.stage_checklists, cloned.stage_checklists);
+    assert_eq!(
+        contract.communication_discipline,
+        cloned.communication_discipline
+    );
+    assert_eq!(
+        contract.claim_publication_record,
+        cloned.claim_publication_record
+    );
+    assert_eq!(contract.prerequisites, cloned.prerequisites);
+}
+
+#[test]
+fn frx_09_2_debug_format_contains_schema_version() {
+    let contract = parse_contract();
+    let debug_str = format!("{contract:?}");
+    assert!(
+        debug_str.contains("frx.release-operations-gatebook.v1"),
+        "Debug output must contain the schema version string"
+    );
+}
+
+#[test]
+fn frx_09_2_channel_source_beads_all_start_with_bd_mjh3() {
+    let contract = parse_contract();
+    for channel in &contract.release_packet_channels {
+        assert!(
+            channel.source_bead.starts_with("bd-mjh3."),
+            "channel '{}' source_bead '{}' must start with 'bd-mjh3.'",
+            channel.channel_id,
+            channel.source_bead
+        );
+    }
+}
+
+#[test]
+fn frx_09_2_all_required_channels_are_signed() {
+    let contract = parse_contract();
+    for channel in &contract.release_packet_channels {
+        if channel.required {
+            assert!(
+                channel.signed_required,
+                "required channel '{}' must also have signed_required=true",
+                channel.channel_id
+            );
+        }
+    }
+}
+
+#[test]
+fn frx_09_2_incident_response_required_fields_are_unique() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for field in &contract
+        .communication_discipline
+        .incident_response
+        .required_fields
+    {
+        assert!(
+            seen.insert(field.as_str()),
+            "duplicate incident_response field: {}",
+            field
+        );
+    }
+    assert!(
+        !seen.is_empty(),
+        "incident_response required_fields must not be empty"
+    );
+}
+
+#[test]
+fn frx_09_2_rollback_communications_required_fields_are_unique() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for field in &contract
+        .communication_discipline
+        .rollback_communications
+        .required_fields
+    {
+        assert!(
+            seen.insert(field.as_str()),
+            "duplicate rollback_communications field: {}",
+            field
+        );
+    }
+    assert!(
+        !seen.is_empty(),
+        "rollback_communications required_fields must not be empty"
+    );
+}
+
+#[test]
+fn frx_09_2_publication_communications_required_fields_are_unique() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for field in &contract
+        .communication_discipline
+        .publication_communications
+        .required_fields
+    {
+        assert!(
+            seen.insert(field.as_str()),
+            "duplicate publication_communications field: {}",
+            field
+        );
+    }
+    assert!(
+        !seen.is_empty(),
+        "publication_communications required_fields must not be empty"
+    );
+}
+
+#[test]
+fn frx_09_2_claim_publication_record_required_fields_are_unique() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for field in &contract.claim_publication_record.required_fields {
+        assert!(
+            seen.insert(field.as_str()),
+            "duplicate claim_publication_record field: {}",
+            field
+        );
+    }
+    assert!(
+        !seen.is_empty(),
+        "claim_publication_record required_fields must not be empty"
+    );
+}
+
+#[test]
+fn frx_09_2_stage_checklist_required_checklist_items_are_unique_per_stage() {
+    let contract = parse_contract();
+    for checklist in &contract.stage_checklists {
+        let mut seen = BTreeSet::new();
+        for item in &checklist.required_checklist_items {
+            assert!(
+                seen.insert(item.as_str()),
+                "stage '{}' has duplicate checklist item: {}",
+                checklist.stage,
+                item
+            );
+        }
+        assert!(
+            !seen.is_empty(),
+            "stage '{}' must have at least one checklist item",
+            checklist.stage
+        );
+    }
+}
+
+#[test]
+fn frx_09_2_fail_closed_rules_count_at_least_six() {
+    let contract = parse_contract();
+    assert!(
+        contract.fail_closed_rules.len() >= 6,
+        "must have at least 6 fail-closed rules, got {}",
+        contract.fail_closed_rules.len()
+    );
+}
+
+#[test]
+fn frx_09_2_structured_log_fields_count_at_least_eleven() {
+    let contract = parse_contract();
+    assert!(
+        contract.required_structured_log_fields.len() >= 11,
+        "must have at least 11 required structured log fields, got {}",
+        contract.required_structured_log_fields.len()
+    );
+}
+
+#[test]
+fn frx_09_2_channel_count_is_nine() {
+    let contract = parse_contract();
+    assert_eq!(
+        contract.release_packet_channels.len(),
+        9,
+        "expected exactly 9 release packet channels"
+    );
+}
+
+#[test]
+fn frx_09_2_cut_line_source_contract_is_nonempty() {
+    let contract = parse_contract();
+    assert!(
+        !contract
+            .consumes_cut_line_artifacts
+            .source_contract
+            .trim()
+            .is_empty(),
+        "source_contract must not be empty"
+    );
+}
+
+#[test]
+fn frx_09_2_cut_line_required_lines_are_all_c_prefixed() {
+    let contract = parse_contract();
+    for cut_line in &contract.consumes_cut_line_artifacts.required_cut_lines {
+        assert!(
+            cut_line.starts_with('C'),
+            "cut-line '{}' must start with 'C'",
+            cut_line
+        );
+    }
+}
+
+#[test]
+fn frx_09_2_prerequisite_bead_ids_follow_bd_prefix_convention() {
+    let contract = parse_contract();
+    for p in &contract.prerequisites {
+        assert!(
+            p.bead_id.starts_with("bd-"),
+            "prerequisite bead_id '{}' must start with 'bd-'",
+            p.bead_id
+        );
+    }
+}
+
+#[test]
+fn frx_09_2_track_id_matches_frx_09_2() {
+    let contract = parse_contract();
+    assert_eq!(
+        contract.track.id, "FRX-09.2",
+        "track id must be exactly 'FRX-09.2'"
+    );
+}
+
+#[test]
+fn frx_09_2_serde_json_value_roundtrip_preserves_all_keys() {
+    let contract = parse_contract();
+    let value: serde_json::Value =
+        serde_json::to_value(&contract).expect("serialize to serde_json::Value");
+    let expected_keys: BTreeSet<&str> = [
+        "schema_version",
+        "bead_id",
+        "generated_by",
+        "generated_at_utc",
+        "track",
+        "consumes_cut_line_artifacts",
+        "release_packet_channels",
+        "stage_checklists",
+        "communication_discipline",
+        "claim_publication_record",
+        "fail_closed_rules",
+        "required_structured_log_fields",
+        "prerequisites",
+        "operator_verification",
+    ]
+    .into_iter()
+    .collect();
+    let actual_keys: BTreeSet<&str> = value
+        .as_object()
+        .expect("top-level must be a JSON object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(actual_keys, expected_keys, "top-level JSON keys mismatch");
+}
+
+#[test]
+fn frx_09_2_operator_verification_count_at_least_three() {
+    let contract = parse_contract();
+    assert!(
+        contract.operator_verification.len() >= 3,
+        "must have at least 3 operator verification entries, got {}",
+        contract.operator_verification.len()
+    );
+}
+
+#[test]
+fn frx_09_2_generated_by_matches_bead_id() {
+    let contract = parse_contract();
+    assert_eq!(
+        contract.generated_by, contract.bead_id,
+        "generated_by must equal bead_id"
+    );
+}
+
+#[test]
+fn frx_09_2_alpha_checklist_items_contain_canary_scope_and_halt_conditions() {
+    let contract = parse_contract();
+    let alpha = contract
+        .stage_checklists
+        .iter()
+        .find(|c| c.stage == "alpha")
+        .expect("alpha checklist must exist");
+    let items: BTreeSet<&str> = alpha
+        .required_checklist_items
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        items.contains("canary_scope_defined"),
+        "alpha checklist must include canary_scope_defined"
+    );
+    assert!(
+        items.contains("halt_conditions_declared"),
+        "alpha checklist must include halt_conditions_declared"
+    );
+}
+
+#[test]
+fn frx_09_2_ga_checklist_items_contain_release_packet_digest_verified() {
+    let contract = parse_contract();
+    let ga = contract
+        .stage_checklists
+        .iter()
+        .find(|c| c.stage == "ga")
+        .expect("ga checklist must exist");
+    let items: BTreeSet<&str> = ga
+        .required_checklist_items
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        items.contains("release_packet_digest_verified"),
+        "ga checklist must include release_packet_digest_verified"
+    );
+    assert!(
+        items.contains("claim_registry_linkage_complete"),
+        "ga checklist must include claim_registry_linkage_complete"
+    );
+}
+
+#[test]
+fn frx_09_2_beta_checklist_items_contain_rollback_drill_and_oncall_readiness() {
+    let contract = parse_contract();
+    let beta = contract
+        .stage_checklists
+        .iter()
+        .find(|c| c.stage == "beta")
+        .expect("beta checklist must exist");
+    let items: BTreeSet<&str> = beta
+        .required_checklist_items
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        items.contains("rollback_drill_passed"),
+        "beta checklist must include rollback_drill_passed"
+    );
+    assert!(
+        items.contains("oncall_readiness_attested"),
+        "beta checklist must include oncall_readiness_attested"
+    );
+}

@@ -456,3 +456,206 @@ fn frankensqlite_inventory_contains_determinism_keyword() {
         "Inventory must reference determinism guarantees"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment batch 2: deeper structural and content invariants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn frankensqlite_inventory_h2_section_count_at_least_seven() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let h2_count = content.lines().filter(|l| l.starts_with("## ")).count();
+    assert!(
+        h2_count >= 7,
+        "Inventory should have at least 7 H2 sections, got {}",
+        h2_count
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_mentions_pragma_or_wal() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    assert!(
+        content.contains("PRAGMA") || content.contains("WAL"),
+        "Inventory should mention PRAGMA or WAL for SQLite configuration"
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_line_count_at_least_hundred() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let line_count = content.lines().count();
+    assert!(
+        line_count >= 100,
+        "Inventory should have at least 100 lines, got {}",
+        line_count
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_mentions_checkpoint_policy() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let lower = content.to_lowercase();
+    assert!(
+        lower.contains("checkpoint") || lower.contains("check-point"),
+        "Inventory should mention checkpoint policy"
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_raw_frankensqlite_mentioned_multiple_times() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let count = content.matches("raw frankensqlite").count();
+    assert!(
+        count >= 2,
+        "Inventory should mention 'raw frankensqlite' at least twice, got {}",
+        count
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_sqlmodel_rust_mentioned_multiple_times() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let count = content.matches("sqlmodel_rust").count();
+    assert!(
+        count >= 2,
+        "Inventory should mention 'sqlmodel_rust' at least twice, got {}",
+        count
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_operator_verification_has_numbered_steps() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let ov_pos = content
+        .find("## Operator Verification")
+        .expect("Operator Verification section must exist");
+    let ov_section = &content[ov_pos..];
+    assert!(
+        ov_section.contains("1.") && ov_section.contains("2."),
+        "Operator Verification must have at least 2 numbered steps"
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_no_fixme_markers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let upper = content.to_uppercase();
+    assert!(
+        !upper.contains("FIXME"),
+        "Inventory should not contain FIXME markers"
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_word_count_at_least_five_hundred() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let word_count = content.split_whitespace().count();
+    assert!(
+        word_count >= 500,
+        "Inventory should have at least 500 words, got {}",
+        word_count
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_mentions_replay_multiple_times() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let lower = content.to_lowercase();
+    let count = lower.matches("replay").count();
+    assert!(
+        count >= 2,
+        "Inventory should mention 'replay' at least twice, got {}",
+        count
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_bead_refs_follow_bd_format() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let mut found = false;
+    for line in content.lines() {
+        if let Some(idx) = line.find("`bd-") {
+            found = true;
+            let rest = &line[idx + 1..];
+            let bead_ref: String = rest.chars().take_while(|c| *c != '`').collect();
+            assert!(
+                bead_ref.starts_with("bd-"),
+                "Bead reference must start with bd-: {}",
+                bead_ref
+            );
+        }
+    }
+    assert!(found, "Inventory must contain at least one bead reference");
+}
+
+#[test]
+fn frankensqlite_inventory_mentions_evidence_index() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    assert!(
+        content.contains("evidence index"),
+        "Inventory must mention evidence index store"
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_mentions_access_pattern() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let count = content.matches("Access pattern").count();
+    assert!(
+        count >= 1,
+        "Inventory should mention 'Access pattern' at least once"
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_data_model_column_present_multiple_times() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let count = content.matches("Data model").count();
+    assert!(
+        count >= 1,
+        "Inventory should mention 'Data model' at least once, got {}",
+        count
+    );
+}
+
+#[test]
+fn frankensqlite_inventory_frankensqlite_integration_point_count() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md");
+    let content = fs::read_to_string(&path).expect("read inventory");
+    let count = content.matches("frankensqlite::").count();
+    assert!(
+        count >= 6,
+        "Inventory should have at least 6 frankensqlite:: integration points, got {}",
+        count
+    );
+}

@@ -550,3 +550,427 @@ fn constitution_doc_references_compatibility() {
         "constitution doc must mention compatibility"
     );
 }
+
+// ---------- enrichment: constitution invariant cross-referencing ----------
+
+#[test]
+fn constitution_doc_references_all_five_ci_codes() {
+    let path = repo_root().join("docs/FRX_PROGRAM_CONSTITUTION_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    for i in 1..=5 {
+        let code = format!("FRX-CI-00{i}");
+        assert!(doc.contains(&code), "constitution must reference {code}");
+    }
+}
+
+#[test]
+fn objective_function_all_invariant_ids_are_unique() {
+    let path = repo_root().join("docs/frx_objective_function_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let invariants = value["testable_invariants"]
+        .as_array()
+        .expect("testable_invariants array");
+    let mut ids = std::collections::BTreeSet::new();
+    for inv in invariants {
+        let id = inv["id"].as_str().expect("invariant id must be string");
+        assert!(ids.insert(id), "duplicate invariant id: {id}");
+    }
+}
+
+#[test]
+fn objective_function_all_invariant_entries_have_name_and_verification_ref() {
+    let path = repo_root().join("docs/frx_objective_function_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let invariants = value["testable_invariants"]
+        .as_array()
+        .expect("testable_invariants array");
+    for inv in invariants {
+        let id = inv["id"].as_str().unwrap_or("?");
+        let name = inv["name"].as_str().expect("invariant name must be string");
+        let vref = inv["verification_ref"]
+            .as_str()
+            .expect("invariant verification_ref must be string");
+        assert!(!name.trim().is_empty(), "invariant {id} name is blank");
+        assert!(
+            !vref.trim().is_empty(),
+            "invariant {id} verification_ref is blank"
+        );
+    }
+}
+
+#[test]
+fn objective_function_metrics_have_north_star_and_guardrails() {
+    let path = repo_root().join("docs/frx_objective_function_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let metrics = value["metrics"].as_object().expect("metrics object");
+    assert!(
+        metrics.contains_key("north_star"),
+        "metrics must have north_star"
+    );
+    assert!(
+        metrics.contains_key("guardrails"),
+        "metrics must have guardrails"
+    );
+    let ns = value["metrics"]["north_star"]
+        .as_array()
+        .expect("north_star array");
+    assert!(!ns.is_empty(), "north_star metrics must not be empty");
+    let guardrails = value["metrics"]["guardrails"]
+        .as_array()
+        .expect("guardrails array");
+    assert!(
+        !guardrails.is_empty(),
+        "guardrail metrics must not be empty"
+    );
+}
+
+#[test]
+fn objective_function_north_star_metrics_have_direction_maximize() {
+    let path = repo_root().join("docs/frx_objective_function_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let ns = value["metrics"]["north_star"]
+        .as_array()
+        .expect("north_star array");
+    for metric in ns {
+        let id = metric["id"].as_str().unwrap_or("?");
+        let direction = metric["direction"]
+            .as_str()
+            .expect("direction must be string");
+        assert_eq!(
+            direction, "maximize",
+            "north_star metric {id} must have direction=maximize"
+        );
+    }
+}
+
+#[test]
+fn objective_function_guardrail_metrics_have_direction_minimize() {
+    let path = repo_root().join("docs/frx_objective_function_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let guardrails = value["metrics"]["guardrails"]
+        .as_array()
+        .expect("guardrails array");
+    for metric in guardrails {
+        let id = metric["id"].as_str().unwrap_or("?");
+        let direction = metric["direction"]
+            .as_str()
+            .expect("direction must be string");
+        assert_eq!(
+            direction, "minimize",
+            "guardrail metric {id} must have direction=minimize"
+        );
+    }
+}
+
+#[test]
+fn objective_function_downstream_reference_policy_is_present_and_complete() {
+    let path = repo_root().join("docs/frx_objective_function_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let policy = value["downstream_reference_policy"]
+        .as_object()
+        .expect("downstream_reference_policy must be an object");
+    assert!(
+        policy.contains_key("constitution_ref_mandatory"),
+        "downstream_reference_policy must have constitution_ref_mandatory"
+    );
+    assert_eq!(
+        value["downstream_reference_policy"]["constitution_ref_mandatory"].as_bool(),
+        Some(true),
+        "constitution_ref_mandatory must be true"
+    );
+    let req_fields = value["downstream_reference_policy"]["required_fields"]
+        .as_array()
+        .expect("required_fields must be an array");
+    assert!(
+        req_fields.len() >= 4,
+        "at least 4 required downstream log fields must be declared"
+    );
+}
+
+#[test]
+fn freeze_manifest_promotion_block_rule_is_present() {
+    let path = repo_root().join("docs/FRX_C0_FREEZE_MANIFEST_V1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let rule = value["promotion_block_rule"]
+        .as_object()
+        .expect("promotion_block_rule must be an object");
+    assert!(
+        rule.contains_key("rule_id"),
+        "promotion_block_rule must have rule_id"
+    );
+    assert!(
+        rule.contains_key("condition"),
+        "promotion_block_rule must have condition"
+    );
+    assert!(
+        rule.contains_key("action"),
+        "promotion_block_rule must have action"
+    );
+    let action = value["promotion_block_rule"]["action"]
+        .as_str()
+        .expect("action must be string");
+    assert!(
+        !action.trim().is_empty(),
+        "promotion_block_rule action must not be blank"
+    );
+}
+
+#[test]
+fn freeze_manifest_milestone_is_c0() {
+    let path = repo_root().join("docs/FRX_C0_FREEZE_MANIFEST_V1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert_eq!(
+        value["milestone"].as_str(),
+        Some("C0"),
+        "freeze manifest milestone must be C0"
+    );
+}
+
+#[test]
+fn freeze_manifest_artifacts_include_all_lane_charters() {
+    let path = repo_root().join("docs/FRX_C0_FREEZE_MANIFEST_V1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let artifacts = value["artifacts"].as_object().expect("artifacts object");
+    let required_charter_keys = [
+        "semantics_lane_charter",
+        "compiler_lane_charter",
+        "verification_lane_charter",
+        "optimization_lane_charter",
+        "toolchain_lane_charter",
+        "governance_lane_charter",
+        "adoption_lane_charter",
+    ];
+    for key in required_charter_keys {
+        assert!(
+            artifacts.contains_key(key),
+            "freeze manifest artifacts must include {key}"
+        );
+        let val = artifacts[key].as_str().expect("{key} must be a string");
+        assert!(
+            val.ends_with(".md"),
+            "charter artifact {key} must point to a .md file, got: {val}"
+        );
+    }
+}
+
+#[test]
+fn forbidden_regressions_json_is_parseable_and_has_entries() {
+    let path = repo_root().join("docs/frx_forbidden_regressions_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let entries = value["entries"]
+        .as_array()
+        .expect("entries must be an array");
+    assert!(
+        entries.len() >= 4,
+        "at least 4 forbidden regression entries must be declared"
+    );
+}
+
+#[test]
+fn forbidden_regressions_all_entries_have_required_fields() {
+    let path = repo_root().join("docs/frx_forbidden_regressions_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let entries = value["entries"]
+        .as_array()
+        .expect("entries must be an array");
+    let required = ["id", "invariant", "description", "severity", "detection"];
+    for entry in entries {
+        let id = entry["id"].as_str().unwrap_or("?");
+        for field in required {
+            let val = entry[field]
+                .as_str()
+                .unwrap_or_else(|| panic!("{field} must be a string in {id}"));
+            assert!(
+                !val.trim().is_empty(),
+                "field {field} must not be blank in entry {id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn forbidden_regressions_all_entry_ids_are_unique() {
+    let path = repo_root().join("docs/frx_forbidden_regressions_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let entries = value["entries"]
+        .as_array()
+        .expect("entries must be an array");
+    let mut ids = std::collections::BTreeSet::new();
+    for entry in entries {
+        let id = entry["id"].as_str().expect("id must be string");
+        assert!(ids.insert(id), "duplicate forbidden regression id: {id}");
+    }
+}
+
+#[test]
+fn forbidden_regressions_critical_entries_exist() {
+    let path = repo_root().join("docs/frx_forbidden_regressions_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let entries = value["entries"]
+        .as_array()
+        .expect("entries must be an array");
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["severity"].as_str() == Some("critical")),
+        "at least one forbidden regression entry must have severity=critical"
+    );
+}
+
+#[test]
+fn compile_vs_fallback_json_has_schema_version_and_rules() {
+    let path = repo_root().join("docs/frx_compile_vs_fallback_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let sv = value["schema_version"]
+        .as_str()
+        .expect("schema_version must be string");
+    assert!(!sv.trim().is_empty(), "schema_version must not be blank");
+    let rules = value["rules"].as_array().expect("rules must be an array");
+    assert!(
+        rules.len() >= 3,
+        "at least 3 compile-vs-fallback rules must be declared"
+    );
+}
+
+#[test]
+fn compile_vs_fallback_rules_all_have_required_fields() {
+    let path = repo_root().join("docs/frx_compile_vs_fallback_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let rules = value["rules"].as_array().expect("rules must be an array");
+    for rule in rules {
+        let id = rule["rule_id"].as_str().unwrap_or("?");
+        for field in ["rule_id", "condition", "decision", "action"] {
+            let val = rule[field]
+                .as_str()
+                .unwrap_or_else(|| panic!("{field} must be a string in {id}"));
+            assert!(
+                !val.trim().is_empty(),
+                "{field} must not be blank in rule {id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn compile_vs_fallback_has_required_evidence_fields() {
+    let path = repo_root().join("docs/frx_compile_vs_fallback_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["required_evidence_fields"]
+        .as_array()
+        .expect("required_evidence_fields must be an array");
+    assert!(
+        fields.len() >= 4,
+        "at least 4 required evidence fields must be declared"
+    );
+    let field_strs: Vec<&str> = fields.iter().filter_map(|f| f.as_str()).collect();
+    for required in ["trace_id", "decision_id", "policy_id"] {
+        assert!(
+            field_strs.contains(&required),
+            "required_evidence_fields must include {required}"
+        );
+    }
+}
+
+#[test]
+fn constitution_doc_mentions_governance_and_change_control() {
+    let path = repo_root().join("docs/FRX_PROGRAM_CONSTITUTION_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.to_ascii_lowercase().contains("change control"),
+        "constitution doc must include Change Control section"
+    );
+    assert!(
+        doc.to_ascii_lowercase().contains("governance"),
+        "constitution doc must mention governance"
+    );
+}
+
+#[test]
+fn objective_function_constitution_version_matches_program_constitution() {
+    let obj_path = repo_root().join("docs/frx_objective_function_v1.json");
+    let obj_raw = fs::read_to_string(&obj_path).expect("read objective JSON");
+    let obj_value: Value = serde_json::from_str(&obj_raw).expect("parse objective JSON");
+    let constitution_version = obj_value["constitution_version"]
+        .as_str()
+        .expect("constitution_version must be present in objective function JSON");
+    let doc_path = repo_root().join("docs/FRX_PROGRAM_CONSTITUTION_V1.md");
+    let doc = fs::read_to_string(&doc_path).expect("read constitution doc");
+    assert!(
+        doc.contains(constitution_version),
+        "program constitution must embed its own version string '{constitution_version}'"
+    );
+}
+
+#[test]
+fn freeze_manifest_serde_roundtrip_preserves_structure() {
+    let path = repo_root().join("docs/FRX_C0_FREEZE_MANIFEST_V1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let serialized = serde_json::to_string(&value).expect("serialize");
+    let reparsed: Value = serde_json::from_str(&serialized).expect("reparse");
+    assert_eq!(
+        value, reparsed,
+        "freeze manifest serde roundtrip must be identity"
+    );
+}
+
+#[test]
+fn objective_function_objective_target_is_maximize() {
+    let path = repo_root().join("docs/frx_objective_function_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert_eq!(
+        value["objective"]["target"].as_str(),
+        Some("maximize"),
+        "objective target must be 'maximize'"
+    );
+}
+
+#[test]
+fn objective_function_hard_constraints_no_constitutional_invariant_violation() {
+    let path = repo_root().join("docs/frx_objective_function_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let hc = value["objective"]["hard_constraints"]
+        .as_array()
+        .expect("hard_constraints array");
+    assert!(
+        hc.iter().any(|c| c
+            .as_str()
+            .is_some_and(|s| s.contains("no_constitutional_invariant"))),
+        "hard_constraints must prohibit constitutional invariant violations"
+    );
+}
+
+#[test]
+fn freeze_manifest_all_artifact_values_are_nonempty_strings() {
+    let path = repo_root().join("docs/FRX_C0_FREEZE_MANIFEST_V1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let artifacts = value["artifacts"].as_object().expect("artifacts object");
+    for (key, val) in artifacts {
+        let s = val
+            .as_str()
+            .unwrap_or_else(|| panic!("artifact {key} must be a string"));
+        assert!(
+            !s.trim().is_empty(),
+            "artifact {key} value must not be blank"
+        );
+    }
+}

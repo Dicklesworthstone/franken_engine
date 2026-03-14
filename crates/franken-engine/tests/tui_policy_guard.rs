@@ -894,3 +894,254 @@ fn tui_policy_guard_event_serde_roundtrip() {
         serde_json::from_str(&pass_json).expect("parse pass json");
     assert!(pass_recovered["error_code"].is_null());
 }
+
+// ---------- enrichment: dependency_names edge cases ----------
+
+#[test]
+fn dependency_names_strips_inline_comments() {
+    let toml = r#"
+[dependencies]
+serde = "1" # serialization
+"#;
+    let deps = dependency_names(toml);
+    assert_eq!(deps, vec!["serde".to_string()]);
+}
+
+#[test]
+fn dependency_names_skips_blank_and_comment_only_lines() {
+    let toml = r#"
+[dependencies]
+# this is a comment
+serde = "1"
+
+# another comment
+tokio = "1"
+"#;
+    let deps = dependency_names(toml);
+    assert_eq!(deps.len(), 2);
+    assert!(deps.contains(&"serde".to_string()));
+    assert!(deps.contains(&"tokio".to_string()));
+}
+
+#[test]
+fn dependency_names_handles_quoted_keys() {
+    let toml = r#"
+[dependencies]
+"serde" = "1"
+"#;
+    let deps = dependency_names(toml);
+    assert_eq!(deps, vec!["serde".to_string()]);
+}
+
+#[test]
+fn dependency_names_handles_build_dependencies() {
+    let toml = r#"
+[build-dependencies]
+cc = "1"
+"#;
+    let deps = dependency_names(toml);
+    assert_eq!(deps, vec!["cc".to_string()]);
+}
+
+#[test]
+fn dependency_names_handles_target_specific_deps() {
+    let toml = r#"
+[target.x86_64-unknown-linux-gnu.dependencies]
+nix = "0.28"
+"#;
+    let deps = dependency_names(toml);
+    assert_eq!(deps, vec!["nix".to_string()]);
+}
+
+// ---------- enrichment: is_forbidden_tui_dependency ----------
+
+#[test]
+fn is_forbidden_tui_dependency_case_insensitive() {
+    assert!(is_forbidden_tui_dependency("Ratatui"));
+    assert!(is_forbidden_tui_dependency("CROSSTERM"));
+    assert!(is_forbidden_tui_dependency("Cursive"));
+}
+
+#[test]
+fn is_forbidden_tui_dependency_all_known_forbidden() {
+    for dep in FORBIDDEN_TUI_DEPENDENCIES {
+        assert!(
+            is_forbidden_tui_dependency(dep),
+            "expected {dep} to be forbidden"
+        );
+    }
+}
+
+#[test]
+fn is_forbidden_tui_dependency_frankentui_variants_allowed() {
+    assert!(!is_forbidden_tui_dependency("frankentui"));
+    assert!(!is_forbidden_tui_dependency("frankentui-widgets"));
+    assert!(!is_forbidden_tui_dependency("frankentui_core"));
+    assert!(!is_forbidden_tui_dependency("FrankenTUI"));
+}
+
+// ---------- enrichment: is_blocked_local_tui_module ----------
+
+#[test]
+fn is_blocked_local_tui_module_blocks_crossterm_in_name() {
+    assert!(is_blocked_local_tui_module(
+        "crates/foo/src/crossterm_backend.rs"
+    ));
+}
+
+#[test]
+fn is_blocked_local_tui_module_blocks_termion_in_name() {
+    assert!(is_blocked_local_tui_module(
+        "crates/bar/src/termion_compat.rs"
+    ));
+}
+
+#[test]
+fn is_blocked_local_tui_module_blocks_cursive_in_name() {
+    assert!(is_blocked_local_tui_module(
+        "crates/bar/src/cursive_wrapper.rs"
+    ));
+}
+
+#[test]
+fn is_blocked_local_tui_module_handles_backslash_paths() {
+    assert!(is_blocked_local_tui_module(
+        "crates\\bar\\src\\tui_renderer.rs"
+    ));
+}
+
+#[test]
+fn is_blocked_local_tui_module_rejects_non_rs_extension() {
+    assert!(!is_blocked_local_tui_module(
+        "crates/foo/src/tui_config.json"
+    ));
+    assert!(!is_blocked_local_tui_module(
+        "crates/foo/src/tui_config.toml"
+    ));
+}
+
+// ---------- enrichment: parse_exception_doc ----------
+
+#[test]
+fn parse_exception_doc_with_multiple_scopes() {
+    let doc = ExceptionDocumentInput {
+        path: "docs/adr/exceptions/ADR-EXCEPTION-TUI-0003.md".to_string(),
+        content: "Status: Approved\nScope: dependency:ratatui\nScope: dependency:crossterm\n"
+            .to_string(),
+    };
+    let parsed = parse_exception_doc(&doc).expect("should parse");
+    assert_eq!(parsed.scopes.len(), 2);
+    assert!(matches!(&parsed.scopes[0], ExceptionScope::Dependency(d) if d == "ratatui"));
+    assert!(matches!(&parsed.scopes[1], ExceptionScope::Dependency(d) if d == "crossterm"));
+}
+
+#[test]
+fn parse_exception_doc_with_module_scope() {
+    let doc = ExceptionDocumentInput {
+        path: "docs/adr/exceptions/ADR-EXCEPTION-TUI-0004.md".to_string(),
+        content: "Status: Approved\nScope: module:crates/legacy/src/tui*\n".to_string(),
+    };
+    let parsed = parse_exception_doc(&doc).expect("should parse");
+    assert_eq!(parsed.scopes.len(), 1);
+    assert!(
+        matches!(&parsed.scopes[0], ExceptionScope::ModulePattern(p) if p == "crates/legacy/src/tui*")
+    );
+}
+
+#[test]
+fn parse_exception_doc_requires_scopes() {
+    let doc = ExceptionDocumentInput {
+        path: "docs/adr/exceptions/ADR-EXCEPTION-TUI-0005.md".to_string(),
+        content: "Status: Approved\n".to_string(),
+    };
+    assert!(
+        parse_exception_doc(&doc).is_none(),
+        "approved but no scopes should return None"
+    );
+}
+
+#[test]
+fn parse_exception_doc_with_backslash_path() {
+    let doc = ExceptionDocumentInput {
+        path: "docs\\adr\\exceptions\\ADR-EXCEPTION-TUI-0006.md".to_string(),
+        content: "Status: Approved\nScope: dependency:tui\n".to_string(),
+    };
+    let parsed = parse_exception_doc(&doc).expect("backslash path should normalize");
+    assert_eq!(parsed.scopes.len(), 1);
+}
+
+// ---------- enrichment: evaluate_guard trace IDs ----------
+
+#[test]
+fn evaluate_guard_trace_ids_are_sequential() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dependencies]\nratatui = \"1\"\ncrossterm = \"1\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    for (i, event) in report.events.iter().enumerate() {
+        let expected_trace = format!("{TRACE_PREFIX}-{:04}", i + 1);
+        assert_eq!(event.trace_id, expected_trace, "trace ID mismatch at {i}");
+    }
+}
+
+#[test]
+fn evaluate_guard_decision_ids_are_sequential() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dependencies]\ntui = \"1\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    for (i, event) in report.events.iter().enumerate() {
+        let expected_decision = format!("decision-{:04}", i + 1);
+        assert_eq!(
+            event.decision_id, expected_decision,
+            "decision ID mismatch at {i}"
+        );
+    }
+}
+
+// ---------- enrichment: report properties ----------
+
+#[test]
+fn evaluate_guard_all_events_have_correct_policy_and_component() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dependencies]\nratatui = \"1\"\n".to_string(),
+    }];
+    let modules = vec!["crates/foo/src/tui_test.rs".to_string()];
+    let report = evaluate_guard(&manifests, &modules, &[]);
+    for event in &report.events {
+        assert_eq!(event.policy_id, POLICY_ID);
+        assert_eq!(event.component, COMPONENT);
+    }
+}
+
+#[test]
+fn evaluate_guard_summary_counts_violations() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dependencies]\nratatui = \"1\"\ncrossterm = \"1\"\ntui = \"1\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    assert_eq!(report.violations.len(), 3);
+    let summary = report
+        .events
+        .iter()
+        .find(|e| e.event == "guard_summary")
+        .expect("must have summary");
+    assert_eq!(summary.detail, "violations=3");
+    assert_eq!(summary.outcome, "fail");
+}
+
+#[test]
+fn policy_guard_report_as_jsonl_line_count_matches_events() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dependencies]\nratatui = \"1\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    let jsonl = report.as_jsonl();
+    let line_count = jsonl.lines().count();
+    assert_eq!(line_count, report.events.len());
+}

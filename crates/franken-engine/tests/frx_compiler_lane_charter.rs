@@ -478,3 +478,202 @@ fn compiler_contract_failure_policy_is_fail_closed_mode() {
         "failure_policy.error_code must not be empty"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment batch 2: deeper structural and cross-field invariants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compiler_charter_word_count_at_least_three_hundred() {
+    let path = repo_root().join("docs/FRX_COMPILER_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter");
+    let word_count = doc.split_whitespace().count();
+    assert!(
+        word_count >= 300,
+        "charter should have at least 300 words, got {}",
+        word_count
+    );
+}
+
+#[test]
+fn compiler_charter_h2_count_at_least_eight() {
+    let path = repo_root().join("docs/FRX_COMPILER_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter");
+    let h2_count = doc.lines().filter(|l| l.starts_with("## ")).count();
+    assert!(
+        h2_count >= 8,
+        "charter should have at least 8 H2 sections, got {}",
+        h2_count
+    );
+}
+
+#[test]
+fn compiler_contract_has_at_least_eight_top_level_keys() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let obj = value.as_object().expect("top-level must be object");
+    assert!(
+        obj.len() >= 8,
+        "contract should have at least 8 top-level keys, got {}",
+        obj.len()
+    );
+}
+
+#[test]
+fn compiler_charter_mentions_rollback_or_recovery() {
+    let path = repo_root().join("docs/FRX_COMPILER_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter");
+    let lower = doc.to_ascii_lowercase();
+    assert!(
+        lower.contains("rollback") || lower.contains("recovery") || lower.contains("revert"),
+        "charter should mention rollback, recovery, or revert"
+    );
+}
+
+#[test]
+fn compiler_contract_primary_bead_starts_with_bd() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let pb = value["primary_bead"]
+        .as_str()
+        .expect("primary_bead must be string");
+    assert!(
+        pb.starts_with("bd-"),
+        "primary_bead must start with bd-, got '{}'",
+        pb
+    );
+}
+
+#[test]
+fn compiler_contract_schema_version_starts_with_frx() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let sv = value["schema_version"]
+        .as_str()
+        .expect("schema_version must be string");
+    assert!(
+        sv.starts_with("frx."),
+        "schema_version must start with frx., got '{}'",
+        sv
+    );
+}
+
+#[test]
+fn compiler_contract_generated_by_starts_with_bd() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let gb = value["generated_by"]
+        .as_str()
+        .expect("generated_by must be string");
+    assert!(
+        gb.starts_with("bd-"),
+        "generated_by must start with bd-, got '{}'",
+        gb
+    );
+}
+
+#[test]
+fn compiler_charter_deterministic_double_read() {
+    let path = repo_root().join("docs/FRX_COMPILER_LANE_CHARTER_V1.md");
+    let a = fs::read_to_string(&path).expect("first read");
+    let b = fs::read_to_string(&path).expect("second read");
+    assert_eq!(a, b, "charter must be deterministic on double read");
+}
+
+#[test]
+fn compiler_contract_json_size_reasonable() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    assert!(
+        raw.len() > 200,
+        "contract JSON should be > 200 bytes, got {}",
+        raw.len()
+    );
+    assert!(
+        raw.len() < 100_000,
+        "contract JSON should be < 100KB, got {}",
+        raw.len()
+    );
+}
+
+#[test]
+fn compiler_charter_line_count_at_least_eighty() {
+    let path = repo_root().join("docs/FRX_COMPILER_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter");
+    let line_count = doc.lines().count();
+    assert!(
+        line_count >= 80,
+        "charter should have at least 80 lines, got {}",
+        line_count
+    );
+}
+
+#[test]
+fn compiler_contract_logging_component_nonempty() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let component = value["logging_contract"]["component"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        !component.trim().is_empty(),
+        "logging_contract.component must not be empty"
+    );
+}
+
+#[test]
+fn compiler_contract_outputs_has_at_least_one_key() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let outputs = value["outputs"]
+        .as_object()
+        .expect("outputs must be object");
+    assert!(!outputs.is_empty(), "outputs must have at least one key");
+}
+
+#[test]
+fn compiler_charter_mentions_budget_or_cost() {
+    let path = repo_root().join("docs/FRX_COMPILER_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter");
+    let lower = doc.to_ascii_lowercase();
+    assert!(
+        lower.contains("budget") || lower.contains("cost"),
+        "charter should mention budget or cost concepts"
+    );
+}
+
+#[test]
+fn compiler_contract_lane_id_starts_with_frx() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let lane_id = value["lane"]["id"]
+        .as_str()
+        .expect("lane.id must be string");
+    assert!(
+        lane_id.starts_with("FRX-"),
+        "lane.id must start with FRX-, got '{}'",
+        lane_id
+    );
+}
+
+#[test]
+fn compiler_contract_generated_at_utc_contains_t_separator() {
+    let path = repo_root().join("docs/frx_compiler_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let ts = value["generated_at_utc"]
+        .as_str()
+        .expect("generated_at_utc must be string");
+    assert!(
+        ts.contains('T'),
+        "generated_at_utc must contain T separator: '{}'",
+        ts
+    );
+}

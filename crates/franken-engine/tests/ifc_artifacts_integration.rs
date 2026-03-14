@@ -95,6 +95,7 @@ fn make_receipt() -> DeclassificationReceipt {
         source_label: Label::Secret,
         sink_clearance: Label::Internal,
         declassification_route_ref: "declass-integ-1".to_string(),
+        decision_contract_id: "decision-contract-integ-1".to_string(),
         policy_evaluation_summary: "approved by security team".to_string(),
         loss_assessment_milli: 5000,
         decision: DeclassificationDecision::Allow,

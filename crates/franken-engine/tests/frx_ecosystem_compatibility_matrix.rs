@@ -615,3 +615,235 @@ fn frx_07_3_compatibility_entry_serde_round_trip() {
         recovered.structured_log_template.scenario_id
     );
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment batch: 17 new tests
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn frx_07_3_known_gap_serde_round_trip_all() {
+    let matrix = parse_matrix();
+    for gap in &matrix.known_gaps {
+        let json = serde_json::to_string(gap).expect("serialize gap");
+        let recovered: KnownGap = serde_json::from_str(&json).expect("deserialize gap");
+        assert_eq!(
+            gap, &recovered,
+            "round-trip mismatch for gap {}",
+            gap.stack_id
+        );
+    }
+}
+
+#[test]
+fn frx_07_3_matrix_track_serde_round_trip() {
+    let matrix = parse_matrix();
+    let json = serde_json::to_string(&matrix.track).expect("serialize track");
+    let recovered: MatrixTrack = serde_json::from_str(&json).expect("deserialize track");
+    assert_eq!(matrix.track, recovered);
+}
+
+#[test]
+fn frx_07_3_structured_log_template_serde_round_trip() {
+    let matrix = parse_matrix();
+    for entry in &matrix.entries {
+        let json =
+            serde_json::to_string(&entry.structured_log_template).expect("serialize template");
+        let recovered: StructuredLogTemplate =
+            serde_json::from_str(&json).expect("deserialize template");
+        assert_eq!(entry.structured_log_template, recovered);
+    }
+}
+
+#[test]
+fn frx_07_3_clone_preserves_full_matrix_equality() {
+    let matrix = parse_matrix();
+    let cloned = matrix.clone();
+    assert_eq!(matrix, cloned);
+    assert_eq!(matrix.entries.len(), cloned.entries.len());
+    assert_eq!(matrix.known_gaps.len(), cloned.known_gaps.len());
+    assert_eq!(
+        matrix.required_structured_log_fields,
+        cloned.required_structured_log_fields
+    );
+}
+
+#[test]
+fn frx_07_3_debug_format_contains_schema_version() {
+    let matrix = parse_matrix();
+    let debug_str = format!("{:?}", matrix);
+    assert!(
+        debug_str.contains(MATRIX_SCHEMA_VERSION),
+        "debug output must contain schema version"
+    );
+}
+
+#[test]
+fn frx_07_3_debug_format_contains_track_id() {
+    let matrix = parse_matrix();
+    let debug_str = format!("{:?}", matrix);
+    assert!(
+        debug_str.contains("FRX-07.3"),
+        "debug output must contain track id"
+    );
+}
+
+#[test]
+fn frx_07_3_fallback_entries_have_fallback_outcome_in_template() {
+    let matrix = parse_matrix();
+    for entry in &matrix.entries {
+        if entry.compatibility_status == "compatibility_fallback" {
+            assert_eq!(
+                entry.structured_log_template.outcome, "fallback",
+                "compatibility_fallback entry {} must have outcome 'fallback'",
+                entry.stack_id
+            );
+        }
+    }
+}
+
+#[test]
+fn frx_07_3_native_entries_have_pass_outcome_in_template() {
+    let matrix = parse_matrix();
+    for entry in &matrix.entries {
+        if entry.compatibility_status == "native" {
+            assert_eq!(
+                entry.structured_log_template.outcome, "pass",
+                "native entry {} must have outcome 'pass'",
+                entry.stack_id
+            );
+        }
+    }
+}
+
+#[test]
+fn frx_07_3_generated_at_utc_is_valid_iso8601() {
+    let matrix = parse_matrix();
+    let ts = &matrix.generated_at_utc;
+    assert!(ts.ends_with('Z'), "timestamp must end with Z");
+    assert!(ts.contains('T'), "timestamp must contain T separator");
+    let parts: Vec<&str> = ts.split('T').collect();
+    assert_eq!(
+        parts.len(),
+        2,
+        "timestamp must have exactly one T separator"
+    );
+    let date_parts: Vec<&str> = parts[0].split('-').collect();
+    assert_eq!(date_parts.len(), 3, "date must have year-month-day");
+    assert_eq!(date_parts[0].len(), 4, "year must be 4 digits");
+    assert_eq!(date_parts[1].len(), 2, "month must be 2 digits");
+    assert_eq!(date_parts[2].len(), 2, "day must be 2 digits");
+}
+
+#[test]
+fn frx_07_3_required_structured_log_fields_count_is_12() {
+    let matrix = parse_matrix();
+    assert_eq!(
+        matrix.required_structured_log_fields.len(),
+        12,
+        "expected exactly 12 required structured log fields"
+    );
+}
+
+#[test]
+fn frx_07_3_required_log_fields_are_unique() {
+    let matrix = parse_matrix();
+    let mut seen = BTreeSet::new();
+    for field in &matrix.required_structured_log_fields {
+        assert!(
+            seen.insert(field.as_str()),
+            "duplicate required_structured_log_field: {}",
+            field
+        );
+    }
+}
+
+#[test]
+fn frx_07_3_every_fallback_entry_has_matching_known_gap() {
+    let matrix = parse_matrix();
+    let gap_stack_ids: BTreeSet<&str> = matrix
+        .known_gaps
+        .iter()
+        .map(|g| g.stack_id.as_str())
+        .collect();
+    for entry in &matrix.entries {
+        if entry.compatibility_status == "compatibility_fallback" {
+            assert!(
+                gap_stack_ids.contains(entry.stack_id.as_str()),
+                "compatibility_fallback entry {} must have a corresponding known gap",
+                entry.stack_id
+            );
+        }
+    }
+}
+
+#[test]
+fn frx_07_3_all_entries_component_field_matches_matrix_name() {
+    let matrix = parse_matrix();
+    for entry in &matrix.entries {
+        assert_eq!(
+            entry.structured_log_template.component, "frx_ecosystem_compatibility_matrix",
+            "entry {} component must be 'frx_ecosystem_compatibility_matrix'",
+            entry.stack_id
+        );
+    }
+}
+
+#[test]
+fn frx_07_3_categories_per_entry_match_expected_set() {
+    let matrix = parse_matrix();
+    let allowed: BTreeSet<&str> = ["state_lib", "routing", "forms", "data_lib", "legacy_api"]
+        .into_iter()
+        .collect();
+    for entry in &matrix.entries {
+        assert!(
+            allowed.contains(entry.category.as_str()),
+            "entry {} has unexpected category: {}",
+            entry.stack_id,
+            entry.category
+        );
+    }
+}
+
+#[test]
+fn frx_07_3_pretty_json_roundtrip_preserves_matrix() {
+    let matrix = parse_matrix();
+    let pretty = serde_json::to_string_pretty(&matrix).expect("pretty serialize");
+    let recovered: EcosystemMatrix = serde_json::from_str(&pretty).expect("deserialize pretty");
+    assert_eq!(matrix, recovered);
+}
+
+#[test]
+fn frx_07_3_known_gap_target_milestones_follow_pattern() {
+    let matrix = parse_matrix();
+    for gap in &matrix.known_gaps {
+        assert!(
+            gap.target_milestone.starts_with("FRX-"),
+            "gap {} target_milestone must start with 'FRX-': {}",
+            gap.stack_id,
+            gap.target_milestone
+        );
+        let suffix = &gap.target_milestone["FRX-".len()..];
+        assert!(
+            suffix.contains('.'),
+            "gap {} target_milestone must contain dot-separated version: {}",
+            gap.stack_id,
+            gap.target_milestone
+        );
+    }
+}
+
+#[test]
+fn frx_07_3_operator_verification_commands_are_nonempty_strings() {
+    let matrix = parse_matrix();
+    for cmd in &matrix.operator_verification {
+        assert!(
+            !cmd.trim().is_empty(),
+            "operator_verification must not contain empty commands"
+        );
+        assert!(
+            cmd.len() > 3,
+            "operator_verification command is suspiciously short: {}",
+            cmd
+        );
+    }
+}

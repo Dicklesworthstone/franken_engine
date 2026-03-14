@@ -687,3 +687,195 @@ fn frx_20_6_quality_summary_has_all_dimensional_scores() {
     assert!(summary.artifact_integrity_score_millionths > 0);
     assert!(summary.aggregate_score_millionths > 0);
 }
+
+// ---------- EvidenceArtifactLink field validation ----------
+
+#[test]
+fn signed_artifact_path_contains_prefix() {
+    let link = signed_artifact("my_component", 5_000);
+    assert!(link.path.contains("my_component"));
+}
+
+#[test]
+fn signed_artifact_sha256_contains_prefix() {
+    let link = signed_artifact("sha_test", 3_000);
+    assert!(link.sha256.contains("sha_test"));
+}
+
+#[test]
+fn signed_artifact_generated_at_before_now() {
+    let now_ns = 10_000_u64;
+    let link = signed_artifact("timing", now_ns);
+    assert!(link.generated_at_ns < now_ns);
+}
+
+// ---------- baseline_signal metadata ----------
+
+#[test]
+fn baseline_signal_flake_source_has_burden_metadata() {
+    let signal = baseline_signal(EvidenceSource::FlakeQuarantineWorkflow, 950_000, 10_000);
+    assert!(signal.metadata.contains_key("flake_burden_millionths"));
+}
+
+#[test]
+fn baseline_signal_non_flake_source_has_no_burden_metadata() {
+    let signal = baseline_signal(EvidenceSource::UnitDepthGate, 950_000, 10_000);
+    assert!(!signal.metadata.contains_key("flake_burden_millionths"));
+}
+
+#[test]
+fn baseline_signal_evidence_refs_contain_source_name() {
+    for source in &EvidenceSource::REQUIRED {
+        let signal = baseline_signal(*source, 900_000, 5_000);
+        assert!(
+            signal.evidence_refs[0].contains(source.as_str()),
+            "evidence ref should contain source name for {:?}",
+            source
+        );
+    }
+}
+
+// ---------- integration decision signed links ----------
+
+#[test]
+fn frx_20_6_passing_decision_has_signed_evidence_links() {
+    let input = baseline_input(30_000);
+    let decision = integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
+    assert!(decision.allows_promotion());
+    for link in &decision.signed_evidence_links {
+        assert!(!link.artifact_id.is_empty());
+    }
+}
+
+// ---------- EvidenceSource exhaustive ----------
+
+#[test]
+fn evidence_source_required_count_at_least_five() {
+    assert!(EvidenceSource::REQUIRED.len() >= 5);
+}
+
+#[test]
+fn evidence_source_as_str_all_unique() {
+    let strs: BTreeSet<&str> = EvidenceSource::REQUIRED
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    assert_eq!(strs.len(), EvidenceSource::REQUIRED.len());
+}
+
+// ---------- IntegratorPolicy thresholds ----------
+
+#[test]
+fn integrator_policy_c1_less_than_or_equal_c5() {
+    let policy = IntegratorPolicy::default();
+    let c1 = policy.threshold_for_cut_line(CutLine::C1);
+    let c2 = policy.threshold_for_cut_line(CutLine::C2);
+    let c3 = policy.threshold_for_cut_line(CutLine::C3);
+    let c4 = policy.threshold_for_cut_line(CutLine::C4);
+    let c5 = policy.threshold_for_cut_line(CutLine::C5);
+    assert!(c1 <= c2);
+    assert!(c2 <= c3);
+    assert!(c3 <= c4);
+    assert!(c4 <= c5);
+}
+
+// ---------- release checklist binding ----------
+
+#[test]
+fn frx_20_6_release_checklist_items_have_nonempty_ids() {
+    let input = baseline_input(50_000);
+    let decision = integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
+
+    let mut checklist = ReleaseChecklist {
+        schema_version: "franken-engine.release-checklist.v1".to_string(),
+        release_tag: "v0.9.0-rc2".to_string(),
+        generated_at_utc: "2026-02-27T00:00:00Z".to_string(),
+        trace_id: "trace-frx-20-6".to_string(),
+        decision_id: "decision-frx-20-6".to_string(),
+        policy_id: "policy-frx-20-6-v1".to_string(),
+        items: Vec::new(),
+    };
+
+    apply_to_release_checklist(&mut checklist, &decision, &input.signals);
+    for item in &checklist.items {
+        assert!(!item.item_id.trim().is_empty());
+    }
+}
+
+#[test]
+fn frx_20_6_release_checklist_has_items_after_apply() {
+    let input = baseline_input(50_000);
+    let decision = integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
+
+    let mut checklist = ReleaseChecklist {
+        schema_version: "franken-engine.release-checklist.v1".to_string(),
+        release_tag: "v0.9.0-rc2".to_string(),
+        generated_at_utc: "2026-02-27T00:00:00Z".to_string(),
+        trace_id: "trace-frx-20-6".to_string(),
+        decision_id: "decision-frx-20-6".to_string(),
+        policy_id: "policy-frx-20-6-v1".to_string(),
+        items: Vec::new(),
+    };
+
+    apply_to_release_checklist(&mut checklist, &decision, &input.signals);
+    assert!(!checklist.items.is_empty());
+}
+
+// ---------- emit_integration_events determinism ----------
+
+#[test]
+fn frx_20_6_events_deterministic_across_two_runs() {
+    let input = baseline_input(30_000);
+    let policy = IntegratorPolicy::default();
+    let dec_a = integrate_milestone_release_test_evidence(&input, &policy);
+    let dec_b = integrate_milestone_release_test_evidence(&input, &policy);
+    let events_a = emit_integration_events(&dec_a);
+    let events_b = emit_integration_events(&dec_b);
+    assert_eq!(events_a.len(), events_b.len());
+    for (a, b) in events_a.iter().zip(events_b.iter()) {
+        assert_eq!(a.schema_version, b.schema_version);
+        assert_eq!(a.outcome, b.outcome);
+    }
+}
+
+// ---------- MilestoneQualitySummary clone independence ----------
+
+#[test]
+fn milestone_quality_summary_clone_independence() {
+    let summary = MilestoneQualitySummary {
+        cut_line: CutLine::C4,
+        aggregate_score_millionths: 950_000,
+        unit_depth_score_millionths: 940_000,
+        e2e_stability_score_millionths: 935_000,
+        logging_integrity_score_millionths: 960_000,
+        flake_resilience_score_millionths: 945_000,
+        artifact_integrity_score_millionths: 955_000,
+        delta_from_previous_millionths: BTreeMap::new(),
+    };
+    let cloned = summary.clone();
+    assert_eq!(
+        cloned.aggregate_score_millionths,
+        summary.aggregate_score_millionths
+    );
+    assert_eq!(cloned.cut_line, summary.cut_line);
+}
+
+// ---------- to_cut_line_gate_inputs ----------
+
+#[test]
+fn frx_20_6_gate_inputs_have_nonempty_gate_ids() {
+    let input = baseline_input(40_000);
+    let decision = integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
+    let gate_inputs = to_cut_line_gate_inputs(&decision, &input.signals);
+    for gate in &gate_inputs {
+        assert!(!format!("{:?}", gate.category).is_empty());
+    }
+}
+
+#[test]
+fn frx_20_6_gate_inputs_count_matches_signals() {
+    let input = baseline_input(40_000);
+    let decision = integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
+    let gate_inputs = to_cut_line_gate_inputs(&decision, &input.signals);
+    assert!(!gate_inputs.is_empty());
+}

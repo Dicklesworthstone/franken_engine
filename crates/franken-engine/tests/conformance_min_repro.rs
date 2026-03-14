@@ -680,3 +680,172 @@ fn sha256_hex_length_is_always_64() {
         );
     }
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: determinism, edge cases, collector boundaries,
+// metadata clone, log event fields, waiver set serde
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn sha256_hex_is_deterministic() {
+    let a = sha256_hex(b"deterministic input");
+    let b = sha256_hex(b"deterministic input");
+    assert_eq!(a, b);
+}
+
+#[test]
+fn sha256_hex_different_inputs_produce_different_hashes() {
+    let a = sha256_hex(b"input-a");
+    let b = sha256_hex(b"input-b");
+    assert_ne!(a, b);
+}
+
+#[test]
+fn delta_classification_empty_strings_is_empty() {
+    let delta = classify_conformance_delta("", "");
+    assert!(delta.is_empty());
+}
+
+#[test]
+fn conformance_repro_metadata_clone_preserves_fields() {
+    let meta = ConformanceReproMetadata {
+        version_combination: BTreeMap::from([("a".to_string(), "1.0".to_string())]),
+        first_seen_commit: "commit1".to_string(),
+        regression_commit: Some("commit2".to_string()),
+        ci_run_id: Some("ci-99".to_string()),
+        issue_tracker_project: "beads".to_string(),
+        issue_tracking_bead: Some("bd-test".to_string()),
+    };
+    let cloned = meta.clone();
+    assert_eq!(meta.first_seen_commit, cloned.first_seen_commit);
+    assert_eq!(meta.regression_commit, cloned.regression_commit);
+    assert_eq!(meta.ci_run_id, cloned.ci_run_id);
+}
+
+#[test]
+fn conformance_runner_config_clone_preserves_seed() {
+    let config = ConformanceRunnerConfig::default();
+    let cloned = config.clone();
+    assert_eq!(config.seed, cloned.seed);
+    assert_eq!(config.run_date, cloned.run_date);
+}
+
+#[test]
+fn waiver_set_serde_roundtrip() {
+    let waivers = ConformanceWaiverSet::default();
+    let json = serde_json::to_string(&waivers).expect("serialize");
+    let recovered: ConformanceWaiverSet = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.waivers.len(), waivers.waivers.len());
+}
+
+#[test]
+fn run_result_summary_has_nonempty_run_id() {
+    let temp = test_temp_dir("summary-run-id");
+    let manifest = write_case_manifest(&temp, "let s = 1;", "value 2", "value 1");
+    let run = runner_with_metadata()
+        .run(&manifest, &ConformanceWaiverSet::default())
+        .expect("run");
+    assert!(!run.summary.run_id.is_empty());
+}
+
+#[test]
+fn artifact_delta_classification_nonempty_for_mismatch() {
+    let temp = test_temp_dir("delta-nonempty");
+    let manifest = write_case_manifest(&temp, "let d = 1;", "props:a,b,c", "props:a,b");
+    let run = runner_with_metadata()
+        .run(&manifest, &ConformanceWaiverSet::default())
+        .expect("run");
+    let artifact = run.minimized_repros.first().expect("artifact");
+    assert!(
+        !artifact.delta_classification.is_empty(),
+        "delta_classification must be nonempty for mismatched outputs"
+    );
+}
+
+#[test]
+fn log_events_have_trace_id() {
+    let temp = test_temp_dir("log-trace-id");
+    let manifest = write_case_manifest(&temp, "let t = 1;", "value 2", "value 1");
+    let run = runner_with_metadata()
+        .run(&manifest, &ConformanceWaiverSet::default())
+        .expect("run");
+    for log in &run.logs {
+        assert!(
+            !log.trace_id.is_empty(),
+            "each log event must have trace_id"
+        );
+    }
+}
+
+#[test]
+fn artifact_failure_id_has_expected_length() {
+    let temp = test_temp_dir("failure-id-len");
+    let manifest = write_case_manifest(&temp, "let f = 1;", "props:a,b,c", "props:a,b");
+    let run = runner_with_metadata()
+        .run(&manifest, &ConformanceWaiverSet::default())
+        .expect("run");
+    let artifact = run.minimized_repros.first().expect("artifact");
+    assert_eq!(
+        artifact.failure_id.len(),
+        19,
+        "failure_id should be 19 chars"
+    );
+}
+
+#[test]
+fn runner_determinism_same_input_same_result() {
+    let temp1 = test_temp_dir("determ-1");
+    let manifest1 = write_case_manifest(&temp1, "let r = 1;", "props:a,b,c", "props:a,b");
+    let run1 = runner_with_metadata()
+        .run(&manifest1, &ConformanceWaiverSet::default())
+        .expect("run1");
+
+    let temp2 = test_temp_dir("determ-2");
+    let manifest2 = write_case_manifest(&temp2, "let r = 1;", "props:a,b,c", "props:a,b");
+    let run2 = runner_with_metadata()
+        .run(&manifest2, &ConformanceWaiverSet::default())
+        .expect("run2");
+
+    assert_eq!(run1.summary.failed, run2.summary.failed);
+    assert_eq!(run1.minimized_repros.len(), run2.minimized_repros.len());
+    assert_eq!(
+        run1.minimized_repros[0].failure_class,
+        run2.minimized_repros[0].failure_class
+    );
+}
+
+#[test]
+fn conformance_failure_class_debug_is_nonempty() {
+    for class in [
+        ConformanceFailureClass::Breaking,
+        ConformanceFailureClass::Behavioral,
+        ConformanceFailureClass::Observability,
+        ConformanceFailureClass::Performance,
+    ] {
+        assert!(!format!("{class:?}").is_empty());
+    }
+}
+
+#[test]
+fn run_result_has_nonempty_run_id() {
+    let temp = test_temp_dir("run-id-nonempty");
+    let manifest = write_case_manifest(&temp, "let n = 1;", "value 2", "value 1");
+    let run = runner_with_metadata()
+        .run(&manifest, &ConformanceWaiverSet::default())
+        .expect("run");
+    assert!(!run.run_id.is_empty());
+}
+
+#[test]
+fn artifact_replay_command_contains_replay_keyword() {
+    let temp = test_temp_dir("replay-cmd");
+    let manifest = write_case_manifest(&temp, "let p = 1;", "props:a,b,c", "props:a,b");
+    let run = runner_with_metadata()
+        .run(&manifest, &ConformanceWaiverSet::default())
+        .expect("run");
+    let artifact = run.minimized_repros.first().expect("artifact");
+    assert!(
+        artifact.replay.replay_command.contains("replay"),
+        "replay_command must contain 'replay'"
+    );
+}

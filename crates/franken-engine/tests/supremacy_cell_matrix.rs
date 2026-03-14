@@ -164,6 +164,7 @@ fn supremacy_cell_matrix_runner_script_requires_rch_and_contract_outputs() {
 
     for snippet in [
         "rch is required",
+        "target_rch_supremacy_cell_matrix_uid",
         "cargo check -p frankenengine-engine --test supremacy_cell_matrix",
         "cargo test -p frankenengine-engine --test supremacy_cell_matrix",
         "cargo clippy -p frankenengine-engine --test supremacy_cell_matrix -- -D warnings",
@@ -177,6 +178,10 @@ fn supremacy_cell_matrix_runner_script_requires_rch_and_contract_outputs() {
             "runner script missing required snippet: {snippet}"
         );
     }
+    assert!(
+        !script.contains("/tmp/rch_target_franken_engine_supremacy_cell_matrix"),
+        "runner script must not default supremacy matrix target dir under /tmp"
+    );
 }
 
 // ── Serde round-trip tests ──────────────────────────────────────────

@@ -1353,3 +1353,306 @@ fn lockstep_runner_missing_fixture_catalog_exits_nonzero() {
         .expect("command should execute");
     assert!(!output.status.success());
 }
+
+#[test]
+fn fixture_catalog_json_roundtrips_through_serde() {
+    let path = temp_path("lockstep_serde_roundtrip_catalog", "json");
+    write_fixture_catalog(&path);
+    let bytes = fs::read(&path).expect("catalog should be readable");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("catalog should parse as json");
+    let reserialized = serde_json::to_vec_pretty(&parsed).expect("reserialization should succeed");
+    let reparsed: serde_json::Value =
+        serde_json::from_slice(&reserialized).expect("re-parse should succeed");
+    assert_eq!(parsed, reparsed, "serde roundtrip must be identity");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn fixture_catalog_fixture_entry_has_expected_field_count() {
+    let path = temp_path("lockstep_field_count_catalog", "json");
+    write_fixture_catalog(&path);
+    let bytes = fs::read(&path).expect("catalog should be readable");
+    let catalog: serde_json::Value = serde_json::from_slice(&bytes).expect("catalog should parse");
+    let fixture = &catalog["fixtures"][0];
+    let obj = fixture.as_object().expect("fixture should be an object");
+    assert_eq!(
+        obj.len(),
+        5,
+        "fixture entry should have exactly 5 fields (id, family_id, goal, source, expected_hash)"
+    );
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn engine_specs_json_roundtrips_through_serde() {
+    let path = temp_path("lockstep_engine_specs_serde_roundtrip", "json");
+    write_engine_specs(&path);
+    let bytes = fs::read(&path).expect("engine specs should be readable");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("engine specs should parse");
+    let reserialized = serde_json::to_vec_pretty(&parsed).expect("reserialization should succeed");
+    let reparsed: serde_json::Value =
+        serde_json::from_slice(&reserialized).expect("re-parse should succeed");
+    assert_eq!(parsed, reparsed, "serde roundtrip must be identity");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn engine_specs_entries_each_have_four_fields() {
+    let path = temp_path("lockstep_engine_specs_field_count", "json");
+    write_engine_specs(&path);
+    let bytes = fs::read(&path).expect("engine specs should be readable");
+    let specs: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("engine specs should parse");
+    for entry in specs.as_array().expect("specs should be an array") {
+        let obj = entry.as_object().expect("entry should be an object");
+        assert_eq!(
+            obj.len(),
+            4,
+            "each engine spec should have 4 fields (engine_id, display_name, kind, version_pin)"
+        );
+    }
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn runtime_specs_content_with_empty_runtime_list_produces_only_header() {
+    let content = runtime_specs_content("sha256:test", &[]);
+    assert!(content.contains("franken-engine.lockstep-runtimes.v1"));
+    assert_eq!(
+        content.matches("[[runtimes]]").count(),
+        0,
+        "empty runtime list should produce no runtime blocks"
+    );
+}
+
+#[test]
+fn runtime_specs_content_with_three_runtimes_produces_three_blocks() {
+    let content = runtime_specs_content("sha256:abc", &["node", "bun", "deno"]);
+    assert_eq!(
+        content.matches("[[runtimes]]").count(),
+        3,
+        "three runtimes should produce three runtime blocks"
+    );
+    assert_eq!(
+        content.matches("runtime_id").count(),
+        3,
+        "three runtimes should produce three runtime_id fields"
+    );
+}
+
+#[test]
+fn read_jsonl_on_multiple_lines_returns_all_records() {
+    let path = temp_path("lockstep_multi_jsonl", "jsonl");
+    let content = "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n";
+    fs::write(&path, content).expect("write multi-line jsonl");
+    let records = read_jsonl(&path);
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0]["a"].as_u64(), Some(1));
+    assert_eq!(records[1]["b"].as_u64(), Some(2));
+    assert_eq!(records[2]["c"].as_u64(), Some(3));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn read_jsonl_ignores_blank_lines_between_records() {
+    let path = temp_path("lockstep_blank_lines_jsonl", "jsonl");
+    let content = "{\"x\":10}\n\n\n{\"y\":20}\n\n";
+    fs::write(&path, content).expect("write jsonl with blank lines");
+    let records = read_jsonl(&path);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["x"].as_u64(), Some(10));
+    assert_eq!(records[1]["y"].as_u64(), Some(20));
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn canonical_parser_different_sources_produce_different_hashes() {
+    let parser = CanonicalEs2020Parser;
+    let h1 = parser
+        .parse("42", ParseGoal::Script)
+        .expect("parse")
+        .canonical_hash();
+    let h2 = parser
+        .parse("43", ParseGoal::Script)
+        .expect("parse")
+        .canonical_hash();
+    assert_ne!(h1, h2, "different source must produce different hashes");
+}
+
+#[test]
+fn lockstep_suite_script_has_no_todo_or_fixme_markers() {
+    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
+        .expect("lockstep suite script should be readable");
+    let upper = script.to_uppercase();
+    assert!(
+        !upper.contains("TODO"),
+        "suite script should have no TODO markers"
+    );
+    assert!(
+        !upper.contains("FIXME"),
+        "suite script should have no FIXME markers"
+    );
+}
+
+#[test]
+fn lockstep_suite_script_mode_variants_are_documented() {
+    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
+        .expect("lockstep suite script should be readable");
+    for mode_variant in ["check)", "test)", "clippy)", "report)", "ci)"] {
+        assert!(
+            script.contains(mode_variant),
+            "suite script should contain case pattern `{mode_variant}`"
+        );
+    }
+}
+
+#[test]
+fn lockstep_suite_script_references_all_artifact_paths() {
+    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
+        .expect("lockstep suite script should be readable");
+    for artifact in [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.json",
+        "lockstep_evidence.jsonl",
+        "governance_actions.json",
+        "repro_packs",
+    ] {
+        assert!(
+            script.contains(artifact),
+            "suite script should reference artifact `{artifact}`"
+        );
+    }
+}
+
+#[test]
+fn lockstep_replay_wrapper_has_no_todo_or_fixme_markers() {
+    let script = fs::read_to_string("scripts/e2e/lockstep_runner_replay.sh")
+        .expect("lockstep replay wrapper should be readable");
+    let upper = script.to_uppercase();
+    assert!(
+        !upper.contains("TODO"),
+        "replay wrapper should have no TODO markers"
+    );
+    assert!(
+        !upper.contains("FIXME"),
+        "replay wrapper should have no FIXME markers"
+    );
+}
+
+#[test]
+fn lockstep_runner_help_lists_all_documented_flags() {
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_lockstep_runner"))
+        .arg("--help")
+        .output()
+        .expect("help command should execute");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    for flag in [
+        "--fixture-catalog",
+        "--fixture-limit",
+        "--fixture-id",
+        "--seed",
+        "--trace-id",
+        "--decision-id",
+        "--policy-id",
+        "--locale",
+        "--timezone",
+        "--engine-specs",
+        "--runtime-specs",
+        "--fail-on-divergence",
+        "--allow-critical-drift",
+        "--max-retries",
+        "--quarantine-flaky",
+        "--preflight-only",
+        "--out",
+        "--evidence-jsonl",
+        "--governance-actions-out",
+    ] {
+        assert!(
+            stdout.contains(flag),
+            "help output should list flag `{flag}`"
+        );
+    }
+}
+
+#[test]
+fn lockstep_runner_report_fields_are_deterministic_across_seeds() {
+    let catalog_path = temp_path("lockstep_deterministic_fields_catalog", "json");
+    let engine_specs_path = temp_path("lockstep_deterministic_fields_engine_specs", "json");
+    let report_path_a = temp_path("lockstep_deterministic_fields_report_a", "json");
+    let report_path_b = temp_path("lockstep_deterministic_fields_report_b", "json");
+    write_fixture_catalog(&catalog_path);
+    write_engine_specs(&engine_specs_path);
+
+    for (seed, report_path) in [("99", &report_path_a), ("99", &report_path_b)] {
+        let output = Command::new(env!("CARGO_BIN_EXE_franken_lockstep_runner"))
+            .args([
+                "--fixture-catalog",
+                catalog_path
+                    .to_str()
+                    .expect("fixture path should be valid utf8"),
+                "--fixture-limit",
+                "1",
+                "--seed",
+                seed,
+                "--engine-specs",
+                engine_specs_path
+                    .to_str()
+                    .expect("engine specs path should be valid utf8"),
+                "--out",
+                report_path
+                    .to_str()
+                    .expect("report path should be valid utf8"),
+            ])
+            .output()
+            .expect("lockstep runner should execute");
+        assert!(
+            output.status.success(),
+            "command failed with stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let report_a: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path_a).expect("report a should exist"))
+            .expect("report a should parse");
+    let report_b: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path_b).expect("report b should exist"))
+            .expect("report b should parse");
+
+    assert_eq!(
+        report_a["fixture_count"], report_b["fixture_count"],
+        "fixture_count must be deterministic for same seed"
+    );
+    assert_eq!(
+        report_a["summary"]["equivalent_fixtures"], report_b["summary"]["equivalent_fixtures"],
+        "equivalent_fixtures must be deterministic for same seed"
+    );
+    assert_eq!(
+        report_a["seed"], report_b["seed"],
+        "seed must match across runs"
+    );
+
+    let _ = fs::remove_file(catalog_path);
+    let _ = fs::remove_file(engine_specs_path);
+    let _ = fs::remove_file(report_path_a);
+    let _ = fs::remove_file(report_path_b);
+}
+
+#[test]
+fn lockstep_suite_script_schema_version_matches_manifest_contract() {
+    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
+        .expect("lockstep suite script should be readable");
+    assert!(
+        script.contains("franken-engine.lockstep-runner-suite.run-manifest.v1"),
+        "suite script should embed the manifest schema version"
+    );
+    assert!(
+        script.contains("franken-engine.parser-log-event.v1"),
+        "suite script should embed the parser log event schema version"
+    );
+}

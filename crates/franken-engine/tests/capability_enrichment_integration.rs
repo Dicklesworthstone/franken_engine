@@ -881,3 +881,214 @@ fn enrichment_clone_debug_capability_denied_all_capabilities() {
         assert!(debug_str.contains("CapabilityDenied"));
     }
 }
+
+// ===========================================================================
+// Enrichment: CapabilityProfile — intersect
+// ===========================================================================
+
+#[test]
+fn enrichment_capability_profile_intersect_same() {
+    let full = CapabilityProfile::full();
+    let result = full.intersect(&full);
+    assert_eq!(result.len(), full.len());
+}
+
+#[test]
+fn enrichment_capability_profile_intersect_disjoint() {
+    let remote = CapabilityProfile::remote();
+    let compute = CapabilityProfile::compute_only();
+    let result = remote.intersect(&compute);
+    // Both share some caps
+    assert!(result.len() <= remote.len().min(compute.len()));
+}
+
+#[test]
+fn enrichment_capability_profile_intersect_with_full() {
+    let core = CapabilityProfile::engine_core();
+    let full = CapabilityProfile::full();
+    let result = core.intersect(&full);
+    assert_eq!(result.len(), core.len());
+}
+
+// ===========================================================================
+// Enrichment: CapabilityProfile — subsumes
+// ===========================================================================
+
+#[test]
+fn enrichment_capability_profile_full_subsumes_all() {
+    let full = CapabilityProfile::full();
+    assert!(full.subsumes(&CapabilityProfile::engine_core()));
+    assert!(full.subsumes(&CapabilityProfile::policy()));
+    assert!(full.subsumes(&CapabilityProfile::remote()));
+    assert!(full.subsumes(&CapabilityProfile::compute_only()));
+}
+
+#[test]
+fn enrichment_capability_profile_compute_only_does_not_subsume_full() {
+    let compute = CapabilityProfile::compute_only();
+    let full = CapabilityProfile::full();
+    assert!(!compute.subsumes(&full));
+}
+
+// ===========================================================================
+// Enrichment: CapabilityProfile — len and is_empty
+// ===========================================================================
+
+#[test]
+fn enrichment_capability_profile_full_nonempty() {
+    let full = CapabilityProfile::full();
+    assert!(!full.is_empty());
+    assert!(full.len() > 0);
+}
+
+// ===========================================================================
+// Enrichment: RuntimeCapability — serde all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_runtime_capability_serde_all() {
+    let all_caps = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::GcInvoke,
+        RuntimeCapability::IrLowering,
+        RuntimeCapability::PolicyRead,
+        RuntimeCapability::PolicyWrite,
+        RuntimeCapability::EvidenceEmit,
+        RuntimeCapability::DecisionInvoke,
+        RuntimeCapability::NetworkEgress,
+    ];
+    for cap in &all_caps {
+        let json = serde_json::to_string(cap).unwrap();
+        let back: RuntimeCapability = serde_json::from_str(&json).unwrap();
+        assert_eq!(*cap, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: ProfileKind — serde all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_profile_kind_serde_all() {
+    let all = [
+        ProfileKind::Full,
+        ProfileKind::EngineCore,
+        ProfileKind::Policy,
+        ProfileKind::Remote,
+        ProfileKind::ComputeOnly,
+    ];
+    for kind in &all {
+        let json = serde_json::to_string(kind).unwrap();
+        let back: ProfileKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(*kind, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: CapabilityProfile — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_capability_profile_serde_roundtrip() {
+    let profiles = [
+        CapabilityProfile::full(),
+        CapabilityProfile::engine_core(),
+        CapabilityProfile::policy(),
+        CapabilityProfile::remote(),
+        CapabilityProfile::compute_only(),
+    ];
+    for p in &profiles {
+        let json = serde_json::to_string(p).unwrap();
+        let back: CapabilityProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(*p, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: require_capability — success and failure
+// ===========================================================================
+
+#[test]
+fn enrichment_require_capability_success() {
+    let profile = CapabilityProfile::full();
+    let result = require_capability(&profile, RuntimeCapability::VmDispatch, "test");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn enrichment_require_capability_failure() {
+    let profile = CapabilityProfile::compute_only();
+    let result = require_capability(&profile, RuntimeCapability::PolicyWrite, "test");
+    assert!(result.is_err());
+    if let Err(denied) = result {
+        assert_eq!(denied.required, RuntimeCapability::PolicyWrite);
+        assert_eq!(denied.held_profile, ProfileKind::ComputeOnly);
+    }
+}
+
+// ===========================================================================
+// Enrichment: require_all — success and failure
+// ===========================================================================
+
+#[test]
+fn enrichment_require_all_success() {
+    let profile = CapabilityProfile::full();
+    let caps = [RuntimeCapability::VmDispatch, RuntimeCapability::GcInvoke];
+    let result = require_all(&profile, &caps, "test");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn enrichment_require_all_failure() {
+    let profile = CapabilityProfile::compute_only();
+    let caps = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::PolicyWrite,
+    ];
+    let result = require_all(&profile, &caps, "test");
+    assert!(result.is_err());
+}
+
+// ===========================================================================
+// Enrichment: CapabilityDenied — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_capability_denied_serde() {
+    let denied = CapabilityDenied {
+        required: RuntimeCapability::NetworkEgress,
+        held_profile: ProfileKind::EngineCore,
+        component: "network".to_string(),
+    };
+    let json = serde_json::to_string(&denied).unwrap();
+    let back: CapabilityDenied = serde_json::from_str(&json).unwrap();
+    assert_eq!(denied, back);
+}
+
+// ===========================================================================
+// Enrichment: CapabilityDenied — Display nonempty
+// ===========================================================================
+
+#[test]
+fn enrichment_capability_denied_display_nonempty() {
+    let denied = CapabilityDenied {
+        required: RuntimeCapability::EvidenceEmit,
+        held_profile: ProfileKind::Remote,
+        component: "emitter".to_string(),
+    };
+    let s = denied.to_string();
+    assert!(!s.is_empty());
+}
+
+// ===========================================================================
+// Enrichment: CapabilityProfile — has method
+// ===========================================================================
+
+#[test]
+fn enrichment_capability_profile_has() {
+    let core = CapabilityProfile::engine_core();
+    assert!(core.has(RuntimeCapability::VmDispatch));
+    assert!(core.has(RuntimeCapability::GcInvoke));
+    assert!(core.has(RuntimeCapability::IrLowering));
+    assert!(!core.has(RuntimeCapability::NetworkEgress));
+}

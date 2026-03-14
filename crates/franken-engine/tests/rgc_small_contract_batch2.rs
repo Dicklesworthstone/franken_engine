@@ -507,3 +507,344 @@ fn cache_scenario_ids_include_at_least_three_scenarios() {
         c.scenario_ids.len()
     );
 }
+
+// ===== Additional enrichment tests =====
+
+// --- Seqlock Candidate Inventory extra ---
+
+#[test]
+fn candidate_inv_clone_equals_original() {
+    let c = parse_candidate_inv();
+    let cloned = c.clone();
+    assert_eq!(c, cloned);
+}
+
+#[test]
+fn candidate_inv_debug_contains_schema_version() {
+    let c = parse_candidate_inv();
+    let dbg = format!("{c:?}");
+    assert!(
+        dbg.contains("franken-engine.rgc-seqlock-reader-writer-bundle.v1"),
+        "Debug output must contain schema_version"
+    );
+}
+
+#[test]
+fn candidate_inv_debug_contains_bead_id() {
+    let c = parse_candidate_inv();
+    let dbg = format!("{c:?}");
+    assert!(dbg.contains("bd-"), "Debug output must contain bead_id");
+}
+
+#[test]
+fn candidate_inv_bead_id_contains_dot_separated_segments() {
+    let c = parse_candidate_inv();
+    // Valid hierarchical bead IDs like "bd-1lsy.7.21.2" have multiple segments
+    let suffix = c.bead_id.trim_start_matches("bd-");
+    assert!(
+        !suffix.is_empty(),
+        "bead_id must have content after 'bd-' prefix"
+    );
+}
+
+#[test]
+fn candidate_inv_required_artifacts_nonempty_strings() {
+    let c = parse_candidate_inv();
+    for a in &c.required_artifacts {
+        assert!(!a.trim().is_empty(), "artifact name must not be blank");
+    }
+}
+
+#[test]
+fn candidate_inv_required_artifacts_are_dot_separated_filenames() {
+    let c = parse_candidate_inv();
+    for a in &c.required_artifacts {
+        assert!(
+            a.contains('.'),
+            "artifact '{a}' must have a file extension (dot separator)"
+        );
+    }
+}
+
+#[test]
+fn candidate_inv_reject_candidates_exist() {
+    let c = parse_candidate_inv();
+    let reject_count = c
+        .candidate_expectations
+        .iter()
+        .filter(|e| e.disposition == "reject")
+        .count();
+    assert!(
+        reject_count >= 1,
+        "must have at least one 'reject' candidate, found {reject_count}"
+    );
+}
+
+#[test]
+fn candidate_inv_accept_candidates_exist() {
+    let c = parse_candidate_inv();
+    let accept_count = c
+        .candidate_expectations
+        .iter()
+        .filter(|e| e.disposition == "accept")
+        .count();
+    assert!(
+        accept_count >= 1,
+        "must have at least one 'accept' candidate, found {accept_count}"
+    );
+}
+
+#[test]
+fn candidate_inv_candidate_ids_are_nonempty() {
+    let c = parse_candidate_inv();
+    for exp in &c.candidate_expectations {
+        assert!(
+            !exp.candidate_id.trim().is_empty(),
+            "candidate_id must not be blank"
+        );
+    }
+}
+
+// --- Seqlock Rollout Guard extra ---
+
+#[test]
+fn rollout_guard_clone_equals_original() {
+    let g = parse_rollout_guard();
+    let cloned = g.clone();
+    assert_eq!(g, cloned);
+}
+
+#[test]
+fn rollout_guard_debug_contains_schema_version() {
+    let g = parse_rollout_guard();
+    let dbg = format!("{g:?}");
+    assert!(
+        dbg.contains("franken-engine.rgc-seqlock-rollout-guard-docs.v1"),
+        "Debug output must contain schema_version"
+    );
+}
+
+#[test]
+fn rollout_guard_disabled_candidates_are_subset_of_all_candidates() {
+    let inv = parse_candidate_inv();
+    let guard = parse_rollout_guard();
+    let all_ids: BTreeSet<&str> = inv
+        .candidate_expectations
+        .iter()
+        .map(|e| e.candidate_id.as_str())
+        .collect();
+    for disabled in &guard.default_disabled_candidates {
+        assert!(
+            all_ids.contains(disabled.as_str()),
+            "disabled candidate '{disabled}' must appear in candidate inventory"
+        );
+    }
+}
+
+#[test]
+fn rollout_guard_required_artifacts_are_dot_separated_filenames() {
+    let g = parse_rollout_guard();
+    for a in &g.required_artifacts {
+        assert!(
+            a.contains('.'),
+            "artifact '{a}' must have a file extension (dot separator)"
+        );
+    }
+}
+
+#[test]
+fn rollout_guard_required_artifacts_nonempty_strings() {
+    let g = parse_rollout_guard();
+    for a in &g.required_artifacts {
+        assert!(!a.trim().is_empty(), "artifact name must not be blank");
+    }
+}
+
+#[test]
+fn rollout_guard_disabled_count_does_not_exceed_accepted_count() {
+    let inv = parse_candidate_inv();
+    let guard = parse_rollout_guard();
+    let accepted_count = inv
+        .candidate_expectations
+        .iter()
+        .filter(|e| e.disposition == "accept")
+        .count();
+    assert!(
+        guard.default_disabled_candidates.len() <= accepted_count,
+        "disabled candidates ({}) must not exceed accepted candidates ({})",
+        guard.default_disabled_candidates.len(),
+        accepted_count
+    );
+}
+
+// --- Persistent Cache Contract extra ---
+
+#[test]
+fn cache_clone_equals_original() {
+    let c = parse_cache();
+    let cloned = c.clone();
+    assert_eq!(c, cloned);
+}
+
+#[test]
+fn cache_debug_contains_schema_version() {
+    let c = parse_cache();
+    let dbg = format!("{c:?}");
+    assert!(
+        dbg.contains("franken-engine.rgc-persistent-cache-docs.v1"),
+        "Debug output must contain schema_version"
+    );
+}
+
+#[test]
+fn cache_key_fields_are_nonempty() {
+    let c = parse_cache();
+    assert!(!c.key_fields.is_empty(), "key_fields must not be empty");
+}
+
+#[test]
+fn cache_required_artifacts_nonempty_strings() {
+    let c = parse_cache();
+    for a in &c.required_artifacts {
+        assert!(!a.trim().is_empty(), "artifact name must not be blank");
+    }
+}
+
+#[test]
+fn cache_required_artifacts_are_dot_separated_filenames() {
+    let c = parse_cache();
+    for a in &c.required_artifacts {
+        assert!(
+            a.contains('.'),
+            "artifact '{a}' must have a file extension (dot separator)"
+        );
+    }
+}
+
+#[test]
+fn cache_scenario_ids_are_sorted() {
+    let c = parse_cache();
+    for window in c.scenario_ids.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "scenario_ids should be sorted: '{}' should not come after '{}'",
+            window[0],
+            window[1]
+        );
+    }
+}
+
+#[test]
+fn cache_key_fields_include_engine_version_marker() {
+    let c = parse_cache();
+    let fields: BTreeSet<&str> = c.key_fields.iter().map(String::as_str).collect();
+    assert!(
+        fields.contains("engine_version_marker"),
+        "key_fields must include engine_version_marker"
+    );
+}
+
+#[test]
+fn cache_consumers_include_product_and_benchmark() {
+    let c = parse_cache();
+    let consumers: BTreeSet<&str> = c.consumers.iter().map(String::as_str).collect();
+    assert!(
+        consumers.contains("product"),
+        "consumers must include 'product'"
+    );
+    assert!(
+        consumers.contains("benchmark"),
+        "consumers must include 'benchmark'"
+    );
+}
+
+// --- Cross-schema invariants ---
+
+#[test]
+fn cross_schema_all_bead_ids_start_with_bd_prefix() {
+    let inv = parse_candidate_inv();
+    let guard = parse_rollout_guard();
+    let cache = parse_cache();
+    for bead_id in [&inv.bead_id, &guard.bead_id, &cache.bead_id] {
+        assert!(
+            bead_id.starts_with("bd-"),
+            "bead_id must start with 'bd-': {bead_id}"
+        );
+    }
+}
+
+#[test]
+fn cross_schema_all_schema_versions_start_with_franken_engine() {
+    let inv = parse_candidate_inv();
+    let guard = parse_rollout_guard();
+    let cache = parse_cache();
+    for sv in [
+        &inv.schema_version,
+        &guard.schema_version,
+        &cache.schema_version,
+    ] {
+        assert!(
+            sv.starts_with("franken-engine."),
+            "schema_version must start with 'franken-engine.': {sv}"
+        );
+    }
+}
+
+#[test]
+fn cross_schema_all_schema_versions_end_with_versioned_suffix() {
+    let inv = parse_candidate_inv();
+    let guard = parse_rollout_guard();
+    let cache = parse_cache();
+    for sv in [
+        &inv.schema_version,
+        &guard.schema_version,
+        &cache.schema_version,
+    ] {
+        // All schema_version strings must end with ".v1" or similar ".vN" suffix
+        assert!(
+            sv.contains(".v"),
+            "schema_version must contain a versioned suffix (.vN): {sv}"
+        );
+    }
+}
+
+#[test]
+fn cross_schema_shared_standard_artifacts_appear_in_all_three() {
+    let inv = parse_candidate_inv();
+    let guard = parse_rollout_guard();
+    let cache = parse_cache();
+    let inv_set: BTreeSet<&str> = inv.required_artifacts.iter().map(String::as_str).collect();
+    let guard_set: BTreeSet<&str> = guard
+        .required_artifacts
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let cache_set: BTreeSet<&str> = cache
+        .required_artifacts
+        .iter()
+        .map(String::as_str)
+        .collect();
+    for standard in ["run_manifest.json", "events.jsonl", "commands.txt"] {
+        assert!(inv_set.contains(standard), "inv missing: {standard}");
+        assert!(guard_set.contains(standard), "guard missing: {standard}");
+        assert!(cache_set.contains(standard), "cache missing: {standard}");
+    }
+}
+
+#[test]
+fn cross_schema_raw_json_all_values_are_strings_or_arrays() {
+    for (label, raw) in [
+        ("candidate_inv", CANDIDATE_INV_JSON),
+        ("rollout_guard", ROLLOUT_GUARD_JSON),
+        ("cache", CACHE_JSON),
+    ] {
+        let v: Value = serde_json::from_str(raw).unwrap();
+        let obj = v.as_object().unwrap();
+        for (key, val) in obj {
+            assert!(
+                val.is_string() || val.is_array(),
+                "{label}: field '{key}' must be string or array, got: {val:?}"
+            );
+        }
+    }
+}

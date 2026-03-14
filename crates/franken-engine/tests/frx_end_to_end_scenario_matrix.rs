@@ -20,8 +20,11 @@ use std::{
 };
 
 use frankenengine_engine::e2e_harness::{
-    ArtifactCollector, DeterministicRunner, ScenarioClass, ScenarioMatrixEntry, ScenarioStep,
-    TestFixture, run_scenario_matrix,
+    ArtifactCollector, DeterministicRunner, DeterministicRunnerConfig, FixtureStore,
+    FixtureValidationError, GoldenStore, ReplayEnvironmentFingerprint, RunReport, ScenarioClass,
+    ScenarioMatrixEntry, ScenarioStep, TestFixture, build_evidence_linkage,
+    diagnose_cross_machine_replay, evaluate_replay_performance, run_scenario_matrix,
+    validate_replay_input, verify_replay,
 };
 use serde::Deserialize;
 
@@ -845,4 +848,277 @@ fn operator_verification_includes_replay_command() {
             .any(|entry| entry.contains("replay")),
         "operator verification must include a replay command"
     );
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment batch: serde roundtrips, clone/debug, edge cases,
+// field validation, invariant checks, replay verification,
+// golden store, fixture store, evidence linkage, and more
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn scenario_class_clone_and_debug_impls() {
+    for class in ScenarioClass::ALL {
+        let cloned = class.clone();
+        assert_eq!(class, cloned);
+        let debug_str = format!("{:?}", class);
+        assert!(!debug_str.is_empty());
+    }
+}
+
+#[test]
+fn scenario_class_all_has_six_variants() {
+    assert_eq!(ScenarioClass::ALL.len(), 6);
+    let as_strs: BTreeSet<_> = ScenarioClass::ALL.iter().map(|c| c.as_str()).collect();
+    assert_eq!(as_strs.len(), 6, "each variant must have a unique as_str");
+}
+
+#[test]
+fn deterministic_runner_config_serde_roundtrip() {
+    let config = DeterministicRunnerConfig::default();
+    let json = serde_json::to_string(&config).expect("serialize");
+    let recovered: DeterministicRunnerConfig = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(config, recovered);
+    assert_eq!(recovered.trace_prefix, "trace");
+}
+
+#[test]
+fn deterministic_runner_config_custom_prefix() {
+    let json = r#"{"trace_prefix":"custom-prefix"}"#;
+    let config: DeterministicRunnerConfig = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(config.trace_prefix, "custom-prefix");
+}
+
+#[test]
+fn test_fixture_validate_rejects_empty_fixture_id() {
+    let fixture = TestFixture {
+        fixture_id: "".to_string(),
+        fixture_version: TestFixture::CURRENT_VERSION,
+        seed: 1,
+        virtual_time_start_micros: 100,
+        policy_id: "policy-1".to_string(),
+        steps: vec![ScenarioStep {
+            component: "c".to_string(),
+            event: "e".to_string(),
+            advance_micros: 10,
+            metadata: BTreeMap::new(),
+        }],
+        expected_events: Vec::new(),
+        determinism_check: false,
+    };
+    let err = fixture.validate().unwrap_err();
+    assert!(
+        matches!(err, FixtureValidationError::MissingFixtureId),
+        "expected MissingFixtureId, got {err:?}"
+    );
+}
+
+#[test]
+fn test_fixture_validate_rejects_wrong_version() {
+    let fixture = TestFixture {
+        fixture_id: "fix-1".to_string(),
+        fixture_version: 999,
+        seed: 1,
+        virtual_time_start_micros: 100,
+        policy_id: "policy-1".to_string(),
+        steps: vec![ScenarioStep {
+            component: "c".to_string(),
+            event: "e".to_string(),
+            advance_micros: 10,
+            metadata: BTreeMap::new(),
+        }],
+        expected_events: Vec::new(),
+        determinism_check: false,
+    };
+    let err = fixture.validate().unwrap_err();
+    assert!(
+        matches!(err, FixtureValidationError::UnsupportedVersion { .. }),
+        "expected UnsupportedVersion, got {err:?}"
+    );
+}
+
+#[test]
+fn test_fixture_validate_rejects_empty_steps() {
+    let fixture = TestFixture {
+        fixture_id: "fix-1".to_string(),
+        fixture_version: TestFixture::CURRENT_VERSION,
+        seed: 1,
+        virtual_time_start_micros: 100,
+        policy_id: "policy-1".to_string(),
+        steps: Vec::new(),
+        expected_events: Vec::new(),
+        determinism_check: false,
+    };
+    let err = fixture.validate().unwrap_err();
+    assert!(
+        matches!(err, FixtureValidationError::MissingSteps),
+        "expected MissingSteps, got {err:?}"
+    );
+}
+
+#[test]
+fn verify_replay_matches_identical_results() {
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result_a = runner.run_fixture(&fixture).expect("run a");
+    let result_b = runner.run_fixture(&fixture).expect("run b");
+    let verification = verify_replay(&result_a, &result_b);
+    assert!(verification.matches, "identical runs should match");
+    assert!(verification.reason.is_none());
+    assert!(verification.mismatch_kind.is_none());
+    assert_eq!(verification.expected_digest, verification.actual_digest);
+}
+
+#[test]
+fn build_evidence_linkage_produces_one_record_per_event() {
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result = runner.run_fixture(&fixture).expect("run");
+    let linkage = build_evidence_linkage(&result.events);
+    assert_eq!(linkage.len(), result.events.len());
+    for (record, event) in linkage.iter().zip(result.events.iter()) {
+        assert_eq!(record.trace_id, event.trace_id);
+        assert_eq!(record.decision_id, event.decision_id);
+        assert_eq!(record.policy_id, event.policy_id);
+        assert_eq!(record.event_sequence, event.sequence);
+        assert!(!record.evidence_hash.is_empty());
+    }
+}
+
+#[test]
+fn validate_replay_input_rejects_missing_snapshot() {
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result = runner.run_fixture(&fixture).expect("run");
+    let err = validate_replay_input(&result, None).unwrap_err();
+    assert!(
+        err.to_string().contains("model snapshot"),
+        "error should mention model snapshot: {}",
+        err
+    );
+}
+
+#[test]
+fn validate_replay_input_accepts_valid_snapshot() {
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result = runner.run_fixture(&fixture).expect("run");
+    validate_replay_input(&result, Some("model://snapshot/abc/seed/42")).expect("should accept");
+}
+
+#[test]
+fn evaluate_replay_performance_faster_than_realtime() {
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result = runner.run_fixture(&fixture).expect("run");
+    let perf = evaluate_replay_performance(&result, 1);
+    assert!(
+        perf.faster_than_realtime,
+        "1 us wall time should be faster than realtime"
+    );
+    assert!(perf.speedup_milli > 0);
+}
+
+#[test]
+fn run_report_from_result_captures_fields() {
+    let contract = parse_contract();
+    let spec = contract
+        .scenario_catalog
+        .iter()
+        .find(|s| s.expected_outcome == "fail")
+        .expect("should have at least one fail scenario");
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result = runner.run_fixture(&fixture).expect("run");
+    let report = RunReport::from_result(&result);
+    assert_eq!(report.fixture_id, result.fixture_id);
+    assert_eq!(report.run_id, result.run_id);
+    assert_eq!(report.event_count, result.events.len());
+    assert_eq!(report.output_digest, result.output_digest);
+}
+
+#[test]
+fn run_report_to_markdown_contains_fixture_id() {
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result = runner.run_fixture(&fixture).expect("run");
+    let report = RunReport::from_result(&result);
+    let md = report.to_markdown();
+    assert!(md.contains(&report.fixture_id));
+    assert!(md.contains("E2E Run Report"));
+    assert!(md.contains(&report.output_digest));
+}
+
+#[test]
+fn replay_environment_fingerprint_local_serde_roundtrip() {
+    let env_fp = ReplayEnvironmentFingerprint::local();
+    assert!(!env_fp.os.is_empty());
+    assert!(!env_fp.architecture.is_empty());
+    assert!(!env_fp.family.is_empty());
+    assert!(env_fp.pointer_width_bits > 0);
+    assert!(
+        env_fp.endian == "little" || env_fp.endian == "big",
+        "endian should be little or big"
+    );
+    let json = serde_json::to_string(&env_fp).expect("serialize");
+    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(env_fp, recovered);
+}
+
+#[test]
+fn diagnose_cross_machine_replay_same_env_matches() {
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result = runner.run_fixture(&fixture).expect("run");
+    let env_fp = ReplayEnvironmentFingerprint::local();
+    let diagnosis = diagnose_cross_machine_replay(&result, &result, &env_fp, &env_fp);
+    assert!(
+        diagnosis.cross_machine_match,
+        "identical result + same env should match"
+    );
+    assert!(diagnosis.environment_mismatches.is_empty());
+}
+
+#[test]
+fn fixture_store_save_and_load_roundtrip() {
+    let root = test_temp_dir("fixture-store-roundtrip");
+    let store = FixtureStore::new(root.join("fixtures")).expect("fixture store");
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let path = store.save_fixture(&fixture).expect("save");
+    assert!(path.exists());
+    let loaded = store.load_fixture(&path).expect("load");
+    assert_eq!(loaded.fixture_id, fixture.fixture_id);
+    assert_eq!(loaded.seed, fixture.seed);
+    assert_eq!(loaded.steps.len(), fixture.steps.len());
+}
+
+#[test]
+fn golden_store_write_then_verify() {
+    let root = test_temp_dir("golden-store-verify");
+    let store = GoldenStore::new(root.join("golden")).expect("golden store");
+    let contract = parse_contract();
+    let spec = &contract.scenario_catalog[0];
+    let fixture = scenario_fixture(spec);
+    let runner = DeterministicRunner::default();
+    let result = runner.run_fixture(&fixture).expect("run");
+    store.write_baseline(&result).expect("write baseline");
+    store
+        .verify_run(&result)
+        .expect("verify should succeed for matching digest");
 }

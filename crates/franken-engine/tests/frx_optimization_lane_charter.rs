@@ -500,3 +500,130 @@ fn optimization_charter_mentions_isomorphism() {
         "optimization charter must reference isomorphism proof discipline"
     );
 }
+
+#[test]
+fn optimization_charter_mentions_rollback() {
+    let path = repo_root().join("docs/FRX_OPTIMIZATION_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter doc");
+    assert!(doc.to_ascii_lowercase().contains("rollback"));
+}
+
+#[test]
+fn optimization_charter_mentions_fail_closed() {
+    let path = repo_root().join("docs/FRX_OPTIMIZATION_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter doc");
+    assert!(doc.to_ascii_lowercase().contains("fail"));
+}
+
+#[test]
+fn optimization_charter_has_at_least_ten_h2_sections() {
+    let path = repo_root().join("docs/FRX_OPTIMIZATION_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter doc");
+    let h2_count = doc.lines().filter(|l| l.starts_with("## ")).count();
+    assert!(
+        h2_count >= 10,
+        "charter should have >= 10 h2 sections, got {h2_count}"
+    );
+}
+
+#[test]
+fn optimization_charter_word_count_at_least_300() {
+    let path = repo_root().join("docs/FRX_OPTIMIZATION_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter doc");
+    let wc = doc.split_whitespace().count();
+    assert!(wc >= 300, "charter should have >= 300 words, got {wc}");
+}
+
+#[test]
+fn optimization_contract_lane_name_is_nonempty() {
+    let path = repo_root().join("docs/frx_optimization_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let name = value["lane"]["name"].as_str().expect("lane name");
+    assert!(!name.trim().is_empty());
+}
+
+#[test]
+fn optimization_contract_primary_bead_starts_with_bd() {
+    let path = repo_root().join("docs/frx_optimization_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let pb = value["primary_bead"].as_str().expect("primary_bead");
+    assert!(pb.starts_with("bd-"));
+}
+
+#[test]
+fn optimization_contract_schema_version_starts_with_frx() {
+    let path = repo_root().join("docs/frx_optimization_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let sv = value["schema_version"].as_str().expect("schema_version");
+    assert!(sv.starts_with("frx."));
+}
+
+#[test]
+fn optimization_contract_before_after_required_fields_count() {
+    let path = repo_root().join("docs/frx_optimization_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["outputs"]["before_after_artifacts"]["required_fields"]
+        .as_array()
+        .expect("before_after required_fields array");
+    assert!(
+        fields.len() >= 3,
+        "should have at least 3 before_after required fields"
+    );
+}
+
+#[test]
+fn optimization_charter_deterministic_double_read() {
+    let path = repo_root().join("docs/FRX_OPTIMIZATION_LANE_CHARTER_V1.md");
+    let a = fs::read_to_string(&path).expect("first read");
+    let b = fs::read_to_string(&path).expect("second read");
+    assert_eq!(a, b);
+}
+
+#[test]
+fn optimization_contract_outputs_object_has_multiple_keys() {
+    let path = repo_root().join("docs/frx_optimization_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let outputs = value["outputs"].as_object().expect("outputs object");
+    assert!(outputs.len() >= 2, "outputs should have >= 2 entries");
+}
+
+#[test]
+fn optimization_contract_logging_contract_component_is_nonempty() {
+    let path = repo_root().join("docs/frx_optimization_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let comp = value["logging_contract"]["component"]
+        .as_str()
+        .expect("logging_contract.component");
+    assert!(!comp.trim().is_empty());
+}
+
+#[test]
+fn optimization_charter_mentions_evidence() {
+    let path = repo_root().join("docs/FRX_OPTIMIZATION_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter doc");
+    assert!(doc.to_ascii_lowercase().contains("evidence"));
+}
+
+#[test]
+fn optimization_charter_mentions_performance() {
+    let path = repo_root().join("docs/FRX_OPTIMIZATION_LANE_CHARTER_V1.md");
+    let doc = fs::read_to_string(&path).expect("read charter doc");
+    assert!(doc.to_ascii_lowercase().contains("performance"));
+}
+
+#[test]
+fn optimization_contract_activation_gate_require_rollback_plan() {
+    let path = repo_root().join("docs/frx_optimization_lane_contract_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert_eq!(
+        value["activation_gate"]["require_rollback_plan"].as_bool(),
+        Some(true)
+    );
+}

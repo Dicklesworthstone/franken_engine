@@ -620,3 +620,266 @@ fn classify_failure_scopes_empty_results_produces_empty() {
     let scopes = classify_failure_scopes(&plan, &[]);
     assert!(scopes.is_empty());
 }
+
+// ---------- enrichment batch: edge cases, serde, debug, clone, invariants ----------
+
+#[test]
+fn version_matrix_error_serde_roundtrip_missing_current() {
+    let err = VersionMatrixError::MissingCurrentVersion {
+        repo: "franken_core".to_string(),
+    };
+    let json = serde_json::to_string(&err).expect("serialize");
+    let recovered: VersionMatrixError = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, err);
+}
+
+#[test]
+fn version_matrix_error_serde_roundtrip_invalid_pinned() {
+    let err = VersionMatrixError::InvalidPinnedCombination {
+        boundary_surface: "api/v2".to_string(),
+        reason: "remote_version is blank".to_string(),
+    };
+    let json = serde_json::to_string(&err).expect("serialize");
+    let recovered: VersionMatrixError = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, err);
+}
+
+#[test]
+fn version_source_debug_contains_field_names() {
+    let vs = VersionSource {
+        tags: vec!["v1.0.0".to_string()],
+        branch_names: vec!["main".to_string()],
+        current_override: None,
+        previous_override: None,
+        next_override: None,
+    };
+    let dbg = format!("{vs:?}");
+    assert!(dbg.contains("tags"));
+    assert!(dbg.contains("branch_names"));
+    assert!(dbg.contains("current_override"));
+}
+
+#[test]
+fn pinned_version_combination_debug_contains_reason() {
+    let pvc = PinnedVersionCombination {
+        local_version: "1.0.0".to_string(),
+        remote_version: "2.0.0".to_string(),
+        reason: "regression tracking".to_string(),
+    };
+    let dbg = format!("{pvc:?}");
+    assert!(dbg.contains("regression tracking"));
+}
+
+#[test]
+fn version_matrix_cell_debug_includes_cell_id() {
+    let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
+    let cell = &plan.cells[0];
+    let dbg = format!("{cell:?}");
+    assert!(dbg.contains(&cell.cell_id));
+    assert!(dbg.contains("boundary_surface"));
+}
+
+#[test]
+fn matrix_health_summary_debug_includes_counts() {
+    let summary = MatrixHealthSummary {
+        total_cells: 5,
+        passed_cells: 3,
+        failed_cells: 2,
+        universal_failures: 0,
+        version_specific_failures: 2,
+    };
+    let dbg = format!("{summary:?}");
+    assert!(dbg.contains("total_cells"));
+    assert!(dbg.contains("5"));
+    assert!(dbg.contains("failed_cells"));
+}
+
+#[test]
+fn matrix_failure_scope_debug_includes_fingerprint() {
+    let scope = MatrixFailureScope {
+        boundary_surface: "test/surface".to_string(),
+        failure_fingerprint: "fp-debug-test".to_string(),
+        scope: FailureScopeKind::VersionSpecific,
+        failing_cells: vec!["cell-x".to_string()],
+    };
+    let dbg = format!("{scope:?}");
+    assert!(dbg.contains("fp-debug-test"));
+    assert!(dbg.contains("VersionSpecific"));
+}
+
+#[test]
+fn derive_version_matrix_rejects_empty_remote_pinned_version() {
+    let mut spec = sample_spec();
+    spec.pinned_combinations = vec![PinnedVersionCombination {
+        local_version: "1.0.0".to_string(),
+        remote_version: "   ".to_string(),
+        reason: "whitespace only".to_string(),
+    }];
+    let err = derive_version_matrix(&[spec]).expect_err("should reject whitespace-only version");
+    match err {
+        VersionMatrixError::InvalidPinnedCombination {
+            boundary_surface, ..
+        } => {
+            assert_eq!(boundary_surface, "frankensqlite/store_record");
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+fn version_slots_derivation_notes_populated_for_branch_derived_next() {
+    let slots = derive_version_slots(
+        &VersionSource {
+            tags: vec!["v2.5.0".to_string(), "v2.4.0".to_string()],
+            branch_names: vec!["main".to_string()],
+            current_override: None,
+            previous_override: None,
+            next_override: None,
+        },
+        "test-repo",
+    )
+    .expect("derive slots");
+    assert_eq!(slots.current, "2.5.0");
+    assert_eq!(slots.previous.as_deref(), Some("2.4.0"));
+    assert!(slots.next.is_some());
+    assert!(
+        slots
+            .derivation_notes
+            .iter()
+            .any(|note| note.contains("branch")),
+        "derivation notes should mention branch convention"
+    );
+}
+
+#[test]
+fn version_slots_derivation_notes_populated_for_prerelease_next() {
+    let slots = derive_version_slots(
+        &VersionSource {
+            tags: vec!["v1.0.0".to_string(), "v1.1.0-rc1".to_string()],
+            branch_names: vec![],
+            current_override: None,
+            previous_override: None,
+            next_override: None,
+        },
+        "test-repo",
+    )
+    .expect("derive slots");
+    assert_eq!(slots.current, "1.0.0");
+    assert_eq!(slots.next.as_deref(), Some("1.1.0-rc1"));
+    assert!(
+        slots
+            .derivation_notes
+            .iter()
+            .any(|note| note.contains("prerelease")),
+        "derivation notes should mention prerelease tag"
+    );
+}
+
+#[test]
+fn matrix_cell_conformance_command_contains_cell_id() {
+    let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
+    for cell in &plan.cells {
+        assert!(
+            cell.expected_conformance_command.contains(&cell.cell_id),
+            "conformance command must embed cell_id for traceability"
+        );
+        assert!(cell.expected_conformance_command.contains("cargo test"));
+    }
+}
+
+#[test]
+fn matrix_plan_schema_version_matches_constant() {
+    let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
+    assert_eq!(
+        plan.schema_version, "franken-engine.version-matrix-lane.v1",
+        "schema version must match the module constant"
+    );
+}
+
+#[test]
+fn matrix_plan_generated_at_utc_is_epoch() {
+    let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
+    assert_eq!(plan.generated_at_utc, "1970-01-01T00:00:00Z");
+}
+
+#[test]
+fn classify_failure_scopes_pass_results_with_fingerprint_are_ignored() {
+    let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
+    let results: Vec<MatrixCellResult> = plan
+        .cells
+        .iter()
+        .enumerate()
+        .map(|(idx, cell)| MatrixCellResult {
+            trace_id: format!("trace-{idx}"),
+            decision_id: format!("decision-{idx}"),
+            policy_id: "policy-v1".to_string(),
+            cell_id: cell.cell_id.clone(),
+            boundary_surface: cell.boundary_surface.clone(),
+            lane_kind: cell.lane_kind,
+            outcome: MatrixOutcome::Pass,
+            error_code: None,
+            failure_fingerprint: Some("fp-should-be-ignored".to_string()),
+            failure_class: None,
+        })
+        .collect();
+    let scopes = classify_failure_scopes(&plan, &results);
+    assert!(
+        scopes.is_empty(),
+        "passing results with fingerprints should not generate failure scopes"
+    );
+}
+
+#[test]
+fn classify_failure_scopes_fail_without_fingerprint_ignored() {
+    let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
+    let results: Vec<MatrixCellResult> = plan
+        .cells
+        .iter()
+        .enumerate()
+        .map(|(idx, cell)| MatrixCellResult {
+            trace_id: format!("trace-{idx}"),
+            decision_id: format!("decision-{idx}"),
+            policy_id: "policy-v1".to_string(),
+            cell_id: cell.cell_id.clone(),
+            boundary_surface: cell.boundary_surface.clone(),
+            lane_kind: cell.lane_kind,
+            outcome: MatrixOutcome::Fail,
+            error_code: Some("FE-ERR".to_string()),
+            failure_fingerprint: None,
+            failure_class: Some("unknown".to_string()),
+        })
+        .collect();
+    let scopes = classify_failure_scopes(&plan, &results);
+    assert!(
+        scopes.is_empty(),
+        "failures without fingerprint should produce no scopes"
+    );
+}
+
+#[test]
+fn matrix_cell_boundary_surface_matches_spec() {
+    let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
+    for cell in &plan.cells {
+        assert_eq!(
+            cell.boundary_surface, "frankensqlite/store_record",
+            "all cells should inherit the spec boundary_surface"
+        );
+    }
+}
+
+#[test]
+fn version_source_clone_independence() {
+    let original = VersionSource {
+        tags: vec!["v1.0.0".to_string()],
+        branch_names: vec!["main".to_string()],
+        current_override: Some("1.0.0".to_string()),
+        previous_override: Some("0.9.0".to_string()),
+        next_override: Some("2.0.0".to_string()),
+    };
+    let mut cloned = original.clone();
+    cloned.tags.push("v3.0.0".to_string());
+    cloned.current_override = None;
+    assert_eq!(original.tags.len(), 1, "original must be unmodified");
+    assert_eq!(original.current_override.as_deref(), Some("1.0.0"));
+    assert_eq!(cloned.tags.len(), 2);
+}

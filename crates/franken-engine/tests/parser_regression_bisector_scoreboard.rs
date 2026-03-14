@@ -805,3 +805,251 @@ fn incident_replay_drill_ids_are_unique() {
         );
     }
 }
+
+// ---------- enrichment: MetricDirection serde roundtrip ----------
+
+#[test]
+fn metric_direction_higher_is_better_deserializes() {
+    let recovered: MetricDirection =
+        serde_json::from_str("\"higher_is_better\"").expect("deserialize");
+    assert_eq!(recovered, MetricDirection::HigherIsBetter);
+}
+
+#[test]
+fn metric_direction_lower_is_better_deserializes() {
+    let recovered: MetricDirection =
+        serde_json::from_str("\"lower_is_better\"").expect("deserialize");
+    assert_eq!(recovered, MetricDirection::LowerIsBetter);
+}
+
+// ---------- enrichment: MetricDefinition ----------
+
+#[test]
+fn metric_definition_clone_equals_original() {
+    let def = MetricDefinition {
+        metric_id: "throughput".to_string(),
+        direction: MetricDirection::HigherIsBetter,
+        weight_millionths: 500_000,
+    };
+    let cloned = def.clone();
+    assert_eq!(def, cloned);
+}
+
+#[test]
+fn metric_definition_debug_contains_id() {
+    let def = MetricDefinition {
+        metric_id: "latency_ns".to_string(),
+        direction: MetricDirection::LowerIsBetter,
+        weight_millionths: 300_000,
+    };
+    let debug = format!("{def:?}");
+    assert!(debug.contains("latency_ns"));
+    assert!(debug.contains("LowerIsBetter"));
+}
+
+// ---------- enrichment: HistoryEntry ----------
+
+#[test]
+fn history_entry_clone_equals_original() {
+    let mut metrics = BTreeMap::new();
+    metrics.insert("throughput".to_string(), 1000);
+    let entry = HistoryEntry {
+        commit: "abc123".to_string(),
+        run_id: "run-001".to_string(),
+        generated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+        metrics,
+        replay_command: "cargo test".to_string(),
+        artifact_manifest: "manifest.json".to_string(),
+        artifact_report: "report.json".to_string(),
+    };
+    let cloned = entry.clone();
+    assert_eq!(entry, cloned);
+}
+
+// ---------- enrichment: CommitScore ----------
+
+#[test]
+fn commit_score_debug_contains_commit() {
+    let score = CommitScore {
+        commit: "abc123".to_string(),
+        run_id: "run-001".to_string(),
+        generated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+        composite_score_millionths: 1_000_000,
+        delta_from_baseline_millionths: 0,
+        regression: false,
+        replay_command: "cargo test".to_string(),
+        artifact_manifest: "manifest.json".to_string(),
+        artifact_report: "report.json".to_string(),
+    };
+    let debug = format!("{score:?}");
+    assert!(debug.contains("abc123"));
+    assert!(debug.contains("CommitScore"));
+}
+
+#[test]
+fn commit_score_clone_equals_original() {
+    let score = CommitScore {
+        commit: "def456".to_string(),
+        run_id: "run-002".to_string(),
+        generated_at_utc: "2026-01-02T00:00:00Z".to_string(),
+        composite_score_millionths: 900_000,
+        delta_from_baseline_millionths: -100_000,
+        regression: false,
+        replay_command: "cargo test".to_string(),
+        artifact_manifest: "manifest.json".to_string(),
+        artifact_report: "report.json".to_string(),
+    };
+    let cloned = score.clone();
+    assert_eq!(score, cloned);
+}
+
+// ---------- enrichment: BisectOutcome ----------
+
+#[test]
+fn bisect_outcome_no_regression_has_none_first_bad() {
+    let outcome = BisectOutcome {
+        classification: "no_regression_detected".to_string(),
+        first_bad_commit: None,
+        search_path: Vec::new(),
+    };
+    assert!(outcome.first_bad_commit.is_none());
+    assert!(outcome.search_path.is_empty());
+}
+
+#[test]
+fn bisect_outcome_regression_detected_has_some_first_bad() {
+    let fixture = load_fixture();
+    let bisect = run_bisect(&fixture);
+    assert_eq!(bisect.classification, "regression_detected");
+    assert!(bisect.first_bad_commit.is_some());
+}
+
+#[test]
+fn bisect_outcome_debug_contains_classification() {
+    let outcome = BisectOutcome {
+        classification: "regression_detected".to_string(),
+        first_bad_commit: Some("c005".to_string()),
+        search_path: vec!["c003".to_string(), "c004".to_string()],
+    };
+    let debug = format!("{outcome:?}");
+    assert!(debug.contains("regression_detected"));
+    assert!(debug.contains("c005"));
+}
+
+// ---------- enrichment: fixture structural properties ----------
+
+#[test]
+fn fixture_history_commits_are_unique() {
+    let fixture = load_fixture();
+    let mut commits = BTreeSet::new();
+    for entry in &fixture.history {
+        assert!(
+            commits.insert(entry.commit.as_str()),
+            "duplicate commit: {}",
+            entry.commit
+        );
+    }
+}
+
+#[test]
+fn fixture_baseline_commit_exists_in_history() {
+    let fixture = load_fixture();
+    assert!(
+        fixture
+            .history
+            .iter()
+            .any(|e| e.commit == fixture.baseline_commit),
+        "baseline commit {} not in history",
+        fixture.baseline_commit
+    );
+}
+
+#[test]
+fn fixture_candidate_commit_exists_in_history() {
+    let fixture = load_fixture();
+    assert!(
+        fixture
+            .history
+            .iter()
+            .any(|e| e.commit == fixture.candidate_commit),
+        "candidate commit {} not in history",
+        fixture.candidate_commit
+    );
+}
+
+#[test]
+fn fixture_candidate_is_after_baseline() {
+    let fixture = load_fixture();
+    let base_idx = baseline_index(&fixture);
+    let cand_idx = candidate_index(&fixture);
+    assert!(
+        cand_idx > base_idx,
+        "candidate must be after baseline in history"
+    );
+}
+
+#[test]
+fn fixture_metric_weights_sum_to_one_million() {
+    let fixture = load_fixture();
+    let total: u64 = fixture
+        .metric_definitions
+        .iter()
+        .map(|m| u64::from(m.weight_millionths))
+        .sum();
+    assert_eq!(total, 1_000_000);
+}
+
+// ---------- enrichment: metric edge cases ----------
+
+#[test]
+fn metric_score_both_zero_clamps_to_million() {
+    let def = MetricDefinition {
+        metric_id: "both_zero".to_string(),
+        direction: MetricDirection::HigherIsBetter,
+        weight_millionths: 1_000_000,
+    };
+    // Both zero → clamped to 1/1 → 1_000_000
+    let score = metric_score_millionths(&def, 0, 0);
+    assert_eq!(score, 1_000_000);
+}
+
+#[test]
+fn metric_score_lower_is_better_zero_current_clamps() {
+    let def = MetricDefinition {
+        metric_id: "zero_current".to_string(),
+        direction: MetricDirection::LowerIsBetter,
+        weight_millionths: 1_000_000,
+    };
+    // baseline 100, current 0 → clamped to 1 → 100/1 * 1_000_000 = 100_000_000
+    let score = metric_score_millionths(&def, 100, 0);
+    assert_eq!(score, 100_000_000);
+}
+
+// ---------- enrichment: structured events ----------
+
+#[test]
+fn structured_events_all_have_trace_id() {
+    let fixture = load_fixture();
+    let scores = build_commit_scores(&fixture);
+    let bisect = run_bisect(&fixture);
+    let events = emit_structured_events(&fixture, &scores, &bisect);
+    for event in &events {
+        assert!(
+            event.get("trace_id").is_some(),
+            "event missing trace_id: {event}"
+        );
+    }
+}
+
+#[test]
+fn structured_events_scoreboard_rows_match_history_count() {
+    let fixture = load_fixture();
+    let scores = build_commit_scores(&fixture);
+    let bisect = run_bisect(&fixture);
+    let events = emit_structured_events(&fixture, &scores, &bisect);
+    let row_count = events
+        .iter()
+        .filter(|e| e.get("event").and_then(|v| v.as_str()) == Some("scoreboard_row"))
+        .count();
+    assert_eq!(row_count, fixture.history.len());
+}

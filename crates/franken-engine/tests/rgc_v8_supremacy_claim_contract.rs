@@ -202,6 +202,11 @@ fn load_doc() -> String {
     fs::read_to_string(path).expect("read V8 supremacy contract doc")
 }
 
+fn load_runner_script() -> String {
+    let path = Path::new("../../scripts/run_rgc_v8_supremacy_claim_contract.sh");
+    fs::read_to_string(path).expect("read V8 supremacy contract runner")
+}
+
 fn fnv1a64(bytes: &[u8]) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0100_0000_01b3;
@@ -421,6 +426,7 @@ fn v8_supremacy_doc_mentions_required_family_keywords() {
         "target",
         "hypothesis",
         "./scripts/run_rgc_v8_supremacy_claim_contract.sh ci",
+        "target_rch_rgc_v8_supremacy_claim_contract_uid",
     ];
 
     for keyword in required_keywords {
@@ -438,6 +444,52 @@ fn v8_supremacy_doc_word_count_exceeds_minimum() {
     assert!(
         word_count >= 250,
         "V8 supremacy contract doc must have at least 250 words, found {word_count}"
+    );
+}
+
+#[test]
+fn v8_supremacy_runner_script_requires_rch_and_repo_local_target_dir() {
+    let script = load_runner_script();
+
+    for snippet in [
+        "rch is required",
+        "target_rch_rgc_v8_supremacy_claim_contract_uid",
+        "cargo check -p frankenengine-engine --test rgc_v8_supremacy_claim_contract",
+        "cargo test -p frankenengine-engine --test rgc_v8_supremacy_claim_contract",
+        "cargo clippy -p frankenengine-engine --test rgc_v8_supremacy_claim_contract -- -D warnings",
+        "supremacy_claim_contract.json",
+        "published_language_contract.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "runner script missing required snippet: {snippet}"
+        );
+    }
+    assert!(
+        !script.contains("/tmp/rch_target_franken_engine_rgc_v8_supremacy_claim_contract_"),
+        "runner script must not default V8 supremacy target dir under /tmp"
+    );
+}
+
+#[test]
+fn v8_supremacy_runner_script_guards_jq_and_rch_failure_paths() {
+    let script = load_runner_script();
+    let jq_check = script
+        .find("if ! command -v jq >/dev/null 2>&1; then")
+        .expect("runner must guard jq availability");
+    let scenario_validation = script
+        .find("if [[ -n \"$scenario_filter\" ]]; then")
+        .expect("runner must validate scenario filters");
+    assert!(
+        jq_check < scenario_validation,
+        "runner must check jq availability before scenario validation uses jq"
+    );
+    assert!(
+        script.contains("if wait \"$rch_pid\"; then"),
+        "runner must guard wait \"$rch_pid\" under set -e so cleanup and manifest logic still run on failure"
     );
 }
 

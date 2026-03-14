@@ -326,3 +326,160 @@ fn pr_template_has_minimum_word_count() {
         "PR template should have >= 30 words, got {word_count}"
     );
 }
+
+#[test]
+fn pr_template_deterministic_double_read() {
+    let path = repo_root().join(".github/PULL_REQUEST_TEMPLATE.md");
+    let a = fs::read_to_string(&path).expect("first read");
+    let b = fs::read_to_string(&path).expect("second read");
+    assert_eq!(a, b);
+}
+
+#[test]
+fn pr_template_has_more_than_50_words() {
+    let path = repo_root().join(".github/PULL_REQUEST_TEMPLATE.md");
+    let content = fs::read_to_string(&path).expect("read PR template");
+    let word_count = content.split_whitespace().count();
+    assert!(
+        word_count >= 50,
+        "PR template should have >= 50 words, got {word_count}"
+    );
+}
+
+#[test]
+fn release_checklist_has_more_than_50_lines() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    assert!(content.lines().count() > 50);
+}
+
+#[test]
+fn release_checklist_has_headings_in_order() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    let headings: Vec<&str> = content.lines().filter(|l| l.starts_with("## ")).collect();
+    assert!(
+        headings.len() >= 3,
+        "release checklist should have >= 3 h2 headings"
+    );
+}
+
+#[test]
+fn pr_template_has_at_least_one_heading() {
+    let path = repo_root().join(".github/PULL_REQUEST_TEMPLATE.md");
+    let content = fs::read_to_string(&path).expect("read PR template");
+    let heading_count = content.lines().filter(|l| l.starts_with('#')).count();
+    assert!(heading_count >= 1, "PR template should have >= 1 heading");
+}
+
+#[test]
+fn release_checklist_mentions_evidence() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    assert!(
+        content.contains("evidence"),
+        "release checklist must mention evidence"
+    );
+}
+
+#[test]
+fn release_checklist_mentions_reimplement() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    assert!(
+        content.contains("reimplement"),
+        "release checklist must mention reimplement"
+    );
+}
+
+#[test]
+fn pr_template_mentions_infrastructure() {
+    let path = repo_root().join(".github/PULL_REQUEST_TEMPLATE.md");
+    let content = fs::read_to_string(&path).expect("read PR template");
+    assert!(
+        content.contains("infrastructure"),
+        "PR template must mention infrastructure"
+    );
+}
+
+#[test]
+fn release_checklist_no_todo_or_fixme() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    assert!(!content.contains("TODO") && !content.contains("FIXME"));
+}
+
+#[test]
+fn pr_template_mentions_reuse() {
+    let path = repo_root().join(".github/PULL_REQUEST_TEMPLATE.md");
+    let content = fs::read_to_string(&path).expect("read PR template");
+    assert!(content.contains("reuse"), "PR template must mention reuse");
+}
+
+#[test]
+fn release_checklist_core_validation_gate_has_content() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    let gate_pos = content.find("## Core Validation Gate").unwrap();
+    let next_h2 = content[gate_pos + 23..]
+        .find("## ")
+        .map(|p| p + gate_pos + 23)
+        .unwrap_or(content.len());
+    let section = &content[gate_pos..next_h2];
+    let word_count = section.split_whitespace().count();
+    assert!(
+        word_count >= 10,
+        "Core Validation Gate section should have >= 10 words, got {word_count}"
+    );
+}
+
+#[test]
+fn release_checklist_machine_readable_gate_has_content() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    let gate_pos = content.find("## Machine-Readable Gate").unwrap();
+    let next_h2 = content[gate_pos + 24..]
+        .find("## ")
+        .map(|p| p + gate_pos + 24)
+        .unwrap_or(content.len());
+    let section = &content[gate_pos..next_h2];
+    let word_count = section.split_whitespace().count();
+    assert!(
+        word_count >= 10,
+        "Machine-Readable Gate section should have >= 10 words, got {word_count}"
+    );
+}
+
+#[test]
+fn release_checklist_sign_off_section_has_content() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    let signoff_pos = content.find("## Sign-Off").unwrap();
+    let section = &content[signoff_pos..];
+    let word_count = section.split_whitespace().count();
+    assert!(
+        word_count >= 5,
+        "Sign-Off section should have >= 5 words, got {word_count}"
+    );
+}
+
+#[test]
+fn pr_template_and_checklist_both_mention_exception_artifact() {
+    let pr = fs::read_to_string(repo_root().join(".github/PULL_REQUEST_TEMPLATE.md"))
+        .expect("read PR template");
+    let cl = fs::read_to_string(repo_root().join("docs/RELEASE_CHECKLIST.md"))
+        .expect("read release checklist");
+    assert!(pr.contains("Exception artifact link"));
+    assert!(cl.contains("Exception artifact link"));
+}
+
+#[test]
+fn release_checklist_has_at_least_five_h2_sections() {
+    let path = repo_root().join("docs/RELEASE_CHECKLIST.md");
+    let content = fs::read_to_string(&path).expect("read release checklist");
+    let h2_count = content.lines().filter(|l| l.starts_with("## ")).count();
+    assert!(
+        h2_count >= 5,
+        "release checklist should have >= 5 h2 sections, got {h2_count}"
+    );
+}

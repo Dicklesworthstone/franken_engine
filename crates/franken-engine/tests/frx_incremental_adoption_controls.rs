@@ -686,3 +686,125 @@ fn frx_07_4_operator_verification_commands_are_nonempty_strings() {
         );
     }
 }
+
+// ---------- enrichment: clone and debug ----------
+
+#[test]
+fn frx_07_4_contract_clone_independence() {
+    let a = parse_contract();
+    let b = a.clone();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn frx_07_4_contract_debug_is_nonempty() {
+    let c = parse_contract();
+    assert!(!format!("{c:?}").is_empty());
+}
+
+#[test]
+fn frx_07_4_policy_toggle_clone_independence() {
+    let contract = parse_contract();
+    let toggle = contract.policy_toggles.get("force_fallback").unwrap();
+    let cloned = toggle.clone();
+    assert_eq!(toggle, &cloned);
+}
+
+#[test]
+fn frx_07_4_canary_transition_clone_independence() {
+    let contract = parse_contract();
+    let transition = &contract.canary_flow.allowed_transitions[0];
+    let cloned = transition.clone();
+    assert_eq!(transition, &cloned);
+}
+
+#[test]
+fn frx_07_4_migration_diagnostic_clone_independence() {
+    let contract = parse_contract();
+    let diag = &contract.migration_diagnostics[0];
+    let cloned = diag.clone();
+    assert_eq!(diag, &cloned);
+}
+
+// ---------- enrichment: more structural tests ----------
+
+#[test]
+fn frx_07_4_rollout_axes_are_unique() {
+    let contract = parse_contract();
+    let unique: BTreeSet<&str> = contract.rollout_axes.iter().map(String::as_str).collect();
+    assert_eq!(unique.len(), contract.rollout_axes.len());
+}
+
+#[test]
+fn frx_07_4_canary_stages_are_unique() {
+    let contract = parse_contract();
+    let unique: BTreeSet<&str> = contract
+        .canary_flow
+        .stages
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(unique.len(), contract.canary_flow.stages.len());
+}
+
+#[test]
+fn frx_07_4_migration_diagnostics_compatibility_classes_are_nonempty() {
+    let contract = parse_contract();
+    for d in &contract.migration_diagnostics {
+        assert!(!d.compatibility_class.trim().is_empty());
+    }
+}
+
+#[test]
+fn frx_07_4_migration_diagnostics_remediation_summaries_are_meaningful() {
+    let contract = parse_contract();
+    for d in &contract.migration_diagnostics {
+        let word_count = d.remediation_summary.split_whitespace().count();
+        assert!(
+            word_count >= 3,
+            "remediation_summary for {} should have >= 3 words, got {word_count}",
+            d.diagnostic_code
+        );
+    }
+}
+
+#[test]
+fn frx_07_4_bead_id_starts_with_bd() {
+    let contract = parse_contract();
+    assert!(contract.bead_id.starts_with("bd-"));
+}
+
+#[test]
+fn frx_07_4_generated_at_utc_contains_t_separator() {
+    let contract = parse_contract();
+    assert!(contract.generated_at_utc.contains('T'));
+}
+
+#[test]
+fn frx_07_4_track_id_starts_with_frx() {
+    let contract = parse_contract();
+    assert!(contract.track.id.starts_with("FRX-"));
+}
+
+#[test]
+fn frx_07_4_policy_toggle_count_is_at_least_four() {
+    let contract = parse_contract();
+    assert!(contract.policy_toggles.len() >= 4);
+}
+
+#[test]
+fn frx_07_4_canary_stages_count_is_four() {
+    let contract = parse_contract();
+    assert_eq!(contract.canary_flow.stages.len(), 4);
+}
+
+#[test]
+fn frx_07_4_doc_word_count_at_least_200() {
+    let path = repo_root().join("docs/FRX_INCREMENTAL_ADOPTION_CONTROLS_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    let word_count = doc.split_whitespace().count();
+    assert!(
+        word_count >= 200,
+        "doc should have >= 200 words, got {word_count}"
+    );
+}

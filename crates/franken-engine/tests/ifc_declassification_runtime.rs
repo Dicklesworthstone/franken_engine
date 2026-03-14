@@ -62,6 +62,10 @@ fn make_policy() -> FlowPolicy {
 }
 
 fn make_request() -> DeclassificationRequest {
+    make_request_for_contract("decision-contract-ifc")
+}
+
+fn make_request_for_contract(decision_contract_id: &str) -> DeclassificationRequest {
     DeclassificationRequest {
         request_id: format!("req-{RUNTIME_ROUTE_ID}"),
         source_label: Label::Secret,
@@ -70,6 +74,7 @@ fn make_request() -> DeclassificationRequest {
         code_location: "runtime::egress".to_string(),
         trace_id: "trace-ifc-runtime".to_string(),
         requested_route_id: RUNTIME_ROUTE_ID.to_string(),
+        decision_contract_id: decision_contract_id.to_string(),
         is_emergency: false,
         timestamp_ms: 1_700_000_010_000,
     }
@@ -93,6 +98,33 @@ fn high_loss() -> LossAssessment {
         historical_abuse_detected: true,
         summary: "high risk".to_string(),
     }
+}
+
+fn assert_last_blocked_receipt_event(
+    lattice: &Ir2FlowLattice,
+    trace_id: &str,
+    obligation_id: &str,
+    decision_contract_id: &str,
+    receipt_id: &str,
+) {
+    let event = lattice.events().last().expect("blocked event");
+    assert_eq!(event.trace_id, trace_id);
+    assert_eq!(event.component, "flow_lattice");
+    assert_eq!(event.event, "use_declassification");
+    assert_eq!(event.outcome, "blocked");
+    assert_eq!(event.error_code.as_deref(), Some("FE-IFC-BLOCK"));
+    assert_eq!(event.obligation_id.as_deref(), Some(obligation_id));
+    assert_eq!(
+        event.decision_contract_id.as_deref(),
+        Some(decision_contract_id)
+    );
+    assert_eq!(event.receipt_id.as_deref(), Some(receipt_id));
+    assert!(
+        event
+            .receipt_replay_command
+            .as_deref()
+            .is_some_and(|command| command.contains(receipt_id))
+    );
 }
 
 #[test]
@@ -208,7 +240,14 @@ fn runtime_lattice_rejects_denied_receipt_and_keeps_obligation_unused() {
         )
         .expect_err("deny receipt must fail closed");
     assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
-    assert_eq!(lattice.events().len(), event_count_before);
+    assert_eq!(lattice.events().len(), event_count_before + 1);
+    assert_last_blocked_receipt_event(
+        &lattice,
+        "trace-ifc-runtime",
+        "obl-secret-egress",
+        "decision-contract-ifc",
+        denied_receipt.receipt_id.as_str(),
+    );
     assert_eq!(
         lattice
             .obligation("obl-secret-egress")
@@ -260,7 +299,14 @@ fn runtime_lattice_rejects_tampered_allow_receipt_signature() {
         }
         other => panic!("expected FlowBlocked for tampered receipt, got {other:?}"),
     }
-    assert_eq!(lattice.events().len(), event_count_before);
+    assert_eq!(lattice.events().len(), event_count_before + 1);
+    assert_last_blocked_receipt_event(
+        &lattice,
+        "trace-ifc-runtime",
+        "obl-secret-egress",
+        "decision-contract-ifc",
+        tampered_receipt.receipt_id.as_str(),
+    );
     assert_eq!(
         lattice
             .obligation("obl-secret-egress")
@@ -451,6 +497,13 @@ fn runtime_lattice_rejects_untrusted_receipt_authorizer() {
         }
         other => panic!("expected FlowBlocked for untrusted authorizer, got {other:?}"),
     }
+    assert_last_blocked_receipt_event(
+        &lattice,
+        "trace-ifc-runtime",
+        "obl-secret-egress",
+        "decision-contract-ifc",
+        receipt.receipt_id.as_str(),
+    );
     assert_eq!(
         lattice
             .obligation("obl-secret-egress")
@@ -497,6 +550,71 @@ fn runtime_lattice_rejects_authorizer_trusted_for_other_contract() {
         }
         other => panic!("expected FlowBlocked for wrong-contract authorizer, got {other:?}"),
     }
+    assert_last_blocked_receipt_event(
+        &lattice,
+        "trace-ifc-runtime",
+        "obl-secret-egress",
+        "decision-contract-ifc",
+        receipt.receipt_id.as_str(),
+    );
+    assert_eq!(
+        lattice
+            .obligation("obl-secret-egress")
+            .map(|ob| ob.use_count),
+        Some(0)
+    );
+}
+
+#[test]
+fn runtime_lattice_rejects_receipt_for_other_contract_even_with_same_signer() {
+    let mut lattice = Ir2FlowLattice::new("policy-ifc-runtime");
+    lattice
+        .register_obligation(DeclassificationObligation {
+            obligation_id: "obl-secret-egress".to_string(),
+            source_label: LabelClass::Secret,
+            target_clearance: Clearance::NeverSink,
+            decision_contract_id: "decision-contract-ifc".to_string(),
+            requires_operator_approval: true,
+            max_uses: 1,
+            use_count: 0,
+        })
+        .expect("register obligation");
+
+    let mut pipeline = DeclassificationPipeline::default();
+    let signing_key = SigningKey::from_bytes([32u8; 32]);
+    let receipt = pipeline
+        .process(
+            &make_request_for_contract("decision-contract-other"),
+            &make_policy(),
+            &low_loss(),
+            &signing_key,
+        )
+        .expect("allow receipt for other contract");
+
+    lattice.trust_receipt_authorizer_for_contract(
+        "decision-contract-ifc",
+        signing_key.verification_key(),
+    );
+
+    let err = lattice
+        .use_declassification_with_receipt("obl-secret-egress", &receipt, "trace-ifc-runtime")
+        .expect_err("receipt for another contract must fail closed");
+    match err {
+        FlowLatticeError::FlowBlocked { detail } => {
+            assert!(
+                detail.contains("decision contract decision-contract-other does not match"),
+                "unexpected error detail: {detail}"
+            );
+        }
+        other => panic!("expected FlowBlocked for contract mismatch, got {other:?}"),
+    }
+    assert_last_blocked_receipt_event(
+        &lattice,
+        "trace-ifc-runtime",
+        "obl-secret-egress",
+        "decision-contract-ifc",
+        receipt.receipt_id.as_str(),
+    );
     assert_eq!(
         lattice
             .obligation("obl-secret-egress")
@@ -543,6 +661,13 @@ fn runtime_lattice_rejects_cross_trace_receipt_replay() {
         }
         other => panic!("expected FlowBlocked for cross-trace replay, got {other:?}"),
     }
+    assert_last_blocked_receipt_event(
+        &lattice,
+        "trace-ifc-runtime-other",
+        "obl-secret-egress",
+        "decision-contract-ifc",
+        receipt.receipt_id.as_str(),
+    );
     assert_eq!(
         lattice
             .obligation("obl-secret-egress")
@@ -596,6 +721,13 @@ fn runtime_lattice_rejects_receipt_with_sink_clearance_mismatch() {
         }
         other => panic!("expected FlowBlocked for sink mismatch, got {other:?}"),
     }
+    assert_last_blocked_receipt_event(
+        &lattice,
+        "trace-ifc-runtime",
+        "obl-secret-egress",
+        "decision-contract-ifc",
+        receipt.receipt_id.as_str(),
+    );
     assert_eq!(
         lattice
             .obligation("obl-secret-egress")

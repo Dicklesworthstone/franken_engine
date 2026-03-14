@@ -15,16 +15,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SchedulerPartition {
     partition_id: String,
     fixture_limit: u64,
     seed_offset: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SchedulerManifest {
     nightly_cron_utc: String,
     timezone: String,
@@ -34,7 +34,7 @@ struct SchedulerManifest {
     expected_manifest_fingerprint: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct WaiverRecord {
     waiver_id: String,
     fingerprint: String,
@@ -43,7 +43,7 @@ struct WaiverRecord {
     approved_by: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ExistingRemediation {
     fingerprint: String,
     bead_id: String,
@@ -51,7 +51,7 @@ struct ExistingRemediation {
     owner_hint: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct DriftFinding {
     finding_id: String,
     fixture_id: String,
@@ -65,14 +65,14 @@ struct DriftFinding {
     provenance_hash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ExpectedGate {
     expected_outcome: String,
     expected_blockers: Vec<String>,
     expected_escalations: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ExpectedRemediationAction {
     fingerprint: String,
     action: String,
@@ -80,14 +80,14 @@ struct ExpectedRemediationAction {
     owner_hint: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ReplayScenario {
     scenario_id: String,
     replay_command: String,
     expected_outcome: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct DifferentialNightlyGovernanceFixture {
     schema_version: String,
     governance_version: String,
@@ -868,4 +868,323 @@ fn evaluate_gate_deterministic() {
     let d1 = evaluate_gate(&fixture);
     let d2 = evaluate_gate(&fixture);
     assert_eq!(d1, d2);
+}
+
+// ---------- fixture structural properties ----------
+
+#[test]
+fn fixture_serde_roundtrip_preserves_all_fields() {
+    let fixture = load_fixture();
+    let serialized = serde_json::to_string(&fixture).expect("serialize");
+    let deserialized: DifferentialNightlyGovernanceFixture =
+        serde_json::from_str(&serialized).expect("deserialize roundtrip");
+    assert_eq!(fixture, deserialized);
+}
+
+#[test]
+fn fixture_clone_produces_independent_copy() {
+    let fixture = load_fixture();
+    let mut cloned = fixture.clone();
+    cloned.bead_id = "bd-mutated".to_string();
+    assert_ne!(fixture.bead_id, cloned.bead_id);
+    assert_eq!(fixture.schema_version, cloned.schema_version);
+}
+
+#[test]
+fn fixture_debug_output_is_nonempty() {
+    let fixture = load_fixture();
+    let debug_str = format!("{fixture:?}");
+    assert!(!debug_str.is_empty());
+    assert!(debug_str.contains("parser-differential-nightly-governance"));
+}
+
+#[test]
+fn fixture_drift_findings_have_unique_finding_ids() {
+    let fixture = load_fixture();
+    let ids: BTreeSet<&str> = fixture
+        .drift_findings
+        .iter()
+        .map(|f| f.finding_id.as_str())
+        .collect();
+    assert_eq!(ids.len(), fixture.drift_findings.len());
+}
+
+#[test]
+fn fixture_drift_findings_have_unique_fixture_ids() {
+    let fixture = load_fixture();
+    let ids: BTreeSet<&str> = fixture
+        .drift_findings
+        .iter()
+        .map(|f| f.fixture_id.as_str())
+        .collect();
+    assert_eq!(ids.len(), fixture.drift_findings.len());
+}
+
+#[test]
+fn fixture_waivers_have_unique_waiver_ids() {
+    let fixture = load_fixture();
+    let ids: BTreeSet<&str> = fixture
+        .waivers
+        .iter()
+        .map(|w| w.waiver_id.as_str())
+        .collect();
+    assert_eq!(ids.len(), fixture.waivers.len());
+}
+
+#[test]
+fn fixture_all_drift_findings_have_nonempty_replay_commands() {
+    let fixture = load_fixture();
+    for finding in &fixture.drift_findings {
+        assert!(
+            !finding.replay_command.is_empty(),
+            "finding {} has empty replay_command",
+            finding.finding_id
+        );
+        assert!(
+            finding.replay_command.starts_with("./"),
+            "replay_command for {} should be a relative script path",
+            finding.finding_id
+        );
+    }
+}
+
+#[test]
+fn fixture_all_fingerprints_have_sha256_prefix() {
+    let fixture = load_fixture();
+    for finding in &fixture.drift_findings {
+        assert!(
+            finding.fingerprint.starts_with("sha256:"),
+            "finding {} fingerprint should start with sha256:",
+            finding.finding_id
+        );
+    }
+    for waiver in &fixture.waivers {
+        assert!(
+            waiver.fingerprint.starts_with("sha256:"),
+            "waiver {} fingerprint should start with sha256:",
+            waiver.waiver_id
+        );
+    }
+    for remediation in &fixture.existing_remediations {
+        assert!(
+            remediation.fingerprint.starts_with("sha256:"),
+            "remediation {} fingerprint should start with sha256:",
+            remediation.bead_id
+        );
+    }
+}
+
+#[test]
+fn fixture_severities_are_known_values() {
+    let known: BTreeSet<&str> = ["critical", "minor"].iter().copied().collect();
+    let fixture = load_fixture();
+    for finding in &fixture.drift_findings {
+        assert!(
+            known.contains(finding.severity.as_str()),
+            "finding {} has unexpected severity '{}'",
+            finding.finding_id,
+            finding.severity
+        );
+    }
+}
+
+#[test]
+fn fixture_required_log_keys_are_nonempty_and_unique() {
+    let fixture = load_fixture();
+    assert!(!fixture.required_log_keys.is_empty());
+    let unique: BTreeSet<&str> = fixture
+        .required_log_keys
+        .iter()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(unique.len(), fixture.required_log_keys.len());
+}
+
+#[test]
+fn fixture_evaluation_time_utc_is_valid_iso8601() {
+    let fixture = load_fixture();
+    assert!(fixture.evaluation_time_utc.ends_with('Z'));
+    assert!(fixture.evaluation_time_utc.contains('T'));
+    let parts: Vec<&str> = fixture.evaluation_time_utc.split('T').collect();
+    assert_eq!(parts.len(), 2);
+    let date_parts: Vec<&str> = parts[0].split('-').collect();
+    assert_eq!(date_parts.len(), 3);
+}
+
+#[test]
+fn fixture_scheduler_manifest_partition_limits_are_positive() {
+    let fixture = load_fixture();
+    for partition in &fixture.scheduler_manifest.partitions {
+        assert!(
+            partition.fixture_limit > 0,
+            "partition {} has zero fixture_limit",
+            partition.partition_id
+        );
+    }
+}
+
+#[test]
+fn fixture_expected_remediation_actions_reference_known_fingerprints() {
+    let fixture = load_fixture();
+    let finding_fps: BTreeSet<&str> = fixture
+        .drift_findings
+        .iter()
+        .map(|f| f.fingerprint.as_str())
+        .collect();
+    for action in &fixture.expected_remediation_actions {
+        assert!(
+            finding_fps.contains(action.fingerprint.as_str()),
+            "expected remediation action fingerprint '{}' not found in drift findings",
+            action.fingerprint
+        );
+    }
+}
+
+#[test]
+fn fixture_replay_scenarios_reference_known_replay_commands() {
+    let fixture = load_fixture();
+    let commands: BTreeSet<&str> = fixture
+        .drift_findings
+        .iter()
+        .map(|f| f.replay_command.as_str())
+        .collect();
+    for scenario in &fixture.replay_scenarios {
+        assert!(
+            commands.contains(scenario.replay_command.as_str()),
+            "replay scenario {} references unknown command '{}'",
+            scenario.scenario_id,
+            scenario.replay_command
+        );
+    }
+}
+
+// ---------- gate decision structural properties ----------
+
+#[test]
+fn gate_decision_clone_and_debug_independence() {
+    let fixture = load_fixture();
+    let decision = evaluate_gate(&fixture);
+    let mut cloned = decision.clone();
+    cloned.outcome = "modified".to_string();
+    assert_ne!(decision.outcome, cloned.outcome);
+    let debug_str = format!("{decision:?}");
+    assert!(debug_str.contains("hold"));
+}
+
+// ---------- evaluate_gate multi-finding synthetic ----------
+
+#[test]
+fn evaluate_gate_multiple_critical_deduplicates_owner_escalations() {
+    let fixture = make_gov_fixture(
+        vec![
+            make_finding("f1", "critical", "sha256:aaa"),
+            make_finding("f2", "critical", "sha256:bbb"),
+        ],
+        vec![],
+    );
+    let decision = evaluate_gate(&fixture);
+    assert_eq!(decision.outcome, "hold");
+    // Both findings share owner_hint "owner", so only one escalation
+    assert_eq!(decision.escalations.len(), 1);
+    assert_eq!(decision.blockers.len(), 2);
+}
+
+#[test]
+fn evaluate_gate_mixed_critical_and_minor_blocks_on_critical() {
+    let fixture = make_gov_fixture(
+        vec![
+            make_finding("f1", "critical", "sha256:aaa"),
+            make_finding("f2", "minor", "sha256:bbb"),
+        ],
+        vec![],
+    );
+    let decision = evaluate_gate(&fixture);
+    assert_eq!(decision.outcome, "hold");
+    assert_eq!(
+        decision.finding_outcomes.get("f1").unwrap(),
+        "critical_unwaived"
+    );
+    assert_eq!(
+        decision.finding_outcomes.get("f2").unwrap(),
+        "minor_unwaived"
+    );
+}
+
+// ---------- remediation_actions deduplication ----------
+
+#[test]
+fn remediation_actions_deduplicates_same_fingerprint_across_findings() {
+    let fixture = make_gov_fixture(
+        vec![
+            make_finding("f1", "critical", "sha256:same"),
+            make_finding("f2", "critical", "sha256:same"),
+        ],
+        vec![],
+    );
+    let decision = evaluate_gate(&fixture);
+    let actions = remediation_actions(&fixture, &decision);
+    // Same fingerprint should produce exactly one action
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].fingerprint, "sha256:same");
+    assert_eq!(actions[0].action, "create");
+}
+
+// ---------- emit_structured_events field validation ----------
+
+#[test]
+fn emit_structured_events_always_contain_policy_and_component_fields() {
+    let fixture = make_gov_fixture(
+        vec![
+            make_finding("f1", "critical", "sha256:aaa"),
+            make_finding("f2", "minor", "sha256:bbb"),
+            make_finding("f3", "critical", "sha256:ccc"),
+        ],
+        vec![],
+    );
+    let decision = evaluate_gate(&fixture);
+    let actions = remediation_actions(&fixture, &decision);
+    let events = emit_structured_events(&fixture, &actions, &decision);
+    assert_eq!(events.len(), 3);
+    for event in &events {
+        assert_eq!(
+            event.get("policy_id").unwrap(),
+            "policy-parser-diff-nightly-governance-v1"
+        );
+        assert_eq!(
+            event.get("component").unwrap(),
+            "parser_differential_nightly_governance"
+        );
+        assert_eq!(event.get("event").unwrap(), "finding_governed");
+        assert!(event.contains_key("trace_id"));
+        assert!(event.contains_key("decision_id"));
+    }
+}
+
+// ---------- fnv1a64 additional properties ----------
+
+#[test]
+fn fnv1a64_order_sensitive() {
+    assert_ne!(fnv1a64(b"ab"), fnv1a64(b"ba"));
+}
+
+#[test]
+fn fnv1a64_long_input_is_stable() {
+    let long_input = vec![0x42_u8; 4096];
+    let h1 = fnv1a64(&long_input);
+    let h2 = fnv1a64(&long_input);
+    assert_eq!(h1, h2);
+    assert_ne!(h1, fnv1a64(b""));
+}
+
+// ---------- scheduler_manifest_fingerprint partition order independence ----------
+
+#[test]
+fn scheduler_manifest_fingerprint_is_partition_order_independent() {
+    let fixture = load_fixture();
+    let fp1 = scheduler_manifest_fingerprint(&fixture.scheduler_manifest);
+    let mut reversed = fixture.scheduler_manifest.clone();
+    reversed.partitions.reverse();
+    let fp2 = scheduler_manifest_fingerprint(&reversed);
+    // The function sorts partitions internally, so order should not matter
+    assert_eq!(fp1, fp2);
 }

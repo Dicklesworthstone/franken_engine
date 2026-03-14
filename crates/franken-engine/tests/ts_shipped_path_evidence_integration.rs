@@ -510,3 +510,279 @@ fn write_bundle_hash_deterministic() {
     let b = write_shipped_path_evidence_bundle(&dir2, &["cmd".to_string()]).unwrap();
     assert_eq!(a.inventory_hash, b.inventory_hash);
 }
+
+// ===========================================================================
+// 7. ShippedPathSpecimen — Clone independence
+// ===========================================================================
+
+#[test]
+fn specimen_clone_independence() {
+    let original = &shipped_path_corpus()[0];
+    let mut cloned = original.clone();
+    cloned.specimen_id = "mutated".to_string();
+    assert_ne!(original.specimen_id, "mutated");
+}
+
+// ===========================================================================
+// 8. ShippedPathExpectedOutcome — Copy and Debug
+// ===========================================================================
+
+#[test]
+fn expected_outcome_copy() {
+    let a = ShippedPathExpectedOutcome::ExecuteSuccess;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn expected_outcome_debug_all_distinct() {
+    let variants = [
+        ShippedPathExpectedOutcome::ExecuteSuccess,
+        ShippedPathExpectedOutcome::NormalizationFailure,
+        ShippedPathExpectedOutcome::ParseFailure,
+    ];
+    let debugs: BTreeSet<String> = variants.iter().map(|v| format!("{v:?}")).collect();
+    assert_eq!(debugs.len(), 3);
+}
+
+// ===========================================================================
+// 9. ShippedPathActualOutcome — Copy and Debug
+// ===========================================================================
+
+#[test]
+fn actual_outcome_copy() {
+    let a = ShippedPathActualOutcome::OtherFailure;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn actual_outcome_debug_all_distinct() {
+    let variants = [
+        ShippedPathActualOutcome::ExecuteSuccess,
+        ShippedPathActualOutcome::NormalizationFailure,
+        ShippedPathActualOutcome::ParseFailure,
+        ShippedPathActualOutcome::OtherFailure,
+    ];
+    let debugs: BTreeSet<String> = variants.iter().map(|v| format!("{v:?}")).collect();
+    assert_eq!(debugs.len(), 4);
+}
+
+// ===========================================================================
+// 10. ShippedPathVerdict — Copy and Debug
+// ===========================================================================
+
+#[test]
+fn verdict_copy() {
+    let a = ShippedPathVerdict::Pass;
+    let b = a;
+    assert_eq!(a, b);
+}
+
+#[test]
+fn verdict_debug_distinct() {
+    let pass_dbg = format!("{:?}", ShippedPathVerdict::Pass);
+    let fail_dbg = format!("{:?}", ShippedPathVerdict::Fail);
+    assert_ne!(pass_dbg, fail_dbg);
+}
+
+// ===========================================================================
+// 11. Evidence inventory — clone and debug
+// ===========================================================================
+
+#[test]
+fn inventory_clone_independence() {
+    let original = run_shipped_path_corpus();
+    let mut cloned = original.clone();
+    cloned.component = "mutated".to_string();
+    assert_eq!(original.component, TS_SHIPPED_PATH_COMPONENT);
+    assert_eq!(cloned.component, "mutated");
+}
+
+#[test]
+fn inventory_debug_nonempty() {
+    let inv = run_shipped_path_corpus();
+    let dbg = format!("{inv:?}");
+    assert!(dbg.contains("TsShippedPathEvidenceInventory"));
+}
+
+// ===========================================================================
+// 12. Corpus — normalization expectations are consistent
+// ===========================================================================
+
+#[test]
+fn corpus_js_specimens_not_normalized() {
+    for s in &shipped_path_corpus() {
+        if s.expected_language == SourceLanguage::JavaScript {
+            assert!(
+                !s.expected_normalization,
+                "JS specimen {} should not expect normalization",
+                s.specimen_id
+            );
+        }
+    }
+}
+
+#[test]
+fn corpus_ts_success_specimens_normalized() {
+    for s in &shipped_path_corpus() {
+        if s.expected_language == SourceLanguage::TypeScript
+            && s.expected_outcome == ShippedPathExpectedOutcome::ExecuteSuccess
+        {
+            assert!(
+                s.expected_normalization,
+                "TS success specimen {} should expect normalization",
+                s.specimen_id
+            );
+        }
+    }
+}
+
+// ===========================================================================
+// 13. ShippedPathEvidenceArtifactPaths — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn artifact_paths_serde_roundtrip() {
+    let paths = ShippedPathEvidenceArtifactPaths {
+        evidence_inventory: "inv.json".into(),
+        run_manifest: "manifest.json".into(),
+        events_jsonl: "events.jsonl".into(),
+        commands_txt: "commands.txt".into(),
+    };
+    let json = serde_json::to_string(&paths).unwrap();
+    let back: ShippedPathEvidenceArtifactPaths = serde_json::from_str(&json).unwrap();
+    assert_eq!(paths, back);
+}
+
+// ===========================================================================
+// 14. ShippedPathEvidenceArtifactPaths — clone and debug
+// ===========================================================================
+
+#[test]
+fn artifact_paths_clone_debug() {
+    let paths = ShippedPathEvidenceArtifactPaths {
+        evidence_inventory: "inv.json".into(),
+        run_manifest: "manifest.json".into(),
+        events_jsonl: "events.jsonl".into(),
+        commands_txt: "commands.txt".into(),
+    };
+    let cloned = paths.clone();
+    assert_eq!(paths, cloned);
+    let dbg = format!("{paths:?}");
+    assert!(dbg.contains("ShippedPathEvidenceArtifactPaths"));
+}
+
+// ===========================================================================
+// 15. Evidence — all verdicts are Pass for the corpus
+// ===========================================================================
+
+#[test]
+fn run_corpus_all_verdicts_pass() {
+    let inv = run_shipped_path_corpus();
+    for ev in &inv.evidence {
+        assert_eq!(
+            ev.verdict,
+            ShippedPathVerdict::Pass,
+            "specimen {} verdict should be Pass",
+            ev.specimen_id
+        );
+    }
+}
+
+// ===========================================================================
+// 16. ShippedPathEvidenceEvent — None fields serde
+// ===========================================================================
+
+#[test]
+fn event_none_fields_serde() {
+    let ev = ShippedPathEvidenceEvent {
+        schema_version: TS_SHIPPED_PATH_EVENT_SCHEMA_VERSION.into(),
+        component: TS_SHIPPED_PATH_COMPONENT.into(),
+        event: "run_start".into(),
+        policy_id: TS_SHIPPED_PATH_POLICY_ID.into(),
+        specimen_id: None,
+        verdict: None,
+        detail: None,
+    };
+    let json = serde_json::to_string(&ev).unwrap();
+    let back: ShippedPathEvidenceEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(ev, back);
+}
+
+// ===========================================================================
+// 17. Manifest — clone and debug
+// ===========================================================================
+
+#[test]
+fn manifest_clone_debug() {
+    let m = ShippedPathEvidenceRunManifest {
+        schema_version: TS_SHIPPED_PATH_MANIFEST_SCHEMA_VERSION.into(),
+        component: TS_SHIPPED_PATH_COMPONENT.into(),
+        trace_id: "t".into(),
+        decision_id: "d".into(),
+        policy_id: TS_SHIPPED_PATH_POLICY_ID.into(),
+        inventory_hash: "h".into(),
+        specimen_count: 1,
+        pass_count: 1,
+        fail_count: 0,
+        contract_satisfied: true,
+        artifact_paths: ShippedPathEvidenceArtifactPaths {
+            evidence_inventory: "a".into(),
+            run_manifest: "b".into(),
+            events_jsonl: "c".into(),
+            commands_txt: "d".into(),
+        },
+    };
+    let cloned = m.clone();
+    assert_eq!(m, cloned);
+    let dbg = format!("{m:?}");
+    assert!(dbg.contains("ShippedPathEvidenceRunManifest"));
+}
+
+// ===========================================================================
+// 18. Corpus has coverage for all expected outcome variants
+// ===========================================================================
+
+#[test]
+fn corpus_covers_execute_success_outcome() {
+    let corpus = shipped_path_corpus();
+    assert!(
+        corpus
+            .iter()
+            .any(|s| s.expected_outcome == ShippedPathExpectedOutcome::ExecuteSuccess)
+    );
+}
+
+// ===========================================================================
+// 19. Inventory JSON field names
+// ===========================================================================
+
+#[test]
+fn inventory_json_field_names() {
+    let inv = run_shipped_path_corpus();
+    let json = serde_json::to_string(&inv).unwrap();
+    assert!(json.contains("\"schema_version\""));
+    assert!(json.contains("\"component\""));
+    assert!(json.contains("\"specimen_count\""));
+    assert!(json.contains("\"pass_count\""));
+    assert!(json.contains("\"fail_count\""));
+    assert!(json.contains("\"js_count\""));
+    assert!(json.contains("\"ts_count\""));
+    assert!(json.contains("\"evidence\""));
+}
+
+// ===========================================================================
+// 20. Corpus specimens have IDs starting with js_ or ts_
+// ===========================================================================
+
+#[test]
+fn corpus_specimen_ids_prefixed() {
+    for s in &shipped_path_corpus() {
+        assert!(
+            s.specimen_id.starts_with("js_") || s.specimen_id.starts_with("ts_"),
+            "specimen ID '{}' should start with js_ or ts_",
+            s.specimen_id
+        );
+    }
+}

@@ -562,3 +562,247 @@ fn compatibility_policy_is_non_trivial_length() {
         registry.compatibility_policy
     );
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment batch 2: deeper structural and semantic invariants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn numeric_ids_are_within_reasonable_range() {
+    let registry = parse_registry();
+    for entry in &registry.entries {
+        assert!(
+            entry.numeric < 10_000,
+            "numeric id {} for code {} should be < 10000",
+            entry.numeric,
+            entry.code
+        );
+    }
+}
+
+#[test]
+fn each_subsystem_has_at_least_two_entries() {
+    let registry = parse_registry();
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for entry in &registry.entries {
+        *counts.entry(entry.subsystem.as_str()).or_insert(0) += 1;
+    }
+    for (subsystem, count) in &counts {
+        assert!(
+            *count >= 2,
+            "subsystem '{}' has only {} entries, expected at least 2",
+            subsystem,
+            count
+        );
+    }
+}
+
+#[test]
+fn warning_severity_entries_exist() {
+    let registry = parse_registry();
+    let warning_count = registry
+        .entries
+        .iter()
+        .filter(|e| e.severity == "warning")
+        .count();
+    assert!(
+        warning_count >= 1,
+        "registry should have at least 1 warning-severity entry, got {}",
+        warning_count
+    );
+}
+
+#[test]
+fn operator_actions_have_minimum_length() {
+    let registry = parse_registry();
+    for entry in &registry.entries {
+        assert!(
+            entry.operator_action.len() >= 10,
+            "operator_action for {} is too short ({} chars): '{}'",
+            entry.code,
+            entry.operator_action.len(),
+            entry.operator_action
+        );
+    }
+}
+
+#[test]
+fn registry_clone_independence() {
+    let registry = parse_registry();
+    let mut cloned = registry.clone();
+    cloned.entries[0].code = "FE-9999".to_string();
+    assert_ne!(
+        registry.entries[0].code, cloned.entries[0].code,
+        "clone must be independent of original"
+    );
+}
+
+#[test]
+fn all_string_fields_are_trimmed() {
+    let registry = parse_registry();
+    for entry in &registry.entries {
+        assert_eq!(
+            entry.code,
+            entry.code.trim(),
+            "code not trimmed: '{}'",
+            entry.code
+        );
+        assert_eq!(
+            entry.subsystem,
+            entry.subsystem.trim(),
+            "subsystem not trimmed for {}",
+            entry.code
+        );
+        assert_eq!(
+            entry.severity,
+            entry.severity.trim(),
+            "severity not trimmed for {}",
+            entry.code
+        );
+        assert_eq!(
+            entry.description,
+            entry.description.trim(),
+            "description not trimmed for {}",
+            entry.code
+        );
+        assert_eq!(
+            entry.operator_action,
+            entry.operator_action.trim(),
+            "operator_action not trimmed for {}",
+            entry.code
+        );
+    }
+}
+
+#[test]
+fn entry_fields_contain_no_control_characters() {
+    let registry = parse_registry();
+    for entry in &registry.entries {
+        for (field_name, val) in [
+            ("code", &entry.code),
+            ("subsystem", &entry.subsystem),
+            ("severity", &entry.severity),
+            ("description", &entry.description),
+            ("operator_action", &entry.operator_action),
+        ] {
+            assert!(
+                !val.chars().any(|c| c.is_control()),
+                "{} for {} contains control characters",
+                field_name,
+                entry.code
+            );
+        }
+    }
+}
+
+#[test]
+fn description_word_count_minimum_three() {
+    let registry = parse_registry();
+    for entry in &registry.entries {
+        let word_count = entry.description.split_whitespace().count();
+        assert!(
+            word_count >= 3,
+            "description for {} has only {} words: '{}'",
+            entry.code,
+            word_count,
+            entry.description
+        );
+    }
+}
+
+#[test]
+fn compatibility_policy_mentions_numeric_codes() {
+    let registry = parse_registry();
+    assert!(
+        registry.compatibility_policy.contains("numeric")
+            || registry.compatibility_policy.contains("code"),
+        "compatibility_policy should reference numeric codes or codes: '{}'",
+        registry.compatibility_policy
+    );
+}
+
+#[test]
+fn first_entry_numeric_is_in_first_block() {
+    let registry = parse_registry();
+    assert!(
+        registry.entries[0].numeric < 1000,
+        "first entry numeric {} should be in the 0-999 block (serialization_encoding)",
+        registry.entries[0].numeric
+    );
+}
+
+#[test]
+fn last_entry_numeric_is_in_last_block() {
+    let registry = parse_registry();
+    let last = registry.entries.last().expect("entries must not be empty");
+    assert!(
+        last.numeric >= 8000,
+        "last entry numeric {} should be in the 8000+ block (lifecycle_migration)",
+        last.numeric
+    );
+}
+
+#[test]
+fn version_field_is_positive() {
+    let registry = parse_registry();
+    assert!(
+        registry.version > 0,
+        "version must be positive, got {}",
+        registry.version
+    );
+}
+
+#[test]
+fn entries_array_not_empty() {
+    let registry = parse_registry();
+    assert!(
+        !registry.entries.is_empty(),
+        "entries array must not be empty"
+    );
+}
+
+#[test]
+fn raw_json_version_is_number() {
+    let raw: serde_json::Value = serde_json::from_str(REGISTRY_JSON).expect("raw JSON must parse");
+    assert!(
+        raw["version"].is_number(),
+        "version must be a number in raw JSON, got {:?}",
+        raw["version"]
+    );
+}
+
+#[test]
+fn individual_entry_serde_roundtrip() {
+    let registry = parse_registry();
+    for entry in &registry.entries {
+        let serialized = serde_json::to_string(entry).expect("entry must serialize");
+        let deserialized: ErrorCodeEntry =
+            serde_json::from_str(&serialized).expect("entry must deserialize");
+        assert_eq!(
+            *entry, deserialized,
+            "roundtrip mismatch for {}",
+            entry.code
+        );
+    }
+}
+
+#[test]
+fn registry_json_size_is_reasonable() {
+    assert!(
+        REGISTRY_JSON.len() < 200_000,
+        "registry JSON should be < 200KB, got {} bytes",
+        REGISTRY_JSON.len()
+    );
+    assert!(
+        REGISTRY_JSON.len() > 500,
+        "registry JSON should be > 500 bytes, got {} bytes",
+        REGISTRY_JSON.len()
+    );
+}
+
+#[test]
+fn registry_eq_impl_is_symmetric() {
+    let a = parse_registry();
+    let b = parse_registry();
+    assert_eq!(a, b, "Eq must be symmetric");
+}

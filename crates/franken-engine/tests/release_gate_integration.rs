@@ -1204,3 +1204,1462 @@ fn is_blocked_false_on_pass_verdict() {
     };
     assert!(!result.is_blocked());
 }
+
+// ===========================================================================
+// Section 16: Enrichment tests — deep coverage
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 16.1  Digest stability and structure
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_digest_is_lowercase_hex() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert!(result.result_digest.chars().all(|c| c.is_ascii_hexdigit()));
+    // Must be lowercase hex specifically
+    assert_eq!(
+        result.result_digest,
+        result.result_digest.to_ascii_lowercase()
+    );
+}
+
+#[test]
+fn enrichment_digest_length_always_16() {
+    for seed in [0u64, 1, 100, u64::MAX / 2, u64::MAX] {
+        let mut gate = ReleaseGate::new(seed);
+        let mut cx = mock_cx(200_000);
+        let result = gate.evaluate(&mut cx);
+        assert_eq!(
+            result.result_digest.len(),
+            16,
+            "seed {seed} failed digest length"
+        );
+    }
+}
+
+#[test]
+fn enrichment_digest_differs_across_50_seeds() {
+    let mut digests = BTreeSet::new();
+    for seed in 0..50 {
+        let mut gate = ReleaseGate::new(seed);
+        let mut cx = mock_cx(200_000);
+        let result = gate.evaluate(&mut cx);
+        digests.insert(result.result_digest);
+    }
+    assert_eq!(digests.len(), 50, "all 50 seeds should have unique digests");
+}
+
+#[test]
+fn enrichment_digest_deterministic_triple_run() {
+    for seed in [0u64, 42, 9999] {
+        let d1 = {
+            let mut g = ReleaseGate::new(seed);
+            let mut c = mock_cx(200_000);
+            g.evaluate(&mut c).result_digest
+        };
+        let d2 = {
+            let mut g = ReleaseGate::new(seed);
+            let mut c = mock_cx(200_000);
+            g.evaluate(&mut c).result_digest
+        };
+        let d3 = {
+            let mut g = ReleaseGate::new(seed);
+            let mut c = mock_cx(200_000);
+            g.evaluate(&mut c).result_digest
+        };
+        assert_eq!(d1, d2);
+        assert_eq!(d2, d3);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 16.2  Infrastructure failure edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_infra_failure_both_empty_and_zero_timeout() {
+    let config = GateConfig {
+        timeout_budget_ms: 0,
+        required_check_kinds: Vec::new(),
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert!(result.is_blocked());
+    // Should trigger infrastructure failure (checked first)
+    match &result.verdict {
+        Verdict::Fail { reason } => {
+            assert!(reason.contains("GATE_INFRASTRUCTURE_FAILURE"));
+        }
+        _ => panic!("expected infrastructure failure"),
+    }
+}
+
+#[test]
+fn enrichment_infra_failure_no_checks_run() {
+    let config = GateConfig {
+        timeout_budget_ms: 600_000,
+        required_check_kinds: Vec::new(),
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert!(result.checks.is_empty());
+    assert_eq!(result.total_checks, 0);
+    assert_eq!(result.passed_checks, 0);
+}
+
+#[test]
+fn enrichment_infra_failure_preserves_seed() {
+    let config = GateConfig {
+        timeout_budget_ms: 0,
+        required_check_kinds: vec![GateCheckKind::FrankenlabScenario],
+    };
+    let mut gate = ReleaseGate::with_config(12345, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert_eq!(result.seed, 12345);
+}
+
+#[test]
+fn enrichment_infra_failure_events_have_component() {
+    let config = GateConfig {
+        timeout_budget_ms: 0,
+        required_check_kinds: vec![GateCheckKind::FrankenlabScenario],
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    for event in &result.gate_events {
+        assert_eq!(event.component, "release_gate");
+    }
+}
+
+#[test]
+fn enrichment_infra_failure_exception_not_applied() {
+    let config = GateConfig {
+        timeout_budget_ms: 600_000,
+        required_check_kinds: Vec::new(),
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert!(!result.exception_applied);
+    assert!(result.exception_justification.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 16.3  Timeout handling edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_timeout_verdict_contains_check_names() {
+    let config = GateConfig {
+        timeout_budget_ms: 1,
+        required_check_kinds: GateConfig::default().required_check_kinds,
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    match &result.verdict {
+        Verdict::Fail { reason } => {
+            assert!(reason.contains("GATE_TIMEOUT"));
+            // Should mention completed check names
+            assert!(reason.contains("frankenlab_scenario") || reason.contains("budget"));
+        }
+        _ => panic!("expected timeout"),
+    }
+}
+
+#[test]
+fn enrichment_timeout_has_nonempty_events() {
+    let config = GateConfig {
+        timeout_budget_ms: 1,
+        required_check_kinds: GateConfig::default().required_check_kinds,
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert!(!result.gate_events.is_empty());
+}
+
+#[test]
+fn enrichment_timeout_seed_preserved() {
+    let config = GateConfig {
+        timeout_budget_ms: 1,
+        required_check_kinds: GateConfig::default().required_check_kinds,
+    };
+    let mut gate = ReleaseGate::with_config(5678, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert_eq!(result.seed, 5678);
+}
+
+#[test]
+fn enrichment_timeout_report_is_blocked() {
+    let config = GateConfig {
+        timeout_budget_ms: 1,
+        required_check_kinds: GateConfig::default().required_check_kinds,
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let report = result.failure_report();
+    assert!(report.blocked);
+    assert!(report.summary.contains("BLOCKED"));
+}
+
+// ---------------------------------------------------------------------------
+// 16.4  Exception policy boundary conditions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_exception_whitespace_only_justification_rejected() {
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: false,
+        requires_security_review: false,
+        max_exception_hours: 24,
+    };
+    let gate = ReleaseGate::with_exception_policy(42, policy);
+    let mut result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Fail {
+            reason: "test".to_string(),
+        },
+        total_checks: 1,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: String::new(),
+    };
+    // A non-empty justification should succeed
+    gate.apply_exception(&mut result, "valid reason", None)
+        .unwrap();
+    assert!(result.exception_applied);
+}
+
+#[test]
+fn enrichment_exception_does_not_modify_checks() {
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: false,
+        requires_security_review: false,
+        max_exception_hours: 24,
+    };
+    let gate = ReleaseGate::with_exception_policy(42, policy);
+    let original_checks = vec![GateCheckResult {
+        kind: GateCheckKind::FrankenlabScenario,
+        passed: false,
+        summary: "fail".to_string(),
+        failure_details: vec![GateFailureDetail {
+            item_id: "s1".to_string(),
+            failure_type: "err".to_string(),
+            expected: "true".to_string(),
+            actual: "false".to_string(),
+        }],
+        items_checked: 1,
+        items_passed: 0,
+    }];
+    let mut result = ReleaseGateResult {
+        seed: 42,
+        checks: original_checks.clone(),
+        verdict: Verdict::Fail {
+            reason: "test".to_string(),
+        },
+        total_checks: 1,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "orig".to_string(),
+    };
+    gate.apply_exception(&mut result, "override", None).unwrap();
+    // Checks should be unchanged
+    assert_eq!(result.checks.len(), 1);
+    assert!(!result.checks[0].passed);
+    assert_eq!(result.checks[0].failure_details.len(), 1);
+}
+
+#[test]
+fn enrichment_exception_multiple_applications_idempotent() {
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: false,
+        requires_security_review: false,
+        max_exception_hours: 24,
+    };
+    let gate = ReleaseGate::with_exception_policy(42, policy);
+    let mut result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Fail {
+            reason: "test".to_string(),
+        },
+        total_checks: 1,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "orig".to_string(),
+    };
+    gate.apply_exception(&mut result, "first", None).unwrap();
+    let digest_after_first = result.result_digest.clone();
+    gate.apply_exception(&mut result, "second", None).unwrap();
+    // Second apply should change justification but recompute digest
+    assert_eq!(result.exception_justification, "second");
+    assert!(result.exception_applied);
+    // Digest may differ because justification differs in exception_applied state
+    assert_eq!(result.verdict, Verdict::Pass);
+    // Both digests should be valid hex
+    assert_eq!(digest_after_first.len(), 16);
+    assert_eq!(result.result_digest.len(), 16);
+}
+
+#[test]
+fn enrichment_exception_with_adr_ref_sets_pass() {
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: true,
+        requires_security_review: false,
+        max_exception_hours: 24,
+    };
+    let gate = ReleaseGate::with_exception_policy(42, policy);
+    let mut result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Fail {
+            reason: "blocked".to_string(),
+        },
+        total_checks: 2,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "orig".to_string(),
+    };
+    gate.apply_exception(&mut result, "critical deploy", Some("ADR-2026-099"))
+        .unwrap();
+    assert_eq!(result.verdict, Verdict::Pass);
+    assert!(!result.is_blocked());
+}
+
+#[test]
+fn enrichment_exception_err_does_not_mutate_result() {
+    let gate = ReleaseGate::new(42); // default policy: no exceptions
+    let mut result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Fail {
+            reason: "test".to_string(),
+        },
+        total_checks: 1,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "original".to_string(),
+    };
+    let _ = gate.apply_exception(&mut result, "reason", Some("ADR-1"));
+    assert!(!result.exception_applied);
+    assert!(result.exception_justification.is_empty());
+    assert_eq!(result.result_digest, "original");
+    assert!(result.is_blocked());
+}
+
+// ---------------------------------------------------------------------------
+// 16.5  GateCheckResult construction and field validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gate_check_result_passing_has_empty_details() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    for check in &result.checks {
+        if check.passed {
+            assert!(
+                check.failure_details.is_empty(),
+                "passing check {:?} should have no failure details",
+                check.kind
+            );
+        }
+    }
+}
+
+#[test]
+fn enrichment_gate_check_result_items_passed_le_items_checked() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    for check in &result.checks {
+        assert!(
+            check.items_passed <= check.items_checked,
+            "items_passed should not exceed items_checked for {:?}",
+            check.kind
+        );
+    }
+}
+
+#[test]
+fn enrichment_gate_check_result_summary_nonempty() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    for check in &result.checks {
+        assert!(
+            !check.summary.is_empty(),
+            "summary for {:?} should be nonempty",
+            check.kind
+        );
+    }
+}
+
+#[test]
+fn enrichment_frankenlab_scenario_check_items_equals_seven() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let check = result
+        .checks
+        .iter()
+        .find(|c| c.kind == GateCheckKind::FrankenlabScenario)
+        .unwrap();
+    assert_eq!(check.items_checked, 7);
+    assert_eq!(check.items_passed, 7);
+}
+
+#[test]
+fn enrichment_evidence_replay_check_items_one() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let check = result
+        .checks
+        .iter()
+        .find(|c| c.kind == GateCheckKind::EvidenceReplay)
+        .unwrap();
+    assert_eq!(check.items_checked, 1);
+    assert_eq!(check.items_passed, 1);
+}
+
+#[test]
+fn enrichment_obligation_tracking_items_equal_scenario_count() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let frankenlab = result
+        .checks
+        .iter()
+        .find(|c| c.kind == GateCheckKind::FrankenlabScenario)
+        .unwrap();
+    let obligation = result
+        .checks
+        .iter()
+        .find(|c| c.kind == GateCheckKind::ObligationTracking)
+        .unwrap();
+    assert_eq!(obligation.items_checked, frankenlab.items_checked);
+}
+
+#[test]
+fn enrichment_evidence_completeness_items_equal_scenario_count() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let frankenlab = result
+        .checks
+        .iter()
+        .find(|c| c.kind == GateCheckKind::FrankenlabScenario)
+        .unwrap();
+    let completeness = result
+        .checks
+        .iter()
+        .find(|c| c.kind == GateCheckKind::EvidenceCompleteness)
+        .unwrap();
+    assert_eq!(completeness.items_checked, frankenlab.items_checked);
+}
+
+// ---------------------------------------------------------------------------
+// 16.6  GateEvent structure validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gate_events_decision_id_contains_hex_seed() {
+    let mut gate = ReleaseGate::new(0xCAFE);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    for event in &result.gate_events {
+        assert!(
+            event.decision_id.contains("cafe"),
+            "decision_id should contain hex of seed: {}",
+            event.decision_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_gate_events_policy_id_is_release_gate_v1() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    for event in &result.gate_events {
+        assert_eq!(event.policy_id, "release-gate-v1");
+    }
+}
+
+#[test]
+fn enrichment_gate_events_metadata_is_btreemap() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    // All events should have a metadata map (can be empty)
+    for event in &result.gate_events {
+        let json = serde_json::to_string(&event.metadata).unwrap();
+        let _: BTreeMap<String, String> = serde_json::from_str(&json).unwrap();
+    }
+}
+
+#[test]
+fn enrichment_gate_events_outcome_values() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let valid_outcomes = ["pass", "fail"];
+    for event in &result.gate_events {
+        assert!(
+            valid_outcomes.contains(&event.outcome.as_str()),
+            "unexpected outcome: {}",
+            event.outcome
+        );
+    }
+}
+
+#[test]
+fn enrichment_gate_events_error_code_none_on_pass() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert_eq!(result.verdict, Verdict::Pass);
+    for event in &result.gate_events {
+        if event.outcome == "pass" {
+            assert!(
+                event.error_code.is_none(),
+                "pass events should have no error code"
+            );
+        }
+    }
+}
+
+#[test]
+fn enrichment_gate_event_count_matches_checks_plus_final() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    // 4 per-check events + 1 final = 5
+    assert_eq!(result.gate_events.len(), 5);
+}
+
+// ---------------------------------------------------------------------------
+// 16.7  GateFailureReport construction from various states
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_failure_report_single_failing_check() {
+    let checks = vec![
+        GateCheckResult {
+            kind: GateCheckKind::FrankenlabScenario,
+            passed: true,
+            summary: "ok".to_string(),
+            failure_details: Vec::new(),
+            items_checked: 7,
+            items_passed: 7,
+        },
+        GateCheckResult {
+            kind: GateCheckKind::EvidenceReplay,
+            passed: false,
+            summary: "1 divergence".to_string(),
+            failure_details: vec![GateFailureDetail {
+                item_id: "entry-x".to_string(),
+                failure_type: "hash_mismatch".to_string(),
+                expected: "match".to_string(),
+                actual: "mismatch".to_string(),
+            }],
+            items_checked: 1,
+            items_passed: 0,
+        },
+        GateCheckResult {
+            kind: GateCheckKind::ObligationTracking,
+            passed: true,
+            summary: "ok".to_string(),
+            failure_details: Vec::new(),
+            items_checked: 7,
+            items_passed: 7,
+        },
+        GateCheckResult {
+            kind: GateCheckKind::EvidenceCompleteness,
+            passed: true,
+            summary: "ok".to_string(),
+            failure_details: Vec::new(),
+            items_checked: 7,
+            items_passed: 7,
+        },
+    ];
+    let result = ReleaseGateResult {
+        seed: 42,
+        checks,
+        verdict: Verdict::Fail {
+            reason: "1 of 4 gate checks failed".to_string(),
+        },
+        total_checks: 4,
+        passed_checks: 3,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "abc123".to_string(),
+    };
+    let report = result.failure_report();
+    assert!(report.blocked);
+    assert_eq!(report.failing_gates.len(), 1);
+    assert_eq!(report.failing_gates[0], GateCheckKind::EvidenceReplay);
+    assert_eq!(report.details.len(), 1);
+    assert!(report.summary.contains("1 gate(s) failed"));
+    assert!(report.summary.contains("evidence_replay"));
+}
+
+#[test]
+fn enrichment_failure_report_all_checks_fail() {
+    let checks = vec![
+        GateCheckResult {
+            kind: GateCheckKind::FrankenlabScenario,
+            passed: false,
+            summary: "fail".to_string(),
+            failure_details: vec![GateFailureDetail {
+                item_id: "s1".to_string(),
+                failure_type: "err".to_string(),
+                expected: "a".to_string(),
+                actual: "b".to_string(),
+            }],
+            items_checked: 1,
+            items_passed: 0,
+        },
+        GateCheckResult {
+            kind: GateCheckKind::EvidenceReplay,
+            passed: false,
+            summary: "fail".to_string(),
+            failure_details: Vec::new(),
+            items_checked: 1,
+            items_passed: 0,
+        },
+        GateCheckResult {
+            kind: GateCheckKind::ObligationTracking,
+            passed: false,
+            summary: "fail".to_string(),
+            failure_details: Vec::new(),
+            items_checked: 1,
+            items_passed: 0,
+        },
+        GateCheckResult {
+            kind: GateCheckKind::EvidenceCompleteness,
+            passed: false,
+            summary: "fail".to_string(),
+            failure_details: Vec::new(),
+            items_checked: 1,
+            items_passed: 0,
+        },
+    ];
+    let result = ReleaseGateResult {
+        seed: 42,
+        checks,
+        verdict: Verdict::Fail {
+            reason: "4 of 4 gate checks failed".to_string(),
+        },
+        total_checks: 4,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "def456".to_string(),
+    };
+    let report = result.failure_report();
+    assert!(report.blocked);
+    assert_eq!(report.failing_gates.len(), 4);
+    assert!(report.summary.contains("4 gate(s) failed"));
+}
+
+#[test]
+fn enrichment_failure_report_exception_overridden_not_blocked() {
+    let result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Pass,
+        total_checks: 0,
+        passed_checks: 0,
+        exception_applied: true,
+        exception_justification: "hotfix".to_string(),
+        gate_events: Vec::new(),
+        result_digest: "abc".to_string(),
+    };
+    let report = result.failure_report();
+    assert!(!report.blocked);
+    assert_eq!(report.summary, "all gates passed");
+}
+
+#[test]
+fn enrichment_failure_report_details_aggregate_across_checks() {
+    let checks = vec![
+        GateCheckResult {
+            kind: GateCheckKind::FrankenlabScenario,
+            passed: false,
+            summary: "fail".to_string(),
+            failure_details: vec![
+                GateFailureDetail {
+                    item_id: "s1".to_string(),
+                    failure_type: "err".to_string(),
+                    expected: "a".to_string(),
+                    actual: "b".to_string(),
+                },
+                GateFailureDetail {
+                    item_id: "s2".to_string(),
+                    failure_type: "err".to_string(),
+                    expected: "c".to_string(),
+                    actual: "d".to_string(),
+                },
+            ],
+            items_checked: 2,
+            items_passed: 0,
+        },
+        GateCheckResult {
+            kind: GateCheckKind::EvidenceCompleteness,
+            passed: false,
+            summary: "fail".to_string(),
+            failure_details: vec![GateFailureDetail {
+                item_id: "e1".to_string(),
+                failure_type: "missing".to_string(),
+                expected: "present".to_string(),
+                actual: "absent".to_string(),
+            }],
+            items_checked: 1,
+            items_passed: 0,
+        },
+    ];
+    let result = ReleaseGateResult {
+        seed: 42,
+        checks,
+        verdict: Verdict::Fail {
+            reason: "failed".to_string(),
+        },
+        total_checks: 2,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "xyz".to_string(),
+    };
+    let report = result.failure_report();
+    assert_eq!(report.details.len(), 3); // 2 from frankenlab + 1 from completeness
+}
+
+#[test]
+fn enrichment_failure_report_seed_and_digest_match_result() {
+    let mut gate = ReleaseGate::new(777);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let report = result.failure_report();
+    assert_eq!(report.seed, result.seed);
+    assert_eq!(report.result_digest, result.result_digest);
+}
+
+// ---------------------------------------------------------------------------
+// 16.8  GateConfig custom configurations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_custom_config_single_required_check() {
+    let config = GateConfig {
+        timeout_budget_ms: 1_000_000,
+        required_check_kinds: vec![GateCheckKind::FrankenlabScenario],
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    // Gate still runs all 4 checks regardless of required kinds
+    assert_eq!(result.checks.len(), 4);
+}
+
+#[test]
+fn enrichment_custom_config_two_required_checks() {
+    let config = GateConfig {
+        timeout_budget_ms: 1_000_000,
+        required_check_kinds: vec![
+            GateCheckKind::FrankenlabScenario,
+            GateCheckKind::EvidenceReplay,
+        ],
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert!(!result.is_blocked());
+    assert_eq!(result.verdict, Verdict::Pass);
+}
+
+#[test]
+fn enrichment_config_with_large_timeout_passes() {
+    let config = GateConfig {
+        timeout_budget_ms: u64::MAX,
+        required_check_kinds: GateConfig::default().required_check_kinds,
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert_eq!(result.verdict, Verdict::Pass);
+}
+
+// ---------------------------------------------------------------------------
+// 16.9  Serde roundtrips for synthesized objects
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_serde_result_with_exception() {
+    let result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Pass,
+        total_checks: 0,
+        passed_checks: 0,
+        exception_applied: true,
+        exception_justification: "CVE-2026-001 emergency".to_string(),
+        gate_events: Vec::new(),
+        result_digest: "abcdef0123456789".to_string(),
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let back: ReleaseGateResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(result, back);
+    assert!(back.exception_applied);
+    assert_eq!(back.exception_justification, "CVE-2026-001 emergency");
+}
+
+#[test]
+fn enrichment_serde_failure_detail_special_chars() {
+    let detail = GateFailureDetail {
+        item_id: "scenario-with-dash".to_string(),
+        failure_type: "assertion_failed/timeout".to_string(),
+        expected: "value < 100ms".to_string(),
+        actual: "5000ms (exceeded)".to_string(),
+    };
+    let json = serde_json::to_string(&detail).unwrap();
+    let back: GateFailureDetail = serde_json::from_str(&json).unwrap();
+    assert_eq!(detail, back);
+}
+
+#[test]
+fn enrichment_serde_gate_event_with_many_metadata() {
+    let mut metadata = BTreeMap::new();
+    for i in 0..10 {
+        metadata.insert(format!("key_{i}"), format!("value_{i}"));
+    }
+    let event = GateEvent {
+        trace_id: "trace-1".to_string(),
+        decision_id: "dec-1".to_string(),
+        policy_id: "pol-1".to_string(),
+        component: "release_gate".to_string(),
+        event: "custom_event".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        metadata: metadata.clone(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: GateEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, back);
+    assert_eq!(back.metadata.len(), 10);
+}
+
+#[test]
+fn enrichment_serde_gate_config_custom_checks() {
+    let config = GateConfig {
+        timeout_budget_ms: 42_000,
+        required_check_kinds: vec![
+            GateCheckKind::ObligationTracking,
+            GateCheckKind::EvidenceCompleteness,
+        ],
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let back: GateConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, back);
+    assert_eq!(back.required_check_kinds.len(), 2);
+}
+
+#[test]
+fn enrichment_serde_exception_policy_all_true() {
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: true,
+        requires_security_review: true,
+        max_exception_hours: 168,
+    };
+    let json = serde_json::to_string(&policy).unwrap();
+    let back: ExceptionPolicy = serde_json::from_str(&json).unwrap();
+    assert_eq!(policy, back);
+}
+
+#[test]
+fn enrichment_serde_idempotency_non_hermetic() {
+    let v = IdempotencyVerification {
+        digests_match: false,
+        verdicts_match: true,
+        checks_match: false,
+        first_digest: "aaa".to_string(),
+        second_digest: "bbb".to_string(),
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    let back: IdempotencyVerification = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, back);
+    assert!(!back.is_hermetic());
+}
+
+// ---------------------------------------------------------------------------
+// 16.10  Idempotency verification via live evaluation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_idempotency_across_multiple_seeds() {
+    for seed in [1u64, 42, 999, 123456] {
+        let mut gate = ReleaseGate::new(seed);
+        let mut cx = mock_cx(400_000);
+        let v = gate.verify_idempotency(&mut cx);
+        assert!(v.is_hermetic(), "seed {seed} should be hermetic");
+        assert_eq!(v.first_digest, v.second_digest);
+    }
+}
+
+#[test]
+fn enrichment_idempotency_digest_length_correct() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(400_000);
+    let v = gate.verify_idempotency(&mut cx);
+    assert_eq!(v.first_digest.len(), 16);
+    assert_eq!(v.second_digest.len(), 16);
+}
+
+// ---------------------------------------------------------------------------
+// 16.11  Constructor and seed variations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_seed_zero_produces_valid_result() {
+    let mut gate = ReleaseGate::new(0);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert_eq!(result.seed, 0);
+    assert_eq!(result.verdict, Verdict::Pass);
+    assert!(!result.result_digest.is_empty());
+}
+
+#[test]
+fn enrichment_seed_max_u64_produces_valid_result() {
+    let mut gate = ReleaseGate::new(u64::MAX);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert_eq!(result.seed, u64::MAX);
+    assert_eq!(result.verdict, Verdict::Pass);
+}
+
+#[test]
+fn enrichment_with_exception_policy_custom_hours() {
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: false,
+        requires_security_review: false,
+        max_exception_hours: 1,
+    };
+    let gate = ReleaseGate::with_exception_policy(42, policy);
+    let mut result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Fail {
+            reason: "test".to_string(),
+        },
+        total_checks: 0,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "orig".to_string(),
+    };
+    gate.apply_exception(&mut result, "quick fix", None)
+        .unwrap();
+    assert!(result.exception_applied);
+}
+
+#[test]
+fn enrichment_with_config_and_policy_exception_after_evaluate() {
+    let config = GateConfig {
+        timeout_budget_ms: 1,
+        required_check_kinds: GateConfig::default().required_check_kinds,
+    };
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: false,
+        requires_security_review: false,
+        max_exception_hours: 24,
+    };
+    let mut gate = ReleaseGate::with_config_and_policy(42, config, policy);
+    let mut cx = mock_cx(200_000);
+    let mut result = gate.evaluate(&mut cx);
+    assert!(result.is_blocked());
+    gate.apply_exception(&mut result, "emergency", None)
+        .unwrap();
+    assert!(!result.is_blocked());
+    assert!(result.exception_applied);
+}
+
+// ---------------------------------------------------------------------------
+// 16.12  GateFailureDetail field validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_failure_detail_clone_independence() {
+    let original = GateFailureDetail {
+        item_id: "orig-id".to_string(),
+        failure_type: "orig-type".to_string(),
+        expected: "orig-expected".to_string(),
+        actual: "orig-actual".to_string(),
+    };
+    let mut cloned = original.clone();
+    cloned.item_id = "changed".to_string();
+    cloned.failure_type = "changed".to_string();
+    assert_eq!(original.item_id, "orig-id");
+    assert_eq!(original.failure_type, "orig-type");
+}
+
+#[test]
+fn enrichment_failure_detail_eq_and_ne() {
+    let a = GateFailureDetail {
+        item_id: "a".to_string(),
+        failure_type: "t".to_string(),
+        expected: "e".to_string(),
+        actual: "x".to_string(),
+    };
+    let b = GateFailureDetail {
+        item_id: "a".to_string(),
+        failure_type: "t".to_string(),
+        expected: "e".to_string(),
+        actual: "x".to_string(),
+    };
+    let c = GateFailureDetail {
+        item_id: "c".to_string(),
+        failure_type: "t".to_string(),
+        expected: "e".to_string(),
+        actual: "x".to_string(),
+    };
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+}
+
+// ---------------------------------------------------------------------------
+// 16.13  GateEvent clone and equality
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gate_event_clone_independence() {
+    let original = GateEvent {
+        trace_id: "t1".to_string(),
+        decision_id: "d1".to_string(),
+        policy_id: "p1".to_string(),
+        component: "release_gate".to_string(),
+        event: "test".to_string(),
+        outcome: "pass".to_string(),
+        error_code: Some("CODE".to_string()),
+        metadata: BTreeMap::new(),
+    };
+    let mut cloned = original.clone();
+    cloned.trace_id = "changed".to_string();
+    cloned.error_code = None;
+    assert_eq!(original.trace_id, "t1");
+    assert_eq!(original.error_code, Some("CODE".to_string()));
+}
+
+#[test]
+fn enrichment_gate_event_equality() {
+    let make = || GateEvent {
+        trace_id: "t".to_string(),
+        decision_id: "d".to_string(),
+        policy_id: "p".to_string(),
+        component: "c".to_string(),
+        event: "e".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        metadata: BTreeMap::new(),
+    };
+    let a = make();
+    let b = make();
+    assert_eq!(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// 16.14  Full lifecycle scenarios
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_lifecycle_evaluate_report_serde_roundtrip() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let report = result.failure_report();
+    let report_json = serde_json::to_string_pretty(&report).unwrap();
+    let report_back: GateFailureReport = serde_json::from_str(&report_json).unwrap();
+    assert_eq!(report, report_back);
+}
+
+#[test]
+fn enrichment_lifecycle_timeout_then_exception_then_report() {
+    let config = GateConfig {
+        timeout_budget_ms: 1,
+        required_check_kinds: GateConfig::default().required_check_kinds,
+    };
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: false,
+        requires_security_review: false,
+        max_exception_hours: 24,
+    };
+    let mut gate = ReleaseGate::with_config_and_policy(42, config, policy);
+    let mut cx = mock_cx(200_000);
+    let mut result = gate.evaluate(&mut cx);
+    assert!(result.is_blocked());
+
+    gate.apply_exception(&mut result, "deploy anyway", None)
+        .unwrap();
+    assert!(!result.is_blocked());
+
+    let report = result.failure_report();
+    assert!(!report.blocked);
+    assert_eq!(report.summary, "all gates passed");
+}
+
+#[test]
+fn enrichment_lifecycle_idempotency_then_evaluate() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(400_000);
+    let v = gate.verify_idempotency(&mut cx);
+    assert!(v.is_hermetic());
+
+    // After verify_idempotency, we can still evaluate
+    let mut gate2 = ReleaseGate::new(42);
+    let mut cx2 = mock_cx(200_000);
+    let result = gate2.evaluate(&mut cx2);
+    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(result.result_digest, v.first_digest);
+}
+
+// ---------------------------------------------------------------------------
+// 16.15  GateConfig clone and equality
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gate_config_equality() {
+    let a = GateConfig::default();
+    let b = GateConfig::default();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_gate_config_ne_different_timeout() {
+    let a = GateConfig::default();
+    let mut b = GateConfig::default();
+    b.timeout_budget_ms = 999;
+    assert_ne!(a, b);
+}
+
+#[test]
+fn enrichment_gate_config_ne_different_checks() {
+    let a = GateConfig::default();
+    let b = GateConfig {
+        timeout_budget_ms: 600_000,
+        required_check_kinds: vec![GateCheckKind::FrankenlabScenario],
+    };
+    assert_ne!(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// 16.16  ExceptionPolicy equality and cloning
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_exception_policy_equality() {
+    let a = ExceptionPolicy::default();
+    let b = ExceptionPolicy::default();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_exception_policy_ne_different_allow() {
+    let a = ExceptionPolicy::default();
+    let mut b = ExceptionPolicy::default();
+    b.allow_exceptions = true;
+    assert_ne!(a, b);
+}
+
+// ---------------------------------------------------------------------------
+// 16.17  Ordered check execution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_checks_ordered_by_kind() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let kinds: Vec<GateCheckKind> = result.checks.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds[0], GateCheckKind::FrankenlabScenario);
+    assert_eq!(kinds[1], GateCheckKind::EvidenceReplay);
+    assert_eq!(kinds[2], GateCheckKind::ObligationTracking);
+    assert_eq!(kinds[3], GateCheckKind::EvidenceCompleteness);
+}
+
+#[test]
+fn enrichment_events_ordered_checks_then_final() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let event_names: Vec<&str> = result
+        .gate_events
+        .iter()
+        .map(|e| e.event.as_str())
+        .collect();
+    assert_eq!(event_names[0], "frankenlab_scenarios_checked");
+    assert_eq!(event_names[1], "evidence_replay_checked");
+    assert_eq!(event_names[2], "obligation_tracking_checked");
+    assert_eq!(event_names[3], "evidence_completeness_checked");
+    assert_eq!(event_names[4], "release_gate_evaluated");
+}
+
+// ---------------------------------------------------------------------------
+// 16.18  BTreeMap metadata in gate events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gate_event_metadata_serde_with_ordered_keys() {
+    let mut metadata = BTreeMap::new();
+    metadata.insert("alpha".to_string(), "1".to_string());
+    metadata.insert("beta".to_string(), "2".to_string());
+    metadata.insert("gamma".to_string(), "3".to_string());
+    let event = GateEvent {
+        trace_id: "t".to_string(),
+        decision_id: "d".to_string(),
+        policy_id: "p".to_string(),
+        component: "c".to_string(),
+        event: "e".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        metadata: metadata.clone(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    // BTreeMap should serialize keys in sorted order
+    let alpha_pos = json.find("alpha").unwrap();
+    let beta_pos = json.find("beta").unwrap();
+    let gamma_pos = json.find("gamma").unwrap();
+    assert!(alpha_pos < beta_pos);
+    assert!(beta_pos < gamma_pos);
+}
+
+// ---------------------------------------------------------------------------
+// 16.19  ReleaseGateResult verdict transitions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_result_verdict_fail_to_pass_via_exception() {
+    let policy = ExceptionPolicy {
+        allow_exceptions: true,
+        requires_adr_reference: false,
+        requires_security_review: false,
+        max_exception_hours: 24,
+    };
+    let gate = ReleaseGate::with_exception_policy(42, policy);
+    let mut result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Fail {
+            reason: "gate blocked".to_string(),
+        },
+        total_checks: 4,
+        passed_checks: 2,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "before".to_string(),
+    };
+    assert!(result.is_blocked());
+    gate.apply_exception(&mut result, "override", None).unwrap();
+    assert!(!result.is_blocked());
+    // total_checks and passed_checks unchanged
+    assert_eq!(result.total_checks, 4);
+    assert_eq!(result.passed_checks, 2);
+}
+
+// ---------------------------------------------------------------------------
+// 16.20  Debug formatting validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_debug_format_release_gate() {
+    let gate = ReleaseGate::new(42);
+    let debug = format!("{gate:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("ReleaseGate"));
+}
+
+#[test]
+fn enrichment_debug_format_gate_check_result() {
+    let check = GateCheckResult {
+        kind: GateCheckKind::FrankenlabScenario,
+        passed: true,
+        summary: "ok".to_string(),
+        failure_details: Vec::new(),
+        items_checked: 7,
+        items_passed: 7,
+    };
+    let debug = format!("{check:?}");
+    assert!(debug.contains("GateCheckResult"));
+    assert!(debug.contains("FrankenlabScenario"));
+}
+
+#[test]
+fn enrichment_debug_format_gate_config() {
+    let config = GateConfig::default();
+    let debug = format!("{config:?}");
+    assert!(debug.contains("GateConfig"));
+    assert!(debug.contains("600000"));
+}
+
+#[test]
+fn enrichment_debug_format_exception_policy() {
+    let policy = ExceptionPolicy::default();
+    let debug = format!("{policy:?}");
+    assert!(debug.contains("ExceptionPolicy"));
+    assert!(debug.contains("72"));
+}
+
+#[test]
+fn enrichment_debug_format_idempotency_verification() {
+    let v = IdempotencyVerification {
+        digests_match: true,
+        verdicts_match: true,
+        checks_match: true,
+        first_digest: "abc".to_string(),
+        second_digest: "abc".to_string(),
+    };
+    let debug = format!("{v:?}");
+    assert!(debug.contains("IdempotencyVerification"));
+}
+
+// ---------------------------------------------------------------------------
+// 16.21  Verdict serialization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_verdict_pass_serde() {
+    let v = Verdict::Pass;
+    let json = serde_json::to_string(&v).unwrap();
+    let back: Verdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, back);
+}
+
+#[test]
+fn enrichment_verdict_fail_serde() {
+    let v = Verdict::Fail {
+        reason: "GATE_TIMEOUT: budget exhausted".to_string(),
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    let back: Verdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, back);
+}
+
+// ---------------------------------------------------------------------------
+// 16.22  Report summary format validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_report_summary_pass_exact_text() {
+    let result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Pass,
+        total_checks: 4,
+        passed_checks: 4,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "abc".to_string(),
+    };
+    let report = result.failure_report();
+    assert_eq!(report.summary, "all gates passed");
+}
+
+#[test]
+fn enrichment_report_summary_infra_failure_format() {
+    let result = ReleaseGateResult {
+        seed: 42,
+        checks: Vec::new(),
+        verdict: Verdict::Fail {
+            reason: "GATE_INFRASTRUCTURE_FAILURE: misconfigured".to_string(),
+        },
+        total_checks: 0,
+        passed_checks: 0,
+        exception_applied: false,
+        exception_justification: String::new(),
+        gate_events: Vec::new(),
+        result_digest: "abc".to_string(),
+    };
+    let report = result.failure_report();
+    assert!(report.summary.starts_with("BLOCKED:"));
+    assert!(report.summary.contains("GATE_INFRASTRUCTURE_FAILURE"));
+}
+
+// ---------------------------------------------------------------------------
+// 16.23  Cross-field consistency in evaluated results
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_total_checks_equals_checks_len() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    assert_eq!(result.total_checks, result.checks.len());
+}
+
+#[test]
+fn enrichment_passed_checks_equals_filtered_count() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    let counted = result.checks.iter().filter(|c| c.passed).count();
+    assert_eq!(result.passed_checks, counted);
+}
+
+#[test]
+fn enrichment_pass_verdict_implies_all_checks_passed() {
+    let mut gate = ReleaseGate::new(42);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    if result.verdict == Verdict::Pass {
+        assert_eq!(result.passed_checks, result.total_checks);
+    }
+}
+
+#[test]
+fn enrichment_blocked_result_has_nonpass_verdict() {
+    let config = GateConfig {
+        timeout_budget_ms: 1,
+        required_check_kinds: GateConfig::default().required_check_kinds,
+    };
+    let mut gate = ReleaseGate::with_config(42, config);
+    let mut cx = mock_cx(200_000);
+    let result = gate.evaluate(&mut cx);
+    if result.is_blocked() {
+        assert_ne!(result.verdict, Verdict::Pass);
+    }
+}

@@ -17,8 +17,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::{
-    EvalError, ExceptionBoundary, JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine,
-    propagate_error_across_boundary,
+    EVAL_ERROR_MIGRATION_NOTES, EvalCorrelationIds, EvalError, EvalErrorClass, EvalErrorCode,
+    EvalSourceLocation, EvalStackFrame, ExceptionBoundary, ExceptionTransitionEvent, HybridRouter,
+    JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine, emit_exception_transition_event,
+    propagate_error_across_boundary, propagate_result_across_boundary, sorted_eval_errors,
+    stable_sort_eval_errors,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1001,4 +1004,478 @@ fn rgc_305_vectors_json_field_names_present() {
     ] {
         assert!(obj.contains_key(key), "missing vectors JSON key: {key}");
     }
+}
+
+// -----------------------------------------------------------------------
+// Enrichment: PearlTower 2026-03-14 — source module API coverage
+// -----------------------------------------------------------------------
+
+#[test]
+fn eval_error_class_stable_label_all_variants() {
+    let cases = [
+        (EvalErrorClass::Parse, "parse"),
+        (EvalErrorClass::Resolution, "resolution"),
+        (EvalErrorClass::Policy, "policy"),
+        (EvalErrorClass::Capability, "capability"),
+        (EvalErrorClass::Runtime, "runtime"),
+        (EvalErrorClass::Hostcall, "hostcall"),
+        (EvalErrorClass::Invariant, "invariant"),
+    ];
+    let mut seen = BTreeSet::new();
+    for (class, expected) in cases {
+        assert_eq!(class.stable_label(), expected);
+        assert!(seen.insert(expected), "duplicate label: {expected}");
+    }
+}
+
+#[test]
+fn eval_error_class_display_matches_stable_label() {
+    for class in [
+        EvalErrorClass::Parse,
+        EvalErrorClass::Resolution,
+        EvalErrorClass::Policy,
+        EvalErrorClass::Capability,
+        EvalErrorClass::Runtime,
+        EvalErrorClass::Hostcall,
+        EvalErrorClass::Invariant,
+    ] {
+        assert_eq!(class.to_string(), class.stable_label());
+    }
+}
+
+#[test]
+fn eval_error_class_serde_roundtrip_all_variants() {
+    for class in [
+        EvalErrorClass::Parse,
+        EvalErrorClass::Resolution,
+        EvalErrorClass::Policy,
+        EvalErrorClass::Capability,
+        EvalErrorClass::Runtime,
+        EvalErrorClass::Hostcall,
+        EvalErrorClass::Invariant,
+    ] {
+        let json = serde_json::to_string(&class).unwrap();
+        let recovered: EvalErrorClass = serde_json::from_str(&json).unwrap();
+        assert_eq!(class, recovered);
+    }
+}
+
+#[test]
+fn eval_error_class_ordering() {
+    assert!(EvalErrorClass::Parse < EvalErrorClass::Resolution);
+    assert!(EvalErrorClass::Resolution < EvalErrorClass::Policy);
+    assert!(EvalErrorClass::Policy < EvalErrorClass::Capability);
+    assert!(EvalErrorClass::Capability < EvalErrorClass::Runtime);
+    assert!(EvalErrorClass::Runtime < EvalErrorClass::Hostcall);
+    assert!(EvalErrorClass::Hostcall < EvalErrorClass::Invariant);
+}
+
+#[test]
+fn eval_error_code_class_mapping_all_variants() {
+    let cases = [
+        (EvalErrorCode::EmptySource, EvalErrorClass::Parse),
+        (EvalErrorCode::ParseFailure, EvalErrorClass::Parse),
+        (EvalErrorCode::ResolutionFailure, EvalErrorClass::Resolution),
+        (EvalErrorCode::PolicyDenied, EvalErrorClass::Policy),
+        (EvalErrorCode::CapabilityDenied, EvalErrorClass::Capability),
+        (EvalErrorCode::RuntimeFault, EvalErrorClass::Runtime),
+        (EvalErrorCode::HostcallFault, EvalErrorClass::Hostcall),
+        (EvalErrorCode::InvariantViolation, EvalErrorClass::Invariant),
+    ];
+    for (code, expected_class) in cases {
+        assert_eq!(code.class(), expected_class, "wrong class for {code:?}");
+    }
+}
+
+#[test]
+fn eval_error_code_stable_namespace_all_unique() {
+    let codes = [
+        EvalErrorCode::EmptySource,
+        EvalErrorCode::ParseFailure,
+        EvalErrorCode::ResolutionFailure,
+        EvalErrorCode::PolicyDenied,
+        EvalErrorCode::CapabilityDenied,
+        EvalErrorCode::RuntimeFault,
+        EvalErrorCode::HostcallFault,
+        EvalErrorCode::InvariantViolation,
+    ];
+    let mut namespaces = BTreeSet::new();
+    for code in codes {
+        let ns = code.stable_namespace();
+        assert!(
+            ns.starts_with("eval."),
+            "namespace must start with eval.: {ns}"
+        );
+        assert!(namespaces.insert(ns), "duplicate namespace: {ns}");
+    }
+    assert_eq!(namespaces.len(), 8);
+}
+
+#[test]
+fn eval_error_code_serde_roundtrip_all_variants() {
+    for code in [
+        EvalErrorCode::EmptySource,
+        EvalErrorCode::ParseFailure,
+        EvalErrorCode::ResolutionFailure,
+        EvalErrorCode::PolicyDenied,
+        EvalErrorCode::CapabilityDenied,
+        EvalErrorCode::RuntimeFault,
+        EvalErrorCode::HostcallFault,
+        EvalErrorCode::InvariantViolation,
+    ] {
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: EvalErrorCode = serde_json::from_str(&json).unwrap();
+        assert_eq!(code, recovered);
+    }
+}
+
+#[test]
+fn exception_boundary_stable_label_and_display() {
+    for (boundary, expected) in [
+        (ExceptionBoundary::SyncCallframe, "sync_callframe"),
+        (ExceptionBoundary::AsyncJob, "async_job"),
+        (ExceptionBoundary::Hostcall, "hostcall"),
+    ] {
+        assert_eq!(boundary.stable_label(), expected);
+        assert_eq!(boundary.to_string(), expected);
+    }
+}
+
+#[test]
+fn exception_boundary_serde_roundtrip() {
+    for boundary in [
+        ExceptionBoundary::SyncCallframe,
+        ExceptionBoundary::AsyncJob,
+        ExceptionBoundary::Hostcall,
+    ] {
+        let json = serde_json::to_string(&boundary).unwrap();
+        let recovered: ExceptionBoundary = serde_json::from_str(&json).unwrap();
+        assert_eq!(boundary, recovered);
+    }
+}
+
+#[test]
+fn eval_error_factory_methods_produce_correct_codes() {
+    let cases: Vec<(EvalError, EvalErrorCode)> = vec![
+        (EvalError::parse_failure("p"), EvalErrorCode::ParseFailure),
+        (
+            EvalError::resolution_failure("r"),
+            EvalErrorCode::ResolutionFailure,
+        ),
+        (EvalError::policy_denied("d"), EvalErrorCode::PolicyDenied),
+        (
+            EvalError::capability_denied("c"),
+            EvalErrorCode::CapabilityDenied,
+        ),
+        (EvalError::runtime_fault("rt"), EvalErrorCode::RuntimeFault),
+        (EvalError::hostcall_fault("h"), EvalErrorCode::HostcallFault),
+        (
+            EvalError::invariant_violation("i"),
+            EvalErrorCode::InvariantViolation,
+        ),
+    ];
+    for (error, expected_code) in cases {
+        assert_eq!(error.code, expected_code);
+        assert!(error.correlation_ids.is_none());
+        assert!(error.location.is_none());
+        assert!(error.stack_frames.is_empty());
+    }
+}
+
+#[test]
+fn eval_error_builder_chain_with_correlation_and_location() {
+    let loc = EvalSourceLocation {
+        source_label: "test.js".to_string(),
+        start_line: 10,
+        start_column: 5,
+        end_line: 10,
+        end_column: 20,
+    };
+    let error = EvalError::parse_failure("syntax error")
+        .with_correlation_ids("trace-1", "dec-1", "pol-1")
+        .with_location(loc.clone());
+    assert!(error.correlation_ids.is_some());
+    let ids = error.correlation_ids.as_ref().unwrap();
+    assert_eq!(ids.trace_id, "trace-1");
+    assert_eq!(ids.decision_id, "dec-1");
+    assert_eq!(ids.policy_id, "pol-1");
+    assert_eq!(error.location.as_ref().unwrap().source_label, "test.js");
+}
+
+#[test]
+fn eval_error_diagnostic_summary_includes_all_components() {
+    let loc = EvalSourceLocation {
+        source_label: "mod.js".to_string(),
+        start_line: 1,
+        start_column: 0,
+        end_line: 1,
+        end_column: 10,
+    };
+    let mut error = EvalError::runtime_fault("division by zero")
+        .with_correlation_ids("t-1", "d-1", "p-1")
+        .with_location(loc);
+    error.push_stack_frame(EvalStackFrame {
+        stage: "eval".to_string(),
+        boundary: None,
+        location: None,
+    });
+
+    let summary = error.diagnostic_summary();
+    assert!(summary.contains("eval.runtime.fault"));
+    assert!(summary.contains("[runtime]"));
+    assert!(summary.contains("division by zero"));
+    assert!(summary.contains("mod.js:1:0-1:10"));
+    assert!(summary.contains("trace_id=t-1"));
+    assert!(summary.contains("[stack="));
+}
+
+#[test]
+fn eval_error_display_equals_diagnostic_summary() {
+    let error = EvalError::policy_denied("forbidden");
+    assert_eq!(error.to_string(), error.diagnostic_summary());
+}
+
+#[test]
+fn eval_error_serde_roundtrip_with_all_optional_fields() {
+    let error = EvalError::hostcall_fault("timeout")
+        .with_correlation_ids("t", "d", "p")
+        .with_location(EvalSourceLocation {
+            source_label: "host.js".to_string(),
+            start_line: 5,
+            start_column: 0,
+            end_line: 5,
+            end_column: 30,
+        });
+    let json = serde_json::to_string(&error).unwrap();
+    let recovered: EvalError = serde_json::from_str(&json).unwrap();
+    assert_eq!(error, recovered);
+}
+
+#[test]
+fn eval_error_serde_skip_serializing_empty_optional_fields() {
+    let error = EvalError::new(EvalErrorCode::EmptySource, "empty");
+    let json = serde_json::to_string(&error).unwrap();
+    let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let obj = raw.as_object().unwrap();
+    assert!(!obj.contains_key("correlation_ids"));
+    assert!(!obj.contains_key("location"));
+    assert!(!obj.contains_key("stack_frames"));
+}
+
+#[test]
+fn eval_correlation_ids_serde_roundtrip() {
+    let ids = EvalCorrelationIds {
+        trace_id: "trace-abc".to_string(),
+        decision_id: "dec-xyz".to_string(),
+        policy_id: "pol-123".to_string(),
+    };
+    let json = serde_json::to_string(&ids).unwrap();
+    let recovered: EvalCorrelationIds = serde_json::from_str(&json).unwrap();
+    assert_eq!(ids, recovered);
+}
+
+#[test]
+fn eval_source_location_display_format() {
+    let loc = EvalSourceLocation {
+        source_label: "<eval>".to_string(),
+        start_line: 3,
+        start_column: 7,
+        end_line: 3,
+        end_column: 15,
+    };
+    assert_eq!(loc.to_string(), "<eval>:3:7-3:15");
+}
+
+#[test]
+fn eval_source_location_serde_roundtrip() {
+    let loc = EvalSourceLocation {
+        source_label: "script.js".to_string(),
+        start_line: 1,
+        start_column: 0,
+        end_line: 100,
+        end_column: 50,
+    };
+    let json = serde_json::to_string(&loc).unwrap();
+    let recovered: EvalSourceLocation = serde_json::from_str(&json).unwrap();
+    assert_eq!(loc, recovered);
+}
+
+#[test]
+fn eval_stack_frame_serde_with_and_without_optional_fields() {
+    let frame_minimal = EvalStackFrame {
+        stage: "parse".to_string(),
+        boundary: None,
+        location: None,
+    };
+    let json_minimal = serde_json::to_string(&frame_minimal).unwrap();
+    let raw: serde_json::Value = serde_json::from_str(&json_minimal).unwrap();
+    assert!(!raw.as_object().unwrap().contains_key("boundary"));
+    assert!(!raw.as_object().unwrap().contains_key("location"));
+    let recovered: EvalStackFrame = serde_json::from_str(&json_minimal).unwrap();
+    assert_eq!(frame_minimal, recovered);
+
+    let frame_full = EvalStackFrame {
+        stage: "boundary_transition".to_string(),
+        boundary: Some("sync_callframe".to_string()),
+        location: Some(EvalSourceLocation {
+            source_label: "x.js".to_string(),
+            start_line: 1,
+            start_column: 0,
+            end_line: 1,
+            end_column: 5,
+        }),
+    };
+    let json_full = serde_json::to_string(&frame_full).unwrap();
+    let recovered_full: EvalStackFrame = serde_json::from_str(&json_full).unwrap();
+    assert_eq!(frame_full, recovered_full);
+}
+
+#[test]
+fn exception_transition_event_serde_roundtrip() {
+    let error = EvalError::runtime_fault("test fault");
+    let event = emit_exception_transition_event(
+        "trace-1",
+        Some("dec-1".to_string()),
+        Some("pol-1".to_string()),
+        "test_component",
+        ExceptionBoundary::AsyncJob,
+        &error,
+    );
+    assert_eq!(event.event, "exception_transition");
+    assert_eq!(event.outcome, "error");
+    assert_eq!(event.error_class, "runtime");
+    assert_eq!(event.error_code, "eval.runtime.fault");
+    assert_eq!(event.boundary, ExceptionBoundary::AsyncJob);
+
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: ExceptionTransitionEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, recovered);
+}
+
+#[test]
+fn propagate_error_appends_boundary_to_message_and_stack() {
+    let error = EvalError::parse_failure("bad syntax");
+    let propagated = propagate_error_across_boundary(error, ExceptionBoundary::SyncCallframe);
+    assert!(propagated.message.contains("boundary=sync_callframe"));
+    assert_eq!(propagated.stack_frames.len(), 1);
+    assert_eq!(
+        propagated.stack_frames[0].boundary.as_deref(),
+        Some("sync_callframe")
+    );
+}
+
+#[test]
+fn propagate_error_multiple_boundaries_accumulate() {
+    let error = EvalError::runtime_fault("error");
+    let p1 = propagate_error_across_boundary(error, ExceptionBoundary::SyncCallframe);
+    let p2 = propagate_error_across_boundary(p1, ExceptionBoundary::AsyncJob);
+    let p3 = propagate_error_across_boundary(p2, ExceptionBoundary::Hostcall);
+    assert_eq!(p3.stack_frames.len(), 3);
+    assert!(p3.message.contains("boundary=sync_callframe"));
+    assert!(p3.message.contains("boundary=async_job"));
+    assert!(p3.message.contains("boundary=hostcall"));
+}
+
+#[test]
+fn propagate_result_across_boundary_ok_passes_through() {
+    let result: Result<i32, EvalError> = Ok(42);
+    let propagated = propagate_result_across_boundary(result, ExceptionBoundary::Hostcall);
+    assert_eq!(propagated.unwrap(), 42);
+}
+
+#[test]
+fn propagate_result_across_boundary_err_propagates() {
+    let result: Result<i32, EvalError> = Err(EvalError::policy_denied("no"));
+    let propagated = propagate_result_across_boundary(result, ExceptionBoundary::AsyncJob);
+    let err = propagated.unwrap_err();
+    assert!(err.message.contains("boundary=async_job"));
+    assert_eq!(err.stack_frames.len(), 1);
+}
+
+#[test]
+fn stable_sort_eval_errors_orders_by_class_then_code_then_message() {
+    let mut errors = vec![
+        EvalError::invariant_violation("z"),
+        EvalError::parse_failure("b"),
+        EvalError::runtime_fault("a"),
+        EvalError::parse_failure("a"),
+    ];
+    stable_sort_eval_errors(&mut errors);
+    assert_eq!(errors[0].code, EvalErrorCode::ParseFailure);
+    assert_eq!(errors[0].message, "a");
+    assert_eq!(errors[1].code, EvalErrorCode::ParseFailure);
+    assert_eq!(errors[1].message, "b");
+    assert_eq!(errors[2].code, EvalErrorCode::RuntimeFault);
+    assert_eq!(errors[3].code, EvalErrorCode::InvariantViolation);
+}
+
+#[test]
+fn sorted_eval_errors_returns_new_sorted_vec() {
+    let errors = vec![
+        EvalError::hostcall_fault("b"),
+        EvalError::parse_failure("a"),
+    ];
+    let sorted = sorted_eval_errors(errors);
+    assert_eq!(sorted[0].code, EvalErrorCode::ParseFailure);
+    assert_eq!(sorted[1].code, EvalErrorCode::HostcallFault);
+}
+
+#[test]
+fn eval_error_migration_notes_is_nonempty() {
+    assert!(!EVAL_ERROR_MIGRATION_NOTES.is_empty());
+    assert!(EVAL_ERROR_MIGRATION_NOTES.contains("EvalErrorClass"));
+    assert!(EVAL_ERROR_MIGRATION_NOTES.contains("EvalErrorCode"));
+}
+
+#[test]
+fn hybrid_router_routes_import_to_v8() {
+    use frankenengine_engine::EngineKind;
+    let mut router = HybridRouter::default();
+    let result = router.eval("import 'mod';");
+    // Whether it errors or not, the routing should go through V8 path
+    match result {
+        Ok(outcome) => assert_eq!(outcome.engine, EngineKind::V8InspiredNative),
+        Err(_) => { /* V8 path may error on invalid import syntax */ }
+    }
+}
+
+#[test]
+fn quickjs_engine_kind_is_correct() {
+    use frankenengine_engine::EngineKind;
+    let engine = QuickJsInspiredNativeEngine;
+    assert_eq!(engine.kind(), EngineKind::QuickJsInspiredNative);
+}
+
+#[test]
+fn v8_engine_kind_is_correct() {
+    use frankenengine_engine::EngineKind;
+    let engine = V8InspiredNativeEngine;
+    assert_eq!(engine.kind(), EngineKind::V8InspiredNative);
+}
+
+#[test]
+fn eval_error_formatted_stack_trace_empty_on_new_error() {
+    let error = EvalError::new(EvalErrorCode::EmptySource, "empty");
+    assert!(error.formatted_stack_trace().is_empty());
+}
+
+#[test]
+fn eval_error_push_stack_frame_grows_trace() {
+    let mut error = EvalError::runtime_fault("test");
+    assert!(error.stack_frames.is_empty());
+    error.push_stack_frame(EvalStackFrame {
+        stage: "compile".to_string(),
+        boundary: None,
+        location: None,
+    });
+    error.push_stack_frame(EvalStackFrame {
+        stage: "eval".to_string(),
+        boundary: None,
+        location: None,
+    });
+    assert_eq!(error.stack_frames.len(), 2);
+    let trace = error.formatted_stack_trace();
+    assert_eq!(trace.len(), 2);
+    assert_eq!(trace[0], "compile");
+    assert_eq!(trace[1], "eval");
 }

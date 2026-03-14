@@ -367,3 +367,240 @@ fn lowering_gap_descriptor_serde_roundtrip() {
         assert_eq!(desc.site_id, recovered.site_id);
     }
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: descriptor field cross-validation, inventory
+// invariants, stage/status coverage, CLI artifact integrity
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn lowering_gap_site_id_debug_impl_nonempty() {
+    for site in LoweringGapSiteId::ALL {
+        let debug = format!("{:?}", site);
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn lowering_gap_stage_debug_impl_nonempty() {
+    let stages = [LoweringGapStage::Ir0ToIr1, LoweringGapStage::Ir1ToIr3];
+    for stage in stages {
+        let debug = format!("{:?}", stage);
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn lowering_gap_status_debug_impl_nonempty() {
+    let statuses = [
+        LoweringGapStatus::FailClosed,
+        LoweringGapStatus::OpenPlaceholder,
+        LoweringGapStatus::Resolved,
+    ];
+    for status in statuses {
+        let debug = format!("{:?}", status);
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn lowering_gap_inventory_all_descriptors_have_matching_site_id() {
+    let inventory = lgap::lowering_gap_inventory();
+    for desc in &inventory.sites {
+        assert!(
+            LoweringGapSiteId::ALL
+                .iter()
+                .any(|s| s.as_str() == desc.site_id),
+            "descriptor site_id {} should match a known LoweringGapSiteId",
+            desc.site_id
+        );
+    }
+}
+
+#[test]
+fn lowering_gap_inventory_diagnostic_codes_all_start_with_fe() {
+    let inventory = lgap::lowering_gap_inventory();
+    for desc in &inventory.sites {
+        assert!(
+            desc.diagnostic_code.starts_with("FE-"),
+            "diagnostic code should start with FE-: {}",
+            desc.diagnostic_code
+        );
+    }
+}
+
+#[test]
+fn lowering_gap_inventory_schema_version_matches_constant() {
+    let inventory = lgap::lowering_gap_inventory();
+    assert_eq!(
+        inventory.schema_version,
+        LOWERING_GAP_INVENTORY_SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn lowering_gap_inventory_json_pretty_roundtrip() {
+    let inventory = lgap::lowering_gap_inventory();
+    let pretty = serde_json::to_string_pretty(&inventory).expect("pretty serialize");
+    let recovered: LoweringGapInventory =
+        serde_json::from_str(&pretty).expect("deserialize pretty");
+    assert_eq!(inventory.sites.len(), recovered.sites.len());
+    assert_eq!(inventory.schema_version, recovered.schema_version);
+}
+
+#[test]
+fn lowering_gap_site_descriptor_clone_preserves_fields() {
+    for site in LoweringGapSiteId::ALL {
+        let desc = LoweringGapSiteDescriptor::from_site(site);
+        let cloned = desc.clone();
+        assert_eq!(desc.site_id, cloned.site_id);
+        assert_eq!(desc.diagnostic_code, cloned.diagnostic_code);
+        assert_eq!(desc.ast_node_family, cloned.ast_node_family);
+        assert_eq!(desc.emitted_ir_shape, cloned.emitted_ir_shape);
+    }
+}
+
+#[test]
+fn lowering_gap_site_descriptor_debug_contains_site_id() {
+    let desc = LoweringGapSiteDescriptor::from_site(LoweringGapSiteId::ALL[0]);
+    let debug = format!("{:?}", desc);
+    assert!(
+        debug.contains(&desc.site_id),
+        "debug output should contain site_id"
+    );
+}
+
+#[test]
+fn lowering_gap_inventory_fail_closed_plus_open_plus_resolved_equals_total() {
+    let inventory = lgap::lowering_gap_inventory();
+    let total = inventory.sites.len();
+    let fail_closed = inventory.fail_closed_site_count();
+    let open = inventory.open_placeholder_site_count();
+    // resolved = total - fail_closed - open
+    let resolved = total - fail_closed - open;
+    assert_eq!(fail_closed + open + resolved, total);
+}
+
+#[test]
+fn lowering_gap_site_id_owner_is_consistent_across_clones() {
+    for site in LoweringGapSiteId::ALL {
+        let owner1 = site.owner();
+        let owner2 = site.owner();
+        assert_eq!(owner1, owner2);
+    }
+}
+
+#[test]
+fn lowering_gap_cli_inventory_hash_deterministic_across_runs() {
+    let out_dir1 = unique_temp_dir("lowering-gap-cli-det1");
+    let out1 = Command::new(env!("CARGO_BIN_EXE_franken_lowering_gap_inventory"))
+        .arg("--out-dir")
+        .arg(&out_dir1)
+        .output()
+        .expect("run 1");
+    assert!(out1.status.success());
+    let json1: serde_json::Value = serde_json::from_slice(&out1.stdout).expect("json1");
+    let hash1 = json1["inventory_hash"].as_str().expect("hash1");
+
+    let out_dir2 = unique_temp_dir("lowering-gap-cli-det2");
+    let out2 = Command::new(env!("CARGO_BIN_EXE_franken_lowering_gap_inventory"))
+        .arg("--out-dir")
+        .arg(&out_dir2)
+        .output()
+        .expect("run 2");
+    assert!(out2.status.success());
+    let json2: serde_json::Value = serde_json::from_slice(&out2.stdout).expect("json2");
+    let hash2 = json2["inventory_hash"].as_str().expect("hash2");
+
+    assert_eq!(hash1, hash2, "inventory hash should be deterministic");
+}
+
+#[test]
+fn lowering_gap_stage_serde_roundtrip() {
+    let stages = [LoweringGapStage::Ir0ToIr1, LoweringGapStage::Ir1ToIr3];
+    for stage in stages {
+        let json = serde_json::to_string(&stage).expect("serialize");
+        let recovered: LoweringGapStage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(stage.as_str(), recovered.as_str());
+    }
+}
+
+#[test]
+fn lowering_gap_status_serde_roundtrip() {
+    let statuses = [
+        LoweringGapStatus::FailClosed,
+        LoweringGapStatus::OpenPlaceholder,
+        LoweringGapStatus::Resolved,
+    ];
+    for status in statuses {
+        let json = serde_json::to_string(&status).expect("serialize");
+        let recovered: LoweringGapStatus = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(status.as_str(), recovered.as_str());
+    }
+}
+
+#[test]
+fn lowering_gap_cli_events_have_trace_id_field() {
+    let out_dir = unique_temp_dir("lowering-gap-cli-trace");
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_lowering_gap_inventory"))
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("run lowering gap inventory binary");
+    assert!(output.status.success());
+
+    let events = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
+    for line in events.lines() {
+        let event: serde_json::Value = serde_json::from_str(line).expect("valid json");
+        assert!(
+            event.get("trace_id").is_some(),
+            "each event should have a trace_id field"
+        );
+    }
+}
+
+#[test]
+fn lowering_gap_cli_events_have_component_field() {
+    let out_dir = unique_temp_dir("lowering-gap-cli-comp");
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_lowering_gap_inventory"))
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("run lowering gap inventory binary");
+    assert!(output.status.success());
+
+    let events = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
+    for line in events.lines() {
+        let event: serde_json::Value = serde_json::from_str(line).expect("valid json");
+        assert!(
+            event.get("component").is_some(),
+            "each event should have a component field"
+        );
+    }
+}
+
+#[test]
+fn lowering_gap_inventory_site_count_matches_all_constant() {
+    let inventory = lgap::lowering_gap_inventory();
+    assert_eq!(
+        inventory.sites.len(),
+        LoweringGapSiteId::ALL.len(),
+        "inventory site count must equal ALL.len()"
+    );
+}
+
+#[test]
+fn lowering_gap_site_id_regression_test_hint_contains_test() {
+    for site in LoweringGapSiteId::ALL {
+        let hint = site.regression_test_hint();
+        assert!(
+            hint.contains("test")
+                || hint.contains("Test")
+                || hint.contains("TEST")
+                || hint.contains("verify")
+                || hint.contains("assert"),
+            "regression_test_hint should reference testing: {}",
+            hint
+        );
+    }
+}

@@ -801,3 +801,256 @@ fn fixture_max_allowed_regression_is_positive() {
         "max_allowed_regression_millionths must be > 0"
     );
 }
+
+// ---------- serde round-trip tests ----------
+
+#[test]
+fn metric_definition_serde_round_trip() {
+    let json = r#"{"metric_id":"diag","description":"d","unit":"score_millionths","direction":"higher_is_better","weight_millionths":500000}"#;
+    let def: MetricDefinition = serde_json::from_str(json).expect("deserialize MetricDefinition");
+    assert_eq!(def.metric_id, "diag");
+    assert_eq!(def.weight_millionths, 500_000);
+    assert_eq!(def.unit, "score_millionths");
+    assert_eq!(def.direction, "higher_is_better");
+}
+
+#[test]
+fn budget_override_serde_round_trip() {
+    let json = r#"{"max_source_bytes":1024,"max_token_count":256,"max_recursion_depth":16}"#;
+    let bo: BudgetOverride = serde_json::from_str(json).expect("deserialize BudgetOverride");
+    assert_eq!(bo.max_source_bytes, 1024);
+    assert_eq!(bo.max_token_count, 256);
+    assert_eq!(bo.max_recursion_depth, 16);
+}
+
+#[test]
+fn diagnostic_sample_serde_round_trip_with_budget_override() {
+    let json = r#"{
+        "sample_id":"s1","goal":"script","source":"x","expected_error_code":"empty_source",
+        "expected_diagnostic_code":"E-PARSE-001","expected_budget_kind":"source_bytes",
+        "budget_override":{"max_source_bytes":0,"max_token_count":0,"max_recursion_depth":0}
+    }"#;
+    let sample: DiagnosticSample = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(sample.sample_id, "s1");
+    assert!(sample.budget_override.is_some());
+    assert_eq!(sample.expected_budget_kind.as_deref(), Some("source_bytes"));
+}
+
+#[test]
+fn diagnostic_sample_serde_round_trip_without_budget_override() {
+    let json = r#"{
+        "sample_id":"s2","goal":"module","source":"y","expected_error_code":"invalid_goal",
+        "expected_diagnostic_code":"E-PARSE-002","expected_budget_kind":null,"budget_override":null
+    }"#;
+    let sample: DiagnosticSample = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(sample.sample_id, "s2");
+    assert!(sample.budget_override.is_none());
+    assert!(sample.expected_budget_kind.is_none());
+}
+
+#[test]
+fn integration_sample_serde_round_trip() {
+    let json = r#"{"sample_id":"is1","goal":"script","source":"var x=1;","expect_ok":true}"#;
+    let sample: IntegrationSample = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(sample.sample_id, "is1");
+    assert!(sample.expect_ok);
+    assert_eq!(sample.goal, "script");
+}
+
+// ---------- debug format tests ----------
+
+#[test]
+fn metric_definition_debug_is_nonempty() {
+    let fixture = load_fixture();
+    let dbg = format!("{:?}", fixture.metric_definitions[0]);
+    assert!(!dbg.is_empty());
+    assert!(dbg.contains("MetricDefinition"));
+}
+
+#[test]
+fn dashboard_snapshot_debug_contains_version() {
+    let fixture = load_fixture();
+    let snapshot = evaluate_snapshot(&fixture);
+    let dbg = format!("{:?}", snapshot);
+    assert!(dbg.contains(&snapshot.schema_version));
+    assert!(dbg.contains("DashboardSnapshot"));
+}
+
+// ---------- weighted_composite_score edge cases ----------
+
+#[test]
+fn weighted_composite_score_single_metric_half_score() {
+    let dimensions = vec![MetricDefinition {
+        metric_id: "only".to_string(),
+        description: "the only metric".to_string(),
+        unit: "score_millionths".to_string(),
+        direction: "higher_is_better".to_string(),
+        weight_millionths: 1_000_000,
+    }];
+    let mut scores = BTreeMap::new();
+    scores.insert("only".to_string(), 500_000_u32);
+    assert_eq!(weighted_composite_score(&scores, &dimensions), 500_000);
+}
+
+#[test]
+fn weighted_composite_score_three_equal_weights() {
+    let make = |id: &str| MetricDefinition {
+        metric_id: id.to_string(),
+        description: format!("metric {id}"),
+        unit: "score_millionths".to_string(),
+        direction: "higher_is_better".to_string(),
+        weight_millionths: 333_333,
+    };
+    let dimensions = vec![make("a"), make("b"), make("c")];
+    let mut scores = BTreeMap::new();
+    scores.insert("a".to_string(), 1_000_000_u32);
+    scores.insert("b".to_string(), 1_000_000_u32);
+    scores.insert("c".to_string(), 1_000_000_u32);
+    // 333_333 * 1_000_000 * 3 / 1_000_000 = 999_999
+    assert_eq!(weighted_composite_score(&scores, &dimensions), 999_999);
+}
+
+// ---------- DashboardSnapshot clone/eq ----------
+
+#[test]
+fn dashboard_snapshot_field_mutation_breaks_equality() {
+    let fixture = load_fixture();
+    let snapshot = evaluate_snapshot(&fixture);
+    let mut mutated = snapshot.clone();
+    mutated.composite_score_millionths = snapshot.composite_score_millionths.wrapping_add(1);
+    assert_ne!(snapshot, mutated);
+}
+
+#[test]
+fn dashboard_snapshot_empty_metric_scores_not_equal_to_full() {
+    let fixture = load_fixture();
+    let snapshot = evaluate_snapshot(&fixture);
+    let empty = DashboardSnapshot {
+        schema_version: snapshot.schema_version.clone(),
+        dashboard_version: snapshot.dashboard_version.clone(),
+        metric_schema_version: snapshot.metric_schema_version.clone(),
+        metric_scores_millionths: BTreeMap::new(),
+        scenario_digest_by_id: BTreeMap::new(),
+        composite_score_millionths: 0,
+    };
+    assert_ne!(snapshot, empty);
+}
+
+// ---------- fixture field coverage ----------
+
+#[test]
+fn fixture_metric_weights_sum_to_one_million() {
+    let fixture = load_fixture();
+    let total: u64 = fixture
+        .metric_definitions
+        .iter()
+        .map(|m| u64::from(m.weight_millionths))
+        .sum();
+    assert_eq!(
+        total, 1_000_000,
+        "metric weights must sum to 1.0 in millionths"
+    );
+}
+
+#[test]
+fn fixture_diagnostic_samples_cover_at_least_two_goals() {
+    let fixture = load_fixture();
+    let goals: BTreeSet<&str> = fixture
+        .diagnostic_samples
+        .iter()
+        .map(|s| s.goal.as_str())
+        .collect();
+    assert!(
+        goals.len() >= 2,
+        "diagnostic samples should cover at least script and module goals"
+    );
+}
+
+#[test]
+fn fixture_integration_samples_cover_both_ok_and_fail() {
+    let fixture = load_fixture();
+    let has_ok = fixture.integration_samples.iter().any(|s| s.expect_ok);
+    let has_fail = fixture.integration_samples.iter().any(|s| !s.expect_ok);
+    assert!(
+        has_ok,
+        "integration samples should include at least one expect_ok=true"
+    );
+    assert!(
+        has_fail,
+        "integration samples should include at least one expect_ok=false"
+    );
+}
+
+// ---------- parser_options helper ----------
+
+#[test]
+fn parser_options_without_override_returns_default_budget() {
+    let sample = DiagnosticSample {
+        sample_id: "no_override".to_string(),
+        goal: "script".to_string(),
+        source: "x".to_string(),
+        expected_error_code: "empty_source".to_string(),
+        expected_diagnostic_code: "E-PARSE-001".to_string(),
+        expected_budget_kind: None,
+        budget_override: None,
+    };
+    let opts = parser_options(&sample);
+    let defaults = ParserBudget::default();
+    assert_eq!(opts.budget.max_source_bytes, defaults.max_source_bytes);
+    assert_eq!(opts.budget.max_token_count, defaults.max_token_count);
+    assert_eq!(
+        opts.budget.max_recursion_depth,
+        defaults.max_recursion_depth
+    );
+}
+
+#[test]
+fn parser_options_with_override_applies_custom_budget() {
+    let sample = DiagnosticSample {
+        sample_id: "with_override".to_string(),
+        goal: "script".to_string(),
+        source: "x".to_string(),
+        expected_error_code: "budget_exceeded".to_string(),
+        expected_diagnostic_code: "E-PARSE-006".to_string(),
+        expected_budget_kind: Some("source_bytes".to_string()),
+        budget_override: Some(BudgetOverride {
+            max_source_bytes: 42,
+            max_token_count: 7,
+            max_recursion_depth: 3,
+        }),
+    };
+    let opts = parser_options(&sample);
+    assert_eq!(opts.budget.max_source_bytes, 42);
+    assert_eq!(opts.budget.max_token_count, 7);
+    assert_eq!(opts.budget.max_recursion_depth, 3);
+}
+
+// ---------- snapshot invariant checks ----------
+
+#[test]
+fn snapshot_metric_scores_all_within_million() {
+    let fixture = load_fixture();
+    let snapshot = evaluate_snapshot(&fixture);
+    for (key, value) in &snapshot.metric_scores_millionths {
+        assert!(
+            *value <= 1_000_000,
+            "metric score `{key}` exceeds 1_000_000: {value}"
+        );
+    }
+}
+
+#[test]
+fn snapshot_composite_at_least_as_large_as_min_component() {
+    let fixture = load_fixture();
+    let snapshot = evaluate_snapshot(&fixture);
+    if let Some(&min_score) = snapshot.metric_scores_millionths.values().min() {
+        // The composite is a weighted average, so it should be >= the minimum component
+        // when all weights are non-negative.
+        assert!(
+            snapshot.composite_score_millionths >= min_score,
+            "composite {} should be >= minimum component {}",
+            snapshot.composite_score_millionths,
+            min_score
+        );
+    }
+}

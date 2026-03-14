@@ -868,3 +868,393 @@ fn enrichment_coverage_serde_mixed_state() {
     assert!(!uncov.contains(&"bytecode_dispatch".to_string()));
     assert!(uncov.contains(&"gc_scanning".to_string()));
 }
+
+// =========================================================================
+// AF. Coverage: all_covered when all sites registered
+// =========================================================================
+
+#[test]
+fn enrichment_coverage_all_covered_when_all_registered() {
+    let mut cov = CheckpointCoverage::new();
+    for site in [
+        "bytecode_dispatch",
+        "gc_scanning",
+        "gc_sweep",
+        "policy_iteration",
+        "contract_evaluation",
+        "replay_step",
+        "module_decode",
+        "module_verify",
+        "ir_lowering",
+        "ir_compilation",
+    ] {
+        cov.register(site);
+    }
+    assert!(cov.all_covered());
+    assert_eq!(cov.uncovered().len(), 0);
+    assert_eq!(cov.covered_count(), cov.total());
+}
+
+// =========================================================================
+// AG. Coverage: empty coverage has zero covered
+// =========================================================================
+
+#[test]
+fn enrichment_coverage_empty_has_zero_covered() {
+    let cov = CheckpointCoverage::new();
+    assert!(!cov.all_covered());
+    assert_eq!(cov.covered_count(), 0);
+    assert_eq!(cov.total(), 10);
+    assert_eq!(cov.uncovered().len(), 10);
+}
+
+// =========================================================================
+// AH. Guard: budget exhausted action
+// =========================================================================
+
+#[test]
+fn enrichment_guard_budget_exhausted() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::BytecodeDispatch,
+        "dispatch",
+        "t",
+        DensityConfig {
+            max_iterations: 5,
+            max_total_iterations: 10,
+        },
+        token,
+    );
+    for _ in 0..10 {
+        guard.tick();
+        guard.check();
+    }
+    let action = guard.check();
+    assert_eq!(action, CheckpointAction::Abort);
+}
+
+// =========================================================================
+// AI. CheckpointEvent: serde roundtrip with periodic reason
+// =========================================================================
+
+#[test]
+fn enrichment_event_serde_periodic() {
+    let event = CheckpointEvent {
+        trace_id: "trace-1".to_string(),
+        component: "gc".to_string(),
+        loop_site: LoopSite::GcScanning,
+        iteration_count: 5,
+        total_iterations: 25,
+        reason: CheckpointReason::Periodic,
+        action: CheckpointAction::Continue,
+        timestamp_virtual: 25,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: CheckpointEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, back);
+}
+
+// =========================================================================
+// AJ. CheckpointEvent: serde with budget exhausted
+// =========================================================================
+
+#[test]
+fn enrichment_event_serde_budget_exhausted() {
+    let event = CheckpointEvent {
+        trace_id: "trace-2".to_string(),
+        component: "bytecode".to_string(),
+        loop_site: LoopSite::BytecodeDispatch,
+        iteration_count: 100,
+        total_iterations: 100,
+        reason: CheckpointReason::BudgetExhausted,
+        action: CheckpointAction::Abort,
+        timestamp_virtual: 100,
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: CheckpointEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, back);
+}
+
+// =========================================================================
+// AK. Guard: zero iterations produces no events
+// =========================================================================
+
+#[test]
+fn enrichment_guard_zero_iterations_no_events() {
+    let token = CancellationToken::new();
+    let guard = CheckpointGuard::new(
+        LoopSite::PolicyIteration,
+        "policy",
+        "t",
+        DensityConfig {
+            max_iterations: 10,
+            max_total_iterations: 100,
+        },
+        token,
+    );
+    assert_eq!(guard.event_count(), 0);
+    assert_eq!(guard.total_iterations(), 0);
+    assert_eq!(guard.virtual_time(), 0);
+}
+
+// =========================================================================
+// AL. CancellationToken: reset and re-cancel
+// =========================================================================
+
+#[test]
+fn enrichment_cancellation_token_reset_and_recancel() {
+    let token = CancellationToken::new();
+    assert!(!token.is_cancelled());
+    token.cancel();
+    assert!(token.is_cancelled());
+    token.reset();
+    assert!(!token.is_cancelled());
+    token.cancel();
+    assert!(token.is_cancelled());
+}
+
+// =========================================================================
+// AM. CancellationToken: clone shares state
+// =========================================================================
+
+#[test]
+fn enrichment_cancellation_token_clone_shares_state() {
+    let token = CancellationToken::new();
+    let clone = token.clone();
+    assert!(!clone.is_cancelled());
+    token.cancel();
+    assert!(clone.is_cancelled());
+}
+
+// =========================================================================
+// AN. DensityConfig: serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_density_config_serde() {
+    let config = DensityConfig {
+        max_iterations: 50,
+        max_total_iterations: 500,
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let back: DensityConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, back);
+}
+
+// =========================================================================
+// AO. DensityConfig: Debug nonempty
+// =========================================================================
+
+#[test]
+fn enrichment_density_config_debug() {
+    let config = DensityConfig {
+        max_iterations: 10,
+        max_total_iterations: 100,
+    };
+    let dbg = format!("{:?}", config);
+    assert!(dbg.contains("DensityConfig"));
+}
+
+// =========================================================================
+// AP. Guard: check returns Continue when under budget
+// =========================================================================
+
+#[test]
+fn enrichment_guard_check_continue_under_budget() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::IrLowering,
+        "lowering",
+        "t",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 1000,
+        },
+        token,
+    );
+    guard.tick();
+    let action = guard.check();
+    assert_eq!(action, CheckpointAction::Continue);
+}
+
+// =========================================================================
+// AQ. Guard: explicit checkpoint returns Continue
+// =========================================================================
+
+#[test]
+fn enrichment_guard_explicit_checkpoint_returns_continue() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::IrCompilation,
+        "compilation",
+        "t",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 1000,
+        },
+        token,
+    );
+    guard.tick();
+    let action = guard.explicit_checkpoint();
+    assert_eq!(action, CheckpointAction::Continue);
+    assert_eq!(guard.event_count(), 1);
+}
+
+// =========================================================================
+// AR. CheckpointEvent: clone and Debug
+// =========================================================================
+
+#[test]
+fn enrichment_checkpoint_event_clone_debug() {
+    let event = CheckpointEvent {
+        trace_id: "t".to_string(),
+        component: "c".to_string(),
+        loop_site: LoopSite::GcSweep,
+        iteration_count: 1,
+        total_iterations: 1,
+        reason: CheckpointReason::Periodic,
+        action: CheckpointAction::Continue,
+        timestamp_virtual: 1,
+    };
+    let cloned = event.clone();
+    assert_eq!(event, cloned);
+    assert!(!format!("{:?}", event).is_empty());
+}
+
+// =========================================================================
+// AS. LoopSite: Custom with special chars serde
+// =========================================================================
+
+#[test]
+fn enrichment_loop_site_custom_special_chars_serde() {
+    let site = LoopSite::Custom("deep.scan/level_2".to_string());
+    let json = serde_json::to_string(&site).unwrap();
+    let back: LoopSite = serde_json::from_str(&json).unwrap();
+    assert_eq!(site, back);
+}
+
+// =========================================================================
+// AT. CheckpointReason: serde roundtrip all variants
+// =========================================================================
+
+#[test]
+fn enrichment_checkpoint_reason_serde_all_variants() {
+    for reason in [
+        CheckpointReason::Periodic,
+        CheckpointReason::CancelPending,
+        CheckpointReason::BudgetExhausted,
+        CheckpointReason::Explicit,
+    ] {
+        let json = serde_json::to_string(&reason).unwrap();
+        let back: CheckpointReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(reason, back);
+    }
+}
+
+// =========================================================================
+// AU. CheckpointAction: serde roundtrip all variants
+// =========================================================================
+
+#[test]
+fn enrichment_checkpoint_action_serde_all_variants() {
+    for action in [
+        CheckpointAction::Continue,
+        CheckpointAction::Drain,
+        CheckpointAction::Abort,
+    ] {
+        let json = serde_json::to_string(&action).unwrap();
+        let back: CheckpointAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(action, back);
+    }
+}
+
+// =========================================================================
+// AV. Coverage: duplicate register is idempotent
+// =========================================================================
+
+#[test]
+fn enrichment_coverage_duplicate_register_idempotent() {
+    let mut cov = CheckpointCoverage::new();
+    cov.register("gc_scanning");
+    cov.register("gc_scanning");
+    assert_eq!(cov.covered_count(), 1);
+}
+
+// =========================================================================
+// AW. Coverage: clone and equality
+// =========================================================================
+
+#[test]
+fn enrichment_coverage_clone_eq() {
+    let mut cov = CheckpointCoverage::new();
+    cov.register("ir_lowering");
+    let cov2 = cov.clone();
+    assert_eq!(cov, cov2);
+}
+
+// =========================================================================
+// AX. Coverage: Debug nonempty
+// =========================================================================
+
+#[test]
+fn enrichment_coverage_debug_nonempty() {
+    let cov = CheckpointCoverage::new();
+    assert!(!format!("{:?}", cov).is_empty());
+}
+
+// =========================================================================
+// AY. Guard: cancel during iteration produces CancelPending event
+// =========================================================================
+
+#[test]
+fn enrichment_guard_cancel_produces_cancel_pending_event() {
+    let token = CancellationToken::new();
+    let token2 = token.clone();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::GcScanning,
+        "gc",
+        "t",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 1000,
+        },
+        token,
+    );
+    guard.tick();
+    token2.cancel();
+    guard.check();
+    let events = guard.drain_events();
+    assert!(!events.is_empty());
+    assert!(
+        events
+            .iter()
+            .any(|e| e.reason == CheckpointReason::CancelPending)
+    );
+}
+
+// =========================================================================
+// AZ. Guard: periodic events have correct iteration_count
+// =========================================================================
+
+#[test]
+fn enrichment_guard_periodic_events_iteration_count() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::ReplayStep,
+        "replay",
+        "t",
+        DensityConfig {
+            max_iterations: 5,
+            max_total_iterations: 100,
+        },
+        token,
+    );
+    for _ in 0..5 {
+        guard.tick();
+        guard.check();
+    }
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].iteration_count, 5);
+    assert_eq!(events[0].reason, CheckpointReason::Periodic);
+}

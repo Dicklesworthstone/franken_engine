@@ -651,3 +651,162 @@ fn write_bundle_artifact_paths_are_relative() {
     assert!(!manifest.artifact_paths.events_jsonl.contains('/'));
     assert!(!manifest.artifact_paths.commands_txt.contains('/'));
 }
+
+// ---------- enrichment: clone/debug independence ----------
+
+#[test]
+fn finding_clone_independence() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    let finding = &inventory.findings[0];
+    let cloned = finding.clone();
+    assert_eq!(finding.finding_id, cloned.finding_id);
+    assert_eq!(finding.subsystem, cloned.subsystem);
+}
+
+#[test]
+fn finding_debug_is_nonempty() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    for finding in &inventory.findings {
+        assert!(!format!("{finding:?}").is_empty());
+    }
+}
+
+#[test]
+fn subsystem_summary_clone_independence() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    let summaries = inventory.subsystem_summaries();
+    let cloned = summaries[0].clone();
+    assert_eq!(cloned.subsystem, summaries[0].subsystem);
+    assert_eq!(cloned.finding_count, summaries[0].finding_count);
+}
+
+// ---------- enrichment: severity/status enum coverage ----------
+
+#[test]
+fn severity_serde_roundtrip() {
+    for sev in [
+        ZeroPlaceholderSeverity::High,
+        ZeroPlaceholderSeverity::Medium,
+        ZeroPlaceholderSeverity::Low,
+    ] {
+        let json = serde_json::to_string(&sev).expect("serialize");
+        let recovered: ZeroPlaceholderSeverity = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, sev);
+    }
+}
+
+#[test]
+fn status_serde_roundtrip() {
+    for status in [
+        ZeroPlaceholderStatus::OpenPlaceholder,
+        ZeroPlaceholderStatus::FailClosed,
+        ZeroPlaceholderStatus::Resolved,
+    ] {
+        let json = serde_json::to_string(&status).expect("serialize");
+        let recovered: ZeroPlaceholderStatus = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, status);
+    }
+}
+
+#[test]
+fn subsystem_serde_roundtrip() {
+    for sub in [
+        ZeroPlaceholderSubsystem::Parser,
+        ZeroPlaceholderSubsystem::Lowering,
+        ZeroPlaceholderSubsystem::Runtime,
+        ZeroPlaceholderSubsystem::CliDocs,
+    ] {
+        let json = serde_json::to_string(&sub).expect("serialize");
+        let recovered: ZeroPlaceholderSubsystem = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, sub);
+    }
+}
+
+// ---------- enrichment: more structural tests ----------
+
+#[test]
+fn inventory_schema_version_matches_constant() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    assert_eq!(
+        inventory.schema_version,
+        ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn inventory_component_matches_constant() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    assert_eq!(inventory.component, ZERO_PLACEHOLDER_SCAN_COMPONENT);
+}
+
+#[test]
+fn write_bundle_produces_five_files() {
+    let out_dir = unique_temp_dir("five-files");
+    let commands = vec!["test".to_string()];
+    let artifacts = zscan::write_zero_placeholder_scan_bundle(&out_dir, &commands).expect("write");
+    assert!(artifacts.inventory_path.exists());
+    assert!(artifacts.trace_ids_path.exists());
+    assert!(artifacts.run_manifest_path.exists());
+    assert!(artifacts.events_path.exists());
+    assert!(artifacts.commands_path.exists());
+}
+
+#[test]
+fn inventory_findings_sorted_by_subsystem_then_id() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    for window in inventory.findings.windows(2) {
+        let a_sub = format!("{:?}", window[0].subsystem);
+        let b_sub = format!("{:?}", window[1].subsystem);
+        if a_sub == b_sub {
+            assert!(
+                window[0].finding_id <= window[1].finding_id,
+                "findings within same subsystem should be sorted: {} vs {}",
+                window[0].finding_id,
+                window[1].finding_id
+            );
+        }
+    }
+}
+
+#[test]
+fn inventory_finding_count_constant_is_correct() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    assert_eq!(
+        inventory.findings.len(),
+        ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
+    );
+}
+
+#[test]
+fn lowering_findings_all_have_lowering_prefix() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    for finding in &inventory.findings {
+        if finding.subsystem == ZeroPlaceholderSubsystem::Lowering {
+            assert!(
+                finding.finding_id.starts_with("lowering::"),
+                "lowering finding {} should start with lowering::",
+                finding.finding_id
+            );
+        }
+    }
+}
+
+#[test]
+fn parser_findings_all_have_parser_prefix() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    for finding in &inventory.findings {
+        if finding.subsystem == ZeroPlaceholderSubsystem::Parser {
+            assert!(
+                finding.finding_id.starts_with("parser::"),
+                "parser finding {} should start with parser::",
+                finding.finding_id
+            );
+        }
+    }
+}
+
+#[test]
+fn inventory_debug_is_nonempty() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    assert!(!format!("{inventory:?}").is_empty());
+}

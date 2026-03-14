@@ -732,3 +732,182 @@ fn run_lockstep_oracle_single_matching_pair_passes() {
     assert_eq!(report.summary.pass_cases, 1);
     assert_eq!(report.summary.failed_cases, 0);
 }
+
+// ---------- enrichment: additional structural tests ----------
+
+#[test]
+fn divergence_class_all_variants_unique_as_str() {
+    use std::collections::BTreeSet;
+    let strs: BTreeSet<&str> = [
+        FrxDivergenceClass::DomMutationTrace,
+        FrxDivergenceClass::EffectInvocationOrder,
+        FrxDivergenceClass::StateTransition,
+        FrxDivergenceClass::HydrationOutcome,
+        FrxDivergenceClass::EventSequence,
+        FrxDivergenceClass::SchemaViolation,
+    ]
+    .iter()
+    .map(|c| c.as_str())
+    .collect();
+    assert_eq!(
+        strs.len(),
+        6,
+        "each divergence class should produce a unique as_str()"
+    );
+}
+
+#[test]
+fn divergence_class_debug_all_unique() {
+    use std::collections::BTreeSet;
+    let dbgs: BTreeSet<String> = [
+        FrxDivergenceClass::DomMutationTrace,
+        FrxDivergenceClass::EffectInvocationOrder,
+        FrxDivergenceClass::StateTransition,
+        FrxDivergenceClass::HydrationOutcome,
+        FrxDivergenceClass::EventSequence,
+        FrxDivergenceClass::SchemaViolation,
+    ]
+    .iter()
+    .map(|c| format!("{c:?}"))
+    .collect();
+    assert_eq!(dbgs.len(), 6);
+}
+
+#[test]
+fn build_trace_error_code_is_none_by_default() {
+    let trace = build_trace("ref", "scen", "tid", vec![event(1, "p", "e", "d", 1)]);
+    assert!(trace.error_code.is_none());
+}
+
+#[test]
+fn observable_trace_schema_version_is_stable() {
+    let a = build_trace("r", "s", "t1", vec![event(1, "p", "e", "d", 1)]);
+    let b = build_trace("r2", "s2", "t2", vec![event(1, "p", "e", "d", 1)]);
+    assert_eq!(a.schema_version, b.schema_version);
+}
+
+#[test]
+fn observable_trace_policy_id_is_stable() {
+    let a = build_trace("r", "s", "t1", vec![event(1, "p", "e", "d", 1)]);
+    let b = build_trace("r2", "s2", "t2", vec![event(1, "p", "e", "d", 1)]);
+    assert_eq!(a.policy_id, b.policy_id);
+}
+
+#[test]
+fn evaluate_case_identical_single_event_passes() {
+    let events = vec![event(1, "render", "dom_commit", "path", 100)];
+    let react = build_trace("ref-single", "scen-single", "trace-r", events.clone());
+    let franken = build_trace("ref-single", "scen-single", "trace-f", events);
+    let result = evaluate_case(FrxLockstepCaseInput {
+        fixture_ref: "ref-single".to_string(),
+        scenario_id: "scen-single".to_string(),
+        react_trace: react,
+        franken_trace: franken,
+        react_trace_path: None,
+        franken_trace_path: None,
+    })
+    .expect("should evaluate");
+    assert!(result.pass);
+}
+
+#[test]
+fn evaluate_case_detects_decision_path_divergence() {
+    let react = build_trace(
+        "ref-dp",
+        "scen-dp",
+        "trace-r-dp",
+        vec![event(1, "render", "dom_commit", "path_a", 100)],
+    );
+    let franken = build_trace(
+        "ref-dp",
+        "scen-dp",
+        "trace-f-dp",
+        vec![event(1, "render", "dom_commit", "path_b", 100)],
+    );
+    let result = evaluate_case(FrxLockstepCaseInput {
+        fixture_ref: "ref-dp".to_string(),
+        scenario_id: "scen-dp".to_string(),
+        react_trace: react,
+        franken_trace: franken,
+        react_trace_path: None,
+        franken_trace_path: None,
+    })
+    .expect("should evaluate");
+    assert!(!result.pass);
+}
+
+#[test]
+fn write_trace_file_content_is_valid_json() {
+    let dir = unique_temp_dir("json-valid");
+    let trace = build_trace(
+        "ref-jv",
+        "scen-jv",
+        "trace-jv",
+        vec![event(1, "r", "e", "d", 1)],
+    );
+    write_trace_file(dir.as_path(), "ref-jv", &trace);
+    let content = fs::read_to_string(dir.join("ref-jv.trace.json")).expect("read");
+    let parsed: serde_json::Value = serde_json::from_str(&content).expect("should be valid JSON");
+    assert!(parsed.is_object());
+}
+
+#[test]
+fn lockstep_run_context_clone_stability() {
+    let a = FrxLockstepRunContext::deterministic("t", "d", "p");
+    let b = a.clone();
+    assert_eq!(a.trace_id, b.trace_id);
+    assert_eq!(a.decision_id, b.decision_id);
+    assert_eq!(a.policy_id, b.policy_id);
+}
+
+#[test]
+fn oracle_error_debug_is_nonempty() {
+    let err = FrxLockstepOracleError::InvalidInput("test".to_string());
+    assert!(!format!("{err:?}").is_empty());
+}
+
+#[test]
+fn run_lockstep_corpus_report_has_stable_schema_version() {
+    let traces_dir =
+        repo_root().join("crates/franken-engine/tests/conformance/frx_react_corpus/traces");
+    let report = run_lockstep_oracle(
+        traces_dir.as_path(),
+        traces_dir.as_path(),
+        FrxLockstepRunContext::deterministic("t-schema", "d-schema", "p-schema"),
+        None,
+    )
+    .expect("oracle run should succeed");
+    assert!(report.schema_version.contains("lockstep"));
+}
+
+#[test]
+fn run_lockstep_corpus_report_component_is_nonempty() {
+    let traces_dir =
+        repo_root().join("crates/franken-engine/tests/conformance/frx_react_corpus/traces");
+    let report = run_lockstep_oracle(
+        traces_dir.as_path(),
+        traces_dir.as_path(),
+        FrxLockstepRunContext::deterministic("t-comp", "d-comp", "p-comp"),
+        None,
+    )
+    .expect("oracle run should succeed");
+    assert!(!report.component.is_empty());
+}
+
+#[test]
+fn run_lockstep_corpus_divergence_counts_empty_for_self_compare() {
+    let traces_dir =
+        repo_root().join("crates/franken-engine/tests/conformance/frx_react_corpus/traces");
+    let report = run_lockstep_oracle(
+        traces_dir.as_path(),
+        traces_dir.as_path(),
+        FrxLockstepRunContext::deterministic("t-div", "d-div", "p-div"),
+        None,
+    )
+    .expect("oracle run should succeed");
+    let total_divergences: u64 = report.summary.divergence_counts_by_class.values().sum();
+    assert_eq!(
+        total_divergences, 0,
+        "self-compare should have no divergences"
+    );
+}

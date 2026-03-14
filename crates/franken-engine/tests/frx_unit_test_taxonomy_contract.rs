@@ -17,8 +17,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::test_taxonomy::{
-    DeterminismContract, FIXTURE_REGISTRY_SCHEMA_VERSION, FixtureEntry, FixtureRegistry,
-    TEST_TAXONOMY_SCHEMA_VERSION, TestClass, TestSurface,
+    ClassBreakdown, ContractViolation, DeterminismContract, FIXTURE_REGISTRY_SCHEMA_VERSION,
+    FixtureEntry, FixtureRegistry, OwnershipEntry, OwnershipMap, ProvenanceLevel, RegistryError,
+    TEST_TAXONOMY_SCHEMA_VERSION, TestClass, TestExecutionRecord, TestOutcome, TestSuiteSummary,
+    TestSurface,
 };
 use serde::Deserialize;
 
@@ -928,4 +930,426 @@ fn fixture_entry_validation_detects_missing_seed_for_core_class() {
             "missing seed should produce violation for core class"
         );
     }
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: ProvenanceLevel
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn provenance_level_as_str_all_four_variants() {
+    assert_eq!(ProvenanceLevel::Authored.as_str(), "authored");
+    assert_eq!(ProvenanceLevel::Generated.as_str(), "generated");
+    assert_eq!(ProvenanceLevel::Captured.as_str(), "captured");
+    assert_eq!(ProvenanceLevel::Synthesized.as_str(), "synthesized");
+}
+
+#[test]
+fn provenance_level_trust_rank_ordering() {
+    assert!(ProvenanceLevel::Synthesized.trust_rank() < ProvenanceLevel::Generated.trust_rank());
+    assert!(ProvenanceLevel::Generated.trust_rank() < ProvenanceLevel::Captured.trust_rank());
+    assert!(ProvenanceLevel::Captured.trust_rank() < ProvenanceLevel::Authored.trust_rank());
+    assert!(ProvenanceLevel::Authored.trust_rank() <= 3);
+}
+
+#[test]
+fn provenance_level_display_matches_as_str() {
+    for prov in [
+        ProvenanceLevel::Authored,
+        ProvenanceLevel::Generated,
+        ProvenanceLevel::Captured,
+        ProvenanceLevel::Synthesized,
+    ] {
+        assert_eq!(prov.to_string(), prov.as_str());
+    }
+}
+
+#[test]
+fn provenance_level_serde_roundtrip_all_variants() {
+    for prov in [
+        ProvenanceLevel::Authored,
+        ProvenanceLevel::Generated,
+        ProvenanceLevel::Captured,
+        ProvenanceLevel::Synthesized,
+    ] {
+        let json = serde_json::to_string(&prov).expect("serialize");
+        let recovered: ProvenanceLevel = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, prov);
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: TestOutcome
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_outcome_as_str_all_five_variants() {
+    assert_eq!(TestOutcome::Pass.as_str(), "pass");
+    assert_eq!(TestOutcome::Fail.as_str(), "fail");
+    assert_eq!(TestOutcome::Skip.as_str(), "skip");
+    assert_eq!(TestOutcome::Timeout.as_str(), "timeout");
+    assert_eq!(TestOutcome::Flake.as_str(), "flake");
+}
+
+#[test]
+fn test_outcome_is_success_only_for_pass() {
+    assert!(TestOutcome::Pass.is_success());
+    assert!(!TestOutcome::Fail.is_success());
+    assert!(!TestOutcome::Skip.is_success());
+    assert!(!TestOutcome::Timeout.is_success());
+    assert!(!TestOutcome::Flake.is_success());
+}
+
+#[test]
+fn test_outcome_display_matches_as_str() {
+    for outcome in [
+        TestOutcome::Pass,
+        TestOutcome::Fail,
+        TestOutcome::Skip,
+        TestOutcome::Timeout,
+        TestOutcome::Flake,
+    ] {
+        assert_eq!(outcome.to_string(), outcome.as_str());
+    }
+}
+
+#[test]
+fn test_outcome_serde_roundtrip_all_variants() {
+    for outcome in [
+        TestOutcome::Pass,
+        TestOutcome::Fail,
+        TestOutcome::Skip,
+        TestOutcome::Timeout,
+        TestOutcome::Flake,
+    ] {
+        let json = serde_json::to_string(&outcome).expect("serialize");
+        let recovered: TestOutcome = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, outcome);
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: TestExecutionRecord
+// ────────────────────────────────────────────────────────────
+
+fn sample_execution_record(outcome: TestOutcome) -> TestExecutionRecord {
+    TestExecutionRecord {
+        fixture_id: "test-fixture-exec".to_string(),
+        test_class: TestClass::Core,
+        surface: TestSurface::Parser,
+        outcome,
+        seed: Some(42),
+        duration_us: 1500,
+        determinism_satisfied: true,
+        evidence_hash: "sha256:exec-evidence".to_string(),
+        notes: "integration test record".to_string(),
+    }
+}
+
+#[test]
+fn test_execution_record_serde_roundtrip() {
+    let record = sample_execution_record(TestOutcome::Pass);
+    let json = serde_json::to_string(&record).expect("serialize");
+    let recovered: TestExecutionRecord = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.fixture_id, record.fixture_id);
+    assert_eq!(recovered.outcome, TestOutcome::Pass);
+    assert_eq!(recovered.seed, Some(42));
+    assert_eq!(recovered.duration_us, 1500);
+    assert!(recovered.determinism_satisfied);
+}
+
+#[test]
+fn test_execution_record_without_seed() {
+    let mut record = sample_execution_record(TestOutcome::Fail);
+    record.seed = None;
+    let json = serde_json::to_string(&record).expect("serialize");
+    let recovered: TestExecutionRecord = serde_json::from_str(&json).expect("deserialize");
+    assert!(recovered.seed.is_none());
+    assert_eq!(recovered.outcome, TestOutcome::Fail);
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: TestSuiteSummary
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_suite_summary_from_empty_records() {
+    let summary = TestSuiteSummary::from_records(&[]);
+    assert_eq!(summary.total, 0);
+    assert_eq!(summary.passed, 0);
+    assert_eq!(summary.pass_rate_millionths, 0);
+    assert_eq!(summary.determinism_rate_millionths, 0);
+    assert!(summary.class_breakdown.is_empty());
+    assert!(summary.surface_breakdown.is_empty());
+}
+
+#[test]
+fn test_suite_summary_from_mixed_records() {
+    let records = vec![
+        sample_execution_record(TestOutcome::Pass),
+        {
+            let mut r = sample_execution_record(TestOutcome::Fail);
+            r.fixture_id = "fix-2".to_string();
+            r.test_class = TestClass::Edge;
+            r.surface = TestSurface::Runtime;
+            r.determinism_satisfied = false;
+            r
+        },
+        {
+            let mut r = sample_execution_record(TestOutcome::Skip);
+            r.fixture_id = "fix-3".to_string();
+            r.test_class = TestClass::Adversarial;
+            r.surface = TestSurface::Compiler;
+            r
+        },
+    ];
+    let summary = TestSuiteSummary::from_records(&records);
+    assert_eq!(summary.total, 3);
+    assert_eq!(summary.passed, 1);
+    assert_eq!(summary.failed, 1);
+    assert_eq!(summary.skipped, 1);
+    assert_eq!(summary.timed_out, 0);
+    assert_eq!(summary.flaky, 0);
+    // 1/3 pass rate = 333_333 millionths
+    assert_eq!(summary.pass_rate_millionths, 333_333);
+    // 2/3 determinism satisfied
+    assert_eq!(summary.determinism_rate_millionths, 666_666);
+    assert!(summary.class_breakdown.contains_key(&TestClass::Core));
+    assert!(summary.class_breakdown.contains_key(&TestClass::Edge));
+    assert_eq!(summary.surface_breakdown[&TestSurface::Parser], 1);
+    assert_eq!(summary.surface_breakdown[&TestSurface::Runtime], 1);
+}
+
+#[test]
+fn test_suite_summary_meets_threshold() {
+    let records = vec![sample_execution_record(TestOutcome::Pass), {
+        let mut r = sample_execution_record(TestOutcome::Pass);
+        r.fixture_id = "fix-2".to_string();
+        r
+    }];
+    let summary = TestSuiteSummary::from_records(&records);
+    assert_eq!(summary.pass_rate_millionths, 1_000_000);
+    assert!(summary.meets_threshold(999_999));
+    assert!(summary.meets_threshold(1_000_000));
+    assert!(!summary.meets_threshold(1_000_001));
+}
+
+#[test]
+fn test_suite_summary_serde_roundtrip() {
+    let records = vec![sample_execution_record(TestOutcome::Pass)];
+    let summary = TestSuiteSummary::from_records(&records);
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: TestSuiteSummary = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.total, summary.total);
+    assert_eq!(recovered.pass_rate_millionths, summary.pass_rate_millionths);
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: ClassBreakdown
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn class_breakdown_serde_roundtrip() {
+    let bd = ClassBreakdown {
+        total: 10,
+        passed: 8,
+        failed: 2,
+    };
+    let json = serde_json::to_string(&bd).expect("serialize");
+    let recovered: ClassBreakdown = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, bd);
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: OwnershipMap
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn ownership_map_new_is_empty() {
+    let map = OwnershipMap::new();
+    assert!(map.entries.is_empty());
+    assert_eq!(map.schema, TEST_TAXONOMY_SCHEMA_VERSION);
+}
+
+#[test]
+fn ownership_map_default_equals_new() {
+    let a = OwnershipMap::new();
+    let b = OwnershipMap::default();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn ownership_map_add_and_by_surface() {
+    let mut map = OwnershipMap::new();
+    map.add(OwnershipEntry {
+        surface: TestSurface::Parser,
+        test_class: TestClass::Core,
+        lane_charter_ref: "bd-mjh3.10.3".to_string(),
+        owner_agent: "AgentA".to_string(),
+        fixture_ids: BTreeSet::from(["fix-1".to_string()]),
+    });
+    map.add(OwnershipEntry {
+        surface: TestSurface::Compiler,
+        test_class: TestClass::Edge,
+        lane_charter_ref: "bd-mjh3.10.2".to_string(),
+        owner_agent: "AgentB".to_string(),
+        fixture_ids: BTreeSet::from(["fix-2".to_string()]),
+    });
+
+    assert_eq!(map.by_surface(TestSurface::Parser).len(), 1);
+    assert_eq!(map.by_surface(TestSurface::Compiler).len(), 1);
+    assert_eq!(map.by_surface(TestSurface::Runtime).len(), 0);
+}
+
+#[test]
+fn ownership_map_unowned_fixtures_detects_gaps() {
+    let mut registry = FixtureRegistry::new();
+    registry
+        .register(FixtureEntry {
+            fixture_id: "owned-fix".to_string(),
+            description: "owned".to_string(),
+            test_class: TestClass::Core,
+            surfaces: BTreeSet::from([TestSurface::Parser]),
+            provenance: ProvenanceLevel::Authored,
+            seed: None,
+            content_hash: "sha256:owned".to_string(),
+            format_version: "v1".to_string(),
+            origin_ref: "bd-test".to_string(),
+            tags: BTreeSet::new(),
+        })
+        .unwrap();
+    registry
+        .register(FixtureEntry {
+            fixture_id: "unowned-fix".to_string(),
+            description: "unowned".to_string(),
+            test_class: TestClass::Edge,
+            surfaces: BTreeSet::from([TestSurface::Runtime]),
+            provenance: ProvenanceLevel::Authored,
+            seed: None,
+            content_hash: "sha256:unowned".to_string(),
+            format_version: "v1".to_string(),
+            origin_ref: "bd-test".to_string(),
+            tags: BTreeSet::new(),
+        })
+        .unwrap();
+
+    let mut map = OwnershipMap::new();
+    map.add(OwnershipEntry {
+        surface: TestSurface::Parser,
+        test_class: TestClass::Core,
+        lane_charter_ref: "bd-mjh3.10.3".to_string(),
+        owner_agent: "AgentA".to_string(),
+        fixture_ids: BTreeSet::from(["owned-fix".to_string()]),
+    });
+
+    let unowned = map.unowned_fixtures(&registry);
+    assert_eq!(unowned, vec!["unowned-fix".to_string()]);
+}
+
+#[test]
+fn ownership_entry_serde_roundtrip() {
+    let entry = OwnershipEntry {
+        surface: TestSurface::Governance,
+        test_class: TestClass::Regression,
+        lane_charter_ref: "bd-mjh3.10.7".to_string(),
+        owner_agent: "AgentX".to_string(),
+        fixture_ids: BTreeSet::from(["f1".to_string(), "f2".to_string()]),
+    };
+    let json = serde_json::to_string(&entry).expect("serialize");
+    let recovered: OwnershipEntry = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, entry);
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: ContractViolation, RegistryError, DeterminismContract
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn contract_violation_serde_roundtrip() {
+    let v = ContractViolation {
+        field: "seed".to_string(),
+        message: "missing seed".to_string(),
+    };
+    let json = serde_json::to_string(&v).expect("serialize");
+    let recovered: ContractViolation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, v);
+}
+
+#[test]
+fn registry_error_display_all_three_variants() {
+    let errors = [
+        RegistryError::DuplicateFixtureId("fix-dup".to_string()),
+        RegistryError::FixtureNotFound("fix-missing".to_string()),
+        RegistryError::InvalidFixture("bad structure".to_string()),
+    ];
+    for err in &errors {
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "Display must produce non-empty output");
+    }
+    assert!(errors[0].to_string().contains("fix-dup"));
+    assert!(errors[1].to_string().contains("fix-missing"));
+    assert!(errors[2].to_string().contains("bad structure"));
+}
+
+#[test]
+fn registry_error_serde_roundtrip() {
+    let err = RegistryError::DuplicateFixtureId("fix-dup".to_string());
+    let json = serde_json::to_string(&err).expect("serialize");
+    let recovered: RegistryError = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, err);
+}
+
+#[test]
+fn determinism_contract_serde_roundtrip() {
+    let dc = DeterminismContract::strict();
+    let json = serde_json::to_string(&dc).expect("serialize");
+    let recovered: DeterminismContract = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, dc);
+}
+
+#[test]
+fn determinism_contract_validate_detects_negative_tolerance() {
+    let mut dc = DeterminismContract::relaxed(0);
+    dc.numeric_tolerance_millionths = -1;
+    let violations = dc.validate();
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.field == "numeric_tolerance_millionths"),
+        "negative tolerance must be flagged"
+    );
+}
+
+#[test]
+fn determinism_contract_validate_detects_bit_identical_with_tolerance() {
+    let mut dc = DeterminismContract::strict();
+    dc.numeric_tolerance_millionths = 100;
+    let violations = dc.validate();
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.message.contains("nonzero tolerance")),
+        "bit-identical with nonzero tolerance must be flagged"
+    );
+}
+
+#[test]
+fn test_class_display_matches_as_str() {
+    for class in TestClass::ALL {
+        assert_eq!(class.to_string(), class.as_str());
+    }
+}
+
+#[test]
+fn test_surface_display_matches_as_str() {
+    for surface in TestSurface::ALL {
+        assert_eq!(surface.to_string(), surface.as_str());
+    }
+}
+
+#[test]
+fn fixture_registry_default_equals_new() {
+    let a = FixtureRegistry::new();
+    let b = FixtureRegistry::default();
+    assert_eq!(a, b);
 }

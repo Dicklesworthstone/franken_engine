@@ -597,6 +597,39 @@ fn rgc_911b_gate_script_uses_repo_local_rch_target_and_rejects_local_fallback() 
 }
 
 #[test]
+fn rgc_911b_gate_script_manifest_reuses_contract_operator_verification_commands() {
+    let script = read_gate_script();
+
+    assert!(
+        script.contains("contract_operator_verification_json"),
+        "gate script should collect the published operator verification commands"
+    );
+    assert!(
+        script.contains("jq '.operator_verification' \"$contract_json\""),
+        "gate script should read operator verification commands from the contract JSON"
+    );
+    assert!(
+        script.contains("] + $contract_operator_verification"),
+        "gate manifest should append the published operator verification commands"
+    );
+}
+
+#[test]
+fn rgc_911b_gate_script_copies_contract_artifacts_before_validation_can_fail() {
+    let script = read_gate_script();
+    let copy_index = script
+        .find("copy_contract_artifacts\nvalidate_source_inputs")
+        .expect("gate script should copy contract artifacts before validation");
+    let run_mode_index = script
+        .find("if [[ \"$main_exit\" -eq 0 ]]; then\n  run_mode")
+        .expect("gate script should only run cargo gates after validation");
+    assert!(
+        copy_index < run_mode_index,
+        "artifact copying must happen before validation-gated cargo execution"
+    );
+}
+
+#[test]
 fn rgc_911b_log_keys_remain_stable() {
     let contract = parse_contract();
     let keys: BTreeSet<_> = contract

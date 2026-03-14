@@ -91,6 +91,7 @@ fn make_request(route_id: &str, source: Label, sink: Label) -> DeclassificationR
         code_location: "module::func".to_string(),
         trace_id: "trace-001".to_string(),
         requested_route_id: route_id.to_string(),
+        decision_contract_id: "decision-contract-test".to_string(),
         is_emergency: false,
         timestamp_ms: 1_700_000_000_000,
     }
@@ -158,6 +159,7 @@ fn request_fields_populated() {
     assert_eq!(req.code_location, "module::func");
     assert_eq!(req.trace_id, "trace-001");
     assert_eq!(req.requested_route_id, "declass-secret-internal");
+    assert_eq!(req.decision_contract_id, "decision-contract-test");
     assert!(!req.is_emergency);
     assert_eq!(req.timestamp_ms, 1_700_000_000_000);
 }

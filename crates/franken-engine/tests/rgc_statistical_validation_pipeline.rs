@@ -16,8 +16,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::performance_statistical_validation::{
-    StatisticalValidationInput, StatisticalValidationPolicy, WorkloadOutcome, WorkloadSamples,
-    evaluate_statistical_validation,
+    ConfidenceIntervalNs, FindingCode, OutlierPolicy, OutlierSummary,
+    PERFORMANCE_STATISTICAL_VALIDATION_COMPONENT, SampleStatsNs, StatisticalThresholds,
+    StatisticalValidationError, StatisticalValidationInput, StatisticalValidationLogEvent,
+    StatisticalValidationPolicy, StatisticalValidationReport, ValidationFinding, WorkloadOutcome,
+    WorkloadSamples, WorkloadValidationVerdict, evaluate_statistical_validation,
 };
 use serde::Deserialize;
 
@@ -638,4 +641,372 @@ fn contract_thresholds_min_effect_size_is_positive() {
         contract.thresholds.min_effect_size_millionths > 0,
         "min effect size threshold must be positive"
     );
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: WorkloadOutcome enum
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn workload_outcome_as_str_all_four_variants() {
+    assert_eq!(WorkloadOutcome::Pass.as_str(), "pass");
+    assert_eq!(WorkloadOutcome::Warn.as_str(), "warn");
+    assert_eq!(WorkloadOutcome::Fail.as_str(), "fail");
+    assert_eq!(WorkloadOutcome::Quarantine.as_str(), "quarantine");
+}
+
+#[test]
+fn workload_outcome_display_matches_as_str() {
+    for outcome in [
+        WorkloadOutcome::Pass,
+        WorkloadOutcome::Warn,
+        WorkloadOutcome::Fail,
+        WorkloadOutcome::Quarantine,
+    ] {
+        assert_eq!(outcome.to_string(), outcome.as_str());
+    }
+}
+
+#[test]
+fn workload_outcome_serde_roundtrip_all_variants() {
+    for outcome in [
+        WorkloadOutcome::Pass,
+        WorkloadOutcome::Warn,
+        WorkloadOutcome::Fail,
+        WorkloadOutcome::Quarantine,
+    ] {
+        let json = serde_json::to_string(&outcome).expect("serialize");
+        let recovered: WorkloadOutcome = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, outcome);
+    }
+}
+
+#[test]
+fn workload_outcome_ordering_pass_lt_fail() {
+    assert!(WorkloadOutcome::Pass < WorkloadOutcome::Warn);
+    assert!(WorkloadOutcome::Warn < WorkloadOutcome::Fail);
+    assert!(WorkloadOutcome::Fail < WorkloadOutcome::Quarantine);
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: FindingCode enum
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn finding_code_stable_code_all_six_variants() {
+    let codes: Vec<&str> = [
+        FindingCode::MissingBenchmarkMetadata,
+        FindingCode::InsufficientSamples,
+        FindingCode::VarianceQuarantine,
+        FindingCode::ConfidenceQuarantine,
+        FindingCode::RegressionFail,
+        FindingCode::RegressionWarn,
+    ]
+    .iter()
+    .map(|c| c.stable_code())
+    .collect();
+
+    for code in &codes {
+        assert!(!code.is_empty());
+    }
+    // All codes should be unique
+    let unique: std::collections::BTreeSet<&&str> = codes.iter().collect();
+    assert_eq!(unique.len(), 6, "all finding codes must be unique");
+}
+
+#[test]
+fn finding_code_display_matches_stable_code() {
+    for code in [
+        FindingCode::MissingBenchmarkMetadata,
+        FindingCode::InsufficientSamples,
+        FindingCode::VarianceQuarantine,
+        FindingCode::ConfidenceQuarantine,
+        FindingCode::RegressionFail,
+        FindingCode::RegressionWarn,
+    ] {
+        assert_eq!(code.to_string(), code.stable_code());
+    }
+}
+
+#[test]
+fn finding_code_serde_roundtrip_all_variants() {
+    for code in [
+        FindingCode::MissingBenchmarkMetadata,
+        FindingCode::InsufficientSamples,
+        FindingCode::VarianceQuarantine,
+        FindingCode::ConfidenceQuarantine,
+        FindingCode::RegressionFail,
+        FindingCode::RegressionWarn,
+    ] {
+        let json = serde_json::to_string(&code).expect("serialize");
+        let recovered: FindingCode = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, code);
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: ValidationFinding, SampleStatsNs, etc.
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn validation_finding_serde_roundtrip() {
+    let finding = ValidationFinding {
+        code: FindingCode::RegressionFail,
+        message: "regression exceeds threshold".to_string(),
+    };
+    let json = serde_json::to_string(&finding).expect("serialize");
+    let recovered: ValidationFinding = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, finding);
+}
+
+#[test]
+fn sample_stats_ns_serde_roundtrip() {
+    let stats = SampleStatsNs {
+        sample_count: 100,
+        mean_ns: 5000,
+        stddev_ns: 50,
+        cv_millionths: 10_000,
+    };
+    let json = serde_json::to_string(&stats).expect("serialize");
+    let recovered: SampleStatsNs = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, stats);
+}
+
+#[test]
+fn confidence_interval_ns_serde_roundtrip() {
+    let ci = ConfidenceIntervalNs {
+        lower_ns: -50,
+        upper_ns: 150,
+    };
+    let json = serde_json::to_string(&ci).expect("serialize");
+    let recovered: ConfidenceIntervalNs = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, ci);
+}
+
+#[test]
+fn outlier_summary_serde_roundtrip() {
+    let summary = OutlierSummary {
+        baseline_removed: 2,
+        candidate_removed: 3,
+        method: "mad".to_string(),
+    };
+    let json = serde_json::to_string(&summary).expect("serialize");
+    let recovered: OutlierSummary = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, summary);
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: OutlierPolicy, StatisticalThresholds defaults
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn outlier_policy_default_values() {
+    let policy = OutlierPolicy::default();
+    assert!(policy.mad_multiplier_millionths > 0);
+    assert!(policy.min_retained_samples > 0);
+}
+
+#[test]
+fn outlier_policy_serde_roundtrip() {
+    let policy = OutlierPolicy::default();
+    let json = serde_json::to_string(&policy).expect("serialize");
+    let recovered: OutlierPolicy = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, policy);
+}
+
+#[test]
+fn statistical_thresholds_default_values() {
+    let t = StatisticalThresholds::default();
+    assert!(t.max_cv_millionths > 0);
+    assert!(t.warning_regression_millionths > 0);
+    assert!(t.fail_regression_millionths >= t.warning_regression_millionths);
+    assert!(t.max_p_value_millionths > 0);
+    assert!(t.min_effect_size_millionths > 0);
+    assert!(t.confidence_level_millionths > 500_000);
+}
+
+#[test]
+fn statistical_thresholds_serde_roundtrip() {
+    let t = StatisticalThresholds::default();
+    let json = serde_json::to_string(&t).expect("serialize");
+    let recovered: StatisticalThresholds = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, t);
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: StatisticalValidationError
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn statistical_validation_error_stable_code_serialization() {
+    let err = StatisticalValidationError::Serialization("bad json".to_string());
+    assert!(!err.stable_code().is_empty());
+    assert!(err.to_string().contains("bad json"));
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: component constant, report/verdict fields
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn performance_statistical_validation_component_is_nonempty() {
+    assert!(!PERFORMANCE_STATISTICAL_VALIDATION_COMPONENT.is_empty());
+}
+
+#[test]
+fn pipeline_report_component_matches_constant() {
+    let mut policy = StatisticalValidationPolicy {
+        warmup_drop_samples: 0,
+        min_samples_after_filter: 5,
+        ..StatisticalValidationPolicy::default()
+    };
+    policy.outlier_policy.min_retained_samples = 5;
+
+    let input = StatisticalValidationInput::new(
+        "trace-component",
+        "decision-component",
+        "policy-component",
+        vec![sample_workload()],
+    );
+    let report = evaluate_statistical_validation(&input, &policy);
+    assert_eq!(
+        report.component,
+        PERFORMANCE_STATISTICAL_VALIDATION_COMPONENT
+    );
+    assert_eq!(report.trace_id, "trace-component");
+    assert_eq!(report.decision_id, "decision-component");
+    assert_eq!(report.policy_id, "policy-component");
+}
+
+#[test]
+fn pipeline_verdict_has_sample_stats_and_outliers() {
+    let mut policy = StatisticalValidationPolicy {
+        warmup_drop_samples: 0,
+        min_samples_after_filter: 5,
+        ..StatisticalValidationPolicy::default()
+    };
+    policy.outlier_policy.min_retained_samples = 5;
+
+    let input = StatisticalValidationInput::new(
+        "trace-verdict",
+        "decision-verdict",
+        "policy-verdict",
+        vec![sample_workload()],
+    );
+    let report = evaluate_statistical_validation(&input, &policy);
+    assert_eq!(report.verdicts.len(), 1);
+
+    let verdict = &report.verdicts[0];
+    assert_eq!(verdict.workload_id, "router_hot_path");
+    assert_eq!(verdict.scenario_id, "golden");
+    assert!(verdict.baseline.sample_count > 0);
+    assert!(verdict.candidate.sample_count > 0);
+    assert!(verdict.baseline.mean_ns > 0);
+}
+
+#[test]
+fn pipeline_report_serde_roundtrip() {
+    let mut policy = StatisticalValidationPolicy {
+        warmup_drop_samples: 0,
+        min_samples_after_filter: 5,
+        ..StatisticalValidationPolicy::default()
+    };
+    policy.outlier_policy.min_retained_samples = 5;
+
+    let input = StatisticalValidationInput::new(
+        "trace-serde-report",
+        "decision-serde-report",
+        "policy-serde-report",
+        vec![sample_workload()],
+    );
+    let report = evaluate_statistical_validation(&input, &policy);
+    let json = serde_json::to_string(&report).expect("serialize");
+    let recovered: StatisticalValidationReport = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.trace_id, report.trace_id);
+    assert_eq!(recovered.promote_allowed, report.promote_allowed);
+    assert_eq!(recovered.verdicts.len(), report.verdicts.len());
+}
+
+#[test]
+fn pipeline_log_events_have_component_and_workload() {
+    let mut policy = StatisticalValidationPolicy {
+        warmup_drop_samples: 0,
+        min_samples_after_filter: 5,
+        ..StatisticalValidationPolicy::default()
+    };
+    policy.outlier_policy.min_retained_samples = 5;
+
+    let input = StatisticalValidationInput::new(
+        "trace-log-fields",
+        "decision-log-fields",
+        "policy-log-fields",
+        vec![sample_workload()],
+    );
+    let report = evaluate_statistical_validation(&input, &policy);
+    for log in &report.logs {
+        assert_eq!(log.component, PERFORMANCE_STATISTICAL_VALIDATION_COMPONENT);
+        assert!(!log.workload_id.is_empty());
+        assert!(!log.event.is_empty());
+        assert!(!log.outcome.is_empty());
+    }
+}
+
+#[test]
+fn statistical_validation_log_event_serde_roundtrip() {
+    let event = StatisticalValidationLogEvent {
+        trace_id: "t1".to_string(),
+        decision_id: "d1".to_string(),
+        policy_id: "p1".to_string(),
+        component: "perf_stat".to_string(),
+        event: "workload_evaluated".to_string(),
+        scenario_id: "golden".to_string(),
+        workload_id: "w1".to_string(),
+        outcome: "fail".to_string(),
+        error_code: Some("FE-RGC-702-REGRESSION-0004".to_string()),
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let recovered: StatisticalValidationLogEvent =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, event);
+}
+
+#[test]
+fn workload_validation_verdict_serde_roundtrip() {
+    let verdict = WorkloadValidationVerdict {
+        workload_id: "w1".to_string(),
+        scenario_id: "golden".to_string(),
+        outcome: WorkloadOutcome::Fail,
+        p_value_millionths: 10_000,
+        effect_size_millionths: 30_000,
+        confidence_interval_mean_delta_ns: ConfidenceIntervalNs {
+            lower_ns: 10,
+            upper_ns: 50,
+        },
+        baseline: SampleStatsNs {
+            sample_count: 9,
+            mean_ns: 1000,
+            stddev_ns: 5,
+            cv_millionths: 5_000,
+        },
+        candidate: SampleStatsNs {
+            sample_count: 9,
+            mean_ns: 1030,
+            stddev_ns: 5,
+            cv_millionths: 4_854,
+        },
+        outliers: OutlierSummary {
+            baseline_removed: 0,
+            candidate_removed: 0,
+            method: "mad".to_string(),
+        },
+        findings: vec![ValidationFinding {
+            code: FindingCode::RegressionFail,
+            message: "regression".to_string(),
+        }],
+    };
+    let json = serde_json::to_string(&verdict).expect("serialize");
+    let recovered: WorkloadValidationVerdict = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.workload_id, verdict.workload_id);
+    assert_eq!(recovered.outcome, WorkloadOutcome::Fail);
+    assert_eq!(recovered.findings.len(), 1);
 }

@@ -432,3 +432,203 @@ fn fixture_required_modes_are_nonempty_strings() {
         assert!(!mode.trim().is_empty(), "wrapper mode must not be empty");
     }
 }
+
+// ---------- serde / deserialization edge cases ----------
+
+#[test]
+fn fixture_deserializes_from_raw_json_bytes() {
+    let fixture_path = Path::new("tests/fixtures/parser_hermetic_env_manifest_v1.json");
+    let bytes = fs::read(fixture_path).expect("read fixture");
+    let fixture: HermeticWrapperFixture =
+        serde_json::from_slice(&bytes).expect("should deserialize from raw bytes");
+    assert!(!fixture.wrapper_id.is_empty());
+}
+
+#[test]
+fn fixture_deserializes_from_string() {
+    let fixture_path = Path::new("tests/fixtures/parser_hermetic_env_manifest_v1.json");
+    let text = fs::read_to_string(fixture_path).expect("read fixture as string");
+    let fixture: HermeticWrapperFixture =
+        serde_json::from_str(&text).expect("should deserialize from string");
+    assert_eq!(fixture.wrapper_id, "parser_benchmark_protocol_gate");
+}
+
+#[test]
+fn fixture_rejects_missing_required_field() {
+    let incomplete = r#"{
+        "schema_version": "v1",
+        "wrapper_id": "test",
+        "bead_id": "bd-1"
+    }"#;
+    let result: Result<HermeticWrapperFixture, _> = serde_json::from_str(incomplete);
+    assert!(
+        result.is_err(),
+        "deserialization should fail with missing required fields"
+    );
+}
+
+#[test]
+fn fixture_rejects_empty_json_object() {
+    let result: Result<HermeticWrapperFixture, _> = serde_json::from_str("{}");
+    assert!(
+        result.is_err(),
+        "deserialization of empty object should fail"
+    );
+}
+
+#[test]
+fn fixture_rejects_json_array() {
+    let result: Result<HermeticWrapperFixture, _> = serde_json::from_str("[]");
+    assert!(
+        result.is_err(),
+        "deserialization of array should fail for struct"
+    );
+}
+
+// ---------- debug trait ----------
+
+#[test]
+fn hermetic_wrapper_fixture_implements_debug() {
+    let fixture = load_fixture();
+    let debug_str = format!("{:?}", fixture);
+    assert!(
+        debug_str.contains("parser_benchmark_protocol_gate"),
+        "Debug output should contain the wrapper_id"
+    );
+    assert!(
+        debug_str.contains("bd-2mds.1.7.1"),
+        "Debug output should contain the bead_id"
+    );
+}
+
+// ---------- structural invariants ----------
+
+#[test]
+fn fixture_runner_commands_modes_match_mode_arg_suffix() {
+    let fixture = load_fixture();
+    for (mode, command) in &fixture.runner_commands {
+        assert!(
+            command.ends_with(mode),
+            "runner command for `{mode}` should end with the mode name as its arg, got: {command}"
+        );
+    }
+}
+
+#[test]
+fn fixture_manifest_keys_include_deterministic_environment() {
+    let fixture = load_fixture();
+    assert!(
+        fixture
+            .required_manifest_keys
+            .iter()
+            .any(|k| k == "deterministic_environment"),
+        "manifest keys must include deterministic_environment"
+    );
+}
+
+#[test]
+fn fixture_required_event_keys_include_outcome_and_error_code() {
+    let fixture = load_fixture();
+    let keys: BTreeSet<&str> = fixture
+        .required_event_keys
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(keys.contains("outcome"), "event keys must contain outcome");
+    assert!(
+        keys.contains("error_code"),
+        "event keys must contain error_code"
+    );
+}
+
+#[test]
+fn fixture_environment_keys_include_cpu_and_toolchain_fingerprints() {
+    let fixture = load_fixture();
+    let keys: BTreeSet<&str> = fixture
+        .required_environment_keys
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        keys.contains("cpu_fingerprint"),
+        "env keys must contain cpu_fingerprint"
+    );
+    assert!(
+        keys.contains("toolchain_fingerprint"),
+        "env keys must contain toolchain_fingerprint"
+    );
+}
+
+#[test]
+fn fixture_required_environment_keys_are_nonempty_strings() {
+    let fixture = load_fixture();
+    for key in &fixture.required_environment_keys {
+        assert!(
+            !key.trim().is_empty(),
+            "environment key must not be empty or whitespace"
+        );
+    }
+}
+
+#[test]
+fn fixture_required_event_keys_are_nonempty_strings() {
+    let fixture = load_fixture();
+    for key in &fixture.required_event_keys {
+        assert!(
+            !key.trim().is_empty(),
+            "event key must not be empty or whitespace"
+        );
+    }
+}
+
+// ---------- cross-artifact consistency ----------
+
+#[test]
+fn env_contract_doc_references_hermetic_wrapper_test_file() {
+    let doc = load_env_contract_doc();
+    assert!(
+        doc.contains("parser_hermetic_wrapper_contract"),
+        "env contract doc should reference the hermetic wrapper contract test file"
+    );
+}
+
+#[test]
+fn env_contract_doc_references_benchmark_protocol_script() {
+    let doc = load_env_contract_doc();
+    assert!(
+        doc.contains("run_parser_benchmark_protocol.sh"),
+        "env contract doc should reference the benchmark protocol script"
+    );
+}
+
+#[test]
+fn wrapper_script_references_rch_for_remote_compilation() {
+    let script = load_benchmark_wrapper_script();
+    assert!(
+        script.contains("rch"),
+        "wrapper script should reference rch for remote compilation"
+    );
+}
+
+#[test]
+fn fixture_schema_version_contains_version_suffix() {
+    let fixture = load_fixture();
+    assert!(
+        fixture.schema_version.ends_with(".v1"),
+        "schema_version should end with a version suffix like .v1"
+    );
+    assert!(
+        fixture.deterministic_env_schema_version.ends_with(".v1"),
+        "deterministic_env_schema_version should end with .v1"
+    );
+}
+
+#[test]
+fn fixture_runner_commands_count_matches_modes_count() {
+    let fixture = load_fixture();
+    assert_eq!(
+        fixture.runner_commands.len(),
+        fixture.required_wrapper_modes.len(),
+        "number of runner commands must equal number of required modes"
+    );
+}

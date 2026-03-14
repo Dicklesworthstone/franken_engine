@@ -611,3 +611,205 @@ fn rgc_051_waiver_governance_required_fields_nonempty() {
     let matrix = parse_matrix();
     assert!(!matrix.waiver_governance.waiver_required_fields.is_empty());
 }
+
+// ---------- enrichment: struct clone/debug ----------
+
+#[test]
+fn rgc_051_matrix_clone_equals_original() {
+    let matrix = parse_matrix();
+    let cloned = matrix.clone();
+    assert_eq!(matrix, cloned);
+}
+
+#[test]
+fn rgc_051_matrix_debug_contains_schema_version() {
+    let matrix = parse_matrix();
+    let debug = format!("{matrix:?}");
+    assert!(debug.contains("VerificationCoverageMatrix"));
+    assert!(debug.contains(&matrix.schema_version));
+}
+
+// ---------- enrichment: individual struct serde ----------
+
+#[test]
+fn rgc_051_matrix_track_serde_roundtrip() {
+    let track = MatrixTrack {
+        id: "RGC-051".to_string(),
+        name: "Test".to_string(),
+    };
+    let json = serde_json::to_string(&track).expect("serialize");
+    let recovered: MatrixTrack = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(track, recovered);
+}
+
+#[test]
+fn rgc_051_matrix_scope_serde_roundtrip() {
+    let scope = MatrixScope {
+        project_epic: "bd-1lsy".to_string(),
+        snapshot_source: "test".to_string(),
+        snapshot_generated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+        open_bead_ids: vec!["bd-1lsy.1".to_string()],
+    };
+    let json = serde_json::to_string(&scope).expect("serialize");
+    let recovered: MatrixScope = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(scope, recovered);
+}
+
+#[test]
+fn rgc_051_milestone_target_serde_roundtrip() {
+    let target = MilestoneTarget {
+        milestone: "M1".to_string(),
+        description: "First milestone".to_string(),
+        required_beads: vec!["bd-1lsy.1".to_string()],
+        stop_go_rule: "all_pass".to_string(),
+    };
+    let json = serde_json::to_string(&target).expect("serialize");
+    let recovered: MilestoneTarget = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(target, recovered);
+}
+
+#[test]
+fn rgc_051_coverage_row_serde_roundtrip() {
+    let row = CoverageRow {
+        row_id: "row-1".to_string(),
+        bead_selectors: vec!["bd-1lsy.*".to_string()],
+        requirement_id: "req-1".to_string(),
+        test_kind: "unit".to_string(),
+        harness_entrypoint: "cargo test".to_string(),
+        deterministic_seed_policy: "fixed_42".to_string(),
+        required_log_fields: vec!["trace_id".to_string()],
+        artifact_paths: vec!["run_manifest.json".to_string()],
+        gate_owner: "team-a".to_string(),
+        pass_fail_interpretation: "strict".to_string(),
+    };
+    let json = serde_json::to_string(&row).expect("serialize");
+    let recovered: CoverageRow = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(row, recovered);
+}
+
+#[test]
+fn rgc_051_waiver_governance_serde_roundtrip() {
+    let waiver = WaiverGovernance {
+        waiver_required_fields: vec!["waiver_id".to_string()],
+        max_waiver_age_hours: 72,
+        fail_closed_on_expired_waiver: true,
+        fail_closed_on_missing_signature: true,
+    };
+    let json = serde_json::to_string(&waiver).expect("serialize");
+    let recovered: WaiverGovernance = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(waiver, recovered);
+}
+
+// ---------- enrichment: selector_matches edge cases ----------
+
+#[test]
+fn rgc_051_selector_matches_wildcard_does_not_match_partial_prefix() {
+    // "bd-1lsy.*" should NOT match "bd-1lsyX" (no dot separator)
+    assert!(!selector_matches("bd-1lsy.*", "bd-1lsyX"));
+}
+
+#[test]
+fn rgc_051_selector_matches_exact_does_not_wildcard() {
+    assert!(selector_matches("bd-1lsy.2", "bd-1lsy.2"));
+    assert!(!selector_matches("bd-1lsy.2", "bd-1lsy.2.1"));
+}
+
+#[test]
+fn rgc_051_selector_matches_wildcard_matches_self() {
+    // "bd-1lsy.*" should match "bd-1lsy" (the prefix itself)
+    assert!(selector_matches("bd-1lsy.*", "bd-1lsy"));
+}
+
+// ---------- enrichment: JSON field names ----------
+
+#[test]
+fn rgc_051_matrix_json_has_expected_top_level_fields() {
+    let val: serde_json::Value = serde_json::from_str(MATRIX_JSON).expect("matrix json must parse");
+    let obj = val.as_object().expect("root must be object");
+    for field in [
+        "schema_version",
+        "bead_id",
+        "generated_by",
+        "generated_at_utc",
+        "track",
+        "scope",
+        "required_structured_log_fields",
+        "critical_behavior_bead_ids",
+        "milestone_targets",
+        "coverage_rows",
+        "waiver_governance",
+        "operator_verification",
+    ] {
+        assert!(obj.contains_key(field), "missing field: {field}");
+    }
+}
+
+// ---------- enrichment: coverage_rows bead_selectors are nonempty ----------
+
+#[test]
+fn rgc_051_coverage_rows_all_have_bead_selectors() {
+    let matrix = parse_matrix();
+    for row in &matrix.coverage_rows {
+        assert!(
+            !row.bead_selectors.is_empty(),
+            "row {} must have at least one bead_selector",
+            row.row_id
+        );
+    }
+}
+
+// ---------- enrichment: operator_verification entries nonempty ----------
+
+#[test]
+fn rgc_051_operator_verification_entries_are_nonempty() {
+    let matrix = parse_matrix();
+    for entry in &matrix.operator_verification {
+        assert!(
+            !entry.trim().is_empty(),
+            "operator_verification entry must not be empty"
+        );
+    }
+}
+
+// ---------- enrichment: milestone required_beads are unique ----------
+
+#[test]
+fn rgc_051_milestone_required_beads_are_unique_per_milestone() {
+    let matrix = parse_matrix();
+    for target in &matrix.milestone_targets {
+        let mut seen = BTreeSet::new();
+        for bead in &target.required_beads {
+            assert!(
+                seen.insert(bead),
+                "duplicate bead {} in milestone {}",
+                bead,
+                target.milestone
+            );
+        }
+    }
+}
+
+// ---------- enrichment: pretty print roundtrip ----------
+
+#[test]
+fn rgc_051_pretty_json_roundtrip_preserves_equality() {
+    let matrix = parse_matrix();
+    let pretty = serde_json::to_string_pretty(&matrix).expect("pretty serialize");
+    let recovered: VerificationCoverageMatrix =
+        serde_json::from_str(&pretty).expect("pretty deserialize");
+    assert_eq!(matrix, recovered);
+}
+
+// ---------- enrichment: required_structured_log_fields unique ----------
+
+#[test]
+fn rgc_051_required_structured_log_fields_are_unique() {
+    let matrix = parse_matrix();
+    let mut seen = BTreeSet::new();
+    for field in &matrix.required_structured_log_fields {
+        assert!(
+            seen.insert(field.as_str()),
+            "duplicate required_structured_log_field: {field}"
+        );
+    }
+}

@@ -30,6 +30,11 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+fn load_runner_script() -> String {
+    fs::read_to_string("../../scripts/run_franken_shipped_path_parity.sh")
+        .expect("runner script should be readable")
+}
+
 #[test]
 fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
     let out_dir = temp_dir("franken_shipped_path_parity");
@@ -107,4 +112,31 @@ fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
     assert!(commands.contains("compile"));
     assert!(commands.contains("run"));
     assert!(commands.contains("verify compile-artifact"));
+}
+
+#[test]
+fn shipped_path_parity_runner_script_uses_unique_repo_local_namespaces() {
+    let script = load_runner_script();
+
+    for snippet in [
+        "rch is required",
+        "rch exec -- env CARGO_TARGET_DIR=\"${target_dir}\"",
+        ".rch_target/franken_shipped_path_parity_uid",
+        "${artifact_root}/${timestamp}_uid${uid}_${mode}_$$",
+        "cargo build -p frankenengine-engine --bin frankenctl --bin franken_shipped_path_parity",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "runner script missing required snippet: {snippet}"
+        );
+    }
+
+    assert!(
+        !script.contains("target_rch_franken_shipped_path_parity"),
+        "runner script must not default to a shared fixed target dir"
+    );
+    assert!(
+        !script.contains("${artifact_root}/${run_stamp}"),
+        "runner script must not use a timestamp-only artifact namespace"
+    );
 }

@@ -637,6 +637,309 @@ fn error_is_std_error() {
     assert!(std_err.source().is_none());
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Enrichment: Display impls for all enums
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn schema_version_display_is_nonempty() {
+    let s = SchemaVersion::V1.to_string();
+    assert!(!s.is_empty());
+}
+
+#[test]
+fn delegate_type_display_all_variants() {
+    for dt in [
+        DelegateType::QuickJsBacked,
+        DelegateType::WasmBacked,
+        DelegateType::ExternalProcess,
+    ] {
+        let s = dt.to_string();
+        assert!(
+            !s.is_empty(),
+            "Display must produce non-empty output for {dt:?}"
+        );
+    }
+}
+
+#[test]
+fn validation_artifact_kind_display_all_variants() {
+    for kind in [
+        ValidationArtifactKind::EquivalenceResult,
+        ValidationArtifactKind::CapabilityPreservation,
+        ValidationArtifactKind::PerformanceBenchmark,
+        ValidationArtifactKind::AdversarialSurvival,
+    ] {
+        let s = kind.to_string();
+        assert!(
+            !s.is_empty(),
+            "Display must produce non-empty output for {kind:?}"
+        );
+    }
+}
+
+#[test]
+fn gate_verdict_display_all_variants() {
+    for gv in [
+        GateVerdict::Approved,
+        GateVerdict::Denied,
+        GateVerdict::Inconclusive,
+    ] {
+        let s = gv.to_string();
+        assert!(
+            !s.is_empty(),
+            "Display must produce non-empty output for {gv:?}"
+        );
+    }
+}
+
+#[test]
+fn risk_level_display_all_variants() {
+    for rl in [
+        RiskLevel::Low,
+        RiskLevel::Medium,
+        RiskLevel::High,
+        RiskLevel::Critical,
+    ] {
+        let s = rl.to_string();
+        assert!(
+            !s.is_empty(),
+            "Display must produce non-empty output for {rl:?}"
+        );
+    }
+}
+
+#[test]
+fn approver_kind_display_both_variants() {
+    let sys = ApproverKind::System {
+        component: "governance".to_string(),
+    };
+    let human = ApproverKind::Human {
+        operator_id: "op-42".to_string(),
+    };
+    assert!(!sys.to_string().is_empty());
+    assert!(!human.to_string().is_empty());
+}
+
+#[test]
+fn replacement_stage_display_all_variants() {
+    for stage in [
+        ReplacementStage::Research,
+        ReplacementStage::Shadow,
+        ReplacementStage::Canary,
+        ReplacementStage::Production,
+    ] {
+        let s = stage.to_string();
+        assert!(
+            !s.is_empty(),
+            "Display must produce non-empty output for {stage:?}"
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Enrichment: SelfReplacementError Display for more variants
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn self_replacement_error_display_all_tested_variants() {
+    let errors: Vec<SelfReplacementError> = vec![
+        SelfReplacementError::EmptyValidationArtifacts,
+        SelfReplacementError::InsufficientSignatures {
+            required: 3,
+            present: 1,
+        },
+        SelfReplacementError::SignatureInvalid {
+            signer_index: 0,
+            role: "gate".to_string(),
+        },
+        SelfReplacementError::SlotMismatch {
+            expected: "slot-a".to_string(),
+            got: "slot-b".to_string(),
+        },
+        SelfReplacementError::ValidationFailed {
+            slot_id: "slot-x".to_string(),
+        },
+        SelfReplacementError::UnsupportedSchemaVersion {
+            version: "v99".to_string(),
+        },
+    ];
+    for err in &errors {
+        let msg = err.to_string();
+        assert!(
+            !msg.is_empty(),
+            "Display must produce non-empty output for {err:?}"
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Enrichment: serde roundtrips for complex types
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn delegate_cell_manifest_serde_roundtrip() {
+    let manifest = create_test_manifest();
+    let json = serde_json::to_string(&manifest).expect("serialize");
+    let recovered: DelegateCellManifest = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.delegate_type, manifest.delegate_type);
+    assert_eq!(recovered.slot_id, manifest.slot_id);
+    assert_eq!(recovered.zone, manifest.zone);
+    assert_eq!(
+        recovered.monitoring_hooks.len(),
+        manifest.monitoring_hooks.len()
+    );
+}
+
+#[test]
+fn replacement_receipt_serde_roundtrip() {
+    let receipt = create_valid_receipt(&test_slot_id(), 1000, 1);
+    let json = serde_json::to_string(&receipt).expect("serialize");
+    let recovered: ReplacementReceipt = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.slot_id, receipt.slot_id);
+    assert_eq!(recovered.old_cell_digest, receipt.old_cell_digest);
+    assert_eq!(recovered.new_cell_digest, receipt.new_cell_digest);
+    assert_eq!(
+        recovered.validation_artifacts.len(),
+        receipt.validation_artifacts.len()
+    );
+}
+
+#[test]
+fn promotion_decision_serde_roundtrip() {
+    let gates = test_gate_results();
+    let decision = PromotionDecision::create_unsigned(CreateDecisionInput {
+        slot_id: &test_slot_id(),
+        candidate_cell_digest: "candidate-serde",
+        gate_results: &gates,
+        risk_level: RiskLevel::Medium,
+        approver: &ApproverKind::System {
+            component: "auto".to_string(),
+        },
+        timestamp_ns: 5000,
+        epoch: SecurityEpoch::from_raw(2),
+        zone: "serde-zone",
+        required_signatures: 0,
+    })
+    .unwrap();
+    let json = serde_json::to_string(&decision).expect("serialize");
+    let recovered: PromotionDecision = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.verdict, decision.verdict);
+    assert_eq!(recovered.risk_level, decision.risk_level);
+    assert_eq!(
+        recovered.candidate_cell_digest,
+        decision.candidate_cell_digest
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Enrichment: ReplacementLifecycle
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lifecycle_new_starts_at_research() {
+    let manifest = create_test_manifest();
+    let lifecycle = ReplacementLifecycle::new(test_slot_id(), manifest);
+    assert!(!lifecycle.is_production());
+    assert_eq!(lifecycle.completed_stages(), 0);
+}
+
+#[test]
+fn lifecycle_serde_roundtrip() {
+    let manifest = create_test_manifest();
+    let lifecycle = ReplacementLifecycle::new(test_slot_id(), manifest);
+    let json = serde_json::to_string(&lifecycle).expect("serialize");
+    let recovered: ReplacementLifecycle = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.is_production(), lifecycle.is_production());
+    assert_eq!(recovered.completed_stages(), lifecycle.completed_stages());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Enrichment: manifest verify_signature with wrong key
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn manifest_verify_signature_rejects_wrong_key() {
+    let manifest = create_test_manifest();
+    let wrong_key = SigningKey::from_bytes([0xFFu8; 32]);
+    let result = manifest.verify_signature(&wrong_key.verification_key());
+    assert!(result.is_err());
+}
+
+#[test]
+fn receipt_empty_validation_artifacts_is_rejected() {
+    let result = ReplacementReceipt::create_unsigned(CreateReceiptInput {
+        slot_id: &test_slot_id(),
+        old_cell_digest: "old",
+        new_cell_digest: "new",
+        validation_artifacts: &[],
+        rollback_token: "rb",
+        promotion_rationale: "test",
+        timestamp_ns: 1000,
+        epoch: SecurityEpoch::from_raw(1),
+        zone: "zone",
+        required_signatures: 1,
+    });
+    assert!(
+        result.is_err(),
+        "empty validation artifacts should be rejected"
+    );
+}
+
+#[test]
+fn delegate_type_serde_roundtrip_all_variants() {
+    for dt in [
+        DelegateType::QuickJsBacked,
+        DelegateType::WasmBacked,
+        DelegateType::ExternalProcess,
+    ] {
+        let json = serde_json::to_string(&dt).expect("serialize");
+        let recovered: DelegateType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, dt);
+    }
+}
+
+#[test]
+fn gate_verdict_serde_roundtrip_all_variants() {
+    for gv in [
+        GateVerdict::Approved,
+        GateVerdict::Denied,
+        GateVerdict::Inconclusive,
+    ] {
+        let json = serde_json::to_string(&gv).expect("serialize");
+        let recovered: GateVerdict = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, gv);
+    }
+}
+
+#[test]
+fn risk_level_serde_roundtrip_all_variants() {
+    for rl in [
+        RiskLevel::Low,
+        RiskLevel::Medium,
+        RiskLevel::High,
+        RiskLevel::Critical,
+    ] {
+        let json = serde_json::to_string(&rl).expect("serialize");
+        let recovered: RiskLevel = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, rl);
+    }
+}
+
+#[test]
+fn replacement_stage_serde_roundtrip_all_variants() {
+    for stage in [
+        ReplacementStage::Research,
+        ReplacementStage::Shadow,
+        ReplacementStage::Canary,
+        ReplacementStage::Production,
+    ] {
+        let json = serde_json::to_string(&stage).expect("serialize");
+        let recovered: ReplacementStage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(recovered, stage);
+    }
+}
+
 #[test]
 fn error_signature_invalid_display() {
     let err = SelfReplacementError::SignatureInvalid {

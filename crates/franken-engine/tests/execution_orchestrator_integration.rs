@@ -14,18 +14,21 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::LaneChoice;
+use frankenengine_engine::baseline_interpreter::{InterpreterError, LaneChoice};
 use frankenengine_engine::bayesian_posterior::RiskState;
 use frankenengine_engine::control_plane_mock_inventory::{
     OrchestratorContextRefactorOutcome, OrchestratorContextRefactorRunManifest,
     write_orchestrator_context_refactor_bundle_in_root,
+};
+use frankenengine_engine::declassification_pipeline::{
+    DeclassificationPipeline, DeclassificationRequest, LossAssessment,
 };
 use frankenengine_engine::execution_cell::CellError;
 use frankenengine_engine::execution_orchestrator::{
@@ -33,7 +36,13 @@ use frankenengine_engine::execution_orchestrator::{
     OrchestratorError, OrchestratorResult,
 };
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
+use frankenengine_engine::ifc_artifacts::{
+    DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+
+const TEST_DECLASS_ROUTE_ID: &str = "declass-secret-public";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,6 +111,50 @@ fn execute_simple(orch: &mut ExecutionOrchestrator) -> OrchestratorResult {
         .expect("execute should succeed")
 }
 
+fn declassification_policy(extension_id: &str) -> FlowPolicy {
+    FlowPolicy {
+        policy_id: "policy-orchestrator-declass".to_string(),
+        extension_id: extension_id.to_string(),
+        label_classes: [
+            Label::Public,
+            Label::Internal,
+            Label::Confidential,
+            Label::Secret,
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>(),
+        clearance_classes: [
+            Label::Public,
+            Label::Internal,
+            Label::Confidential,
+            Label::Secret,
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>(),
+        allowed_flows: vec![],
+        prohibited_flows: vec![],
+        declassification_routes: vec![DeclassificationRoute {
+            route_id: TEST_DECLASS_ROUTE_ID.to_string(),
+            source_label: Label::Secret,
+            target_clearance: Label::Public,
+            conditions: vec!["audit_approval".to_string()],
+        }],
+        epoch_id: 1,
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+    }
+}
+
+fn low_loss_assessment() -> LossAssessment {
+    LossAssessment {
+        expected_loss_milli: 10_000,
+        data_sensitivity_bps: 1_200,
+        sink_exposure_bps: 800,
+        historical_abuse_detected: false,
+        summary: "low risk".to_string(),
+    }
+}
+
 // =========================================================================
 // Section 1: End-to-end pipeline
 // =========================================================================
@@ -119,6 +172,111 @@ fn e2e_simple_literal_produces_complete_result() {
     assert!(!result.evidence_entries.is_empty());
     assert!(result.instructions_executed > 0);
     assert_eq!(result.epoch, SecurityEpoch::from_raw(1));
+}
+
+#[test]
+fn declared_package_capability_allows_orchestrated_hostcall_execution() {
+    let mut orch = default_orch();
+    let pkg = package_with_caps(
+        "ext-hostcall-allow",
+        r#""hostcall<\"net.write\">";"#,
+        &["net.write"],
+    );
+
+    let result = orch
+        .execute(&pkg)
+        .expect("declared package capability should reach the interpreter lane");
+
+    assert_eq!(result.execution_value, "undefined");
+    assert!(result.instructions_executed > 0);
+}
+
+#[test]
+fn missing_package_capability_denies_orchestrated_hostcall_execution() {
+    let mut orch = default_orch();
+    let pkg = simple_package("ext-hostcall-deny", r#""hostcall<\"net.write\">";"#);
+
+    let err = orch
+        .execute(&pkg)
+        .expect_err("hostcall should fail closed when package capability is missing");
+
+    match err {
+        OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }) => {
+            assert_eq!(capability, "net.write");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn staged_receipt_allows_public_orchestrator_declassification_without_internal_guard_capability() {
+    let mut orch = default_orch();
+    let pkg = package_with_caps(
+        "ext-declassify-allow",
+        r#""hostcall<\"declassify.audit\"> secret_token";"#,
+        &["declassify.audit"],
+    );
+
+    assert!(
+        !pkg.capabilities.iter().any(|cap| cap == "ifc.check_flow"),
+        "packages should not need to declare the internal IFC runtime guard capability"
+    );
+
+    let prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("preflight should expose the declassification obligation");
+    assert_eq!(
+        prepared
+            .ir2_flow_proof_artifact
+            .required_declassifications
+            .len(),
+        1
+    );
+    let obligation = &prepared.ir2_flow_proof_artifact.required_declassifications[0];
+    assert_eq!(obligation.capability.as_deref(), Some("declassify.audit"));
+    assert_eq!(obligation.decision_contract_id, prepared.decision_id);
+
+    let request = DeclassificationRequest {
+        request_id: "req-orchestrator-declass".to_string(),
+        source_label: Label::Secret,
+        sink_clearance: Label::Public,
+        extension_id: pkg.extension_id.clone(),
+        code_location: "execution_orchestrator_integration::declassify".to_string(),
+        trace_id: prepared.trace_id.clone(),
+        requested_route_id: TEST_DECLASS_ROUTE_ID.to_string(),
+        decision_contract_id: prepared.decision_id.clone(),
+        is_emergency: false,
+        timestamp_ms: 1_700_000_010_000,
+    };
+    let signing_key = SigningKey::from_bytes([23u8; 32]);
+    let mut pipeline = DeclassificationPipeline::default();
+    let receipt = pipeline
+        .process(
+            &request,
+            &declassification_policy(&pkg.extension_id),
+            &low_loss_assessment(),
+            &signing_key,
+        )
+        .expect("declassification request should be approved");
+
+    orch.trust_declassification_authorizer_for_contract(
+        prepared.decision_id.clone(),
+        signing_key.verification_key(),
+    );
+    orch.stage_declassification_receipt_for_obligation(
+        prepared.trace_id.clone(),
+        obligation.obligation_id.clone(),
+        receipt,
+    );
+
+    let result = orch
+        .execute(&pkg)
+        .expect("approved staged receipt should allow the runtime-guarded declassification path");
+
+    assert_eq!(result.trace_id, prepared.trace_id);
+    assert_eq!(result.decision_id, prepared.decision_id);
+    assert_eq!(result.execution_value, "undefined");
+    assert!(result.instructions_executed > 0);
 }
 
 #[test]

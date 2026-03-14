@@ -638,3 +638,260 @@ fn rgc_012_all_rollback_trigger_ids_globally_unique() {
         }
     }
 }
+
+// ---------- enrichment batch 2 ----------
+
+#[test]
+fn rgc_012_serde_roundtrip_gate_track() {
+    let gatebook = parse_gatebook();
+    let track = gatebook.track.clone();
+    let json = serde_json::to_string(&track).expect("serialize GateTrack");
+    let recovered: GateTrack = serde_json::from_str(&json).expect("deserialize GateTrack");
+    assert_eq!(track, recovered);
+}
+
+#[test]
+fn rgc_012_serde_roundtrip_automation_contract() {
+    let gatebook = parse_gatebook();
+    let auto = gatebook.automation.clone();
+    let json = serde_json::to_string(&auto).expect("serialize AutomationContract");
+    let recovered: AutomationContract =
+        serde_json::from_str(&json).expect("deserialize AutomationContract");
+    assert_eq!(auto, recovered);
+}
+
+#[test]
+fn rgc_012_serde_roundtrip_blocker_class() {
+    let gatebook = parse_gatebook();
+    let class = gatebook.blocker_classes.first().unwrap().clone();
+    let json = serde_json::to_string(&class).expect("serialize BlockerClass");
+    let recovered: BlockerClass = serde_json::from_str(&json).expect("deserialize BlockerClass");
+    assert_eq!(class, recovered);
+}
+
+#[test]
+fn rgc_012_serde_roundtrip_milestone_gate() {
+    let gatebook = parse_gatebook();
+    let gate = gatebook.milestones.first().unwrap().clone();
+    let json = serde_json::to_string(&gate).expect("serialize MilestoneGate");
+    let recovered: MilestoneGate = serde_json::from_str(&json).expect("deserialize MilestoneGate");
+    assert_eq!(gate, recovered);
+}
+
+#[test]
+fn rgc_012_serde_roundtrip_transition_rule() {
+    let gatebook = parse_gatebook();
+    let rule = gatebook
+        .automation
+        .report_only_transition_rules
+        .first()
+        .unwrap()
+        .clone();
+    let json = serde_json::to_string(&rule).expect("serialize TransitionRule");
+    let recovered: TransitionRule =
+        serde_json::from_str(&json).expect("deserialize TransitionRule");
+    assert_eq!(rule, recovered);
+}
+
+#[test]
+fn rgc_012_clone_preserves_equality_for_gatebook() {
+    let gatebook = parse_gatebook();
+    let cloned = gatebook.clone();
+    assert_eq!(gatebook, cloned);
+}
+
+#[test]
+fn rgc_012_debug_impl_contains_schema_version() {
+    let gatebook = parse_gatebook();
+    let debug_str = format!("{:?}", gatebook);
+    assert!(
+        debug_str.contains(GATEBOOK_SCHEMA_VERSION),
+        "Debug output should contain schema_version"
+    );
+}
+
+#[test]
+fn rgc_012_debug_impl_contains_milestone_names() {
+    let gatebook = parse_gatebook();
+    let debug_str = format!("{:?}", gatebook);
+    for ms in &["M1", "M2", "M3", "M4", "M5"] {
+        assert!(
+            debug_str.contains(ms),
+            "Debug output should contain milestone {}",
+            ms
+        );
+    }
+}
+
+#[test]
+fn rgc_012_transition_rules_chronologically_ordered() {
+    let gatebook = parse_gatebook();
+    let rules = &gatebook.automation.report_only_transition_rules;
+    for window in rules.windows(2) {
+        assert!(
+            window[0].report_only_until_utc < window[1].report_only_until_utc,
+            "transition rules should be chronologically ordered: {} vs {}",
+            window[0].milestone,
+            window[1].milestone
+        );
+        assert!(
+            window[0].fail_closed_after_utc < window[1].fail_closed_after_utc,
+            "fail_closed dates should be chronologically ordered: {} vs {}",
+            window[0].milestone,
+            window[1].milestone
+        );
+    }
+}
+
+#[test]
+fn rgc_012_ci_gate_dates_align_with_transition_rules() {
+    let gatebook = parse_gatebook();
+    let transition_map: std::collections::BTreeMap<&str, &TransitionRule> = gatebook
+        .automation
+        .report_only_transition_rules
+        .iter()
+        .map(|r| (r.milestone.as_str(), r))
+        .collect();
+
+    for milestone in &gatebook.milestones {
+        let rule = transition_map
+            .get(milestone.milestone.as_str())
+            .unwrap_or_else(|| panic!("no transition rule for milestone {}", milestone.milestone));
+        assert_eq!(
+            milestone.ci_gate.report_only_until_utc, rule.report_only_until_utc,
+            "ci_gate report_only_until mismatch for {}",
+            milestone.milestone
+        );
+        assert_eq!(
+            milestone.ci_gate.fail_closed_after_utc, rule.fail_closed_after_utc,
+            "ci_gate fail_closed_after mismatch for {}",
+            milestone.milestone
+        );
+    }
+}
+
+#[test]
+fn rgc_012_exactly_four_blocker_classes() {
+    let gatebook = parse_gatebook();
+    assert_eq!(
+        gatebook.blocker_classes.len(),
+        4,
+        "expected exactly 4 blocker classes"
+    );
+}
+
+#[test]
+fn rgc_012_blocker_class_ids_match_known_set() {
+    let gatebook = parse_gatebook();
+    let expected: BTreeSet<&str> = [
+        "correctness_regression",
+        "security_enforcement_failure",
+        "artifact_incompleteness",
+        "performance_claim_instability",
+    ]
+    .into_iter()
+    .collect();
+    let actual: BTreeSet<&str> = gatebook
+        .blocker_classes
+        .iter()
+        .map(|c| c.class_id.as_str())
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn rgc_012_every_milestone_has_exactly_two_rollback_triggers() {
+    let gatebook = parse_gatebook();
+    for milestone in &gatebook.milestones {
+        assert_eq!(
+            milestone.rollback_triggers.len(),
+            2,
+            "{} should have exactly 2 rollback triggers but has {}",
+            milestone.milestone,
+            milestone.rollback_triggers.len()
+        );
+    }
+}
+
+#[test]
+fn rgc_012_every_milestone_has_exactly_two_pass_predicates() {
+    let gatebook = parse_gatebook();
+    for milestone in &gatebook.milestones {
+        assert_eq!(
+            milestone.pass_predicates.len(),
+            2,
+            "{} should have exactly 2 pass predicates but has {}",
+            milestone.milestone,
+            milestone.pass_predicates.len()
+        );
+    }
+}
+
+#[test]
+fn rgc_012_all_source_beads_follow_bead_id_format() {
+    let gatebook = parse_gatebook();
+    let mut all_beads = BTreeSet::new();
+    for milestone in &gatebook.milestones {
+        for pred in &milestone.pass_predicates {
+            for bead in &pred.source_beads {
+                all_beads.insert(bead.as_str());
+            }
+        }
+    }
+    assert!(
+        !all_beads.is_empty(),
+        "should have at least one source bead across all predicates"
+    );
+    for bead in &all_beads {
+        assert!(
+            bead.starts_with("bd-"),
+            "source bead {} should start with bd-",
+            bead
+        );
+        let dot_count = bead.chars().filter(|c| *c == '.').count();
+        assert!(
+            dot_count >= 1,
+            "source bead {} should have at least one dot-separated segment",
+            bead
+        );
+    }
+}
+
+#[test]
+fn rgc_012_required_artifacts_reference_milestone_directory() {
+    let gatebook = parse_gatebook();
+    for milestone in &gatebook.milestones {
+        let expected_dir = format!("artifacts/rgc_{}/", milestone.milestone.to_lowercase());
+        for artifact in &milestone.required_artifacts {
+            assert!(
+                artifact.starts_with(&expected_dir),
+                "{} artifact {} should start with {}",
+                milestone.milestone,
+                artifact,
+                expected_dir
+            );
+        }
+    }
+}
+
+#[test]
+fn rgc_012_decision_event_required_fields_match_known_set() {
+    let gatebook = parse_gatebook();
+    let expected: BTreeSet<&str> = [
+        "milestone",
+        "gate_id",
+        "mode",
+        "decision",
+        "blocker_classes",
+        "rollback_trigger_ids",
+    ]
+    .into_iter()
+    .collect();
+    let actual: BTreeSet<&str> = gatebook
+        .automation
+        .decision_event_required_fields
+        .iter()
+        .map(|f| f.as_str())
+        .collect();
+    assert_eq!(actual, expected);
+}

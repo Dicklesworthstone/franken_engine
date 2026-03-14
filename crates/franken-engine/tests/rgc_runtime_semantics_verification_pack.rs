@@ -712,3 +712,222 @@ fn rgc_057_vectors_path_types_match_expected_outcome_pattern() {
         );
     }
 }
+
+// ---------- enrichment: struct clone/debug ----------
+
+#[test]
+fn rgc_057_contract_clone_equals_original() {
+    let contract = parse_contract();
+    let cloned = contract.clone();
+    assert_eq!(contract, cloned);
+}
+
+#[test]
+fn rgc_057_vectors_clone_equals_original() {
+    let vectors = parse_vectors();
+    let cloned = vectors.clone();
+    assert_eq!(vectors, cloned);
+}
+
+#[test]
+fn rgc_057_contract_debug_is_nonempty() {
+    let contract = parse_contract();
+    let debug = format!("{contract:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("RuntimeSemanticsPackContract"));
+}
+
+#[test]
+fn rgc_057_vectors_debug_is_nonempty() {
+    let vectors = parse_vectors();
+    let debug = format!("{vectors:?}");
+    assert!(!debug.is_empty());
+    assert!(debug.contains("RuntimeSemanticsVectors"));
+}
+
+// ---------- enrichment: individual struct serde ----------
+
+#[test]
+fn rgc_057_failure_scenario_serde_roundtrip() {
+    let scenario = FailureScenario {
+        scenario_id: "test_scenario".to_string(),
+        path_type: "failure".to_string(),
+        command_template: "cargo test -- test_scenario".to_string(),
+        expected_exit_code: 1,
+        expected_error_code: "FE-RGC-057-TEST-0001".to_string(),
+        expected_message_fragment: "test failure".to_string(),
+    };
+    let json = serde_json::to_string(&scenario).expect("serialize");
+    let recovered: FailureScenario = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(scenario, recovered);
+}
+
+#[test]
+fn rgc_057_gate_runner_serde_roundtrip() {
+    let gate_runner = GateRunner {
+        script: "scripts/run.sh".to_string(),
+        replay_wrapper: "scripts/replay.sh".to_string(),
+        strict_mode: "rch_only_no_local_fallback".to_string(),
+        manifest_schema_version: "v1".to_string(),
+    };
+    let json = serde_json::to_string(&gate_runner).expect("serialize");
+    let recovered: GateRunner = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(gate_runner, recovered);
+}
+
+#[test]
+fn rgc_057_runtime_semantics_vector_serde_roundtrip() {
+    let vector = RuntimeSemanticsVector {
+        scenario_id: "test_scenario".to_string(),
+        semantics_class: "arithmetic_control_flow".to_string(),
+        severity: "critical".to_string(),
+        path_type: "golden".to_string(),
+        deterministic_seed: 42,
+        expected_outcome: "expect_pass".to_string(),
+        expected_policy_action: "execute".to_string(),
+        command_template: "cargo test".to_string(),
+        minimal_repro_pointer: "tests/foo.rs".to_string(),
+        requires_replay: true,
+    };
+    let json = serde_json::to_string(&vector).expect("serialize");
+    let recovered: RuntimeSemanticsVector = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(vector, recovered);
+}
+
+// ---------- enrichment: JSON field name stability ----------
+
+#[test]
+fn rgc_057_contract_json_has_expected_top_level_fields() {
+    let val: serde_json::Value = serde_json::from_str(PACK_JSON).expect("pack json must parse");
+    let obj = val.as_object().expect("root must be object");
+    for field in [
+        "schema_version",
+        "contract_version",
+        "bead_id",
+        "policy_id",
+        "required_semantics_classes",
+        "required_log_keys",
+        "required_artifacts",
+        "test_vectors_source",
+        "failure_scenarios",
+        "gate_runner",
+        "operator_verification",
+    ] {
+        assert!(obj.contains_key(field), "missing field: {field}");
+    }
+}
+
+#[test]
+fn rgc_057_vectors_json_has_expected_top_level_fields() {
+    let val: serde_json::Value =
+        serde_json::from_str(VECTORS_JSON).expect("vectors json must parse");
+    let obj = val.as_object().expect("root must be object");
+    for field in [
+        "schema_version",
+        "contract_version",
+        "bead_id",
+        "generated_by",
+        "generated_at_utc",
+        "vectors",
+    ] {
+        assert!(obj.contains_key(field), "missing field: {field}");
+    }
+}
+
+#[test]
+fn rgc_057_each_vector_json_has_expected_fields() {
+    let val: serde_json::Value =
+        serde_json::from_str(VECTORS_JSON).expect("vectors json must parse");
+    let vectors_arr = val["vectors"].as_array().expect("vectors must be array");
+    for vector in vectors_arr {
+        let obj = vector.as_object().expect("vector must be object");
+        for field in [
+            "scenario_id",
+            "semantics_class",
+            "severity",
+            "path_type",
+            "deterministic_seed",
+            "expected_outcome",
+            "expected_policy_action",
+            "command_template",
+            "minimal_repro_pointer",
+            "requires_replay",
+        ] {
+            assert!(
+                obj.contains_key(field),
+                "missing field {field} in vector {}",
+                vector["scenario_id"]
+            );
+        }
+    }
+}
+
+// ---------- enrichment: cross-validation ----------
+
+#[test]
+fn rgc_057_contract_failure_scenario_error_codes_are_unique() {
+    let contract = parse_contract();
+    let mut codes = BTreeSet::new();
+    for scenario in &contract.failure_scenarios {
+        assert!(
+            codes.insert(scenario.expected_error_code.as_str()),
+            "duplicate error code: {}",
+            scenario.expected_error_code
+        );
+    }
+}
+
+#[test]
+fn rgc_057_contract_failure_scenario_message_fragments_are_nonempty() {
+    let contract = parse_contract();
+    for scenario in &contract.failure_scenarios {
+        assert!(
+            !scenario.expected_message_fragment.trim().is_empty(),
+            "scenario {} must have non-empty message fragment",
+            scenario.scenario_id
+        );
+    }
+}
+
+#[test]
+fn rgc_057_vectors_deterministic_seeds_are_unique() {
+    let vectors = parse_vectors();
+    let mut seeds = BTreeSet::new();
+    for vector in &vectors.vectors {
+        assert!(
+            seeds.insert(vector.deterministic_seed),
+            "duplicate seed: {}",
+            vector.deterministic_seed
+        );
+    }
+}
+
+#[test]
+fn rgc_057_contract_schema_version_follows_naming_convention() {
+    let contract = parse_contract();
+    assert!(
+        contract.schema_version.starts_with("franken-engine."),
+        "schema_version should start with 'franken-engine.': {}",
+        contract.schema_version
+    );
+    assert!(
+        contract.schema_version.ends_with(".v1"),
+        "schema_version should end with version suffix: {}",
+        contract.schema_version
+    );
+}
+
+#[test]
+fn rgc_057_vectors_schema_version_follows_naming_convention() {
+    let vectors = parse_vectors();
+    assert!(
+        vectors.schema_version.starts_with("franken-engine."),
+        "schema_version should start with 'franken-engine.': {}",
+        vectors.schema_version
+    );
+    assert!(
+        vectors.schema_version.ends_with(".v1"),
+        "schema_version should end with version suffix: {}",
+        vectors.schema_version
+    );
+}

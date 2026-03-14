@@ -986,3 +986,222 @@ fn containment_claim_with_no_scenarios_passes_vacuously() {
     // With no scenarios the checks pass vacuously
     assert_eq!(report.verdict, VerificationVerdict::Verified);
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: struct serde, clone, tampering edges, report
+// invariants, render coverage, multi-counterfactual
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn benchmark_claim_bundle_serde_round_trip() {
+    let bundle = make_benchmark_claim_bundle();
+    let json = serde_json::to_string(&bundle).expect("serialize");
+    let recovered: BenchmarkClaimBundle = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.trace_id, bundle.trace_id);
+    assert_eq!(recovered.decision_id, bundle.decision_id);
+    assert_eq!(recovered.policy_id, bundle.policy_id);
+    assert_eq!(
+        recovered.claimed.publish_allowed,
+        bundle.claimed.publish_allowed
+    );
+}
+
+#[test]
+fn replay_claim_bundle_serde_round_trip() {
+    let bundle = make_replay_claim_bundle();
+    let json = serde_json::to_string(&bundle).expect("serialize");
+    let recovered: ReplayClaimBundle = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.trace_id, bundle.trace_id);
+    assert_eq!(recovered.current_epoch, bundle.current_epoch);
+    assert_eq!(
+        recovered.signature_verification_key_hex,
+        bundle.signature_verification_key_hex
+    );
+}
+
+#[test]
+fn containment_claim_bundle_serde_round_trip() {
+    let bundle = make_containment_claim_bundle();
+    let json = serde_json::to_string(&bundle).expect("serialize");
+    let recovered: ContainmentClaimBundle = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.trace_id, bundle.trace_id);
+    assert_eq!(
+        recovered.detection_latency_sla_ns,
+        bundle.detection_latency_sla_ns
+    );
+    assert_eq!(recovered.result.passed, bundle.result.passed);
+}
+
+#[test]
+fn verification_attestation_serde_round_trip() {
+    let input = make_attestation_input(true);
+    let attestation = generate_attestation(&input).expect("create");
+    let json = serde_json::to_string(&attestation).expect("serialize");
+    let recovered: VerificationAttestation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.verifier_name, attestation.verifier_name);
+    assert_eq!(recovered.verifier_version, attestation.verifier_version);
+    assert_eq!(recovered.signature_hex, attestation.signature_hex);
+    assert_eq!(recovered.report_digest_hex, attestation.report_digest_hex);
+}
+
+#[test]
+fn benchmark_claim_detects_tampered_bun_score() {
+    let mut bundle = make_benchmark_claim_bundle();
+    bundle.claimed.score_vs_bun += 0.5;
+    let report = verify_benchmark_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name == "score_vs_bun_matches" && !c.passed)
+    );
+}
+
+#[test]
+fn benchmark_claim_detects_tampered_publish_flag() {
+    let mut bundle = make_benchmark_claim_bundle();
+    bundle.claimed.publish_allowed = !bundle.claimed.publish_allowed;
+    let report = verify_benchmark_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name == "publish_allowed_matches" && !c.passed)
+    );
+}
+
+#[test]
+fn containment_claim_fails_when_scenario_count_mismatch() {
+    let mut bundle = make_containment_claim_bundle();
+    bundle.result.total_scenarios = 5;
+    let report = verify_containment_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name.contains("scenario_count") && !c.passed)
+    );
+}
+
+#[test]
+fn containment_claim_fails_when_passed_exceeds_total() {
+    let mut bundle = make_containment_claim_bundle();
+    bundle.result.passed_scenarios = bundle.result.total_scenarios + 1;
+    let report = verify_containment_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+}
+
+#[test]
+fn replay_claim_without_signature_key_is_partially_verified() {
+    let mut bundle = make_replay_claim_bundle();
+    bundle.signature_verification_key_hex = None;
+    let report = verify_replay_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::PartiallyVerified);
+    assert!(
+        report
+            .scope_limitations
+            .iter()
+            .any(|s| s.contains("signature"))
+    );
+}
+
+#[test]
+fn benchmark_report_checks_have_unique_names() {
+    let bundle = make_benchmark_claim_bundle();
+    let report = verify_benchmark_claim(&bundle);
+    let mut names: Vec<&str> = report.checks.iter().map(|c| c.name.as_str()).collect();
+    let before = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), before, "check names must be unique");
+}
+
+#[test]
+fn containment_report_checks_have_unique_names() {
+    let bundle = make_containment_claim_bundle();
+    let report = verify_containment_claim(&bundle);
+    let mut names: Vec<&str> = report.checks.iter().map(|c| c.name.as_str()).collect();
+    let before = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), before, "check names must be unique");
+}
+
+#[test]
+fn replay_report_checks_have_unique_names() {
+    let bundle = make_replay_claim_bundle();
+    let report = verify_replay_claim(&bundle);
+    let mut names: Vec<&str> = report.checks.iter().map(|c| c.name.as_str()).collect();
+    let before = names.len();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), before, "check names must be unique");
+}
+
+#[test]
+fn render_report_summary_for_failed_verdict_contains_failed() {
+    let mut bundle = make_benchmark_claim_bundle();
+    bundle.claimed.score_vs_node += 1.0;
+    let report = verify_benchmark_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    let summary = render_report_summary(&report);
+    assert!(summary.contains("verdict=Failed"));
+}
+
+#[test]
+fn render_attestation_summary_unsigned_shows_signed_false() {
+    let input = make_attestation_input(false);
+    let attestation = generate_attestation(&input).expect("create");
+    let summary = render_attestation_summary(&attestation);
+    assert!(summary.contains("signed=false"));
+}
+
+#[test]
+fn multiple_counterfactual_configs_all_verified() {
+    let mut bundle = make_replay_claim_bundle();
+    bundle
+        .counterfactual_configs
+        .push(make_counterfactual_config("cf-a"));
+    bundle
+        .counterfactual_configs
+        .push(make_counterfactual_config("cf-b"));
+    bundle
+        .counterfactual_configs
+        .push(make_counterfactual_config("cf-c"));
+    let report = verify_replay_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Verified);
+    let cf_checks: Vec<_> = report
+        .checks
+        .iter()
+        .filter(|c| c.name.starts_with("counterfactual:"))
+        .collect();
+    assert!(
+        cf_checks.len() >= 3,
+        "each counterfactual branch should produce a check"
+    );
+    assert!(cf_checks.iter().all(|c| c.passed));
+}
+
+#[test]
+fn benchmark_claim_report_has_correct_claim_type() {
+    let bundle = make_benchmark_claim_bundle();
+    let report = verify_benchmark_claim(&bundle);
+    assert_eq!(report.claim_type, "benchmark");
+}
+
+#[test]
+fn containment_claim_report_has_correct_claim_type() {
+    let bundle = make_containment_claim_bundle();
+    let report = verify_containment_claim(&bundle);
+    assert_eq!(report.claim_type, "containment");
+}
+
+#[test]
+fn replay_claim_report_has_correct_claim_type() {
+    let bundle = make_replay_claim_bundle();
+    let report = verify_replay_claim(&bundle);
+    assert_eq!(report.claim_type, "replay");
+}

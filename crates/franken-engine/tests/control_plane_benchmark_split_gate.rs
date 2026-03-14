@@ -16,9 +16,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::control_plane_benchmark_split_gate::{
-    BenchmarkSplit, BenchmarkSplitFailureCode, BenchmarkSplitFinding, BenchmarkSplitGateInput,
-    BenchmarkSplitLogEvent, BenchmarkSplitSnapshot, BenchmarkSplitThresholds, LatencyStatsNs,
-    SplitBenchmarkMetrics, evaluate_control_plane_benchmark_split,
+    BenchmarkSplit, BenchmarkSplitFailureCode, BenchmarkSplitFinding, BenchmarkSplitGateDecision,
+    BenchmarkSplitGateInput, BenchmarkSplitLogEvent, BenchmarkSplitSnapshot,
+    BenchmarkSplitThresholds, LatencyStatsNs, SplitBenchmarkEvaluation, SplitBenchmarkMetrics,
+    evaluate_control_plane_benchmark_split,
 };
 
 fn repo_root() -> PathBuf {
@@ -665,4 +666,181 @@ fn decision_id_is_nonempty_for_any_evaluation() {
         &BenchmarkSplitThresholds::default(),
     );
     assert!(!decision.decision_id.is_empty());
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: PearlTower 2026-03-14 — failure code Display,
+// evaluation/decision serde, edge cases
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn benchmark_split_failure_code_display_all_eight_variants() {
+    let cases = [
+        (
+            BenchmarkSplitFailureCode::MissingSplitMetrics,
+            "missing_split_metrics",
+        ),
+        (
+            BenchmarkSplitFailureCode::InsufficientBaselineRuns,
+            "insufficient_baseline_runs",
+        ),
+        (
+            BenchmarkSplitFailureCode::BaselineVarianceExceeded,
+            "baseline_variance_exceeded",
+        ),
+        (BenchmarkSplitFailureCode::InvalidMetric, "invalid_metric"),
+        (
+            BenchmarkSplitFailureCode::ThroughputRegressionExceeded,
+            "throughput_regression_exceeded",
+        ),
+        (
+            BenchmarkSplitFailureCode::LatencyRegressionExceeded,
+            "latency_regression_exceeded",
+        ),
+        (
+            BenchmarkSplitFailureCode::MemoryOverheadExceeded,
+            "memory_overhead_exceeded",
+        ),
+        (
+            BenchmarkSplitFailureCode::PreviousRunRegressionExceeded,
+            "previous_run_regression_exceeded",
+        ),
+    ];
+    let mut seen = BTreeSet::new();
+    for (code, expected) in cases {
+        assert_eq!(code.to_string(), expected);
+        assert!(seen.insert(expected), "duplicate display string");
+    }
+}
+
+#[test]
+fn split_benchmark_evaluation_serde_roundtrip() {
+    let eval = SplitBenchmarkEvaluation {
+        split: BenchmarkSplit::CxThreading,
+        previous_metrics: metrics(1_000_000, 950_000, 1_000_000, 1_050_000, 0),
+        candidate_metrics: metrics(990_000, 960_000, 1_010_000, 1_060_000, 1024),
+        throughput_regression_vs_previous_millionths: 10_000,
+        latency_p95_regression_vs_previous_millionths: 10_000,
+        latency_p99_regression_vs_previous_millionths: 9_524,
+        pass: true,
+    };
+    let json = serde_json::to_string(&eval).expect("serialize");
+    let recovered: SplitBenchmarkEvaluation = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(eval, recovered);
+}
+
+#[test]
+fn benchmark_split_gate_decision_serde_roundtrip() {
+    let decision = evaluate_control_plane_benchmark_split(
+        &input(previous_snapshot(), candidate_snapshot(0, true)),
+        &BenchmarkSplitThresholds::default(),
+    );
+    let json = serde_json::to_string(&decision).expect("serialize");
+    let recovered: BenchmarkSplitGateDecision = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decision, recovered);
+}
+
+#[test]
+fn decision_pass_and_rollback_consistency() {
+    // When pass is true, rollback_required should be false
+    let clean = evaluate_control_plane_benchmark_split(
+        &input(previous_snapshot(), candidate_snapshot(0, true)),
+        &BenchmarkSplitThresholds::default(),
+    );
+    if clean.pass {
+        assert!(
+            !clean.rollback_required,
+            "passing decision should not require rollback"
+        );
+    }
+
+    // When rollback is required, pass should be false
+    let heavy = evaluate_control_plane_benchmark_split(
+        &input(previous_snapshot(), candidate_snapshot(350_000, true)),
+        &BenchmarkSplitThresholds::default(),
+    );
+    if heavy.rollback_required {
+        assert!(!heavy.pass, "rollback-required decision should not pass");
+    }
+}
+
+#[test]
+fn finding_detail_is_nonempty_for_all_findings() {
+    let decision = evaluate_control_plane_benchmark_split(
+        &input(previous_snapshot(), candidate_snapshot(350_000, true)),
+        &BenchmarkSplitThresholds::default(),
+    );
+    for finding in &decision.findings {
+        assert!(
+            !finding.detail.trim().is_empty(),
+            "finding detail should not be empty for code {:?}",
+            finding.code
+        );
+    }
+}
+
+#[test]
+fn evaluation_pass_flag_matches_absence_of_findings() {
+    let decision = evaluate_control_plane_benchmark_split(
+        &input(previous_snapshot(), candidate_snapshot(0, true)),
+        &BenchmarkSplitThresholds::default(),
+    );
+    for eval in &decision.evaluations {
+        if eval.pass {
+            // A passing evaluation should have no findings for its split
+            let split_findings: Vec<_> = decision
+                .findings
+                .iter()
+                .filter(|f| f.split == Some(eval.split))
+                .filter(|f| {
+                    f.code == BenchmarkSplitFailureCode::ThroughputRegressionExceeded
+                        || f.code == BenchmarkSplitFailureCode::LatencyRegressionExceeded
+                        || f.code == BenchmarkSplitFailureCode::MemoryOverheadExceeded
+                        || f.code == BenchmarkSplitFailureCode::PreviousRunRegressionExceeded
+                })
+                .collect();
+            assert!(
+                split_findings.is_empty(),
+                "passing split {:?} should not have regression findings",
+                eval.split
+            );
+        }
+    }
+}
+
+#[test]
+fn decision_log_events_have_consistent_component() {
+    let decision = evaluate_control_plane_benchmark_split(
+        &input(previous_snapshot(), candidate_snapshot(0, true)),
+        &BenchmarkSplitThresholds::default(),
+    );
+    for event in &decision.logs {
+        assert_eq!(
+            event.component, "control_plane_benchmark_split_gate",
+            "all log events should use gate component"
+        );
+    }
+}
+
+#[test]
+fn decision_baseline_cv_millionths_is_present() {
+    let decision = evaluate_control_plane_benchmark_split(
+        &input(previous_snapshot(), candidate_snapshot(0, true)),
+        &BenchmarkSplitThresholds::default(),
+    );
+    assert!(
+        decision.baseline_cv_millionths.is_some(),
+        "baseline CV should be computed when 10+ baseline runs exist"
+    );
+}
+
+#[test]
+fn snapshot_hash_changes_when_metrics_differ() {
+    let snap_a = previous_snapshot();
+    let mut snap_b = previous_snapshot();
+    snap_b.split_metrics.insert(
+        BenchmarkSplit::Baseline,
+        metrics(999_999, 950_000, 1_000_000, 1_050_000, 0),
+    );
+    assert_ne!(snap_a.snapshot_hash(), snap_b.snapshot_hash());
 }

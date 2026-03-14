@@ -546,3 +546,163 @@ fn benchmark_spec_mentions_scoring() {
     let lower = spec.to_lowercase();
     assert!(lower.contains("scor"), "spec should mention scoring");
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: deeper section validation, table invariants,
+// cross-section consistency, helper edge cases
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn structured_event_contract_declares_all_seven_keys() {
+    let spec = read_spec();
+    let keys = [
+        "`trace_id`",
+        "`decision_id`",
+        "`policy_id`",
+        "`component`",
+        "`event`",
+        "`outcome`",
+        "`error_code`",
+    ];
+    let mut found = 0;
+    for key in &keys {
+        if spec.contains(key) {
+            found += 1;
+        }
+    }
+    assert_eq!(found, 7, "all 7 structured event keys must be declared");
+}
+
+#[test]
+fn family_table_family_ids_are_unique() {
+    let spec = read_spec();
+    let (_header, rows) = parse_table_by_heading(&spec, "## Required Benchmark Families");
+    let ids: BTreeSet<String> = rows.iter().map(|r| r[0].clone()).collect();
+    assert_eq!(ids.len(), rows.len(), "family IDs must be unique");
+}
+
+#[test]
+fn scale_profile_matrix_rows_have_five_columns() {
+    let spec = read_spec();
+    let (header, rows) =
+        parse_table_by_heading(&spec, "## Scale Profile Matrix (Normative Defaults)");
+    assert_eq!(header.len(), 5);
+    for row in &rows {
+        assert_eq!(row.len(), 5, "each profile row must have 5 columns");
+    }
+}
+
+#[test]
+fn threat_scenario_matrix_mentions_detection() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("detection") || spec.contains("Detection"),
+        "threat scenario matrix should discuss detection"
+    );
+}
+
+#[test]
+fn threat_scenario_matrix_mentions_containment() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("containment") || spec.contains("Containment"),
+        "threat scenario matrix should discuss containment"
+    );
+}
+
+#[test]
+fn spec_mentions_json_schema_files() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("extension_heavy_workload_matrix_v1.json"),
+        "spec should reference the workload matrix JSON file"
+    );
+    assert!(
+        spec.contains("extension_heavy_golden_outputs_v1.json"),
+        "spec should reference the golden outputs JSON file"
+    );
+}
+
+#[test]
+fn spec_mentions_fifteen_cases() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("15"),
+        "spec should mention the total of 15 workload cases"
+    );
+}
+
+#[test]
+fn spec_scoring_formula_section_has_weight_constraint() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("sum_i w_i = 1"),
+        "scoring section must declare weight normalization constraint"
+    );
+}
+
+#[test]
+fn spec_mentions_sha256() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("sha256") || spec.contains("SHA256") || spec.contains("sha-256"),
+        "spec should reference SHA256 checksums"
+    );
+}
+
+#[test]
+fn spec_mentions_node_and_bun_baselines() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("node") || spec.contains("Node"),
+        "spec should mention Node.js baseline"
+    );
+    assert!(
+        spec.contains("bun") || spec.contains("Bun"),
+        "spec should mention Bun baseline"
+    );
+}
+
+#[test]
+fn spec_contains_at_least_fifteen_sections() {
+    let spec = read_spec();
+    let section_count = spec.lines().filter(|l| l.starts_with("## ")).count();
+    assert!(
+        section_count >= 15,
+        "spec should have at least 15 top-level sections, got {section_count}"
+    );
+}
+
+#[test]
+fn spec_mentions_golden_output() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("golden") || spec.contains("Golden"),
+        "spec should mention golden outputs"
+    );
+}
+
+#[test]
+fn parse_table_row_empty_string_returns_single_empty() {
+    let cells = parse_table_row("");
+    assert_eq!(cells, vec![""]);
+}
+
+#[test]
+fn spec_word_count_exceeds_minimum() {
+    let spec = read_spec();
+    let word_count = spec.split_whitespace().count();
+    assert!(
+        word_count >= 500,
+        "spec should have at least 500 words, got {word_count}"
+    );
+}
+
+#[test]
+fn spec_mentions_replay() {
+    let spec = read_spec();
+    assert!(
+        spec.contains("replay") || spec.contains("Replay"),
+        "spec should mention replay for reproducibility"
+    );
+}

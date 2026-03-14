@@ -1741,3 +1741,501 @@ fn telemetry_events_match_transition_count() {
         assert!(e.transition.is_some());
     }
 }
+
+// ===========================================================================
+// Enrichment: ExtensionState — serde roundtrip all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_extension_state_serde_roundtrip() {
+    let states = [
+        ExtensionState::Unloaded,
+        ExtensionState::Validating,
+        ExtensionState::Loading,
+        ExtensionState::Starting,
+        ExtensionState::Running,
+        ExtensionState::Suspending,
+        ExtensionState::Suspended,
+        ExtensionState::Resuming,
+        ExtensionState::Terminating,
+        ExtensionState::Terminated,
+        ExtensionState::Quarantined,
+    ];
+    for s in &states {
+        let json = serde_json::to_string(s).unwrap();
+        let back: ExtensionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(*s, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: ExtensionState — as_str produces 11 distinct strings
+// ===========================================================================
+
+#[test]
+fn enrichment_extension_state_as_str_unique() {
+    let strs: std::collections::BTreeSet<&str> = [
+        ExtensionState::Unloaded,
+        ExtensionState::Validating,
+        ExtensionState::Loading,
+        ExtensionState::Starting,
+        ExtensionState::Running,
+        ExtensionState::Suspending,
+        ExtensionState::Suspended,
+        ExtensionState::Resuming,
+        ExtensionState::Terminating,
+        ExtensionState::Terminated,
+        ExtensionState::Quarantined,
+    ]
+    .iter()
+    .map(|s| s.as_str())
+    .collect();
+    assert_eq!(strs.len(), 11);
+}
+
+// ===========================================================================
+// Enrichment: ExtensionState — Display delegates to as_str
+// ===========================================================================
+
+#[test]
+fn enrichment_extension_state_display_matches_as_str() {
+    let states = [
+        ExtensionState::Unloaded,
+        ExtensionState::Running,
+        ExtensionState::Quarantined,
+        ExtensionState::Terminated,
+    ];
+    for s in &states {
+        assert_eq!(s.to_string(), s.as_str());
+    }
+}
+
+// ===========================================================================
+// Enrichment: ExtensionState — is_alive / is_terminal / is_executing
+// ===========================================================================
+
+#[test]
+fn enrichment_extension_state_is_alive_running() {
+    assert!(ExtensionState::Running.is_alive());
+    assert!(ExtensionState::Suspending.is_alive());
+    assert!(ExtensionState::Suspended.is_alive());
+    assert!(ExtensionState::Resuming.is_alive());
+}
+
+#[test]
+fn enrichment_extension_state_is_not_alive_terminal() {
+    assert!(!ExtensionState::Terminated.is_alive());
+    assert!(!ExtensionState::Quarantined.is_alive());
+    assert!(!ExtensionState::Unloaded.is_alive());
+}
+
+#[test]
+fn enrichment_extension_state_is_terminal() {
+    assert!(ExtensionState::Terminated.is_terminal());
+    assert!(ExtensionState::Quarantined.is_terminal());
+    assert!(!ExtensionState::Running.is_terminal());
+    assert!(!ExtensionState::Unloaded.is_terminal());
+}
+
+#[test]
+fn enrichment_extension_state_is_executing() {
+    assert!(ExtensionState::Running.is_executing());
+    assert!(!ExtensionState::Suspended.is_executing());
+    assert!(!ExtensionState::Terminated.is_executing());
+    assert!(!ExtensionState::Unloaded.is_executing());
+}
+
+// ===========================================================================
+// Enrichment: LifecycleTransition — serde roundtrip all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_lifecycle_transition_serde_roundtrip() {
+    let transitions = [
+        LifecycleTransition::Validate,
+        LifecycleTransition::Load,
+        LifecycleTransition::Start,
+        LifecycleTransition::Activate,
+        LifecycleTransition::Suspend,
+        LifecycleTransition::Freeze,
+        LifecycleTransition::Resume,
+        LifecycleTransition::Reactivate,
+        LifecycleTransition::Terminate,
+        LifecycleTransition::Finalize,
+        LifecycleTransition::Quarantine,
+        LifecycleTransition::RejectManifest,
+        LifecycleTransition::LoadFailed,
+        LifecycleTransition::StartFailed,
+    ];
+    for t in &transitions {
+        let json = serde_json::to_string(t).unwrap();
+        let back: LifecycleTransition = serde_json::from_str(&json).unwrap();
+        assert_eq!(*t, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: LifecycleTransition — as_str produces 14 distinct strings
+// ===========================================================================
+
+#[test]
+fn enrichment_lifecycle_transition_as_str_unique() {
+    let strs: std::collections::BTreeSet<&str> = [
+        LifecycleTransition::Validate,
+        LifecycleTransition::Load,
+        LifecycleTransition::Start,
+        LifecycleTransition::Activate,
+        LifecycleTransition::Suspend,
+        LifecycleTransition::Freeze,
+        LifecycleTransition::Resume,
+        LifecycleTransition::Reactivate,
+        LifecycleTransition::Terminate,
+        LifecycleTransition::Finalize,
+        LifecycleTransition::Quarantine,
+        LifecycleTransition::RejectManifest,
+        LifecycleTransition::LoadFailed,
+        LifecycleTransition::StartFailed,
+    ]
+    .iter()
+    .map(|t| t.as_str())
+    .collect();
+    assert_eq!(strs.len(), 14);
+}
+
+// ===========================================================================
+// Enrichment: LifecycleTransition — is_failure
+// ===========================================================================
+
+#[test]
+fn enrichment_lifecycle_transition_is_failure() {
+    assert!(LifecycleTransition::RejectManifest.is_failure());
+    assert!(LifecycleTransition::LoadFailed.is_failure());
+    assert!(LifecycleTransition::StartFailed.is_failure());
+    assert!(!LifecycleTransition::Validate.is_failure());
+    assert!(!LifecycleTransition::Load.is_failure());
+    assert!(!LifecycleTransition::Start.is_failure());
+    assert!(!LifecycleTransition::Activate.is_failure());
+    assert!(!LifecycleTransition::Terminate.is_failure());
+}
+
+// ===========================================================================
+// Enrichment: LifecycleTransition — Display matches as_str
+// ===========================================================================
+
+#[test]
+fn enrichment_lifecycle_transition_display_matches_as_str() {
+    let transitions = [
+        LifecycleTransition::Validate,
+        LifecycleTransition::Quarantine,
+        LifecycleTransition::StartFailed,
+    ];
+    for t in &transitions {
+        assert_eq!(t.to_string(), t.as_str());
+    }
+}
+
+// ===========================================================================
+// Enrichment: LifecycleError — error_code all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_lifecycle_error_error_code_all_variants() {
+    let errors: Vec<LifecycleError> = vec![
+        LifecycleError::InvalidTransition {
+            extension_id: "e1".into(),
+            current_state: ExtensionState::Running,
+            attempted: LifecycleTransition::Load,
+        },
+        LifecycleError::ExtensionNotFound {
+            extension_id: "e2".into(),
+        },
+        LifecycleError::ExtensionAlreadyExists {
+            extension_id: "e3".into(),
+        },
+        LifecycleError::BudgetExhausted {
+            extension_id: "e4".into(),
+            remaining_millionths: 0,
+            required_millionths: 100,
+        },
+        LifecycleError::GracePeriodExpired {
+            extension_id: "e5".into(),
+            elapsed_ns: 10_000_000_000,
+            budget_ns: 5_000_000_000,
+        },
+        LifecycleError::ManifestRejected {
+            extension_id: "e6".into(),
+            reason: "bad capabilities".into(),
+        },
+        LifecycleError::Internal {
+            detail: "something broke".into(),
+        },
+    ];
+
+    let codes: std::collections::BTreeSet<&str> = errors.iter().map(|e| e.error_code()).collect();
+    assert_eq!(codes.len(), 7, "7 distinct error codes");
+
+    assert_eq!(errors[0].error_code(), "LIFECYCLE_INVALID_TRANSITION");
+    assert_eq!(errors[1].error_code(), "LIFECYCLE_EXTENSION_NOT_FOUND");
+    assert_eq!(errors[2].error_code(), "LIFECYCLE_EXTENSION_EXISTS");
+    assert_eq!(errors[3].error_code(), "LIFECYCLE_BUDGET_EXHAUSTED");
+    assert_eq!(errors[4].error_code(), "LIFECYCLE_GRACE_EXPIRED");
+    assert_eq!(errors[5].error_code(), "LIFECYCLE_MANIFEST_REJECTED");
+    assert_eq!(errors[6].error_code(), "LIFECYCLE_INTERNAL");
+}
+
+// ===========================================================================
+// Enrichment: LifecycleError — Display is nonempty for all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_lifecycle_error_display_nonempty() {
+    let errors: Vec<LifecycleError> = vec![
+        LifecycleError::InvalidTransition {
+            extension_id: "e1".into(),
+            current_state: ExtensionState::Running,
+            attempted: LifecycleTransition::Load,
+        },
+        LifecycleError::ExtensionNotFound {
+            extension_id: "e2".into(),
+        },
+        LifecycleError::ExtensionAlreadyExists {
+            extension_id: "e3".into(),
+        },
+        LifecycleError::BudgetExhausted {
+            extension_id: "e4".into(),
+            remaining_millionths: 0,
+            required_millionths: 100,
+        },
+        LifecycleError::GracePeriodExpired {
+            extension_id: "e5".into(),
+            elapsed_ns: 10_000_000_000,
+            budget_ns: 5_000_000_000,
+        },
+        LifecycleError::ManifestRejected {
+            extension_id: "e6".into(),
+            reason: "bad capabilities".into(),
+        },
+        LifecycleError::Internal {
+            detail: "something broke".into(),
+        },
+    ];
+
+    let displays: std::collections::BTreeSet<String> =
+        errors.iter().map(|e| e.to_string()).collect();
+    assert_eq!(displays.len(), 7, "7 distinct display strings");
+    for d in &displays {
+        assert!(!d.is_empty());
+    }
+}
+
+// ===========================================================================
+// Enrichment: LifecycleError — serde roundtrip all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_lifecycle_error_serde_roundtrip() {
+    let errors: Vec<LifecycleError> = vec![
+        LifecycleError::InvalidTransition {
+            extension_id: "e1".into(),
+            current_state: ExtensionState::Suspended,
+            attempted: LifecycleTransition::Start,
+        },
+        LifecycleError::ExtensionNotFound {
+            extension_id: "e2".into(),
+        },
+        LifecycleError::ExtensionAlreadyExists {
+            extension_id: "e3".into(),
+        },
+        LifecycleError::BudgetExhausted {
+            extension_id: "e4".into(),
+            remaining_millionths: 50,
+            required_millionths: 1000,
+        },
+        LifecycleError::GracePeriodExpired {
+            extension_id: "e5".into(),
+            elapsed_ns: 6_000_000_000,
+            budget_ns: 5_000_000_000,
+        },
+        LifecycleError::ManifestRejected {
+            extension_id: "e6".into(),
+            reason: "invalid".into(),
+        },
+        LifecycleError::Internal {
+            detail: "oops".into(),
+        },
+    ];
+
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: LifecycleError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*e, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: ResourceBudget — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_resource_budget_serde_roundtrip() {
+    let b = ResourceBudget::new(1_000_000, 64 * 1024 * 1024, 10_000);
+    let json = serde_json::to_string(&b).unwrap();
+    let back: ResourceBudget = serde_json::from_str(&json).unwrap();
+    assert_eq!(b, back);
+}
+
+// ===========================================================================
+// Enrichment: ResourceBudget — is_exhausted
+// ===========================================================================
+
+#[test]
+fn enrichment_resource_budget_not_exhausted_initially() {
+    let b = ResourceBudget::new(1_000_000, 64 * 1024 * 1024, 10_000);
+    assert!(!b.is_exhausted());
+}
+
+#[test]
+fn enrichment_resource_budget_exhausted_zero_cpu() {
+    let b = ResourceBudget::new(0, 64 * 1024 * 1024, 10_000);
+    assert!(b.is_exhausted());
+}
+
+#[test]
+fn enrichment_resource_budget_exhausted_zero_memory() {
+    let b = ResourceBudget::new(1_000_000, 0, 10_000);
+    assert!(b.is_exhausted());
+}
+
+#[test]
+fn enrichment_resource_budget_exhausted_zero_hostcalls() {
+    let b = ResourceBudget::new(1_000_000, 64 * 1024 * 1024, 0);
+    assert!(b.is_exhausted());
+}
+
+// ===========================================================================
+// Enrichment: ResourceBudget — consume_cpu
+// ===========================================================================
+
+#[test]
+fn enrichment_resource_budget_consume_cpu_success() {
+    let mut b = ResourceBudget::new(1_000, 1024, 10);
+    assert!(b.consume_cpu(500));
+    assert_eq!(b.cpu_remaining_millionths, 500);
+}
+
+#[test]
+fn enrichment_resource_budget_consume_cpu_insufficient() {
+    let mut b = ResourceBudget::new(100, 1024, 10);
+    assert!(!b.consume_cpu(200));
+}
+
+// ===========================================================================
+// Enrichment: ResourceBudget — consume_hostcall
+// ===========================================================================
+
+#[test]
+fn enrichment_resource_budget_consume_hostcall_success() {
+    let mut b = ResourceBudget::new(1_000, 1024, 1);
+    assert!(b.consume_hostcall());
+    assert_eq!(b.hostcall_remaining, 0);
+}
+
+#[test]
+fn enrichment_resource_budget_consume_hostcall_zero_remaining() {
+    let mut b = ResourceBudget::new(1_000, 1024, 0);
+    assert!(!b.consume_hostcall());
+}
+
+// ===========================================================================
+// Enrichment: ResourceBudget — cpu_utilization_millionths
+// ===========================================================================
+
+#[test]
+fn enrichment_resource_budget_cpu_utilization_full() {
+    let mut b = ResourceBudget::new(1_000_000, 1024, 10);
+    b.consume_cpu(1_000_000);
+    assert_eq!(b.cpu_utilization_millionths(), 1_000_000);
+}
+
+#[test]
+fn enrichment_resource_budget_cpu_utilization_half() {
+    let mut b = ResourceBudget::new(1_000_000, 1024, 10);
+    b.consume_cpu(500_000);
+    assert_eq!(b.cpu_utilization_millionths(), 500_000);
+}
+
+#[test]
+fn enrichment_resource_budget_cpu_utilization_zero_total() {
+    let b = ResourceBudget::new(0, 1024, 10);
+    assert_eq!(b.cpu_utilization_millionths(), 0);
+}
+
+// ===========================================================================
+// Enrichment: CancellationConfig — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_cancellation_config_serde_roundtrip() {
+    let c = CancellationConfig::default();
+    let json = serde_json::to_string(&c).unwrap();
+    let back: CancellationConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(c, back);
+}
+
+// ===========================================================================
+// Enrichment: CancellationConfig — default values
+// ===========================================================================
+
+#[test]
+fn enrichment_cancellation_config_default_values() {
+    let c = CancellationConfig::default();
+    assert!(c.grace_period_ns > 0);
+    assert!(c.force_on_timeout);
+    assert!(c.propagate_to_children);
+}
+
+// ===========================================================================
+// Enrichment: CancellationConfig — clamped
+// ===========================================================================
+
+#[test]
+fn enrichment_cancellation_config_clamped_already_valid() {
+    let c = CancellationConfig::default().clamped();
+    assert_eq!(c, CancellationConfig::default());
+}
+
+#[test]
+fn enrichment_cancellation_config_clamped_excessive_grace() {
+    let mut c = CancellationConfig::default();
+    c.grace_period_ns = u64::MAX;
+    let clamped = c.clamped();
+    assert!(clamped.grace_period_ns < u64::MAX);
+}
+
+// ===========================================================================
+// Enrichment: valid_transitions — Unloaded has valid transitions
+// ===========================================================================
+
+#[test]
+fn enrichment_valid_transitions_unloaded_nonempty() {
+    use frankenengine_engine::extension_lifecycle_manager::valid_transitions;
+    let transitions = valid_transitions(ExtensionState::Unloaded);
+    assert!(!transitions.is_empty());
+}
+
+#[test]
+fn enrichment_valid_transitions_terminated_empty() {
+    use frankenengine_engine::extension_lifecycle_manager::valid_transitions;
+    let transitions = valid_transitions(ExtensionState::Terminated);
+    assert!(
+        transitions.is_empty(),
+        "terminal states have no transitions"
+    );
+}
+
+#[test]
+fn enrichment_valid_transitions_quarantined_empty() {
+    use frankenengine_engine::extension_lifecycle_manager::valid_transitions;
+    let transitions = valid_transitions(ExtensionState::Quarantined);
+    assert!(transitions.is_empty(), "quarantined is terminal");
+}

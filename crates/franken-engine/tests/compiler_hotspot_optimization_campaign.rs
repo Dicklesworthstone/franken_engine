@@ -742,3 +742,161 @@ fn compute_campaign_results_count_matches_fixture() {
     let results = compute_campaign_results(&fixture);
     assert_eq!(results.len(), fixture.campaign_runs.len());
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: struct clone/debug, deserialization from JSON,
+// fixture invariants, lever classification edge cases
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn hotspot_evidence_clone_preserves_fields() {
+    let evidence = HotspotEvidence {
+        hotspot_id: "hp-1".to_string(),
+        phase: "codegen".to_string(),
+        baseline_share_millionths: 200_000,
+        baseline_profile_ref: "profile-ref-1".to_string(),
+    };
+    let cloned = evidence.clone();
+    assert_eq!(evidence, cloned);
+}
+
+#[test]
+fn metric_vector_clone_preserves_fields() {
+    let mv = MetricVector {
+        analysis_graph_construction_ns: 1000,
+        lowering_sources_per_second_millionths: 2000,
+        optimization_pass_ns: 3000,
+        codegen_output_bytes: 4000,
+        compile_latency_ns: 5000,
+    };
+    let cloned = mv.clone();
+    assert_eq!(mv, cloned);
+}
+
+#[test]
+fn ev_inputs_debug_is_nonempty() {
+    let inputs = EvInputs {
+        impact: 5,
+        confidence: 8,
+        reuse: 3,
+        effort: 2,
+        friction: 1,
+    };
+    assert!(!format!("{inputs:?}").is_empty());
+}
+
+#[test]
+fn isomorphism_proof_note_clone_preserves_fields() {
+    let note = IsomorphismProofNote {
+        proof_method: "bisimulation".to_string(),
+        verification_contract_ref: "contract-ref-1".to_string(),
+        drift_status: "no_drift".to_string(),
+    };
+    let cloned = note.clone();
+    assert_eq!(note, cloned);
+}
+
+#[test]
+fn replay_scenario_debug_is_nonempty() {
+    let scenario = ReplayScenario {
+        scenario_id: "s-1".to_string(),
+        scenario_kind: "normal".to_string(),
+        replay_command: "cargo test".to_string(),
+        expected_pass: true,
+        expected_outcome: "pass".to_string(),
+    };
+    assert!(!format!("{scenario:?}").is_empty());
+}
+
+#[test]
+fn hotspot_evidence_deserialization_from_json() {
+    let json = r#"{"hotspot_id":"hp-test","phase":"analysis","baseline_share_millionths":150000,"baseline_profile_ref":"ref-1"}"#;
+    let evidence: HotspotEvidence = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(evidence.hotspot_id, "hp-test");
+    assert_eq!(evidence.baseline_share_millionths, 150_000);
+}
+
+#[test]
+fn metric_vector_deserialization_from_json() {
+    let json = r#"{"analysis_graph_construction_ns":100,"lowering_sources_per_second_millionths":200,"optimization_pass_ns":300,"codegen_output_bytes":400,"compile_latency_ns":500}"#;
+    let mv: MetricVector = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(mv.analysis_graph_construction_ns, 100);
+    assert_eq!(mv.compile_latency_ns, 500);
+}
+
+#[test]
+fn ev_inputs_deserialization_from_json() {
+    let json = r#"{"impact":10,"confidence":9,"reuse":8,"effort":3,"friction":2}"#;
+    let inputs: EvInputs = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(inputs.impact, 10);
+    assert_eq!(inputs.friction, 2);
+}
+
+#[test]
+fn fixture_expected_rankings_are_nonempty() {
+    let fixture = load_fixture();
+    assert!(!fixture.expected_ev_ranking.is_empty());
+    assert!(!fixture.expected_gain_ranking.is_empty());
+    assert!(!fixture.expected_selected_campaign.is_empty());
+}
+
+#[test]
+fn fixture_replay_scenarios_are_nonempty() {
+    let fixture = load_fixture();
+    assert!(!fixture.cross_subsystem_replay_scenarios.is_empty());
+}
+
+#[test]
+fn fixture_required_log_keys_has_eight_keys() {
+    let fixture = load_fixture();
+    assert_eq!(fixture.required_log_keys.len(), 8);
+}
+
+#[test]
+fn classify_compiler_lever_is_case_insensitive() {
+    assert_eq!(
+        classify_compiler_lever("src/Static_Analysis_Graph/mod.rs"),
+        Some("analysis_graph")
+    );
+    assert_eq!(
+        classify_compiler_lever("src/LOWERING_PIPELINE/pass.rs"),
+        Some("lowering_throughput")
+    );
+}
+
+#[test]
+fn structured_events_have_correct_schema_version() {
+    let results = vec![CampaignResult {
+        campaign_id: "test-schema".to_string(),
+        ev_score_millionths: 100,
+        gain_millionths: 50,
+    }];
+    let events = emit_structured_events(&results);
+    assert_eq!(
+        events[0]["schema_version"],
+        "franken-engine.compiler-log-event.v1"
+    );
+}
+
+#[test]
+fn structured_events_have_correct_component() {
+    let results = vec![CampaignResult {
+        campaign_id: "test-comp".to_string(),
+        ev_score_millionths: 100,
+        gain_millionths: 50,
+    }];
+    let events = emit_structured_events(&results);
+    assert_eq!(
+        events[0]["component"],
+        "compiler_hotspot_optimization_campaign"
+    );
+}
+
+#[test]
+fn campaign_gain_with_identical_metrics_is_zero() {
+    let fixture = load_fixture();
+    let run = &fixture.campaign_runs[0];
+    let mut zero_run = run.clone();
+    zero_run.candidate_metrics = zero_run.baseline_metrics.clone();
+    assert_eq!(campaign_gain_millionths(&zero_run), 0);
+}

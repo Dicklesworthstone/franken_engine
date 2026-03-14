@@ -2129,3 +2129,1203 @@ fn enrichment_history_entry_phase_consumption_map_roundtrip() {
         300
     );
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment tests — PearlTower 2026-03-13 batch
+// ---------------------------------------------------------------------------
+
+// --- SynthesisPhase deeper property tests ---
+
+#[test]
+fn enrichment_phase_partial_eq_reflexive_all_variants() {
+    for phase in &SynthesisPhase::ALL {
+        assert_eq!(*phase, *phase);
+    }
+}
+
+#[test]
+fn enrichment_phase_ne_across_variants() {
+    let phases = SynthesisPhase::ALL;
+    for i in 0..phases.len() {
+        for j in (i + 1)..phases.len() {
+            assert_ne!(phases[i], phases[j]);
+        }
+    }
+}
+
+#[test]
+fn enrichment_phase_display_no_empty_strings() {
+    for phase in &SynthesisPhase::ALL {
+        let disp = phase.to_string();
+        assert!(!disp.is_empty());
+        assert!(disp.len() > 3);
+    }
+}
+
+#[test]
+fn enrichment_phase_serde_json_strings_are_quoted() {
+    for phase in &SynthesisPhase::ALL {
+        let json = serde_json::to_string(phase).unwrap();
+        assert!(json.starts_with('"'));
+        assert!(json.ends_with('"'));
+    }
+}
+
+#[test]
+fn enrichment_phase_hash_in_btreeset_preserves_all() {
+    use std::collections::BTreeSet;
+    let mut set = BTreeSet::new();
+    for phase in &SynthesisPhase::ALL {
+        set.insert(*phase);
+    }
+    assert_eq!(set.len(), 4);
+}
+
+// --- BudgetDimension deeper property tests ---
+
+#[test]
+fn enrichment_dimension_ne_across_variants() {
+    assert_ne!(BudgetDimension::Time, BudgetDimension::Compute);
+    assert_ne!(BudgetDimension::Compute, BudgetDimension::Depth);
+    assert_ne!(BudgetDimension::Time, BudgetDimension::Depth);
+}
+
+#[test]
+fn enrichment_dimension_serde_json_strings_are_quoted() {
+    for dim in &[
+        BudgetDimension::Time,
+        BudgetDimension::Compute,
+        BudgetDimension::Depth,
+    ] {
+        let json = serde_json::to_string(dim).unwrap();
+        assert!(json.starts_with('"'));
+        assert!(json.ends_with('"'));
+    }
+}
+
+#[test]
+fn enrichment_dimension_display_distinct_strings() {
+    let time_s = BudgetDimension::Time.to_string();
+    let compute_s = BudgetDimension::Compute.to_string();
+    let depth_s = BudgetDimension::Depth.to_string();
+    assert_ne!(time_s, compute_s);
+    assert_ne!(compute_s, depth_s);
+    assert_ne!(time_s, depth_s);
+}
+
+#[test]
+fn enrichment_dimension_in_btreemap_key() {
+    let mut map = BTreeMap::new();
+    map.insert(BudgetDimension::Time, 1);
+    map.insert(BudgetDimension::Compute, 2);
+    map.insert(BudgetDimension::Depth, 3);
+    assert_eq!(map.len(), 3);
+    assert_eq!(*map.get(&BudgetDimension::Compute).unwrap(), 2);
+}
+
+// --- PhaseBudget boundary tests ---
+
+#[test]
+fn enrichment_phase_budget_exact_boundary_not_exceeded() {
+    let budget = PhaseBudget {
+        time_cap_ns: 1_000,
+        compute_cap: 100,
+        depth_cap: 10,
+    };
+    let consumed = PhaseConsumption {
+        time_ns: 1_000,
+        compute: 100,
+        depth: 10,
+    };
+    assert!(!budget.is_exceeded(&consumed));
+    assert!(budget.exceeded_dimensions(&consumed).is_empty());
+}
+
+#[test]
+fn enrichment_phase_budget_one_over_each_dimension_individually() {
+    let budget = PhaseBudget {
+        time_cap_ns: 100,
+        compute_cap: 200,
+        depth_cap: 300,
+    };
+    // Time+1 only
+    let c1 = PhaseConsumption {
+        time_ns: 101,
+        compute: 0,
+        depth: 0,
+    };
+    assert_eq!(budget.exceeded_dimensions(&c1), vec![BudgetDimension::Time]);
+    // Compute+1 only
+    let c2 = PhaseConsumption {
+        time_ns: 0,
+        compute: 201,
+        depth: 0,
+    };
+    assert_eq!(
+        budget.exceeded_dimensions(&c2),
+        vec![BudgetDimension::Compute]
+    );
+    // Depth+1 only
+    let c3 = PhaseConsumption {
+        time_ns: 0,
+        compute: 0,
+        depth: 301,
+    };
+    assert_eq!(
+        budget.exceeded_dimensions(&c3),
+        vec![BudgetDimension::Depth]
+    );
+}
+
+#[test]
+fn enrichment_phase_budget_clone_equals_original() {
+    let budget = PhaseBudget {
+        time_cap_ns: 500,
+        compute_cap: 250,
+        depth_cap: 42,
+    };
+    let cloned = budget.clone();
+    assert_eq!(budget, cloned);
+}
+
+#[test]
+fn enrichment_phase_budget_u64_max_minus_one_not_exceeded() {
+    let budget = PhaseBudget {
+        time_cap_ns: u64::MAX,
+        compute_cap: u64::MAX,
+        depth_cap: u64::MAX,
+    };
+    let consumed = PhaseConsumption {
+        time_ns: u64::MAX - 1,
+        compute: u64::MAX - 1,
+        depth: u64::MAX - 1,
+    };
+    assert!(!budget.is_exceeded(&consumed));
+}
+
+// --- PhaseConsumption property tests ---
+
+#[test]
+fn enrichment_phase_consumption_zero_equals_self() {
+    let a = PhaseConsumption::zero();
+    let b = PhaseConsumption::zero();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn enrichment_phase_consumption_clone_deep() {
+    let pc = PhaseConsumption {
+        time_ns: 1_000_000,
+        compute: 999,
+        depth: 77,
+    };
+    let cloned = pc.clone();
+    assert_eq!(pc.time_ns, cloned.time_ns);
+    assert_eq!(pc.compute, cloned.compute);
+    assert_eq!(pc.depth, cloned.depth);
+}
+
+#[test]
+fn enrichment_phase_consumption_large_values_serde() {
+    let pc = PhaseConsumption {
+        time_ns: u64::MAX,
+        compute: u64::MAX,
+        depth: u64::MAX,
+    };
+    let json = serde_json::to_string(&pc).unwrap();
+    let back: PhaseConsumption = serde_json::from_str(&json).unwrap();
+    assert_eq!(pc, back);
+}
+
+// --- SynthesisBudgetContract deeper tests ---
+
+#[test]
+fn enrichment_contract_version_default_is_one() {
+    let c = default_contract();
+    assert_eq!(c.version, 1);
+}
+
+#[test]
+fn enrichment_contract_budget_for_all_four_phases_with_partial_overrides() {
+    let c = contract_with_phase_budgets();
+    // StaticAnalysis has override
+    let sa = c.budget_for_phase(SynthesisPhase::StaticAnalysis);
+    assert_eq!(sa.time_cap_ns, 500);
+    // Ablation has override
+    let ab = c.budget_for_phase(SynthesisPhase::Ablation);
+    assert_eq!(ab.time_cap_ns, 300);
+    // TheoremChecking inherits global
+    let tc = c.budget_for_phase(SynthesisPhase::TheoremChecking);
+    assert_eq!(tc.time_cap_ns, c.global_time_cap_ns);
+    // ResultAssembly inherits global
+    let ra = c.budget_for_phase(SynthesisPhase::ResultAssembly);
+    assert_eq!(ra.time_cap_ns, c.global_time_cap_ns);
+}
+
+#[test]
+fn enrichment_contract_globally_exceeded_compute_only() {
+    let c = tight_contract();
+    let total = PhaseConsumption {
+        time_ns: 0,
+        compute: c.global_compute_cap + 1,
+        depth: 0,
+    };
+    assert!(c.is_globally_exceeded(&total));
+}
+
+#[test]
+fn enrichment_contract_globally_exceeded_depth_only() {
+    let c = tight_contract();
+    let total = PhaseConsumption {
+        time_ns: 0,
+        compute: 0,
+        depth: c.global_depth_cap + 1,
+    };
+    assert!(c.is_globally_exceeded(&total));
+}
+
+#[test]
+fn enrichment_contract_clone_preserves_all_fields() {
+    let c = contract_with_phase_budgets();
+    let cloned = c.clone();
+    assert_eq!(c.version, cloned.version);
+    assert_eq!(c.global_time_cap_ns, cloned.global_time_cap_ns);
+    assert_eq!(c.global_compute_cap, cloned.global_compute_cap);
+    assert_eq!(c.global_depth_cap, cloned.global_depth_cap);
+    assert_eq!(c.phase_budgets.len(), cloned.phase_budgets.len());
+    assert_eq!(c.epoch, cloned.epoch);
+}
+
+#[test]
+fn enrichment_contract_inequality_on_different_epochs() {
+    let mut c1 = default_contract();
+    let mut c2 = default_contract();
+    c1.epoch = SecurityEpoch::from_raw(1);
+    c2.epoch = SecurityEpoch::from_raw(2);
+    assert_ne!(c1, c2);
+}
+
+#[test]
+fn enrichment_contract_inequality_on_different_versions() {
+    let mut c1 = default_contract();
+    let mut c2 = default_contract();
+    c1.version = 1;
+    c2.version = 2;
+    assert_ne!(c1, c2);
+}
+
+// --- BudgetRegistry deeper tests ---
+
+#[test]
+fn enrichment_registry_effective_contract_returns_ref_to_default() {
+    let reg = BudgetRegistry::new(tight_contract());
+    let eff1 = reg.effective_contract("no-override-1");
+    let eff2 = reg.effective_contract("no-override-2");
+    assert_eq!(eff1, eff2);
+    assert_eq!(eff1.global_time_cap_ns, 1_000);
+}
+
+#[test]
+fn enrichment_registry_add_override_increments_count() {
+    let mut reg = BudgetRegistry::new(default_contract());
+    for i in 0..10 {
+        reg.add_override(BudgetOverride {
+            extension_id: format!("ext-{i}"),
+            contract: tight_contract(),
+            justification: "test".to_string(),
+        });
+        assert_eq!(reg.override_count(), i + 1);
+    }
+}
+
+#[test]
+fn enrichment_registry_remove_restores_default() {
+    let mut reg = BudgetRegistry::new(default_contract());
+    reg.add_override(BudgetOverride {
+        extension_id: "ext-temp".to_string(),
+        contract: tight_contract(),
+        justification: "temp".to_string(),
+    });
+    assert_eq!(reg.effective_contract("ext-temp").global_time_cap_ns, 1_000);
+    reg.remove_override("ext-temp");
+    assert_eq!(
+        reg.effective_contract("ext-temp").global_time_cap_ns,
+        default_contract().global_time_cap_ns
+    );
+}
+
+#[test]
+fn enrichment_registry_debug_format() {
+    let reg = BudgetRegistry::new(tight_contract());
+    let dbg = format!("{reg:?}");
+    assert!(dbg.contains("BudgetRegistry"));
+}
+
+#[test]
+fn enrichment_registry_clone_preserves_overrides() {
+    let mut reg = BudgetRegistry::new(default_contract());
+    reg.add_override(BudgetOverride {
+        extension_id: "ext-clone".to_string(),
+        contract: tight_contract(),
+        justification: "clone".to_string(),
+    });
+    let cloned = reg.clone();
+    assert_eq!(cloned.override_count(), 1);
+    assert_eq!(
+        cloned.effective_contract("ext-clone").global_time_cap_ns,
+        1_000
+    );
+}
+
+// --- BudgetMonitor phase lifecycle edge cases ---
+
+#[test]
+fn enrichment_monitor_begin_same_phase_twice_no_error() {
+    let mut mon = BudgetMonitor::new(default_contract());
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    mon.record_consumption(10, 1, 1).unwrap();
+    // Re-beginning the same phase should succeed.
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    mon.record_consumption(20, 2, 1).unwrap();
+    let pc = mon.phase_consumption(SynthesisPhase::Ablation).unwrap();
+    assert_eq!(pc.time_ns, 30);
+}
+
+#[test]
+fn enrichment_monitor_current_phase_updates_on_begin() {
+    let mut mon = BudgetMonitor::new(default_contract());
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    assert_eq!(mon.current_phase(), Some(SynthesisPhase::StaticAnalysis));
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    assert_eq!(mon.current_phase(), Some(SynthesisPhase::Ablation));
+    mon.begin_phase(SynthesisPhase::TheoremChecking).unwrap();
+    assert_eq!(mon.current_phase(), Some(SynthesisPhase::TheoremChecking));
+    mon.begin_phase(SynthesisPhase::ResultAssembly).unwrap();
+    assert_eq!(mon.current_phase(), Some(SynthesisPhase::ResultAssembly));
+}
+
+#[test]
+fn enrichment_monitor_remaining_global_after_multi_phase() {
+    let mut mon = BudgetMonitor::new(tight_contract()); // time=1000, compute=100, depth=10
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(200, 20, 2).unwrap();
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    mon.record_consumption(300, 30, 3).unwrap();
+
+    let rem = mon.remaining_global();
+    assert_eq!(rem.time_ns, 500);
+    assert_eq!(rem.compute, 50);
+    assert_eq!(rem.depth, 5);
+}
+
+#[test]
+fn enrichment_monitor_phase_consumption_returns_none_for_unvisited() {
+    let mut mon = BudgetMonitor::new(default_contract());
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(10, 1, 1).unwrap();
+    // Ablation never started
+    assert!(mon.phase_consumption(SynthesisPhase::Ablation).is_none());
+    assert!(
+        mon.phase_consumption(SynthesisPhase::TheoremChecking)
+            .is_none()
+    );
+    assert!(
+        mon.phase_consumption(SynthesisPhase::ResultAssembly)
+            .is_none()
+    );
+}
+
+#[test]
+fn enrichment_monitor_total_consumption_accumulates_across_phases() {
+    let mut mon = BudgetMonitor::new(default_contract());
+    for (i, phase) in SynthesisPhase::ALL.iter().enumerate() {
+        mon.begin_phase(*phase).unwrap();
+        mon.record_consumption((i as u64 + 1) * 100, (i as u64 + 1) * 10, i as u64 + 1)
+            .unwrap();
+    }
+    // Total: time=100+200+300+400=1000, compute=10+20+30+40=100, depth=1+2+3+4=10
+    assert_eq!(mon.total_consumption().time_ns, 1_000);
+    assert_eq!(mon.total_consumption().compute, 100);
+    assert_eq!(mon.total_consumption().depth, 10);
+}
+
+#[test]
+fn enrichment_monitor_remaining_phase_with_override_budget() {
+    let c = contract_with_phase_budgets();
+    let mut mon = BudgetMonitor::new(c);
+    // StaticAnalysis budget: time=500, compute=50, depth=5
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(100, 10, 1).unwrap();
+
+    let rem = mon.remaining_for_current_phase().unwrap();
+    assert_eq!(rem.time_ns, 400);
+    assert_eq!(rem.compute, 40);
+    assert_eq!(rem.depth, 4);
+}
+
+#[test]
+fn enrichment_monitor_utilization_with_zero_global_caps() {
+    let contract = SynthesisBudgetContract {
+        version: 1,
+        global_time_cap_ns: 0,
+        global_compute_cap: 0,
+        global_depth_cap: 0,
+        phase_budgets: BTreeMap::new(),
+        epoch: SecurityEpoch::from_raw(0),
+    };
+    let mon = BudgetMonitor::new(contract);
+    let util = mon.utilization();
+    // Zero caps should result in empty utilization map (avoids division by zero).
+    assert!(util.is_empty());
+}
+
+#[test]
+fn enrichment_monitor_utilization_partial_zero_caps() {
+    let contract = SynthesisBudgetContract {
+        version: 1,
+        global_time_cap_ns: 1_000,
+        global_compute_cap: 0,
+        global_depth_cap: 500,
+        phase_budgets: BTreeMap::new(),
+        epoch: SecurityEpoch::from_raw(0),
+    };
+    let mut mon = BudgetMonitor::new(contract);
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(250, 0, 100).unwrap();
+
+    let util = mon.utilization();
+    // time: 250/1000 = 250_000
+    assert_eq!(*util.get(&BudgetDimension::Time).unwrap(), 250_000);
+    // compute: zero cap, no entry
+    assert!(util.get(&BudgetDimension::Compute).is_none());
+    // depth: 100/500 = 200_000
+    assert_eq!(*util.get(&BudgetDimension::Depth).unwrap(), 200_000);
+}
+
+#[test]
+fn enrichment_monitor_exhaustion_compute_dimension_sets_limit_value() {
+    let mut mon = BudgetMonitor::new(tight_contract()); // compute=100
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    let err = mon.record_consumption(0, 101, 0).unwrap_err();
+    match err {
+        BudgetError::Exhausted(reason) => {
+            assert!(
+                reason
+                    .exceeded_dimensions
+                    .contains(&BudgetDimension::Compute)
+            );
+            assert_eq!(reason.limit_value, 100);
+        }
+        other => panic!("expected Exhausted, got {other:?}"),
+    }
+}
+
+#[test]
+fn enrichment_monitor_exhaustion_depth_dimension_sets_limit_value() {
+    let mut mon = BudgetMonitor::new(tight_contract()); // depth=10
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    let err = mon.record_consumption(0, 0, 11).unwrap_err();
+    match err {
+        BudgetError::Exhausted(reason) => {
+            assert!(reason.exceeded_dimensions.contains(&BudgetDimension::Depth));
+            assert_eq!(reason.limit_value, 10);
+        }
+        other => panic!("expected Exhausted, got {other:?}"),
+    }
+}
+
+#[test]
+fn enrichment_monitor_global_compute_exhaustion_across_phases() {
+    let contract = SynthesisBudgetContract {
+        version: 1,
+        global_time_cap_ns: u64::MAX,
+        global_compute_cap: 100,
+        global_depth_cap: u64::MAX,
+        phase_budgets: BTreeMap::new(),
+        epoch: SecurityEpoch::from_raw(0),
+    };
+    let mut mon = BudgetMonitor::new(contract);
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(0, 50, 0).unwrap();
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    mon.record_consumption(0, 40, 0).unwrap();
+    mon.begin_phase(SynthesisPhase::TheoremChecking).unwrap();
+    let err = mon.record_consumption(0, 11, 0).unwrap_err();
+    match err {
+        BudgetError::Exhausted(reason) => {
+            assert!(reason.global_limit_hit);
+            assert!(
+                reason
+                    .exceeded_dimensions
+                    .contains(&BudgetDimension::Compute)
+            );
+            assert_eq!(reason.phase, SynthesisPhase::TheoremChecking);
+        }
+        other => panic!("expected Exhausted, got {other:?}"),
+    }
+}
+
+#[test]
+fn enrichment_monitor_global_depth_exhaustion_across_phases() {
+    let contract = SynthesisBudgetContract {
+        version: 1,
+        global_time_cap_ns: u64::MAX,
+        global_compute_cap: u64::MAX,
+        global_depth_cap: 10,
+        phase_budgets: BTreeMap::new(),
+        epoch: SecurityEpoch::from_raw(0),
+    };
+    let mut mon = BudgetMonitor::new(contract);
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(0, 0, 5).unwrap();
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    let err = mon.record_consumption(0, 0, 6).unwrap_err();
+    match err {
+        BudgetError::Exhausted(reason) => {
+            assert!(reason.global_limit_hit);
+            assert!(reason.exceeded_dimensions.contains(&BudgetDimension::Depth));
+        }
+        other => panic!("expected Exhausted, got {other:?}"),
+    }
+}
+
+#[test]
+fn enrichment_monitor_saturating_add_time() {
+    let contract = SynthesisBudgetContract {
+        global_time_cap_ns: u64::MAX,
+        global_compute_cap: u64::MAX,
+        global_depth_cap: u64::MAX,
+        ..Default::default()
+    };
+    let mut mon = BudgetMonitor::new(contract);
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    mon.record_consumption(u64::MAX - 1, 0, 0).unwrap();
+    mon.record_consumption(10, 0, 0).unwrap();
+    assert_eq!(mon.total_consumption().time_ns, u64::MAX);
+}
+
+#[test]
+fn enrichment_monitor_debug_format() {
+    let mon = BudgetMonitor::new(tight_contract());
+    let dbg = format!("{mon:?}");
+    assert!(dbg.contains("BudgetMonitor"));
+}
+
+#[test]
+fn enrichment_monitor_clone_is_independent() {
+    let mut mon = BudgetMonitor::new(default_contract());
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(100, 10, 1).unwrap();
+
+    let cloned = mon.clone();
+    // Mutating original should not affect clone.
+    mon.record_consumption(200, 20, 2).unwrap();
+    assert_eq!(cloned.total_consumption().time_ns, 100);
+    assert_eq!(mon.total_consumption().time_ns, 300);
+}
+
+// --- BudgetHistory deeper tests ---
+
+#[test]
+fn enrichment_history_record_order_preserved() {
+    let mut hist = BudgetHistory::new(100);
+    for i in 0..20 {
+        hist.record(make_history_entry(&format!("ext-{i}"), i % 3 == 0, i * 50));
+    }
+    assert_eq!(hist.len(), 20);
+    for (idx, entry) in hist.entries().iter().enumerate() {
+        assert_eq!(entry.extension_id, format!("ext-{idx}"));
+    }
+}
+
+#[test]
+fn enrichment_history_capacity_exact() {
+    let mut hist = BudgetHistory::new(5);
+    for i in 0..5 {
+        hist.record(make_history_entry(&format!("ext-{i}"), false, i * 10));
+    }
+    assert_eq!(hist.len(), 5);
+    // Adding one more should evict the oldest.
+    hist.record(make_history_entry("ext-5", false, 50));
+    assert_eq!(hist.len(), 5);
+    assert_eq!(hist.entries()[0].extension_id, "ext-1");
+}
+
+#[test]
+fn enrichment_history_exhaustion_rate_all_different_extensions() {
+    let mut hist = BudgetHistory::new(10);
+    hist.record(make_history_entry("ext-a", true, 100));
+    hist.record(make_history_entry("ext-b", false, 200));
+    // ext-a: 1/1 = 1_000_000
+    assert_eq!(hist.exhaustion_rate("ext-a"), 1_000_000);
+    // ext-b: 0/1 = 0
+    assert_eq!(hist.exhaustion_rate("ext-b"), 0);
+}
+
+#[test]
+fn enrichment_history_average_utilization_multiple_entries() {
+    let c = tight_contract(); // time=1000, compute=100, depth=10
+    let mut hist = BudgetHistory::new(10);
+    // Three entries: time 100, 200, 300 -> avg 200 -> 200/1000 = 200_000
+    hist.record(make_history_entry("ext-a", false, 100));
+    hist.record(make_history_entry("ext-a", false, 200));
+    hist.record(make_history_entry("ext-a", false, 300));
+
+    let util = hist.average_utilization("ext-a", &c);
+    assert_eq!(*util.get(&BudgetDimension::Time).unwrap(), 200_000);
+}
+
+#[test]
+fn enrichment_history_entries_for_extension_returns_references() {
+    let mut hist = BudgetHistory::new(10);
+    hist.record(make_history_entry("ext-a", false, 100));
+    hist.record(make_history_entry("ext-a", true, 200));
+
+    let entries = hist.entries_for_extension("ext-a");
+    assert_eq!(entries.len(), 2);
+    assert!(!entries[0].exhausted);
+    assert!(entries[1].exhausted);
+}
+
+#[test]
+fn enrichment_history_large_capacity_no_eviction() {
+    let mut hist = BudgetHistory::new(1000);
+    for i in 0..500 {
+        hist.record(make_history_entry(&format!("ext-{i}"), false, i));
+    }
+    assert_eq!(hist.len(), 500);
+    assert_eq!(hist.entries()[0].extension_id, "ext-0");
+    assert_eq!(hist.entries()[499].extension_id, "ext-499");
+}
+
+#[test]
+fn enrichment_history_clone_is_independent() {
+    let mut hist = BudgetHistory::new(10);
+    hist.record(make_history_entry("ext-a", false, 100));
+    let cloned = hist.clone();
+    hist.record(make_history_entry("ext-b", false, 200));
+    assert_eq!(cloned.len(), 1);
+    assert_eq!(hist.len(), 2);
+}
+
+// --- ExhaustionReason deeper tests ---
+
+#[test]
+fn enrichment_exhaustion_reason_display_single_dimension_time() {
+    let reason = ExhaustionReason {
+        exceeded_dimensions: vec![BudgetDimension::Time],
+        phase: SynthesisPhase::StaticAnalysis,
+        global_limit_hit: false,
+        consumption: PhaseConsumption {
+            time_ns: 500,
+            compute: 10,
+            depth: 1,
+        },
+        limit_value: 400,
+    };
+    let s = reason.to_string();
+    assert!(s.contains("static-analysis"));
+    assert!(s.contains("time"));
+    assert!(!s.contains("compute"));
+    assert!(!s.contains("depth"));
+}
+
+#[test]
+fn enrichment_exhaustion_reason_display_all_three_dimensions() {
+    let reason = ExhaustionReason {
+        exceeded_dimensions: vec![
+            BudgetDimension::Time,
+            BudgetDimension::Compute,
+            BudgetDimension::Depth,
+        ],
+        phase: SynthesisPhase::ResultAssembly,
+        global_limit_hit: true,
+        consumption: PhaseConsumption::zero(),
+        limit_value: 0,
+    };
+    let s = reason.to_string();
+    assert!(s.contains("time"));
+    assert!(s.contains("compute"));
+    assert!(s.contains("depth"));
+    assert!(s.contains("global=true"));
+}
+
+#[test]
+fn enrichment_exhaustion_reason_clone_preserves_all() {
+    let reason = sample_exhaustion_reason();
+    let cloned = reason.clone();
+    assert_eq!(reason.exceeded_dimensions, cloned.exceeded_dimensions);
+    assert_eq!(reason.phase, cloned.phase);
+    assert_eq!(reason.global_limit_hit, cloned.global_limit_hit);
+    assert_eq!(reason.consumption, cloned.consumption);
+    assert_eq!(reason.limit_value, cloned.limit_value);
+}
+
+#[test]
+fn enrichment_exhaustion_reason_ne_different_phases() {
+    let r1 = ExhaustionReason {
+        exceeded_dimensions: vec![BudgetDimension::Time],
+        phase: SynthesisPhase::Ablation,
+        global_limit_hit: false,
+        consumption: PhaseConsumption::zero(),
+        limit_value: 100,
+    };
+    let r2 = ExhaustionReason {
+        exceeded_dimensions: vec![BudgetDimension::Time],
+        phase: SynthesisPhase::TheoremChecking,
+        global_limit_hit: false,
+        consumption: PhaseConsumption::zero(),
+        limit_value: 100,
+    };
+    assert_ne!(r1, r2);
+}
+
+// --- FallbackQuality ordering tests ---
+
+#[test]
+fn enrichment_fallback_quality_ord_static_bound_is_least() {
+    assert!(FallbackQuality::StaticBound < FallbackQuality::PartialAblation);
+    assert!(FallbackQuality::PartialAblation < FallbackQuality::UnverifiedFull);
+    assert!(FallbackQuality::StaticBound < FallbackQuality::UnverifiedFull);
+}
+
+#[test]
+fn enrichment_fallback_quality_all_variants_serde_json_strings() {
+    for q in &[
+        FallbackQuality::StaticBound,
+        FallbackQuality::PartialAblation,
+        FallbackQuality::UnverifiedFull,
+    ] {
+        let json = serde_json::to_string(q).unwrap();
+        assert!(json.starts_with('"'));
+        let back: FallbackQuality = serde_json::from_str(&json).unwrap();
+        assert_eq!(*q, back);
+    }
+}
+
+// --- FallbackResult deeper tests ---
+
+#[test]
+fn enrichment_fallback_result_negative_multiplier() {
+    let fr = FallbackResult {
+        quality: FallbackQuality::StaticBound,
+        result_digest: "neg".to_string(),
+        exhaustion_reason: sample_exhaustion_reason(),
+        increase_likely_helpful: false,
+        recommended_multiplier: Some(-500_000),
+    };
+    let json = serde_json::to_string(&fr).unwrap();
+    let back: FallbackResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.recommended_multiplier, Some(-500_000));
+}
+
+#[test]
+fn enrichment_fallback_result_empty_digest() {
+    let fr = FallbackResult {
+        quality: FallbackQuality::UnverifiedFull,
+        result_digest: String::new(),
+        exhaustion_reason: sample_exhaustion_reason(),
+        increase_likely_helpful: false,
+        recommended_multiplier: None,
+    };
+    let json = serde_json::to_string(&fr).unwrap();
+    let back: FallbackResult = serde_json::from_str(&json).unwrap();
+    assert!(back.result_digest.is_empty());
+}
+
+#[test]
+fn enrichment_fallback_result_clone_deep() {
+    let fr = FallbackResult {
+        quality: FallbackQuality::PartialAblation,
+        result_digest: "deep-clone".to_string(),
+        exhaustion_reason: sample_exhaustion_reason(),
+        increase_likely_helpful: true,
+        recommended_multiplier: Some(2_000_000),
+    };
+    let cloned = fr.clone();
+    assert_eq!(fr, cloned);
+}
+
+#[test]
+fn enrichment_fallback_result_ne_different_quality() {
+    let fr1 = FallbackResult {
+        quality: FallbackQuality::StaticBound,
+        result_digest: "same".to_string(),
+        exhaustion_reason: sample_exhaustion_reason(),
+        increase_likely_helpful: false,
+        recommended_multiplier: None,
+    };
+    let fr2 = FallbackResult {
+        quality: FallbackQuality::UnverifiedFull,
+        result_digest: "same".to_string(),
+        exhaustion_reason: sample_exhaustion_reason(),
+        increase_likely_helpful: false,
+        recommended_multiplier: None,
+    };
+    assert_ne!(fr1, fr2);
+}
+
+// --- BudgetOverride deeper tests ---
+
+#[test]
+fn enrichment_budget_override_inequality_different_extensions() {
+    let ovr1 = BudgetOverride {
+        extension_id: "ext-1".to_string(),
+        contract: tight_contract(),
+        justification: "same".to_string(),
+    };
+    let ovr2 = BudgetOverride {
+        extension_id: "ext-2".to_string(),
+        contract: tight_contract(),
+        justification: "same".to_string(),
+    };
+    assert_ne!(ovr1, ovr2);
+}
+
+#[test]
+fn enrichment_budget_override_empty_justification() {
+    let ovr = BudgetOverride {
+        extension_id: "ext-empty".to_string(),
+        contract: default_contract(),
+        justification: String::new(),
+    };
+    let json = serde_json::to_string(&ovr).unwrap();
+    let back: BudgetOverride = serde_json::from_str(&json).unwrap();
+    assert!(back.justification.is_empty());
+}
+
+// --- BudgetError deeper tests ---
+
+#[test]
+fn enrichment_budget_error_exhausted_display_delegates_to_reason() {
+    let reason = ExhaustionReason {
+        exceeded_dimensions: vec![BudgetDimension::Time, BudgetDimension::Depth],
+        phase: SynthesisPhase::Ablation,
+        global_limit_hit: true,
+        consumption: PhaseConsumption {
+            time_ns: 999,
+            compute: 50,
+            depth: 20,
+        },
+        limit_value: 500,
+    };
+    let err = BudgetError::Exhausted(reason.clone());
+    // Error display should match the reason display.
+    assert_eq!(err.to_string(), reason.to_string());
+}
+
+#[test]
+fn enrichment_budget_error_ne_across_variants() {
+    assert_ne!(BudgetError::AlreadyExhausted, BudgetError::NoActivePhase);
+    assert_ne!(
+        BudgetError::AlreadyExhausted,
+        BudgetError::Exhausted(sample_exhaustion_reason())
+    );
+    assert_ne!(
+        BudgetError::NoActivePhase,
+        BudgetError::Exhausted(sample_exhaustion_reason())
+    );
+}
+
+#[test]
+fn enrichment_budget_error_serde_already_exhausted_roundtrip() {
+    let e = BudgetError::AlreadyExhausted;
+    let json = serde_json::to_string(&e).unwrap();
+    let back: BudgetError = serde_json::from_str(&json).unwrap();
+    assert_eq!(e, back);
+}
+
+#[test]
+fn enrichment_budget_error_serde_no_active_phase_roundtrip() {
+    let e = BudgetError::NoActivePhase;
+    let json = serde_json::to_string(&e).unwrap();
+    let back: BudgetError = serde_json::from_str(&json).unwrap();
+    assert_eq!(e, back);
+}
+
+// --- BudgetHistoryEntry deeper tests ---
+
+#[test]
+fn enrichment_history_entry_clone_equality() {
+    let entry = make_history_entry("ext-clone", true, 999);
+    let cloned = entry.clone();
+    assert_eq!(entry, cloned);
+}
+
+#[test]
+fn enrichment_history_entry_inequality_different_extension_id() {
+    let e1 = make_history_entry("ext-a", false, 100);
+    let e2 = make_history_entry("ext-b", false, 100);
+    assert_ne!(e1, e2);
+}
+
+#[test]
+fn enrichment_history_entry_inequality_different_exhausted() {
+    let e1 = make_history_entry("ext-a", false, 100);
+    let e2 = make_history_entry("ext-a", true, 100);
+    assert_ne!(e1, e2);
+}
+
+// --- Integration: end-to-end pipeline with registry and history ---
+
+#[test]
+fn enrichment_full_pipeline_registry_to_monitor_to_history() {
+    // Build a registry with an override for a specific extension.
+    let mut reg = BudgetRegistry::new(default_contract());
+    reg.add_override(BudgetOverride {
+        extension_id: "ext-special".to_string(),
+        contract: tight_contract(),
+        justification: "needs tight limits".to_string(),
+    });
+
+    // Create a monitor from the effective contract.
+    let contract = reg.effective_contract("ext-special").clone();
+    let mut mon = BudgetMonitor::new(contract.clone());
+
+    // Run through phases.
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(300, 30, 3).unwrap();
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    mon.record_consumption(200, 20, 2).unwrap();
+
+    // Build a history entry from the monitor state.
+    let mut pc_map = BTreeMap::new();
+    for phase in &SynthesisPhase::ALL {
+        if let Some(pc) = mon.phase_consumption(*phase) {
+            pc_map.insert(*phase, pc.clone());
+        }
+    }
+    let entry = BudgetHistoryEntry {
+        extension_id: "ext-special".to_string(),
+        contract_version: contract.version,
+        phase_consumption: pc_map,
+        total_consumption: mon.total_consumption().clone(),
+        exhausted: mon.is_exhausted(),
+        timestamp_ns: 42_000_000,
+        epoch: contract.epoch,
+    };
+
+    // Record in history and compute metrics.
+    let mut hist = BudgetHistory::new(100);
+    hist.record(entry);
+
+    let util = hist.average_utilization("ext-special", &contract);
+    // time: 500/1000 = 500_000
+    assert_eq!(*util.get(&BudgetDimension::Time).unwrap(), 500_000);
+    assert_eq!(hist.exhaustion_rate("ext-special"), 0);
+}
+
+#[test]
+fn enrichment_full_pipeline_exhaustion_recorded_in_history() {
+    let contract = tight_contract();
+    let mut mon = BudgetMonitor::new(contract.clone());
+    mon.begin_phase(SynthesisPhase::Ablation).unwrap();
+    let _ = mon.record_consumption(2_000, 0, 0); // Exhaust time
+
+    assert!(mon.is_exhausted());
+
+    let entry = BudgetHistoryEntry {
+        extension_id: "ext-exhaust".to_string(),
+        contract_version: contract.version,
+        phase_consumption: BTreeMap::new(),
+        total_consumption: mon.total_consumption().clone(),
+        exhausted: true,
+        timestamp_ns: 1_000_000,
+        epoch: contract.epoch,
+    };
+
+    let mut hist = BudgetHistory::new(10);
+    hist.record(entry);
+    assert_eq!(hist.exhaustion_rate("ext-exhaust"), 1_000_000);
+}
+
+#[test]
+fn enrichment_pipeline_multiple_runs_mixed_exhaustion() {
+    let contract = tight_contract(); // time=1000
+    let mut hist = BudgetHistory::new(100);
+
+    // Run 1: successful (500 time)
+    hist.record(BudgetHistoryEntry {
+        extension_id: "ext-mix".to_string(),
+        contract_version: 1,
+        phase_consumption: BTreeMap::new(),
+        total_consumption: PhaseConsumption {
+            time_ns: 500,
+            compute: 50,
+            depth: 5,
+        },
+        exhausted: false,
+        timestamp_ns: 1_000,
+        epoch: SecurityEpoch::from_raw(0),
+    });
+
+    // Run 2: exhausted (2000 time)
+    hist.record(BudgetHistoryEntry {
+        extension_id: "ext-mix".to_string(),
+        contract_version: 1,
+        phase_consumption: BTreeMap::new(),
+        total_consumption: PhaseConsumption {
+            time_ns: 2_000,
+            compute: 50,
+            depth: 5,
+        },
+        exhausted: true,
+        timestamp_ns: 2_000,
+        epoch: SecurityEpoch::from_raw(0),
+    });
+
+    // Run 3: successful (800 time)
+    hist.record(BudgetHistoryEntry {
+        extension_id: "ext-mix".to_string(),
+        contract_version: 1,
+        phase_consumption: BTreeMap::new(),
+        total_consumption: PhaseConsumption {
+            time_ns: 800,
+            compute: 50,
+            depth: 5,
+        },
+        exhausted: false,
+        timestamp_ns: 3_000,
+        epoch: SecurityEpoch::from_raw(0),
+    });
+
+    // 1/3 exhausted = 333_333
+    assert_eq!(hist.exhaustion_rate("ext-mix"), 333_333);
+
+    // Average time: (500+2000+800)/3 = 1100, utilization: 1100/1000 = 1_100_000
+    let util = hist.average_utilization("ext-mix", &contract);
+    assert_eq!(*util.get(&BudgetDimension::Time).unwrap(), 1_100_000);
+}
+
+#[test]
+fn enrichment_monitor_multiple_records_per_phase_summing() {
+    let mut mon = BudgetMonitor::new(default_contract());
+    mon.begin_phase(SynthesisPhase::TheoremChecking).unwrap();
+    mon.record_consumption(1, 1, 1).unwrap();
+    mon.record_consumption(2, 2, 2).unwrap();
+    mon.record_consumption(3, 3, 3).unwrap();
+
+    let pc = mon
+        .phase_consumption(SynthesisPhase::TheoremChecking)
+        .unwrap();
+    assert_eq!(pc.time_ns, 6);
+    assert_eq!(pc.compute, 6);
+    assert_eq!(pc.depth, 6);
+}
+
+#[test]
+fn enrichment_contract_phase_budget_for_result_assembly_inherits() {
+    let c = contract_with_phase_budgets(); // Only StaticAnalysis and Ablation have overrides
+    let pb = c.budget_for_phase(SynthesisPhase::ResultAssembly);
+    assert_eq!(pb.time_cap_ns, c.global_time_cap_ns);
+    assert_eq!(pb.compute_cap, c.global_compute_cap);
+    assert_eq!(pb.depth_cap, c.global_depth_cap);
+}
+
+#[test]
+fn enrichment_fallback_result_large_multiplier() {
+    let fr = FallbackResult {
+        quality: FallbackQuality::PartialAblation,
+        result_digest: "large-mult".to_string(),
+        exhaustion_reason: sample_exhaustion_reason(),
+        increase_likely_helpful: true,
+        recommended_multiplier: Some(i64::MAX),
+    };
+    let json = serde_json::to_string(&fr).unwrap();
+    let back: FallbackResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.recommended_multiplier, Some(i64::MAX));
+}
+
+#[test]
+fn enrichment_monitor_full_pipeline_all_phases_remain_at_boundary() {
+    // Each phase uses 1/4 of global budget.
+    let c = SynthesisBudgetContract {
+        version: 1,
+        global_time_cap_ns: 400,
+        global_compute_cap: 40,
+        global_depth_cap: 8,
+        phase_budgets: BTreeMap::new(),
+        epoch: SecurityEpoch::from_raw(1),
+    };
+    let mut mon = BudgetMonitor::new(c);
+
+    for phase in &SynthesisPhase::ALL {
+        mon.begin_phase(*phase).unwrap();
+        mon.record_consumption(100, 10, 2).unwrap();
+    }
+
+    assert!(!mon.is_exhausted());
+    let rem = mon.remaining_global();
+    assert_eq!(rem.time_ns, 0);
+    assert_eq!(rem.compute, 0);
+    assert_eq!(rem.depth, 0);
+
+    let util = mon.utilization();
+    assert_eq!(*util.get(&BudgetDimension::Time).unwrap(), 1_000_000);
+}
+
+#[test]
+fn enrichment_registry_override_with_phase_budgets() {
+    let mut reg = BudgetRegistry::new(default_contract());
+    let override_contract = contract_with_phase_budgets();
+    reg.add_override(BudgetOverride {
+        extension_id: "ext-phased".to_string(),
+        contract: override_contract.clone(),
+        justification: "needs phase budgets".to_string(),
+    });
+
+    let eff = reg.effective_contract("ext-phased");
+    assert_eq!(eff.phase_budgets.len(), 2);
+    let sa = eff.budget_for_phase(SynthesisPhase::StaticAnalysis);
+    assert_eq!(sa.time_cap_ns, 500);
+}
+
+#[test]
+fn enrichment_history_average_utilization_zero_time_cap() {
+    let c = SynthesisBudgetContract {
+        version: 1,
+        global_time_cap_ns: 0,
+        global_compute_cap: 100,
+        global_depth_cap: 10,
+        phase_budgets: BTreeMap::new(),
+        epoch: SecurityEpoch::from_raw(0),
+    };
+    let mut hist = BudgetHistory::new(10);
+    hist.record(make_history_entry("ext-a", false, 0));
+
+    let util = hist.average_utilization("ext-a", &c);
+    // Time cap is zero, so Time dimension should not be present.
+    assert!(util.get(&BudgetDimension::Time).is_none());
+    // Compute and Depth should be present.
+    assert!(util.get(&BudgetDimension::Compute).is_some());
+    assert!(util.get(&BudgetDimension::Depth).is_some());
+}
+
+#[test]
+fn enrichment_monitor_utilization_tenth() {
+    let mut mon = BudgetMonitor::new(tight_contract()); // time=1000, compute=100, depth=10
+    mon.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+    mon.record_consumption(100, 10, 1).unwrap(); // 10% each
+
+    let util = mon.utilization();
+    assert_eq!(*util.get(&BudgetDimension::Time).unwrap(), 100_000);
+    assert_eq!(*util.get(&BudgetDimension::Compute).unwrap(), 100_000);
+    assert_eq!(*util.get(&BudgetDimension::Depth).unwrap(), 100_000);
+}
+
+#[test]
+fn enrichment_history_entry_empty_phase_consumption_serde() {
+    let entry = BudgetHistoryEntry {
+        extension_id: "ext-empty-pc".to_string(),
+        contract_version: 1,
+        phase_consumption: BTreeMap::new(),
+        total_consumption: PhaseConsumption::zero(),
+        exhausted: false,
+        timestamp_ns: 0,
+        epoch: SecurityEpoch::from_raw(0),
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: BudgetHistoryEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, back);
+    assert!(back.phase_consumption.is_empty());
+}

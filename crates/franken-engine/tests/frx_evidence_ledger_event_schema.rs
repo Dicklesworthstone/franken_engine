@@ -398,3 +398,280 @@ fn provenance_build_id_and_toolchain_are_strings() {
     assert_eq!(prov["build_id"]["type"].as_str(), Some("string"));
     assert_eq!(prov["toolchain"]["type"].as_str(), Some("string"));
 }
+
+// ---------------------------------------------------------------------------
+// Additional structural and cross-cutting invariants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schema_id_matches_schema_version_const() {
+    let schema = parse_schema();
+    let id = schema["$id"].as_str().unwrap();
+    let version_const = schema["properties"]["schema_version"]["const"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        id, version_const,
+        "$id must match schema_version const value"
+    );
+}
+
+#[test]
+fn event_type_has_string_type_annotation() {
+    let schema = parse_schema();
+    let event_type = &schema["properties"]["event_type"];
+    assert_eq!(
+        event_type["type"].as_str(),
+        Some("string"),
+        "event_type must be typed as string"
+    );
+}
+
+#[test]
+fn signer_has_min_length_one() {
+    let schema = parse_schema();
+    let signer = &schema["properties"]["signer"];
+    assert_eq!(signer["type"].as_str(), Some("string"));
+    assert_eq!(
+        signer["minLength"].as_u64(),
+        Some(1),
+        "signer minLength must be exactly 1"
+    );
+}
+
+#[test]
+fn artifact_hash_min_length_is_at_least_eight() {
+    let schema = parse_schema();
+    let ah = &schema["properties"]["artifact_hash"];
+    let min_len = ah["minLength"].as_u64().unwrap_or(0);
+    assert!(
+        min_len >= 8,
+        "artifact_hash minLength must be >= 8, got {min_len}"
+    );
+}
+
+#[test]
+fn calibration_disallows_additional_properties() {
+    let schema = parse_schema();
+    let cal = &schema["properties"]["calibration"];
+    assert_eq!(
+        cal["additionalProperties"].as_bool(),
+        Some(false),
+        "calibration must disallow additional properties"
+    );
+}
+
+#[test]
+fn provenance_disallows_additional_properties() {
+    let schema = parse_schema();
+    let prov = &schema["properties"]["provenance"];
+    assert_eq!(
+        prov["additionalProperties"].as_bool(),
+        Some(false),
+        "provenance must disallow additional properties"
+    );
+}
+
+#[test]
+fn provenance_has_exactly_three_properties() {
+    let schema = parse_schema();
+    let prov_props = schema["properties"]["provenance"]["properties"]
+        .as_object()
+        .unwrap();
+    assert_eq!(
+        prov_props.len(),
+        3,
+        "provenance must have exactly 3 properties: build_id, toolchain, policy_bundle_hash"
+    );
+}
+
+#[test]
+fn provenance_policy_bundle_hash_is_optional() {
+    let schema = parse_schema();
+    let prov_required = schema["properties"]["provenance"]["required"]
+        .as_array()
+        .unwrap();
+    let req_set: BTreeSet<&str> = prov_required.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(
+        !req_set.contains("policy_bundle_hash"),
+        "provenance.policy_bundle_hash must be optional"
+    );
+}
+
+#[test]
+fn provenance_required_has_exactly_two_fields() {
+    let schema = parse_schema();
+    let prov_required = schema["properties"]["provenance"]["required"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        prov_required.len(),
+        2,
+        "provenance required must list exactly 2 fields (build_id, toolchain)"
+    );
+}
+
+#[test]
+fn loss_terms_has_object_type() {
+    let schema = parse_schema();
+    let lt = &schema["properties"]["loss_terms"];
+    assert_eq!(
+        lt["type"].as_str(),
+        Some("object"),
+        "loss_terms must be typed as object"
+    );
+}
+
+#[test]
+fn schema_version_const_is_not_empty() {
+    let schema = parse_schema();
+    let version_const = schema["properties"]["schema_version"]["const"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !version_const.is_empty(),
+        "schema_version const must not be empty"
+    );
+}
+
+#[test]
+fn required_fields_are_all_present_in_properties() {
+    let schema = parse_schema();
+    let required = schema["required"].as_array().unwrap();
+    let props = schema["properties"].as_object().unwrap();
+
+    for field in required {
+        let field_name = field.as_str().unwrap();
+        assert!(
+            props.contains_key(field_name),
+            "required field '{field_name}' must appear in properties"
+        );
+    }
+}
+
+#[test]
+fn all_properties_are_declared_in_schema() {
+    let schema = parse_schema();
+    let props = schema["properties"].as_object().unwrap();
+    let expected_keys: BTreeSet<&str> = [
+        "schema_version",
+        "claim_id",
+        "evidence_id",
+        "policy_id",
+        "trace_id",
+        "decision_id",
+        "event_type",
+        "action",
+        "rejected_alternatives",
+        "assumptions",
+        "calibration",
+        "loss_terms",
+        "artifact_hash",
+        "signature",
+        "signer",
+        "created_at",
+        "provenance",
+    ]
+    .iter()
+    .copied()
+    .collect();
+
+    let actual_keys: BTreeSet<&str> = props.keys().map(|k| k.as_str()).collect();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "properties keys must match expected set exactly"
+    );
+}
+
+#[test]
+fn schema_is_stable_across_multiple_parses() {
+    // Parse three times and verify structural equality (determinism).
+    let a = parse_schema();
+    let b = parse_schema();
+    let c = parse_schema();
+    assert_eq!(a, b);
+    assert_eq!(b, c);
+}
+
+#[test]
+fn serialise_and_reparse_schema_is_identical() {
+    let original = parse_schema();
+    let serialised = serde_json::to_string(&original).expect("re-serialise must succeed");
+    let reparsed: Value = serde_json::from_str(&serialised).expect("re-parse must succeed");
+    assert_eq!(
+        original, reparsed,
+        "round-trip through JSON must preserve schema"
+    );
+}
+
+#[test]
+fn calibration_numeric_fields_have_no_min_max_constraint() {
+    // The schema intentionally leaves calibration metrics unconstrained —
+    // ECE, Brier, and coverage values are real-valued and may be negative or > 1.
+    let schema = parse_schema();
+    let cal_props = schema["properties"]["calibration"]["properties"]
+        .as_object()
+        .unwrap();
+    for field in ["ece", "brier", "coverage"] {
+        let prop = &cal_props[field];
+        assert!(
+            prop.get("minimum").is_none() && prop.get("maximum").is_none(),
+            "calibration.{field} must not impose min/max constraints"
+        );
+    }
+}
+
+#[test]
+fn event_type_does_not_allow_free_form_strings() {
+    // The presence of an `enum` constraint means arbitrary strings are rejected.
+    let schema = parse_schema();
+    let event_type = &schema["properties"]["event_type"];
+    assert!(
+        event_type.get("enum").is_some(),
+        "event_type must have an enum constraint to prevent free-form strings"
+    );
+    // There must be no `pattern` or `const` — enum is the sole constraint.
+    assert!(event_type.get("pattern").is_none());
+    assert!(event_type.get("const").is_none());
+}
+
+#[test]
+fn string_id_fields_have_no_format_constraint() {
+    // ID fields (claim_id, evidence_id, etc.) use free-form strings — no format is imposed.
+    let schema = parse_schema();
+    let props = schema["properties"].as_object().unwrap();
+    for field in [
+        "claim_id",
+        "evidence_id",
+        "policy_id",
+        "trace_id",
+        "decision_id",
+    ] {
+        let prop = &props[field];
+        assert!(
+            prop.get("format").is_none(),
+            "{field} must not impose a format constraint"
+        );
+    }
+}
+
+#[test]
+fn assumptions_array_has_no_uniqueness_constraint() {
+    // Assumptions may repeat; the schema must not force uniqueItems.
+    let schema = parse_schema();
+    let assumptions = &schema["properties"]["assumptions"];
+    assert!(
+        assumptions.get("uniqueItems").is_none(),
+        "assumptions must not require uniqueItems"
+    );
+}
+
+#[test]
+fn rejected_alternatives_array_has_no_uniqueness_constraint() {
+    let schema = parse_schema();
+    let ra = &schema["properties"]["rejected_alternatives"];
+    assert!(
+        ra.get("uniqueItems").is_none(),
+        "rejected_alternatives must not require uniqueItems"
+    );
+}

@@ -703,3 +703,273 @@ fn router_config_default_serde_roundtrip() {
         config.change_point.threshold_millionths
     );
 }
+
+// ===========================================================================
+// Enrichment: LaneChoice — ALL, as_str, index, from_index
+// ===========================================================================
+
+#[test]
+fn enrichment_lane_choice_all_has_two_variants() {
+    assert_eq!(LaneChoice::ALL.len(), 2);
+}
+
+#[test]
+fn enrichment_lane_choice_as_str_distinct() {
+    assert_ne!(LaneChoice::Js.as_str(), LaneChoice::Wasm.as_str());
+    assert_eq!(LaneChoice::Js.as_str(), "js");
+    assert_eq!(LaneChoice::Wasm.as_str(), "wasm");
+}
+
+#[test]
+fn enrichment_lane_choice_index_roundtrip() {
+    for lane in LaneChoice::ALL {
+        let recovered = LaneChoice::from_index(lane.index()).unwrap();
+        assert_eq!(recovered, lane);
+    }
+}
+
+#[test]
+fn enrichment_lane_choice_from_index_out_of_range() {
+    assert!(LaneChoice::from_index(2).is_none());
+    assert!(LaneChoice::from_index(usize::MAX).is_none());
+}
+
+// ===========================================================================
+// Enrichment: DemotionReason — ConformalViolation serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_demotion_reason_conformal_serde_roundtrip() {
+    let reason = DemotionReason::ConformalViolation {
+        coverage_millionths: 800_000,
+        target_millionths: 900_000,
+    };
+    let json = serde_json::to_string(&reason).expect("serialize");
+    let recovered: DemotionReason = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered, reason);
+}
+
+// ===========================================================================
+// Enrichment: DemotionReason — all three variants produce distinct JSON
+// ===========================================================================
+
+#[test]
+fn enrichment_demotion_reason_all_variants_distinct_json() {
+    let reasons = [
+        DemotionReason::RegretExceeded {
+            realized_millionths: 100,
+            bound_millionths: 50,
+        },
+        DemotionReason::ChangePointDetected {
+            cusum_stat_millionths: 200,
+            threshold_millionths: 100,
+        },
+        DemotionReason::ConformalViolation {
+            coverage_millionths: 800_000,
+            target_millionths: 900_000,
+        },
+    ];
+    let jsons: std::collections::BTreeSet<String> = reasons
+        .iter()
+        .map(|r| serde_json::to_string(r).unwrap())
+        .collect();
+    assert_eq!(jsons.len(), 3);
+}
+
+// ===========================================================================
+// Enrichment: RegimeEstimate — serde roundtrip all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_regime_estimate_serde_roundtrip() {
+    let regimes = [
+        RegimeEstimate::Normal,
+        RegimeEstimate::Elevated,
+        RegimeEstimate::Attack,
+        RegimeEstimate::Degraded,
+        RegimeEstimate::Recovery,
+    ];
+    for r in &regimes {
+        let json = serde_json::to_string(r).unwrap();
+        let back: RegimeEstimate = serde_json::from_str(&json).unwrap();
+        assert_eq!(*r, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: FallbackReason — serde roundtrip all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_fallback_reason_serde_roundtrip() {
+    let reasons: Vec<FallbackReason> = vec![
+        FallbackReason::RegimeChange("elevated".into()),
+        FallbackReason::CVaRViolation {
+            cvar_us: 5000,
+            max_us: 1000,
+        },
+        FallbackReason::CalibrationUndercoverage {
+            coverage_millionths: 800_000,
+        },
+        FallbackReason::BudgetExhausted {
+            compute_ms: 100,
+            memory_mb: 512,
+        },
+        FallbackReason::LowConfidence {
+            confidence_millionths: 500_000,
+        },
+        FallbackReason::EProcessTriggered {
+            guardrail_id: "g1".into(),
+        },
+        FallbackReason::ConsecutiveAdverse { count: 5 },
+    ];
+    for r in &reasons {
+        let json = serde_json::to_string(r).unwrap();
+        let back: FallbackReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(*r, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: ChangePointMonitor — observe and is_triggered
+// ===========================================================================
+
+#[test]
+fn enrichment_change_point_monitor_starts_untriggered() {
+    let monitor = ChangePointMonitor::new(ChangePointConfig {
+        threshold_millionths: 500_000,
+        drift_millionths: 50_000,
+        min_observations: 10,
+    });
+    assert!(!monitor.is_triggered());
+    assert_eq!(monitor.observation_count, 0);
+}
+
+#[test]
+fn enrichment_change_point_monitor_observe_increments_count() {
+    let mut monitor = ChangePointMonitor::new(ChangePointConfig {
+        threshold_millionths: 500_000,
+        drift_millionths: 50_000,
+        min_observations: 10,
+    });
+    monitor.observe(100_000);
+    assert_eq!(monitor.observation_count, 1);
+    monitor.observe(200_000);
+    assert_eq!(monitor.observation_count, 2);
+}
+
+#[test]
+fn enrichment_change_point_monitor_reset_clears_state() {
+    let mut monitor = ChangePointMonitor::new(ChangePointConfig {
+        threshold_millionths: 500_000,
+        drift_millionths: 50_000,
+        min_observations: 1,
+    });
+    monitor.observe(100_000);
+    assert_eq!(monitor.observation_count, 1);
+    monitor.reset();
+    assert_eq!(monitor.observation_count, 0);
+    assert!(!monitor.is_triggered());
+}
+
+// ===========================================================================
+// Enrichment: ConformalState — coverage_millionths and is_valid
+// ===========================================================================
+
+#[test]
+fn enrichment_conformal_state_initial_coverage() {
+    let state = ConformalState::new(ConformalConfig {
+        target_coverage_millionths: 900_000,
+        min_observations: 50,
+        window_size: 100,
+    });
+    // Initially no observations, coverage should be defined
+    let _cov = state.coverage_millionths();
+    // Should not panic
+}
+
+#[test]
+fn enrichment_conformal_state_is_valid_insufficient_observations() {
+    let state = ConformalState::new(ConformalConfig {
+        target_coverage_millionths: 900_000,
+        min_observations: 50,
+        window_size: 100,
+    });
+    // No observations => insufficient => is_valid should be true (not enough data to invalidate)
+    assert!(state.is_valid());
+}
+
+// ===========================================================================
+// Enrichment: LaneId — constructors and stable_label
+// ===========================================================================
+
+#[test]
+fn enrichment_lane_id_constructors_distinct() {
+    let qjs = LaneId::quickjs_native();
+    let v8 = LaneId::v8_native();
+    let safe = LaneId::safe_mode();
+    assert_ne!(qjs, v8);
+    assert_ne!(qjs, safe);
+    assert_ne!(v8, safe);
+}
+
+#[test]
+fn enrichment_lane_id_stable_label_nonempty() {
+    assert!(!LaneId::quickjs_native().stable_label().is_empty());
+    assert!(!LaneId::v8_native().stable_label().is_empty());
+    assert!(!LaneId::safe_mode().stable_label().is_empty());
+}
+
+// ===========================================================================
+// Enrichment: RoutingPolicy — Display and Debug
+// ===========================================================================
+
+#[test]
+fn enrichment_routing_policy_debug_nonempty() {
+    assert!(!format!("{:?}", RoutingPolicy::Conservative).is_empty());
+    assert!(!format!("{:?}", RoutingPolicy::Adaptive).is_empty());
+}
+
+// ===========================================================================
+// Enrichment: HybridLaneRouter — promote and observe updates summary
+// ===========================================================================
+
+#[test]
+fn enrichment_hybrid_lane_router_observe_increments_routes() {
+    let mut config = RouterConfig::default_config();
+    config.risk_budget = RiskBudget {
+        tail_latency_budget_us: u64::MAX,
+        compatibility_error_budget: u64::MAX,
+        regret_budget_millionths: i64::MAX,
+    };
+    config.change_point = ChangePointConfig {
+        threshold_millionths: i64::MAX,
+        drift_millionths: 50_000,
+        min_observations: u64::MAX,
+    };
+    config.conformal = ConformalConfig {
+        target_coverage_millionths: 0,
+        min_observations: u64::MAX,
+        window_size: 1,
+    };
+    let mut router = HybridLaneRouter::new(config);
+    router.conformal = ConformalState::new(router.config.conformal.clone());
+    router.change_point = ChangePointMonitor::new(router.config.change_point.clone());
+    router.promote_to_adaptive().expect("promote");
+
+    router.observe(
+        LaneChoice::Js,
+        &neutral_observation(LaneChoice::Js),
+        Some(1),
+    );
+    router.observe(
+        LaneChoice::Wasm,
+        &neutral_observation(LaneChoice::Wasm),
+        Some(2),
+    );
+
+    let summary = router.summary();
+    assert_eq!(summary.total_js_routes, 1);
+    assert_eq!(summary.total_wasm_routes, 1);
+    assert_eq!(summary.round, 2);
+}

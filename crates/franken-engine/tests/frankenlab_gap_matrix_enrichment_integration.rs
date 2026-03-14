@@ -689,3 +689,471 @@ fn enrichment_lookup_wrong_surface_returns_none() {
             .is_none()
     );
 }
+
+// ---------------------------------------------------------------------------
+// GapMatrix clone and equality
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gap_matrix_clone_eq() {
+    let mut m = GapMatrix::new(epoch(1));
+    m.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    let m2 = m.clone();
+    assert_eq!(m, m2);
+}
+
+#[test]
+fn enrichment_gap_matrix_ne_different_entries() {
+    let mut m1 = GapMatrix::new(epoch(1));
+    m1.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    let mut m2 = GapMatrix::new(epoch(1));
+    m2.add_entry(entry(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::LabRuntime,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+    ));
+    assert_ne!(m1, m2);
+}
+
+// ---------------------------------------------------------------------------
+// GapMatrix serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gap_matrix_serde_roundtrip_empty() {
+    let m = GapMatrix::new(epoch(5));
+    let json = serde_json::to_string(&m).unwrap();
+    let back: GapMatrix = serde_json::from_str(&json).unwrap();
+    assert_eq!(m, back);
+}
+
+#[test]
+fn enrichment_gap_matrix_serde_roundtrip_with_entries() {
+    let mut m = GapMatrix::new(epoch(5));
+    m.add_entry(entry(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::EvidenceReplay,
+        GapStatus::PartialGap,
+        600_000,
+        MigrationDecision::ThinBridge,
+    ));
+    m.add_entry(entry(
+        LabSurfaceKind::VirtualTimeClock,
+        UpstreamCapability::VirtualTimeControl,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+    ));
+    let json = serde_json::to_string(&m).unwrap();
+    let back: GapMatrix = serde_json::from_str(&json).unwrap();
+    assert_eq!(m, back);
+}
+
+// ---------------------------------------------------------------------------
+// Coverage summary edge cases — empty matrix
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_coverage_summary_empty_matrix() {
+    let matrix = GapMatrix::new(epoch(1));
+    let summary = matrix.coverage_summary();
+    assert_eq!(summary.total_pairs, 0);
+    assert_eq!(summary.covered_count, 0);
+    assert_eq!(summary.partial_gap_count, 0);
+    assert_eq!(summary.full_gap_count, 0);
+    assert_eq!(summary.redundant_count, 0);
+    assert_eq!(summary.overall_coverage_millionths, 0);
+}
+
+#[test]
+fn enrichment_coverage_summary_single_partial_gap() {
+    let mut matrix = GapMatrix::new(epoch(1));
+    matrix.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::PartialGap,
+        400_000,
+        MigrationDecision::ThinBridge,
+    ));
+    let summary = matrix.coverage_summary();
+    assert_eq!(summary.total_pairs, 1);
+    assert_eq!(summary.partial_gap_count, 1);
+    assert_eq!(summary.overall_coverage_millionths, 400_000);
+}
+
+#[test]
+fn enrichment_coverage_summary_counts_all_statuses() {
+    let mut matrix = GapMatrix::new(epoch(1));
+    matrix.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        1_000_000,
+        MigrationDecision::NoMigration,
+    ));
+    matrix.add_entry(entry(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::LabRuntime,
+        GapStatus::PartialGap,
+        500_000,
+        MigrationDecision::ThinBridge,
+    ));
+    matrix.add_entry(entry(
+        LabSurfaceKind::EvidenceChecker,
+        UpstreamCapability::LabRuntime,
+        GapStatus::FullGap,
+        0,
+        MigrationDecision::DirectAdoption,
+    ));
+    matrix.add_entry(entry(
+        LabSurfaceKind::CancellationInjector,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Redundant,
+        1_000_000,
+        MigrationDecision::NoMigration,
+    ));
+    let summary = matrix.coverage_summary();
+    assert_eq!(summary.total_pairs, 4);
+    assert_eq!(summary.covered_count, 1);
+    assert_eq!(summary.partial_gap_count, 1);
+    assert_eq!(summary.full_gap_count, 1);
+    assert_eq!(summary.redundant_count, 1);
+    assert_eq!(summary.overall_coverage_millionths, 625_000);
+}
+
+// ---------------------------------------------------------------------------
+// Migration plan — all keep
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_migration_plan_all_no_migration() {
+    let mut matrix = GapMatrix::new(epoch(1));
+    matrix.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+    ));
+    matrix.add_entry(entry(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        850_000,
+        MigrationDecision::NoMigration,
+    ));
+    let plan = matrix.migration_plan();
+    assert!(plan.adopt.is_empty());
+    assert!(plan.bridge.is_empty());
+    assert!(plan.wrap.is_empty());
+    assert!(plan.defer.is_empty());
+    assert_eq!(plan.keep.len(), 2);
+    // Mixed strategy text since no adopt but bridge/defer both empty
+    assert!(plan.recommendation.contains("Mixed strategy"));
+}
+
+#[test]
+fn enrichment_migration_plan_empty_matrix() {
+    let matrix = GapMatrix::new(epoch(1));
+    let plan = matrix.migration_plan();
+    assert!(plan.adopt.is_empty());
+    assert!(plan.bridge.is_empty());
+    assert!(plan.wrap.is_empty());
+    assert!(plan.keep.is_empty());
+    assert!(plan.defer.is_empty());
+}
+
+#[test]
+fn enrichment_migration_plan_all_maintained_wrapper() {
+    let mut matrix = GapMatrix::new(epoch(1));
+    matrix.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::MaintainedWrapper,
+    ));
+    let plan = matrix.migration_plan();
+    assert_eq!(plan.wrap.len(), 1);
+    assert!(plan.adopt.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Content hash determinism
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_content_hash_deterministic() {
+    let mut m1 = GapMatrix::new(epoch(3));
+    m1.add_entry(entry(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::TraceValidation,
+        GapStatus::PartialGap,
+        450_000,
+        MigrationDecision::ThinBridge,
+    ));
+    let mut m2 = GapMatrix::new(epoch(3));
+    m2.add_entry(entry(
+        LabSurfaceKind::ScheduleReplay,
+        UpstreamCapability::TraceValidation,
+        GapStatus::PartialGap,
+        450_000,
+        MigrationDecision::ThinBridge,
+    ));
+    assert_eq!(m1.content_hash(), m2.content_hash());
+}
+
+#[test]
+fn enrichment_content_hash_empty_matrix() {
+    let m = GapMatrix::new(epoch(1));
+    let h = m.content_hash();
+    assert!(!h.as_bytes().is_empty());
+}
+
+#[test]
+fn enrichment_content_hash_sensitive_to_status() {
+    let mut m1 = GapMatrix::new(epoch(1));
+    m1.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    let mut m2 = GapMatrix::new(epoch(1));
+    m2.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::PartialGap,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    assert_ne!(m1.content_hash(), m2.content_hash());
+}
+
+#[test]
+fn enrichment_content_hash_sensitive_to_surface() {
+    let mut m1 = GapMatrix::new(epoch(1));
+    m1.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    let mut m2 = GapMatrix::new(epoch(1));
+    m2.add_entry(entry(
+        LabSurfaceKind::ScenarioRunner,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    assert_ne!(m1.content_hash(), m2.content_hash());
+}
+
+#[test]
+fn enrichment_content_hash_sensitive_to_upstream() {
+    let mut m1 = GapMatrix::new(epoch(1));
+    m1.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    let mut m2 = GapMatrix::new(epoch(1));
+    m2.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::OracleDispatch,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    assert_ne!(m1.content_hash(), m2.content_hash());
+}
+
+// ---------------------------------------------------------------------------
+// LabSurfaceKind serde roundtrip per variant
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_lab_surface_kind_serde_all_variants() {
+    for kind in &LabSurfaceKind::ALL {
+        let json = serde_json::to_string(kind).unwrap();
+        let back: LabSurfaceKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(*kind, back);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UpstreamCapability serde roundtrip per variant
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_upstream_capability_serde_all_variants() {
+    for cap in &UpstreamCapability::ALL {
+        let json = serde_json::to_string(cap).unwrap();
+        let back: UpstreamCapability = serde_json::from_str(&json).unwrap();
+        assert_eq!(*cap, back);
+    }
+}
+
+#[test]
+fn enrichment_upstream_capability_display_nonempty() {
+    for c in &UpstreamCapability::ALL {
+        assert!(!c.to_string().is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical matrix — migration plan category membership
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_canonical_matrix_no_duplicate_migration_plan_entries() {
+    let matrix = build_canonical_gap_matrix(epoch(42));
+    let plan = matrix.migration_plan();
+    let mut all_pairs = BTreeSet::new();
+    for pair in plan
+        .adopt
+        .iter()
+        .chain(plan.bridge.iter())
+        .chain(plan.wrap.iter())
+        .chain(plan.keep.iter())
+        .chain(plan.defer.iter())
+    {
+        assert!(all_pairs.insert(*pair), "duplicate in plan: {:?}", pair);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GapMatrix schema_version populated
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gap_matrix_schema_version_set() {
+    let m = GapMatrix::new(epoch(1));
+    assert_eq!(m.schema_version, GAP_MATRIX_SCHEMA_VERSION);
+}
+
+#[test]
+fn enrichment_gap_matrix_epoch_preserved() {
+    let m = GapMatrix::new(epoch(99));
+    assert_eq!(m.assessed_epoch.as_u64(), 99);
+}
+
+// ---------------------------------------------------------------------------
+// Display for GapMatrix — summary lines
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_matrix_display_contains_pair_count() {
+    let mut matrix = GapMatrix::new(epoch(1));
+    matrix.add_entry(entry(
+        LabSurfaceKind::DeterministicReplay,
+        UpstreamCapability::LabRuntime,
+        GapStatus::Covered,
+        900_000,
+        MigrationDecision::NoMigration,
+    ));
+    let display = matrix.to_string();
+    assert!(display.contains("Total pairs: 1"));
+    assert!(display.contains("Covered: 1"));
+}
+
+// ---------------------------------------------------------------------------
+// GapMatrixEntry clone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_gap_matrix_entry_clone_eq() {
+    let e = entry(
+        LabSurfaceKind::LifecycleTester,
+        UpstreamCapability::LifecycleOrchestration,
+        GapStatus::PartialGap,
+        550_000,
+        MigrationDecision::ThinBridge,
+    );
+    let e2 = e.clone();
+    assert_eq!(e, e2);
+}
+
+// ---------------------------------------------------------------------------
+// GapCoverageSummary clone + Debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_coverage_summary_clone_debug() {
+    let summary = GapCoverageSummary {
+        total_pairs: 10,
+        covered_count: 3,
+        partial_gap_count: 2,
+        full_gap_count: 4,
+        redundant_count: 1,
+        overall_coverage_millionths: 450_000,
+    };
+    let s2 = summary.clone();
+    assert_eq!(summary, s2);
+    let dbg = format!("{:?}", summary);
+    assert!(dbg.contains("GapCoverageSummary"));
+}
+
+// ---------------------------------------------------------------------------
+// MigrationPlan clone + Debug
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_migration_plan_clone_debug() {
+    let plan = MigrationPlan {
+        adopt: vec![],
+        bridge: vec![],
+        wrap: vec![],
+        keep: vec![],
+        defer: vec![],
+        recommendation: "empty".into(),
+    };
+    let p2 = plan.clone();
+    assert_eq!(plan, p2);
+    let dbg = format!("{:?}", plan);
+    assert!(dbg.contains("MigrationPlan"));
+}
+
+// ---------------------------------------------------------------------------
+// Lookup hit — returns correct entry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_lookup_hit_returns_matching_entry() {
+    let mut matrix = GapMatrix::new(epoch(1));
+    let e = entry(
+        LabSurfaceKind::ReleaseGateRunner,
+        UpstreamCapability::ReleaseGating,
+        GapStatus::Covered,
+        950_000,
+        MigrationDecision::NoMigration,
+    );
+    matrix.add_entry(e.clone());
+    let found = matrix
+        .lookup(
+            LabSurfaceKind::ReleaseGateRunner,
+            UpstreamCapability::ReleaseGating,
+        )
+        .unwrap();
+    assert_eq!(found.coverage_millionths, 950_000);
+    assert_eq!(found.status, GapStatus::Covered);
+}

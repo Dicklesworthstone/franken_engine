@@ -574,3 +574,328 @@ fn enrichment_pressure_event_emitted_at_threshold() {
         "pressure event should be emitted at threshold"
     );
 }
+
+// =========================================================================
+// P. BulkheadRegistry — release unknown permit
+// =========================================================================
+
+#[test]
+fn enrichment_release_unknown_permit_errors() {
+    let mut reg = small_registry();
+    let result = reg.release("test", PermitId(9999), "t");
+    assert!(matches!(result, Err(BulkheadError::PermitNotFound { .. })));
+}
+
+// =========================================================================
+// Q. BulkheadRegistry — release from nonexistent bulkhead (2)
+// =========================================================================
+
+#[test]
+fn enrichment_release_nonexistent_bulkhead_errors2() {
+    let mut reg = small_registry();
+    let result = reg.release("nonexistent", PermitId(1), "t");
+    assert!(matches!(
+        result,
+        Err(BulkheadError::BulkheadNotFound { .. })
+    ));
+}
+
+// =========================================================================
+// R. BulkheadRegistry — acquire from nonexistent bulkhead (2)
+// =========================================================================
+
+#[test]
+fn enrichment_acquire_nonexistent_bulkhead_errors2() {
+    let mut reg = small_registry();
+    let result = reg.acquire("nonexistent", "t");
+    assert!(matches!(
+        result,
+        Err(BulkheadError::BulkheadNotFound { .. })
+    ));
+}
+
+// =========================================================================
+// S. BulkheadSnapshot — serde roundtrip (2)
+// =========================================================================
+
+#[test]
+fn enrichment_snapshot_serde_roundtrip2() {
+    let reg = BulkheadRegistry::with_defaults();
+    let snap = reg.snapshot();
+    let json = serde_json::to_string(&snap).unwrap();
+    let back: std::collections::BTreeMap<String, BulkheadSnapshot> =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(snap, back);
+}
+
+// =========================================================================
+// T. BulkheadConfig — serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_config_serde_roundtrip() {
+    let config = BulkheadConfig {
+        max_concurrent: 10,
+        max_queue_depth: 20,
+        pressure_threshold_pct: 75,
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let back: BulkheadConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, back);
+}
+
+// =========================================================================
+// U. BulkheadConfig — equality and clone
+// =========================================================================
+
+#[test]
+fn enrichment_config_clone_eq() {
+    let config = BulkheadConfig {
+        max_concurrent: 5,
+        max_queue_depth: 10,
+        pressure_threshold_pct: 80,
+    };
+    let cloned = config.clone();
+    assert_eq!(config, cloned);
+}
+
+#[test]
+fn enrichment_config_ne() {
+    let a = BulkheadConfig {
+        max_concurrent: 5,
+        max_queue_depth: 10,
+        pressure_threshold_pct: 80,
+    };
+    let b = BulkheadConfig {
+        max_concurrent: 6,
+        max_queue_depth: 10,
+        pressure_threshold_pct: 80,
+    };
+    assert_ne!(a, b);
+}
+
+// =========================================================================
+// V. BulkheadClass — all variants serde
+// =========================================================================
+
+#[test]
+fn enrichment_class_serde_all_variants() {
+    let classes = [
+        BulkheadClass::RemoteInFlight,
+        BulkheadClass::BackgroundMaintenance,
+        BulkheadClass::SagaExecution,
+        BulkheadClass::EvidenceFlush,
+    ];
+    for class in &classes {
+        let json = serde_json::to_string(class).unwrap();
+        let back: BulkheadClass = serde_json::from_str(&json).unwrap();
+        assert_eq!(*class, back);
+    }
+}
+
+// =========================================================================
+// W. BulkheadClass — default_config is valid
+// =========================================================================
+
+#[test]
+fn enrichment_class_default_config_valid() {
+    let classes = [
+        BulkheadClass::RemoteInFlight,
+        BulkheadClass::BackgroundMaintenance,
+        BulkheadClass::SagaExecution,
+        BulkheadClass::EvidenceFlush,
+    ];
+    for class in &classes {
+        let config = class.default_config();
+        assert!(config.max_concurrent > 0);
+        assert!(config.max_queue_depth > 0);
+        assert!(config.pressure_threshold_pct > 0);
+        assert!(config.pressure_threshold_pct <= 100);
+    }
+}
+
+// =========================================================================
+// X. BulkheadRegistry — active_count and queue_depth
+// =========================================================================
+
+#[test]
+fn enrichment_active_count_after_acquire() {
+    let mut reg = small_registry();
+    assert_eq!(reg.active_count("test"), Some(0));
+    reg.acquire("test", "t1").unwrap();
+    assert_eq!(reg.active_count("test"), Some(1));
+}
+
+#[test]
+fn enrichment_active_count_nonexistent() {
+    let reg = small_registry();
+    assert_eq!(reg.active_count("nonexistent"), None);
+}
+
+#[test]
+fn enrichment_queue_depth_nonexistent() {
+    let reg = small_registry();
+    assert_eq!(reg.queue_depth("nonexistent"), None);
+}
+
+// =========================================================================
+// Y. BulkheadRegistry — is_at_pressure
+// =========================================================================
+
+#[test]
+fn enrichment_is_at_pressure_false_initially() {
+    let reg = small_registry();
+    assert_eq!(reg.is_at_pressure("test"), Some(false));
+}
+
+#[test]
+fn enrichment_is_at_pressure_nonexistent() {
+    let reg = small_registry();
+    assert_eq!(reg.is_at_pressure("nonexistent"), None);
+}
+
+// =========================================================================
+// Z. BulkheadRegistry — bulkhead_count
+// =========================================================================
+
+#[test]
+fn enrichment_bulkhead_count_empty() {
+    let reg = BulkheadRegistry::empty();
+    assert_eq!(reg.bulkhead_count(), 0);
+}
+
+#[test]
+fn enrichment_bulkhead_count_with_defaults() {
+    let reg = BulkheadRegistry::with_defaults();
+    assert!(reg.bulkhead_count() >= 4);
+}
+
+// =========================================================================
+// AA. BulkheadRegistry — event_counts
+// =========================================================================
+
+#[test]
+fn enrichment_event_counts_empty_initially() {
+    let reg = small_registry();
+    assert!(reg.event_counts().is_empty() || reg.event_counts().values().all(|v| *v == 0));
+}
+
+// =========================================================================
+// AB. BulkheadRegistry — acquire and release lifecycle
+// =========================================================================
+
+#[test]
+fn enrichment_acquire_release_lifecycle() {
+    let mut reg = small_registry();
+    let permit = reg.acquire("test", "t1").unwrap();
+    assert_eq!(reg.active_count("test"), Some(1));
+    reg.release("test", permit, "t1").unwrap();
+    assert_eq!(reg.active_count("test"), Some(0));
+}
+
+// =========================================================================
+// AC. BulkheadRegistry — acquire at capacity queues
+// =========================================================================
+
+#[test]
+fn enrichment_acquire_at_capacity_queues() {
+    let mut reg = small_registry();
+    // Fill to max_concurrent = 2
+    let _p1 = reg.acquire("test", "t1").unwrap();
+    let _p2 = reg.acquire("test", "t2").unwrap();
+    // Next acquire goes to queue
+    let _p3 = reg.acquire("test", "t3").unwrap();
+    assert_eq!(reg.queue_depth("test"), Some(1));
+}
+
+// =========================================================================
+// AD. BulkheadError — Display strings
+// =========================================================================
+
+#[test]
+fn enrichment_error_display_all_variants() {
+    let errors = [
+        BulkheadError::BulkheadNotFound {
+            bulkhead_id: "x".into(),
+        },
+        BulkheadError::PermitNotFound { permit_id: 1 },
+        BulkheadError::BulkheadFull {
+            bulkhead_id: "x".into(),
+            max_concurrent: 5,
+            queue_depth: 10,
+        },
+        BulkheadError::InvalidConfig {
+            reason: "bad".into(),
+        },
+    ];
+    let mut displays = BTreeSet::new();
+    for e in &errors {
+        let s = e.to_string();
+        assert!(!s.is_empty());
+        displays.insert(s);
+    }
+    assert_eq!(displays.len(), errors.len());
+}
+
+// =========================================================================
+// AE. BulkheadRegistry — register duplicate errors
+// =========================================================================
+
+#[test]
+fn enrichment_register_duplicate_errors() {
+    let mut reg = small_registry();
+    let result = reg.register(
+        "test",
+        BulkheadConfig {
+            max_concurrent: 1,
+            max_queue_depth: 1,
+            pressure_threshold_pct: 80,
+        },
+    );
+    assert!(result.is_err());
+}
+
+// =========================================================================
+// AF. BulkheadSnapshot — clone and Debug
+// =========================================================================
+
+#[test]
+fn enrichment_snapshot_clone_debug() {
+    let reg = BulkheadRegistry::with_defaults();
+    let snap = reg.snapshot();
+    let cloned = snap.clone();
+    assert_eq!(snap, cloned);
+    assert!(!format!("{:?}", snap).is_empty());
+}
+
+// =========================================================================
+// AG. PermitId — Copy and equality
+// =========================================================================
+
+#[test]
+fn enrichment_permit_id_copy_eq() {
+    let p = PermitId(42);
+    let p2 = p;
+    assert_eq!(p, p2);
+}
+
+// =========================================================================
+// AH. BulkheadEvent — clone and Debug
+// =========================================================================
+
+#[test]
+fn enrichment_event_clone_debug() {
+    let event = BulkheadEvent {
+        bulkhead_id: "test".into(),
+        current_count: 1,
+        max_concurrent: 2,
+        queue_depth: 0,
+        action: "acquire".into(),
+        trace_id: "t1".into(),
+        event: "permit_acquired".into(),
+        permit_id: 1,
+    };
+    let cloned = event.clone();
+    assert_eq!(event, cloned);
+    assert!(!format!("{:?}", event).is_empty());
+}

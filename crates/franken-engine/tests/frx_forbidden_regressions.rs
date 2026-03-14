@@ -458,3 +458,290 @@ fn entry_count_matches_raw_json_array_length() {
         "typed entry count must match raw JSON array length"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment batch 2: deeper structural and semantic invariants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_invariant_values_are_nonempty() {
+    let regressions = parse_regressions();
+    for entry in &regressions.entries {
+        assert!(
+            !entry.invariant.trim().is_empty(),
+            "invariant must be non-empty for entry {}",
+            entry.id
+        );
+    }
+}
+
+#[test]
+fn individual_entry_serde_roundtrip() {
+    let regressions = parse_regressions();
+    for entry in &regressions.entries {
+        let serialized = serde_json::to_string(entry).expect("entry must serialize");
+        let deserialized: ForbiddenRegressionEntry =
+            serde_json::from_str(&serialized).expect("entry must deserialize");
+        assert_eq!(*entry, deserialized, "roundtrip mismatch for {}", entry.id);
+    }
+}
+
+#[test]
+fn fixture_ref_contains_exactly_two_dots() {
+    let regressions = parse_regressions();
+    for entry in &regressions.entries {
+        let dot_count = entry.fixture_ref.chars().filter(|c| *c == '.').count();
+        assert_eq!(
+            dot_count, 2,
+            "fixture_ref '{}' for {} must contain exactly 2 dots (compat.X.*)",
+            entry.fixture_ref, entry.id
+        );
+    }
+}
+
+#[test]
+fn severity_distribution_is_not_uniform() {
+    let regressions = parse_regressions();
+    let critical = regressions
+        .entries
+        .iter()
+        .filter(|e| e.severity == "critical")
+        .count();
+    let high = regressions
+        .entries
+        .iter()
+        .filter(|e| e.severity == "high")
+        .count();
+    assert!(
+        critical != high || regressions.entries.len() <= 2,
+        "severity distribution should vary: critical={}, high={}",
+        critical,
+        high
+    );
+}
+
+#[test]
+fn schema_version_ends_with_v1() {
+    let regressions = parse_regressions();
+    assert!(
+        regressions.schema_version.ends_with(".v1"),
+        "schema_version must end with .v1: {}",
+        regressions.schema_version
+    );
+}
+
+#[test]
+fn raw_json_entry_values_are_all_strings() {
+    let raw: Value = serde_json::from_str(FORBIDDEN_REGRESSIONS_JSON).expect("must parse");
+    let entries = raw["entries"].as_array().expect("entries must be array");
+    for (i, entry) in entries.iter().enumerate() {
+        let obj = entry.as_object().expect("entry must be object");
+        for (key, val) in obj {
+            assert!(
+                val.is_string(),
+                "entry {} field '{}' must be a string, got {:?}",
+                i,
+                key,
+                val
+            );
+        }
+    }
+}
+
+#[test]
+fn entry_description_word_count_minimum() {
+    let regressions = parse_regressions();
+    for entry in &regressions.entries {
+        let word_count = entry.description.split_whitespace().count();
+        assert!(
+            word_count >= 3,
+            "description for {} has only {} words, need at least 3: '{}'",
+            entry.id,
+            word_count,
+            entry.description
+        );
+    }
+}
+
+#[test]
+fn invariant_ids_are_sorted_ascending() {
+    let regressions = parse_regressions();
+    let invariants: Vec<&str> = regressions
+        .entries
+        .iter()
+        .map(|e| e.invariant.as_str())
+        .collect();
+    for window in invariants.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "invariants must be sorted: '{}' should come before '{}'",
+            window[0],
+            window[1]
+        );
+    }
+}
+
+#[test]
+fn clone_independence_on_entries() {
+    let regressions = parse_regressions();
+    let mut cloned = regressions.clone();
+    cloned.entries[0].id = "FR-CI-999".to_string();
+    assert_ne!(
+        regressions.entries[0].id, cloned.entries[0].id,
+        "clone must be independent of original"
+    );
+}
+
+#[test]
+fn all_string_fields_are_trimmed() {
+    let regressions = parse_regressions();
+    for entry in &regressions.entries {
+        assert_eq!(entry.id, entry.id.trim(), "id not trimmed for {}", entry.id);
+        assert_eq!(
+            entry.invariant,
+            entry.invariant.trim(),
+            "invariant not trimmed for {}",
+            entry.id
+        );
+        assert_eq!(
+            entry.description,
+            entry.description.trim(),
+            "description not trimmed for {}",
+            entry.id
+        );
+        assert_eq!(
+            entry.severity,
+            entry.severity.trim(),
+            "severity not trimmed for {}",
+            entry.id
+        );
+        assert_eq!(
+            entry.detection,
+            entry.detection.trim(),
+            "detection not trimmed for {}",
+            entry.id
+        );
+        assert_eq!(
+            entry.fixture_ref,
+            entry.fixture_ref.trim(),
+            "fixture_ref not trimmed for {}",
+            entry.id
+        );
+    }
+}
+
+#[test]
+fn entry_fields_contain_no_control_characters() {
+    let regressions = parse_regressions();
+    for entry in &regressions.entries {
+        for (field_name, val) in [
+            ("id", &entry.id),
+            ("invariant", &entry.invariant),
+            ("description", &entry.description),
+            ("severity", &entry.severity),
+            ("detection", &entry.detection),
+            ("fixture_ref", &entry.fixture_ref),
+        ] {
+            assert!(
+                !val.chars().any(|c| c.is_control()),
+                "{} for {} contains control characters",
+                field_name,
+                entry.id
+            );
+        }
+    }
+}
+
+#[test]
+fn fixture_ref_middle_segment_is_lowercase_alpha() {
+    let regressions = parse_regressions();
+    for entry in &regressions.entries {
+        let parts: Vec<&str> = entry.fixture_ref.splitn(3, '.').collect();
+        assert_eq!(parts.len(), 3, "fixture_ref must have 3 dot-segments");
+        let middle = parts[1];
+        assert!(
+            !middle.is_empty(),
+            "fixture_ref middle segment must not be empty for {}",
+            entry.id
+        );
+        assert!(
+            middle.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "fixture_ref middle segment '{}' must be lowercase alpha or underscore for {}",
+            middle,
+            entry.id
+        );
+    }
+}
+
+#[test]
+fn manifest_json_size_is_reasonable() {
+    assert!(
+        FORBIDDEN_REGRESSIONS_JSON.len() < 100_000,
+        "manifest JSON should be < 100KB, got {} bytes",
+        FORBIDDEN_REGRESSIONS_JSON.len()
+    );
+    assert!(
+        FORBIDDEN_REGRESSIONS_JSON.len() > 100,
+        "manifest JSON should be > 100 bytes, got {} bytes",
+        FORBIDDEN_REGRESSIONS_JSON.len()
+    );
+}
+
+#[test]
+fn manifest_serde_to_pretty_json_has_entries_key() {
+    let regressions = parse_regressions();
+    let pretty = serde_json::to_string_pretty(&regressions).expect("pretty serialize");
+    assert!(
+        pretty.contains("\"entries\""),
+        "pretty JSON must contain entries key"
+    );
+    assert!(
+        pretty.contains("\"schema_version\""),
+        "pretty JSON must contain schema_version key"
+    );
+}
+
+#[test]
+fn all_detection_methods_have_underscore() {
+    let regressions = parse_regressions();
+    for entry in &regressions.entries {
+        assert!(
+            entry.detection.contains('_'),
+            "detection method '{}' for {} should contain at least one underscore (compound_name)",
+            entry.detection,
+            entry.id
+        );
+    }
+}
+
+#[test]
+fn generated_by_has_at_least_two_segments() {
+    let regressions = parse_regressions();
+    let segments: Vec<&str> = regressions.generated_by.split('.').collect();
+    assert!(
+        segments.len() >= 2,
+        "generated_by '{}' should have at least 2 dot-separated segments",
+        regressions.generated_by
+    );
+}
+
+#[test]
+fn no_duplicate_entry_field_combinations() {
+    let regressions = parse_regressions();
+    let mut seen = BTreeSet::new();
+    for entry in &regressions.entries {
+        let key = format!("{}|{}|{}", entry.invariant, entry.severity, entry.detection);
+        assert!(
+            seen.insert(key.clone()),
+            "duplicate invariant+severity+detection combination: {}",
+            key
+        );
+    }
+}
+
+#[test]
+fn manifest_eq_impl_is_symmetric() {
+    let a = parse_regressions();
+    let b = parse_regressions();
+    assert_eq!(a, b, "Eq must be symmetric");
+}

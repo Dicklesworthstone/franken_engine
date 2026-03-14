@@ -16,12 +16,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::privacy_learning_contract::PrivacyLearningContract;
 use frankenengine_engine::privacy_learning_contract::{
-    ClippingMethod, ClippingStrategy, CompositionMethod, CoordinatorTrustModel,
+    ClippingMethod, ClippingStrategy, CompositionMethod, ContractError, CoordinatorTrustModel,
     CreateContractInput, DataRetentionPolicy, DpBudgetSemantics, FeatureField, FeatureFieldType,
-    FeatureSchema, HumanOverrideRequest, SafetyMetric, SafetyMetricSnapshot, SecretSharingScheme,
-    SecureAggregationRequirements, ShadowBurnInThresholdProfile, ShadowEvaluationCandidate,
-    ShadowEvaluationGate, ShadowEvaluationGateConfig, ShadowExtensionClass, ShadowPromotionVerdict,
-    ShadowReplayReference, ShadowRollbackReadinessArtifacts, UpdatePolicy,
+    FeatureSchema, HumanOverrideRequest, PrngAlgorithm, SafetyMetric, SafetyMetricSnapshot,
+    SecretSharingScheme, SecureAggregationRequirements, ShadowBurnInThresholdProfile,
+    ShadowEvaluationCandidate, ShadowEvaluationGate, ShadowEvaluationGateConfig,
+    ShadowExtensionClass, ShadowPromotionVerdict, ShadowReplayReference,
+    ShadowRollbackReadinessArtifacts, UpdatePolicy,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::SigningKey;
@@ -870,4 +871,204 @@ fn shadow_gate_post_deployment_with_unchanged_metrics_returns_none() {
         g.active_artifact("policy-shadow-gate").is_some(),
         "artifact should remain active after stable post-deployment check"
     );
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: PearlTower 2026-03-14 — Display impls, serde, defaults
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn feature_field_type_display_all_variants() {
+    let cases = [
+        (FeatureFieldType::FixedPoint, "fixed_point"),
+        (FeatureFieldType::Counter, "counter"),
+        (FeatureFieldType::Boolean, "boolean"),
+        (FeatureFieldType::Categorical, "categorical"),
+    ];
+    for (variant, expected) in cases {
+        assert_eq!(variant.to_string(), expected);
+    }
+}
+
+#[test]
+fn feature_field_type_serde_roundtrip() {
+    for variant in [
+        FeatureFieldType::FixedPoint,
+        FeatureFieldType::Counter,
+        FeatureFieldType::Boolean,
+        FeatureFieldType::Categorical,
+    ] {
+        let json = serde_json::to_string(&variant).expect("serialize");
+        let recovered: FeatureFieldType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(variant, recovered);
+    }
+}
+
+#[test]
+fn clipping_method_display_all_variants() {
+    let cases = [
+        (ClippingMethod::L2Norm, "l2_norm"),
+        (ClippingMethod::PerCoordinate, "per_coordinate"),
+        (ClippingMethod::Adaptive, "adaptive"),
+    ];
+    for (variant, expected) in cases {
+        assert_eq!(variant.to_string(), expected);
+    }
+}
+
+#[test]
+fn clipping_method_serde_roundtrip() {
+    for method in [
+        ClippingMethod::L2Norm,
+        ClippingMethod::PerCoordinate,
+        ClippingMethod::Adaptive,
+    ] {
+        let json = serde_json::to_string(&method).expect("serialize");
+        let recovered: ClippingMethod = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(method, recovered);
+    }
+}
+
+#[test]
+fn composition_method_display_all_variants() {
+    let cases = [
+        (CompositionMethod::Basic, "basic"),
+        (CompositionMethod::Advanced, "advanced"),
+        (CompositionMethod::Renyi, "renyi"),
+        (CompositionMethod::ZeroCdp, "zcdp"),
+    ];
+    for (variant, expected) in cases {
+        assert_eq!(variant.to_string(), expected);
+    }
+}
+
+#[test]
+fn composition_method_serde_roundtrip() {
+    for method in [
+        CompositionMethod::Basic,
+        CompositionMethod::Advanced,
+        CompositionMethod::Renyi,
+        CompositionMethod::ZeroCdp,
+    ] {
+        let json = serde_json::to_string(&method).expect("serialize");
+        let recovered: CompositionMethod = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(method, recovered);
+    }
+}
+
+#[test]
+fn coordinator_trust_model_display() {
+    assert_eq!(
+        CoordinatorTrustModel::HonestButCurious.to_string(),
+        "honest_but_curious"
+    );
+    assert_eq!(CoordinatorTrustModel::Malicious.to_string(), "malicious");
+}
+
+#[test]
+fn coordinator_trust_model_serde_roundtrip() {
+    for model in [
+        CoordinatorTrustModel::HonestButCurious,
+        CoordinatorTrustModel::Malicious,
+    ] {
+        let json = serde_json::to_string(&model).expect("serialize");
+        let recovered: CoordinatorTrustModel = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(model, recovered);
+    }
+}
+
+#[test]
+fn secret_sharing_scheme_display() {
+    assert_eq!(SecretSharingScheme::Additive.to_string(), "additive");
+    assert_eq!(SecretSharingScheme::Shamir.to_string(), "shamir");
+}
+
+#[test]
+fn secret_sharing_scheme_serde_roundtrip() {
+    for scheme in [SecretSharingScheme::Additive, SecretSharingScheme::Shamir] {
+        let json = serde_json::to_string(&scheme).expect("serialize");
+        let recovered: SecretSharingScheme = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(scheme, recovered);
+    }
+}
+
+#[test]
+fn prng_algorithm_display() {
+    assert_eq!(
+        PrngAlgorithm::ChaCha20LikeCounter.to_string(),
+        "chacha20_like_counter"
+    );
+}
+
+#[test]
+fn prng_algorithm_serde_roundtrip() {
+    let alg = PrngAlgorithm::ChaCha20LikeCounter;
+    let json = serde_json::to_string(&alg).expect("serialize");
+    let recovered: PrngAlgorithm = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(alg, recovered);
+}
+
+#[test]
+fn safety_metric_display_all_five_variants() {
+    let displays: BTreeSet<String> = SafetyMetric::ALL.iter().map(|m| m.to_string()).collect();
+    assert_eq!(
+        displays.len(),
+        5,
+        "all 5 SafetyMetric variants should have distinct Display"
+    );
+    for display in &displays {
+        assert!(!display.is_empty());
+    }
+}
+
+#[test]
+fn shadow_promotion_verdict_display_all_variants() {
+    let pass = ShadowPromotionVerdict::Pass.to_string();
+    let reject = ShadowPromotionVerdict::Reject.to_string();
+    let over = ShadowPromotionVerdict::OverrideApproved.to_string();
+    assert!(!pass.is_empty());
+    assert!(!reject.is_empty());
+    assert!(!over.is_empty());
+    assert_ne!(pass, reject);
+    assert_ne!(reject, over);
+}
+
+#[test]
+fn shadow_burn_in_threshold_profile_default_values() {
+    let profile = ShadowBurnInThresholdProfile::default();
+    assert_eq!(profile.min_shadow_success_rate_millionths, 995_000);
+    assert_eq!(profile.max_false_deny_rate_millionths, 5_000);
+    assert!(profile.min_burn_in_duration_ns > 0);
+    assert!(profile.require_verified_rollback_artifacts);
+}
+
+#[test]
+fn shadow_evaluation_gate_config_default_has_profiles() {
+    let config = ShadowEvaluationGateConfig::default();
+    let json = serde_json::to_string(&config).expect("serialize config");
+    assert!(!json.is_empty());
+    // Default config should have a default burn-in profile
+    assert!(
+        config
+            .default_burn_in_profile
+            .min_shadow_success_rate_millionths
+            > 0
+    );
+}
+
+#[test]
+fn contract_error_display_is_nonempty_for_all_tested_variants() {
+    let errors: Vec<ContractError> = vec![
+        ContractError::EmptyFeatureSchema,
+        ContractError::InvalidVersion {
+            detail: "version must be > 0".to_string(),
+        },
+    ];
+    for err in &errors {
+        let msg = err.to_string();
+        assert!(
+            !msg.is_empty(),
+            "ContractError Display must be non-empty for {err:?}"
+        );
+    }
 }

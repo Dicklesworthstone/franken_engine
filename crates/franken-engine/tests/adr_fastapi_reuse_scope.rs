@@ -364,3 +364,338 @@ fn fastapi_adr_bead_references_are_well_formed() {
         "ADR should reference at least 3 beads, found {bead_count}"
     );
 }
+
+#[test]
+fn fastapi_adr_has_plan_references_field() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(
+        content.contains("Plan references:"),
+        "ADR must include a Plan references field"
+    );
+}
+
+#[test]
+fn fastapi_adr_mentions_success_criterion() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(
+        content.contains("success criterion"),
+        "ADR must reference success criterion"
+    );
+}
+
+#[test]
+fn fastapi_adr_mentions_fastapi_rust_path() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(
+        content.contains("/dp/fastapi_rust"),
+        "ADR must reference the /dp/fastapi_rust path"
+    );
+}
+
+#[test]
+fn fastapi_adr_out_of_scope_mentions_internal_rpc() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let out_pos = content.find("## Out-of-Scope Interfaces").unwrap();
+    let required_pos = content
+        .find("## Required `fastapi_rust` Conventions")
+        .unwrap();
+    let out_section = &content[out_pos..required_pos];
+    assert!(
+        out_section.contains("Internal RPC"),
+        "Out-of-Scope section must mention Internal RPC"
+    );
+}
+
+#[test]
+fn fastapi_adr_out_of_scope_mentions_vm_hot_path() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let out_pos = content.find("## Out-of-Scope Interfaces").unwrap();
+    let required_pos = content
+        .find("## Required `fastapi_rust` Conventions")
+        .unwrap();
+    let out_section = &content[out_pos..required_pos];
+    assert!(
+        out_section.contains("hot-path"),
+        "Out-of-Scope section must mention VM hot-path"
+    );
+}
+
+#[test]
+fn fastapi_adr_consequences_mentions_positive_outcomes() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let consequences_pos = content.find("## Consequences").unwrap();
+    let compliance_pos = content.find("## Compliance Signals").unwrap();
+    let consequences_section = &content[consequences_pos..compliance_pos];
+    let positive_count = consequences_section.matches("Positive:").count();
+    assert!(
+        positive_count >= 2,
+        "Consequences section must have at least 2 positive outcomes, found {positive_count}"
+    );
+}
+
+#[test]
+fn fastapi_adr_consequences_mentions_cost() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let consequences_pos = content.find("## Consequences").unwrap();
+    let compliance_pos = content.find("## Compliance Signals").unwrap();
+    let consequences_section = &content[consequences_pos..compliance_pos];
+    assert!(
+        consequences_section.contains("Cost:"),
+        "Consequences section must acknowledge a cost/tradeoff"
+    );
+}
+
+#[test]
+fn fastapi_adr_compliance_signals_reference_bd_3o95() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(
+        content.contains("bd-3o95"),
+        "ADR compliance signals must reference bead bd-3o95"
+    );
+}
+
+#[test]
+fn fastapi_adr_compliance_signals_reference_bd_yqg5() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(
+        content.contains("bd-yqg5"),
+        "ADR compliance signals must reference bead bd-yqg5"
+    );
+}
+
+#[test]
+fn fastapi_adr_review_gate_has_three_steps() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let review_pos = content.find("## Review Gate").unwrap();
+    let non_goals_pos = content.find("## Non-Goals").unwrap();
+    let review_section = &content[review_pos..non_goals_pos];
+    for n in 1..=3 {
+        let marker = format!("{n}.");
+        assert!(
+            review_section.contains(&marker),
+            "Review Gate section must list step {n}"
+        );
+    }
+}
+
+#[test]
+fn fastapi_adr_non_goals_mentions_runtime_internals() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let non_goals_pos = content.find("## Non-Goals").unwrap();
+    let consequences_pos = content.find("## Consequences").unwrap();
+    let non_goals_section = &content[non_goals_pos..consequences_pos];
+    assert!(
+        non_goals_section.contains("runtime internals"),
+        "Non-Goals section must mention runtime internals"
+    );
+}
+
+#[test]
+fn fastapi_adr_convention_mentions_route_and_versioning() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let conventions_pos = content
+        .find("## Required `fastapi_rust` Conventions")
+        .unwrap();
+    let exception_pos = content.find("## Exception Process").unwrap();
+    let conventions_section = &content[conventions_pos..exception_pos];
+    assert!(
+        conventions_section.contains("versioning"),
+        "Conventions section must mention versioning"
+    );
+}
+
+#[test]
+fn fastapi_adr_convention_mentions_pagination_and_filter() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let conventions_pos = content
+        .find("## Required `fastapi_rust` Conventions")
+        .unwrap();
+    let exception_pos = content.find("## Exception Process").unwrap();
+    let conventions_section = &content[conventions_pos..exception_pos];
+    assert!(
+        conventions_section.contains("pagination"),
+        "Conventions section must mention pagination"
+    );
+}
+
+#[test]
+fn fastapi_adr_exception_process_mentions_time_bounded() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let exception_pos = content.find("## Exception Process").unwrap();
+    let review_pos = content.find("## Review Gate").unwrap();
+    let exception_section = &content[exception_pos..review_pos];
+    assert!(
+        exception_section.contains("time-bounded"),
+        "Exception Process must state that exceptions are time-bounded"
+    );
+}
+
+#[test]
+fn fastapi_adr_context_mentions_sibling_repositories() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let context_pos = content.find("## Context").unwrap();
+    let decision_pos = content.find("## Decision").unwrap();
+    let context_section = &content[context_pos..decision_pos];
+    assert!(
+        context_section.contains("sibling repositories"),
+        "Context section must mention sibling repositories"
+    );
+}
+
+#[test]
+fn fastapi_adr_title_includes_adr_number() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let first_line = content.lines().next().expect("ADR must have a first line");
+    assert!(
+        first_line.contains("ADR-0002"),
+        "ADR title must contain its number ADR-0002"
+    );
+}
+
+#[test]
+fn fastapi_adr_title_mentions_reuse_scope() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let first_line = content.lines().next().expect("ADR must have a first line");
+    assert!(
+        first_line.contains("Reuse Scope"),
+        "ADR title must mention Reuse Scope"
+    );
+}
+
+#[test]
+fn fastapi_adr_review_gate_mentions_divergence_exception() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let review_pos = content.find("## Review Gate").unwrap();
+    let non_goals_pos = content.find("## Non-Goals").unwrap();
+    let review_section = &content[review_pos..non_goals_pos];
+    assert!(
+        review_section.contains("diverging"),
+        "Review Gate section must address divergence from the standard"
+    );
+}
+
+#[test]
+fn fastapi_adr_evidence_export_api_in_scope() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let in_scope_pos = content.find("## In-Scope Endpoint Classes").unwrap();
+    let out_scope_pos = content.find("## Out-of-Scope Interfaces").unwrap();
+    let in_scope_section = &content[in_scope_pos..out_scope_pos];
+    assert!(
+        in_scope_section.contains("Evidence export APIs"),
+        "Evidence export APIs must appear in the In-Scope section"
+    );
+    assert!(
+        in_scope_section.contains("pagination"),
+        "Evidence export APIs entry must mention pagination"
+    );
+}
+
+#[test]
+fn fastapi_adr_line_endings_are_consistent() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let bytes = fs::read(&path).expect("read ADR bytes");
+    let crlf_count = bytes.windows(2).filter(|w| w == b"\r\n").count();
+    assert_eq!(
+        crlf_count, 0,
+        "ADR must use Unix line endings (no CRLF), found {crlf_count} CRLF sequences"
+    );
+}
+
+#[test]
+fn fastapi_adr_no_trailing_whitespace_on_any_line() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let offending: Vec<(usize, &str)> = content
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line != &line.trim_end())
+        .collect();
+    assert!(
+        offending.is_empty(),
+        "ADR has trailing whitespace on {} line(s); first: line {}",
+        offending.len(),
+        offending.first().map(|(n, _)| n + 1).unwrap_or(0)
+    );
+}
+
+#[test]
+fn fastapi_adr_endpoint_table_columns_cover_reuse_requirement() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let in_scope_pos = content.find("## In-Scope Endpoint Classes").unwrap();
+    let out_scope_pos = content.find("## Out-of-Scope Interfaces").unwrap();
+    let table_section = &content[in_scope_pos..out_scope_pos];
+    assert!(
+        table_section.contains("Minimum reuse requirement"),
+        "Endpoint table must have a 'Minimum reuse requirement' column header"
+    );
+}
+
+#[test]
+fn fastapi_adr_exception_process_mentions_rollback() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let exception_pos = content.find("## Exception Process").unwrap();
+    let review_pos = content.find("## Review Gate").unwrap();
+    let exception_section = &content[exception_pos..review_pos];
+    assert!(
+        exception_section.contains("rollback"),
+        "Exception Process must mention rollback/remediation path"
+    );
+}
+
+#[test]
+fn fastapi_adr_compliance_mentions_release_checklist() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0002-fastapi-rust-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let compliance_pos = content.find("## Compliance Signals").unwrap();
+    let compliance_section = &content[compliance_pos..];
+    assert!(
+        compliance_section.contains("Release checklist")
+            || compliance_section.contains("release checklist"),
+        "Compliance Signals section must mention the release checklist"
+    );
+}

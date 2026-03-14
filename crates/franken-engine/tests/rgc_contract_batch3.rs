@@ -462,3 +462,132 @@ fn s3fifo_replaced_and_untouched_items_are_unique_and_nonempty() {
         );
     }
 }
+
+// ===== Continuation Cliff Atlas — additional enrichment =====
+
+#[test]
+fn cliff_clone_independence() {
+    let a = parse_cliff();
+    let b = a.clone();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn cliff_debug_is_nonempty() {
+    let c = parse_cliff();
+    assert!(!format!("{c:?}").is_empty());
+}
+
+#[test]
+fn cliff_track_name_is_nonempty() {
+    let c = parse_cliff();
+    assert!(!c.track.name.trim().is_empty());
+}
+
+#[test]
+fn cliff_margin_required_fields_are_unique() {
+    let c = parse_cliff();
+    let mut seen = BTreeSet::new();
+    for f in &c.margin_certificate_contract.required_fields {
+        assert!(seen.insert(f.clone()), "duplicate margin field: {f}");
+    }
+}
+
+#[test]
+fn cliff_witness_required_fields_include_trace_id() {
+    let c = parse_cliff();
+    let fields: BTreeSet<&str> = c
+        .witness_contract
+        .required_fields
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        fields.contains("trace_id"),
+        "witness fields must include trace_id"
+    );
+}
+
+#[test]
+fn cliff_logging_required_fields_are_unique() {
+    let c = parse_cliff();
+    let mut seen = BTreeSet::new();
+    for f in &c.logging_contract.required_fields {
+        assert!(seen.insert(f.clone()), "duplicate logging field: {f}");
+    }
+}
+
+#[test]
+fn cliff_generated_at_utc_is_nonempty() {
+    let c = parse_cliff();
+    assert!(!c.generated_at_utc.trim().is_empty());
+}
+
+#[test]
+fn cliff_operator_verification_entries_are_nonempty() {
+    let c = parse_cliff();
+    for cmd in &c.operator_verification {
+        assert!(!cmd.trim().is_empty());
+    }
+}
+
+// ===== S3FIFO — additional enrichment =====
+
+#[test]
+fn s3fifo_clone_independence() {
+    let a = parse_s3fifo();
+    let b = a.clone();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn s3fifo_debug_is_nonempty() {
+    let s = parse_s3fifo();
+    assert!(!format!("{s:?}").is_empty());
+}
+
+#[test]
+fn s3fifo_workload_classes_are_nonempty() {
+    let s = parse_s3fifo();
+    assert!(!s.workload_classes.is_empty());
+}
+
+#[test]
+fn s3fifo_trace_ids_are_unique() {
+    let s = parse_s3fifo();
+    let mut seen = BTreeSet::new();
+    for tid in &s.trace_ids {
+        assert!(seen.insert(tid.clone()), "duplicate trace_id: {tid}");
+    }
+}
+
+#[test]
+fn s3fifo_replaced_surfaces_are_nonempty_list() {
+    let s = parse_s3fifo();
+    assert!(!s.replaced_surfaces.is_empty());
+}
+
+#[test]
+fn s3fifo_win_metrics_count_at_least_two() {
+    let s = parse_s3fifo();
+    assert!(
+        s.win_metrics.len() >= 2,
+        "should have at least 2 win metrics"
+    );
+}
+
+// ===== Cross-schema additional =====
+
+#[test]
+fn cross_schema_both_schemas_end_with_v1() {
+    let c = parse_cliff();
+    let s = parse_s3fifo();
+    assert!(
+        c.schema_version.ends_with(".v1"),
+        "cliff schema should end with .v1"
+    );
+    assert!(
+        s.schema_version.ends_with(".v1"),
+        "s3fifo schema should end with .v1"
+    );
+}

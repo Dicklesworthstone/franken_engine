@@ -1028,3 +1028,370 @@ fn conflict_resolution_mode_debug_is_nonempty() {
     let mode = ConflictResolutionMode::Reject;
     assert!(!format!("{mode:?}").is_empty());
 }
+
+// ===========================================================================
+// Enrichment: ConflictResolutionMode — Display all variants
+// ===========================================================================
+
+#[test]
+fn enrichment_conflict_resolution_mode_display_all() {
+    assert_eq!(ConflictResolutionMode::Serialize.to_string(), "serialize");
+    assert_eq!(ConflictResolutionMode::Reject.to_string(), "reject");
+}
+
+#[test]
+fn enrichment_conflict_resolution_mode_serde_roundtrip() {
+    for mode in [
+        ConflictResolutionMode::Serialize,
+        ConflictResolutionMode::Reject,
+    ] {
+        let json = serde_json::to_string(&mode).unwrap();
+        let back: ConflictResolutionMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, mode);
+    }
+}
+
+// ===========================================================================
+// Enrichment: InterferenceFailureCode — Display all 7 variants
+// ===========================================================================
+
+#[test]
+fn enrichment_interference_failure_code_display_all() {
+    let codes = [
+        InterferenceFailureCode::DuplicateController,
+        InterferenceFailureCode::MissingTimescaleStatement,
+        InterferenceFailureCode::InvalidTimescaleInterval,
+        InterferenceFailureCode::UnknownController,
+        InterferenceFailureCode::UnauthorizedRead,
+        InterferenceFailureCode::UnauthorizedWrite,
+        InterferenceFailureCode::TimescaleConflict,
+    ];
+    let displays: BTreeSet<String> = codes.iter().map(|c| c.to_string()).collect();
+    assert_eq!(displays.len(), 7, "7 distinct display strings");
+    for d in &displays {
+        assert!(!d.is_empty());
+    }
+}
+
+#[test]
+fn enrichment_interference_failure_code_serde_roundtrip() {
+    let codes = [
+        InterferenceFailureCode::DuplicateController,
+        InterferenceFailureCode::MissingTimescaleStatement,
+        InterferenceFailureCode::InvalidTimescaleInterval,
+        InterferenceFailureCode::UnknownController,
+        InterferenceFailureCode::UnauthorizedRead,
+        InterferenceFailureCode::UnauthorizedWrite,
+        InterferenceFailureCode::TimescaleConflict,
+    ];
+    for c in &codes {
+        let json = serde_json::to_string(c).unwrap();
+        let back: InterferenceFailureCode = serde_json::from_str(&json).unwrap();
+        assert_eq!(*c, back);
+    }
+}
+
+// ===========================================================================
+// Enrichment: InterferenceConfig — default values
+// ===========================================================================
+
+#[test]
+fn enrichment_interference_config_default_values() {
+    let config = InterferenceConfig::default();
+    assert_eq!(config.min_timescale_separation_millionths, 100_000);
+    assert_eq!(
+        config.conflict_resolution_mode,
+        ConflictResolutionMode::Reject
+    );
+}
+
+#[test]
+fn enrichment_interference_config_serde_roundtrip() {
+    let config = InterferenceConfig {
+        min_timescale_separation_millionths: 250_000,
+        conflict_resolution_mode: ConflictResolutionMode::Serialize,
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let back: InterferenceConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, config);
+}
+
+// ===========================================================================
+// Enrichment: TimescaleSeparationStatement — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_timescale_separation_statement_serde_roundtrip() {
+    let ts = TimescaleSeparationStatement {
+        observation_interval_millionths: 500_000,
+        write_interval_millionths: 1_000_000,
+        statement: "observe every 500ms, write every 1s".to_string(),
+    };
+    let json = serde_json::to_string(&ts).unwrap();
+    let back: TimescaleSeparationStatement = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ts);
+}
+
+// ===========================================================================
+// Enrichment: MetricReadRequest / MetricWriteRequest / MetricSubscription serde
+// ===========================================================================
+
+#[test]
+fn enrichment_metric_read_request_serde_roundtrip() {
+    let req = MetricReadRequest {
+        controller_id: "ctrl-1".to_string(),
+        metric: "cpu".to_string(),
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    let back: MetricReadRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, req);
+}
+
+#[test]
+fn enrichment_metric_write_request_serde_roundtrip() {
+    let req = MetricWriteRequest {
+        controller_id: "ctrl-1".to_string(),
+        metric: "latency".to_string(),
+        value: 42,
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    let back: MetricWriteRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, req);
+}
+
+#[test]
+fn enrichment_metric_subscription_serde_roundtrip() {
+    let sub = MetricSubscription {
+        controller_id: "ctrl-1".to_string(),
+        metric: "throughput".to_string(),
+    };
+    let json = serde_json::to_string(&sub).unwrap();
+    let back: MetricSubscription = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, sub);
+}
+
+// ===========================================================================
+// Enrichment: ControllerRegistration — serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_controller_registration_serde_roundtrip() {
+    let reg = registration(
+        "ctrl-rt",
+        &["cpu", "latency"],
+        &["throughput"],
+        1_000_000,
+        500_000,
+        "fast controller",
+    );
+    let json = serde_json::to_string(&reg).unwrap();
+    let back: ControllerRegistration = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, reg);
+}
+
+// ===========================================================================
+// Enrichment: InterferenceEvaluation — serde roundtrip via evaluate
+// ===========================================================================
+
+#[test]
+fn enrichment_interference_evaluation_serde_roundtrip() {
+    let config = InterferenceConfig::default();
+    let registrations = vec![registration(
+        "ctrl-serde",
+        &["cpu"],
+        &["cpu"],
+        500_000,
+        500_000,
+        "serde test",
+    )];
+    let read_requests: [MetricReadRequest; 0] = [];
+    let write_requests = [MetricWriteRequest {
+        controller_id: "ctrl-serde".to_string(),
+        metric: "cpu".to_string(),
+        value: 42,
+    }];
+    let subscriptions: [MetricSubscription; 0] = [];
+    let metrics = initial_metrics();
+
+    let evaluation = evaluate_controller_interference(&scenario(
+        "trace-serde",
+        "policy-serde",
+        &config,
+        &registrations,
+        (&read_requests, &write_requests, &subscriptions),
+        &metrics,
+    ));
+
+    let json = serde_json::to_string(&evaluation).unwrap();
+    let back: InterferenceEvaluation = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, evaluation);
+}
+
+// ===========================================================================
+// Enrichment: evaluate — empty registrations yields pass
+// ===========================================================================
+
+#[test]
+fn enrichment_evaluate_empty_registrations_pass() {
+    let config = InterferenceConfig::default();
+    let registrations: Vec<ControllerRegistration> = vec![];
+    let read_requests: [MetricReadRequest; 0] = [];
+    let write_requests: [MetricWriteRequest; 0] = [];
+    let subscriptions: [MetricSubscription; 0] = [];
+    let metrics = initial_metrics();
+
+    let evaluation = evaluate_controller_interference(&scenario(
+        "trace-empty",
+        "policy-empty",
+        &config,
+        &registrations,
+        (&read_requests, &write_requests, &subscriptions),
+        &metrics,
+    ));
+    assert!(evaluation.pass);
+    assert!(evaluation.findings.is_empty());
+}
+
+// ===========================================================================
+// Enrichment: evaluate — read snapshot reflects initial metrics
+// ===========================================================================
+
+#[test]
+fn enrichment_evaluate_read_snapshot_reflects_initial() {
+    let config = InterferenceConfig::default();
+    let registrations = vec![registration(
+        "reader",
+        &["cpu", "latency"],
+        &[],
+        1_000_000,
+        0,
+        "read-only",
+    )];
+    let read_requests = [
+        MetricReadRequest {
+            controller_id: "reader".to_string(),
+            metric: "cpu".to_string(),
+        },
+        MetricReadRequest {
+            controller_id: "reader".to_string(),
+            metric: "latency".to_string(),
+        },
+    ];
+    let write_requests: [MetricWriteRequest; 0] = [];
+    let subscriptions: [MetricSubscription; 0] = [];
+    let metrics = initial_metrics();
+
+    let evaluation = evaluate_controller_interference(&scenario(
+        "trace-read",
+        "policy-read",
+        &config,
+        &registrations,
+        (&read_requests, &write_requests, &subscriptions),
+        &metrics,
+    ));
+    assert!(evaluation.pass);
+    assert_eq!(evaluation.read_snapshots.get("cpu"), Some(&10));
+    assert_eq!(evaluation.read_snapshots.get("latency"), Some(&100));
+}
+
+// ===========================================================================
+// Enrichment: evaluate — decision_id is nonempty
+// ===========================================================================
+
+#[test]
+fn enrichment_evaluate_decision_id_present() {
+    let config = InterferenceConfig::default();
+    let registrations = vec![registration("c", &[], &[], 1_000_000, 1_000_000, "s")];
+    let read_requests: [MetricReadRequest; 0] = [];
+    let write_requests: [MetricWriteRequest; 0] = [];
+    let subscriptions: [MetricSubscription; 0] = [];
+    let metrics = initial_metrics();
+
+    let evaluation = evaluate_controller_interference(&scenario(
+        "trace-id",
+        "policy-id",
+        &config,
+        &registrations,
+        (&read_requests, &write_requests, &subscriptions),
+        &metrics,
+    ));
+    assert!(!evaluation.decision_id.is_empty());
+}
+
+// ===========================================================================
+// Enrichment: evaluate — single writer without conflict passes
+// ===========================================================================
+
+#[test]
+fn enrichment_evaluate_single_writer_passes() {
+    let config = InterferenceConfig::default();
+    let registrations = vec![registration(
+        "writer",
+        &["cpu"],
+        &["cpu"],
+        1_000_000,
+        500_000,
+        "single writer",
+    )];
+    let read_requests: [MetricReadRequest; 0] = [];
+    let write_requests = [MetricWriteRequest {
+        controller_id: "writer".to_string(),
+        metric: "cpu".to_string(),
+        value: 99,
+    }];
+    let subscriptions: [MetricSubscription; 0] = [];
+    let metrics = initial_metrics();
+
+    let evaluation = evaluate_controller_interference(&scenario(
+        "trace-single",
+        "policy-single",
+        &config,
+        &registrations,
+        (&read_requests, &write_requests, &subscriptions),
+        &metrics,
+    ));
+    assert!(evaluation.pass);
+    assert_eq!(evaluation.applied_writes.len(), 1);
+    assert!(evaluation.rejected_writes.is_empty());
+    assert_eq!(evaluation.final_metrics.get("cpu"), Some(&99));
+}
+
+// ===========================================================================
+// Enrichment: evaluate — log events have correct component
+// ===========================================================================
+
+#[test]
+fn enrichment_evaluate_log_events_have_component() {
+    let config = InterferenceConfig::default();
+    let registrations = vec![registration(
+        "logtest",
+        &["cpu"],
+        &["cpu"],
+        1_000_000,
+        1_000_000,
+        "log check",
+    )];
+    let read_requests: [MetricReadRequest; 0] = [];
+    let write_requests = [MetricWriteRequest {
+        controller_id: "logtest".to_string(),
+        metric: "cpu".to_string(),
+        value: 50,
+    }];
+    let subscriptions: [MetricSubscription; 0] = [];
+    let metrics = initial_metrics();
+
+    let evaluation = evaluate_controller_interference(&scenario(
+        "trace-log",
+        "policy-log",
+        &config,
+        &registrations,
+        (&read_requests, &write_requests, &subscriptions),
+        &metrics,
+    ));
+    for log in &evaluation.logs {
+        assert!(!log.component.is_empty());
+        assert!(!log.trace_id.is_empty());
+        assert!(!log.event.is_empty());
+        assert!(!log.outcome.is_empty());
+    }
+}

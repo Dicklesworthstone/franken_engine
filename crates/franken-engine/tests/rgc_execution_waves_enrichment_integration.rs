@@ -666,3 +666,270 @@ fn serde_roundtrip_coordination_dry_run_report() {
     let rt: CoordinationDryRunReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report, rt);
 }
+
+// ===========================================================================
+// Enrichment: ExecutionWave — order_index values
+// ===========================================================================
+
+#[test]
+fn enrichment_execution_wave_order_index_distinct() {
+    let mut indices = BTreeSet::new();
+    for wave in &ExecutionWave::ALL {
+        indices.insert(wave.order_index());
+    }
+    assert_eq!(indices.len(), 4);
+}
+
+#[test]
+fn enrichment_execution_wave_order_matches_all_array() {
+    for (i, wave) in ExecutionWave::ALL.iter().enumerate() {
+        assert_eq!(wave.order_index(), i);
+    }
+}
+
+// ===========================================================================
+// Enrichment: ExecutionWave — Display strings unique
+// ===========================================================================
+
+#[test]
+fn enrichment_execution_wave_as_str_unique() {
+    let displays: BTreeSet<&str> = ExecutionWave::ALL.iter().map(|w| w.as_str()).collect();
+    assert_eq!(displays.len(), 4);
+}
+
+// ===========================================================================
+// Enrichment: ExecutionWave — Clone/Copy
+// ===========================================================================
+
+#[test]
+fn enrichment_execution_wave_copy() {
+    let w = ExecutionWave::Wave0;
+    let w2 = w;
+    assert_eq!(w, w2);
+}
+
+// ===========================================================================
+// Enrichment: AntiStallAction — as_str exact
+// ===========================================================================
+
+#[test]
+fn enrichment_anti_stall_action_as_str_exact() {
+    assert_eq!(AntiStallAction::Healthy.as_str(), "healthy");
+    assert_eq!(AntiStallAction::Warn.as_str(), "warn");
+    assert_eq!(AntiStallAction::Escalate.as_str(), "escalate");
+    assert_eq!(AntiStallAction::Reassign.as_str(), "reassign");
+    assert_eq!(AntiStallAction::Split.as_str(), "split");
+}
+
+// ===========================================================================
+// Enrichment: select_anti_stall_action — boundary cases
+// ===========================================================================
+
+#[test]
+fn enrichment_select_anti_stall_zero_elapsed_healthy() {
+    let thresholds = AntiStallThresholds {
+        warn_after_seconds: 60,
+        escalate_after_seconds: 120,
+        reassign_after_seconds: 300,
+        split_after_seconds: 600,
+    };
+    assert_eq!(
+        select_anti_stall_action(&thresholds, 0),
+        AntiStallAction::Healthy
+    );
+}
+
+#[test]
+fn enrichment_select_anti_stall_at_warn_boundary() {
+    let thresholds = AntiStallThresholds {
+        warn_after_seconds: 60,
+        escalate_after_seconds: 120,
+        reassign_after_seconds: 300,
+        split_after_seconds: 600,
+    };
+    assert_eq!(
+        select_anti_stall_action(&thresholds, 60),
+        AntiStallAction::Warn
+    );
+}
+
+#[test]
+fn enrichment_select_anti_stall_at_split_boundary() {
+    let thresholds = AntiStallThresholds {
+        warn_after_seconds: 60,
+        escalate_after_seconds: 120,
+        reassign_after_seconds: 300,
+        split_after_seconds: 600,
+    };
+    assert_eq!(
+        select_anti_stall_action(&thresholds, 600),
+        AntiStallAction::Split
+    );
+}
+
+#[test]
+fn enrichment_select_anti_stall_above_split() {
+    let thresholds = AntiStallThresholds {
+        warn_after_seconds: 60,
+        escalate_after_seconds: 120,
+        reassign_after_seconds: 300,
+        split_after_seconds: 600,
+    };
+    assert_eq!(
+        select_anti_stall_action(&thresholds, 9999),
+        AntiStallAction::Split
+    );
+}
+
+// ===========================================================================
+// Enrichment: default protocol — validation passes
+// ===========================================================================
+
+#[test]
+fn enrichment_default_protocol_validates_clean() {
+    let protocol = default_rgc_execution_wave_protocol();
+    assert!(
+        validate_execution_wave_protocol(&protocol).is_ok(),
+        "default protocol should validate clean"
+    );
+}
+
+// ===========================================================================
+// Enrichment: default handoff — validation passes
+// ===========================================================================
+
+#[test]
+fn enrichment_default_handoff_validates_clean() {
+    let protocol = default_rgc_execution_wave_protocol();
+    let pkg = default_wave_handoff_package();
+    assert!(
+        validate_wave_handoff_package(&protocol, &pkg).is_ok(),
+        "default handoff should validate clean"
+    );
+}
+
+// ===========================================================================
+// Enrichment: dry run report — fields populated
+// ===========================================================================
+
+#[test]
+fn enrichment_dry_run_report_fields_populated() {
+    let protocol = default_rgc_execution_wave_protocol();
+    let pkg = default_wave_handoff_package();
+    let report = run_coordination_dry_run(&protocol, &pkg, 42, "t-1", "d-1").unwrap();
+    // CoordinationDryRunReport has `action` and `events` fields.
+    assert_eq!(report.action, AntiStallAction::Healthy);
+    assert!(!report.events.is_empty());
+}
+
+// ===========================================================================
+// Enrichment: constants — nonempty
+// ===========================================================================
+
+#[test]
+fn enrichment_constants_nonempty() {
+    assert!(!RGC_EXECUTION_WAVE_PROTOCOL_SCHEMA_VERSION.is_empty());
+    assert!(!RGC_WAVE_HANDOFF_SCHEMA_VERSION.is_empty());
+    assert!(!RGC_COORDINATION_EVENT_SCHEMA_VERSION.is_empty());
+    assert!(!RGC_COORDINATION_COMPONENT.is_empty());
+}
+
+// ===========================================================================
+// Enrichment: WavePlanEntry — clone + Debug
+// ===========================================================================
+
+#[test]
+fn enrichment_wave_plan_entry_clone_debug() {
+    let entry = WavePlanEntry {
+        wave: ExecutionWave::Wave1,
+        parallel_bead_ids: vec!["bd-1".into()],
+        serial_bead_ids: vec!["bd-2".into()],
+        required_predecessor_waves: vec![ExecutionWave::Wave0],
+        entry_criteria: vec!["criterion".into()],
+        exit_criteria: vec!["exit".into()],
+    };
+    let cloned = entry.clone();
+    assert_eq!(entry, cloned);
+    assert!(!format!("{:?}", entry).is_empty());
+}
+
+// ===========================================================================
+// Enrichment: FileReservationProtocol — serde
+// ===========================================================================
+
+#[test]
+fn enrichment_file_reservation_protocol_serde() {
+    let p = FileReservationProtocol {
+        exclusive_required: true,
+        min_ttl_seconds: 3600,
+        renew_before_seconds: 900,
+        max_paths_per_claim: 12,
+    };
+    let json = serde_json::to_string(&p).unwrap();
+    let rt: FileReservationProtocol = serde_json::from_str(&json).unwrap();
+    assert_eq!(p, rt);
+}
+
+// ===========================================================================
+// Enrichment: AgentMailProtocol — serde
+// ===========================================================================
+
+#[test]
+fn enrichment_agent_mail_protocol_serde() {
+    let p = AgentMailProtocol {
+        poll_interval_seconds: 120,
+        urgent_poll_interval_seconds: 30,
+        ack_required_within_seconds: 300,
+    };
+    let json = serde_json::to_string(&p).unwrap();
+    let rt: AgentMailProtocol = serde_json::from_str(&json).unwrap();
+    assert_eq!(p, rt);
+}
+
+// ===========================================================================
+// Enrichment: AntiStallThresholds — serde
+// ===========================================================================
+
+#[test]
+fn enrichment_anti_stall_thresholds_serde() {
+    let t = AntiStallThresholds {
+        warn_after_seconds: 60,
+        escalate_after_seconds: 120,
+        reassign_after_seconds: 300,
+        split_after_seconds: 600,
+    };
+    let json = serde_json::to_string(&t).unwrap();
+    let rt: AntiStallThresholds = serde_json::from_str(&json).unwrap();
+    assert_eq!(t, rt);
+}
+
+// ===========================================================================
+// Enrichment: CoordinationValidationError — Display unique
+// ===========================================================================
+
+#[test]
+fn enrichment_coordination_validation_error_display_unique() {
+    let errors = vec![
+        CoordinationValidationError::InvalidSchemaVersion {
+            field: "a".into(),
+            expected: "b".into(),
+            actual: "c".into(),
+        },
+        CoordinationValidationError::EmptyField { field: "d".into() },
+        CoordinationValidationError::DuplicateWaveEntry { wave: "e".into() },
+        CoordinationValidationError::MissingWaveEntry { wave: "f".into() },
+        CoordinationValidationError::DuplicateBeadOwnership {
+            bead_id: "g".into(),
+        },
+        CoordinationValidationError::InvalidPredecessor {
+            wave: "h".into(),
+            predecessor: "i".into(),
+        },
+        CoordinationValidationError::InvalidThresholdOrder,
+        CoordinationValidationError::InvalidMailPolicy,
+        CoordinationValidationError::InvalidReservationPolicy,
+        CoordinationValidationError::UnknownWaveForHandoff { wave: "j".into() },
+    ];
+    let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
+    assert_eq!(displays.len(), errors.len());
+}

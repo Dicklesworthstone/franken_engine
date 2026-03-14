@@ -14,6 +14,9 @@
     clippy::manual_abs_diff
 )]
 
+use std::fs;
+use std::path::Path;
+
 use frankenengine_engine::rgc_execution_waves::{
     AgentMailProtocol, AntiStallAction, AntiStallThresholds, CoordinationDryRunReport,
     CoordinationEvent, CoordinationValidationError, ExecutionWave, ExecutionWaveProtocol,
@@ -23,6 +26,16 @@ use frankenengine_engine::rgc_execution_waves::{
     default_wave_handoff_package, run_coordination_dry_run, select_anti_stall_action,
     validate_execution_wave_protocol, validate_wave_handoff_package,
 };
+
+fn load_protocol_doc() -> String {
+    let path = Path::new("../../docs/RGC_EXECUTION_WAVE_PROTOCOL.md");
+    fs::read_to_string(path).expect("read RGC execution wave protocol doc")
+}
+
+fn load_runner_script() -> String {
+    let path = Path::new("../../scripts/run_rgc_execution_waves_coordination_suite.sh");
+    fs::read_to_string(path).expect("read RGC execution waves coordination runner")
+}
 
 #[test]
 fn rgc_execution_waves_default_contract_versions_are_stable() {
@@ -83,6 +96,59 @@ fn rgc_execution_waves_handoff_rejects_unknown_wave() {
         error,
         CoordinationValidationError::UnknownWaveForHandoff { .. }
     ));
+}
+
+#[test]
+fn rgc_execution_waves_doc_mentions_unique_repo_local_runner_target_dir() {
+    let doc = load_protocol_doc();
+    for snippet in [
+        "./scripts/run_rgc_execution_waves_coordination_suite.sh ci",
+        ".rch_target/rgc_execution_waves_uid",
+        "step_logs/step_*.log",
+    ] {
+        assert!(
+            doc.contains(snippet),
+            "protocol doc missing required snippet: {snippet}"
+        );
+    }
+}
+
+#[test]
+fn rgc_execution_waves_runner_script_requires_unique_repo_local_target_dir() {
+    let script = load_runner_script();
+    for snippet in [
+        "rch is required",
+        ".rch_target/rgc_execution_waves_uid",
+        "CARGO_BUILD_JOBS=${cargo_build_jobs}",
+        "dry_run_attempted=true",
+        "dry_run_validated=true",
+        "if [[ \"$dry_run_attempted\" == true ]]; then",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "step_logs_dir",
+        "cargo check -p frankenengine-engine --test rgc_execution_waves_integration",
+        "cargo test -p frankenengine-engine --test rgc_execution_waves_enrichment_integration",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "runner script missing required snippet: {snippet}"
+        );
+    }
+    assert!(
+        !script.contains("/tmp/rch_target_franken_engine"),
+        "runner script must not default execution-wave target dir under /tmp"
+    );
+    assert!(
+        !script.contains(".rch_target/rgc_execution_waves_${timestamp}"),
+        "runner script must not use a timestamp-only execution-wave target-dir namespace"
+    );
+    assert!(
+        !script.contains(
+            "\"event\":\"protocol_dry_run_validated\",\"outcome\":\"pass\",\"error_code\":null"
+        ),
+        "runner script must not unconditionally emit a passing dry-run validation event"
+    );
 }
 
 #[test]

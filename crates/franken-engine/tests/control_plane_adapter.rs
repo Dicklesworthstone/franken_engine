@@ -681,3 +681,386 @@ fn posterior_serde_is_deterministic() {
     let b = serde_json::to_string(&posterior).expect("second");
     assert_eq!(a, b);
 }
+
+// ---------- Enrichment batch: additional coverage ----------
+
+#[test]
+fn control_plane_adapter_error_display_budget_exhausted_contains_requested_ms_and_ms_suffix() {
+    let err = control_plane::ControlPlaneAdapterError::BudgetExhausted {
+        requested_ms: 42_000,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("42000"),
+        "Display must include the requested_ms value"
+    );
+    assert!(msg.contains("ms"), "Display must mention ms unit");
+}
+
+#[test]
+fn control_plane_adapter_error_display_decision_gateway_includes_code() {
+    let err = control_plane::ControlPlaneAdapterError::DecisionGateway {
+        code: "gw_timeout_enriched",
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("gw_timeout_enriched"));
+    assert!(msg.contains("gateway") || msg.contains("decision"));
+}
+
+#[test]
+fn control_plane_adapter_error_display_evidence_emission_includes_code() {
+    let err = control_plane::ControlPlaneAdapterError::EvidenceEmission {
+        code: "emit_quota_exceeded",
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("emit_quota_exceeded"));
+}
+
+#[test]
+fn control_plane_adapter_error_source_is_none_for_all_variants() {
+    use std::error::Error;
+    let variants: Vec<control_plane::ControlPlaneAdapterError> = vec![
+        control_plane::ControlPlaneAdapterError::BudgetExhausted { requested_ms: 0 },
+        control_plane::ControlPlaneAdapterError::DecisionGateway { code: "src_check" },
+        control_plane::ControlPlaneAdapterError::EvidenceEmission { code: "src_check" },
+    ];
+    for e in &variants {
+        assert!(
+            e.source().is_none(),
+            "ControlPlaneAdapterError should have no source for {e}"
+        );
+    }
+}
+
+#[test]
+fn control_plane_adapter_error_debug_distinct_per_variant() {
+    let e1 = format!(
+        "{:?}",
+        control_plane::ControlPlaneAdapterError::BudgetExhausted { requested_ms: 1 }
+    );
+    let e2 = format!(
+        "{:?}",
+        control_plane::ControlPlaneAdapterError::DecisionGateway { code: "debug_gw" }
+    );
+    let e3 = format!(
+        "{:?}",
+        control_plane::ControlPlaneAdapterError::EvidenceEmission { code: "debug_ee" }
+    );
+    let mut set = std::collections::BTreeSet::new();
+    set.insert(e1);
+    set.insert(e2);
+    set.insert(e3);
+    assert_eq!(set.len(), 3, "all three error Debug formats must differ");
+}
+
+#[test]
+fn control_plane_adapter_error_clone_preserves_equality() {
+    let e1 = control_plane::ControlPlaneAdapterError::BudgetExhausted { requested_ms: 777 };
+    assert_eq!(e1, e1.clone());
+
+    let e2 = control_plane::ControlPlaneAdapterError::DecisionGateway { code: "clone_test" };
+    assert_eq!(e2, e2.clone());
+
+    let e3 = control_plane::ControlPlaneAdapterError::EvidenceEmission { code: "clone_test" };
+    assert_eq!(e3, e3.clone());
+}
+
+#[test]
+fn decision_verdict_copy_semantics_all_variants() {
+    // DecisionVerdict derives Copy — assignment should not move.
+    let a = DecisionVerdict::Allow;
+    let d = DecisionVerdict::Deny;
+    let t = DecisionVerdict::Timeout;
+    let a2 = a;
+    let d2 = d;
+    let t2 = t;
+    // Originals still usable after copy
+    assert_eq!(a, a2);
+    assert_eq!(d, d2);
+    assert_eq!(t, t2);
+    assert_eq!(a, DecisionVerdict::Allow);
+    assert_eq!(d, DecisionVerdict::Deny);
+    assert_eq!(t, DecisionVerdict::Timeout);
+}
+
+#[test]
+fn mock_failure_mode_default_is_never() {
+    let default_mode = control_plane::mocks::MockFailureMode::default();
+    assert_eq!(default_mode, control_plane::mocks::MockFailureMode::Never);
+}
+
+#[test]
+fn mock_failure_mode_serde_like_clone_eq_all_variants() {
+    let variants = [
+        control_plane::mocks::MockFailureMode::Never,
+        control_plane::mocks::MockFailureMode::FailAlways { code: "serde_like" },
+        control_plane::mocks::MockFailureMode::FailAfterN {
+            remaining_successes: 3,
+            code: "serde_fan",
+        },
+        control_plane::mocks::MockFailureMode::LatencyInjection { millis: 10 },
+        control_plane::mocks::MockFailureMode::PanicOnCall,
+    ];
+    for v in &variants {
+        let cloned = v.clone();
+        assert_eq!(v, &cloned);
+    }
+}
+
+#[test]
+fn mock_decision_contract_fail_always_returns_gateway_error() {
+    let mut contract =
+        control_plane::mocks::MockDecisionContract::new(vec![DecisionVerdict::Allow])
+            .with_failure_mode(control_plane::mocks::MockFailureMode::FailAlways {
+                code: "always_fail_code",
+            });
+    let request = DecisionRequest {
+        decision_id: control_plane::DecisionId::from_parts(5_000, 1_u128),
+        policy_id: control_plane::PolicyId::new("test.fail_always", 1),
+        trace_id: control_plane::TraceId::from_parts(5_000, 1_u128),
+        ts_unix_ms: 5_000,
+        calibration_score_bps: 5_000,
+        e_process_milli: 100,
+        ci_width_milli: 50,
+    };
+    let err = contract
+        .evaluate(&request)
+        .expect_err("FailAlways should error");
+    assert!(matches!(
+        err,
+        control_plane::ControlPlaneAdapterError::DecisionGateway {
+            code: "always_fail_code"
+        }
+    ));
+    // Error event recorded
+    assert_eq!(contract.events().len(), 1);
+    assert_eq!(contract.events()[0].outcome, "error");
+}
+
+#[test]
+fn mock_evidence_emitter_fail_always_returns_evidence_emission_error() {
+    let mut emitter = control_plane::mocks::MockEvidenceEmitter::new().with_failure_mode(
+        control_plane::mocks::MockFailureMode::FailAlways {
+            code: "emit_always_fail",
+        },
+    );
+    let request = DecisionRequest {
+        decision_id: control_plane::DecisionId::from_parts(6_000, 1_u128),
+        policy_id: control_plane::PolicyId::new("test.emit_fail", 1),
+        trace_id: control_plane::TraceId::from_parts(6_000, 1_u128),
+        ts_unix_ms: 6_000,
+        calibration_score_bps: 5_000,
+        e_process_milli: 100,
+        ci_width_milli: 50,
+    };
+    let entry = control_plane::EvidenceLedgerBuilder::new()
+        .ts_unix_ms(6_000)
+        .component("test_emit_fail")
+        .action("allow")
+        .posterior(vec![0.5, 0.5])
+        .expected_loss("allow", 0.1)
+        .expected_loss("deny", 0.9)
+        .chosen_expected_loss(0.1)
+        .calibration_score(0.5)
+        .fallback_active(false)
+        .build()
+        .expect("valid evidence entry");
+
+    let err = emitter
+        .emit(&request, entry)
+        .expect_err("FailAlways should error");
+    assert!(matches!(
+        err,
+        control_plane::ControlPlaneAdapterError::EvidenceEmission {
+            code: "emit_always_fail"
+        }
+    ));
+    // Entries should be empty (emission failed), but event recorded
+    assert!(emitter.entries().is_empty());
+    assert_eq!(emitter.events().len(), 1);
+    assert_eq!(emitter.events()[0].outcome, "error");
+}
+
+#[test]
+fn mock_cx_implements_context_adapter_trait() {
+    use frankenengine_engine::control_plane::ContextAdapter;
+
+    let trace = control_plane::mocks::trace_id_from_seed(100);
+    let mut cx =
+        control_plane::mocks::MockCx::new(trace, control_plane::mocks::MockBudget::new(200));
+
+    // ContextAdapter::trace_id
+    assert_eq!(cx.trace_id(), trace);
+
+    // ContextAdapter::budget
+    assert_eq!(cx.budget().remaining_ms(), 200);
+
+    // ContextAdapter::consume_budget
+    cx.consume_budget(50).expect("consume 50ms");
+    assert_eq!(cx.budget().remaining_ms(), 150);
+
+    // Overspend should fail
+    let err = cx.consume_budget(200);
+    assert!(err.is_err());
+}
+
+#[test]
+fn schema_version_from_seed_produces_deterministic_versions() {
+    let v1 = control_plane::mocks::schema_version_from_seed(0);
+    let v2 = control_plane::mocks::schema_version_from_seed(0);
+    assert_eq!(v1, v2);
+
+    let v3 = control_plane::mocks::schema_version_from_seed(1);
+    // Different seeds should give at least a different minor or patch
+    let v4 = control_plane::mocks::schema_version_from_seed(10);
+    // Just verify determinism for same seed
+    assert_eq!(v3, control_plane::mocks::schema_version_from_seed(1));
+    assert_eq!(v4, control_plane::mocks::schema_version_from_seed(10));
+}
+
+#[test]
+fn adapter_event_clone_independence_mutation_does_not_affect_original() {
+    let original = control_plane::AdapterEvent {
+        trace_id: "orig_trace".to_string(),
+        decision_id: "orig_decision".to_string(),
+        policy_id: "orig_policy".to_string(),
+        component: "orig_component".to_string(),
+        event: "orig_event".to_string(),
+        outcome: "ok".to_string(),
+        error_code: None,
+    };
+    let mut cloned = original.clone();
+    cloned.outcome = "mutated".to_string();
+    cloned.error_code = Some("injected_error".to_string());
+    assert_eq!(original.outcome, "ok");
+    assert!(original.error_code.is_none());
+    assert_eq!(cloned.outcome, "mutated");
+    assert_eq!(cloned.error_code.as_deref(), Some("injected_error"));
+}
+
+#[test]
+fn decision_request_clone_independence_mutation_does_not_affect_original() {
+    let original = DecisionRequest {
+        decision_id: control_plane::DecisionId::from_parts(7_000, 7_u128),
+        policy_id: control_plane::PolicyId::new("clone.test", 1),
+        trace_id: control_plane::TraceId::from_parts(7_000, 7_u128),
+        ts_unix_ms: 7_000,
+        calibration_score_bps: 9_000,
+        e_process_milli: 200,
+        ci_width_milli: 100,
+    };
+    let mut cloned = original.clone();
+    cloned.ts_unix_ms = 0;
+    cloned.calibration_score_bps = 0;
+    assert_eq!(original.ts_unix_ms, 7_000);
+    assert_eq!(original.calibration_score_bps, 9_000);
+    assert_eq!(cloned.ts_unix_ms, 0);
+}
+
+#[test]
+fn in_memory_evidence_emitter_default_produces_empty_emitter() {
+    let emitter = InMemoryEvidenceEmitter::default();
+    assert!(emitter.entries().is_empty());
+    assert!(emitter.events().is_empty());
+
+    // new() and default() should produce equivalent emitters
+    let emitter_new = InMemoryEvidenceEmitter::new();
+    assert_eq!(emitter.entries().len(), emitter_new.entries().len());
+    assert_eq!(emitter.events().len(), emitter_new.events().len());
+}
+
+#[test]
+fn evidence_ledger_builder_missing_action_fails() {
+    // Omit the `action` field — build must return Err.
+    let result = control_plane::EvidenceLedgerBuilder::new()
+        .ts_unix_ms(1_000)
+        .component("test_comp")
+        // .action("allow")  — intentionally omitted
+        .posterior(vec![0.5, 0.5])
+        .expected_loss("allow", 0.1)
+        .chosen_expected_loss(0.1)
+        .calibration_score(0.5)
+        .fallback_active(false)
+        .build();
+    assert!(result.is_err(), "builder without action should fail");
+}
+
+#[test]
+fn evidence_ledger_builder_missing_posterior_fails() {
+    // Omit the `posterior` field — build must return Err.
+    let result = control_plane::EvidenceLedgerBuilder::new()
+        .ts_unix_ms(1_000)
+        .component("test_comp")
+        .action("allow")
+        // .posterior(...)  — intentionally omitted
+        .expected_loss("allow", 0.1)
+        .chosen_expected_loss(0.1)
+        .calibration_score(0.5)
+        .fallback_active(false)
+        .build();
+    assert!(result.is_err(), "builder without posterior should fail");
+}
+
+#[test]
+fn loss_matrix_empty_states_returns_error() {
+    let result = LossMatrix::new(vec![], vec!["allow".to_string()], vec![]);
+    assert!(
+        result.is_err(),
+        "LossMatrix::new with empty states should fail"
+    );
+}
+
+#[test]
+fn loss_matrix_empty_actions_returns_error() {
+    let result = LossMatrix::new(vec!["good".to_string()], vec![], vec![]);
+    assert!(
+        result.is_err(),
+        "LossMatrix::new with empty actions should fail"
+    );
+}
+
+#[test]
+fn mock_budget_multiple_zero_consumes_leave_budget_unchanged() {
+    let mut budget = control_plane::mocks::MockBudget::new(100);
+    for _ in 0..10 {
+        budget.consume(0).expect("zero consume must succeed");
+    }
+    assert_eq!(budget.remaining_ms(), 100);
+    assert_eq!(budget.consumed_ms(), 0);
+}
+
+#[test]
+fn mock_budget_panic_on_overspend_builder_returns_self() {
+    // Verify the builder pattern returns self so chaining works.
+    let b = control_plane::mocks::MockBudget::new(50).panic_on_overspend(false);
+    assert_eq!(b.remaining_ms(), 50);
+    assert_eq!(b.consumed_ms(), 0);
+}
+
+#[test]
+fn adapter_accumulates_correct_event_fields_per_evaluation() {
+    let contract = MiniContract::new();
+    let posterior = Posterior::uniform(2);
+    let mut adapter = ContractDecisionAdapter::new(contract, posterior);
+
+    let request = DecisionRequest {
+        decision_id: control_plane::DecisionId::from_parts(8_000, 8_u128),
+        policy_id: control_plane::PolicyId::new("test.event_fields", 1),
+        trace_id: control_plane::TraceId::from_parts(8_000, 8_u128),
+        ts_unix_ms: 8_000,
+        calibration_score_bps: 9_500,
+        e_process_milli: 100,
+        ci_width_milli: 50,
+    };
+
+    let verdict = adapter.evaluate(&request).expect("decision");
+    assert_eq!(adapter.events().len(), 1);
+
+    let event = &adapter.events()[0];
+    assert_eq!(event.component, "control_plane_adapter");
+    assert_eq!(event.event, "decision_eval");
+    // Outcome should match the verdict
+    assert_eq!(event.outcome, verdict_to_action(verdict));
+    // No error code on success
+    assert!(event.error_code.is_none());
+}

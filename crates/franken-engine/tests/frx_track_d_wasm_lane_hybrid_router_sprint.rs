@@ -471,3 +471,384 @@ fn track_d_contract_track_name_is_nonempty() {
         .expect("track.name must be a string");
     assert!(!name.trim().is_empty(), "track.name must not be empty");
 }
+
+// ---------- Additional coverage: charter doc content ----------
+
+#[test]
+fn track_d_charter_mentions_conservative_override() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.to_ascii_lowercase().contains("conservative override"),
+        "charter must mention conservative override"
+    );
+}
+
+#[test]
+fn track_d_charter_mentions_replay_linkage() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.to_ascii_lowercase().contains("replay linkage"),
+        "charter must mention replay linkage"
+    );
+}
+
+#[test]
+fn track_d_charter_mentions_wasm_scheduler_determinism() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.to_ascii_lowercase()
+            .contains("wasm scheduler determinism"),
+        "charter must mention wasm scheduler determinism"
+    );
+}
+
+#[test]
+fn track_d_charter_mentions_verification_and_governance_signoff() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.to_ascii_lowercase()
+            .contains("verification and governance signoff artifacts"),
+        "charter must mention verification and governance signoff artifacts"
+    );
+}
+
+#[test]
+fn track_d_charter_mentions_hybrid_router_calibration() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.to_ascii_lowercase()
+            .contains("hybrid router calibration"),
+        "charter must mention hybrid router calibration"
+    );
+}
+
+#[test]
+fn track_d_charter_interface_contracts_section_exists() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.contains("## Interface Contracts"),
+        "charter must have Interface Contracts section"
+    );
+}
+
+#[test]
+fn track_d_charter_doc_size_is_reasonable() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    // Must be at least 1 KB to constitute a meaningful charter
+    assert!(
+        doc.len() >= 1_024,
+        "charter doc must be at least 1 KB, got {} bytes",
+        doc.len()
+    );
+}
+
+#[test]
+fn track_d_charter_inputs_section_exists() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.contains("## Inputs"),
+        "charter must have Inputs section"
+    );
+}
+
+#[test]
+fn track_d_charter_outputs_section_exists() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.contains("## Outputs"),
+        "charter must have Outputs section"
+    );
+}
+
+#[test]
+fn track_d_charter_responsibilities_section_exists() {
+    let path = repo_root().join("docs/FRX_TRACK_D_WASM_LANE_HYBRID_ROUTER_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.contains("## Responsibilities"),
+        "charter must have Responsibilities section"
+    );
+}
+
+// ---------- Additional coverage: JSON contract structure ----------
+
+#[test]
+fn track_d_contract_failure_policy_mode_is_fail_closed() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert_eq!(
+        value["failure_policy"]["mode"].as_str(),
+        Some("fail_closed"),
+        "failure_policy.mode must be fail_closed"
+    );
+}
+
+#[test]
+fn track_d_contract_generated_by_matches_primary_bead() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let generated_by = value["generated_by"].as_str().expect("generated_by");
+    let primary_bead = value["primary_bead"].as_str().expect("primary_bead");
+    assert_eq!(
+        generated_by, primary_bead,
+        "generated_by and primary_bead must match"
+    );
+}
+
+#[test]
+fn track_d_contract_schema_version_contains_track_d() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let sv = value["schema_version"].as_str().expect("schema_version");
+    assert!(
+        sv.contains("track-d") || sv.contains("wasm-lane"),
+        "schema_version must reference track-d or wasm-lane, got: {sv}"
+    );
+}
+
+#[test]
+fn track_d_contract_track_id_is_frx_11_4() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert_eq!(
+        value["track"]["id"].as_str(),
+        Some("FRX-11.4"),
+        "track.id must be FRX-11.4"
+    );
+}
+
+#[test]
+fn track_d_contract_activation_gate_block_on_missing_calibration_evidence() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert_eq!(
+        value["activation_gate"]["block_on_missing_calibration_evidence"].as_bool(),
+        Some(true),
+        "block_on_missing_calibration_evidence must be true"
+    );
+}
+
+#[test]
+fn track_d_contract_activation_gate_block_on_missing_failover_replay_linkage() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert_eq!(
+        value["activation_gate"]["block_on_missing_failover_replay_linkage"].as_bool(),
+        Some(true),
+        "block_on_missing_failover_replay_linkage must be true"
+    );
+}
+
+#[test]
+fn track_d_contract_activation_gate_requires_governance_signoff() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert_eq!(
+        value["activation_gate"]["requires_verification_and_governance_signoff"].as_bool(),
+        Some(true),
+        "requires_verification_and_governance_signoff must be true"
+    );
+}
+
+#[test]
+fn track_d_contract_router_decision_fields_contain_abi_overhead_us() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["outputs"]["router_decision_artifact"]["required_fields"]
+        .as_array()
+        .expect("required_fields array");
+    assert!(
+        fields.iter().any(|f| f.as_str() == Some("abi_overhead_us")),
+        "router decision must include abi_overhead_us field"
+    );
+}
+
+#[test]
+fn track_d_contract_router_decision_fields_contain_lane_choice() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["outputs"]["router_decision_artifact"]["required_fields"]
+        .as_array()
+        .expect("required_fields array");
+    assert!(
+        fields.iter().any(|f| f.as_str() == Some("lane_choice")),
+        "router decision must include lane_choice field"
+    );
+}
+
+#[test]
+fn track_d_contract_router_decision_fields_contain_calibration_snapshot_id() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["outputs"]["router_decision_artifact"]["required_fields"]
+        .as_array()
+        .expect("required_fields array");
+    assert!(
+        fields
+            .iter()
+            .any(|f| f.as_str() == Some("calibration_snapshot_id")),
+        "router decision must include calibration_snapshot_id field"
+    );
+}
+
+#[test]
+fn track_d_contract_router_decision_fields_contain_override_reason() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["outputs"]["router_decision_artifact"]["required_fields"]
+        .as_array()
+        .expect("required_fields array");
+    assert!(
+        fields.iter().any(|f| f.as_str() == Some("override_reason")),
+        "router decision must include override_reason field"
+    );
+}
+
+#[test]
+fn track_d_contract_generated_at_utc_is_nonempty() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let ts = value["generated_at_utc"]
+        .as_str()
+        .expect("generated_at_utc must be string");
+    assert!(!ts.trim().is_empty(), "generated_at_utc must not be empty");
+}
+
+#[test]
+fn track_d_contract_parses_to_object_at_root() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    assert!(value.is_object(), "contract JSON root must be an object");
+}
+
+#[test]
+fn track_d_contract_router_decision_field_count_at_least_eight() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["outputs"]["router_decision_artifact"]["required_fields"]
+        .as_array()
+        .expect("required_fields array");
+    assert!(
+        fields.len() >= 8,
+        "router_decision_artifact must have at least 8 required fields, found {}",
+        fields.len()
+    );
+}
+
+#[test]
+fn track_d_contract_router_decision_fields_contain_trace_id() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["outputs"]["router_decision_artifact"]["required_fields"]
+        .as_array()
+        .expect("required_fields array");
+    assert!(
+        fields.iter().any(|f| f.as_str() == Some("trace_id")),
+        "router decision must include trace_id field"
+    );
+}
+
+#[test]
+fn track_d_contract_router_decision_fields_contain_decision_id() {
+    let path = repo_root().join("docs/frx_track_d_wasm_lane_hybrid_router_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse JSON");
+    let fields = value["outputs"]["router_decision_artifact"]["required_fields"]
+        .as_array()
+        .expect("required_fields array");
+    assert!(
+        fields.iter().any(|f| f.as_str() == Some("decision_id")),
+        "router decision must include decision_id field"
+    );
+}
+
+// ---------- Additional: source file surface checks ----------
+
+#[test]
+fn track_d_wasm_lane_source_file_exists() {
+    let path = repo_root().join("crates/franken-engine/src/wasm_runtime_lane.rs");
+    assert!(path.exists(), "wasm_runtime_lane.rs source file must exist");
+}
+
+#[test]
+fn track_d_hybrid_router_source_file_exists() {
+    let path = repo_root().join("crates/franken-engine/src/hybrid_lane_router.rs");
+    assert!(
+        path.exists(),
+        "hybrid_lane_router.rs source file must exist"
+    );
+}
+
+#[test]
+fn track_d_wasm_lane_source_mentions_wasm_budget() {
+    let path = repo_root().join("crates/franken-engine/src/wasm_runtime_lane.rs");
+    let src = fs::read_to_string(&path).expect("read wasm_runtime_lane.rs");
+    assert!(
+        src.contains("pub struct WasmBudget"),
+        "wasm_runtime_lane.rs must define WasmBudget"
+    );
+}
+
+#[test]
+fn track_d_wasm_lane_source_mentions_bounded_queue() {
+    let path = repo_root().join("crates/franken-engine/src/wasm_runtime_lane.rs");
+    let src = fs::read_to_string(&path).expect("read wasm_runtime_lane.rs");
+    assert!(
+        src.contains("pub struct BoundedQueue"),
+        "wasm_runtime_lane.rs must define BoundedQueue"
+    );
+}
+
+#[test]
+fn track_d_hybrid_router_source_mentions_lane_choice() {
+    let path = repo_root().join("crates/franken-engine/src/hybrid_lane_router.rs");
+    let src = fs::read_to_string(&path).expect("read hybrid_lane_router.rs");
+    assert!(
+        src.contains("pub enum LaneChoice"),
+        "hybrid_lane_router.rs must define LaneChoice"
+    );
+}
+
+#[test]
+fn track_d_hybrid_router_source_mentions_demotion_reason() {
+    let path = repo_root().join("crates/franken-engine/src/hybrid_lane_router.rs");
+    let src = fs::read_to_string(&path).expect("read hybrid_lane_router.rs");
+    assert!(
+        src.contains("pub enum DemotionReason"),
+        "hybrid_lane_router.rs must define DemotionReason"
+    );
+}
+
+#[test]
+fn track_d_hybrid_router_source_mentions_routing_policy() {
+    let path = repo_root().join("crates/franken-engine/src/hybrid_lane_router.rs");
+    let src = fs::read_to_string(&path).expect("read hybrid_lane_router.rs");
+    assert!(
+        src.contains("pub enum RoutingPolicy"),
+        "hybrid_lane_router.rs must define RoutingPolicy"
+    );
+}

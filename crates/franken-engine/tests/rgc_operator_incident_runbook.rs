@@ -550,3 +550,308 @@ fn rgc_operator_runbook_expected_triage_values_are_nonempty() {
         );
     }
 }
+
+// ---------- new enrichment tests ----------
+
+#[test]
+fn rgc_operator_runbook_incident_scenario_clone_independence() {
+    let fixture = load_fixture();
+    let original = fixture.incident_matrix[0].clone();
+    let mut clone = original.clone();
+    clone.scenario_id = "mutated".to_string();
+    assert_ne!(original.scenario_id, clone.scenario_id);
+    assert_eq!(original.symptom, clone.symptom);
+}
+
+#[test]
+fn rgc_operator_runbook_fixture_clone_full_independence() {
+    let a = load_fixture();
+    let mut b = a.clone();
+    b.policy_id = "mutated-policy".to_string();
+    assert_ne!(a.policy_id, b.policy_id);
+    assert_eq!(a.bead_id, b.bead_id);
+    assert_eq!(a.schema_version, b.schema_version);
+}
+
+#[test]
+fn rgc_operator_runbook_incident_scenario_debug_nonempty() {
+    let scenario = IncidentScenario {
+        scenario_id: "test_scenario".to_string(),
+        symptom: "semantic drift detected".to_string(),
+        severity: "high".to_string(),
+        expected_triage: "rerun_runtime_semantics_replay".to_string(),
+        replay_command: "./scripts/e2e/rgc_runtime_semantics_verification_pack_replay.sh"
+            .to_string(),
+    };
+    let debug = format!("{:?}", scenario);
+    assert!(debug.contains("test_scenario"));
+    assert!(debug.contains("semantic drift"));
+}
+
+#[test]
+fn rgc_operator_runbook_fixture_debug_nonempty() {
+    let fixture = load_fixture();
+    let debug = format!("{:?}", fixture);
+    assert!(!debug.is_empty());
+    assert!(debug.contains("bd-1lsy.10.2"));
+}
+
+#[test]
+fn rgc_operator_runbook_scenario_equality_reflexive() {
+    let scenario = IncidentScenario {
+        scenario_id: "replay_mismatch".to_string(),
+        symptom: "replay mismatch against expected evidence".to_string(),
+        severity: "critical".to_string(),
+        expected_triage: "rerun_execution_waves_replay".to_string(),
+        replay_command: "./scripts/e2e/rgc_execution_waves_coordination_replay.sh".to_string(),
+    };
+    assert_eq!(scenario, scenario.clone());
+}
+
+#[test]
+fn rgc_operator_runbook_triage_performance_regression_variants() {
+    for symptom_text in [
+        "performance regression observed",
+        "PERFORMANCE REGRESSION p99",
+        "a performance regression in the runtime",
+    ] {
+        let scenario = IncidentScenario {
+            scenario_id: "perf".to_string(),
+            symptom: symptom_text.to_string(),
+            severity: "high".to_string(),
+            expected_triage: "rerun_performance_regression_replay".to_string(),
+            replay_command: "./scripts/e2e/rgc_performance_regression_verification_pack_replay.sh"
+                .to_string(),
+        };
+        assert_eq!(
+            triage_action(&scenario),
+            "rerun_performance_regression_replay",
+            "failed for symptom: {}",
+            symptom_text
+        );
+    }
+}
+
+#[test]
+fn rgc_operator_runbook_triage_containment_false_positive_variants() {
+    for symptom_text in [
+        "containment false positive in module X",
+        "CONTAINMENT FALSE POSITIVE flagged",
+    ] {
+        let scenario = IncidentScenario {
+            scenario_id: "containment".to_string(),
+            symptom: symptom_text.to_string(),
+            severity: "critical".to_string(),
+            expected_triage: "rerun_security_enforcement_replay".to_string(),
+            replay_command: "./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh"
+                .to_string(),
+        };
+        assert_eq!(
+            triage_action(&scenario),
+            "rerun_security_enforcement_replay",
+            "failed for symptom: {}",
+            symptom_text
+        );
+    }
+}
+
+#[test]
+fn rgc_operator_runbook_triage_lockstep_divergence_variants() {
+    for symptom_text in [
+        "lockstep divergence in zone A",
+        "LOCKSTEP DIVERGENCE detected",
+    ] {
+        let scenario = IncidentScenario {
+            scenario_id: "lockstep".to_string(),
+            symptom: symptom_text.to_string(),
+            severity: "critical".to_string(),
+            expected_triage: "rerun_module_interop_replay".to_string(),
+            replay_command: "./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh"
+                .to_string(),
+        };
+        assert_eq!(
+            triage_action(&scenario),
+            "rerun_module_interop_replay",
+            "failed for symptom: {}",
+            symptom_text
+        );
+    }
+}
+
+#[test]
+fn rgc_operator_runbook_triage_replay_mismatch_variants() {
+    for symptom_text in [
+        "replay mismatch against expected evidence",
+        "REPLAY MISMATCH in wave 3",
+    ] {
+        let scenario = IncidentScenario {
+            scenario_id: "replay".to_string(),
+            symptom: symptom_text.to_string(),
+            severity: "critical".to_string(),
+            expected_triage: "rerun_execution_waves_replay".to_string(),
+            replay_command: "./scripts/e2e/rgc_execution_waves_coordination_replay.sh".to_string(),
+        };
+        assert_eq!(
+            triage_action(&scenario),
+            "rerun_execution_waves_replay",
+            "failed for symptom: {}",
+            symptom_text
+        );
+    }
+}
+
+#[test]
+fn rgc_operator_runbook_drill_commands_start_with_rgc_prefix() {
+    let fixture = load_fixture();
+    for cmd in &fixture.drill_replay_commands {
+        assert!(
+            cmd.contains("rgc_"),
+            "drill command should contain 'rgc_' prefix segment: {}",
+            cmd
+        );
+    }
+}
+
+#[test]
+fn rgc_operator_runbook_policy_id_contains_version_suffix() {
+    let fixture = load_fixture();
+    assert!(
+        fixture.policy_id.ends_with("-v1"),
+        "policy_id should end with a version suffix like -v1, got: {}",
+        fixture.policy_id
+    );
+}
+
+#[test]
+fn rgc_operator_runbook_required_manifest_keys_include_trace_and_decision() {
+    let fixture = load_fixture();
+    let keys: BTreeSet<_> = fixture
+        .required_manifest_keys
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        keys.contains("trace_id"),
+        "required_manifest_keys must include trace_id"
+    );
+    assert!(
+        keys.contains("decision_id"),
+        "required_manifest_keys must include decision_id"
+    );
+}
+
+#[test]
+fn rgc_operator_runbook_required_log_keys_include_outcome() {
+    let fixture = load_fixture();
+    let keys: BTreeSet<_> = fixture
+        .required_log_keys
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        keys.contains("outcome"),
+        "required_log_keys must include outcome"
+    );
+    assert!(
+        keys.contains("component"),
+        "required_log_keys must include component"
+    );
+    assert!(
+        keys.contains("event"),
+        "required_log_keys must include event"
+    );
+}
+
+#[test]
+fn rgc_operator_runbook_structured_event_null_error_code_passes() {
+    let fixture = load_fixture();
+    let event = json!({
+        "schema_version": "franken-engine.parser-log-event.v1",
+        "trace_id": "trace-null-error",
+        "decision_id": "decision-null-error",
+        "policy_id": fixture.policy_id,
+        "component": "rgc_operator_incident_runbook_gate",
+        "event": "gate_started",
+        "outcome": "pass",
+        "error_code": Value::Null
+    });
+    assert_required_event_keys(&event, &fixture.required_log_keys);
+}
+
+#[test]
+fn rgc_operator_runbook_incident_matrix_replay_commands_use_e2e_path() {
+    let fixture = load_fixture();
+    for scenario in &fixture.incident_matrix {
+        assert!(
+            scenario.replay_command.starts_with("./scripts/e2e/"),
+            "scenario {} replay_command must be under ./scripts/e2e/: {}",
+            scenario.scenario_id,
+            scenario.replay_command
+        );
+    }
+}
+
+#[test]
+fn rgc_operator_runbook_required_modes_include_ci_and_drill() {
+    let fixture = load_fixture();
+    let modes: BTreeSet<_> = fixture.required_modes.iter().map(String::as_str).collect();
+    assert!(modes.contains("ci"), "required_modes must include 'ci'");
+    assert!(
+        modes.contains("drill"),
+        "required_modes must include 'drill'"
+    );
+}
+
+#[test]
+fn rgc_operator_runbook_required_manifest_keys_include_artifacts() {
+    let fixture = load_fixture();
+    let keys: BTreeSet<_> = fixture
+        .required_manifest_keys
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        keys.contains("artifacts"),
+        "required_manifest_keys must include 'artifacts'"
+    );
+    assert!(
+        keys.contains("operator_verification"),
+        "required_manifest_keys must include 'operator_verification'"
+    );
+}
+
+#[test]
+fn rgc_operator_runbook_all_scenario_ids_are_snake_case() {
+    let fixture = load_fixture();
+    for scenario in &fixture.incident_matrix {
+        let id = &scenario.scenario_id;
+        assert!(
+            id.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "scenario_id '{}' must be lowercase snake_case",
+            id
+        );
+    }
+}
+
+#[test]
+fn rgc_operator_runbook_triage_semantic_drift_explicit() {
+    let scenario = IncidentScenario {
+        scenario_id: "semantic_drift".to_string(),
+        symptom: "semantic drift detected".to_string(),
+        severity: "high".to_string(),
+        expected_triage: "rerun_runtime_semantics_replay".to_string(),
+        replay_command: "./scripts/e2e/rgc_runtime_semantics_verification_pack_replay.sh"
+            .to_string(),
+    };
+    assert_eq!(triage_action(&scenario), scenario.expected_triage);
+}
+
+#[test]
+fn rgc_operator_runbook_incident_count_matches_drill_count() {
+    let fixture = load_fixture();
+    assert_eq!(
+        fixture.incident_matrix.len(),
+        fixture.drill_replay_commands.len(),
+        "incident_matrix and drill_replay_commands should have equal length"
+    );
+}

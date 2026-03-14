@@ -688,3 +688,267 @@ fn security_conformance_replay_wrapper_defaults_to_run_mode() {
         "replay wrapper should delegate to the suite script with the selected mode"
     );
 }
+
+// ---------- sha256_hex edge cases ----------
+
+#[test]
+fn sha256_hex_all_zeros_byte() {
+    let hash = sha256_hex(&[0x00]);
+    assert_eq!(hash.len(), 64);
+    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    // Must differ from empty-input hash
+    assert_ne!(hash, sha256_hex(b""));
+}
+
+#[test]
+fn sha256_hex_large_input() {
+    let input = vec![0xABu8; 1024];
+    let hash = sha256_hex(&input);
+    assert_eq!(hash.len(), 64);
+    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[test]
+fn sha256_hex_differs_by_single_bit_flip() {
+    let base = b"security conformance test payload";
+    let mut flipped = base.to_vec();
+    flipped[0] ^= 0x01;
+    assert_ne!(sha256_hex(base), sha256_hex(&flipped));
+}
+
+#[test]
+fn sha256_hex_output_is_all_lowercase() {
+    // No uppercase hex digits — verify lowercase invariant for all printable ASCII
+    for byte in 32u8..=126u8 {
+        let hash = sha256_hex(&[byte]);
+        assert!(
+            hash.chars().all(|c| !c.is_ascii_uppercase()),
+            "sha256_hex produced uppercase character for input byte {byte:#04x}: {hash}"
+        );
+    }
+}
+
+#[test]
+fn sha256_hex_binary_input_stable() {
+    let input = [0x00u8, 0xFF, 0x80, 0x7F, 0x01, 0xFE];
+    let first = sha256_hex(&input);
+    let second = sha256_hex(&input);
+    assert_eq!(first, second);
+}
+
+// ---------- parse_evidence_path edge cases ----------
+
+#[test]
+fn parse_evidence_path_first_matching_line_wins() {
+    // Only the first matching line should be used
+    let stdout = "security evidence=/first/path.jsonl\nsecurity evidence=/second/path.jsonl\n";
+    let path = parse_evidence_path(stdout);
+    assert_eq!(path, PathBuf::from("/first/path.jsonl"));
+}
+
+#[test]
+fn parse_evidence_path_trims_trailing_whitespace() {
+    let stdout = "security evidence=/tmp/trimmed.jsonl   \n";
+    let path = parse_evidence_path(stdout);
+    assert_eq!(path, PathBuf::from("/tmp/trimmed.jsonl"));
+}
+
+#[test]
+fn parse_evidence_path_nested_directory() {
+    let stdout = "prelude\nsecurity evidence=/a/b/c/evidence.jsonl\n";
+    let path = parse_evidence_path(stdout);
+    assert_eq!(path, PathBuf::from("/a/b/c/evidence.jsonl"));
+}
+
+// ---------- normalize_path edge cases ----------
+
+#[test]
+fn normalize_path_deeply_nested_absolute() {
+    let path = PathBuf::from("/a/b/c/d/e/f.jsonl");
+    let result = normalize_path(path.clone());
+    assert_eq!(result, path);
+    assert!(result.is_absolute());
+}
+
+#[test]
+fn normalize_path_preserves_extension() {
+    let path = PathBuf::from("/outputs/evidence.jsonl");
+    let result = normalize_path(path.clone());
+    assert_eq!(result.extension().and_then(|e| e.to_str()), Some("jsonl"));
+}
+
+// ---------- TestTempDir ----------
+
+#[test]
+fn test_temp_dir_counter_increments_across_instances() {
+    let a = TestTempDir::new("counter-check");
+    let b = TestTempDir::new("counter-check");
+    // Paths must be different even with identical prefix
+    assert_ne!(a.path, b.path);
+}
+
+#[test]
+fn test_temp_dir_subdirectory_can_be_created() {
+    let guard = TestTempDir::new("subdir-test");
+    let sub = guard.path.join("nested").join("level");
+    fs::create_dir_all(&sub).expect("create nested subdirectory");
+    assert!(sub.exists() && sub.is_dir());
+}
+
+// ---------- write_file ----------
+
+#[test]
+fn write_file_deeply_nested_path() {
+    let guard = TestTempDir::new("deep-write");
+    let path = guard.path.join("a/b/c/d/test.txt");
+    write_file(&path, "deep content");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "deep content");
+}
+
+#[test]
+fn write_file_empty_content() {
+    let guard = TestTempDir::new("empty-write");
+    let path = guard.path.join("empty.txt");
+    write_file(&path, "");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "");
+}
+
+// ---------- build_fixture ----------
+
+#[test]
+fn build_fixture_benign_label_has_valid_hostcall_hash() {
+    let fixture = build_fixture();
+    let benign_path = fixture
+        .labels_root
+        .join("benign/echo_read/workload_label.toml");
+    let content = fs::read_to_string(&benign_path).unwrap();
+    let parsed: toml::Value = toml::from_str(&content).expect("valid toml");
+    let hash = parsed["hostcall_sequence_hash"]
+        .as_str()
+        .expect("hostcall_sequence_hash present");
+    assert_eq!(hash.len(), 64, "hostcall_sequence_hash must be 64 chars");
+    assert!(
+        hash.chars().all(|c| c.is_ascii_hexdigit()),
+        "hostcall_sequence_hash must be hex"
+    );
+}
+
+#[test]
+fn build_fixture_malicious_label_has_valid_latency_bound() {
+    let fixture = build_fixture();
+    let malicious_path = fixture
+        .labels_root
+        .join("malicious/credential_exfil/workload_label.toml");
+    let content = fs::read_to_string(&malicious_path).unwrap();
+    let parsed: toml::Value = toml::from_str(&content).expect("valid toml");
+    let latency_bound = parsed["expected_detection_latency_bound_ms"]
+        .as_integer()
+        .expect("expected_detection_latency_bound_ms present");
+    assert!(
+        latency_bound > 0,
+        "detection latency bound must be positive"
+    );
+}
+
+#[test]
+fn build_fixture_observations_each_have_sentinel_posterior() {
+    let fixture = build_fixture();
+    let content = fs::read_to_string(&fixture.observations_jsonl).unwrap();
+    for line in content.lines() {
+        let parsed: Value = serde_json::from_str(line).expect("valid JSON");
+        let posterior = parsed["sentinel_posterior"]
+            .as_f64()
+            .expect("sentinel_posterior present");
+        assert!(
+            (0.0..=1.0).contains(&posterior),
+            "sentinel_posterior {posterior} out of [0,1] for line: {line}"
+        );
+    }
+}
+
+#[test]
+fn build_fixture_observations_have_non_null_actual_outcome() {
+    let fixture = build_fixture();
+    let content = fs::read_to_string(&fixture.observations_jsonl).unwrap();
+    for line in content.lines() {
+        let parsed: Value = serde_json::from_str(line).expect("valid JSON");
+        assert!(
+            parsed["actual_outcome"].is_string(),
+            "actual_outcome must be a string in: {line}"
+        );
+    }
+}
+
+#[test]
+fn build_fixture_manifest_lists_both_corpus_types() {
+    let fixture = build_fixture();
+    let manifest_path = fixture.labels_root.join("corpus_manifest.toml");
+    let content = fs::read_to_string(&manifest_path).unwrap();
+    // Both corpora represented
+    assert!(
+        content.contains("corpus = \"benign\""),
+        "manifest missing benign corpus entry"
+    );
+    assert!(
+        content.contains("corpus = \"malicious\""),
+        "manifest missing malicious corpus entry"
+    );
+}
+
+#[test]
+fn build_fixture_output_root_distinct_from_labels_root() {
+    let fixture = build_fixture();
+    assert_ne!(
+        fixture.output_root, fixture.labels_root,
+        "output_root and labels_root must be distinct paths"
+    );
+}
+
+#[test]
+fn sha256_hex_two_consecutive_calls_same_slice_agree() {
+    let data = b"consensus check payload";
+    let h1 = sha256_hex(data);
+    let h2 = sha256_hex(data);
+    assert_eq!(h1, h2);
+    assert_eq!(h1.len(), 64);
+}
+
+#[test]
+fn build_fixture_benign_label_detection_latency_nonzero() {
+    let fixture = build_fixture();
+    let benign_path = fixture
+        .labels_root
+        .join("benign/echo_read/workload_label.toml");
+    let content = fs::read_to_string(&benign_path).unwrap();
+    let parsed: toml::Value = toml::from_str(&content).expect("valid toml");
+    let bound = parsed["expected_detection_latency_bound_ms"]
+        .as_integer()
+        .expect("field present");
+    assert!(bound > 0, "benign latency bound must be positive");
+}
+
+#[test]
+fn build_fixture_policy_hash_is_hex_only() {
+    let fixture = build_fixture();
+    assert!(
+        fixture
+            .policy_snapshot_hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()),
+        "policy_snapshot_hash must contain only hex digits"
+    );
+}
+
+#[test]
+fn runner_outputs_security_evidence_path_on_stdout() {
+    let fixture = build_fixture();
+    let output = runner_command(&fixture)
+        .arg("--allow-small-corpus")
+        .output()
+        .expect("run security conformance runner");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(
+        stdout.lines().any(|l| l.starts_with("security evidence=")),
+        "stdout must contain 'security evidence=...' line"
+    );
+}

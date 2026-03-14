@@ -898,3 +898,579 @@ fn sqlite_policy_guard_event_serde_roundtrip() {
         serde_json::from_str(&pass_json).expect("parse pass json");
     assert!(pass_recovered["error_code"].is_null());
 }
+
+// ---------- enrichment: clone/debug/eq ----------
+
+#[test]
+fn sqlite_manifest_input_clone_debug_eq() {
+    let m = ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[package]\nname = \"test\"\n".to_string(),
+    };
+    let m2 = m.clone();
+    assert_eq!(m, m2);
+    let dbg = format!("{m:?}");
+    assert!(dbg.contains("ManifestInput"));
+    assert!(dbg.contains("Cargo.toml"));
+}
+
+#[test]
+fn sqlite_source_input_clone_debug_eq() {
+    let s = SourceInput {
+        path: "src/lib.rs".to_string(),
+        content: "fn main() {}".to_string(),
+    };
+    let s2 = s.clone();
+    assert_eq!(s, s2);
+    let dbg = format!("{s:?}");
+    assert!(dbg.contains("SourceInput"));
+}
+
+#[test]
+fn sqlite_exception_document_input_clone_debug_eq() {
+    let d = ExceptionDocumentInput {
+        path: "docs/adr/exceptions/ADR-EXCEPTION-SQLITE-0099.md".to_string(),
+        content: "Status: Approved\nScope: dependency:sqlite\n".to_string(),
+    };
+    let d2 = d.clone();
+    assert_eq!(d, d2);
+    let dbg = format!("{d:?}");
+    assert!(dbg.contains("ExceptionDocumentInput"));
+}
+
+#[test]
+fn sqlite_exception_scope_variants_clone_debug_eq() {
+    let dep = ExceptionScope::Dependency("rusqlite".to_string());
+    let path = ExceptionScope::PathPattern("crates/*".to_string());
+    let tok = ExceptionScope::Token("rusqlite::".to_string());
+
+    assert_eq!(dep.clone(), dep);
+    assert_eq!(path.clone(), path);
+    assert_eq!(tok.clone(), tok);
+
+    assert_ne!(dep, path);
+    assert_ne!(path, tok);
+    assert_ne!(dep, tok);
+
+    let dbg_dep = format!("{dep:?}");
+    assert!(dbg_dep.contains("Dependency"));
+    let dbg_path = format!("{path:?}");
+    assert!(dbg_path.contains("PathPattern"));
+    let dbg_tok = format!("{tok:?}");
+    assert!(dbg_tok.contains("Token"));
+}
+
+#[test]
+fn sqlite_parsed_exception_clone_debug_eq() {
+    let pe = ParsedException {
+        scopes: vec![
+            ExceptionScope::Dependency("sqlite3".to_string()),
+            ExceptionScope::Token("sqlite3::".to_string()),
+        ],
+    };
+    let pe2 = pe.clone();
+    assert_eq!(pe, pe2);
+    let dbg = format!("{pe:?}");
+    assert!(dbg.contains("ParsedException"));
+    assert!(dbg.contains("sqlite3"));
+}
+
+#[test]
+fn sqlite_policy_violation_clone_debug_eq() {
+    let v = PolicyViolation {
+        error_code: "FE-SQLITE-DEPENDENCY-FORBIDDEN",
+        subject: "rusqlite".to_string(),
+        detail: "test detail".to_string(),
+    };
+    let v2 = v.clone();
+    assert_eq!(v, v2);
+    let dbg = format!("{v:?}");
+    assert!(dbg.contains("PolicyViolation"));
+    assert!(dbg.contains("FE-SQLITE-DEPENDENCY-FORBIDDEN"));
+}
+
+#[test]
+fn sqlite_policy_guard_report_clone_debug_eq() {
+    let report = evaluate_guard(&[], &[], &[]);
+    let r2 = report.clone();
+    assert_eq!(report, r2);
+    let dbg = format!("{report:?}");
+    assert!(dbg.contains("PolicyGuardReport"));
+}
+
+// ---------- enrichment: dependency_section edge cases ----------
+
+#[test]
+fn sqlite_dependency_section_recognizes_target_specific() {
+    // e.g. [target.'cfg(windows)'.dependencies]
+    assert!(dependency_section("target.'cfg(windows)'.dependencies"));
+    assert!(dependency_section("target.'cfg(unix)'.dev-dependencies"));
+    assert!(dependency_section(
+        "target.'cfg(target_os = \"linux\")'.build-dependencies"
+    ));
+}
+
+#[test]
+fn sqlite_dependency_section_rejects_misc_sections() {
+    assert!(!dependency_section(""));
+    assert!(!dependency_section("lib"));
+    assert!(!dependency_section("bin"));
+    assert!(!dependency_section("profile.release"));
+    assert!(!dependency_section("patch.crates-io"));
+    assert!(!dependency_section("workspace.metadata"));
+}
+
+// ---------- enrichment: dependency_names edge cases ----------
+
+#[test]
+fn sqlite_dependency_names_skips_non_dep_sections() {
+    let toml = "[package]\nname = \"test\"\nversion = \"0.1.0\"\n\n[features]\ndefault = []\n";
+    let deps = dependency_names(toml);
+    assert!(deps.is_empty());
+}
+
+#[test]
+fn sqlite_dependency_names_case_normalizes() {
+    let toml = "[dependencies]\nMyPkg = \"1\"\nANOTHER = { version = \"2\" }\n";
+    let deps = dependency_names(toml);
+    assert!(deps.contains(&"mypkg".to_string()));
+    assert!(deps.contains(&"another".to_string()));
+}
+
+#[test]
+fn sqlite_dependency_names_handles_inline_table_values() {
+    let toml = "[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\ntokio = { version = \"1.0\", optional = true }\n";
+    let deps = dependency_names(toml);
+    assert!(deps.contains(&"serde".to_string()));
+    assert!(deps.contains(&"tokio".to_string()));
+}
+
+#[test]
+fn sqlite_dependency_names_ignores_inline_comments() {
+    let toml = "[dependencies]\nserde = \"1\" # serialization\n";
+    let deps = dependency_names(toml);
+    assert!(deps.contains(&"serde".to_string()));
+    assert_eq!(deps.len(), 1);
+}
+
+#[test]
+fn sqlite_dependency_names_handles_quoted_keys() {
+    let toml = "[dependencies]\n\"my-crate\" = \"1.0\"\n";
+    let deps = dependency_names(toml);
+    assert!(deps.contains(&"my-crate".to_string()));
+}
+
+#[test]
+fn sqlite_dependency_names_skips_blank_lines_between_deps() {
+    let toml = "[dependencies]\nserde = \"1\"\n\n\ntokio = \"1\"\n";
+    let deps = dependency_names(toml);
+    assert_eq!(deps.len(), 2);
+}
+
+// ---------- enrichment: parse_exception_doc edge cases ----------
+
+#[test]
+fn sqlite_parse_exception_doc_requires_scope() {
+    let doc = ExceptionDocumentInput {
+        path: "docs/adr/exceptions/ADR-EXCEPTION-SQLITE-0001.md".to_string(),
+        content: "Status: Approved\n".to_string(),
+    };
+    // Approved but no scopes → None
+    assert!(parse_exception_doc(&doc).is_none());
+}
+
+#[test]
+fn sqlite_parse_exception_doc_not_approved_with_scope_rejected() {
+    let doc = ExceptionDocumentInput {
+        path: "docs/adr/exceptions/ADR-EXCEPTION-SQLITE-0001.md".to_string(),
+        content: "Status: Draft\nScope: dependency:rusqlite\n".to_string(),
+    };
+    assert!(parse_exception_doc(&doc).is_none());
+}
+
+#[test]
+fn sqlite_parse_exception_doc_multiple_scopes() {
+    let doc = ExceptionDocumentInput {
+        path: "docs/adr/exceptions/ADR-EXCEPTION-SQLITE-0005.md".to_string(),
+        content: "Status: Approved\nScope: dependency:rusqlite\nScope: dependency:sqlite3\nScope: token:rusqlite::\nScope: path:crates/legacy/*\n".to_string(),
+    };
+    let parsed = parse_exception_doc(&doc).expect("should parse");
+    assert_eq!(parsed.scopes.len(), 4);
+    assert!(
+        parsed
+            .scopes
+            .iter()
+            .any(|s| matches!(s, ExceptionScope::Dependency(d) if d == "rusqlite"))
+    );
+    assert!(
+        parsed
+            .scopes
+            .iter()
+            .any(|s| matches!(s, ExceptionScope::Dependency(d) if d == "sqlite3"))
+    );
+    assert!(
+        parsed
+            .scopes
+            .iter()
+            .any(|s| matches!(s, ExceptionScope::Token(t) if t == "rusqlite::"))
+    );
+    assert!(
+        parsed
+            .scopes
+            .iter()
+            .any(|s| matches!(s, ExceptionScope::PathPattern(p) if p == "crates/legacy/*"))
+    );
+}
+
+#[test]
+fn sqlite_parse_exception_doc_backslash_path_normalized() {
+    // Windows-style backslash paths should be normalized
+    let doc = ExceptionDocumentInput {
+        path: "docs\\adr\\exceptions\\ADR-EXCEPTION-SQLITE-0010.md".to_string(),
+        content: "Status: Approved\nScope: dependency:sqlite\n".to_string(),
+    };
+    let parsed = parse_exception_doc(&doc);
+    assert!(
+        parsed.is_some(),
+        "backslash paths should be normalized to forward slashes"
+    );
+}
+
+#[test]
+fn sqlite_parse_exception_doc_case_insensitive_status() {
+    let doc = ExceptionDocumentInput {
+        path: "docs/adr/exceptions/ADR-EXCEPTION-SQLITE-0011.md".to_string(),
+        content: "status: approved\nScope: dependency:sqlite\n".to_string(),
+    };
+    let parsed = parse_exception_doc(&doc);
+    assert!(
+        parsed.is_some(),
+        "Status: Approved should be case-insensitive"
+    );
+}
+
+#[test]
+fn sqlite_parse_exception_docs_filters_invalid() {
+    let docs = vec![
+        ExceptionDocumentInput {
+            path: "docs/adr/exceptions/ADR-EXCEPTION-SQLITE-0001.md".to_string(),
+            content: "Status: Approved\nScope: dependency:rusqlite\n".to_string(),
+        },
+        ExceptionDocumentInput {
+            path: "docs/adr/exceptions/ADR-OTHER-0001.md".to_string(),
+            content: "Status: Approved\nScope: dependency:serde\n".to_string(),
+        },
+        ExceptionDocumentInput {
+            path: "docs/adr/exceptions/ADR-EXCEPTION-SQLITE-0002.md".to_string(),
+            content: "Status: Draft\nScope: dependency:sqlite3\n".to_string(),
+        },
+    ];
+    let parsed = parse_exception_docs(&docs);
+    assert_eq!(parsed.len(), 1, "only the first doc should pass filtering");
+}
+
+// ---------- enrichment: matches_pattern edge cases ----------
+
+#[test]
+fn sqlite_matches_pattern_empty_pattern_empty_value() {
+    assert!(matches_pattern("", ""));
+    assert!(!matches_pattern("", "something"));
+}
+
+#[test]
+fn sqlite_matches_pattern_wildcard_only() {
+    // Pattern "*" means prefix is "", so everything matches
+    assert!(matches_pattern("*", "anything"));
+    assert!(matches_pattern("*", ""));
+}
+
+// ---------- enrichment: exception allowed functions ----------
+
+#[test]
+fn sqlite_dependency_exception_allowed_no_exceptions() {
+    assert!(!dependency_exception_allowed("rusqlite", &[]));
+}
+
+#[test]
+fn sqlite_path_exception_allowed_no_exceptions() {
+    assert!(!path_exception_allowed("crates/foo/src/lib.rs", &[]));
+}
+
+#[test]
+fn sqlite_token_exception_allowed_no_exceptions() {
+    assert!(!token_exception_allowed("rusqlite::", &[]));
+}
+
+#[test]
+fn sqlite_dependency_exception_allowed_wrong_dep() {
+    let exceptions = vec![ParsedException {
+        scopes: vec![ExceptionScope::Dependency("sqlite3".to_string())],
+    }];
+    assert!(!dependency_exception_allowed("rusqlite", &exceptions));
+    assert!(dependency_exception_allowed("sqlite3", &exceptions));
+}
+
+#[test]
+fn sqlite_token_exception_allowed_matching() {
+    let exceptions = vec![ParsedException {
+        scopes: vec![ExceptionScope::Token("rusqlite::".to_string())],
+    }];
+    assert!(token_exception_allowed("rusqlite::", &exceptions));
+    assert!(!token_exception_allowed("sqlite3::", &exceptions));
+}
+
+#[test]
+fn sqlite_path_exception_allowed_exact() {
+    let exceptions = vec![ParsedException {
+        scopes: vec![ExceptionScope::PathPattern(
+            "crates/foo/src/db.rs".to_string(),
+        )],
+    }];
+    assert!(path_exception_allowed("crates/foo/src/db.rs", &exceptions));
+    assert!(!path_exception_allowed(
+        "crates/foo/src/other.rs",
+        &exceptions
+    ));
+}
+
+#[test]
+fn sqlite_path_exception_allowed_wildcard() {
+    let exceptions = vec![ParsedException {
+        scopes: vec![ExceptionScope::PathPattern("crates/legacy/*".to_string())],
+    }];
+    assert!(path_exception_allowed("crates/legacy/db.rs", &exceptions));
+    assert!(path_exception_allowed(
+        "crates/legacy/nested/deep.rs",
+        &exceptions
+    ));
+    assert!(!path_exception_allowed("crates/other/db.rs", &exceptions));
+}
+
+// ---------- enrichment: is_forbidden_sqlite_dependency completeness ----------
+
+#[test]
+fn sqlite_all_forbidden_deps_detected() {
+    for dep in FORBIDDEN_SQLITE_DEPENDENCIES {
+        assert!(
+            is_forbidden_sqlite_dependency(dep),
+            "expected {dep} to be forbidden"
+        );
+    }
+}
+
+#[test]
+fn sqlite_forbidden_deps_are_case_sensitive() {
+    // The function does exact match; uppercase should not match
+    assert!(!is_forbidden_sqlite_dependency("Rusqlite"));
+    assert!(!is_forbidden_sqlite_dependency("SQLITE3"));
+}
+
+// ---------- enrichment: evaluate_guard trace_id and decision_id sequencing ----------
+
+#[test]
+fn sqlite_evaluate_guard_trace_ids_are_sequential() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dependencies]\nrusqlite = \"1\"\nsqlite3 = \"1\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    // Should have 2 violation events + 1 summary = 3 events
+    assert_eq!(report.events.len(), 3);
+    assert_eq!(report.events[0].trace_id, "trace-sqlite-policy-0001");
+    assert_eq!(report.events[0].decision_id, "decision-0001");
+    assert_eq!(report.events[1].trace_id, "trace-sqlite-policy-0002");
+    assert_eq!(report.events[1].decision_id, "decision-0002");
+    assert_eq!(report.events[2].trace_id, "trace-sqlite-policy-0003");
+    assert_eq!(report.events[2].decision_id, "decision-0003");
+}
+
+// ---------- enrichment: evaluate_guard with all forbidden tokens ----------
+
+#[test]
+fn sqlite_all_forbidden_tokens_detected_as_violations() {
+    let sources: Vec<SourceInput> = FORBIDDEN_SQLITE_TOKENS
+        .iter()
+        .enumerate()
+        .map(|(i, token)| SourceInput {
+            path: format!("crates/franken-engine/src/test_module_{i}.rs"),
+            content: format!("// usage: {token}\n"),
+        })
+        .collect();
+
+    let report = evaluate_guard(&[], &sources, &[]);
+    // Each source has exactly one forbidden token, so one violation per source
+    assert_eq!(
+        report.violations.len(),
+        FORBIDDEN_SQLITE_TOKENS.len(),
+        "each forbidden token in a non-adapter path should produce a violation"
+    );
+    for v in &report.violations {
+        assert_eq!(v.error_code, "FE-SQLITE-USAGE-FORBIDDEN");
+    }
+}
+
+// ---------- enrichment: adapter path allows all tokens ----------
+
+#[test]
+fn sqlite_adapter_allowed_paths_bypass_all_tokens() {
+    let mut sources = Vec::new();
+    for path in ADAPTER_ALLOWED_PATHS {
+        sources.push(SourceInput {
+            path: path.to_string(),
+            content: FORBIDDEN_SQLITE_TOKENS.to_vec().join("\n"),
+        });
+    }
+    let report = evaluate_guard(&[], &sources, &[]);
+    assert!(
+        report.violations.is_empty(),
+        "adapter allowed paths should bypass all token checks"
+    );
+}
+
+// ---------- enrichment: report as_jsonl contains all events ----------
+
+#[test]
+fn sqlite_report_as_jsonl_line_count_matches_events() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dependencies]\nrusqlite = \"1\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    let jsonl = report.as_jsonl();
+    let line_count = jsonl.lines().count();
+    assert_eq!(
+        line_count,
+        report.events.len(),
+        "JSONL line count must match event count"
+    );
+}
+
+// ---------- enrichment: serde roundtrip for PolicyGuardEvent with all fields ----------
+
+#[test]
+fn sqlite_policy_guard_event_serde_all_fields_present() {
+    let event = PolicyGuardEvent {
+        trace_id: "t1".to_string(),
+        decision_id: "d1".to_string(),
+        policy_id: "p1".to_string(),
+        component: "c1".to_string(),
+        event: "e1".to_string(),
+        outcome: "pass".to_string(),
+        error_code: Some("EC1".to_string()),
+        subject: "s1".to_string(),
+        detail: "det1".to_string(),
+    };
+    let json = serde_json::to_string(&event).expect("serialize");
+    let map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&json).expect("parse");
+    let expected_keys = [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "component",
+        "event",
+        "outcome",
+        "error_code",
+        "subject",
+        "detail",
+    ];
+    for key in expected_keys {
+        assert!(map.contains_key(key), "JSON must contain key: {key}");
+    }
+    assert_eq!(map.len(), expected_keys.len(), "no extra keys in JSON");
+}
+
+// ---------- enrichment: multiple manifests scanned ----------
+
+#[test]
+fn sqlite_evaluate_guard_scans_all_manifests() {
+    let manifests = vec![
+        ManifestInput {
+            path: "Cargo.toml".to_string(),
+            content: "[dependencies]\nrusqlite = \"1\"\n".to_string(),
+        },
+        ManifestInput {
+            path: "crates/foo/Cargo.toml".to_string(),
+            content: "[dependencies]\nsqlite3 = \"0.5\"\n".to_string(),
+        },
+    ];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    assert_eq!(report.violations.len(), 2);
+    assert!(report.violations.iter().any(|v| v.subject == "rusqlite"));
+    assert!(report.violations.iter().any(|v| v.subject == "sqlite3"));
+}
+
+// ---------- enrichment: dev-dependencies and build-dependencies scanned ----------
+
+#[test]
+fn sqlite_evaluate_guard_scans_dev_and_build_deps() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dev-dependencies]\nrusqlite = \"1\"\n\n[build-dependencies]\nlibsqlite3-sys = \"0.28\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    assert_eq!(report.violations.len(), 2);
+    assert!(report.violations.iter().any(|v| v.subject == "rusqlite"));
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.subject == "libsqlite3-sys")
+    );
+}
+
+// ---------- enrichment: non-forbidden dependency not flagged ----------
+
+#[test]
+fn sqlite_evaluate_guard_clean_manifest_no_violations() {
+    let manifests = vec![ManifestInput {
+        path: "Cargo.toml".to_string(),
+        content: "[dependencies]\nserde = \"1\"\ntokio = \"1\"\nrand = \"0.8\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    assert!(report.violations.is_empty());
+    let summary = report.events.last().unwrap();
+    assert_eq!(summary.outcome, "pass");
+}
+
+// ---------- enrichment: source with no forbidden tokens passes ----------
+
+#[test]
+fn sqlite_source_without_forbidden_tokens_passes() {
+    let sources = vec![SourceInput {
+        path: "crates/franken-engine/src/clean_module.rs".to_string(),
+        content: "use std::collections::BTreeMap;\nfn main() {}\n".to_string(),
+    }];
+    let report = evaluate_guard(&[], &sources, &[]);
+    assert!(report.violations.is_empty());
+}
+
+// ---------- enrichment: violation detail contains path ----------
+
+#[test]
+fn sqlite_violation_detail_contains_manifest_path() {
+    let manifests = vec![ManifestInput {
+        path: "my/custom/Cargo.toml".to_string(),
+        content: "[dependencies]\nrusqlite = \"1\"\n".to_string(),
+    }];
+    let report = evaluate_guard(&manifests, &[], &[]);
+    assert_eq!(report.violations.len(), 1);
+    assert!(
+        report.violations[0].detail.contains("my/custom/Cargo.toml"),
+        "violation detail must reference the manifest path"
+    );
+}
+
+#[test]
+fn sqlite_violation_detail_contains_source_path() {
+    let sources = vec![SourceInput {
+        path: "crates/franken-engine/src/my_mod.rs".to_string(),
+        content: "use rusqlite::Connection;\n".to_string(),
+    }];
+    let report = evaluate_guard(&[], &sources, &[]);
+    assert_eq!(report.violations.len(), 1);
+    assert!(
+        report.violations[0].detail.contains("my_mod.rs"),
+        "violation detail must reference the source file"
+    );
+}

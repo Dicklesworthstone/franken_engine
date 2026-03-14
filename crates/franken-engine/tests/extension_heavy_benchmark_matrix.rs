@@ -593,3 +593,255 @@ fn golden_output_entries_have_nonempty_golden_output_ids() {
         assert!(!gid.trim().is_empty(), "golden_output_id must be non-empty");
     }
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: deeper fixture invariants, cross-manifest
+// consistency, field format contracts, digest uniqueness
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn workload_matrix_cases_dataset_checksums_are_unique() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let cases = matrix["cases"].as_array().expect("cases");
+    let mut seen = BTreeSet::new();
+    for case in cases {
+        let checksum = require_string_field(case, "dataset_checksum_sha256");
+        assert!(
+            seen.insert(checksum.to_string()),
+            "duplicate dataset_checksum_sha256: {checksum}"
+        );
+    }
+}
+
+#[test]
+fn workload_matrix_cases_seed_checksums_are_unique() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let cases = matrix["cases"].as_array().expect("cases");
+    let mut seen = BTreeSet::new();
+    for case in cases {
+        let checksum = require_string_field(case, "seed_transcript_sha256");
+        assert!(
+            seen.insert(checksum.to_string()),
+            "duplicate seed_transcript_sha256: {checksum}"
+        );
+    }
+}
+
+#[test]
+fn golden_output_correctness_digests_are_unique() {
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+    let entries = golden["entries"].as_array().expect("entries");
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let digest = require_string_field(entry, "correctness_digest_sha256");
+        assert!(
+            seen.insert(digest.to_string()),
+            "duplicate correctness_digest_sha256: {digest}"
+        );
+    }
+}
+
+#[test]
+fn golden_output_result_digests_are_unique() {
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+    let entries = golden["entries"].as_array().expect("entries");
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let digest = require_string_field(entry, "result_digest_sha256");
+        assert!(
+            seen.insert(digest.to_string()),
+            "duplicate result_digest_sha256: {digest}"
+        );
+    }
+}
+
+#[test]
+fn golden_output_workload_ids_match_matrix_workload_ids() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+
+    let matrix_ids: BTreeSet<String> = matrix["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|c| require_string_field(c, "workload_id").to_string())
+        .collect();
+    let golden_ids: BTreeSet<String> = golden["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|e| require_string_field(e, "workload_id").to_string())
+        .collect();
+
+    assert_eq!(
+        matrix_ids, golden_ids,
+        "workload IDs must be identical across manifests"
+    );
+}
+
+#[test]
+fn workload_matrix_family_definitions_all_have_description() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let families = matrix["family_definitions"].as_array().expect("array");
+    for family in families {
+        let fid = require_string_field(family, "family_id");
+        let desc = family
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("family {fid} missing description"));
+        assert!(
+            !desc.trim().is_empty(),
+            "family {fid} description must be nonempty"
+        );
+    }
+}
+
+#[test]
+fn golden_output_canonical_output_external_digests_are_unique() {
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+    let entries = golden["entries"].as_array().expect("entries");
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        let co = entry.get("canonical_output").expect("canonical_output");
+        let digest = require_string_field(co, "external_output_digest");
+        assert!(
+            seen.insert(digest.to_string()),
+            "duplicate external_output_digest: {digest}"
+        );
+    }
+}
+
+#[test]
+fn workload_matrix_cases_golden_ids_match_golden_manifest() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+
+    let matrix_golden: BTreeSet<String> = matrix["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|c| require_string_field(c, "golden_output_id").to_string())
+        .collect();
+    let golden_golden: BTreeSet<String> = golden["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|e| require_string_field(e, "golden_output_id").to_string())
+        .collect();
+
+    assert_eq!(
+        matrix_golden, golden_golden,
+        "golden_output_id sets must match"
+    );
+}
+
+#[test]
+fn golden_output_security_envelope_profiles_match_workload_matrix() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+
+    let matrix_cases = matrix["cases"].as_array().expect("cases");
+    let golden_entries = golden["entries"].as_array().expect("entries");
+
+    for entry in golden_entries {
+        let wid = require_string_field(entry, "workload_id");
+        let env_profile = require_string_field(
+            entry.get("security_envelope").expect("security_envelope"),
+            "profile",
+        );
+        let matrix_profile = matrix_cases
+            .iter()
+            .find(|c| require_string_field(c, "workload_id") == wid)
+            .map(|c| require_string_field(c, "profile"))
+            .unwrap_or_else(|| panic!("workload {wid} not found in matrix"));
+        assert_eq!(
+            env_profile, matrix_profile,
+            "security envelope profile must match matrix profile for {wid}"
+        );
+    }
+}
+
+#[test]
+fn workload_matrix_cases_all_have_comparison_targets() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let cases = matrix["cases"].as_array().expect("cases");
+    for case in cases {
+        let targets = case
+            .get("comparison_targets")
+            .and_then(Value::as_array)
+            .expect("comparison_targets");
+        assert!(
+            !targets.is_empty(),
+            "comparison_targets must not be empty for {}",
+            require_string_field(case, "workload_id")
+        );
+    }
+}
+
+#[test]
+fn golden_output_entries_all_pass_behavior_equivalence() {
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+    let entries = golden["entries"].as_array().expect("entries");
+    for entry in entries {
+        let co = entry.get("canonical_output").expect("canonical_output");
+        let verdict = require_string_field(co, "behavior_equivalence_verdict");
+        assert_eq!(
+            verdict, "pass",
+            "all golden outputs must have behavior_equivalence_verdict=pass"
+        );
+    }
+}
+
+#[test]
+fn golden_output_entries_no_work_drop_detected() {
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+    let entries = golden["entries"].as_array().expect("entries");
+    for entry in entries {
+        let co = entry.get("canonical_output").expect("canonical_output");
+        let drop = require_bool_field(co, "work_drop_detected");
+        assert!(!drop, "no golden output should have work_drop_detected");
+    }
+}
+
+#[test]
+fn workload_matrix_profile_s_has_smallest_extension_count() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let defaults = matrix["profile_defaults"].as_object().expect("object");
+    let s_ext = require_u64_field(defaults.get("S").expect("S"), "extension_count");
+    let m_ext = require_u64_field(defaults.get("M").expect("M"), "extension_count");
+    let l_ext = require_u64_field(defaults.get("L").expect("L"), "extension_count");
+    assert!(s_ext < m_ext, "S must have fewer extensions than M");
+    assert!(m_ext < l_ext, "M must have fewer extensions than L");
+}
+
+#[test]
+fn workload_matrix_cases_family_id_matches_workload_id_prefix() {
+    let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
+    let cases = matrix["cases"].as_array().expect("cases");
+    for case in cases {
+        let wid = require_string_field(case, "workload_id");
+        let fid = require_string_field(case, "family_id");
+        assert!(
+            wid.starts_with(fid),
+            "workload_id {wid} should start with family_id {fid}"
+        );
+    }
+}
+
+#[test]
+fn golden_output_entries_have_four_side_effect_classes() {
+    let golden = read_json("docs/extension_heavy_golden_outputs_v1.json");
+    let entries = golden["entries"].as_array().expect("entries");
+    for entry in entries {
+        let co = entry.get("canonical_output").expect("canonical_output");
+        let side_effects = co
+            .get("side_effect_trace_class")
+            .and_then(Value::as_object)
+            .expect("side_effect_trace_class");
+        assert_eq!(
+            side_effects.len(),
+            4,
+            "each golden output must have exactly 4 side effect classes"
+        );
+    }
+}

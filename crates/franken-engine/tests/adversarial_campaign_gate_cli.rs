@@ -505,3 +505,290 @@ fn adversarial_gate_fixture_pretty_printed_is_deterministic() {
     let b = serde_json::to_string_pretty(&value).expect("second");
     assert_eq!(a, b);
 }
+
+// ---------- enrichment: structural / cross-reference / CLI ----------
+
+#[test]
+fn adversarial_gate_fixture_campaign_ids_are_globally_unique() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let samples = fixture["samples"].as_array().expect("samples array");
+    let mut seen = std::collections::BTreeSet::new();
+    for sample in samples {
+        let id = sample["campaign_id"].as_str().expect("campaign_id string");
+        assert!(
+            seen.insert(id.to_string()),
+            "duplicate campaign_id found: {id}"
+        );
+    }
+}
+
+#[test]
+fn adversarial_gate_fixture_samples_cover_three_runtimes() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let samples = fixture["samples"].as_array().expect("samples array");
+    let runtimes: std::collections::BTreeSet<String> = samples
+        .iter()
+        .map(|s| {
+            s["target_runtime"]
+                .as_str()
+                .expect("target_runtime")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        runtimes.len() >= 3,
+        "expected at least 3 distinct runtimes, got {runtimes:?}"
+    );
+}
+
+#[test]
+fn adversarial_gate_fixture_samples_cover_at_least_four_attack_categories() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let samples = fixture["samples"].as_array().expect("samples array");
+    let categories: std::collections::BTreeSet<String> = samples
+        .iter()
+        .map(|s| {
+            s["attack_category"]
+                .as_str()
+                .expect("attack_category")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        categories.len() >= 4,
+        "expected at least 4 attack categories, got {categories:?}"
+    );
+}
+
+#[test]
+fn adversarial_gate_fixture_escalations_all_have_required_fields() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let escalations = fixture["escalations"]
+        .as_array()
+        .expect("escalations array");
+    for esc in escalations {
+        assert!(
+            esc["campaign_id"].is_string(),
+            "escalation must have campaign_id"
+        );
+        assert!(
+            esc["attack_category"].is_string(),
+            "escalation must have attack_category"
+        );
+        assert!(
+            esc["target_runtime"].is_string(),
+            "escalation must have target_runtime"
+        );
+        assert!(
+            esc["successful_exploit"].is_boolean(),
+            "escalation must have successful_exploit boolean"
+        );
+        assert!(
+            esc["escalation_triggered"].is_boolean(),
+            "escalation must have escalation_triggered boolean"
+        );
+        assert!(
+            esc["escalation_latency_seconds"].is_number(),
+            "escalation must have escalation_latency_seconds number"
+        );
+    }
+}
+
+#[test]
+fn adversarial_gate_fixture_escalation_latencies_are_positive() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let escalations = fixture["escalations"]
+        .as_array()
+        .expect("escalations array");
+    for esc in escalations {
+        let latency = esc["escalation_latency_seconds"]
+            .as_u64()
+            .expect("escalation_latency_seconds u64");
+        assert!(
+            latency > 0,
+            "escalation_latency_seconds must be positive for campaign {}",
+            esc["campaign_id"]
+        );
+    }
+}
+
+#[test]
+fn adversarial_gate_fixture_all_samples_have_repro_script_ref() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let samples = fixture["samples"].as_array().expect("samples array");
+    for sample in samples {
+        let repro = sample["repro_script_ref"]
+            .as_str()
+            .expect("repro_script_ref string");
+        assert!(
+            !repro.trim().is_empty(),
+            "repro_script_ref must be non-empty for campaign {}",
+            sample["campaign_id"]
+        );
+    }
+}
+
+#[test]
+fn adversarial_gate_fixture_sample_field_count_is_seven() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let samples = fixture["samples"].as_array().expect("samples array");
+    for sample in samples {
+        let obj = sample.as_object().expect("sample must be object");
+        assert_eq!(
+            obj.len(),
+            7,
+            "each sample should have exactly 7 fields, got {} for campaign {}",
+            obj.len(),
+            sample["campaign_id"]
+        );
+    }
+}
+
+#[test]
+fn adversarial_gate_fixture_trend_points_have_distinct_timestamps() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let points = fixture["trend_points"]
+        .as_array()
+        .expect("trend_points array");
+    let timestamps: std::collections::BTreeSet<u64> = points
+        .iter()
+        .map(|p| p["timestamp_ns"].as_u64().expect("timestamp_ns"))
+        .collect();
+    assert_eq!(
+        timestamps.len(),
+        points.len(),
+        "trend_points must have distinct timestamps"
+    );
+}
+
+#[test]
+fn adversarial_gate_fixture_trend_points_are_chronologically_ordered() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let points = fixture["trend_points"]
+        .as_array()
+        .expect("trend_points array");
+    let timestamps: Vec<u64> = points
+        .iter()
+        .map(|p| p["timestamp_ns"].as_u64().expect("timestamp_ns"))
+        .collect();
+    for window in timestamps.windows(2) {
+        assert!(
+            window[0] <= window[1],
+            "trend_points timestamps must be non-decreasing: {} > {}",
+            window[0],
+            window[1]
+        );
+    }
+}
+
+#[test]
+fn adversarial_gate_fixture_no_null_values_in_samples() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let samples = fixture["samples"].as_array().expect("samples array");
+    for sample in samples {
+        let obj = sample.as_object().expect("sample must be object");
+        for (key, val) in obj {
+            assert!(
+                !val.is_null(),
+                "sample field '{key}' must not be null in campaign {}",
+                sample["campaign_id"]
+            );
+        }
+    }
+}
+
+#[test]
+fn adversarial_gate_fixture_compact_serde_roundtrip() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let compact = serde_json::to_string(&parsed).expect("compact encode");
+    let re_parsed: serde_json::Value = serde_json::from_str(&compact).expect("re-parse compact");
+    assert_eq!(
+        parsed, re_parsed,
+        "compact serde roundtrip must preserve fixture"
+    );
+}
+
+#[test]
+fn adversarial_gate_fixture_escalations_only_reference_frankenengine_runtime() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let fixture: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let escalations = fixture["escalations"]
+        .as_array()
+        .expect("escalations array");
+    for esc in escalations {
+        let runtime = esc["target_runtime"].as_str().expect("target_runtime");
+        assert_eq!(
+            runtime, "FrankenEngine",
+            "escalations should only reference FrankenEngine runtime, got {runtime}"
+        );
+    }
+}
+
+#[test]
+fn suppression_gate_cli_summary_mode_prints_key_value_lines() {
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_adversarial_campaign_gate"))
+        .arg("--input")
+        .arg(fixture_path())
+        .arg("--summary")
+        .output()
+        .expect("should execute suppression gate CLI");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("suppression_gate.passed=true"),
+        "summary output must contain passed=true, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("suppression_gate.schema_version="),
+        "summary output must contain schema_version key"
+    );
+    assert!(
+        stdout.contains("suppression_gate.release_candidate_id="),
+        "summary output must contain release_candidate_id key"
+    );
+}
+
+#[test]
+fn suppression_gate_cli_exits_nonzero_for_no_arguments() {
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_adversarial_campaign_gate"))
+        .output()
+        .expect("should execute suppression gate CLI");
+
+    assert!(
+        !output.status.success(),
+        "CLI must fail when no arguments are provided"
+    );
+}
+
+#[test]
+fn adversarial_gate_fixture_clone_independence() {
+    let bytes = fs::read(fixture_path()).expect("read fixture");
+    let original: serde_json::Value = serde_json::from_slice(&bytes).expect("parse fixture");
+    let mut cloned = original.clone();
+    cloned["release_candidate_id"] = serde_json::Value::String("mutated-id".to_string());
+    assert_ne!(
+        original["release_candidate_id"], cloned["release_candidate_id"],
+        "mutating clone must not affect original"
+    );
+    assert_eq!(
+        original["release_candidate_id"], "rc-adversarial-gate-v1",
+        "original must be unchanged after clone mutation"
+    );
+}

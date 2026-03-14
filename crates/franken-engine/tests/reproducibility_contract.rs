@@ -609,3 +609,278 @@ fn all_templates_share_consistent_schema_hash_format() {
         "schema_hash prefix must be sha256, found: {hash_prefixes:?}"
     );
 }
+
+// ---------- canonicalize_json: string with special chars ----------
+
+#[test]
+fn canonicalize_json_string_with_special_characters() {
+    let val = Value::String("line1\nline2\ttab\"quote\\back".to_string());
+    let canon = canonicalize_json(&val);
+    // Must produce valid JSON that round-trips
+    let reparsed: Value = serde_json::from_str(&canon).expect("reparsed special string");
+    assert_eq!(reparsed.as_str(), Some("line1\nline2\ttab\"quote\\back"));
+}
+
+// ---------- canonicalize_json: nested arrays of objects ----------
+
+#[test]
+fn canonicalize_json_nested_array_of_objects_sorts_inner_keys() {
+    let val: Value = serde_json::json!([
+        {"z": 1, "a": 2},
+        {"m": 3, "b": 4}
+    ]);
+    let canon = canonicalize_json(&val);
+    // Each inner object must have sorted keys
+    assert!(
+        canon.contains("{\"a\":2,\"z\":1}"),
+        "first object keys sorted"
+    );
+    assert!(
+        canon.contains("{\"b\":4,\"m\":3}"),
+        "second object keys sorted"
+    );
+}
+
+// ---------- env template: project fields ----------
+
+#[test]
+fn env_template_project_has_repo_url_and_dirty_flag() {
+    let env = parse_json_file("docs/templates/env.json.template");
+    assert_string_field(&env, &["project", "repo_url"]);
+    assert_bool_field(&env, &["project", "dirty"]);
+}
+
+// ---------- env template: host fields ----------
+
+#[test]
+fn env_template_host_has_os_and_kernel_fields() {
+    let env = parse_json_file("docs/templates/env.json.template");
+    assert_string_field(&env, &["host", "os"]);
+    assert_string_field(&env, &["host", "kernel"]);
+    assert_string_field(&env, &["host", "cpu_model"]);
+    // Numeric fields should be present
+    let cores = value_at_path(&env, &["host", "cpu_cores_logical"]);
+    assert!(cores.is_number(), "cpu_cores_logical must be a number");
+    let mem = value_at_path(&env, &["host", "memory_bytes"]);
+    assert!(mem.is_number(), "memory_bytes must be a number");
+}
+
+// ---------- env template: toolchain fields ----------
+
+#[test]
+fn env_template_toolchain_has_cargo_llvm_target_and_profile() {
+    let env = parse_json_file("docs/templates/env.json.template");
+    assert_string_field(&env, &["toolchain", "cargo"]);
+    assert_string_field(&env, &["toolchain", "llvm"]);
+    assert_string_field(&env, &["toolchain", "target_triple"]);
+    assert_string_field(&env, &["toolchain", "profile"]);
+}
+
+// ---------- manifest template: source_revision fields ----------
+
+#[test]
+fn manifest_template_source_revision_has_repo_branch_commit() {
+    let manifest = parse_json_file("docs/templates/manifest.json.template");
+    assert_string_field(&manifest, &["source_revision", "repo"]);
+    assert_string_field(&manifest, &["source_revision", "branch"]);
+    assert_string_field(&manifest, &["source_revision", "commit"]);
+}
+
+// ---------- manifest template: artifacts sub-objects ----------
+
+#[test]
+fn manifest_template_artifacts_have_path_and_sha256() {
+    let manifest = parse_json_file("docs/templates/manifest.json.template");
+    let artifact_keys = ["env", "lock", "commands", "results"];
+    for key in artifact_keys {
+        let artifact = value_at_path(&manifest, &["artifacts", key]);
+        assert!(artifact.is_object(), "artifacts.{key} must be an object");
+        let path = artifact
+            .get("path")
+            .unwrap_or_else(|| panic!("artifacts.{key} must have path"));
+        assert!(
+            path.as_str().is_some(),
+            "artifacts.{key}.path must be a string"
+        );
+        let sha = artifact
+            .get("sha256")
+            .unwrap_or_else(|| panic!("artifacts.{key} must have sha256"));
+        assert!(
+            sha.as_str().is_some(),
+            "artifacts.{key}.sha256 must be a string"
+        );
+    }
+}
+
+// ---------- manifest template: canonicalization sub-fields ----------
+
+#[test]
+fn manifest_template_canonicalization_specifies_lexicographic_and_lf() {
+    let manifest = parse_json_file("docs/templates/manifest.json.template");
+    let key_order = value_at_path(&manifest, &["canonicalization", "key_order"])
+        .as_str()
+        .expect("key_order must be a string");
+    assert_eq!(
+        key_order, "lexicographic",
+        "key_order must be lexicographic"
+    );
+
+    let newline = value_at_path(&manifest, &["canonicalization", "newline"])
+        .as_str()
+        .expect("newline must be a string");
+    assert_eq!(newline, "lf", "newline must be lf");
+
+    let format = value_at_path(&manifest, &["canonicalization", "format"])
+        .as_str()
+        .expect("format must be a string");
+    assert_eq!(format, "json", "format must be json");
+}
+
+// ---------- manifest template: retention min_days ----------
+
+#[test]
+fn manifest_template_retention_min_days_are_positive() {
+    let manifest = parse_json_file("docs/templates/manifest.json.template");
+    let min_days = value_at_path(&manifest, &["retention", "min_days"])
+        .as_u64()
+        .expect("min_days must be a number");
+    assert!(
+        min_days >= 365,
+        "min_days must be at least 365, got {min_days}"
+    );
+
+    let high_impact_min = value_at_path(&manifest, &["retention", "high_impact_min_days"])
+        .as_u64()
+        .expect("high_impact_min_days must be a number");
+    assert!(
+        high_impact_min >= 730,
+        "high_impact_min_days must be at least 730, got {high_impact_min}"
+    );
+    assert!(
+        high_impact_min >= min_days,
+        "high_impact_min_days must be >= min_days"
+    );
+}
+
+// ---------- repro lock: determinism max_clock_skew_seconds ----------
+
+#[test]
+fn repro_lock_determinism_max_clock_skew_is_zero() {
+    let lock = parse_json_file("docs/templates/repro.lock.template");
+    let skew = value_at_path(&lock, &["determinism", "max_clock_skew_seconds"])
+        .as_u64()
+        .expect("max_clock_skew_seconds must be a number");
+    assert_eq!(skew, 0, "deterministic lock must have zero clock skew");
+}
+
+// ---------- repro lock: determinism booleans all false ----------
+
+#[test]
+fn repro_lock_determinism_booleans_all_false_by_default() {
+    let lock = parse_json_file("docs/templates/repro.lock.template");
+    let fields = ["allow_network", "allow_wall_clock", "allow_randomness"];
+    for field in fields {
+        let val = value_at_path(&lock, &["determinism", field])
+            .as_bool()
+            .unwrap_or_else(|| panic!("determinism.{field} must be a bool"));
+        assert!(
+            !val,
+            "determinism.{field} must default to false for strict reproducibility"
+        );
+    }
+}
+
+// ---------- repro lock: verification expected_verdict ----------
+
+#[test]
+fn repro_lock_verification_expected_verdict_is_pass() {
+    let lock = parse_json_file("docs/templates/repro.lock.template");
+    let verdict = value_at_path(&lock, &["verification", "expected_verdict"])
+        .as_str()
+        .expect("expected_verdict must be a string");
+    assert_eq!(verdict, "pass", "default expected_verdict must be 'pass'");
+}
+
+// ---------- contract doc: error code descriptions ----------
+
+#[test]
+fn contract_doc_error_codes_have_descriptions() {
+    let doc = read_file("docs/REPRODUCIBILITY_CONTRACT.md");
+    let code_descriptions = [
+        ("FE-REPRO-0001", "missing required file"),
+        ("FE-REPRO-0002", "schema validation failure"),
+        ("FE-REPRO-0003", "canonicalization mismatch"),
+        ("FE-REPRO-0004", "digest mismatch"),
+        ("FE-REPRO-0005", "provenance link"),
+        ("FE-REPRO-0006", "replay command failed"),
+        ("FE-REPRO-0007", "stale policy"),
+        ("FE-REPRO-0008", "override"),
+    ];
+    for (code, keyword) in code_descriptions {
+        // Find the line containing the code and verify it has the expected keyword nearby
+        let code_pos = doc.find(code).unwrap_or_else(|| panic!("missing {code}"));
+        // Take a window of text after the code to check for description
+        let window_end = (code_pos + 80).min(doc.len());
+        let window = &doc[code_pos..window_end];
+        assert!(
+            window.to_lowercase().contains(keyword),
+            "error code {code} should have description containing '{keyword}', found: {window}"
+        );
+    }
+}
+
+// ---------- contract doc: sections match template guide ----------
+
+#[test]
+fn contract_doc_and_template_guide_agree_on_core_file_list() {
+    let contract = read_file("docs/REPRODUCIBILITY_CONTRACT.md");
+    let guide = read_file("docs/REPRODUCIBILITY_CONTRACT_TEMPLATE.md");
+    let core_files = ["env.json", "manifest.json", "repro.lock"];
+    for file in core_files {
+        assert!(
+            contract.contains(file),
+            "contract doc must reference core file: {file}"
+        );
+        assert!(
+            guide.contains(file),
+            "template guide must reference core file: {file}"
+        );
+    }
+}
+
+// ---------- canonicalize_json: single-key object ----------
+
+#[test]
+fn canonicalize_json_single_key_object() {
+    let val: Value = serde_json::json!({"only": 99});
+    let canon = canonicalize_json(&val);
+    assert_eq!(canon, "{\"only\":99}");
+}
+
+// ---------- all templates have generated_at_utc ----------
+
+#[test]
+fn all_templates_have_generated_at_utc_or_captured_at_utc() {
+    // env uses captured_at_utc, manifest and lock use generated_at_utc
+    let env = parse_json_file("docs/templates/env.json.template");
+    assert!(
+        env.get("captured_at_utc").is_some(),
+        "env template must have captured_at_utc"
+    );
+    assert!(
+        env.get("captured_at_utc").unwrap().as_str().is_some(),
+        "captured_at_utc must be a string"
+    );
+
+    let manifest = parse_json_file("docs/templates/manifest.json.template");
+    assert!(
+        manifest.get("generated_at_utc").is_some(),
+        "manifest template must have generated_at_utc"
+    );
+
+    let lock = parse_json_file("docs/templates/repro.lock.template");
+    assert!(
+        lock.get("generated_at_utc").is_some(),
+        "repro lock template must have generated_at_utc"
+    );
+}

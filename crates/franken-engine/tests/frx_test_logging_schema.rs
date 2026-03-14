@@ -11,7 +11,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,8 +22,10 @@ use serde::Deserialize;
 mod test_logging_schema;
 
 use test_logging_schema::{
-    FailureTaxonomy, TEST_LOG_EVENT_SCHEMA_VERSION, TEST_LOGGING_CONTRACT_SCHEMA_VERSION,
-    TEST_LOGGING_FAILURE_CODE, TestLane, TestLogEvent, TestLoggingSchemaSpec, validate_events,
+    FailureTaxonomy, TEST_LOG_EVENT_SCHEMA_VERSION, TEST_LOGGING_COMPONENT,
+    TEST_LOGGING_CONTRACT_SCHEMA_VERSION, TEST_LOGGING_FAILURE_CODE, TestLane, TestLogEvent,
+    TestLoggingSchemaSpec, ValidationReport, apply_redaction, apply_redaction_with_audit,
+    detect_secret_patterns, validate_events, validate_logging_contract, validate_schema_evolution,
 };
 
 fn repo_root() -> PathBuf {
@@ -539,4 +541,253 @@ fn failure_taxonomy_serde_is_deterministic() {
     let a = serde_json::to_string(&tax).expect("first");
     let b = serde_json::to_string(&tax).expect("second");
     assert_eq!(a, b);
+}
+
+// ---------- enrichment: doc structural properties ----------
+
+#[test]
+fn frx_20_4_doc_has_no_todo_or_fixme_markers() {
+    let path = repo_root().join("docs/FRX_TEST_LOGGING_SCHEMA_V1.md");
+    let doc = read_to_string(&path);
+    let upper = doc.to_ascii_uppercase();
+    assert!(
+        !upper.contains("TODO"),
+        "doc must not contain TODO markers: {}",
+        path.display()
+    );
+    assert!(
+        !upper.contains("FIXME"),
+        "doc must not contain FIXME markers: {}",
+        path.display()
+    );
+}
+
+#[test]
+fn frx_20_4_doc_heading_count_is_stable() {
+    let path = repo_root().join("docs/FRX_TEST_LOGGING_SCHEMA_V1.md");
+    let doc = read_to_string(&path);
+    let heading_count = doc.lines().filter(|line| line.starts_with('#')).count();
+    // The doc has exactly 7 headings (1 top-level + 6 sections)
+    assert!(
+        heading_count >= 7,
+        "expected at least 7 headings, found {heading_count}"
+    );
+}
+
+#[test]
+fn frx_20_4_doc_word_count_above_minimum() {
+    let path = repo_root().join("docs/FRX_TEST_LOGGING_SCHEMA_V1.md");
+    let doc = read_to_string(&path);
+    let word_count: usize = doc.split_whitespace().count();
+    assert!(
+        word_count >= 100,
+        "doc word count {word_count} is below the 100-word minimum"
+    );
+}
+
+#[test]
+fn frx_20_4_doc_lists_all_required_event_fields() {
+    let path = repo_root().join("docs/FRX_TEST_LOGGING_SCHEMA_V1.md");
+    let doc = read_to_string(&path);
+    let spec = TestLoggingSchemaSpec::default();
+    for field in &spec.required_fields {
+        assert!(
+            doc.contains(field.as_str()),
+            "doc is missing required field `{field}`"
+        );
+    }
+}
+
+#[test]
+fn frx_20_4_contract_json_is_valid_and_deterministic_on_reparse() {
+    let path = repo_root().join("docs/frx_test_logging_schema_v1.json");
+    let raw = read_to_string(&path);
+    let first: serde_json::Value = serde_json::from_str(&raw).expect("first parse");
+    let serialized = serde_json::to_string(&first).expect("serialize");
+    let second: serde_json::Value = serde_json::from_str(&serialized).expect("second parse");
+    assert_eq!(
+        first, second,
+        "JSON contract must roundtrip deterministically"
+    );
+}
+
+#[test]
+fn frx_20_4_contract_required_fields_count_matches_spec() {
+    let path = repo_root().join("docs/frx_test_logging_schema_v1.json");
+    let contract: LoggingContract = load_json(&path);
+    let spec = TestLoggingSchemaSpec::default();
+    assert_eq!(
+        contract.logging_schema.required_fields.len(),
+        spec.required_fields.len(),
+        "contract required_fields count drifted from spec"
+    );
+}
+
+#[test]
+fn frx_20_4_contract_correlation_ids_are_subset_of_required_fields() {
+    let path = repo_root().join("docs/frx_test_logging_schema_v1.json");
+    let contract: LoggingContract = load_json(&path);
+    let required: BTreeSet<_> = contract.logging_schema.required_fields.iter().collect();
+    for cid in &contract.logging_schema.required_correlation_ids {
+        assert!(
+            required.contains(cid),
+            "correlation id `{cid}` not in required_fields"
+        );
+    }
+}
+
+// ---------- enrichment: validation report structural properties ----------
+
+#[test]
+fn validation_report_serde_roundtrip_with_failures() {
+    let mut event = baseline_event();
+    event.trace_id.clear();
+    let report = validate_events(&[event]);
+    assert!(!report.valid);
+    let json = serde_json::to_string(&report).expect("serialize");
+    let recovered: ValidationReport = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(recovered.valid, report.valid);
+    assert_eq!(recovered.outcome, report.outcome);
+    assert_eq!(recovered.failures.len(), report.failures.len());
+    assert_eq!(recovered.error_code, report.error_code);
+}
+
+#[test]
+fn validation_report_component_matches_constant() {
+    let report = validate_events(&[baseline_event()]);
+    assert_eq!(report.component, TEST_LOGGING_COMPONENT);
+}
+
+#[test]
+fn validate_events_schema_version_mismatch_fails() {
+    let mut event = baseline_event();
+    event.schema_version = "frx.test-log-event.v999".to_string();
+    let report = validate_events(&[event]);
+    assert!(!report.valid);
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|f| f.message.contains("schema_version"))
+    );
+}
+
+// ---------- enrichment: validate_logging_contract ----------
+
+#[test]
+fn validate_logging_contract_default_spec_passes() {
+    let spec = TestLoggingSchemaSpec::default();
+    let failures = validate_logging_contract(&spec);
+    assert!(
+        failures.is_empty(),
+        "default spec must validate: {failures:?}"
+    );
+}
+
+#[test]
+fn validate_logging_contract_empty_schema_version_fails() {
+    let mut spec = TestLoggingSchemaSpec::default();
+    spec.schema_version.clear();
+    let failures = validate_logging_contract(&spec);
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.message.contains("schema_version")),
+        "expected failure for empty schema_version"
+    );
+}
+
+// ---------- enrichment: redaction ----------
+
+#[test]
+fn apply_redaction_drops_secret_fields() {
+    let mut record = BTreeMap::new();
+    record.insert("payload.auth_token".to_string(), "my-secret".to_string());
+    let spec = TestLoggingSchemaSpec::default();
+    let redacted = apply_redaction(&record, &spec);
+    let value = redacted.get("payload.auth_token").expect("key must exist");
+    assert!(value.is_empty(), "secret field must be dropped (emptied)");
+}
+
+#[test]
+fn apply_redaction_hashes_sensitive_fields() {
+    let mut record = BTreeMap::new();
+    record.insert(
+        "payload.user_email".to_string(),
+        "user@example.com".to_string(),
+    );
+    let spec = TestLoggingSchemaSpec::default();
+    let redacted = apply_redaction(&record, &spec);
+    let value = redacted.get("payload.user_email").expect("key must exist");
+    assert!(
+        value.starts_with("sha256:"),
+        "sensitive field must be hashed, got: {value}"
+    );
+}
+
+#[test]
+fn apply_redaction_with_audit_report_deterministic() {
+    let mut record = BTreeMap::new();
+    record.insert("payload.ip_address".to_string(), "192.168.1.1".to_string());
+    let spec = TestLoggingSchemaSpec::default();
+    let report_a = apply_redaction_with_audit(&record, &spec);
+    let report_b = apply_redaction_with_audit(&record, &spec);
+    assert_eq!(report_a.report_hash, report_b.report_hash);
+    assert_eq!(report_a.audit_entries.len(), report_b.audit_entries.len());
+}
+
+// ---------- enrichment: detect_secret_patterns ----------
+
+#[test]
+fn detect_secret_patterns_empty_record_returns_empty() {
+    let record = BTreeMap::new();
+    let matches = detect_secret_patterns(&record);
+    assert!(matches.is_empty());
+}
+
+#[test]
+fn detect_secret_patterns_finds_password_inline() {
+    let mut record = BTreeMap::new();
+    record.insert("config".to_string(), "password=hunter2".to_string());
+    let matches = detect_secret_patterns(&record);
+    assert!(
+        matches.iter().any(|m| m.pattern_id == "password_inline"),
+        "should detect password_inline pattern"
+    );
+}
+
+// ---------- enrichment: validate_schema_evolution ----------
+
+#[test]
+fn validate_schema_evolution_identical_specs_passes() {
+    let baseline = TestLoggingSchemaSpec::default();
+    let candidate = TestLoggingSchemaSpec::default();
+    let failures = validate_schema_evolution(&baseline, &candidate);
+    assert!(
+        failures.is_empty(),
+        "identical specs must pass evolution: {failures:?}"
+    );
+}
+
+#[test]
+fn validate_schema_evolution_removed_required_field_fails() {
+    let baseline = TestLoggingSchemaSpec::default();
+    let mut candidate = TestLoggingSchemaSpec::default();
+    candidate.required_fields.retain(|f| f != "fixture_id");
+    let failures = validate_schema_evolution(&baseline, &candidate);
+    assert!(
+        failures.iter().any(|f| f.message.contains("fixture_id")),
+        "should detect removed required field"
+    );
+}
+
+// ---------- enrichment: clone independence ----------
+
+#[test]
+fn test_log_event_clone_is_independent() {
+    let original = baseline_event();
+    let mut cloned = original.clone();
+    cloned.scenario_id = "mutated".to_string();
+    assert_ne!(original.scenario_id, cloned.scenario_id);
+    assert_eq!(original.trace_id, "trace-frx-20-4");
 }

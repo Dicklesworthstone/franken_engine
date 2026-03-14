@@ -549,3 +549,199 @@ fn simulated_seqlock_publish_interference_updates_value() {
     assert_eq!(outcome.resolution, ReadResolution::Optimistic);
     assert_eq!(outcome.retries, 1);
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: enum debug, struct clone, seqlock edge cases,
+// bundle integrity, inventory invariants, error variants
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn candidate_disposition_debug_is_nonempty() {
+    for variant in [
+        CandidateDisposition::Accept,
+        CandidateDisposition::Conditional,
+        CandidateDisposition::Reject,
+    ] {
+        assert!(!format!("{variant:?}").is_empty());
+    }
+}
+
+#[test]
+fn surface_area_debug_is_nonempty() {
+    for variant in [
+        SurfaceArea::GovernanceState,
+        SurfaceArea::OfflineArtifact,
+        SurfaceArea::OperatorProjection,
+        SurfaceArea::PolicyState,
+        SurfaceArea::RuntimeMetadata,
+        SurfaceArea::Telemetry,
+    ] {
+        assert!(!format!("{variant:?}").is_empty());
+    }
+}
+
+#[test]
+fn tearing_risk_debug_is_nonempty() {
+    for variant in [
+        TearingRisk::None,
+        TearingRisk::Low,
+        TearingRisk::Medium,
+        TearingRisk::High,
+    ] {
+        assert!(!format!("{variant:?}").is_empty());
+    }
+}
+
+#[test]
+fn write_profile_debug_is_nonempty() {
+    for variant in [
+        WriteProfile::Rare,
+        WriteProfile::Moderate,
+        WriteProfile::Bursty,
+        WriteProfile::HotPath,
+    ] {
+        assert!(!format!("{variant:?}").is_empty());
+    }
+}
+
+#[test]
+fn retry_budget_policy_row_clone_preserves_fields() {
+    let row = RetryBudgetPolicyRow {
+        candidate_id: "clone-test".to_string(),
+        disposition: CandidateDisposition::Accept,
+        max_retries: 5,
+        fallback_target: "incumbent".to_string(),
+        fallback_reason: FallbackReason::RetryBudgetExhausted,
+        write_pressure_limit: WriteProfile::Moderate,
+        policy_rationale: vec!["reason-1".to_string()],
+    };
+    let cloned = row.clone();
+    assert_eq!(row.candidate_id, cloned.candidate_id);
+    assert_eq!(row.max_retries, cloned.max_retries);
+    assert_eq!(row.policy_rationale, cloned.policy_rationale);
+}
+
+#[test]
+fn structured_log_event_debug_is_nonempty() {
+    let event = StructuredLogEvent {
+        trace_id: "t".to_string(),
+        decision_id: "d".to_string(),
+        policy_id: "p".to_string(),
+        component: "c".to_string(),
+        event: "e".to_string(),
+        outcome: "o".to_string(),
+        error_code: None,
+        candidate_id: None,
+        detail: "det".to_string(),
+    };
+    assert!(!format!("{event:?}").is_empty());
+}
+
+#[test]
+fn simulated_seqlock_multiple_writes_update_value() {
+    let mut seqlock = SimulatedSeqlock::new(0u64);
+    seqlock.begin_write().unwrap();
+    seqlock.commit_write(10).unwrap();
+    seqlock.begin_write().unwrap();
+    seqlock.commit_write(20).unwrap();
+
+    let policy = RetryBudgetPolicyRow {
+        candidate_id: "multi".to_string(),
+        disposition: CandidateDisposition::Accept,
+        max_retries: 3,
+        fallback_target: "incumbent".to_string(),
+        fallback_reason: FallbackReason::RetryBudgetExhausted,
+        write_pressure_limit: WriteProfile::Moderate,
+        policy_rationale: vec![],
+    };
+    let outcome = seqlock.read_with_interference(&policy, &[ReadInterference::Stable]);
+    assert_eq!(outcome.value, 20);
+}
+
+#[test]
+fn simulated_seqlock_write_pressure_violation_tracked() {
+    let mut seqlock = SimulatedSeqlock::new(0u64);
+    let policy = RetryBudgetPolicyRow {
+        candidate_id: "pressure".to_string(),
+        disposition: CandidateDisposition::Accept,
+        max_retries: 0,
+        fallback_target: "incumbent".to_string(),
+        fallback_reason: FallbackReason::RetryBudgetExhausted,
+        write_pressure_limit: WriteProfile::Rare,
+        policy_rationale: vec![],
+    };
+    // Exhaust budget to cause fallback
+    let _ = seqlock.read_with_interference(&policy, &[ReadInterference::WriterActive]);
+    assert!(seqlock.fallback_reads() > 0);
+}
+
+#[test]
+fn default_candidate_inventory_candidate_ids_are_unique() {
+    let inventory = default_candidate_inventory("2026-03-08T00:00:00Z");
+    let mut seen = std::collections::BTreeSet::new();
+    for candidate in &inventory.candidates {
+        assert!(
+            seen.insert(&candidate.candidate_id),
+            "duplicate candidate_id: {}",
+            candidate.candidate_id
+        );
+    }
+}
+
+#[test]
+fn seqlock_contract_error_debug_is_nonempty() {
+    for err in [
+        SeqlockContractError::WriterAlreadyActive,
+        SeqlockContractError::WriterNotActive,
+    ] {
+        assert!(!format!("{err:?}").is_empty());
+    }
+}
+
+#[test]
+fn read_interference_stable_does_not_retry() {
+    let mut seqlock = SimulatedSeqlock::new(42u64);
+    let policy = RetryBudgetPolicyRow {
+        candidate_id: "no-retry".to_string(),
+        disposition: CandidateDisposition::Accept,
+        max_retries: 10,
+        fallback_target: "incumbent".to_string(),
+        fallback_reason: FallbackReason::RetryBudgetExhausted,
+        write_pressure_limit: WriteProfile::Moderate,
+        policy_rationale: vec![],
+    };
+    let outcome = seqlock.read_with_interference(&policy, &[ReadInterference::Stable]);
+    assert_eq!(outcome.retries, 0);
+    assert_eq!(outcome.resolution, ReadResolution::Optimistic);
+}
+
+#[test]
+fn render_summary_is_nonempty() {
+    let inventory = default_candidate_inventory("2026-03-08T00:00:00Z");
+    let summary = render_summary(&inventory);
+    assert!(!summary.is_empty());
+}
+
+#[test]
+fn build_contract_fixture_is_deterministic() {
+    let a = build_contract_fixture();
+    let b = build_contract_fixture();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn candidate_disposition_conditional_allows_read() {
+    let mut seqlock = SimulatedSeqlock::new(55u64);
+    let policy = RetryBudgetPolicyRow {
+        candidate_id: "conditional-test".to_string(),
+        disposition: CandidateDisposition::Conditional,
+        max_retries: 3,
+        fallback_target: "incumbent".to_string(),
+        fallback_reason: FallbackReason::RetryBudgetExhausted,
+        write_pressure_limit: WriteProfile::Moderate,
+        policy_rationale: vec![],
+    };
+    let outcome = seqlock.read_with_interference(&policy, &[ReadInterference::Stable]);
+    assert_eq!(outcome.value, 55);
+    assert_eq!(outcome.resolution, ReadResolution::Optimistic);
+}

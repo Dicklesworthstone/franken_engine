@@ -829,3 +829,234 @@ fn required_log_keys_are_unique() {
         );
     }
 }
+
+// ---------- enrichment: AlarmPolicy clone/debug ----------
+
+#[test]
+fn alarm_policy_clone_equals_original() {
+    let policy = AlarmPolicy {
+        alarm_id: "test-alarm".to_string(),
+        slo_id: "test-slo".to_string(),
+        metric_key: "throughput".to_string(),
+        comparator: "min".to_string(),
+        threshold_millionths: 900_000,
+        severity: "critical".to_string(),
+        escalation_action: "page".to_string(),
+        error_code: "FE-TEST-0001".to_string(),
+        replay_command: "cargo test".to_string(),
+    };
+    let cloned = policy.clone();
+    assert_eq!(policy, cloned);
+}
+
+#[test]
+fn alarm_policy_debug_contains_alarm_id() {
+    let fixture = load_fixture();
+    let policy = &fixture.alarm_policies[0];
+    let debug = format!("{policy:?}");
+    assert!(debug.contains(&policy.alarm_id));
+    assert!(debug.contains("AlarmPolicy"));
+}
+
+// ---------- enrichment: MetricWindow ----------
+
+#[test]
+fn metric_window_clone_equals_original() {
+    let mut metrics = BTreeMap::new();
+    metrics.insert("throughput".to_string(), 950_000);
+    let window = MetricWindow {
+        window_id: "w-001".to_string(),
+        created_at_utc: "2026-01-01T00:00:00Z".to_string(),
+        metrics_millionths: metrics,
+        expected_alarm_ids: vec!["a-001".to_string()],
+    };
+    let cloned = window.clone();
+    assert_eq!(window, cloned);
+}
+
+#[test]
+fn metric_window_debug_contains_window_id() {
+    let fixture = load_fixture();
+    let window = &fixture.metric_windows[0];
+    let debug = format!("{window:?}");
+    assert!(debug.contains(&window.window_id));
+}
+
+// ---------- enrichment: AlarmEvaluation ----------
+
+#[test]
+fn alarm_evaluation_clone_equals_original() {
+    let eval = AlarmEvaluation {
+        window_id: "w-001".to_string(),
+        alarm_id: "a-001".to_string(),
+        slo_id: "slo-001".to_string(),
+        severity: "critical".to_string(),
+        threshold_millionths: 900_000,
+        observed_millionths: 850_000,
+        breached: true,
+        escalation_action: "page".to_string(),
+        replay_command: "cargo test".to_string(),
+        error_code: "FE-TEST".to_string(),
+    };
+    let cloned = eval.clone();
+    assert_eq!(eval, cloned);
+}
+
+#[test]
+fn alarm_evaluation_debug_contains_fields() {
+    let eval = AlarmEvaluation {
+        window_id: "w-001".to_string(),
+        alarm_id: "a-001".to_string(),
+        slo_id: "slo-001".to_string(),
+        severity: "critical".to_string(),
+        threshold_millionths: 900_000,
+        observed_millionths: 850_000,
+        breached: true,
+        escalation_action: "page".to_string(),
+        replay_command: "cargo test".to_string(),
+        error_code: "FE-TEST".to_string(),
+    };
+    let debug = format!("{eval:?}");
+    assert!(debug.contains("AlarmEvaluation"));
+    assert!(debug.contains("breached: true"));
+}
+
+// ---------- enrichment: GuardrailGate ----------
+
+#[test]
+fn guardrail_gate_clone_equals_original() {
+    let gate = GuardrailGate {
+        outcome: "hold".to_string(),
+        blockers: vec!["critical_alarm:a-001".to_string()],
+        psrp_10_4_status: "blocked".to_string(),
+        psrp_8_4_status: "blocked".to_string(),
+    };
+    let cloned = gate.clone();
+    assert_eq!(gate, cloned);
+}
+
+#[test]
+fn guardrail_gate_debug_contains_outcome() {
+    let gate = evaluate_guardrail_gate(&load_fixture());
+    let debug = format!("{gate:?}");
+    assert!(debug.contains("GuardrailGate"));
+    assert!(debug.contains(&gate.outcome));
+}
+
+// ---------- enrichment: WindowEvaluation ----------
+
+#[test]
+fn window_evaluation_clone_equals_original() {
+    let window = WindowEvaluation {
+        window_id: "w-001".to_string(),
+        alarms: Vec::new(),
+    };
+    let cloned = window.clone();
+    assert_eq!(window, cloned);
+}
+
+// ---------- enrichment: structured log trace IDs ----------
+
+#[test]
+fn structured_log_alarm_events_have_unique_trace_ids() {
+    let fixture = load_fixture();
+    let events = emit_structured_logs(&fixture);
+    let alarm_events: Vec<_> = events
+        .iter()
+        .filter(|e| e["event"].as_str() == Some("alarm_evaluated"))
+        .collect();
+    let mut trace_ids = BTreeSet::new();
+    for event in &alarm_events {
+        let trace_id = event["trace_id"].as_str().expect("trace_id must be string");
+        assert!(trace_ids.insert(trace_id), "duplicate trace_id: {trace_id}");
+    }
+}
+
+// ---------- enrichment: gate_decision event fields ----------
+
+#[test]
+fn gate_decision_event_carries_psrp_statuses() {
+    let fixture = load_fixture();
+    let events = emit_structured_logs(&fixture);
+    let gate_event = events
+        .iter()
+        .find(|e| e["event"].as_str() == Some("gate_decision"))
+        .expect("gate_decision event must exist");
+    assert!(gate_event.get("psrp_10_4_status").is_some());
+    assert!(gate_event.get("psrp_8_4_status").is_some());
+    assert!(gate_event.get("blockers").is_some());
+}
+
+// ---------- enrichment: all alarm_evaluated events have alarm_id ----------
+
+#[test]
+fn alarm_evaluated_events_carry_alarm_and_slo_ids() {
+    let fixture = load_fixture();
+    let events = emit_structured_logs(&fixture);
+    for event in &events {
+        if event["event"].as_str() == Some("alarm_evaluated") {
+            assert!(
+                event["alarm_id"].as_str().is_some(),
+                "alarm_evaluated must carry alarm_id"
+            );
+            assert!(
+                event["slo_id"].as_str().is_some(),
+                "alarm_evaluated must carry slo_id"
+            );
+            assert!(
+                event["severity"].as_str().is_some(),
+                "alarm_evaluated must carry severity"
+            );
+        }
+    }
+}
+
+// ---------- enrichment: breach events carry error_code ----------
+
+#[test]
+fn breach_events_carry_error_code_ok_events_carry_null() {
+    let fixture = load_fixture();
+    let events = emit_structured_logs(&fixture);
+    for event in &events {
+        if event["event"].as_str() != Some("alarm_evaluated") {
+            continue;
+        }
+        if event["outcome"].as_str() == Some("breach") {
+            assert!(
+                !event["error_code"].is_null(),
+                "breach event must carry error_code"
+            );
+        } else if event["outcome"].as_str() == Some("ok") {
+            assert!(
+                event["error_code"].is_null(),
+                "ok event must have null error_code"
+            );
+        }
+    }
+}
+
+// ---------- enrichment: fixture file consistency ----------
+
+#[test]
+fn fixture_alarm_slo_ids_are_nonempty() {
+    let fixture = load_fixture();
+    for policy in &fixture.alarm_policies {
+        assert!(
+            !policy.slo_id.trim().is_empty(),
+            "alarm {} has empty slo_id",
+            policy.alarm_id
+        );
+    }
+}
+
+#[test]
+fn fixture_metric_keys_are_nonempty() {
+    let fixture = load_fixture();
+    for policy in &fixture.alarm_policies {
+        assert!(
+            !policy.metric_key.trim().is_empty(),
+            "alarm {} has empty metric_key",
+            policy.alarm_id
+        );
+    }
+}

@@ -716,3 +716,305 @@ fn deferred_decision_without_sandbox_when_config_disabled() {
         other => panic!("expected deferred, got {other:?}"),
     }
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: Display impls, remaining variants, Default,
+// error serde, queue_id monotonicity, transition receipt serde,
+// event field completeness
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn attestation_health_display_values_are_distinct() {
+    let all = [
+        AttestationHealth::Valid,
+        AttestationHealth::VerificationFailed,
+        AttestationHealth::EvidenceExpired,
+        AttestationHealth::EvidenceUnavailable,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for h in &all {
+        let s = h.to_string();
+        assert!(!s.is_empty(), "{h:?} Display is empty");
+        assert!(seen.insert(s.clone()), "duplicate Display: {s}");
+    }
+}
+
+#[test]
+fn attestation_fallback_state_display_values_are_distinct() {
+    let all = [
+        AttestationFallbackState::Normal,
+        AttestationFallbackState::Degraded,
+        AttestationFallbackState::Restoring,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for s in &all {
+        let display = s.to_string();
+        assert!(!display.is_empty());
+        assert!(seen.insert(display.clone()), "duplicate Display: {display}");
+    }
+}
+
+#[test]
+fn action_tier_display_values_are_distinct() {
+    let all = [
+        ActionTier::HighImpact,
+        ActionTier::Standard,
+        ActionTier::LowImpact,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for t in &all {
+        let display = t.to_string();
+        assert!(!display.is_empty());
+        assert!(seen.insert(display.clone()), "duplicate Display: {display}");
+    }
+}
+
+#[test]
+fn autonomous_action_display_values_are_distinct() {
+    let all = [
+        AutonomousAction::Quarantine,
+        AutonomousAction::Terminate,
+        AutonomousAction::EmergencyGrant,
+        AutonomousAction::PolicyPromotion,
+        AutonomousAction::CapabilityEscalation,
+        AutonomousAction::RoutineMonitoring,
+        AutonomousAction::EvidenceCollection,
+        AutonomousAction::MetricsEmission,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for a in &all {
+        let display = a.to_string();
+        assert!(!display.is_empty());
+        assert!(seen.insert(display.clone()), "duplicate Display: {display}");
+    }
+}
+
+#[test]
+fn autonomous_action_serde_all_eight_variants() {
+    let all = [
+        AutonomousAction::Quarantine,
+        AutonomousAction::Terminate,
+        AutonomousAction::EmergencyGrant,
+        AutonomousAction::PolicyPromotion,
+        AutonomousAction::CapabilityEscalation,
+        AutonomousAction::RoutineMonitoring,
+        AutonomousAction::EvidenceCollection,
+        AutonomousAction::MetricsEmission,
+    ];
+    for action in &all {
+        let json = serde_json::to_string(action).expect("serialize");
+        let recovered: AutonomousAction = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(&recovered, action);
+    }
+}
+
+#[test]
+fn autonomous_action_default_tiers_all_variants() {
+    assert_eq!(
+        AutonomousAction::EmergencyGrant.default_tier(),
+        ActionTier::HighImpact
+    );
+    assert_eq!(
+        AutonomousAction::CapabilityEscalation.default_tier(),
+        ActionTier::HighImpact
+    );
+    assert_eq!(
+        AutonomousAction::EvidenceCollection.default_tier(),
+        ActionTier::Standard
+    );
+}
+
+#[test]
+fn attestation_fallback_state_default_is_normal() {
+    let state = AttestationFallbackState::default();
+    assert_eq!(state, AttestationFallbackState::Normal);
+}
+
+#[test]
+fn attestation_fallback_config_default_values() {
+    let config = AttestationFallbackConfig::default();
+    assert_eq!(config.unavailable_timeout_ns, 300_000_000_000);
+    assert!(config.challenge_on_fallback);
+    assert!(config.sandbox_on_fallback);
+}
+
+#[test]
+fn attestation_fallback_error_serde_roundtrip() {
+    let err = AttestationFallbackError::SignatureFailure {
+        detail: "invalid ed25519 signature".to_string(),
+    };
+    let json = serde_json::to_string(&err).expect("serialize");
+    let recovered: AttestationFallbackError = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(err, recovered);
+}
+
+#[test]
+fn queue_ids_increment_monotonically() {
+    let mut mgr = mk_manager(1_000);
+    for i in 0..4 {
+        let req = mk_request(
+            &format!("trace-qid-{i}"),
+            &format!("decision-qid-{i}"),
+            "policy-qid",
+            AutonomousAction::Terminate,
+            ActionTier::HighImpact,
+            100 + i as u64,
+        );
+        mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
+            .expect("decision");
+    }
+    let pending = mgr.pending_decisions();
+    assert_eq!(pending.len(), 4);
+    for i in 1..pending.len() {
+        assert!(
+            pending[i].queue_id > pending[i - 1].queue_id,
+            "queue_id must be monotonically increasing"
+        );
+    }
+}
+
+#[test]
+fn transition_receipt_serde_roundtrip() {
+    let mut mgr = mk_manager(1_000);
+    let req = mk_request(
+        "trace-receipt-serde",
+        "decision-receipt-serde",
+        "policy-receipt-serde",
+        AutonomousAction::Terminate,
+        ActionTier::HighImpact,
+        100,
+    );
+    mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
+        .expect("decision");
+
+    let receipt = &mgr.transition_receipts()[0];
+    let json = serde_json::to_string(receipt).expect("serialize receipt");
+    assert!(!json.is_empty());
+    // Verify key fields in JSON
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert!(value.get("from_state").is_some());
+    assert!(value.get("to_state").is_some());
+    assert!(value.get("reason").is_some());
+    assert!(value.get("trace_id").is_some());
+}
+
+#[test]
+fn event_fields_populated_after_degraded_action() {
+    let mut mgr = mk_manager(1_000);
+    let req = mk_request(
+        "trace-evt-fields",
+        "decision-evt-fields",
+        "policy-evt-fields",
+        AutonomousAction::Terminate,
+        ActionTier::HighImpact,
+        999,
+    );
+    mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
+        .expect("decision");
+
+    let events = mgr.events();
+    assert!(!events.is_empty());
+    for event in events {
+        assert_eq!(event.component, "attestation_safe_mode");
+        assert!(!event.trace_id.is_empty());
+        assert!(!event.decision_id.is_empty());
+        assert!(!event.policy_id.is_empty());
+        assert!(!event.event.is_empty());
+        assert!(!event.outcome.is_empty());
+    }
+}
+
+#[test]
+fn emergency_grant_high_impact_is_deferred_in_degraded() {
+    let mut mgr = mk_manager(1_000);
+    let req = mk_request(
+        "trace-emergency",
+        "decision-emergency",
+        "policy-emergency",
+        AutonomousAction::EmergencyGrant,
+        ActionTier::HighImpact,
+        100,
+    );
+    let decision = mgr
+        .evaluate_action(req, AttestationHealth::EvidenceUnavailable)
+        .expect("decision");
+    assert!(matches!(
+        decision,
+        AttestationFallbackDecision::Deferred { .. }
+    ));
+}
+
+#[test]
+fn capability_escalation_deferred_in_degraded() {
+    let mut mgr = mk_manager(1_000);
+    let req = mk_request(
+        "trace-cap-esc",
+        "decision-cap-esc",
+        "policy-cap-esc",
+        AutonomousAction::CapabilityEscalation,
+        ActionTier::HighImpact,
+        100,
+    );
+    let decision = mgr
+        .evaluate_action(req, AttestationHealth::VerificationFailed)
+        .expect("decision");
+    assert!(matches!(
+        decision,
+        AttestationFallbackDecision::Deferred { .. }
+    ));
+}
+
+#[test]
+fn evidence_collection_standard_continues_with_warning_in_degraded() {
+    let mut mgr = mk_manager(1_000);
+    let req = mk_request(
+        "trace-evidence",
+        "decision-evidence",
+        "policy-evidence",
+        AutonomousAction::EvidenceCollection,
+        ActionTier::Standard,
+        100,
+    );
+    let decision = mgr
+        .evaluate_action(req, AttestationHealth::EvidenceExpired)
+        .expect("decision");
+    match decision {
+        AttestationFallbackDecision::Execute {
+            attestation_status,
+            warning,
+        } => {
+            assert_eq!(attestation_status, "degraded");
+            assert!(warning.is_some());
+        }
+        other => panic!("expected execute with warning, got {other:?}"),
+    }
+}
+
+#[test]
+fn attestation_health_ordering_valid_is_smallest() {
+    assert!(AttestationHealth::Valid < AttestationHealth::VerificationFailed);
+    assert!(AttestationHealth::Valid < AttestationHealth::EvidenceExpired);
+    assert!(AttestationHealth::Valid < AttestationHealth::EvidenceUnavailable);
+}
+
+#[test]
+fn queued_decision_serde_roundtrip() {
+    let mut mgr = mk_manager(1_000);
+    let req = mk_request(
+        "trace-qd-serde",
+        "decision-qd-serde",
+        "policy-qd-serde",
+        AutonomousAction::Terminate,
+        ActionTier::HighImpact,
+        777,
+    );
+    mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
+        .expect("decision");
+    let queued = &mgr.pending_decisions()[0];
+    let json = serde_json::to_string(queued).expect("serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(value["trace_id"].as_str(), Some("trace-qd-serde"));
+    assert_eq!(value["decision_id"].as_str(), Some("decision-qd-serde"));
+    assert_eq!(value["queued_at_ns"].as_u64(), Some(777));
+    assert_eq!(value["status"].as_str(), Some("attestation-pending"));
+}

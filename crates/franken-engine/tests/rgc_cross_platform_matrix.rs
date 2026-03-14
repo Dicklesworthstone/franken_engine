@@ -772,3 +772,221 @@ fn rgc_063_normalize_platform_path_windows_drive_letter_lowercased() {
         "d:/projects/franken"
     );
 }
+
+// ---------- enrichment batch: clone/debug, serde round-trips, edge cases ----------
+
+#[test]
+fn rgc_063_cross_platform_matrix_contract_clone_equals_original() {
+    let contract = parse_contract();
+    let cloned = contract.clone();
+    assert_eq!(contract, cloned);
+}
+
+#[test]
+fn rgc_063_cross_platform_matrix_contract_debug_is_nonempty() {
+    let contract = parse_contract();
+    let debug_str = format!("{:?}", contract);
+    assert!(!debug_str.is_empty());
+    assert!(debug_str.contains("CrossPlatformMatrixContract"));
+}
+
+#[test]
+fn rgc_063_target_spec_clone_preserves_all_fields() {
+    let contract = parse_contract();
+    for target in &contract.targets {
+        let cloned = target.clone();
+        assert_eq!(target.target_id, cloned.target_id);
+        assert_eq!(target.os, cloned.os);
+        assert_eq!(target.arch, cloned.arch);
+        assert_eq!(target.tier, cloned.tier);
+        assert_eq!(target.required, cloned.required);
+        assert_eq!(target.path_style, cloned.path_style);
+        assert_eq!(target.line_endings, cloned.line_endings);
+        assert_eq!(target.manifest_env_var, cloned.manifest_env_var);
+        assert_eq!(target.replay_command, cloned.replay_command);
+    }
+}
+
+#[test]
+fn rgc_063_drift_class_debug_contains_class_id() {
+    let contract = parse_contract();
+    for dc in &contract.drift_classes {
+        let debug_str = format!("{:?}", dc);
+        assert!(
+            debug_str.contains(&dc.class_id),
+            "Debug output for DriftClass should contain class_id"
+        );
+    }
+}
+
+#[test]
+fn rgc_063_gate_runner_clone_equals_original() {
+    let contract = parse_contract();
+    let cloned = contract.gate_runner.clone();
+    assert_eq!(contract.gate_runner, cloned);
+}
+
+#[test]
+fn rgc_063_target_run_summary_debug_contains_outcome() {
+    let summary = TargetRunSummary {
+        outcome: "pass".to_string(),
+        error_code: None,
+        witness_digest: "sha256:abc".to_string(),
+        toolchain_fingerprint: "fp-test".to_string(),
+        normalized_runtime_digest: "sha256:rt".to_string(),
+        normalized_cli_digest: "sha256:cli".to_string(),
+    };
+    let debug_str = format!("{:?}", summary);
+    assert!(debug_str.contains("pass"));
+    assert!(debug_str.contains("TargetRunSummary"));
+}
+
+#[test]
+fn rgc_063_drift_explanation_clone_and_eq() {
+    let explanation = DriftExplanation {
+        class_id: "artifact_only_drift".to_string(),
+        severity: "warning".to_string(),
+    };
+    let cloned = explanation.clone();
+    assert_eq!(explanation, cloned);
+    assert_eq!(explanation.class_id, "artifact_only_drift");
+    assert_eq!(explanation.severity, "warning");
+}
+
+#[test]
+fn rgc_063_normalize_platform_path_preserves_relative_paths() {
+    assert_eq!(
+        normalize_platform_path("relative/path/to/file.json"),
+        "relative/path/to/file.json"
+    );
+    assert_eq!(
+        normalize_platform_path("relative\\path\\to\\file.json"),
+        "relative/path/to/file.json"
+    );
+}
+
+#[test]
+fn rgc_063_normalize_platform_path_single_char_non_drive() {
+    // Single char that is NOT followed by colon should not be treated as drive letter
+    assert_eq!(normalize_platform_path("a/b/c"), "a/b/c");
+}
+
+#[test]
+fn rgc_063_normalize_line_endings_mixed_crlf_and_cr() {
+    // Mix of \r\n and standalone \r in one string
+    let input = "first\r\nsecond\rthird\r\nfourth";
+    let result = normalize_line_endings(input);
+    assert_eq!(result, "first\nsecond\nthird\nfourth");
+    // Ensure no \r remains
+    assert!(!result.contains('\r'));
+}
+
+#[test]
+fn rgc_063_normalize_line_endings_only_crlf() {
+    assert_eq!(normalize_line_endings("\r\n\r\n\r\n"), "\n\n\n");
+}
+
+#[test]
+fn rgc_063_drift_classifier_missing_input_takes_priority_over_outcome_drift() {
+    // Even if outcomes differ, missing-input witness should classify as missing_target_input
+    let baseline = TargetRunSummary {
+        outcome: "pass".to_string(),
+        error_code: None,
+        witness_digest: "sha256:baseline".to_string(),
+        toolchain_fingerprint: "fp-base".to_string(),
+        normalized_runtime_digest: "sha256:rt".to_string(),
+        normalized_cli_digest: "sha256:cli".to_string(),
+    };
+    let target = TargetRunSummary {
+        outcome: "fail".to_string(),
+        error_code: Some("ERR-999".to_string()),
+        witness_digest: "missing-input".to_string(),
+        toolchain_fingerprint: "fp-different".to_string(),
+        normalized_runtime_digest: "sha256:rt-other".to_string(),
+        normalized_cli_digest: "sha256:cli-other".to_string(),
+    };
+    let result = classify_drift(&baseline, &target);
+    assert_eq!(result.class_id, "missing_target_input");
+    assert_eq!(result.severity, "critical");
+}
+
+#[test]
+fn rgc_063_drift_classifier_error_code_mismatch_is_behavior_drift() {
+    let baseline = TargetRunSummary {
+        outcome: "pass".to_string(),
+        error_code: None,
+        witness_digest: "sha256:base".to_string(),
+        toolchain_fingerprint: "fp".to_string(),
+        normalized_runtime_digest: "sha256:rt".to_string(),
+        normalized_cli_digest: "sha256:cli".to_string(),
+    };
+    let target = TargetRunSummary {
+        outcome: "pass".to_string(),
+        error_code: Some("FE-0042".to_string()),
+        witness_digest: "sha256:other".to_string(),
+        toolchain_fingerprint: "fp".to_string(),
+        normalized_runtime_digest: "sha256:rt".to_string(),
+        normalized_cli_digest: "sha256:cli".to_string(),
+    };
+    let result = classify_drift(&baseline, &target);
+    assert_eq!(result.class_id, "workflow_behavior_drift");
+    assert_eq!(result.severity, "critical");
+}
+
+#[test]
+fn rgc_063_target_id_format_is_os_dash_arch() {
+    let contract = parse_contract();
+    for target in &contract.targets {
+        let expected_id = format!("{}-{}", target.os, target.arch);
+        assert_eq!(
+            target.target_id, expected_id,
+            "target_id '{}' does not match expected os-arch format '{}'",
+            target.target_id, expected_id
+        );
+    }
+}
+
+#[test]
+fn rgc_063_manifest_env_vars_are_unique_across_targets() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for target in &contract.targets {
+        assert!(
+            seen.insert(&target.manifest_env_var),
+            "duplicate manifest_env_var: {}",
+            target.manifest_env_var
+        );
+    }
+}
+
+#[test]
+fn rgc_063_contract_deserialization_rejects_missing_required_field() {
+    // Remove a required field and verify deserialization fails
+    let bad_json = r#"{"schema_version":"v1","contract_version":"1.0.0","bead_id":"bd-test","policy_id":"pol-test","required_log_keys":[],"required_artifacts":[],"targets":[],"drift_classes":[],"operator_verification":[]}"#;
+    // This should fail because gate_runner is missing
+    let result: Result<CrossPlatformMatrixContract, _> = serde_json::from_str(bad_json);
+    assert!(
+        result.is_err(),
+        "deserialization should fail when gate_runner field is missing"
+    );
+}
+
+#[test]
+fn rgc_063_at_least_one_critical_drift_class_exists() {
+    let contract = parse_contract();
+    let critical_count = contract
+        .drift_classes
+        .iter()
+        .filter(|dc| dc.severity == "critical")
+        .count();
+    assert!(
+        critical_count >= 1,
+        "contract must have at least one critical drift class"
+    );
+}
+
+#[test]
+fn rgc_063_normalize_platform_path_trailing_slash_preserved() {
+    assert_eq!(normalize_platform_path("/tmp/franken/"), "/tmp/franken/");
+    assert_eq!(normalize_platform_path("C:\\franken\\"), "c:/franken/");
+}

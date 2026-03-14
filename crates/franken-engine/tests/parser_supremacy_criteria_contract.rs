@@ -809,3 +809,238 @@ fn supremacy_fixture_minimum_weighted_score_is_reasonable() {
     assert!(fixture.gating_policy.minimum_weighted_score_millionths > 0);
     assert!(fixture.gating_policy.minimum_weighted_score_millionths <= 1_000_000);
 }
+
+// ---------- enrichment: structural, serde, determinism, doc validation ----------
+
+#[test]
+fn supremacy_doc_has_no_todo_or_fixme_markers() {
+    let doc = load_doc();
+    let lower = doc.to_lowercase();
+    assert!(
+        !lower.contains("todo"),
+        "supremacy criteria doc must not contain TODO markers"
+    );
+    assert!(
+        !lower.contains("fixme"),
+        "supremacy criteria doc must not contain FIXME markers"
+    );
+}
+
+#[test]
+fn supremacy_doc_heading_count_matches_expected() {
+    let doc = load_doc();
+    let heading_count = doc.lines().filter(|line| line.starts_with('#')).count();
+    // The doc has 1 title + 8 subsections = 9 headings
+    assert!(
+        heading_count >= 9,
+        "supremacy criteria doc should have at least 9 headings, found {heading_count}"
+    );
+}
+
+#[test]
+fn supremacy_doc_cross_references_fixture_schema_version() {
+    let doc = load_doc();
+    let fixture = load_fixture();
+    assert!(
+        doc.contains(&fixture.schema_version),
+        "doc must reference the fixture schema_version `{}`",
+        fixture.schema_version
+    );
+    assert!(
+        doc.contains(&fixture.criteria_version),
+        "doc must reference the fixture criteria_version `{}`",
+        fixture.criteria_version
+    );
+    assert!(
+        doc.contains(&fixture.log_schema_version),
+        "doc must reference the fixture log_schema_version `{}`",
+        fixture.log_schema_version
+    );
+}
+
+#[test]
+fn supremacy_doc_references_all_rule_fields() {
+    let doc = load_doc();
+    for field in [
+        "rule_id",
+        "rule_class",
+        "description",
+        "minimum_millionths",
+        "weight_millionths",
+    ] {
+        assert!(
+            doc.contains(field),
+            "doc must reference rule field `{field}`"
+        );
+    }
+}
+
+#[test]
+fn supremacy_fixture_rule_definitions_field_count() {
+    let fixture = load_fixture();
+    assert_eq!(
+        fixture.rule_definitions.len(),
+        6,
+        "fixture must have exactly 6 rule definitions (one per rule class)"
+    );
+}
+
+#[test]
+fn supremacy_fixture_changelog_versions_are_semver_like() {
+    let fixture = load_fixture();
+    for entry in &fixture.criteria_changelog {
+        let parts: Vec<&str> = entry.version.split('.').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "changelog version `{}` must be semver-like (X.Y.Z)",
+            entry.version
+        );
+        for part in &parts {
+            assert!(
+                part.parse::<u32>().is_ok(),
+                "changelog version component `{part}` in `{}` must be numeric",
+                entry.version
+            );
+        }
+    }
+}
+
+#[test]
+fn supremacy_fixture_changelog_timestamps_contain_utc_marker() {
+    let fixture = load_fixture();
+    for entry in &fixture.criteria_changelog {
+        assert!(
+            entry.changed_at_utc.ends_with('Z') || entry.changed_at_utc.contains("UTC"),
+            "changelog timestamp `{}` must indicate UTC",
+            entry.changed_at_utc
+        );
+    }
+}
+
+#[test]
+fn supremacy_fixture_json_roundtrip_is_stable() {
+    let path = Path::new("tests/fixtures/parser_supremacy_criteria_contract_v1.json");
+    let raw_bytes = fs::read(path).expect("read fixture");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&raw_bytes).expect("parse fixture as Value");
+    let serialized = serde_json::to_string_pretty(&parsed).expect("re-serialize");
+    let reparsed: serde_json::Value =
+        serde_json::from_str(&serialized).expect("re-parse serialized");
+    assert_eq!(parsed, reparsed, "JSON serde roundtrip must be stable");
+}
+
+#[test]
+fn supremacy_gate_event_serde_roundtrip() {
+    let fixture = load_fixture();
+    let events = simulate_gate_events(&fixture);
+    for event in &events {
+        let json_str = serde_json::to_string(event).expect("serialize gate event");
+        let value: serde_json::Value =
+            serde_json::from_str(&json_str).expect("deserialize gate event JSON");
+        let obj = value.as_object().expect("gate event must be object");
+        // Verify all expected keys survive the roundtrip
+        for key in [
+            "schema_version",
+            "run_id",
+            "criteria_version",
+            "git_sha",
+            "artifact_bundle_id",
+            "verdict",
+            "replay_command",
+            "component",
+            "event",
+            "outcome",
+            "error_code",
+        ] {
+            assert!(
+                obj.contains_key(key),
+                "gate event missing key `{key}` after serde roundtrip"
+            );
+        }
+    }
+}
+
+#[test]
+fn supremacy_evaluation_result_clone_independence() {
+    let fixture = load_fixture();
+    let bundle = &fixture.artifact_bundles[0];
+    let result = evaluate_bundle(&fixture, bundle);
+    let mut cloned = result.clone();
+    cloned.weighted_score_millionths = 0;
+    // Original must be unaffected
+    assert_ne!(
+        result.weighted_score_millionths, cloned.weighted_score_millionths,
+        "clone must be independent of original"
+    );
+}
+
+#[test]
+fn supremacy_fixture_deterministic_double_load() {
+    let a = load_fixture();
+    let b = load_fixture();
+    assert_eq!(a.schema_version, b.schema_version);
+    assert_eq!(a.criteria_version, b.criteria_version);
+    assert_eq!(a.rule_definitions.len(), b.rule_definitions.len());
+    assert_eq!(a.artifact_bundles.len(), b.artifact_bundles.len());
+    for (ra, rb) in a.rule_definitions.iter().zip(b.rule_definitions.iter()) {
+        assert_eq!(ra.rule_id, rb.rule_id);
+        assert_eq!(ra.weight_millionths, rb.weight_millionths);
+    }
+}
+
+#[test]
+fn supremacy_fixture_all_minimums_nonzero() {
+    let fixture = load_fixture();
+    for rule in &fixture.rule_definitions {
+        assert!(
+            rule.minimum_millionths > 0,
+            "rule `{}` must have a nonzero minimum",
+            rule.rule_id
+        );
+    }
+}
+
+#[test]
+fn supremacy_fixture_each_rule_class_appears_once() {
+    let fixture = load_fixture();
+    let mut class_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for rule in &fixture.rule_definitions {
+        *class_counts.entry(rule.rule_class.clone()).or_insert(0) += 1;
+    }
+    for (class, count) in &class_counts {
+        assert_eq!(
+            *count, 1,
+            "rule class `{class}` must appear exactly once, found {count}"
+        );
+    }
+}
+
+#[test]
+fn supremacy_gate_events_component_and_event_fields_consistent() {
+    let fixture = load_fixture();
+    let events = simulate_gate_events(&fixture);
+    for event in &events {
+        assert_eq!(
+            event.component, "parser_supremacy_criteria_gate",
+            "component must be parser_supremacy_criteria_gate"
+        );
+        assert_eq!(
+            event.event, "criteria_evaluated",
+            "event must be criteria_evaluated"
+        );
+        assert_eq!(event.outcome, event.verdict, "outcome must match verdict");
+    }
+}
+
+#[test]
+fn supremacy_doc_references_all_hard_fail_classes() {
+    let doc = load_doc();
+    let fixture = load_fixture();
+    for class in &fixture.gating_policy.hard_fail_classes {
+        assert!(
+            doc.contains(class.as_str()),
+            "doc must reference hard-fail class `{class}`"
+        );
+    }
+}

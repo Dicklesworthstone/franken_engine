@@ -622,3 +622,587 @@ fn generate_case_all_nine_variants_reachable() {
         variants_seen.len()
     );
 }
+
+// ---------- serde roundtrip: ParseErrorCode ----------
+
+#[test]
+fn parse_error_code_serde_roundtrip_all_variants() {
+    use frankenengine_engine::parser::ParseErrorCode;
+    for code in ParseErrorCode::ALL {
+        let json = serde_json::to_string(&code).expect("serialize");
+        let back: ParseErrorCode = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(code, back, "roundtrip failed for {:?}", code);
+    }
+}
+
+// ---------- serde roundtrip: ParseBudgetKind ----------
+
+#[test]
+fn parse_budget_kind_serde_roundtrip_all_variants() {
+    let variants = [
+        ParseBudgetKind::SourceBytes,
+        ParseBudgetKind::TokenCount,
+        ParseBudgetKind::RecursionDepth,
+    ];
+    for kind in variants {
+        let json = serde_json::to_string(&kind).expect("serialize");
+        let back: ParseBudgetKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(kind, back, "roundtrip failed for {:?}", kind);
+    }
+}
+
+// ---------- serde roundtrip: ParserMode ----------
+
+#[test]
+fn parser_mode_serde_roundtrip() {
+    let mode = ParserMode::ScalarReference;
+    let json = serde_json::to_string(&mode).expect("serialize");
+    let back: ParserMode = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(mode, back);
+}
+
+// ---------- serde roundtrip: ParserBudget ----------
+
+#[test]
+fn parser_budget_serde_roundtrip() {
+    let budget = ParserBudget {
+        max_source_bytes: 999,
+        max_token_count: 1234,
+        max_recursion_depth: 55,
+    };
+    let json = serde_json::to_string(&budget).expect("serialize");
+    let back: ParserBudget = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(budget, back);
+}
+
+// ---------- serde roundtrip: ParserOptions ----------
+
+#[test]
+fn parser_options_serde_roundtrip() {
+    let opts = ParserOptions {
+        mode: ParserMode::ScalarReference,
+        budget: ParserBudget {
+            max_source_bytes: 512,
+            max_token_count: 256,
+            max_recursion_depth: 10,
+        },
+    };
+    let json = serde_json::to_string(&opts).expect("serialize");
+    let back: ParserOptions = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(opts, back);
+}
+
+// ---------- Default impls ----------
+
+#[test]
+fn parser_budget_default_has_positive_limits() {
+    let budget = ParserBudget::default();
+    assert!(budget.max_source_bytes > 0);
+    assert!(budget.max_token_count > 0);
+    assert!(budget.max_recursion_depth > 0);
+}
+
+#[test]
+fn parser_options_default_is_scalar_reference() {
+    let opts = ParserOptions::default();
+    assert_eq!(opts.mode, ParserMode::ScalarReference);
+    assert_eq!(opts.budget, ParserBudget::default());
+}
+
+// ---------- Debug / Clone ----------
+
+#[test]
+fn parse_error_code_debug_is_nonempty() {
+    use frankenengine_engine::parser::ParseErrorCode;
+    for code in ParseErrorCode::ALL {
+        let dbg = format!("{:?}", code);
+        assert!(!dbg.is_empty(), "Debug for {:?} must be nonempty", code);
+    }
+}
+
+#[test]
+fn parser_budget_clone_equals_original() {
+    let budget = ParserBudget {
+        max_source_bytes: 42,
+        max_token_count: 43,
+        max_recursion_depth: 44,
+    };
+    let cloned = budget.clone();
+    assert_eq!(budget, cloned);
+}
+
+// ---------- as_str stability ----------
+
+#[test]
+fn parse_error_code_as_str_is_nonempty_and_snake_case() {
+    use frankenengine_engine::parser::ParseErrorCode;
+    for code in ParseErrorCode::ALL {
+        let s = code.as_str();
+        assert!(!s.is_empty());
+        assert!(
+            s.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "as_str should be snake_case, got {s}"
+        );
+    }
+}
+
+#[test]
+fn parse_budget_kind_as_str_is_nonempty_and_snake_case() {
+    let variants = [
+        ParseBudgetKind::SourceBytes,
+        ParseBudgetKind::TokenCount,
+        ParseBudgetKind::RecursionDepth,
+    ];
+    for kind in variants {
+        let s = kind.as_str();
+        assert!(!s.is_empty());
+        assert!(
+            s.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "as_str should be snake_case, got {s}"
+        );
+    }
+}
+
+// ---------- stable_diagnostic_code ----------
+
+#[test]
+fn stable_diagnostic_code_starts_with_fe_parser_diag() {
+    use frankenengine_engine::parser::ParseErrorCode;
+    for code in ParseErrorCode::ALL {
+        let diag = code.stable_diagnostic_code();
+        assert!(
+            diag.starts_with("FE-PARSER-DIAG-"),
+            "stable_diagnostic_code for {:?} should start with FE-PARSER-DIAG-, got {diag}",
+            code
+        );
+    }
+}
+
+#[test]
+fn all_diagnostic_codes_are_unique() {
+    use frankenengine_engine::parser::ParseErrorCode;
+    let mut seen = std::collections::BTreeSet::new();
+    for code in ParseErrorCode::ALL {
+        let diag = code.stable_diagnostic_code();
+        assert!(
+            seen.insert(diag),
+            "duplicate stable_diagnostic_code: {diag}"
+        );
+    }
+}
+
+// ---------- diagnostic_category / severity ----------
+
+#[test]
+fn diagnostic_category_covers_all_error_codes() {
+    use frankenengine_engine::parser::{ParseDiagnosticCategory, ParseErrorCode};
+    for code in ParseErrorCode::ALL {
+        let cat = code.diagnostic_category();
+        let cat_str = cat.as_str();
+        assert!(!cat_str.is_empty());
+        // Verify known category set
+        assert!(
+            matches!(
+                cat,
+                ParseDiagnosticCategory::Input
+                    | ParseDiagnosticCategory::Goal
+                    | ParseDiagnosticCategory::Syntax
+                    | ParseDiagnosticCategory::Encoding
+                    | ParseDiagnosticCategory::Resource
+                    | ParseDiagnosticCategory::System
+            ),
+            "unexpected category {:?} for {:?}",
+            cat,
+            code
+        );
+    }
+}
+
+#[test]
+fn diagnostic_severity_is_error_or_fatal_for_all_codes() {
+    use frankenengine_engine::parser::{ParseDiagnosticSeverity, ParseErrorCode};
+    for code in ParseErrorCode::ALL {
+        let sev = code.diagnostic_severity();
+        assert!(
+            matches!(
+                sev,
+                ParseDiagnosticSeverity::Error | ParseDiagnosticSeverity::Fatal
+            ),
+            "unexpected severity {:?} for {:?}",
+            sev,
+            code
+        );
+    }
+}
+
+// ---------- diagnostic_message_template ----------
+
+#[test]
+fn diagnostic_message_template_nonempty_for_all_codes() {
+    use frankenengine_engine::parser::ParseErrorCode;
+    for code in ParseErrorCode::ALL {
+        let msg = code.diagnostic_message_template(None);
+        assert!(!msg.is_empty(), "message template empty for {:?}", code);
+    }
+}
+
+#[test]
+fn budget_exceeded_message_template_varies_with_budget_kind() {
+    use frankenengine_engine::parser::ParseErrorCode;
+    let base = ParseErrorCode::BudgetExceeded.diagnostic_message_template(None);
+    let source = ParseErrorCode::BudgetExceeded
+        .diagnostic_message_template(Some(ParseBudgetKind::SourceBytes));
+    let token = ParseErrorCode::BudgetExceeded
+        .diagnostic_message_template(Some(ParseBudgetKind::TokenCount));
+    let recursion = ParseErrorCode::BudgetExceeded
+        .diagnostic_message_template(Some(ParseBudgetKind::RecursionDepth));
+    // All should be non-empty and all different
+    let msgs = [base, source, token, recursion];
+    for m in &msgs {
+        assert!(!m.is_empty());
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    for m in &msgs {
+        unique.insert(*m);
+    }
+    assert_eq!(
+        unique.len(),
+        4,
+        "all budget_kind variants should produce distinct messages"
+    );
+}
+
+// ---------- ParseError Display ----------
+
+#[test]
+fn parse_error_display_contains_code_and_message() {
+    let parser = CanonicalEs2020Parser;
+    let error = parser
+        .parse("", ParseGoal::Script)
+        .expect_err("empty source should fail");
+    let display = format!("{}", error);
+    assert!(
+        display.contains("EmptySource"),
+        "Display should contain code variant, got: {display}"
+    );
+}
+
+// ---------- ParseDiagnosticEnvelope serde roundtrip ----------
+
+#[test]
+fn parse_diagnostic_envelope_serde_roundtrip() {
+    let parser = CanonicalEs2020Parser;
+    let error = parser
+        .parse("", ParseGoal::Script)
+        .expect_err("empty source should fail");
+    let envelope = error.normalized_diagnostic();
+    let json = serde_json::to_string(&envelope).expect("serialize envelope");
+    let back: frankenengine_engine::parser::ParseDiagnosticEnvelope =
+        serde_json::from_str(&json).expect("deserialize envelope");
+    assert_eq!(envelope, back);
+}
+
+// ---------- ParseDiagnosticTaxonomy ----------
+
+#[test]
+fn parse_diagnostic_taxonomy_v1_covers_all_error_codes() {
+    use frankenengine_engine::parser::{ParseDiagnosticTaxonomy, ParseErrorCode};
+    let taxonomy = ParseDiagnosticTaxonomy::v1();
+    for code in ParseErrorCode::ALL {
+        let rule = taxonomy.rule_for(code);
+        assert!(
+            rule.is_some(),
+            "taxonomy v1 should have rule for {:?}",
+            code
+        );
+        let rule = rule.unwrap();
+        assert_eq!(rule.parse_error_code, code);
+        assert!(!rule.diagnostic_code.is_empty());
+        assert!(!rule.message_template.is_empty());
+    }
+}
+
+#[test]
+fn parse_diagnostic_taxonomy_serde_roundtrip() {
+    use frankenengine_engine::parser::ParseDiagnosticTaxonomy;
+    let taxonomy = ParseDiagnosticTaxonomy::v1();
+    let json = serde_json::to_string(&taxonomy).expect("serialize");
+    let back: ParseDiagnosticTaxonomy = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(taxonomy, back);
+}
+
+// ---------- GrammarCompletenessMatrix ----------
+
+#[test]
+fn grammar_completeness_matrix_serde_roundtrip() {
+    use frankenengine_engine::parser::GrammarCompletenessMatrix;
+    let matrix = GrammarCompletenessMatrix::scalar_reference_es2020();
+    let json = serde_json::to_string(&matrix).expect("serialize");
+    let back: GrammarCompletenessMatrix = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(matrix, back);
+}
+
+#[test]
+fn grammar_completeness_summary_has_positive_family_count() {
+    use frankenengine_engine::parser::GrammarCompletenessMatrix;
+    let matrix = GrammarCompletenessMatrix::scalar_reference_es2020();
+    let summary = matrix.summary();
+    assert!(summary.family_count > 0);
+    assert_eq!(
+        summary.family_count,
+        summary.supported_families
+            + summary.partially_supported_families
+            + summary.unsupported_families
+    );
+    assert!(summary.completeness_millionths <= 1_000_000);
+}
+
+// ---------- token budget exceeded ----------
+
+#[test]
+fn token_budget_exceeded_produces_correct_witness() {
+    let parser = CanonicalEs2020Parser;
+    let options = ParserOptions {
+        mode: ParserMode::ScalarReference,
+        budget: ParserBudget {
+            max_source_bytes: 65_536,
+            max_token_count: 1,
+            max_recursion_depth: 256,
+        },
+    };
+    let result = parser.parse_with_options("var x = 1; var y = 2;", ParseGoal::Script, &options);
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert_eq!(error.code, ParseErrorCode::BudgetExceeded);
+    let witness = error
+        .witness
+        .expect("budget failure should include witness");
+    assert_eq!(witness.budget_kind, Some(ParseBudgetKind::TokenCount));
+    assert_eq!(witness.mode, ParserMode::ScalarReference);
+}
+
+// ---------- ParseError serde roundtrip ----------
+
+#[test]
+fn parse_error_serde_roundtrip_without_witness() {
+    use frankenengine_engine::parser::ParseError;
+    let parser = CanonicalEs2020Parser;
+    let error = parser
+        .parse("", ParseGoal::Script)
+        .expect_err("should fail");
+    let json = serde_json::to_string(&error).expect("serialize");
+    let back: ParseError = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(error.code, back.code);
+    assert_eq!(error.message, back.message);
+}
+
+#[test]
+fn parse_error_serde_roundtrip_with_witness() {
+    use frankenengine_engine::parser::ParseError;
+    let parser = CanonicalEs2020Parser;
+    let options = ParserOptions {
+        mode: ParserMode::ScalarReference,
+        budget: ParserBudget {
+            max_source_bytes: 1,
+            max_token_count: 65_536,
+            max_recursion_depth: 256,
+        },
+    };
+    let error = parser
+        .parse_with_options("var x = 1;", ParseGoal::Script, &options)
+        .expect_err("should fail");
+    assert!(error.witness.is_some());
+    let json = serde_json::to_string(&error).expect("serialize");
+    let back: ParseError = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(error, back);
+}
+
+// ---------- ParseEventKind ----------
+
+#[test]
+fn parse_event_kind_as_str_is_nonempty() {
+    use frankenengine_engine::parser::ParseEventKind;
+    let kinds = [
+        ParseEventKind::ParseStarted,
+        ParseEventKind::StatementParsed,
+        ParseEventKind::ParseCompleted,
+        ParseEventKind::ParseFailed,
+    ];
+    for kind in kinds {
+        let s = kind.as_str();
+        assert!(!s.is_empty(), "as_str for {:?} must be nonempty", kind);
+    }
+}
+
+#[test]
+fn parse_event_kind_serde_roundtrip() {
+    use frankenengine_engine::parser::ParseEventKind;
+    let kinds = [
+        ParseEventKind::ParseStarted,
+        ParseEventKind::StatementParsed,
+        ParseEventKind::ParseCompleted,
+        ParseEventKind::ParseFailed,
+    ];
+    for kind in kinds {
+        let json = serde_json::to_string(&kind).expect("serialize");
+        let back: ParseEventKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(kind, back, "roundtrip failed for {:?}", kind);
+    }
+}
+
+// ---------- ParseDiagnosticEnvelope canonical hash stability ----------
+
+#[test]
+fn parse_diagnostic_envelope_canonical_hash_is_deterministic() {
+    let parser = CanonicalEs2020Parser;
+    let error = parser
+        .parse("", ParseGoal::Script)
+        .expect_err("should fail");
+    let envelope = error.normalized_diagnostic();
+    let hash_a = envelope.canonical_hash();
+    let hash_b = envelope.canonical_hash();
+    assert_eq!(hash_a, hash_b);
+    assert!(
+        hash_a.starts_with("sha256:"),
+        "hash should start with sha256: prefix"
+    );
+}
+
+// ---------- ParseFailureWitness serde roundtrip ----------
+
+#[test]
+fn parse_failure_witness_serde_roundtrip() {
+    use frankenengine_engine::parser::ParseFailureWitness;
+    let witness = ParseFailureWitness {
+        mode: ParserMode::ScalarReference,
+        budget_kind: Some(ParseBudgetKind::SourceBytes),
+        source_bytes: 100,
+        token_count: 50,
+        max_recursion_observed: 3,
+        max_source_bytes: 10,
+        max_token_count: 65_536,
+        max_recursion_depth: 256,
+    };
+    let json = serde_json::to_string(&witness).expect("serialize");
+    let back: ParseFailureWitness = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(witness, back);
+}
+
+// ---------- GrammarCoverageStatus serde roundtrip ----------
+
+#[test]
+fn grammar_coverage_status_serde_roundtrip_all_variants() {
+    use frankenengine_engine::parser::GrammarCoverageStatus;
+    let variants = [
+        GrammarCoverageStatus::Supported,
+        GrammarCoverageStatus::Partial,
+        GrammarCoverageStatus::Unsupported,
+        GrammarCoverageStatus::NotApplicable,
+    ];
+    for status in variants {
+        let json = serde_json::to_string(&status).expect("serialize");
+        let back: GrammarCoverageStatus = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(status, back, "roundtrip failed for {:?}", status);
+    }
+}
+
+// ---------- lcg boundary values ----------
+
+#[test]
+fn lcg_next_zero_seed_is_deterministic() {
+    let mut state = 0_u64;
+    let val = lcg_next(&mut state);
+    // LCG with state=0: 0*a + c = c
+    assert_eq!(val, 1442695040888963407);
+    assert_eq!(state, val);
+}
+
+#[test]
+fn lcg_next_max_seed_does_not_panic() {
+    let mut state = u64::MAX;
+    let val = lcg_next(&mut state);
+    // Should wrap around, not panic
+    assert_eq!(state, val);
+}
+
+// ---------- generate_identifier numeric suffix range ----------
+
+#[test]
+fn generate_identifier_suffix_is_numeric_and_bounded() {
+    for seed in 0_u64..64 {
+        let mut state = seed;
+        let ident = generate_identifier(&mut state);
+        assert!(ident.starts_with('v'));
+        let suffix: u64 = ident[1..].parse().expect("suffix should be numeric");
+        assert!(suffix < 10_000, "suffix should be < 10000, got {suffix}");
+    }
+}
+
+// ---------- failure_context schema_version field ----------
+
+#[test]
+fn failure_context_has_stable_schema_version() {
+    let ctx = failure_context("test_fn", 123, ParseGoal::Module, "export default 1");
+    let parsed: serde_json::Value = serde_json::from_str(&ctx).expect("valid json");
+    assert_eq!(
+        parsed["schema_version"],
+        "franken-engine.parser-test-failure.v1"
+    );
+    assert_eq!(parsed["event"], "assertion_failure_context");
+}
+
+// ---------- semantic_signature variable_decl ----------
+
+#[test]
+fn semantic_signature_variable_decl_tag() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse("var x = 1;", ParseGoal::Script)
+        .expect("parse");
+    let sig = semantic_signature(&tree);
+    assert!(
+        sig.iter().any(|s| s == "variable_decl"),
+        "should contain variable_decl tag, got: {:?}",
+        sig
+    );
+}
+
+// ---------- ParseEventIr constants ----------
+
+#[test]
+fn parse_event_ir_version_constants_are_nonempty() {
+    use frankenengine_engine::parser::ParseEventIr;
+    assert!(!ParseEventIr::contract_version().is_empty());
+    assert!(!ParseEventIr::schema_version().is_empty());
+    assert!(!ParseEventIr::canonical_hash_algorithm().is_empty());
+    assert!(!ParseEventIr::canonical_hash_prefix().is_empty());
+}
+
+// ---------- ParseDiagnosticEnvelope constants ----------
+
+#[test]
+fn parse_diagnostic_envelope_version_constants_are_nonempty() {
+    use frankenengine_engine::parser::ParseDiagnosticEnvelope;
+    assert!(!ParseDiagnosticEnvelope::schema_version().is_empty());
+    assert!(!ParseDiagnosticEnvelope::taxonomy_version().is_empty());
+    assert!(!ParseDiagnosticEnvelope::canonical_hash_algorithm().is_empty());
+    assert!(!ParseDiagnosticEnvelope::canonical_hash_prefix().is_empty());
+}
+
+// ---------- generated_case clone / debug ----------
+
+#[test]
+fn generated_case_clone_preserves_fields() {
+    let case = generate_case(77);
+    let cloned = case.clone();
+    assert_eq!(case.source, cloned.source);
+    assert_eq!(case.goal, cloned.goal);
+}
+
+#[test]
+fn generated_case_debug_is_nonempty() {
+    let case = generate_case(0);
+    let dbg = format!("{:?}", case);
+    assert!(!dbg.is_empty());
+    assert!(dbg.contains("GeneratedCase"));
+}

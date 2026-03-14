@@ -819,3 +819,650 @@ fn ifc_release_gate_metrics_corpus_size_meets_minimum_thresholds() {
         decision.metrics.declassify_total
     );
 }
+
+// ---------- IfcReleaseGateMetrics clone/debug/eq ----------
+
+#[test]
+fn ifc_release_gate_metrics_clone_preserves_equality() {
+    let metrics = IfcReleaseGateMetrics {
+        benign_total: 150,
+        exfil_total: 90,
+        declassify_total: 40,
+        false_positive_count: 2,
+        unauthorized_exfil_success_count: 1,
+        direct_indirect_bypass_count: 0,
+    };
+    let cloned = metrics.clone();
+    assert_eq!(metrics, cloned);
+}
+
+#[test]
+fn ifc_release_gate_metrics_debug_contains_field_names() {
+    let metrics = IfcReleaseGateMetrics {
+        benign_total: 0,
+        exfil_total: 0,
+        declassify_total: 0,
+        false_positive_count: 0,
+        unauthorized_exfil_success_count: 0,
+        direct_indirect_bypass_count: 0,
+    };
+    let dbg = format!("{metrics:?}");
+    assert!(dbg.contains("benign_total"));
+    assert!(dbg.contains("exfil_total"));
+    assert!(dbg.contains("declassify_total"));
+    assert!(dbg.contains("false_positive_count"));
+    assert!(dbg.contains("unauthorized_exfil_success_count"));
+    assert!(dbg.contains("direct_indirect_bypass_count"));
+}
+
+#[test]
+fn ifc_release_gate_metrics_inequality_on_different_values() {
+    let a = IfcReleaseGateMetrics {
+        benign_total: 100,
+        exfil_total: 80,
+        declassify_total: 30,
+        false_positive_count: 0,
+        unauthorized_exfil_success_count: 0,
+        direct_indirect_bypass_count: 0,
+    };
+    let b = IfcReleaseGateMetrics {
+        benign_total: 101,
+        exfil_total: 80,
+        declassify_total: 30,
+        false_positive_count: 0,
+        unauthorized_exfil_success_count: 0,
+        direct_indirect_bypass_count: 0,
+    };
+    assert_ne!(a, b);
+}
+
+// ---------- IfcReleaseGateDecision clone/debug ----------
+
+#[test]
+fn ifc_release_gate_decision_clone_preserves_equality() {
+    let decision = IfcReleaseGateDecision {
+        blocked: true,
+        error_code: Some("FE-IFCR-1001".to_string()),
+        blockers: vec!["blocker-a".to_string(), "blocker-b".to_string()],
+        metrics: IfcReleaseGateMetrics {
+            benign_total: 50,
+            exfil_total: 40,
+            declassify_total: 10,
+            false_positive_count: 1,
+            unauthorized_exfil_success_count: 2,
+            direct_indirect_bypass_count: 3,
+        },
+    };
+    let cloned = decision.clone();
+    assert_eq!(decision, cloned);
+    assert_eq!(decision.allows_release(), cloned.allows_release());
+}
+
+#[test]
+fn ifc_release_gate_decision_debug_contains_blocked_field() {
+    let decision = IfcReleaseGateDecision {
+        blocked: true,
+        error_code: Some("FE-IFCR-1001".to_string()),
+        blockers: vec!["test".to_string()],
+        metrics: IfcReleaseGateMetrics {
+            benign_total: 0,
+            exfil_total: 0,
+            declassify_total: 0,
+            false_positive_count: 0,
+            unauthorized_exfil_success_count: 0,
+            direct_indirect_bypass_count: 0,
+        },
+    };
+    let dbg = format!("{decision:?}");
+    assert!(dbg.contains("blocked"));
+    assert!(dbg.contains("error_code"));
+    assert!(dbg.contains("blockers"));
+    assert!(dbg.contains("metrics"));
+}
+
+// ---------- allows_release edge cases ----------
+
+#[test]
+fn allows_release_false_when_both_blocked_and_error_code() {
+    let decision = IfcReleaseGateDecision {
+        blocked: true,
+        error_code: Some("FE-IFCR-1001".to_string()),
+        blockers: vec!["dual failure".to_string()],
+        metrics: IfcReleaseGateMetrics {
+            benign_total: 0,
+            exfil_total: 0,
+            declassify_total: 0,
+            false_positive_count: 0,
+            unauthorized_exfil_success_count: 0,
+            direct_indirect_bypass_count: 0,
+        },
+    };
+    assert!(!decision.allows_release());
+}
+
+// ---------- event_has_required_fields — additional fields ----------
+
+#[test]
+fn event_has_required_fields_rejects_whitespace_only_component() {
+    let event = ConformanceLogEvent {
+        trace_id: "trace-1".to_string(),
+        decision_id: "decision-1".to_string(),
+        policy_id: "policy-1".to_string(),
+        component: "   ".to_string(),
+        event: "evaluate".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        asset_id: "asset-1".to_string(),
+        workload_id: "asset-1".to_string(),
+        semantic_domain: "test".to_string(),
+        category: None,
+        source_labels: Vec::new(),
+        sink_clearances: Vec::new(),
+        flow_path_type: None,
+        expected_outcome: None,
+        actual_outcome: None,
+        evidence_type: None,
+        evidence_id: None,
+        duration_us: 100,
+        error_detail: None,
+    };
+    assert!(!event_has_required_fields(&event));
+}
+
+#[test]
+fn event_has_required_fields_rejects_empty_event_field() {
+    let event = ConformanceLogEvent {
+        trace_id: "trace-1".to_string(),
+        decision_id: "decision-1".to_string(),
+        policy_id: "policy-1".to_string(),
+        component: "ifc".to_string(),
+        event: "".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        asset_id: "asset-1".to_string(),
+        workload_id: "asset-1".to_string(),
+        semantic_domain: "test".to_string(),
+        category: None,
+        source_labels: Vec::new(),
+        sink_clearances: Vec::new(),
+        flow_path_type: None,
+        expected_outcome: None,
+        actual_outcome: None,
+        evidence_type: None,
+        evidence_id: None,
+        duration_us: 100,
+        error_detail: None,
+    };
+    assert!(!event_has_required_fields(&event));
+}
+
+#[test]
+fn event_has_required_fields_rejects_whitespace_only_outcome() {
+    let event = ConformanceLogEvent {
+        trace_id: "trace-1".to_string(),
+        decision_id: "decision-1".to_string(),
+        policy_id: "policy-1".to_string(),
+        component: "ifc".to_string(),
+        event: "evaluate".to_string(),
+        outcome: " \t ".to_string(),
+        error_code: None,
+        asset_id: "asset-1".to_string(),
+        workload_id: "asset-1".to_string(),
+        semantic_domain: "test".to_string(),
+        category: None,
+        source_labels: Vec::new(),
+        sink_clearances: Vec::new(),
+        flow_path_type: None,
+        expected_outcome: None,
+        actual_outcome: None,
+        evidence_type: None,
+        evidence_id: None,
+        duration_us: 100,
+        error_detail: None,
+    };
+    assert!(!event_has_required_fields(&event));
+}
+
+// ---------- gate blocks on empty IFC logs ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_no_ifc_logs_present() {
+    let mut run = run_ifc_corpus();
+    // Remove all IFC-relevant logs (those with a category)
+    for event in &mut run.logs {
+        event.category = None;
+    }
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("manifest produced no IFC logs"))
+    );
+}
+
+// ---------- gate blocks on unsupported category ----------
+
+#[test]
+fn ifc_release_gate_blocks_on_unsupported_ifc_category() {
+    let mut run = run_ifc_corpus();
+    let event = run
+        .logs
+        .iter_mut()
+        .find(|e| e.category.is_some())
+        .expect("expected at least one categorized event");
+    event.category = Some("unknown_category".to_string());
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("unsupported IFC category `unknown_category`"))
+    );
+}
+
+// ---------- gate blocks on sink_clearances empty ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_sink_clearances_empty() {
+    let mut run = run_ifc_corpus();
+    let event = run
+        .logs
+        .iter_mut()
+        .find(|e| e.category.is_some())
+        .expect("expected at least one categorized event");
+    event.sink_clearances.clear();
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("missing source/sink IFC labels"))
+    );
+}
+
+// ---------- gate blocks on corpus size thresholds ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_benign_corpus_too_small() {
+    let mut run = run_ifc_corpus();
+    // Remove all but 10 benign events to fall below the 100 threshold
+    let mut benign_count = 0usize;
+    for event in &mut run.logs {
+        if event.category.as_deref() == Some("benign") {
+            benign_count += 1;
+            if benign_count > 10 {
+                event.category = None;
+            }
+        }
+    }
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("benign corpus too small"))
+    );
+}
+
+#[test]
+fn ifc_release_gate_blocks_when_exfil_corpus_too_small() {
+    let mut run = run_ifc_corpus();
+    // Remove all but 5 exfil events to fall below the 80 threshold
+    let mut exfil_count = 0usize;
+    for event in &mut run.logs {
+        if event.category.as_deref() == Some("exfil") {
+            exfil_count += 1;
+            if exfil_count > 5 {
+                event.category = None;
+            }
+        }
+    }
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("exfil corpus too small"))
+    );
+}
+
+#[test]
+fn ifc_release_gate_blocks_when_declassify_corpus_too_small() {
+    let mut run = run_ifc_corpus();
+    // Remove all but 5 declassify events to fall below the 30 threshold
+    let mut declass_count = 0usize;
+    for event in &mut run.logs {
+        if event.category.as_deref() == Some("declassify") {
+            declass_count += 1;
+            if declass_count > 5 {
+                event.category = None;
+            }
+        }
+    }
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("declassify corpus too small"))
+    );
+}
+
+// ---------- gate blocks on exfil missing flow_violation evidence type ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_exfil_evidence_type_wrong() {
+    let mut run = run_ifc_corpus();
+    let exfil_event = run
+        .logs
+        .iter_mut()
+        .find(|e| e.category.as_deref() == Some("exfil"))
+        .expect("expected at least one exfil workload");
+    exfil_event.evidence_type = Some("incorrect_type".to_string());
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("missing flow_violation evidence type"))
+    );
+}
+
+// ---------- gate blocks on empty evidence_id for exfil ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_exfil_evidence_id_is_whitespace() {
+    let mut run = run_ifc_corpus();
+    let exfil_event = run
+        .logs
+        .iter_mut()
+        .find(|e| e.category.as_deref() == Some("exfil"))
+        .expect("expected at least one exfil workload");
+    exfil_event.evidence_id = Some("   ".to_string());
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("missing evidence_id receipt handle"))
+    );
+}
+
+// ---------- gate blocks on declassify receipt not starting with dr- ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_declassify_receipt_lacks_dr_prefix() {
+    let mut run = run_ifc_corpus();
+    let declass_event = run
+        .logs
+        .iter_mut()
+        .find(|e| e.category.as_deref() == Some("declassify"))
+        .expect("expected at least one declassify workload");
+    declass_event.evidence_id = Some("no-prefix-receipt".to_string());
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("missing signed receipt handle"))
+    );
+}
+
+// ---------- constants unique and non-empty ----------
+
+#[test]
+fn required_flow_path_types_are_unique() {
+    let set: BTreeSet<&str> = REQUIRED_FLOW_PATH_TYPES.iter().copied().collect();
+    assert_eq!(set.len(), REQUIRED_FLOW_PATH_TYPES.len());
+}
+
+#[test]
+fn required_exfil_vector_domains_are_unique() {
+    let set: BTreeSet<&str> = REQUIRED_EXFIL_VECTOR_DOMAINS.iter().copied().collect();
+    assert_eq!(set.len(), REQUIRED_EXFIL_VECTOR_DOMAINS.len());
+}
+
+#[test]
+fn required_flow_path_types_all_nonempty() {
+    for path_type in REQUIRED_FLOW_PATH_TYPES {
+        assert!(
+            !path_type.trim().is_empty(),
+            "flow path type must not be empty"
+        );
+    }
+}
+
+#[test]
+fn required_exfil_vector_domains_all_nonempty() {
+    for domain in REQUIRED_EXFIL_VECTOR_DOMAINS {
+        assert!(!domain.trim().is_empty(), "domain must not be empty");
+    }
+}
+
+// ---------- gate accumulates multiple blockers ----------
+
+#[test]
+fn ifc_release_gate_accumulates_multiple_blockers() {
+    let mut run = run_ifc_corpus();
+    // Corrupt both a benign and an exfil event simultaneously
+    for event in &mut run.logs {
+        if event.category.as_deref() == Some("benign") {
+            event.actual_outcome = Some("block".to_string());
+            break;
+        }
+    }
+    for event in &mut run.logs {
+        if event.category.as_deref() == Some("exfil") {
+            event.actual_outcome = Some("allow".to_string());
+            event.evidence_type = Some("none".to_string());
+            event.evidence_id = None;
+            break;
+        }
+    }
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    // Should have at least two blockers: false positive + unauthorized exfil
+    assert!(
+        decision.blockers.len() >= 2,
+        "expected at least 2 blockers, got {}",
+        decision.blockers.len()
+    );
+    let has_fp = decision
+        .blockers
+        .iter()
+        .any(|b| b.contains("false positives"));
+    let has_exfil = decision
+        .blockers
+        .iter()
+        .any(|b| b.contains("unauthorized exfiltration succeeded"));
+    assert!(has_fp, "expected false positive blocker");
+    assert!(has_exfil, "expected unauthorized exfiltration blocker");
+}
+
+// ---------- gate blocks when ci gate fails ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_summary_has_failures() {
+    let mut run = run_ifc_corpus();
+    run.summary.failed = 1;
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("run summary contains failures"))
+    );
+}
+
+#[test]
+fn ifc_release_gate_blocks_when_summary_has_errors() {
+    let mut run = run_ifc_corpus();
+    run.summary.errored = 3;
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("run summary contains failures"))
+    );
+}
+
+// ---------- metrics zero-value construction ----------
+
+#[test]
+fn ifc_release_gate_metrics_all_zeros() {
+    let metrics = IfcReleaseGateMetrics {
+        benign_total: 0,
+        exfil_total: 0,
+        declassify_total: 0,
+        false_positive_count: 0,
+        unauthorized_exfil_success_count: 0,
+        direct_indirect_bypass_count: 0,
+    };
+    assert_eq!(metrics.benign_total, 0);
+    assert_eq!(metrics.exfil_total, 0);
+    assert_eq!(metrics.declassify_total, 0);
+    assert_eq!(metrics.false_positive_count, 0);
+    assert_eq!(metrics.unauthorized_exfil_success_count, 0);
+    assert_eq!(metrics.direct_indirect_bypass_count, 0);
+}
+
+// ---------- metrics usize::MAX boundary ----------
+
+#[test]
+fn ifc_release_gate_metrics_max_values() {
+    let metrics = IfcReleaseGateMetrics {
+        benign_total: usize::MAX,
+        exfil_total: usize::MAX,
+        declassify_total: usize::MAX,
+        false_positive_count: usize::MAX,
+        unauthorized_exfil_success_count: usize::MAX,
+        direct_indirect_bypass_count: usize::MAX,
+    };
+    let cloned = metrics.clone();
+    assert_eq!(metrics, cloned);
+    assert_eq!(metrics.benign_total, usize::MAX);
+}
+
+// ---------- decision with empty blockers but blocked true ----------
+
+#[test]
+fn ifc_release_gate_decision_blocked_with_empty_blockers_still_blocked() {
+    let decision = IfcReleaseGateDecision {
+        blocked: true,
+        error_code: None,
+        blockers: Vec::new(),
+        metrics: IfcReleaseGateMetrics {
+            benign_total: 100,
+            exfil_total: 80,
+            declassify_total: 30,
+            false_positive_count: 0,
+            unauthorized_exfil_success_count: 0,
+            direct_indirect_bypass_count: 0,
+        },
+    };
+    // blocked is true, so allows_release returns false
+    assert!(!decision.allows_release());
+}
+
+// ---------- gate blocks on missing flow path coverage ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_flow_path_coverage_missing() {
+    let mut run = run_ifc_corpus();
+    // Remove all "covert" flow path types so coverage check fails
+    for event in &mut run.logs {
+        if event.flow_path_type.as_deref() == Some("covert") {
+            event.flow_path_type = None;
+        }
+    }
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("missing exfil flow-path coverage `covert`"))
+    );
+}
+
+// ---------- gate blocks on missing vector domain coverage ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_vector_domain_coverage_missing() {
+    let mut run = run_ifc_corpus();
+    let target_domain = REQUIRED_EXFIL_VECTOR_DOMAINS[0];
+    // Remove all events matching the first required exfil vector domain
+    for event in &mut run.logs {
+        if event.semantic_domain == target_domain {
+            event.semantic_domain = "unrelated_domain".to_string();
+        }
+    }
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(decision.blockers.iter().any(|b| b.contains(&format!(
+        "missing bypass-vector corpus coverage `{target_domain}`"
+    ))));
+}
+
+// ---------- manifest path correctness ----------
+
+#[test]
+fn ifc_manifest_path_ends_with_expected_filename() {
+    let path = manifest_path();
+    assert_eq!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("ifc_conformance_assets.json")
+    );
+}
+
+#[test]
+fn ifc_manifest_path_contains_ifc_corpus_dir() {
+    let path = manifest_path();
+    let path_str = path.to_string_lossy();
+    assert!(
+        path_str.contains("ifc_corpus"),
+        "manifest path should contain ifc_corpus directory"
+    );
+}
+
+// ---------- gate blocks on whitespace-only trace_id in categorized event ----------
+
+#[test]
+fn ifc_release_gate_blocks_when_categorized_event_has_whitespace_trace_id() {
+    let mut run = run_ifc_corpus();
+    let event = run
+        .logs
+        .iter_mut()
+        .find(|e| e.category.is_some())
+        .expect("expected at least one categorized event");
+    event.trace_id = "   ".to_string();
+
+    let decision = evaluate_ifc_release_gate(&run);
+    assert!(decision.blocked);
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .any(|b| b.contains("missing required structured log fields"))
+    );
+}

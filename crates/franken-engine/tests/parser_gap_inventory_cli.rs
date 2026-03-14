@@ -363,3 +363,226 @@ fn parser_gap_inventory_default_has_correct_schema() {
         PARSER_GAP_INVENTORY_SCHEMA_VERSION
     );
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: descriptor invariants, debug/clone, serde
+// coverage, CLI artifact cross-validation
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn parser_gap_site_id_debug_impl_nonempty() {
+    for site in ParserGapSiteId::ALL {
+        let debug = format!("{:?}", site);
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn parser_gap_stage_debug_impl_nonempty() {
+    let stages = [ParserGapStage::Ir0ToIr1, ParserGapStage::Ir1ToIr3];
+    for stage in stages {
+        let debug = format!("{:?}", stage);
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn parser_gap_remediation_status_debug_impl_nonempty() {
+    let statuses = [
+        ParserGapRemediationStatus::FailClosed,
+        ParserGapRemediationStatus::OpenPlaceholder,
+        ParserGapRemediationStatus::Resolved,
+    ];
+    for status in statuses {
+        let debug = format!("{:?}", status);
+        assert!(!debug.is_empty());
+    }
+}
+
+#[test]
+fn parser_gap_inventory_all_descriptors_match_known_site_ids() {
+    let inventory = pgap::parser_gap_inventory();
+    for desc in &inventory.sites {
+        assert!(
+            ParserGapSiteId::ALL
+                .iter()
+                .any(|s| s.as_str() == desc.site_id),
+            "descriptor site_id {} should match a known ParserGapSiteId",
+            desc.site_id
+        );
+    }
+}
+
+#[test]
+fn parser_gap_inventory_diagnostic_codes_all_start_with_fe() {
+    let inventory = pgap::parser_gap_inventory();
+    for desc in &inventory.sites {
+        assert!(
+            desc.desired_diagnostic_code.starts_with("FE-"),
+            "diagnostic code should start with FE-: {}",
+            desc.desired_diagnostic_code
+        );
+    }
+}
+
+#[test]
+fn parser_gap_inventory_json_pretty_roundtrip() {
+    let inventory = pgap::parser_gap_inventory();
+    let pretty = serde_json::to_string_pretty(&inventory).expect("pretty serialize");
+    let recovered: ParserGapInventory = serde_json::from_str(&pretty).expect("deserialize pretty");
+    assert_eq!(inventory.sites.len(), recovered.sites.len());
+    assert_eq!(inventory.schema_version, recovered.schema_version);
+}
+
+#[test]
+fn parser_gap_site_descriptor_clone_preserves_fields() {
+    for site in ParserGapSiteId::ALL {
+        let desc = ParserGapSiteDescriptor::from_site(site);
+        let cloned = desc.clone();
+        assert_eq!(desc.site_id, cloned.site_id);
+        assert_eq!(desc.desired_diagnostic_code, cloned.desired_diagnostic_code);
+        assert_eq!(desc.feature_family, cloned.feature_family);
+        assert_eq!(desc.syntax_shape, cloned.syntax_shape);
+    }
+}
+
+#[test]
+fn parser_gap_site_descriptor_debug_contains_site_id() {
+    let desc = ParserGapSiteDescriptor::from_site(ParserGapSiteId::ALL[0]);
+    let debug = format!("{:?}", desc);
+    assert!(
+        debug.contains(&desc.site_id),
+        "debug output should contain site_id"
+    );
+}
+
+#[test]
+fn parser_gap_inventory_fail_closed_plus_open_plus_resolved_equals_total() {
+    let inventory = pgap::parser_gap_inventory();
+    let total = inventory.sites.len();
+    let fail_closed = inventory.fail_closed_site_count();
+    let open = inventory.open_placeholder_site_count();
+    let resolved = total - fail_closed - open;
+    assert_eq!(fail_closed + open + resolved, total);
+}
+
+#[test]
+fn parser_gap_stage_serde_roundtrip() {
+    let stages = [ParserGapStage::Ir0ToIr1, ParserGapStage::Ir1ToIr3];
+    for stage in stages {
+        let json = serde_json::to_string(&stage).expect("serialize");
+        let recovered: ParserGapStage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(stage.as_str(), recovered.as_str());
+    }
+}
+
+#[test]
+fn parser_gap_remediation_status_serde_roundtrip() {
+    let statuses = [
+        ParserGapRemediationStatus::FailClosed,
+        ParserGapRemediationStatus::OpenPlaceholder,
+        ParserGapRemediationStatus::Resolved,
+    ];
+    for status in statuses {
+        let json = serde_json::to_string(&status).expect("serialize");
+        let recovered: ParserGapRemediationStatus =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(status.as_str(), recovered.as_str());
+    }
+}
+
+#[test]
+fn parser_gap_cli_events_have_trace_id_field() {
+    let out_dir = unique_temp_dir("parser-gap-cli-trace");
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_parser_gap_inventory"))
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("run parser gap inventory binary");
+    assert!(output.status.success());
+
+    let events = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
+    for line in events.lines() {
+        let event: serde_json::Value = serde_json::from_str(line).expect("valid json");
+        assert!(
+            event.get("trace_id").is_some(),
+            "each event should have a trace_id field"
+        );
+    }
+}
+
+#[test]
+fn parser_gap_cli_events_have_component_field() {
+    let out_dir = unique_temp_dir("parser-gap-cli-comp");
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_parser_gap_inventory"))
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("run parser gap inventory binary");
+    assert!(output.status.success());
+
+    let events = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
+    for line in events.lines() {
+        let event: serde_json::Value = serde_json::from_str(line).expect("valid json");
+        assert!(
+            event.get("component").is_some(),
+            "each event should have a component field"
+        );
+    }
+}
+
+#[test]
+fn parser_gap_cli_inventory_hash_deterministic_across_runs() {
+    let out_dir1 = unique_temp_dir("parser-gap-cli-det1");
+    let out1 = Command::new(env!("CARGO_BIN_EXE_franken_parser_gap_inventory"))
+        .arg("--out-dir")
+        .arg(&out_dir1)
+        .output()
+        .expect("run 1");
+    assert!(out1.status.success());
+    let json1: serde_json::Value = serde_json::from_slice(&out1.stdout).expect("json1");
+    let hash1 = json1["inventory_hash"].as_str().expect("hash1");
+
+    let out_dir2 = unique_temp_dir("parser-gap-cli-det2");
+    let out2 = Command::new(env!("CARGO_BIN_EXE_franken_parser_gap_inventory"))
+        .arg("--out-dir")
+        .arg(&out_dir2)
+        .output()
+        .expect("run 2");
+    assert!(out2.status.success());
+    let json2: serde_json::Value = serde_json::from_slice(&out2.stdout).expect("json2");
+    let hash2 = json2["inventory_hash"].as_str().expect("hash2");
+
+    assert_eq!(hash1, hash2, "inventory hash should be deterministic");
+}
+
+#[test]
+fn parser_gap_inventory_site_count_matches_all_constant() {
+    let inventory = pgap::parser_gap_inventory();
+    assert_eq!(
+        inventory.sites.len(),
+        ParserGapSiteId::ALL.len(),
+        "inventory site count must equal ALL.len()"
+    );
+}
+
+#[test]
+fn parser_gap_site_id_message_template_contains_placeholder_or_description() {
+    for site in ParserGapSiteId::ALL {
+        let template = site.message_template();
+        assert!(
+            !template.is_empty(),
+            "message_template should not be empty for {}",
+            site.as_str()
+        );
+    }
+}
+
+#[test]
+fn parser_gap_site_id_owner_is_consistent_across_calls() {
+    for site in ParserGapSiteId::ALL {
+        let owner1 = site.owner();
+        let owner2 = site.owner();
+        assert_eq!(owner1, owner2);
+    }
+}

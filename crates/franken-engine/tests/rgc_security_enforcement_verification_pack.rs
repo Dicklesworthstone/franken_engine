@@ -621,3 +621,322 @@ fn vectors_all_command_templates_are_nonempty() {
         );
     }
 }
+
+// ---------- additional coverage ----------
+
+#[test]
+fn contract_clone_equals_original() {
+    let contract = parse_contract();
+    let cloned = contract.clone();
+    assert_eq!(contract, cloned);
+}
+
+#[test]
+fn vectors_clone_equals_original() {
+    let vectors = parse_vectors();
+    let cloned = vectors.clone();
+    assert_eq!(vectors, cloned);
+}
+
+#[test]
+fn failure_scenario_clone_equals_original() {
+    let contract = parse_contract();
+    for scenario in &contract.failure_scenarios {
+        let cloned = scenario.clone();
+        assert_eq!(scenario, &cloned);
+    }
+}
+
+#[test]
+fn security_scenario_vector_clone_equals_original() {
+    let vectors = parse_vectors();
+    for vector in &vectors.vectors {
+        let cloned = vector.clone();
+        assert_eq!(vector, &cloned);
+    }
+}
+
+#[test]
+fn gate_runner_clone_equals_original() {
+    let contract = parse_contract();
+    let cloned = contract.gate_runner.clone();
+    assert_eq!(contract.gate_runner, cloned);
+}
+
+#[test]
+fn gate_runner_debug_is_nonempty() {
+    let contract = parse_contract();
+    assert!(!format!("{:?}", contract.gate_runner).is_empty());
+}
+
+#[test]
+fn failure_scenario_debug_is_nonempty() {
+    let contract = parse_contract();
+    for scenario in &contract.failure_scenarios {
+        assert!(!format!("{scenario:?}").is_empty());
+    }
+}
+
+#[test]
+fn security_scenario_vector_debug_is_nonempty() {
+    let vectors = parse_vectors();
+    for vector in &vectors.vectors {
+        assert!(!format!("{vector:?}").is_empty());
+    }
+}
+
+#[test]
+fn contract_required_log_keys_are_unique() {
+    let contract = parse_contract();
+    let unique: BTreeSet<&str> = contract
+        .required_log_keys
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        unique.len(),
+        contract.required_log_keys.len(),
+        "required_log_keys must be unique"
+    );
+}
+
+#[test]
+fn contract_required_artifacts_are_unique() {
+    let contract = parse_contract();
+    let unique: BTreeSet<&str> = contract
+        .required_artifacts
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        unique.len(),
+        contract.required_artifacts.len(),
+        "required_artifacts must be unique"
+    );
+}
+
+#[test]
+fn contract_failure_scenarios_path_type_is_failure() {
+    let contract = parse_contract();
+    for scenario in &contract.failure_scenarios {
+        assert_eq!(
+            scenario.path_type, "failure",
+            "scenario {} path_type must be 'failure'",
+            scenario.scenario_id
+        );
+    }
+}
+
+#[test]
+fn contract_failure_scenarios_expected_exit_code_nonzero() {
+    let contract = parse_contract();
+    for scenario in &contract.failure_scenarios {
+        assert_ne!(
+            scenario.expected_exit_code, 0,
+            "failure scenario {} must have nonzero exit code",
+            scenario.scenario_id
+        );
+    }
+}
+
+#[test]
+fn contract_failure_scenarios_message_fragments_are_nonempty() {
+    let contract = parse_contract();
+    for scenario in &contract.failure_scenarios {
+        assert!(
+            !scenario.expected_message_fragment.trim().is_empty(),
+            "scenario {} must have a nonempty expected_message_fragment",
+            scenario.scenario_id
+        );
+    }
+}
+
+#[test]
+fn contract_test_vectors_source_matches_known_path() {
+    let contract = parse_contract();
+    assert_eq!(
+        contract.test_vectors_source,
+        "docs/rgc_security_enforcement_verification_vectors_v1.json"
+    );
+}
+
+#[test]
+fn vectors_generated_at_utc_is_nonempty() {
+    let vectors = parse_vectors();
+    assert!(!vectors.generated_at_utc.trim().is_empty());
+}
+
+#[test]
+fn vectors_generated_at_utc_contains_date_separator() {
+    let vectors = parse_vectors();
+    assert!(
+        vectors.generated_at_utc.contains('T'),
+        "generated_at_utc must be an ISO-8601 datetime with 'T' separator"
+    );
+}
+
+#[test]
+fn vectors_all_seeds_are_nonzero() {
+    let vectors = parse_vectors();
+    for vector in &vectors.vectors {
+        assert_ne!(
+            vector.deterministic_seed, 0,
+            "vector {} must have a nonzero deterministic_seed",
+            vector.scenario_id
+        );
+    }
+}
+
+#[test]
+fn vectors_attack_classes_are_nonempty_strings() {
+    let vectors = parse_vectors();
+    for vector in &vectors.vectors {
+        assert!(
+            !vector.attack_class.trim().is_empty(),
+            "vector {} must have a nonempty attack_class",
+            vector.scenario_id
+        );
+    }
+}
+
+#[test]
+fn vectors_severity_values_cover_at_least_critical_or_high() {
+    let vectors = parse_vectors();
+    let severities: BTreeSet<&str> = vectors
+        .vectors
+        .iter()
+        .map(|v| v.severity.as_str())
+        .collect();
+    assert!(
+        severities.contains("critical") || severities.contains("high"),
+        "vectors must include at least one critical or high severity scenario"
+    );
+}
+
+#[test]
+fn vectors_expected_outcomes_are_all_pass() {
+    let vectors = parse_vectors();
+    for vector in &vectors.vectors {
+        assert_eq!(
+            vector.expected_outcome, "pass",
+            "vector {} expected_outcome must be 'pass'",
+            vector.scenario_id
+        );
+    }
+}
+
+#[test]
+fn vectors_all_require_replay() {
+    let vectors = parse_vectors();
+    for vector in &vectors.vectors {
+        assert!(
+            vector.requires_replay,
+            "vector {} must set requires_replay = true",
+            vector.scenario_id
+        );
+    }
+}
+
+#[test]
+fn vectors_scenario_ids_contain_no_whitespace() {
+    let vectors = parse_vectors();
+    for vector in &vectors.vectors {
+        assert!(
+            !vector.scenario_id.contains(char::is_whitespace),
+            "vector scenario_id '{}' must not contain whitespace",
+            vector.scenario_id
+        );
+    }
+}
+
+#[test]
+fn contract_failure_scenario_error_codes_have_fe_prefix() {
+    let contract = parse_contract();
+    for scenario in &contract.failure_scenarios {
+        assert!(
+            scenario.expected_error_code.starts_with("FE-"),
+            "scenario {} error_code '{}' must start with 'FE-'",
+            scenario.scenario_id,
+            scenario.expected_error_code
+        );
+    }
+}
+
+#[test]
+fn contract_gate_runner_script_ends_with_sh() {
+    let contract = parse_contract();
+    assert!(
+        contract.gate_runner.script.ends_with(".sh"),
+        "gate_runner.script must end with '.sh'"
+    );
+    assert!(
+        contract.gate_runner.replay_wrapper.ends_with(".sh"),
+        "gate_runner.replay_wrapper must end with '.sh'"
+    );
+}
+
+#[test]
+fn contract_gate_runner_manifest_schema_version_starts_with_franken() {
+    let contract = parse_contract();
+    assert!(
+        contract
+            .gate_runner
+            .manifest_schema_version
+            .starts_with("franken-engine."),
+        "manifest_schema_version must start with 'franken-engine.'"
+    );
+}
+
+#[test]
+fn contract_operator_verification_contains_jq_validate_entries() {
+    let contract = parse_contract();
+    let has_pack_jq = contract.operator_verification.iter().any(|e| {
+        e.contains("jq") && e.contains("rgc_security_enforcement_verification_pack_v1.json")
+    });
+    let has_vectors_jq = contract.operator_verification.iter().any(|e| {
+        e.contains("jq") && e.contains("rgc_security_enforcement_verification_vectors_v1.json")
+    });
+    assert!(
+        has_pack_jq,
+        "operator_verification must include a jq validation step for the pack JSON"
+    );
+    assert!(
+        has_vectors_jq,
+        "operator_verification must include a jq validation step for the vectors JSON"
+    );
+}
+
+#[test]
+fn contract_and_vectors_schema_versions_are_distinct() {
+    assert_ne!(
+        PACK_SCHEMA_VERSION, VECTORS_SCHEMA_VERSION,
+        "pack and vectors schema versions must differ to avoid confusion"
+    );
+}
+
+#[test]
+fn gate_script_references_events_jsonl() {
+    let script = read_gate_script();
+    assert!(
+        script.contains("events.jsonl") || script.contains("events_path"),
+        "gate script must reference the events JSONL artifact"
+    );
+}
+
+#[test]
+fn gate_script_references_policy_id_constant() {
+    let script = read_gate_script();
+    assert!(
+        script.contains("policy_id"),
+        "gate script must declare or reference a policy_id variable"
+    );
+}
+
+#[test]
+fn gate_script_references_report_artifact() {
+    let script = read_gate_script();
+    assert!(
+        script.contains("security_verification_report.json") || script.contains("report_path"),
+        "gate script must produce or reference security_verification_report.json"
+    );
+}

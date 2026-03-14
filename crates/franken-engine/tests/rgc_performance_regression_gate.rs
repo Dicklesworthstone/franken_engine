@@ -16,8 +16,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::performance_regression_gate::{
-    RegressionGateInput, RegressionGatePolicy, RegressionObservation, RegressionWaiver,
-    evaluate_performance_regression_gate,
+    PERFORMANCE_REGRESSION_GATE_COMPONENT, PERFORMANCE_REGRESSION_GATE_SCHEMA_VERSION,
+    RegressionGateInput, RegressionGatePolicy, RegressionObservation, RegressionSeverity,
+    RegressionStatus, RegressionWaiver, evaluate_performance_regression_gate,
+    write_regression_report,
 };
 use serde::Deserialize;
 
@@ -774,4 +776,340 @@ fn regression_observation_debug_is_nonempty() {
 fn contract_debug_is_nonempty() {
     let contract: Contract = serde_json::from_str(CONTRACT_JSON).expect("parse");
     assert!(!format!("{contract:?}").is_empty());
+}
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: severity/status enums, Display, serde, constants,
+// finding/culprit/log serde, write_regression_report, error types
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn regression_severity_as_str_all_variants() {
+    assert_eq!(RegressionSeverity::None.as_str(), "none");
+    assert_eq!(RegressionSeverity::Warning.as_str(), "warning");
+    assert_eq!(RegressionSeverity::High.as_str(), "high");
+    assert_eq!(RegressionSeverity::Critical.as_str(), "critical");
+}
+
+#[test]
+fn regression_severity_display_matches_as_str() {
+    for severity in [
+        RegressionSeverity::None,
+        RegressionSeverity::Warning,
+        RegressionSeverity::High,
+        RegressionSeverity::Critical,
+    ] {
+        assert_eq!(severity.to_string(), severity.as_str());
+    }
+}
+
+#[test]
+fn regression_severity_serde_roundtrip_all_variants() {
+    for severity in [
+        RegressionSeverity::None,
+        RegressionSeverity::Warning,
+        RegressionSeverity::High,
+        RegressionSeverity::Critical,
+    ] {
+        let json = serde_json::to_string(&severity).expect("serialize");
+        let recovered: RegressionSeverity = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(severity, recovered);
+    }
+}
+
+#[test]
+fn regression_severity_default_is_none() {
+    assert_eq!(RegressionSeverity::default(), RegressionSeverity::None);
+}
+
+#[test]
+fn regression_severity_ordering() {
+    assert!(RegressionSeverity::None < RegressionSeverity::Warning);
+    assert!(RegressionSeverity::Warning < RegressionSeverity::High);
+    assert!(RegressionSeverity::High < RegressionSeverity::Critical);
+}
+
+#[test]
+fn regression_status_as_str_all_variants() {
+    assert_eq!(RegressionStatus::Active.as_str(), "active");
+    assert_eq!(RegressionStatus::Waived.as_str(), "waived");
+}
+
+#[test]
+fn regression_status_display_matches_as_str() {
+    for status in [RegressionStatus::Active, RegressionStatus::Waived] {
+        assert_eq!(status.to_string(), status.as_str());
+    }
+}
+
+#[test]
+fn regression_status_serde_roundtrip() {
+    for status in [RegressionStatus::Active, RegressionStatus::Waived] {
+        let json = serde_json::to_string(&status).expect("serialize");
+        let recovered: RegressionStatus = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(status, recovered);
+    }
+}
+
+#[test]
+fn regression_status_default_is_active() {
+    assert_eq!(RegressionStatus::default(), RegressionStatus::Active);
+}
+
+#[test]
+fn component_constant_matches_report() {
+    let input = RegressionGateInput::new(
+        "trace-const",
+        "decision-const",
+        "policy-const",
+        1_700_000_000,
+        Vec::new(),
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+    assert_eq!(report.component, PERFORMANCE_REGRESSION_GATE_COMPONENT);
+}
+
+#[test]
+fn schema_version_constant_matches_report() {
+    let input = RegressionGateInput::new(
+        "trace-sv",
+        "decision-sv",
+        "policy-sv",
+        1_700_000_000,
+        Vec::new(),
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+    assert_eq!(
+        report.schema_version,
+        PERFORMANCE_REGRESSION_GATE_SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn report_highest_severity_matches_severity_field() {
+    let input = RegressionGateInput::new(
+        "trace-sev",
+        "decision-sev",
+        "policy-sev",
+        1_700_000_000,
+        vec![RegressionObservation::new(
+            "wl-sev", "scen", "sha256:s", 100_000, 200_000, 10_000, None,
+        )],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+    assert_eq!(report.highest_severity, report.severity);
+}
+
+#[test]
+fn report_blocking_matches_is_blocking() {
+    let input = RegressionGateInput::new(
+        "trace-ib",
+        "decision-ib",
+        "policy-ib",
+        1_700_000_000,
+        vec![RegressionObservation::new(
+            "wl-ib",
+            "scen",
+            "sha256:ib",
+            100_000,
+            200_000,
+            10_000,
+            None,
+        )],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+    assert_eq!(report.blocking, report.is_blocking);
+}
+
+#[test]
+fn regression_finding_waived_has_waiver_fields() {
+    let input = RegressionGateInput::new(
+        "trace-wf",
+        "decision-wf",
+        "policy-wf",
+        1_700_000_000,
+        vec![RegressionObservation::new(
+            "wl-wf",
+            "scen",
+            "sha256:wf",
+            100_000,
+            200_000,
+            10_000,
+            None,
+        )],
+        vec![RegressionWaiver::new(
+            "waiver-wf",
+            "wl-wf",
+            "alice",
+            1_800_000_000,
+            "approved",
+        )],
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+    assert_eq!(report.regressions.len(), 1);
+    let finding = &report.regressions[0];
+    assert_eq!(finding.status, RegressionStatus::Waived);
+    assert_eq!(finding.waiver_id.as_deref(), Some("waiver-wf"));
+    assert_eq!(finding.waiver_owner.as_deref(), Some("alice"));
+    assert_eq!(finding.waiver_expires_at_unix_seconds, Some(1_800_000_000));
+}
+
+#[test]
+fn regression_finding_serde_roundtrip() {
+    let input = RegressionGateInput::new(
+        "trace-fs",
+        "decision-fs",
+        "policy-fs",
+        1_700_000_000,
+        vec![RegressionObservation::new(
+            "wl-fs",
+            "scen",
+            "sha256:fs",
+            100_000,
+            200_000,
+            10_000,
+            Some("commit-fs".to_string()),
+        )],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+    let finding = &report.regressions[0];
+    let json = serde_json::to_string(finding).expect("serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert!(value.get("workload_id").is_some());
+    assert!(value.get("severity").is_some());
+    assert!(value.get("status").is_some());
+    assert!(value.get("error_code").is_some());
+    assert!(value.get("message").is_some());
+}
+
+#[test]
+fn culprit_candidate_serde_roundtrip() {
+    let input = RegressionGateInput::new(
+        "trace-cc",
+        "decision-cc",
+        "policy-cc",
+        1_700_000_000,
+        vec![RegressionObservation::new(
+            "wl-cc",
+            "scen",
+            "sha256:cc",
+            100_000,
+            200_000,
+            10_000,
+            Some("commit-cc".to_string()),
+        )],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+    assert!(!report.culprit_ranking.is_empty());
+    let culprit = &report.culprit_ranking[0];
+    let json = serde_json::to_string(culprit).expect("serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert!(value.get("rank").is_some());
+    assert!(value.get("workload_id").is_some());
+    assert!(value.get("severity").is_some());
+    assert!(value.get("score").is_some());
+}
+
+#[test]
+fn log_events_present_in_report() {
+    let input = RegressionGateInput::new(
+        "trace-log",
+        "decision-log",
+        "policy-log",
+        1_700_000_000,
+        vec![RegressionObservation::new(
+            "wl-log",
+            "scen",
+            "sha256:log",
+            100_000,
+            200_000,
+            10_000,
+            None,
+        )],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+    assert!(!report.logs.is_empty());
+    for log in &report.logs {
+        assert_eq!(log.trace_id, "trace-log");
+        assert_eq!(log.decision_id, "decision-log");
+        assert_eq!(log.policy_id, "policy-log");
+        assert_eq!(log.component, PERFORMANCE_REGRESSION_GATE_COMPONENT);
+        assert!(!log.event.is_empty());
+        assert!(!log.outcome.is_empty());
+    }
+}
+
+#[test]
+fn write_regression_report_creates_file() {
+    let input = RegressionGateInput::new(
+        "trace-write",
+        "decision-write",
+        "policy-write",
+        1_700_000_000,
+        Vec::new(),
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
+
+    let dir = std::env::temp_dir().join(format!(
+        "franken-rgc-write-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("regression_report.json");
+
+    write_regression_report(&report, &path).expect("write report");
+    assert!(path.exists());
+
+    let contents = fs::read_to_string(&path).expect("read report");
+    let recovered: serde_json::Value = serde_json::from_str(&contents).expect("parse json");
+    assert_eq!(
+        recovered["schema_version"].as_str(),
+        Some(PERFORMANCE_REGRESSION_GATE_SCHEMA_VERSION)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn low_confidence_p_value_produces_high_severity() {
+    let policy = RegressionGatePolicy {
+        max_p_value_millionths: 50_000,
+        ..RegressionGatePolicy::default()
+    };
+    let input = RegressionGateInput::new(
+        "trace-pv",
+        "decision-pv",
+        "policy-pv",
+        1_700_000_000,
+        vec![RegressionObservation::new(
+            "wl-pv",
+            "scen",
+            "sha256:pv",
+            100_000,
+            200_000,
+            60_000, // p-value above threshold
+            None,
+        )],
+        Vec::new(),
+    );
+    let report = evaluate_performance_regression_gate(&input, &policy);
+    assert!(report.blocking);
+    assert!(
+        report
+            .regressions
+            .iter()
+            .any(|f| f.error_code.contains("SIGNIFICANCE")),
+        "low confidence should produce SIGNIFICANCE error code"
+    );
 }

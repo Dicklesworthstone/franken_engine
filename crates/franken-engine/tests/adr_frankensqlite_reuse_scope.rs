@@ -369,3 +369,175 @@ fn frankensqlite_adr_migration_policy_references_ci_script() {
         "Migration Policy must reference CI enforcement script"
     );
 }
+
+#[test]
+fn frankensqlite_adr_mentions_replay_index() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(content.contains("replay index"));
+}
+
+#[test]
+fn frankensqlite_adr_mentions_benchmark_ledger() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(content.contains("benchmark ledger"));
+}
+
+#[test]
+fn frankensqlite_adr_mentions_policy_cache() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(content.contains("policy cache"));
+}
+
+#[test]
+fn frankensqlite_adr_mentions_witness_stores() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(content.contains("witness stores"));
+}
+
+#[test]
+fn frankensqlite_adr_mentions_dp_frankensqlite() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(content.contains("/dp/frankensqlite"));
+}
+
+#[test]
+fn frankensqlite_adr_has_more_than_100_lines() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(content.lines().count() > 100);
+}
+
+#[test]
+fn frankensqlite_adr_has_heading_level_one() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(
+        content.lines().any(|l| l.starts_with("# ")),
+        "ADR must have at least one level-1 heading"
+    );
+}
+
+#[test]
+fn frankensqlite_adr_has_at_least_eight_h2_sections() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let h2_count = content.lines().filter(|l| l.starts_with("## ")).count();
+    assert!(
+        h2_count >= 8,
+        "ADR should have >= 8 h2 sections, got {h2_count}"
+    );
+}
+
+#[test]
+fn frankensqlite_adr_compliance_signals_section_nonempty() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let compliance_pos = content.find("## Compliance Signals").unwrap();
+    let next_section = content[compliance_pos + 21..]
+        .find("## ")
+        .map(|p| p + compliance_pos + 21);
+    let end = next_section.unwrap_or(content.len());
+    let section = &content[compliance_pos..end];
+    let word_count = section.split_whitespace().count();
+    assert!(
+        word_count >= 10,
+        "Compliance Signals section should have >= 10 words, got {word_count}"
+    );
+}
+
+#[test]
+fn frankensqlite_adr_mentions_pragma() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(content.contains("PRAGMA"));
+}
+
+#[test]
+fn frankensqlite_adr_operator_verification_has_steps() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let ov_pos = content.find("## Operator Verification").unwrap();
+    let ov_section = &content[ov_pos..];
+    let step_count = ov_section
+        .lines()
+        .filter(|l| l.starts_with("1.") || l.starts_with("2.") || l.starts_with("3."))
+        .count();
+    assert!(
+        step_count >= 2,
+        "Operator Verification should have >= 2 numbered steps, got {step_count}"
+    );
+}
+
+#[test]
+fn frankensqlite_adr_word_count_at_least_500() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let word_count = content.split_whitespace().count();
+    assert!(
+        word_count >= 500,
+        "ADR should have >= 500 words, got {word_count}"
+    );
+}
+
+#[test]
+fn frankensqlite_adr_consequences_section_mentions_positive_and_negative() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let cons_pos = content.find("## Consequences").unwrap();
+    let next_h2 = content[cons_pos + 15..]
+        .find("## ")
+        .map(|p| p + cons_pos + 15)
+        .unwrap_or(content.len());
+    let section = &content[cons_pos..next_h2];
+    assert!(
+        section.contains("Positive") || section.contains("positive") || section.contains("+"),
+        "Consequences should mention positive outcomes"
+    );
+}
+
+#[test]
+fn frankensqlite_adr_rationale_is_nonempty() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    let rationale_pos = content.find("## Rationale").unwrap();
+    let next_h2 = content[rationale_pos + 12..]
+        .find("## ")
+        .map(|p| p + rationale_pos + 12)
+        .unwrap_or(content.len());
+    let section = &content[rationale_pos..next_h2];
+    let word_count = section.split_whitespace().count();
+    assert!(
+        word_count >= 20,
+        "Rationale section should have >= 20 words, got {word_count}"
+    );
+}
+
+#[test]
+fn frankensqlite_adr_no_todo_markers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/adr/ADR-0004-frankensqlite-reuse-scope.md");
+    let content = fs::read_to_string(&path).expect("read ADR");
+    assert!(
+        !content.contains("TODO") && !content.contains("FIXME"),
+        "ADR should not contain TODO or FIXME markers"
+    );
+}

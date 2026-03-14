@@ -779,3 +779,220 @@ fn witness_publication_config_serde_is_deterministic() {
     let b = serde_json::to_string(&config).expect("second");
     assert_eq!(a, b);
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: lifecycle edge cases, publication artifact
+// serde, query filtering combos, checkpoint invariants
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn published_witness_artifact_serde_roundtrip() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let witness = build_promoted_witness(1_500, &synthesizer_key);
+    pipeline
+        .publish_witness(witness, 12_000_000)
+        .expect("publish");
+
+    let artifact = &pipeline.publications()[0];
+    let json = serde_json::to_string(artifact).expect("serialize");
+    assert!(!json.is_empty());
+    // Deserialize back to validate structure
+    let _: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+}
+
+#[test]
+fn query_by_extension_id_filters_correctly() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let witness_a = build_promoted_witness(1_600, &synthesizer_key);
+    let witness_b = build_promoted_witness(1_601, &synthesizer_key);
+    let target_ext = witness_a.extension_id.clone();
+
+    pipeline
+        .publish_witness(witness_a, 13_000_000)
+        .expect("publish A");
+    pipeline
+        .publish_witness(witness_b, 13_100_000)
+        .expect("publish B");
+
+    let filtered = pipeline.query(&WitnessPublicationQuery {
+        extension_id: Some(target_ext.clone()),
+        policy_id: None,
+        epoch: None,
+        content_hash: None,
+        include_revoked: true,
+    });
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].witness.extension_id, target_ext);
+}
+
+#[test]
+fn query_combining_epoch_and_extension_id() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let witness_a = build_promoted_witness(1_700, &synthesizer_key);
+    let witness_b = build_promoted_witness(1_701, &synthesizer_key);
+    let target_ext = witness_a.extension_id.clone();
+    let target_epoch = witness_a.epoch;
+
+    pipeline
+        .publish_witness(witness_a, 14_000_000)
+        .expect("publish A");
+    pipeline
+        .publish_witness(witness_b, 14_100_000)
+        .expect("publish B");
+
+    let filtered = pipeline.query(&WitnessPublicationQuery {
+        extension_id: Some(target_ext),
+        policy_id: None,
+        epoch: Some(target_epoch),
+        content_hash: None,
+        include_revoked: true,
+    });
+    assert_eq!(filtered.len(), 1);
+}
+
+#[test]
+fn empty_pipeline_query_returns_empty() {
+    let pipeline = build_pipeline();
+    let results = pipeline.query(&WitnessPublicationQuery::all());
+    assert!(results.is_empty());
+}
+
+#[test]
+fn empty_pipeline_has_no_events() {
+    let pipeline = build_pipeline();
+    assert!(pipeline.events().is_empty());
+}
+
+#[test]
+fn empty_pipeline_has_no_log_entries() {
+    let pipeline = build_pipeline();
+    assert!(pipeline.log_entries().is_empty());
+}
+
+#[test]
+fn empty_pipeline_has_no_evidence_entries() {
+    let pipeline = build_pipeline();
+    assert!(pipeline.evidence_entries().is_empty());
+}
+
+#[test]
+fn pipeline_publication_ids_are_unique() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let mut pub_ids = BTreeSet::new();
+    for seed in 1_800..1_805 {
+        let witness = build_promoted_witness(seed, &synthesizer_key);
+        let pub_id = pipeline
+            .publish_witness(witness, seed * 1_000)
+            .expect("publish");
+        assert!(pub_ids.insert(pub_id), "publication IDs must be unique");
+    }
+}
+
+#[test]
+fn verify_publication_succeeds_for_freshly_published() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let witness = build_promoted_witness(1_900, &synthesizer_key);
+    let pub_id = pipeline
+        .publish_witness(witness, 15_000_000)
+        .expect("publish");
+
+    let result = pipeline.verify_publication(
+        &pub_id,
+        &synthesizer_key.verification_key(),
+        &tree_head_signing_key().verification_key(),
+    );
+    assert!(result.is_ok(), "freshly published witness should verify");
+}
+
+#[test]
+fn log_entries_track_publish_and_revoke_kinds() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let witness = build_promoted_witness(2_000, &synthesizer_key);
+    let witness_id = witness.witness_id.clone();
+
+    pipeline
+        .publish_witness(witness, 16_000_000)
+        .expect("publish");
+    pipeline
+        .revoke_witness(&witness_id, "kind tracking test", 16_100_000)
+        .expect("revoke");
+
+    let entries = pipeline.log_entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].kind, PublicationEntryKind::Publish);
+    assert_eq!(entries[1].kind, PublicationEntryKind::Revoke);
+}
+
+#[test]
+fn checkpoints_grow_with_checkpoint_interval_1() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+
+    for seed in 2_100..2_104 {
+        let witness = build_promoted_witness(seed, &synthesizer_key);
+        pipeline
+            .publish_witness(witness, seed * 1_000)
+            .expect("publish");
+    }
+
+    assert!(
+        pipeline.checkpoints().len() >= 4,
+        "with interval=1, each publish should trigger a checkpoint"
+    );
+}
+
+#[test]
+fn witness_publication_event_has_nonempty_trace_id() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let witness = build_promoted_witness(2_200, &synthesizer_key);
+    pipeline
+        .publish_witness(witness, 17_000_000)
+        .expect("publish");
+
+    for event in pipeline.events() {
+        assert!(!event.trace_id.is_empty());
+        assert!(!event.decision_id.is_empty());
+        assert!(!event.policy_id.is_empty());
+        assert!(!event.component.is_empty());
+    }
+}
+
+#[test]
+fn publication_proof_has_nonempty_leaf_hash() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let witness = build_promoted_witness(2_300, &synthesizer_key);
+    pipeline
+        .publish_witness(witness, 18_000_000)
+        .expect("publish");
+
+    let artifact = &pipeline.publications()[0];
+    let leaf = artifact.publication_proof.log_entry.leaf_hash;
+    assert_ne!(leaf, ContentHash([0u8; 32]), "leaf hash must not be zeroed");
+}
+
+#[test]
+fn revoke_event_has_correct_event_name() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let witness = build_promoted_witness(2_400, &synthesizer_key);
+    let witness_id = witness.witness_id.clone();
+
+    pipeline
+        .publish_witness(witness, 19_000_000)
+        .expect("publish");
+    pipeline
+        .revoke_witness(&witness_id, "event name test", 19_100_000)
+        .expect("revoke");
+
+    let revoke_event = &pipeline.events()[1];
+    assert_eq!(revoke_event.event, "revoke_witness");
+    assert_eq!(revoke_event.outcome, "success");
+}

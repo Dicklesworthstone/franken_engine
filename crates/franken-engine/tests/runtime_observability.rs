@@ -832,3 +832,269 @@ fn runtime_security_metrics_serde_roundtrip() {
     );
     assert_eq!(recovered.revocation_freshness_degraded_seconds, 42);
 }
+
+// ────────────────────────────────────────────────────────────
+// Enrichment: enum serde roundtrips, edge cases, prometheus format
+// ────────────────────────────────────────────────────────────
+
+#[test]
+fn security_event_type_serde_roundtrip() {
+    let types = [
+        SecurityEventType::AuthFailure,
+        SecurityEventType::CapabilityDenial,
+        SecurityEventType::ReplayDrop,
+        SecurityEventType::CheckpointViolation,
+        SecurityEventType::RevocationCheck,
+        SecurityEventType::CrossZoneReference,
+    ];
+    for event_type in types {
+        let json = serde_json::to_string(&event_type).expect("serialize");
+        let recovered: SecurityEventType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(event_type, recovered);
+    }
+}
+
+#[test]
+fn security_outcome_serde_roundtrip() {
+    let outcomes = [
+        SecurityOutcome::Pass,
+        SecurityOutcome::Allowed,
+        SecurityOutcome::Denied,
+        SecurityOutcome::Dropped,
+        SecurityOutcome::Rejected,
+        SecurityOutcome::Degraded,
+    ];
+    for outcome in outcomes {
+        let json = serde_json::to_string(&outcome).expect("serialize");
+        let recovered: SecurityOutcome = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(outcome, recovered);
+    }
+}
+
+#[test]
+fn capability_denial_reason_serde_roundtrip() {
+    for reason in CapabilityDenialReason::ALL {
+        let json = serde_json::to_string(&reason).expect("serialize");
+        let recovered: CapabilityDenialReason = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(reason, recovered);
+    }
+}
+
+#[test]
+fn replay_drop_reason_serde_roundtrip() {
+    for reason in ReplayDropReason::ALL {
+        let json = serde_json::to_string(&reason).expect("serialize");
+        let recovered: ReplayDropReason = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(reason, recovered);
+    }
+}
+
+#[test]
+fn checkpoint_violation_type_serde_roundtrip() {
+    for vt in CheckpointViolationType::ALL {
+        let json = serde_json::to_string(&vt).expect("serialize");
+        let recovered: CheckpointViolationType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(vt, recovered);
+    }
+}
+
+#[test]
+fn revocation_check_outcome_serde_roundtrip() {
+    for outcome in RevocationCheckOutcome::ALL {
+        let json = serde_json::to_string(&outcome).expect("serialize");
+        let recovered: RevocationCheckOutcome = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(outcome, recovered);
+    }
+}
+
+#[test]
+fn cross_zone_reference_type_serde_roundtrip() {
+    for rt in CrossZoneReferenceType::ALL {
+        let json = serde_json::to_string(&rt).expect("serialize");
+        let recovered: CrossZoneReferenceType = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(rt, recovered);
+    }
+}
+
+#[test]
+fn redact_sensitive_value_empty_string_produces_valid_hash() {
+    let result = redact_sensitive_value("");
+    assert!(result.starts_with("sha256:"));
+    // SHA-256 of "" is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    assert_eq!(result.len(), 7 + 64); // "sha256:" + 64 hex chars
+}
+
+#[test]
+fn context_with_empty_fields_uses_sanitized_fallbacks() {
+    let mut observability = RuntimeSecurityObservability::new();
+    let ctx = SecurityEventContext {
+        timestamp_ns: 42,
+        trace_id: "".to_string(),
+        principal_id: "  ".to_string(),
+        decision_id: "".to_string(),
+        policy_id: "".to_string(),
+        zone_id: "".to_string(),
+        component: "".to_string(),
+    };
+
+    let event = observability.record_auth_failure(ctx, AuthFailureType::KeyRevoked, None, None);
+
+    // All fields should be non-empty after sanitization
+    assert!(event.required_fields_present());
+    assert!(!event.trace_id.is_empty());
+    assert!(!event.principal_id.is_empty());
+    assert!(!event.component.is_empty());
+}
+
+#[test]
+fn prometheus_output_contains_help_and_type_annotations() {
+    let observability = RuntimeSecurityObservability::new();
+    let prom = observability.export_prometheus_metrics();
+
+    // Verify HELP lines
+    assert!(prom.contains("# HELP auth_failure_total"));
+    assert!(prom.contains("# HELP capability_denial_total"));
+    assert!(prom.contains("# HELP replay_drop_total"));
+    assert!(prom.contains("# HELP checkpoint_violation_total"));
+    assert!(prom.contains("# HELP revocation_freshness_degraded_seconds"));
+    assert!(prom.contains("# HELP revocation_check_total"));
+    assert!(prom.contains("# HELP cross_zone_reference_total"));
+
+    // Verify TYPE lines
+    assert!(prom.contains("# TYPE auth_failure_total counter"));
+    assert!(prom.contains("# TYPE capability_denial_total counter"));
+    assert!(prom.contains("# TYPE revocation_freshness_degraded_seconds gauge"));
+}
+
+#[test]
+fn prometheus_output_uses_correct_label_format() {
+    let mut observability = RuntimeSecurityObservability::new();
+    observability.record_auth_failure(
+        context(1, "auth"),
+        AuthFailureType::AttestationInvalid,
+        None,
+        None,
+    );
+
+    let prom = observability.export_prometheus_metrics();
+    // Verify label format: metric_name{label="value"} count
+    assert!(prom.contains("auth_failure_total{type=\"attestation_invalid\"} 1"));
+    // Other types should be zero
+    assert!(prom.contains("auth_failure_total{type=\"signature_invalid\"} 0"));
+}
+
+#[test]
+fn render_security_logs_jsonl_empty_input_returns_empty_string() {
+    let result = render_security_logs_jsonl(&[]);
+    assert!(result.is_empty());
+}
+
+#[test]
+fn structured_log_event_required_fields_present_false_for_missing_fields() {
+    let event = StructuredSecurityLogEvent {
+        timestamp_ns: 0,
+        trace_id: "".to_string(),
+        component: "test".to_string(),
+        event_type: "auth_failure".to_string(),
+        outcome: "denied".to_string(),
+        error_code: None,
+        principal_id: "p".to_string(),
+        decision_id: "d".to_string(),
+        policy_id: "pol".to_string(),
+        zone_id: "z".to_string(),
+        metadata: std::collections::BTreeMap::new(),
+    };
+    assert!(
+        !event.required_fields_present(),
+        "empty trace_id should fail"
+    );
+
+    let event2 = StructuredSecurityLogEvent {
+        timestamp_ns: 0,
+        trace_id: "t".to_string(),
+        component: "".to_string(),
+        event_type: "auth_failure".to_string(),
+        outcome: "denied".to_string(),
+        error_code: None,
+        principal_id: "p".to_string(),
+        decision_id: "d".to_string(),
+        policy_id: "pol".to_string(),
+        zone_id: "z".to_string(),
+        metadata: std::collections::BTreeMap::new(),
+    };
+    assert!(
+        !event2.required_fields_present(),
+        "empty component should fail"
+    );
+}
+
+#[test]
+fn revocation_revoked_outcome_emits_denied_with_error_code() {
+    let mut observability = RuntimeSecurityObservability::new();
+    let event = observability.record_revocation_check(
+        context(1, "rev"),
+        RevocationCheckOutcome::Revoked,
+        10,
+        20,
+        5,
+        None,
+    );
+
+    assert_eq!(event.outcome, "denied");
+    assert!(event.error_code.is_some());
+    assert_eq!(
+        observability.metrics().revocation_check_total[&RevocationCheckOutcome::Revoked],
+        1
+    );
+}
+
+#[test]
+fn revocation_stale_outcome_emits_degraded() {
+    let mut observability = RuntimeSecurityObservability::new();
+    let event = observability.record_revocation_check(
+        context(1, "rev"),
+        RevocationCheckOutcome::Stale,
+        10,
+        20,
+        5,
+        Some(30),
+    );
+
+    assert_eq!(event.outcome, "degraded");
+    assert!(event.error_code.is_some());
+}
+
+#[test]
+fn all_six_event_types_produce_distinct_event_type_strings() {
+    let mut observability = RuntimeSecurityObservability::new();
+    observability.record_auth_failure(context(1, "a"), AuthFailureType::KeyRevoked, None, None);
+    observability.record_capability_denial(context(2, "b"), CapabilityDenialReason::Expired, "cap");
+    observability.record_replay_drop(context(3, "c"), ReplayDropReason::DuplicateSeq, 1, 2, "s");
+    observability.record_checkpoint_violation(
+        context(4, "d"),
+        CheckpointViolationType::ForkDetected,
+        1,
+        2,
+    );
+    observability.record_revocation_check(
+        context(5, "e"),
+        RevocationCheckOutcome::Pass,
+        10,
+        10,
+        5,
+        None,
+    );
+    observability.record_cross_zone_reference(
+        context(6, "f"),
+        CrossZoneReferenceType::ProvenanceAllowed,
+        "za",
+        "zb",
+    );
+
+    let event_types: BTreeSet<&str> = observability
+        .logs()
+        .iter()
+        .map(|e| e.event_type.as_str())
+        .collect();
+    assert_eq!(event_types.len(), 6, "all 6 event types must be distinct");
+}

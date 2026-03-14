@@ -706,3 +706,330 @@ fn enrichment_gaussian_rbf_zero_bandwidth_different_vectors_returns_zero() {
     // Different vectors with zero bandwidth: returns 0
     assert_eq!(val, 0);
 }
+
+// =========================================================================
+// DD. MonitorConfig: default_config produces valid config
+// =========================================================================
+
+#[test]
+fn enrichment_monitor_config_default_valid() {
+    let config = MonitorConfig::default_config();
+    assert!(config.window.window_size > 0);
+    assert!(config.window.slide_step > 0);
+    assert!(config.window.min_samples > 0);
+    assert!(config.significance_threshold_millionths > 0);
+    assert!(config.significance_threshold_millionths <= 1_000_000);
+}
+
+// =========================================================================
+// EE. MonitorConfig: serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_monitor_config_serde_roundtrip2() {
+    let config = small_config();
+    let json = serde_json::to_string(&config).unwrap();
+    let back: MonitorConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, back);
+}
+
+// =========================================================================
+// FF. MonitorConfig: clone and equality
+// =========================================================================
+
+#[test]
+fn enrichment_monitor_config_clone_eq() {
+    let config = small_config();
+    let cloned = config.clone();
+    assert_eq!(config, cloned);
+}
+
+// =========================================================================
+// GG. WindowConfig: serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_window_config_serde_roundtrip() {
+    let wc = WindowConfig {
+        window_size: 20,
+        slide_step: 10,
+        min_samples: 5,
+    };
+    let json = serde_json::to_string(&wc).unwrap();
+    let back: WindowConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(wc, back);
+}
+
+// =========================================================================
+// HH. EmbeddingVector: serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_embedding_vector_serde_roundtrip() {
+    let v = emb(&[100_000, 200_000, 300_000]);
+    let json = serde_json::to_string(&v).unwrap();
+    let back: EmbeddingVector = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, back);
+}
+
+// =========================================================================
+// II. EmbeddingVector: clone and equality
+// =========================================================================
+
+#[test]
+fn enrichment_embedding_vector_clone_eq() {
+    let v = emb(&[500_000]);
+    let cloned = v.clone();
+    assert_eq!(v, cloned);
+}
+
+// =========================================================================
+// JJ. ShiftVerdict: serde roundtrip all variants
+// =========================================================================
+
+#[test]
+fn enrichment_shift_verdict_serde_all_variants() {
+    let verdicts = [
+        ShiftVerdict::NoShift,
+        ShiftVerdict::ShiftDetected {
+            mmd_squared: 200_000,
+        },
+        ShiftVerdict::InsufficientSamples {
+            available: 3,
+            required: 10,
+        },
+        ShiftVerdict::Abstained {
+            reason: "low samples".into(),
+        },
+    ];
+    for v in &verdicts {
+        let json = serde_json::to_string(v).unwrap();
+        let back: ShiftVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+// =========================================================================
+// KK. ShiftError: serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_shift_error_serde_roundtrip() {
+    let errors = [
+        ShiftError::EmptyWindow,
+        ShiftError::DimensionMismatch {
+            expected: 3,
+            actual: 5,
+        },
+        ShiftError::InsufficientData,
+    ];
+    for e in &errors {
+        let json = serde_json::to_string(e).unwrap();
+        let back: ShiftError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*e, back);
+    }
+}
+
+// =========================================================================
+// LL. ShiftError: Display strings are unique
+// =========================================================================
+
+#[test]
+fn enrichment_shift_error_display_unique() {
+    let errors = [
+        ShiftError::EmptyWindow,
+        ShiftError::DimensionMismatch {
+            expected: 3,
+            actual: 5,
+        },
+        ShiftError::InsufficientData,
+    ];
+    let displays: std::collections::BTreeSet<String> =
+        errors.iter().map(|e| e.to_string()).collect();
+    assert_eq!(displays.len(), 3);
+}
+
+// =========================================================================
+// MM. KernelKind: serde roundtrip all variants
+// =========================================================================
+
+#[test]
+fn enrichment_kernel_kind_serde_all_variants() {
+    let kernels = [
+        KernelKind::Linear,
+        KernelKind::GaussianRbf {
+            bandwidth_millionths: 500_000,
+        },
+    ];
+    for k in &kernels {
+        let json = serde_json::to_string(k).unwrap();
+        let back: KernelKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(*k, back);
+    }
+}
+
+// =========================================================================
+// NN. Linear kernel: symmetric
+// =========================================================================
+
+#[test]
+fn enrichment_linear_kernel_symmetric() {
+    let a = emb(&[100_000, 200_000]);
+    let b = emb(&[300_000, 400_000]);
+    let ab = compute_kernel_value(&a, &b, &KernelKind::Linear);
+    let ba = compute_kernel_value(&b, &a, &KernelKind::Linear);
+    assert_eq!(ab, ba);
+}
+
+// =========================================================================
+// OO. Linear kernel: self-dot positive
+// =========================================================================
+
+#[test]
+fn enrichment_linear_kernel_self_dot_positive() {
+    let a = emb(&[500_000, 500_000]);
+    let val = compute_kernel_value(&a, &a, &KernelKind::Linear);
+    assert!(val > 0);
+}
+
+// =========================================================================
+// PP. compute_mmd_squared: identical distributions yield zero
+// =========================================================================
+
+#[test]
+fn enrichment_mmd_identical_distributions_zero() {
+    let samples: Vec<EmbeddingVector> = (0..5).map(|i| emb(&[100_000 + i * 100])).collect();
+    let mmd = compute_mmd_squared(&samples, &samples, &KernelKind::Linear);
+    assert!(mmd.is_ok());
+    assert_eq!(mmd.unwrap().mmd_squared_millionths, 0);
+}
+
+// =========================================================================
+// QQ. build_window: stream_kind preserved
+// =========================================================================
+
+#[test]
+fn enrichment_build_window_fields_preserved() {
+    let embeddings = vec![emb(&[100_000]), emb(&[200_000])];
+    let window = build_window(StreamKind::LiveWorkload, embeddings.clone(), 42);
+    assert_eq!(window.stream_kind, StreamKind::LiveWorkload);
+    assert_eq!(window.start_index, 42);
+    assert_eq!(window.embeddings.len(), 2);
+}
+
+// =========================================================================
+// RR. detect_shift: below min_samples yields InsufficientSamples
+// =========================================================================
+
+#[test]
+fn enrichment_detect_shift_insufficient_samples() {
+    let config = MonitorConfig {
+        window: WindowConfig {
+            window_size: 10,
+            slide_step: 5,
+            min_samples: 10,
+        },
+        kernel: KernelKind::Linear,
+        significance_threshold_millionths: 100_000,
+        min_effect_size_millionths: 10_000,
+        abstention_sample_floor: 10,
+    };
+    let bench = build_window(StreamKind::Benchmark, vec![emb(&[100_000])], 0);
+    let live = build_window(StreamKind::LiveWorkload, vec![emb(&[900_000])], 0);
+    let cert = detect_shift(&bench, &live, &config);
+    assert!(matches!(
+        cert.verdict,
+        ShiftVerdict::InsufficientSamples { .. }
+    ));
+}
+
+// =========================================================================
+// SS. ShiftCertificate: serde roundtrip (2)
+// =========================================================================
+
+#[test]
+fn enrichment_shift_certificate_serde_roundtrip2() {
+    let bench = build_window(
+        StreamKind::Benchmark,
+        (0..5).map(|i| emb(&[100_000 + i * 100])).collect(),
+        0,
+    );
+    let live = build_window(
+        StreamKind::LiveWorkload,
+        (0..5).map(|i| emb(&[900_000 + i * 100])).collect(),
+        0,
+    );
+    let cert = detect_shift(&bench, &live, &small_config());
+    let json = serde_json::to_string(&cert).unwrap();
+    let back: ShiftCertificate = serde_json::from_str(&json).unwrap();
+    assert_eq!(cert, back);
+}
+
+// =========================================================================
+// TT. ShiftEvidenceManifest: serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_evidence_manifest_serde_roundtrip() {
+    let manifest = run_shift_evidence();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let back: ShiftEvidenceManifest = serde_json::from_str(&json).unwrap();
+    assert_eq!(manifest, back);
+}
+
+// =========================================================================
+// UU. ShiftEvidenceManifest: schema version matches constant
+// =========================================================================
+
+#[test]
+fn enrichment_evidence_manifest_schema_version() {
+    let manifest = run_shift_evidence();
+    assert_eq!(manifest.schema_version, SHIFT_MONITOR_SCHEMA_VERSION);
+}
+
+// =========================================================================
+// VV. MonitorState: serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_monitor_state_serde_roundtrip() {
+    let state = MonitorState {
+        benchmark_windows: vec![build_window(
+            StreamKind::Benchmark,
+            vec![emb(&[500_000])],
+            0,
+        )],
+        live_windows: Vec::new(),
+        certificates: Vec::new(),
+        state_hash: ContentHash::compute(b"test"),
+    };
+    let json = serde_json::to_string(&state).unwrap();
+    let back: MonitorState = serde_json::from_str(&json).unwrap();
+    assert_eq!(state, back);
+}
+
+// =========================================================================
+// WW. Constants: schema version and component nonempty
+// =========================================================================
+
+#[test]
+fn enrichment_constants_nonempty() {
+    assert!(!SHIFT_MONITOR_SCHEMA_VERSION.is_empty());
+    assert!(SHIFT_MONITOR_SCHEMA_VERSION.contains("distribution-shift-monitor"));
+}
+
+// =========================================================================
+// XX. GaussianRbf: symmetric
+// =========================================================================
+
+#[test]
+fn enrichment_gaussian_rbf_symmetric() {
+    let a = emb(&[100_000, 500_000]);
+    let b = emb(&[300_000, 700_000]);
+    let kernel = KernelKind::GaussianRbf {
+        bandwidth_millionths: 500_000,
+    };
+    let ab = compute_kernel_value(&a, &b, &kernel);
+    let ba = compute_kernel_value(&b, &a, &kernel);
+    assert_eq!(ab, ba);
+}

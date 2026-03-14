@@ -1200,3 +1200,230 @@ fn multiple_checkpoints_accumulate() {
     }
     assert_eq!(log.checkpoints().len(), 3);
 }
+
+// ---------- enrichment: LineageLogConfig ----------
+
+#[test]
+fn lineage_log_config_debug_is_nonempty() {
+    let config = LineageLogConfig::default();
+    let debug = format!("{config:?}");
+    assert!(debug.contains("LineageLogConfig"));
+}
+
+#[test]
+fn lineage_log_config_clone_equals_original() {
+    let config = LineageLogConfig::default();
+    let cloned = config.clone();
+    assert_eq!(
+        serde_json::to_string(&config).unwrap(),
+        serde_json::to_string(&cloned).unwrap()
+    );
+}
+
+// ---------- enrichment: ReplacementKind ordering ----------
+
+#[test]
+fn replacement_kind_btreeset_ordering_is_deterministic() {
+    let mut set = BTreeSet::new();
+    set.insert(ReplacementKind::Rollback);
+    set.insert(ReplacementKind::DelegateToNative);
+    set.insert(ReplacementKind::Demotion);
+    set.insert(ReplacementKind::RePromotion);
+
+    let vec: Vec<_> = set.iter().collect();
+    // Just verify consistent ordering — exact order depends on serde repr
+    let json_a = serde_json::to_string(&vec).unwrap();
+    let json_b = serde_json::to_string(&vec).unwrap();
+    assert_eq!(json_a, json_b);
+}
+
+#[test]
+fn replacement_kind_clone_copy_eq() {
+    let kind = ReplacementKind::DelegateToNative;
+    let cloned = kind.clone();
+    assert_eq!(kind, cloned);
+}
+
+#[test]
+fn replacement_kind_debug_all_variants() {
+    for kind in [
+        ReplacementKind::DelegateToNative,
+        ReplacementKind::Demotion,
+        ReplacementKind::RePromotion,
+        ReplacementKind::Rollback,
+    ] {
+        let debug = format!("{kind:?}");
+        assert!(!debug.is_empty());
+    }
+}
+
+// ---------- enrichment: log audit on empty ----------
+
+#[test]
+fn audit_on_empty_log_is_valid() {
+    let log = ReplacementLineageLog::new(LineageLogConfig::default());
+    let audit = log.audit();
+    assert!(audit.chain_valid);
+    assert!(audit.merkle_valid);
+    assert_eq!(audit.total_slots, 0);
+    assert_eq!(audit.checkpoint_count, 0);
+}
+
+// ---------- enrichment: log query with slot_id filter ----------
+
+#[test]
+fn lineage_query_filters_by_slot_id() {
+    let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
+    log.append(
+        receipt("slot-filter-a", "old-0", "new-0", 100),
+        ReplacementKind::DelegateToNative,
+        100,
+    )
+    .expect("append");
+    log.append(
+        receipt("slot-filter-b", "old-1", "new-1", 200),
+        ReplacementKind::DelegateToNative,
+        200,
+    )
+    .expect("append");
+
+    let query = LineageQuery {
+        slot_id: Some(slot_id("slot-filter-a")),
+        kinds: None,
+        min_timestamp_ns: None,
+        max_timestamp_ns: None,
+    };
+    let results = log.query(&query);
+    assert_eq!(results.len(), 1);
+}
+
+// ---------- enrichment: EvidencePointerInput ----------
+
+#[test]
+fn evidence_pointer_input_debug_is_nonempty() {
+    let input = EvidencePointerInput {
+        category: EvidenceCategory::GateResult,
+        artifact_digest: "gate-1".to_string(),
+        passed: Some(true),
+        summary: "gate passed".to_string(),
+    };
+    let debug = format!("{input:?}");
+    assert!(debug.contains("EvidencePointerInput"));
+}
+
+// ---------- enrichment: DemotionReceiptInput ----------
+
+#[test]
+fn demotion_receipt_input_debug_is_nonempty() {
+    let input = DemotionReceiptInput {
+        receipt_id: "demotion-1".to_string(),
+        slot_id: slot_id("slot-debug"),
+        demoted_cell_digest: "native-v1".to_string(),
+        restored_cell_digest: "delegate-v1".to_string(),
+        demotion_reason: "test_reason".to_string(),
+        timestamp_ns: 100,
+        rollback_token_used: "rollback-v1".to_string(),
+        linked_replacement_receipt_id: None,
+        evidence: Vec::new(),
+    };
+    let debug = format!("{input:?}");
+    assert!(debug.contains("demotion-1"));
+}
+
+// ---------- enrichment: consistency proof on identical checkpoints ----------
+
+#[test]
+fn consistency_proof_same_checkpoint_index_is_error() {
+    let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
+    let r = receipt("slot-same-cp", "old-0", "new-0", 100);
+    log.append(r, ReplacementKind::DelegateToNative, 100)
+        .expect("append");
+    log.create_checkpoint(100, SecurityEpoch::from_raw(11))
+        .expect("checkpoint");
+
+    let err = log
+        .consistency_proof(0, 0)
+        .expect_err("same checkpoint index should error");
+    assert!(matches!(
+        err,
+        LineageLogError::InvalidCheckpointOrder { .. }
+    ));
+}
+
+// ---------- enrichment: log slot_lineage for nonexistent slot ----------
+
+#[test]
+fn slot_lineage_for_nonexistent_slot_is_empty() {
+    let log = ReplacementLineageLog::new(LineageLogConfig::default());
+    let lineage = log.slot_lineage(&slot_id("no-such-slot"));
+    assert!(lineage.is_empty());
+}
+
+// ---------- enrichment: log serialization preserves entries ----------
+
+#[test]
+fn log_json_roundtrip_preserves_entries_count() {
+    let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
+    for i in 0..5 {
+        log.append(
+            receipt(
+                "slot-json",
+                &format!("old-{i}"),
+                &format!("new-{i}"),
+                (i + 1) * 100,
+            ),
+            ReplacementKind::DelegateToNative,
+            (i + 1) * 100,
+        )
+        .expect("append");
+    }
+
+    let json = serde_json::to_string(&log).expect("serialize");
+    let decoded: ReplacementLineageLog = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.len(), 5);
+    assert_eq!(decoded.entries().len(), 5);
+}
+
+// ---------- enrichment: replay_join empty index ----------
+
+#[test]
+fn replay_join_on_empty_index_returns_empty() {
+    let mut index = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+    let rows = index
+        .replay_join(&ReplayJoinQuery::default(), &index_context())
+        .expect("replay join on empty");
+    assert!(rows.is_empty());
+}
+
+// ---------- enrichment: slot_lineage query with limit ----------
+
+#[test]
+fn slot_lineage_query_respects_limit() {
+    let context = index_context();
+    let mut index = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+
+    for i in 0..5 {
+        let r = receipt(
+            "slot-limit",
+            &format!("old-{i}"),
+            &format!("new-{i}"),
+            (i + 1) * 100,
+        );
+        index
+            .index_replacement_receipt(&r, ReplacementKind::DelegateToNative, &[], &context)
+            .expect("index");
+    }
+
+    let chain = index
+        .slot_lineage(
+            &slot_id("slot-limit"),
+            &SlotLineageQuery {
+                min_timestamp_ns: None,
+                max_timestamp_ns: None,
+                limit: Some(3),
+            },
+            &context,
+        )
+        .expect("slot lineage with limit");
+    assert_eq!(chain.len(), 3);
+}

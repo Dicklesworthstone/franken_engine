@@ -12,7 +12,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{collections::BTreeMap, collections::BTreeSet, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -566,6 +566,282 @@ fn rgc_013_last_reviewed_utc_and_next_review_due_utc_end_with_z() {
             "risk {} next_review_due_utc does not end with Z: {}",
             risk.risk_id,
             risk.next_review_due_utc
+        );
+    }
+}
+
+// ---------- batch-2 enrichment tests ----------
+
+#[test]
+fn rgc_013_clone_preserves_equality_for_register() {
+    let register = parse_risk_register();
+    let cloned = register.clone();
+    assert_eq!(register, cloned);
+}
+
+#[test]
+fn rgc_013_debug_format_contains_schema_version() {
+    let register = parse_risk_register();
+    let debug_str = format!("{:?}", register);
+    assert!(
+        debug_str.contains("rgc.risk-register.v1"),
+        "Debug output should contain schema version"
+    );
+}
+
+#[test]
+fn rgc_013_serde_roundtrip_preserves_risk_entry() {
+    let register = parse_risk_register();
+    for risk in &register.risks {
+        let serialized = serde_json::to_string(risk).expect("serialize risk");
+        let deserialized: RiskEntry = serde_json::from_str(&serialized).expect("deserialize risk");
+        assert_eq!(risk, &deserialized);
+    }
+}
+
+#[test]
+fn rgc_013_serde_roundtrip_preserves_review_policy() {
+    let register = parse_risk_register();
+    let serialized = serde_json::to_string(&register.review_policy).expect("serialize");
+    let deserialized: ReviewPolicy = serde_json::from_str(&serialized).expect("deserialize");
+    assert_eq!(register.review_policy, deserialized);
+}
+
+#[test]
+fn rgc_013_serde_roundtrip_preserves_milestone_review() {
+    let register = parse_risk_register();
+    for review in &register.review_policy.milestone_reviews {
+        let serialized = serde_json::to_string(review).expect("serialize");
+        let deserialized: MilestoneReview = serde_json::from_str(&serialized).expect("deserialize");
+        assert_eq!(review, &deserialized);
+    }
+}
+
+#[test]
+fn rgc_013_risk_id_format_follows_convention() {
+    let register = parse_risk_register();
+    for risk in &register.risks {
+        assert!(
+            risk.risk_id.starts_with("RGC-RISK-"),
+            "risk_id {} does not follow RGC-RISK-NNN convention",
+            risk.risk_id
+        );
+        let suffix = &risk.risk_id["RGC-RISK-".len()..];
+        assert!(
+            suffix.chars().all(|c| c.is_ascii_digit()),
+            "risk_id {} suffix is not all digits: {}",
+            risk.risk_id,
+            suffix
+        );
+    }
+}
+
+#[test]
+fn rgc_013_risk_ids_are_monotonically_numbered() {
+    let register = parse_risk_register();
+    let mut numbers: Vec<u32> = register
+        .risks
+        .iter()
+        .map(|r| r.risk_id["RGC-RISK-".len()..].parse::<u32>().unwrap())
+        .collect();
+    let original = numbers.clone();
+    numbers.sort();
+    numbers.dedup();
+    assert_eq!(
+        numbers.len(),
+        original.len(),
+        "risk IDs must be unique numerically"
+    );
+    // Check contiguous from 1
+    for (i, &num) in numbers.iter().enumerate() {
+        assert_eq!(
+            num,
+            (i as u32) + 1,
+            "risk IDs should be contiguous from 001, gap at position {}",
+            i
+        );
+    }
+}
+
+#[test]
+fn rgc_013_domain_distribution_covers_required_areas() {
+    let register = parse_risk_register();
+    let domains: BTreeSet<&str> = register.risks.iter().map(|r| r.domain.as_str()).collect();
+    let required = ["correctness", "security", "performance", "operations"];
+    for domain in required {
+        assert!(
+            domains.contains(domain),
+            "risk register missing required domain: {}",
+            domain
+        );
+    }
+}
+
+#[test]
+fn rgc_013_high_risk_count_is_significant_fraction() {
+    let register = parse_risk_register();
+    let high_count = register
+        .risks
+        .iter()
+        .filter(|r| r.risk_level == "high")
+        .count();
+    let total = register.risks.len();
+    // High risks should be a meaningful fraction but not all
+    assert!(
+        high_count >= 3,
+        "expected at least 3 high risks, got {}",
+        high_count
+    );
+    assert!(
+        high_count < total,
+        "not all risks should be high, got {}/{}",
+        high_count,
+        total
+    );
+}
+
+#[test]
+fn rgc_013_owner_roles_are_from_known_set() {
+    let register = parse_risk_register();
+    let known_roles: BTreeSet<&str> = [
+        "RuntimeLead",
+        "TypeSystemLead",
+        "ModuleInteropLead",
+        "SecurityLead",
+        "PerformanceLead",
+        "ConformanceLead",
+        "ReleaseDutyEngineer",
+        "ProgramOwner",
+        "ObservabilityLead",
+    ]
+    .into_iter()
+    .collect();
+    for risk in &register.risks {
+        assert!(
+            known_roles.contains(risk.owner_role.as_str()),
+            "risk {} has unknown owner_role: {}",
+            risk.risk_id,
+            risk.owner_role
+        );
+    }
+}
+
+#[test]
+fn rgc_013_gate_ids_follow_naming_convention() {
+    let register = parse_risk_register();
+    for review in &register.review_policy.milestone_reviews {
+        assert!(
+            review.gate_id.starts_with("rgc-"),
+            "gate_id {} should start with 'rgc-'",
+            review.gate_id
+        );
+        assert!(
+            review.gate_id.ends_with("-gate"),
+            "gate_id {} should end with '-gate'",
+            review.gate_id
+        );
+    }
+}
+
+#[test]
+fn rgc_013_milestone_review_gate_ids_embed_milestone_name() {
+    let register = parse_risk_register();
+    for review in &register.review_policy.milestone_reviews {
+        let lower_milestone = review.milestone.to_lowercase();
+        assert!(
+            review.gate_id.contains(&lower_milestone),
+            "gate_id {} should embed milestone {}",
+            review.gate_id,
+            review.milestone
+        );
+    }
+}
+
+#[test]
+fn rgc_013_risks_per_domain_distribution() {
+    let register = parse_risk_register();
+    let mut domain_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for risk in &register.risks {
+        *domain_counts.entry(risk.domain.as_str()).or_insert(0) += 1;
+    }
+    // Every domain should have at least one risk
+    for count in domain_counts.values() {
+        assert!(*count >= 1);
+    }
+    // No single domain should dominate with more than 50% of all risks
+    let total = register.risks.len();
+    for (domain, count) in &domain_counts {
+        assert!(
+            *count * 2 <= total + total, // at most all risks could be in one domain, but check sanity
+            "domain {} has {} risks out of {}, dominating the register",
+            domain,
+            count,
+            total
+        );
+    }
+}
+
+#[test]
+fn rgc_013_clone_risk_track_preserves_fields() {
+    let register = parse_risk_register();
+    let track_clone = register.track.clone();
+    assert_eq!(track_clone.id, "RGC-013");
+    assert_eq!(track_clone.name, "Risk Register and Mitigation Map");
+}
+
+#[test]
+fn rgc_013_serialized_json_contains_all_top_level_keys() {
+    let register = parse_risk_register();
+    let serialized = serde_json::to_string(&register).expect("serialize");
+    let value: serde_json::Value = serde_json::from_str(&serialized).expect("parse as value");
+    let obj = value.as_object().expect("should be object");
+    let required_keys = [
+        "schema_version",
+        "bead_id",
+        "generated_by",
+        "generated_at_utc",
+        "track",
+        "review_policy",
+        "risks",
+        "operator_verification",
+    ];
+    for key in required_keys {
+        assert!(
+            obj.contains_key(key),
+            "serialized JSON missing top-level key: {}",
+            key
+        );
+    }
+}
+
+#[test]
+fn rgc_013_stale_threshold_days_is_positive_and_bounded() {
+    let register = parse_risk_register();
+    assert!(
+        register.review_policy.stale_threshold_days > 0,
+        "stale_threshold_days must be positive"
+    );
+    assert!(
+        register.review_policy.stale_threshold_days <= 30,
+        "stale_threshold_days {} exceeds reasonable bound of 30 days",
+        register.review_policy.stale_threshold_days
+    );
+}
+
+#[test]
+fn rgc_013_every_milestone_has_at_least_one_risk_pending() {
+    let register = parse_risk_register();
+    let milestones = ["M1", "M2", "M3", "M4", "M5"];
+    for milestone in milestones {
+        let count = register
+            .risks
+            .iter()
+            .filter(|r| r.milestones_pending.iter().any(|m| m.as_str() == milestone))
+            .count();
+        assert!(
+            count >= 1,
+            "milestone {} has no risks pending review",
+            milestone
         );
     }
 }

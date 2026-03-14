@@ -707,3 +707,288 @@ fn conformance_run_summary_total_equals_passed_plus_failed_plus_waived() {
         "total_assets must equal passed + failed + waived + errored"
     );
 }
+
+#[test]
+fn conformance_runner_config_serde_roundtrip() {
+    let config = ConformanceRunnerConfig::default();
+    let json = serde_json::to_string(&config).expect("serialize config");
+    let recovered: ConformanceRunnerConfig =
+        serde_json::from_str(&json).expect("deserialize config");
+    assert_eq!(config.seed, recovered.seed);
+    assert_eq!(config.trace_prefix, recovered.trace_prefix);
+    assert_eq!(config.policy_id, recovered.policy_id);
+    assert_eq!(config.locale, recovered.locale);
+    assert_eq!(config.timezone, recovered.timezone);
+    assert_eq!(config.gc_schedule, recovered.gc_schedule);
+    assert_eq!(config.run_date, recovered.run_date);
+}
+
+#[test]
+fn conformance_waiver_set_serde_roundtrip() {
+    let mut set = ConformanceWaiverSet::default();
+    set.waivers.push(conformance_harness::ConformanceWaiver {
+        asset_id: "test-asset-1".to_string(),
+        reason_code: conformance_harness::WaiverReasonCode::HarnessGap,
+        tracking_bead: "bd-test".to_string(),
+        expiry_date: "2027-12-31".to_string(),
+    });
+    let json = serde_json::to_string(&set).expect("serialize");
+    let recovered: ConformanceWaiverSet = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(set.waivers.len(), recovered.waivers.len());
+    assert_eq!(set.waivers[0].asset_id, recovered.waivers[0].asset_id);
+    assert_eq!(set.waivers[0].reason_code, recovered.waivers[0].reason_code);
+}
+
+#[test]
+fn conformance_run_result_serde_roundtrip() {
+    let runner = ConformanceRunner::default();
+    let waivers = ConformanceWaiverSet::load_toml(sample_waiver_path()).expect("waiver load");
+    let run = runner
+        .run(sample_manifest_path(), &waivers)
+        .expect("conformance run");
+    let json = serde_json::to_string(&run).expect("serialize run result");
+    let recovered: conformance_harness::ConformanceRunResult =
+        serde_json::from_str(&json).expect("deserialize run result");
+    assert_eq!(run.run_id, recovered.run_id);
+    assert_eq!(run.asset_manifest_hash, recovered.asset_manifest_hash);
+    assert_eq!(run.logs.len(), recovered.logs.len());
+    assert_eq!(run.summary.total_assets, recovered.summary.total_assets);
+    assert_eq!(run.summary.passed, recovered.summary.passed);
+}
+
+#[test]
+fn donor_fixture_serde_roundtrip() {
+    let fixture = conformance_harness::DonorFixture {
+        donor_harness: "quickjs".to_string(),
+        source: "let x = 1;".to_string(),
+        observed_output: "1\n".to_string(),
+    };
+    let json = serde_json::to_string(&fixture).expect("serialize fixture");
+    let recovered: conformance_harness::DonorFixture =
+        serde_json::from_str(&json).expect("deserialize fixture");
+    assert_eq!(fixture.donor_harness, recovered.donor_harness);
+    assert_eq!(fixture.source, recovered.source);
+    assert_eq!(fixture.observed_output, recovered.observed_output);
+}
+
+#[test]
+fn conformance_run_summary_serde_roundtrip() {
+    let runner = ConformanceRunner::default();
+    let waivers = ConformanceWaiverSet::load_toml(sample_waiver_path()).expect("waiver load");
+    let run = runner
+        .run(sample_manifest_path(), &waivers)
+        .expect("conformance run");
+    let json = serde_json::to_string(&run.summary).expect("serialize summary");
+    let recovered: conformance_harness::ConformanceRunSummary =
+        serde_json::from_str(&json).expect("deserialize summary");
+    assert_eq!(run.summary.run_id, recovered.run_id);
+    assert_eq!(
+        run.summary.asset_manifest_hash,
+        recovered.asset_manifest_hash
+    );
+    assert_eq!(run.summary.env_fingerprint, recovered.env_fingerprint);
+}
+
+#[test]
+fn conformance_log_event_serde_roundtrip() {
+    let runner = ConformanceRunner::default();
+    let waivers = ConformanceWaiverSet::load_toml(sample_waiver_path()).expect("waiver load");
+    let run = runner
+        .run(sample_manifest_path(), &waivers)
+        .expect("conformance run");
+    for log in &run.logs {
+        let json = serde_json::to_string(log).expect("serialize log event");
+        let recovered: conformance_harness::ConformanceLogEvent =
+            serde_json::from_str(&json).expect("deserialize log event");
+        assert_eq!(log.trace_id, recovered.trace_id);
+        assert_eq!(log.asset_id, recovered.asset_id);
+        assert_eq!(log.outcome, recovered.outcome);
+        assert_eq!(log.duration_us, recovered.duration_us);
+    }
+}
+
+#[test]
+fn conformance_runner_clone_preserves_config() {
+    let runner = ConformanceRunner {
+        config: ConformanceRunnerConfig {
+            seed: 99,
+            run_date: "2026-03-14".to_string(),
+            ..ConformanceRunnerConfig::default()
+        },
+        ..ConformanceRunner::default()
+    };
+    let cloned = runner.clone();
+    assert_eq!(runner.config.seed, cloned.config.seed);
+    assert_eq!(runner.config.run_date, cloned.config.run_date);
+    assert_eq!(runner.config.policy_id, cloned.config.policy_id);
+}
+
+#[test]
+fn conformance_waiver_set_clone_is_equal() {
+    let mut set = ConformanceWaiverSet::default();
+    set.waivers.push(conformance_harness::ConformanceWaiver {
+        asset_id: "asset-clone-test".to_string(),
+        reason_code: conformance_harness::WaiverReasonCode::NotYetImplemented,
+        tracking_bead: "bd-clone".to_string(),
+        expiry_date: "2028-01-01".to_string(),
+    });
+    let cloned = set.clone();
+    assert_eq!(set, cloned);
+}
+
+#[test]
+fn conformance_manifest_schema_version_matches_constant() {
+    let manifest = conformance_harness::ConformanceAssetManifest::load(sample_manifest_path())
+        .expect("load manifest");
+    assert_eq!(
+        manifest.schema_version,
+        conformance_harness::ConformanceAssetManifest::CURRENT_SCHEMA,
+        "manifest schema_version should match CURRENT_SCHEMA constant"
+    );
+}
+
+#[test]
+fn conformance_runner_debug_format_contains_config() {
+    let runner = ConformanceRunner::default();
+    let debug_str = format!("{runner:?}");
+    assert!(
+        debug_str.contains("ConformanceRunner"),
+        "debug format should contain type name"
+    );
+    assert!(
+        debug_str.contains("config"),
+        "debug format should contain config field"
+    );
+}
+
+#[test]
+fn conformance_repro_metadata_default_has_package_version() {
+    let meta = conformance_harness::ConformanceReproMetadata::default();
+    assert!(
+        meta.version_combination.contains_key("franken_engine"),
+        "default repro metadata should include franken_engine version"
+    );
+    assert_eq!(meta.first_seen_commit, "unknown");
+    assert!(meta.regression_commit.is_none());
+    assert!(meta.ci_run_id.is_none());
+    assert_eq!(meta.issue_tracker_project, "beads");
+}
+
+#[test]
+fn conformance_asset_record_serde_roundtrip_with_optional_ifc_fields() {
+    let record = conformance_harness::ConformanceAssetRecord {
+        asset_id: "test-ifc-asset".to_string(),
+        source_donor: "test262".to_string(),
+        semantic_domain: "ifc_corpus/benign".to_string(),
+        normative_reference: "sec-14.1".to_string(),
+        fixture_path: "fixtures/test.json".to_string(),
+        fixture_hash: "a".repeat(64),
+        expected_output_path: "expected/test.txt".to_string(),
+        expected_output_hash: "b".repeat(64),
+        import_date: "2026-01-01".to_string(),
+        category: Some("benign".to_string()),
+        source_labels: vec!["credential".to_string()],
+        sink_clearances: vec!["network_egress".to_string()],
+        flow_path_type: Some("direct".to_string()),
+        expected_outcome: Some("allow".to_string()),
+        expected_evidence_type: Some("none".to_string()),
+    };
+    let json = serde_json::to_string(&record).expect("serialize asset record");
+    let recovered: conformance_harness::ConformanceAssetRecord =
+        serde_json::from_str(&json).expect("deserialize asset record");
+    assert_eq!(record.asset_id, recovered.asset_id);
+    assert_eq!(record.category, recovered.category);
+    assert_eq!(record.source_labels, recovered.source_labels);
+    assert_eq!(record.sink_clearances, recovered.sink_clearances);
+    assert_eq!(record.flow_path_type, recovered.flow_path_type);
+    assert_eq!(record.expected_outcome, recovered.expected_outcome);
+    assert_eq!(
+        record.expected_evidence_type,
+        recovered.expected_evidence_type
+    );
+}
+
+#[test]
+fn conformance_asset_record_serde_defaults_for_missing_optional_fields() {
+    let json = r#"{
+        "asset_id": "test-minimal",
+        "source_donor": "quickjs",
+        "semantic_domain": "error_handling",
+        "normative_reference": "sec-1.2",
+        "fixture_path": "fixtures/minimal.json",
+        "fixture_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expected_output_path": "expected/minimal.txt",
+        "expected_output_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "import_date": "2026-01-01"
+    }"#;
+    let record: conformance_harness::ConformanceAssetRecord =
+        serde_json::from_str(json).expect("deserialize minimal asset record");
+    assert!(record.category.is_none());
+    assert!(record.source_labels.is_empty());
+    assert!(record.sink_clearances.is_empty());
+    assert!(record.flow_path_type.is_none());
+    assert!(record.expected_outcome.is_none());
+    assert!(record.expected_evidence_type.is_none());
+}
+
+#[test]
+fn conformance_log_events_all_have_conformance_runner_component() {
+    let runner = ConformanceRunner::default();
+    let waivers = ConformanceWaiverSet::load_toml(sample_waiver_path()).expect("waiver load");
+    let run = runner
+        .run(sample_manifest_path(), &waivers)
+        .expect("conformance run");
+    for log in &run.logs {
+        assert_eq!(
+            log.component, "conformance_runner",
+            "log for {} should have component=conformance_runner, got {}",
+            log.asset_id, log.component
+        );
+        assert_eq!(
+            log.event, "asset_execution",
+            "log for {} should have event=asset_execution, got {}",
+            log.asset_id, log.event
+        );
+    }
+}
+
+#[test]
+fn conformance_run_with_all_passing_has_no_minimized_repros() {
+    let runner = ConformanceRunner::default();
+    let waivers = ConformanceWaiverSet::load_toml(sample_waiver_path()).expect("waiver load");
+    let run = runner
+        .run(sample_manifest_path(), &waivers)
+        .expect("conformance run");
+    assert_eq!(run.summary.failed, 0);
+    assert!(
+        run.minimized_repros.is_empty(),
+        "all-passing run should have no minimized repros"
+    );
+}
+
+#[test]
+fn waiver_reason_code_all_variants_serde_roundtrip() {
+    use conformance_harness::WaiverReasonCode;
+    let variants = [
+        WaiverReasonCode::HarnessGap,
+        WaiverReasonCode::HostHookMissing,
+        WaiverReasonCode::IntentionalDivergence,
+        WaiverReasonCode::NotYetImplemented,
+    ];
+    for variant in &variants {
+        let json = serde_json::to_string(variant).expect("serialize waiver reason");
+        let recovered: WaiverReasonCode =
+            serde_json::from_str(&json).expect("deserialize waiver reason");
+        assert_eq!(*variant, recovered);
+    }
+}
+
+#[test]
+fn conformance_manifest_generated_at_utc_is_nonempty() {
+    let manifest = conformance_harness::ConformanceAssetManifest::load(sample_manifest_path())
+        .expect("load manifest");
+    assert!(
+        !manifest.generated_at_utc.trim().is_empty(),
+        "manifest generated_at_utc should be non-empty"
+    );
+}

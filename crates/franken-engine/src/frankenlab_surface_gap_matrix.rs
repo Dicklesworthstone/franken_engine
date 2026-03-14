@@ -27,8 +27,10 @@ use crate::hash_tiers::ContentHash;
 // ---------------------------------------------------------------------------
 
 pub const COMPONENT: &str = "frankenlab_surface_gap_matrix";
-pub const BEAD_ID: &str = "bd-3nr.1.1.2";
-pub const GAP_MATRIX_SCHEMA_VERSION: &str = "frankenengine.frankenlab-gap-matrix.v1";
+// Reuse the canonical bead/schema identity so the sibling gap-matrix modules
+// cannot silently drift apart.
+pub const BEAD_ID: &str = crate::frankenlab_gap_matrix::GAP_MATRIX_BEAD_ID;
+pub const GAP_MATRIX_SCHEMA_VERSION: &str = crate::frankenlab_gap_matrix::GAP_MATRIX_SCHEMA_VERSION;
 
 // ---------------------------------------------------------------------------
 // SurfaceId — which local module/capability area
@@ -728,7 +730,7 @@ mod tests {
     fn schema_version_is_stable() {
         assert_eq!(
             GAP_MATRIX_SCHEMA_VERSION,
-            "frankenengine.frankenlab-gap-matrix.v1"
+            "franken-engine.frankenlab-gap-matrix.v1"
         );
     }
 

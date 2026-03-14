@@ -659,9 +659,27 @@ impl CausalDag {
             }
 
             // Instrument must NOT have a direct path to outcome (only through treatment)
-            let inst_descendants = self.descendants(inst);
-            let has_direct_outcome_path =
-                inst_descendants.contains(&outcome) && !self.has_path(treatment, outcome);
+            // We verify this by searching for a path from `inst` to `outcome` that does NOT pass through `treatment`.
+            let mut stack = vec![inst];
+            let mut visited = BTreeSet::new();
+            let mut has_direct_outcome_path = false;
+
+            while let Some(node) = stack.pop() {
+                if node == outcome {
+                    has_direct_outcome_path = true;
+                    break;
+                }
+                if node == treatment && node != inst {
+                    continue; // Stop exploring this path, it goes through treatment
+                }
+                if visited.insert(node) {
+                    if let Some(children) = self.children.get(&node) {
+                        for &child in children {
+                            stack.push(child);
+                        }
+                    }
+                }
+            }
 
             // Check: instrument -> treatment -> outcome, no inst -> outcome bypass
             if !has_direct_outcome_path {

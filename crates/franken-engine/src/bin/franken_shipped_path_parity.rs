@@ -1035,7 +1035,8 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::Cell(_)
         | OrchestratorError::Containment(_)
         | OrchestratorError::IfcRuntimeGuardBlocked { .. }
-        | OrchestratorError::EmptyExtensionId => FailureClass::Runtime,
+        | OrchestratorError::EmptyExtensionId
+        | OrchestratorError::PreparedExecutionContextMismatch { .. } => FailureClass::Runtime,
     }
 }
 

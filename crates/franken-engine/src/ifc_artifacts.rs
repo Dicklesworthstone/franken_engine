@@ -711,6 +711,8 @@ pub struct DeclassificationReceipt {
     pub sink_clearance: Label,
     /// Reference to the declassification route in the governing policy.
     pub declassification_route_ref: String,
+    /// Decision contract that authorized this declassification.
+    pub decision_contract_id: String,
     /// Summary of the policy evaluation.
     pub policy_evaluation_summary: String,
     /// Loss assessment (expected loss in millionths, 1_000_000 = 1.0).
@@ -765,7 +767,7 @@ impl DeclassificationReceipt {
 fn declassification_receipt_schema() -> &'static SchemaHash {
     use std::sync::LazyLock;
     static HASH: LazyLock<SchemaHash> =
-        LazyLock::new(|| SchemaHash::from_definition(b"ifc_declassification_receipt_v1"));
+        LazyLock::new(|| SchemaHash::from_definition(b"ifc_declassification_receipt_v2"));
     &HASH
 }
 
@@ -1020,6 +1022,7 @@ mod tests {
             source_label: Label::Secret,
             sink_clearance: Label::Internal,
             declassification_route_ref: "declass-1".to_string(),
+            decision_contract_id: "decision-contract-1".to_string(),
             policy_evaluation_summary: "approved by security team".to_string(),
             loss_assessment_milli: 5000,
             decision: DeclassificationDecision::Allow,

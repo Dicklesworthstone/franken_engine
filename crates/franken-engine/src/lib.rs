@@ -54,6 +54,7 @@ pub mod capability_token;
 pub mod capability_witness;
 pub mod catastrophe_witness_generator;
 pub mod catastrophic_tail_tournament_gate;
+pub mod category_shift_report;
 pub mod causal_intervention_dag;
 pub mod causal_regret_evidence_gate;
 pub mod causal_replay;

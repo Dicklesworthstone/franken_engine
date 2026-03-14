@@ -46,6 +46,8 @@ pub struct DeclassificationRequest {
     pub trace_id: String,
     /// Requested declassification route ID (from the flow policy).
     pub requested_route_id: String,
+    /// Decision contract expected to authorize this declassification.
+    pub decision_contract_id: String,
     /// Whether this is an emergency declassification.
     pub is_emergency: bool,
     /// Timestamp (unix ms).
@@ -554,6 +556,7 @@ impl DeclassificationPipeline {
             source_label: request.source_label.clone(),
             sink_clearance: request.sink_clearance.clone(),
             declassification_route_ref: route_ref.to_string(),
+            decision_contract_id: request.decision_contract_id.clone(),
             policy_evaluation_summary: summary.to_string(),
             loss_assessment_milli: loss.expected_loss_milli,
             decision,
@@ -668,6 +671,7 @@ mod tests {
             code_location: "module::func".to_string(),
             trace_id: "trace-001".to_string(),
             requested_route_id: route_id.to_string(),
+            decision_contract_id: "decision-contract-test".to_string(),
             is_emergency: false,
             timestamp_ms: 1_700_000_000_000,
         }
@@ -708,6 +712,7 @@ mod tests {
         assert_eq!(receipt.decision, DeclassificationDecision::Allow);
         assert_eq!(receipt.source_label, Label::Secret);
         assert_eq!(receipt.sink_clearance, Label::Internal);
+        assert_eq!(receipt.decision_contract_id, request.decision_contract_id);
         assert!(!receipt.signature.is_sentinel());
         receipt.verify(&key.verification_key()).unwrap();
     }
@@ -1870,6 +1875,7 @@ mod tests {
             "code_location",
             "trace_id",
             "requested_route_id",
+            "decision_contract_id",
             "is_emergency",
             "timestamp_ms",
         ] {
@@ -2164,6 +2170,7 @@ mod tests {
             code_location: String::new(),
             trace_id: String::new(),
             requested_route_id: String::new(),
+            decision_contract_id: String::new(),
             is_emergency: false,
             timestamp_ms: 0,
         };
@@ -2182,6 +2189,7 @@ mod tests {
             code_location: "loc".into(),
             trace_id: "trace".into(),
             requested_route_id: "route".into(),
+            decision_contract_id: "decision-contract-max".into(),
             is_emergency: false,
             timestamp_ms: u64::MAX,
         };
@@ -2284,6 +2292,7 @@ mod tests {
             code_location: "loc".into(),
             trace_id: "trace".into(),
             requested_route_id: "r".into(),
+            decision_contract_id: "decision-contract-custom".into(),
             is_emergency: false,
             timestamp_ms: 100,
         };

@@ -868,6 +868,7 @@ impl std::error::Error for ResolutionError {}
 #[serde(rename_all = "snake_case")]
 pub enum RegistryErrorCode {
     EmptyKey,
+    OutsideRoot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -881,6 +882,16 @@ impl RegistryError {
         Self {
             code: RegistryErrorCode::EmptyKey,
             message: "module key must not be empty".to_string(),
+        }
+    }
+
+    fn outside_root(root_dir: &str, path: &str) -> Self {
+        Self {
+            code: RegistryErrorCode::OutsideRoot,
+            message: format!(
+                "workspace module path '{}' escapes resolver root '{}'",
+                path, root_dir
+            ),
         }
     }
 }
@@ -1117,6 +1128,9 @@ impl DeterministicModuleResolver {
         } else {
             normalize_absolute_path(&join_paths(&self.root_dir, &path))
         };
+        if !is_within_workspace_root(&self.root_dir, &absolute_path) {
+            return Err(RegistryError::outside_root(&self.root_dir, &absolute_path));
+        }
 
         let record = ModuleRecord::from_definition(
             absolute_path.clone(),
@@ -1173,24 +1187,27 @@ impl DeterministicModuleResolver {
         }
 
         if is_relative_specifier(specifier) {
-            let referrer = request.referrer.as_deref().ok_or_else(|| {
-                Box::new(
-                    ResolutionError::new(
-                        ResolutionErrorCode::InvalidReferrer,
-                        format!(
-                            "relative specifier '{}' requires a referrer module",
-                            request.specifier
+            let referrer = match request.referrer.as_deref() {
+                Some(referrer) => referrer,
+                None => {
+                    return Err(Box::new(
+                        ResolutionError::new(
+                            ResolutionErrorCode::InvalidReferrer,
+                            format!(
+                                "relative specifier '{}' requires a referrer module",
+                                request.specifier
+                            ),
+                            context,
+                        )
+                        .with_resolution_attempt(
+                            request.specifier.clone(),
+                            None,
+                            None,
+                            probe_sequence.clone(),
                         ),
-                        context,
-                    )
-                    .with_resolution_attempt(
-                        request.specifier.clone(),
-                        None,
-                        None,
-                        probe_sequence.clone(),
-                    ),
-                )
-            })?;
+                    ));
+                }
+            };
             if let Some(external_referrer) = referrer.strip_prefix("external:") {
                 let base_dir = external_referrer_directory(external_referrer);
                 let resolved_base =
@@ -1218,17 +1235,36 @@ impl DeterministicModuleResolver {
                     )),
                 };
             }
-            let base_dir = self
-                .referrer_directory(referrer, context)
-                .map_err(|error| {
-                    Box::new((*error).with_resolution_attempt(
+            let base_dir = match self.referrer_directory(referrer, context) {
+                Ok(base_dir) => base_dir,
+                Err(error) => {
+                    return Err(Box::new((*error).with_resolution_attempt(
                         request.specifier.clone(),
                         None,
                         None,
                         probe_sequence.clone(),
-                    ))
-                })?;
+                    )));
+                }
+            };
             let resolved_base = normalize_absolute_path(&join_paths(&base_dir, specifier));
+            if !is_within_workspace_root(&self.root_dir, &resolved_base) {
+                return Err(Box::new(
+                    ResolutionError::new(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        format!(
+                            "relative specifier '{}' escapes workspace root '{}'",
+                            request.specifier, self.root_dir
+                        ),
+                        context,
+                    )
+                    .with_resolution_attempt(
+                        request.specifier.clone(),
+                        Some(resolved_base),
+                        Some(ModuleSourceKind::Workspace),
+                        probe_sequence,
+                    ),
+                ));
+            }
             let (relative_probes, candidate) =
                 self.lookup_workspace_candidate_with_probes(&resolved_base, request.style);
             probe_sequence.extend(relative_probes);
@@ -1255,6 +1291,24 @@ impl DeterministicModuleResolver {
 
         if specifier.starts_with('/') {
             let resolved_base = normalize_absolute_path(specifier);
+            if !is_within_workspace_root(&self.root_dir, &resolved_base) {
+                return Err(Box::new(
+                    ResolutionError::new(
+                        ResolutionErrorCode::UnsupportedSpecifier,
+                        format!(
+                            "absolute specifier '{}' escapes workspace root '{}'",
+                            request.specifier, self.root_dir
+                        ),
+                        context,
+                    )
+                    .with_resolution_attempt(
+                        request.specifier.clone(),
+                        Some(resolved_base),
+                        Some(ModuleSourceKind::Workspace),
+                        probe_sequence,
+                    ),
+                ));
+            }
             let (absolute_probes, candidate) =
                 self.lookup_workspace_candidate_with_probes(&resolved_base, request.style);
             probe_sequence.extend(absolute_probes);
@@ -1284,6 +1338,24 @@ impl DeterministicModuleResolver {
         }
 
         let workspace_base = normalize_absolute_path(&join_paths(&self.root_dir, specifier));
+        if !is_within_workspace_root(&self.root_dir, &workspace_base) {
+            return Err(Box::new(
+                ResolutionError::new(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    format!(
+                        "bare specifier '{}' escapes workspace root '{}'",
+                        request.specifier, self.root_dir
+                    ),
+                    context,
+                )
+                .with_resolution_attempt(
+                    request.specifier.clone(),
+                    Some(workspace_base),
+                    Some(ModuleSourceKind::Workspace),
+                    probe_sequence,
+                ),
+            ));
+        }
         let (workspace_probes, workspace_candidate) =
             self.lookup_workspace_candidate_with_probes(&workspace_base, request.style);
         probe_sequence.extend(workspace_probes);
@@ -1327,6 +1399,16 @@ impl DeterministicModuleResolver {
         } else {
             normalize_absolute_path(&join_paths(&self.root_dir, referrer))
         };
+        if !is_within_workspace_root(&self.root_dir, &normalized) {
+            return Err(Box::new(ResolutionError::new(
+                ResolutionErrorCode::InvalidReferrer,
+                format!(
+                    "workspace referrer '{}' escapes resolver root '{}'",
+                    referrer, self.root_dir
+                ),
+                context,
+            )));
+        }
         Ok(parent_directory(&normalized))
     }
 
@@ -1521,6 +1603,17 @@ fn normalize_absolute_path(path: &str) -> String {
     }
 
     format!("/{}", stack.join("/"))
+}
+
+fn is_within_workspace_root(root_dir: &str, path: &str) -> bool {
+    if root_dir == "/" {
+        return path.starts_with('/');
+    }
+
+    path == root_dir
+        || path
+            .strip_prefix(root_dir)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn join_paths(base: &str, child: &str) -> String {

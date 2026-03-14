@@ -12,14 +12,15 @@
 //! 7. **Execute containment** via `ContainmentExecutor`
 //! 8. **Close cell** via `ExecutionCell` quiescent protocol
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
-    ExecutionResult, InterpreterError, LaneChoice, LaneReason, LaneRouter, RoutedResult,
+    ExecutionResult, InterpreterConfig, InterpreterError, LaneChoice, LaneReason, LaneRouter,
+    RoutedResult,
 };
 use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
@@ -39,11 +40,13 @@ use crate::execution_cell::{CellError, CellEvent, CellKind, ExecutionCell};
 use crate::expected_loss_selector::{
     ActionDecision, ContainmentAction, ExpectedLossSelector, LossMatrix,
 };
+use crate::flow_lattice::{Clearance, DeclassificationObligation, Ir2FlowLattice, LabelClass};
 use crate::hash_tiers::ContentHash;
+use crate::ifc_artifacts::{DeclassificationReceipt, Label};
 use crate::ir_contract::{Ir0Module, Ir3Module};
 use crate::lowering_pipeline::{
-    Ir2FlowProofArtifact, LoweringContext, LoweringEvent, LoweringPipelineError, PassWitness,
-    lower_ir0_to_ir3,
+    Ir2FlowProofArtifact, LoweringContext, LoweringEvent, LoweringPipelineError,
+    LoweringPipelineOutput, PassWitness, lower_ir0_to_ir3,
 };
 use crate::optimal_stopping::{
     EscalationPolicy, Observation as StoppingObservation, OptimalStoppingCertificate,
@@ -60,6 +63,7 @@ use crate::saga_orchestrator::{
     revocation_saga_steps,
 };
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::VerificationKey;
 use crate::tropical_semiring::{
     InstructionCostGraph, InstructionNode, ScheduleOptimizer, TropicalWeight,
 };
@@ -71,6 +75,7 @@ const ADAPTIVE_ROUTER_GAMMA_MILLIONTHS: i64 = 100_000;
 const STOPPING_CUSUM_THRESHOLD_MILLIONTHS: i64 = 5_000_000;
 const STOPPING_CUSUM_REFERENCE_MILLIONTHS: i64 = 500_000;
 const ORCHESTRATOR_CELL_CLOSE_BUDGET_MS: u64 = 10_000;
+const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const SCALE_MILLION: i64 = 1_000_000;
 
 // ---------------------------------------------------------------------------
@@ -217,6 +222,16 @@ pub struct OrchestratorResult {
     pub epoch: SecurityEpoch,
 }
 
+/// Preflighted runtime-flow guard context for the next execution attempt.
+#[derive(Debug, Clone)]
+pub struct PreparedRuntimeFlowGuards {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub source_label: String,
+    pub source_ingestion: SourceIngestionSummary,
+    pub ir2_flow_proof_artifact: Ir2FlowProofArtifact,
+}
+
 struct EvidenceRecordInput<'a> {
     trace_id: &'a str,
     decision_id: &'a str,
@@ -230,6 +245,21 @@ struct EvidenceRecordInput<'a> {
     optimal_stopping_certificate: Option<&'a OptimalStoppingCertificate>,
 }
 
+#[derive(Debug, Clone)]
+struct ReservedExecutionContext {
+    attempt_index: u64,
+    trace_id: String,
+    decision_id: String,
+    package_fingerprint: ContentHash,
+    extension_id: String,
+}
+
+struct PreparedLoweringOutput {
+    source_label: String,
+    source_ingestion: SourceIngestionSummary,
+    lowering_output: LoweringPipelineOutput,
+}
+
 // ---------------------------------------------------------------------------
 // OrchestratorError
 // ---------------------------------------------------------------------------
@@ -239,7 +269,9 @@ struct EvidenceRecordInput<'a> {
 pub enum OrchestratorError {
     Parse(Box<ParseError>),
     Lowering(Box<LoweringPipelineError>),
-    IfcRuntimeGuardBlocked { detail: String },
+    IfcRuntimeGuardBlocked {
+        detail: String,
+    },
     Interpreter(InterpreterError),
     Ledger(LedgerError),
     Saga(SagaError),
@@ -248,6 +280,10 @@ pub enum OrchestratorError {
     TsNormalization(TsNormalizationError),
     EmptySource,
     EmptyExtensionId,
+    PreparedExecutionContextMismatch {
+        reserved_extension_id: String,
+        requested_extension_id: String,
+    },
 }
 
 impl fmt::Display for OrchestratorError {
@@ -266,6 +302,13 @@ impl fmt::Display for OrchestratorError {
             Self::TsNormalization(e) => write!(f, "ts normalization: {e}"),
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
+            Self::PreparedExecutionContextMismatch {
+                reserved_extension_id,
+                requested_extension_id,
+            } => write!(
+                f,
+                "prepared execution context is reserved for extension {reserved_extension_id}, not {requested_extension_id}"
+            ),
         }
     }
 }
@@ -328,7 +371,6 @@ impl From<TsNormalizationError> for OrchestratorError {
 pub struct ExecutionOrchestrator {
     config: OrchestratorConfig,
     parser: CanonicalEs2020Parser,
-    lane_router: LaneRouter,
     adaptive_router: RegretBoundedRouter,
     stopping_policies: BTreeMap<String, EscalationPolicy>,
     last_cumulative_llr_by_extension: BTreeMap<String, i64>,
@@ -337,6 +379,9 @@ pub struct ExecutionOrchestrator {
     ledger: InMemoryLedger,
     saga_orchestrator: SagaOrchestrator,
     containment_executor: ContainmentExecutor,
+    reserved_execution_context: Option<ReservedExecutionContext>,
+    staged_declassification_receipts: BTreeMap<(String, String), DeclassificationReceipt>,
+    trusted_declassification_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
     attempt_counter: u64,
     execution_counter: u64,
 }
@@ -362,7 +407,6 @@ impl ExecutionOrchestrator {
         .expect("adaptive router configuration must be valid");
         Self {
             parser: CanonicalEs2020Parser,
-            lane_router: LaneRouter::new(),
             adaptive_router,
             stopping_policies: BTreeMap::new(),
             last_cumulative_llr_by_extension: BTreeMap::new(),
@@ -371,6 +415,9 @@ impl ExecutionOrchestrator {
             ledger: InMemoryLedger::new(),
             saga_orchestrator: SagaOrchestrator::new(config.epoch, config.max_concurrent_sagas),
             containment_executor: ContainmentExecutor::new(),
+            reserved_execution_context: None,
+            staged_declassification_receipts: BTreeMap::new(),
+            trusted_declassification_authorizers: BTreeMap::new(),
             attempt_counter: 0,
             execution_counter: 0,
             config,
@@ -410,6 +457,60 @@ impl ExecutionOrchestrator {
         self.execution_counter
     }
 
+    /// Trust a declassification receipt authorizer for a specific decision contract.
+    pub fn trust_declassification_authorizer_for_contract(
+        &mut self,
+        decision_contract_id: impl Into<String>,
+        verification_key: VerificationKey,
+    ) {
+        self.trusted_declassification_authorizers
+            .entry(decision_contract_id.into())
+            .or_default()
+            .insert(verification_key);
+    }
+
+    /// Stage a declassification receipt for a specific trace/obligation pair.
+    pub fn stage_declassification_receipt_for_obligation(
+        &mut self,
+        trace_id: impl Into<String>,
+        obligation_id: impl Into<String>,
+        receipt: DeclassificationReceipt,
+    ) -> Option<DeclassificationReceipt> {
+        self.staged_declassification_receipts
+            .insert((trace_id.into(), obligation_id.into()), receipt)
+    }
+
+    /// Preflight the next execution attempt and return its exact runtime-flow guard artifact.
+    ///
+    /// The returned `trace_id` and `decision_id` are reserved for the next
+    /// `execute()` call on the same package, allowing callers to mint and stage
+    /// declassification receipts against the same deterministic linkage.
+    pub fn prepare_next_runtime_flow_guards(
+        &mut self,
+        package: &ExtensionPackage,
+    ) -> Result<PreparedRuntimeFlowGuards, OrchestratorError> {
+        Self::validate_package(package)?;
+        let reserved = self.reserve_execution_context(package)?;
+        let prepared = match self.prepare_lowering_output(
+            package,
+            &reserved.trace_id,
+            &reserved.decision_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                self.reserved_execution_context = None;
+                return Err(err);
+            }
+        };
+        Ok(PreparedRuntimeFlowGuards {
+            trace_id: reserved.trace_id,
+            decision_id: reserved.decision_id,
+            source_label: prepared.source_label,
+            source_ingestion: prepared.source_ingestion,
+            ir2_flow_proof_artifact: prepared.lowering_output.ir2_flow_proof_artifact,
+        })
+    }
+
     /// Execute an extension package through the full pipeline.
     pub fn execute(
         &mut self,
@@ -419,20 +520,14 @@ impl ExecutionOrchestrator {
         Self::validate_package(package)?;
 
         // Step 1: Generate identifiers.
-        let (attempt_index, trace_id, decision_id) = self.allocate_attempt_identifiers();
-        let source_label = format!("ext:{}", package.extension_id);
-
-        // Step 1b: TS normalization — detect language, normalize if TypeScript.
-        let effective_source_label = package.source_file.as_deref().unwrap_or(&source_label);
-        let prepared = prepare_source_entry_for_public_entrypoints(
-            &package.source,
-            effective_source_label,
-            &trace_id,
-            &decision_id,
-            &self.config.policy_id,
-        )?;
-        let source_ingestion = prepared.source_ingestion.clone();
-        let parse_source = prepared.prepared_source;
+        let (attempt_index, trace_id, decision_id) =
+            self.take_or_allocate_execution_context(package)?;
+        let prepared = self.prepare_lowering_output(package, &trace_id, &decision_id)?;
+        let PreparedLoweringOutput {
+            source_label,
+            source_ingestion,
+            lowering_output,
+        } = prepared;
 
         // Step 2: Create execution cell.
         let mut cell = ExecutionCell::with_context(
@@ -445,25 +540,13 @@ impl ExecutionOrchestrator {
 
         // Step 3: Register extension in containment executor.
         self.containment_executor.register(&package.extension_id);
-
-        // Step 4: Parse source (uses normalized source if TS was detected).
-        let syntax_tree = self.parser.parse_with_options(
-            parse_source.as_str(),
-            self.config.parse_goal,
-            &self.config.parser_options,
-        )?;
-
-        // Step 5: Lower IR0 → IR3.
-        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
-        let lowering_ctx = LoweringContext::new(&trace_id, &decision_id, &self.config.policy_id);
-        let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
         let lowering_events = lowering_output.events.clone();
         let lowering_witnesses = lowering_output.witnesses.clone();
         self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
         let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3);
 
         // Step 6: Execute IR3.
-        let routed = self.phase_execute(&lowering_output.ir3, &trace_id)?;
+        let routed = self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
         let lane = routed.lane;
         let lane_reason = routed.reason;
         let exec_result = routed.result;
@@ -573,6 +656,93 @@ impl ExecutionOrchestrator {
         Ok(())
     }
 
+    fn package_fingerprint(package: &ExtensionPackage) -> ContentHash {
+        let encoded = serde_json::to_vec(package).unwrap_or_default();
+        ContentHash::compute(&encoded)
+    }
+
+    fn reserve_execution_context(
+        &mut self,
+        package: &ExtensionPackage,
+    ) -> Result<ReservedExecutionContext, OrchestratorError> {
+        let package_fingerprint = Self::package_fingerprint(package);
+        if let Some(reserved) = &self.reserved_execution_context {
+            if reserved.package_fingerprint == package_fingerprint {
+                return Ok(reserved.clone());
+            }
+            return Err(OrchestratorError::PreparedExecutionContextMismatch {
+                reserved_extension_id: reserved.extension_id.clone(),
+                requested_extension_id: package.extension_id.clone(),
+            });
+        }
+
+        let (attempt_index, trace_id, decision_id) = self.allocate_attempt_identifiers();
+        let reserved = ReservedExecutionContext {
+            attempt_index,
+            trace_id,
+            decision_id,
+            package_fingerprint,
+            extension_id: package.extension_id.clone(),
+        };
+        self.reserved_execution_context = Some(reserved.clone());
+        Ok(reserved)
+    }
+
+    fn take_or_allocate_execution_context(
+        &mut self,
+        package: &ExtensionPackage,
+    ) -> Result<(u64, String, String), OrchestratorError> {
+        let package_fingerprint = Self::package_fingerprint(package);
+        if let Some(reserved) = self.reserved_execution_context.take() {
+            if reserved.package_fingerprint == package_fingerprint {
+                return Ok((
+                    reserved.attempt_index,
+                    reserved.trace_id,
+                    reserved.decision_id,
+                ));
+            }
+            self.reserved_execution_context = Some(reserved.clone());
+            return Err(OrchestratorError::PreparedExecutionContextMismatch {
+                reserved_extension_id: reserved.extension_id,
+                requested_extension_id: package.extension_id.clone(),
+            });
+        }
+
+        Ok(self.allocate_attempt_identifiers())
+    }
+
+    fn prepare_lowering_output(
+        &self,
+        package: &ExtensionPackage,
+        trace_id: &str,
+        decision_id: &str,
+    ) -> Result<PreparedLoweringOutput, OrchestratorError> {
+        let source_label = format!("ext:{}", package.extension_id);
+        let effective_source_label = package.source_file.as_deref().unwrap_or(&source_label);
+        let prepared = prepare_source_entry_for_public_entrypoints(
+            &package.source,
+            effective_source_label,
+            trace_id,
+            decision_id,
+            &self.config.policy_id,
+        )?;
+        let source_ingestion = prepared.source_ingestion.clone();
+        let parse_source = prepared.prepared_source;
+        let syntax_tree = self.parser.parse_with_options(
+            parse_source.as_str(),
+            self.config.parse_goal,
+            &self.config.parser_options,
+        )?;
+        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
+        let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id);
+        let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
+        Ok(PreparedLoweringOutput {
+            source_label,
+            source_ingestion,
+            lowering_output,
+        })
+    }
+
     fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'static, NoCaps> {
         KernelContext::new(Cx::new(
             Self::derive_cell_close_trace_id(trace_id),
@@ -588,18 +758,49 @@ impl ExecutionOrchestrator {
         TraceId::from_bytes(bytes)
     }
 
+    fn internal_runtime_capabilities_for_module(ir3: &Ir3Module) -> BTreeSet<String> {
+        ir3.required_capabilities
+            .iter()
+            .filter_map(|capability| match capability.0.as_str() {
+                IFC_RUNTIME_GUARD_CAPABILITY => Some(capability.0.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn lane_router_for_execution(package: &ExtensionPackage, ir3: &Ir3Module) -> LaneRouter {
+        let mut granted_capabilities = package
+            .capabilities
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        granted_capabilities.extend(Self::internal_runtime_capabilities_for_module(ir3));
+        let granted_capabilities = granted_capabilities.into_iter().collect::<Vec<_>>();
+
+        let mut quickjs_config = InterpreterConfig::quickjs_defaults();
+        quickjs_config.granted_capabilities = granted_capabilities.clone();
+
+        let mut v8_config = InterpreterConfig::v8_defaults();
+        v8_config.granted_capabilities = granted_capabilities;
+
+        LaneRouter::with_configs(quickjs_config, v8_config)
+    }
+
     fn phase_execute(
         &self,
+        package: &ExtensionPackage,
         ir3: &Ir3Module,
         trace_id: &str,
     ) -> Result<RoutedResult, OrchestratorError> {
-        self.lane_router
+        // Package capabilities remain user-scoped; the orchestrator adds only
+        // the internal enforcement capabilities required by the lowered module.
+        Self::lane_router_for_execution(package, ir3)
             .execute(ir3, trace_id, self.config.force_lane)
             .map_err(OrchestratorError::Interpreter)
     }
 
     fn phase_enforce_runtime_flow_guards(
-        &self,
+        &mut self,
         artifact: &Ir2FlowProofArtifact,
     ) -> Result<(), OrchestratorError> {
         if artifact.required_declassifications.is_empty() && artifact.runtime_checkpoints.is_empty()
@@ -607,19 +808,68 @@ impl ExecutionOrchestrator {
             return Ok(());
         }
 
+        let mut lattice = Ir2FlowLattice::with_decision_id(
+            artifact.policy_id.clone(),
+            artifact.decision_id.clone(),
+        );
+        self.register_artifact_declassification_obligations(&mut lattice, artifact)?;
+        for (decision_contract_id, trusted_keys) in &self.trusted_declassification_authorizers {
+            for verification_key in trusted_keys {
+                lattice.trust_receipt_authorizer_for_contract(
+                    decision_contract_id.clone(),
+                    verification_key.clone(),
+                );
+            }
+        }
+
+        let mut pending_declassifications = Vec::new();
+        let mut consumed_receipt_keys = Vec::new();
+        for entry in &artifact.required_declassifications {
+            let staged_key = (artifact.trace_id.clone(), entry.obligation_id.clone());
+            if let Some(receipt) = self.staged_declassification_receipts.get(&staged_key) {
+                lattice
+                    .use_declassification_with_receipt(
+                        &entry.obligation_id,
+                        receipt,
+                        &artifact.trace_id,
+                    )
+                    .map_err(|err| OrchestratorError::IfcRuntimeGuardBlocked {
+                        detail: format!(
+                            "artifact {} receipt-linked declassification failed for {}: {}",
+                            artifact.artifact_id, entry.obligation_id, err
+                        ),
+                    })?;
+                consumed_receipt_keys.push(staged_key);
+                continue;
+            }
+
+            if !entry.requires_operator_approval && !entry.receipt_linkage_required {
+                lattice
+                    .use_declassification(&entry.obligation_id, &artifact.trace_id)
+                    .map_err(|err| OrchestratorError::IfcRuntimeGuardBlocked {
+                        detail: format!(
+                            "artifact {} declassification failed for {}: {}",
+                            artifact.artifact_id, entry.obligation_id, err
+                        ),
+                    })?;
+                continue;
+            }
+
+            pending_declassifications.push(format!("{}@op{}", entry.obligation_id, entry.op_index));
+        }
+
         let mut summary = Vec::new();
 
-        if !artifact.required_declassifications.is_empty() {
-            let pending = artifact
-                .required_declassifications
+        if !pending_declassifications.is_empty() {
+            let pending = pending_declassifications
                 .iter()
                 .take(3)
-                .map(|entry| format!("{}@op{}", entry.obligation_id, entry.op_index))
+                .cloned()
                 .collect::<Vec<_>>()
                 .join(", ");
             summary.push(format!(
                 "pending declassifications={} [{}]",
-                artifact.required_declassifications.len(),
+                pending_declassifications.len(),
                 pending
             ));
         }
@@ -646,6 +896,13 @@ impl ExecutionOrchestrator {
             ));
         }
 
+        if summary.is_empty() {
+            for staged_key in consumed_receipt_keys {
+                self.staged_declassification_receipts.remove(&staged_key);
+            }
+            return Ok(());
+        }
+
         Err(OrchestratorError::IfcRuntimeGuardBlocked {
             detail: format!(
                 "artifact {} has unresolved IFC runtime obligations: {}",
@@ -653,6 +910,49 @@ impl ExecutionOrchestrator {
                 summary.join("; ")
             ),
         })
+    }
+
+    fn register_artifact_declassification_obligations(
+        &self,
+        lattice: &mut Ir2FlowLattice,
+        artifact: &Ir2FlowProofArtifact,
+    ) -> Result<(), OrchestratorError> {
+        for entry in &artifact.required_declassifications {
+            lattice
+                .register_obligation(DeclassificationObligation {
+                    obligation_id: entry.obligation_id.clone(),
+                    source_label: LabelClass::from_label(&entry.source_label),
+                    target_clearance: Self::artifact_sink_label_to_clearance(&entry.sink_clearance),
+                    decision_contract_id: entry.decision_contract_id.clone(),
+                    requires_operator_approval: entry.requires_operator_approval,
+                    max_uses: 0,
+                    use_count: 0,
+                })
+                .map_err(|err| OrchestratorError::IfcRuntimeGuardBlocked {
+                    detail: format!(
+                        "artifact {} has invalid declassification obligation {}: {}",
+                        artifact.artifact_id, entry.obligation_id, err
+                    ),
+                })?;
+        }
+        Ok(())
+    }
+
+    fn artifact_sink_label_to_clearance(label: &Label) -> Clearance {
+        match label {
+            Label::Public => Clearance::NeverSink,
+            Label::Internal => Clearance::RestrictedSink,
+            Label::Confidential => Clearance::AuditedSink,
+            Label::Secret => Clearance::SealedSink,
+            Label::TopSecret => Clearance::OpenSink,
+            Label::Custom { level, .. } => match level {
+                0 => Clearance::NeverSink,
+                1 => Clearance::RestrictedSink,
+                2 => Clearance::AuditedSink,
+                3 => Clearance::SealedSink,
+                _ => Clearance::OpenSink,
+            },
+        }
     }
 
     fn phase_record_evidence(
@@ -1256,6 +1556,8 @@ impl ExecutionOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ifc_artifacts::{DeclassificationDecision, IfcSchemaVersion};
+    use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
     fn simple_package() -> ExtensionPackage {
         ExtensionPackage {
@@ -1297,6 +1599,56 @@ mod tests {
         }
     }
 
+    fn artifact_with_required_declassification(
+        trace_id: &str,
+        obligation_id: &str,
+        decision_contract_id: &str,
+    ) -> Ir2FlowProofArtifact {
+        let mut artifact = empty_flow_artifact();
+        artifact.trace_id = trace_id.to_string();
+        artifact.decision_id = decision_contract_id.to_string();
+        artifact.required_declassifications.push(
+            crate::lowering_pipeline::RequiredDeclassificationArtifactEntry {
+                op_index: 7,
+                source_label: crate::ifc_artifacts::Label::Secret,
+                sink_clearance: crate::ifc_artifacts::Label::Public,
+                capability: Some("declassify.audit".to_string()),
+                obligation_id: obligation_id.to_string(),
+                decision_contract_id: decision_contract_id.to_string(),
+                requires_operator_approval: true,
+                receipt_linkage_required: true,
+                replay_command_hint: format!(
+                    "frankenctl replay run --trace {trace_id} --obligation {obligation_id}"
+                ),
+            },
+        );
+        artifact
+    }
+
+    fn signed_receipt(
+        trace_id: &str,
+        decision_contract_id: &str,
+        signing_key: &SigningKey,
+    ) -> DeclassificationReceipt {
+        let mut receipt = DeclassificationReceipt {
+            receipt_id: format!("receipt-{trace_id}-{decision_contract_id}"),
+            source_label: Label::Secret,
+            sink_clearance: Label::Public,
+            declassification_route_ref: "declassify.audit".to_string(),
+            decision_contract_id: decision_contract_id.to_string(),
+            policy_evaluation_summary: "approved".to_string(),
+            loss_assessment_milli: 1_000,
+            decision: DeclassificationDecision::Allow,
+            authorized_by: signing_key.verification_key(),
+            replay_linkage: trace_id.to_string(),
+            timestamp_ms: 1_700_000_000_000,
+            schema_version: IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        receipt.sign(signing_key).expect("sign receipt");
+        receipt
+    }
+
     #[test]
     fn end_to_end_simple_source() {
         let mut orch = ExecutionOrchestrator::with_defaults();
@@ -1314,29 +1666,15 @@ mod tests {
 
     #[test]
     fn phase_enforce_runtime_flow_guards_allows_static_artifact() {
-        let orch = ExecutionOrchestrator::with_defaults();
+        let mut orch = ExecutionOrchestrator::with_defaults();
         orch.phase_enforce_runtime_flow_guards(&empty_flow_artifact())
             .expect("static flow artifact should pass");
     }
 
     #[test]
     fn phase_enforce_runtime_flow_guards_blocks_pending_declassifications() {
-        let orch = ExecutionOrchestrator::with_defaults();
-        let mut artifact = empty_flow_artifact();
-        artifact.required_declassifications.push(
-            crate::lowering_pipeline::RequiredDeclassificationArtifactEntry {
-                op_index: 7,
-                source_label: crate::ifc_artifacts::Label::Secret,
-                sink_clearance: crate::ifc_artifacts::Label::Public,
-                capability: Some("declassify.audit".to_string()),
-                obligation_id: "obl-7".to_string(),
-                decision_contract_id: "decision-7".to_string(),
-                requires_operator_approval: true,
-                receipt_linkage_required: true,
-                replay_command_hint: "frankenctl replay run --trace trace-test --obligation obl-7"
-                    .to_string(),
-            },
-        );
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let artifact = artifact_with_required_declassification("trace-test", "obl-7", "decision-7");
 
         let err = orch
             .phase_enforce_runtime_flow_guards(&artifact)
@@ -1352,7 +1690,7 @@ mod tests {
 
     #[test]
     fn phase_enforce_runtime_flow_guards_blocks_runtime_checkpoints() {
-        let orch = ExecutionOrchestrator::with_defaults();
+        let mut orch = ExecutionOrchestrator::with_defaults();
         let mut artifact = empty_flow_artifact();
         artifact.runtime_checkpoints.push(
             crate::lowering_pipeline::RuntimeCheckpointArtifactEntry {
@@ -1375,6 +1713,61 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn phase_enforce_runtime_flow_guards_allows_staged_approved_receipt() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let artifact =
+            artifact_with_required_declassification("trace-allow", "obl-allow", "decision-allow");
+        let signing_key = SigningKey::from_bytes([17u8; 32]);
+        let receipt = signed_receipt("trace-allow", "decision-allow", &signing_key);
+
+        orch.trust_declassification_authorizer_for_contract(
+            "decision-allow",
+            signing_key.verification_key(),
+        );
+        orch.stage_declassification_receipt_for_obligation("trace-allow", "obl-allow", receipt);
+
+        orch.phase_enforce_runtime_flow_guards(&artifact)
+            .expect("approved staged receipt should satisfy runtime guard");
+
+        assert!(
+            !orch
+                .staged_declassification_receipts
+                .contains_key(&("trace-allow".to_string(), "obl-allow".to_string(),))
+        );
+    }
+
+    #[test]
+    fn phase_enforce_runtime_flow_guards_blocks_invalid_staged_receipt() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let artifact =
+            artifact_with_required_declassification("trace-block", "obl-block", "decision-block");
+        let signing_key = SigningKey::from_bytes([18u8; 32]);
+        let receipt = signed_receipt("trace-other", "decision-block", &signing_key);
+
+        orch.trust_declassification_authorizer_for_contract(
+            "decision-block",
+            signing_key.verification_key(),
+        );
+        orch.stage_declassification_receipt_for_obligation("trace-block", "obl-block", receipt);
+
+        let err = orch
+            .phase_enforce_runtime_flow_guards(&artifact)
+            .expect_err("mismatched replay linkage must fail closed");
+        match err {
+            OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+                assert!(detail.contains("receipt-linked declassification failed for obl-block"));
+                assert!(detail.contains("replay linkage does not match trace trace-block"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        assert!(
+            orch.staged_declassification_receipts
+                .contains_key(&("trace-block".to_string(), "obl-block".to_string(),))
+        );
     }
 
     #[test]
@@ -1694,6 +2087,68 @@ mod tests {
         let r1 = orch.execute(&simple_package()).unwrap();
         assert_ne!(r0.trace_id, r1.trace_id);
         assert_ne!(r0.decision_id, r1.decision_id);
+    }
+
+    #[test]
+    fn prepare_next_runtime_flow_guards_reuses_reserved_ids_for_execute() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let prepared = orch
+            .prepare_next_runtime_flow_guards(&simple_package())
+            .expect("preflight should succeed");
+
+        assert_eq!(prepared.trace_id, "orch:0");
+        assert_eq!(prepared.decision_id, "orch:decision:0");
+        assert_eq!(prepared.source_label, "ext:test-ext-1");
+
+        let result = orch
+            .execute(&simple_package())
+            .expect("execute should succeed");
+        assert_eq!(result.trace_id, prepared.trace_id);
+        assert_eq!(result.decision_id, prepared.decision_id);
+
+        let next = orch
+            .prepare_next_runtime_flow_guards(&simple_package())
+            .expect("next preflight should succeed");
+        assert_eq!(next.trace_id, "orch:1");
+        assert_eq!(next.decision_id, "orch:decision:1");
+    }
+
+    #[test]
+    fn prepare_next_runtime_flow_guards_rejects_different_package_until_consumed() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        orch.prepare_next_runtime_flow_guards(&simple_package())
+            .expect("initial preflight should succeed");
+
+        let err = orch
+            .prepare_next_runtime_flow_guards(&package_with_id("other-ext"))
+            .expect_err("different package should fail closed while reservation is active");
+        match err {
+            OrchestratorError::PreparedExecutionContextMismatch {
+                reserved_extension_id,
+                requested_extension_id,
+            } => {
+                assert_eq!(reserved_extension_id, "test-ext-1");
+                assert_eq!(requested_extension_id, "other-ext");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn prepare_next_runtime_flow_guards_clears_reservation_after_parse_failure() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let bad_pkg = package_with_source("function {");
+
+        assert!(
+            orch.prepare_next_runtime_flow_guards(&bad_pkg).is_err(),
+            "broken package should fail during preflight"
+        );
+
+        let prepared = orch
+            .prepare_next_runtime_flow_guards(&simple_package())
+            .expect("reservation should be reset after failed preflight");
+        assert_eq!(prepared.trace_id, "orch:1");
+        assert_eq!(prepared.decision_id, "orch:decision:1");
     }
 
     // -- preset variations ----------------------------------------------------

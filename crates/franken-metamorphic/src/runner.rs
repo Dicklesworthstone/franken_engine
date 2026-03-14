@@ -2802,6 +2802,15 @@ mod tests {
         ))
     }
 
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn read_repo_file(path: &str) -> String {
+        fs::read_to_string(repo_root().join(path))
+            .unwrap_or_else(|error| panic!("failed to read {path}: {error}"))
+    }
+
     #[test]
     fn budget_is_enforced_exactly() {
         let relation = AlwaysPassRelation {
@@ -2827,6 +2836,24 @@ mod tests {
         assert_eq!(execution.pairs_tested, 10);
         assert_eq!(execution.outcomes.len(), 10);
         assert_eq!(execution.violations_found, 0);
+    }
+
+    #[test]
+    fn metamorphic_suite_script_defaults_to_repo_local_rch_target_dir() {
+        let script = read_repo_file("scripts/run_metamorphic_suite.sh");
+
+        assert!(script.contains("target_rch_metamorphic_uid$(id -u)"));
+        assert!(script.contains("${root_dir}/target_rch_metamorphic_uid$(id -u)"));
+        assert!(!script.contains("/tmp/rch_target_franken_engine_metamorphic"));
+    }
+
+    #[test]
+    fn metamorphic_testing_doc_requires_repo_local_rch_target_dir() {
+        let doc = read_repo_file("docs/METAMORPHIC_TESTING.md");
+
+        assert!(doc.contains("${workspace_root}/target_rch_metamorphic_uid<uid>"));
+        assert!(doc.contains("workspace root"));
+        assert!(!doc.contains("/tmp/rch_target_franken_engine_metamorphic"));
     }
 
     #[test]

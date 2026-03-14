@@ -2411,7 +2411,8 @@ fn build_ir2_flow_proof_artifact(
     ir2: &Ir2Module,
     context: &LoweringContext,
 ) -> Result<Ir2FlowProofArtifact, LoweringPipelineError> {
-    let mut lattice = Ir2FlowLattice::new(context.policy_id.clone());
+    let mut lattice =
+        Ir2FlowLattice::with_decision_id(context.policy_id.clone(), context.decision_id.clone());
     let mut artifact = Ir2FlowProofArtifact {
         schema_version: IFC_FLOW_PROOF_SCHEMA_VERSION.to_string(),
         artifact_id: String::new(),
@@ -3773,16 +3774,21 @@ fn flow_requires_runtime_check(flow: Option<&FlowAnnotation>, capability: &Capab
 }
 
 fn extract_hostcall_capability(raw: &str) -> Option<String> {
-    let marker = "hostcall<\"";
-    let start = raw.find(marker)?;
-    let remainder = &raw[start + marker.len()..];
-    let end = remainder.find("\">")?;
-    let capability = remainder[..end].trim();
-    if capability.is_empty() {
-        None
-    } else {
-        Some(capability.to_string())
+    for (marker, terminator) in [("hostcall<\"", "\">"), ("hostcall<\\\"", "\\\">")] {
+        let Some(start) = raw.find(marker) else {
+            continue;
+        };
+        let remainder = &raw[start + marker.len()..];
+        let Some(end) = remainder.find(terminator) else {
+            continue;
+        };
+        let capability = remainder[..end].trim();
+        if !capability.is_empty() {
+            return Some(capability.to_string());
+        }
     }
+
+    None
 }
 
 fn lower_literal_to_ir3(
@@ -4634,6 +4640,14 @@ mod tests {
     fn extract_hostcall_capability_embedded() {
         assert_eq!(
             extract_hostcall_capability("something hostcall<\"net.write\"> more"),
+            Some("net.write".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_hostcall_capability_accepts_parser_preserved_escape_form() {
+        assert_eq!(
+            extract_hostcall_capability(r#"hostcall<\"net.write\">"#),
             Some("net.write".to_string())
         );
     }

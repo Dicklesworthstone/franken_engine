@@ -23,6 +23,9 @@ use serde::{Deserialize, Serialize};
 use crate::ifc_artifacts::{DeclassificationDecision, DeclassificationReceipt, Label};
 use crate::signature_preimage::VerificationKey;
 
+const RECEIPT_BLOCKED_ERROR_CODE: &str = "FE-IFC-BLOCK";
+const UNSPECIFIED_DECISION_ID: &str = "flow-lattice:decision:unspecified";
+
 // ---------------------------------------------------------------------------
 // Clearance — sink authorization level
 // ---------------------------------------------------------------------------
@@ -420,15 +423,26 @@ pub struct FlowLatticeEvent {
 pub struct Ir2FlowLattice {
     obligations: BTreeMap<String, DeclassificationObligation>,
     events: Vec<FlowLatticeEvent>,
+    decision_id: String,
     policy_id: String,
     trusted_receipt_authorizers: BTreeMap<String, BTreeSet<VerificationKey>>,
 }
 
 impl Ir2FlowLattice {
     pub fn new(policy_id: impl Into<String>) -> Self {
+        Self::with_decision_id(policy_id, UNSPECIFIED_DECISION_ID)
+    }
+
+    pub fn with_decision_id(policy_id: impl Into<String>, decision_id: impl Into<String>) -> Self {
+        let decision_id = decision_id.into();
         Self {
             obligations: BTreeMap::new(),
             events: Vec::new(),
+            decision_id: if decision_id.trim().is_empty() {
+                UNSPECIFIED_DECISION_ID.to_string()
+            } else {
+                decision_id
+            },
             policy_id: policy_id.into(),
             trusted_receipt_authorizers: BTreeMap::new(),
         }
@@ -617,8 +631,16 @@ impl Ir2FlowLattice {
         let decision_contract_id = self
             .obligations
             .get(obligation_id)
-            .map(|obligation| obligation.decision_contract_id.clone())
+            .map(|obligation| {
+                (
+                    obligation.decision_contract_id.clone(),
+                    obligation.source_label.clone(),
+                    obligation.target_clearance.clone(),
+                )
+            })
             .expect("checked above");
+        let (decision_contract_id, obligation_source_label, obligation_target_clearance) =
+            decision_contract_id;
 
         let authorizer_is_trusted = self
             .trusted_receipt_authorizers
@@ -626,6 +648,12 @@ impl Ir2FlowLattice {
             .is_some_and(|trusted| trusted.contains(&receipt.authorized_by));
 
         if !authorizer_is_trusted {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
                     "receipt {} authorizer is not trusted for decision contract {} on obligation {obligation_id}",
@@ -634,21 +662,43 @@ impl Ir2FlowLattice {
             });
         }
 
-        let obligation = self
-            .obligations
-            .get_mut(obligation_id)
-            .expect("checked above");
-
-        receipt
-            .verify(&receipt.authorized_by)
-            .map_err(|err| FlowLatticeError::FlowBlocked {
+        receipt.verify(&receipt.authorized_by).map_err(|err| {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
+            FlowLatticeError::FlowBlocked {
                 detail: format!(
                     "receipt {} failed signature verification: {err}",
                     receipt.receipt_id
                 ),
-            })?;
+            }
+        })?;
+
+        if receipt.decision_contract_id != decision_contract_id {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
+            return Err(FlowLatticeError::FlowBlocked {
+                detail: format!(
+                    "receipt {} decision contract {} does not match obligation {obligation_id} contract {}",
+                    receipt.receipt_id, receipt.decision_contract_id, decision_contract_id
+                ),
+            });
+        }
 
         if receipt.decision != DeclassificationDecision::Allow {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
                     "receipt {} denied declassification for obligation {obligation_id}",
@@ -657,7 +707,13 @@ impl Ir2FlowLattice {
             });
         }
 
-        if LabelClass::from_label(&receipt.source_label) != obligation.source_label {
+        if LabelClass::from_label(&receipt.source_label) != obligation_source_label {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
                     "receipt {} source label does not match obligation {obligation_id}",
@@ -666,19 +722,28 @@ impl Ir2FlowLattice {
             });
         }
 
-        if !obligation
-            .target_clearance
-            .can_receive_label(&receipt.sink_clearance)
-        {
+        if !obligation_target_clearance.can_receive_label(&receipt.sink_clearance) {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
                     "receipt {} sink clearance {} cannot flow to obligation target clearance {} for obligation {obligation_id}",
-                    receipt.receipt_id, receipt.sink_clearance, obligation.target_clearance
+                    receipt.receipt_id, receipt.sink_clearance, obligation_target_clearance
                 ),
             });
         }
 
         if receipt.replay_linkage != trace_id {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
             return Err(FlowLatticeError::FlowBlocked {
                 detail: format!(
                     "receipt {} replay linkage does not match trace {trace_id} for obligation {obligation_id}",
@@ -687,7 +752,23 @@ impl Ir2FlowLattice {
             });
         }
 
-        obligation.record_use()?;
+        let record_use_result = {
+            let obligation = self
+                .obligations
+                .get_mut(obligation_id)
+                .expect("checked above");
+            obligation.record_use()
+        };
+        if let Err(err) = record_use_result {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
+            return Err(err);
+        }
+
         self.emit_event_with_metadata(
             trace_id,
             "use_declassification",
@@ -720,6 +801,25 @@ impl Ir2FlowLattice {
         self.emit_event_with_metadata(trace_id, event, outcome, error_code, None, None, None, None);
     }
 
+    fn emit_receipt_blocked_event(
+        &mut self,
+        trace_id: &str,
+        obligation_id: &str,
+        decision_contract_id: &str,
+        receipt: &DeclassificationReceipt,
+    ) {
+        self.emit_event_with_metadata(
+            trace_id,
+            "use_declassification",
+            "blocked",
+            Some(RECEIPT_BLOCKED_ERROR_CODE),
+            Some(obligation_id.to_string()),
+            Some(decision_contract_id.to_string()),
+            Some(receipt.receipt_id.clone()),
+            Some(receipt.replay_command()),
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn emit_event_with_metadata(
         &mut self,
@@ -734,7 +834,7 @@ impl Ir2FlowLattice {
     ) {
         self.events.push(FlowLatticeEvent {
             trace_id: trace_id.to_string(),
-            decision_id: String::new(),
+            decision_id: self.decision_id.clone(),
             policy_id: self.policy_id.clone(),
             component: "flow_lattice".to_string(),
             event: event.to_string(),
@@ -756,6 +856,36 @@ impl Ir2FlowLattice {
 mod tests {
     use super::*;
     use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+
+    fn assert_last_blocked_receipt_event(
+        lattice: &Ir2FlowLattice,
+        trace_id: &str,
+        obligation_id: &str,
+        decision_contract_id: &str,
+        receipt_id: &str,
+    ) {
+        let event = lattice.events().last().expect("blocked event");
+        assert_eq!(event.trace_id, trace_id);
+        assert_eq!(event.component, "flow_lattice");
+        assert_eq!(event.event, "use_declassification");
+        assert_eq!(event.outcome, "blocked");
+        assert_eq!(
+            event.error_code.as_deref(),
+            Some(RECEIPT_BLOCKED_ERROR_CODE)
+        );
+        assert_eq!(event.obligation_id.as_deref(), Some(obligation_id));
+        assert_eq!(
+            event.decision_contract_id.as_deref(),
+            Some(decision_contract_id)
+        );
+        assert_eq!(event.receipt_id.as_deref(), Some(receipt_id));
+        assert!(
+            event
+                .receipt_replay_command
+                .as_deref()
+                .is_some_and(|command| command.contains(receipt_id))
+        );
+    }
 
     // -----------------------------------------------------------------------
     // LabelClass lattice operations
@@ -1344,12 +1474,22 @@ mod tests {
 
         let event = &lattice.events()[0];
         assert_eq!(event.trace_id, "trace-1");
+        assert_eq!(event.decision_id, UNSPECIFIED_DECISION_ID);
         assert_eq!(event.policy_id, "my-policy");
         assert_eq!(event.component, "flow_lattice");
         assert!(event.obligation_id.is_none());
         assert!(event.decision_contract_id.is_none());
         assert!(event.receipt_id.is_none());
         assert!(event.receipt_replay_command.is_none());
+    }
+
+    #[test]
+    fn event_fields_preserve_explicit_decision_id() {
+        let mut lattice = Ir2FlowLattice::with_decision_id("my-policy", "decision-42");
+        lattice.check_flow(&LabelClass::Public, &Clearance::OpenSink, "trace-1");
+
+        let event = &lattice.events()[0];
+        assert_eq!(event.decision_id, "decision-42");
     }
 
     #[test]
@@ -1405,6 +1545,7 @@ mod tests {
             source_label: Label::Secret,
             sink_clearance: Label::Public,
             declassification_route_ref: "declass-2".to_string(),
+            decision_contract_id: "decision-2".to_string(),
             policy_evaluation_summary: "approved".to_string(),
             loss_assessment_milli: 42,
             decision: DeclassificationDecision::Allow,
@@ -1453,6 +1594,7 @@ mod tests {
             source_label: Label::Secret,
             sink_clearance: Label::Public,
             declassification_route_ref: "declass-3".to_string(),
+            decision_contract_id: "decision-3".to_string(),
             policy_evaluation_summary: "denied".to_string(),
             loss_assessment_milli: 9_999,
             decision: DeclassificationDecision::Deny,
@@ -1469,6 +1611,13 @@ mod tests {
             .use_declassification_with_receipt("obl-3", &denied_receipt, "trace-deny")
             .expect_err("deny receipt must fail closed");
         assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-deny",
+            "obl-3",
+            "decision-3",
+            "rcpt-deny",
+        );
         assert_eq!(
             lattice.obligation("obl-3").map(|ob| ob.use_count),
             Some(0),
@@ -1497,6 +1646,7 @@ mod tests {
             source_label: Label::Secret,
             sink_clearance: Label::Public,
             declassification_route_ref: "declass-4".to_string(),
+            decision_contract_id: "decision-4".to_string(),
             policy_evaluation_summary: "approved".to_string(),
             loss_assessment_milli: 7,
             decision: DeclassificationDecision::Allow,
@@ -1525,7 +1675,14 @@ mod tests {
             }
             other => panic!("expected FlowBlocked for tampered receipt, got {other:?}"),
         }
-        assert_eq!(lattice.events().len(), event_count_before);
+        assert_eq!(lattice.events().len(), event_count_before + 1);
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-rt",
+            "obl-4",
+            "decision-4",
+            "rcpt-tampered",
+        );
         assert_eq!(lattice.obligation("obl-4").map(|ob| ob.use_count), Some(0));
     }
 
@@ -1550,6 +1707,7 @@ mod tests {
             source_label: Label::Secret,
             sink_clearance: Label::Public,
             declassification_route_ref: "declass-5".to_string(),
+            decision_contract_id: "decision-5".to_string(),
             policy_evaluation_summary: "approved".to_string(),
             loss_assessment_milli: 1,
             decision: DeclassificationDecision::Allow,
@@ -1570,7 +1728,14 @@ mod tests {
             }
             other => panic!("expected FlowBlocked for untrusted authorizer, got {other:?}"),
         }
-        assert_eq!(lattice.events().len(), 0);
+        assert_eq!(lattice.events().len(), 1);
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-rt",
+            "obl-5",
+            "decision-5",
+            "rcpt-untrusted",
+        );
         assert_eq!(lattice.obligation("obl-5").map(|ob| ob.use_count), Some(0));
     }
 
@@ -1595,6 +1760,7 @@ mod tests {
             source_label: Label::Secret,
             sink_clearance: Label::Public,
             declassification_route_ref: "declass-6".to_string(),
+            decision_contract_id: "decision-6".to_string(),
             policy_evaluation_summary: "approved".to_string(),
             loss_assessment_milli: 2,
             decision: DeclassificationDecision::Allow,
@@ -1616,7 +1782,14 @@ mod tests {
             }
             other => panic!("expected FlowBlocked for cross-trace replay, got {other:?}"),
         }
-        assert_eq!(lattice.events().len(), 0);
+        assert_eq!(lattice.events().len(), 1);
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-other",
+            "obl-6",
+            "decision-6",
+            "rcpt-cross-trace",
+        );
         assert_eq!(lattice.obligation("obl-6").map(|ob| ob.use_count), Some(0));
     }
 
@@ -2362,6 +2535,7 @@ mod tests {
             source_label: Label::Public,
             sink_clearance: Label::Public,
             declassification_route_ref: "route-m".into(),
+            decision_contract_id: "dc-m".into(),
             policy_evaluation_summary: "approved".into(),
             loss_assessment_milli: 0,
             decision: DeclassificationDecision::Allow,
@@ -2380,6 +2554,7 @@ mod tests {
         assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
         let msg = format!("{err}");
         assert!(msg.contains("source label does not match"));
+        assert_last_blocked_receipt_event(&lattice, "trace-m", "obl-m", "dc-m", "rcpt-m");
         // Obligation use_count should not be advanced
         assert_eq!(lattice.obligation("obl-m").unwrap().use_count, 0);
     }
@@ -2405,6 +2580,7 @@ mod tests {
             source_label: Label::Secret,
             sink_clearance: Label::Internal,
             declassification_route_ref: "route-sink".into(),
+            decision_contract_id: "dc-sink".into(),
             policy_evaluation_summary: "approved".into(),
             loss_assessment_milli: 0,
             decision: DeclassificationDecision::Allow,
@@ -2423,6 +2599,13 @@ mod tests {
         assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
         let msg = format!("{err}");
         assert!(msg.contains("sink clearance internal cannot flow"));
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-sink",
+            "obl-sink",
+            "dc-sink",
+            "rcpt-sink",
+        );
         assert_eq!(lattice.obligation("obl-sink").unwrap().use_count, 0);
     }
 
@@ -2450,6 +2633,7 @@ mod tests {
                 level: 5,
             },
             declassification_route_ref: "route-custom".into(),
+            decision_contract_id: "dc-custom".into(),
             policy_evaluation_summary: "approved".into(),
             loss_assessment_milli: 0,
             decision: DeclassificationDecision::Allow,
@@ -2468,6 +2652,13 @@ mod tests {
         assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
         let msg = format!("{err}");
         assert!(msg.contains("sink clearance custom(ultra, level=5) cannot flow"));
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-custom",
+            "obl-custom",
+            "dc-custom",
+            "rcpt-custom",
+        );
         assert_eq!(lattice.obligation("obl-custom").unwrap().use_count, 0);
     }
 
@@ -2492,6 +2683,7 @@ mod tests {
             source_label: Label::Secret,
             sink_clearance: Label::Public,
             declassification_route_ref: "route-contract".into(),
+            decision_contract_id: "dc-expected".into(),
             policy_evaluation_summary: "approved".into(),
             loss_assessment_milli: 0,
             decision: DeclassificationDecision::Allow,
@@ -2510,7 +2702,65 @@ mod tests {
         assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
         let msg = format!("{err}");
         assert!(msg.contains("decision contract dc-expected"));
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-contract",
+            "obl-contract",
+            "dc-expected",
+            "rcpt-contract",
+        );
         assert_eq!(lattice.obligation("obl-contract").unwrap().use_count, 0);
+    }
+
+    #[test]
+    fn enrichment_receipt_signed_by_expected_key_but_for_other_contract_rejected() {
+        let mut lattice = Ir2FlowLattice::new("policy-contract-binding");
+        lattice
+            .register_obligation(DeclassificationObligation {
+                obligation_id: "obl-binding".into(),
+                source_label: LabelClass::Secret,
+                target_clearance: Clearance::NeverSink,
+                decision_contract_id: "dc-expected".into(),
+                requires_operator_approval: false,
+                max_uses: 0,
+                use_count: 0,
+            })
+            .unwrap();
+
+        let signing_key = SigningKey::from_bytes([13u8; 32]);
+        let mut receipt = DeclassificationReceipt {
+            receipt_id: "rcpt-binding".into(),
+            source_label: Label::Secret,
+            sink_clearance: Label::Public,
+            declassification_route_ref: "route-binding".into(),
+            decision_contract_id: "dc-other".into(),
+            policy_evaluation_summary: "approved".into(),
+            loss_assessment_milli: 0,
+            decision: DeclassificationDecision::Allow,
+            authorized_by: signing_key.verification_key(),
+            replay_linkage: "trace-binding".into(),
+            timestamp_ms: 1_700_000_000_003,
+            schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        receipt.sign(&signing_key).unwrap();
+        lattice
+            .trust_receipt_authorizer_for_contract("dc-expected", signing_key.verification_key());
+
+        let err = lattice
+            .use_declassification_with_receipt("obl-binding", &receipt, "trace-binding")
+            .unwrap_err();
+        assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
+        let msg = format!("{err}");
+        assert!(msg.contains("decision contract dc-other does not match"));
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-binding",
+            "obl-binding",
+            "dc-expected",
+            "rcpt-binding",
+        );
+        assert_eq!(lattice.obligation("obl-binding").unwrap().use_count, 0);
     }
 
     #[test]

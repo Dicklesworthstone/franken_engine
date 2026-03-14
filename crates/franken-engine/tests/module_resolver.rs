@@ -1246,6 +1246,10 @@ fn resolution_error_serde_roundtrip_all_codes() {
             trace_id: "t".to_string(),
             decision_id: "d".to_string(),
             policy_id: "p".to_string(),
+            request_specifier: String::new(),
+            canonical_specifier: None,
+            source_kind: None,
+            probe_sequence: Vec::new(),
             event: ev,
         };
         let json = serde_json::to_string(&err).expect("serialize");

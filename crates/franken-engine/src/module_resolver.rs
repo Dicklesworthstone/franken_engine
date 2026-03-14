@@ -302,10 +302,57 @@ pub struct ResolvedModule {
     pub probe_sequence: Vec<String>,
 }
 
+pub const MODULE_RESOLUTION_TRACE_SCHEMA_VERSION: &str = "rgc.module-resolution.trace.v1";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolutionOutcome {
     pub module: ResolvedModule,
     pub event: ResolutionEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleResolutionTraceRecord {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub event: String,
+    pub request_specifier: String,
+    pub canonical_specifier: String,
+    pub source_kind: String,
+    pub probe_sequence: Vec<String>,
+    pub outcome: String,
+    pub error_code: String,
+}
+
+impl ModuleResolutionTraceRecord {
+    pub const fn schema_version() -> &'static str {
+        MODULE_RESOLUTION_TRACE_SCHEMA_VERSION
+    }
+
+    pub fn to_json_line(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+}
+
+impl ResolutionOutcome {
+    pub fn trace_record(&self) -> ModuleResolutionTraceRecord {
+        ModuleResolutionTraceRecord {
+            schema_version: ModuleResolutionTraceRecord::schema_version().to_string(),
+            trace_id: self.event.trace_id.clone(),
+            decision_id: self.event.decision_id.clone(),
+            policy_id: self.event.policy_id.clone(),
+            component: self.event.component.clone(),
+            event: self.event.event.clone(),
+            request_specifier: self.module.request_specifier.clone(),
+            canonical_specifier: self.module.canonical_specifier.clone(),
+            source_kind: self.module.record.provenance.kind.as_str().to_string(),
+            probe_sequence: self.module.probe_sequence.clone(),
+            outcome: self.event.outcome.clone(),
+            error_code: self.event.error_code.clone(),
+        }
+    }
 }
 
 pub type HostApiAuthorizationResult<T> = Result<T, Box<HostApiAuthorizationError>>;
@@ -723,6 +770,14 @@ pub struct ResolutionError {
     pub trace_id: String,
     pub decision_id: String,
     pub policy_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request_specifier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_specifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<ModuleSourceKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probe_sequence: Vec<String>,
     pub event: ResolutionEvent,
 }
 
@@ -740,7 +795,55 @@ impl ResolutionError {
             trace_id: context.trace_id.clone(),
             decision_id: context.decision_id.clone(),
             policy_id: context.policy_id.clone(),
+            request_specifier: String::new(),
+            canonical_specifier: None,
+            source_kind: None,
+            probe_sequence: Vec::new(),
             event,
+        }
+    }
+
+    fn with_resolution_attempt(
+        mut self,
+        request_specifier: impl Into<String>,
+        canonical_specifier: Option<String>,
+        source_kind: Option<ModuleSourceKind>,
+        probe_sequence: Vec<String>,
+    ) -> Self {
+        self.request_specifier = request_specifier.into();
+        self.canonical_specifier = canonical_specifier;
+        self.source_kind = source_kind;
+        self.probe_sequence = probe_sequence;
+        self
+    }
+
+    pub fn trace_record(&self) -> ModuleResolutionTraceRecord {
+        let request_specifier = if self.request_specifier.trim().is_empty() {
+            "<unknown>".to_string()
+        } else {
+            self.request_specifier.clone()
+        };
+        let canonical_specifier = self
+            .canonical_specifier
+            .clone()
+            .unwrap_or_else(|| request_specifier.clone());
+        ModuleResolutionTraceRecord {
+            schema_version: ModuleResolutionTraceRecord::schema_version().to_string(),
+            trace_id: self.trace_id.clone(),
+            decision_id: self.decision_id.clone(),
+            policy_id: self.policy_id.clone(),
+            component: self.event.component.clone(),
+            event: self.event.event.clone(),
+            request_specifier,
+            canonical_specifier,
+            source_kind: self
+                .source_kind
+                .map(ModuleSourceKind::as_str)
+                .unwrap_or("unresolved")
+                .to_string(),
+            probe_sequence: self.probe_sequence.clone(),
+            outcome: self.event.outcome.clone(),
+            error_code: self.event.error_code.clone(),
         }
     }
 }
@@ -1049,11 +1152,19 @@ impl DeterministicModuleResolver {
         let specifier = request.specifier.trim();
         let mut probe_sequence = Vec::new();
         if specifier.is_empty() {
-            return Err(Box::new(ResolutionError::new(
-                ResolutionErrorCode::EmptySpecifier,
-                "module specifier must not be empty",
-                context,
-            )));
+            return Err(Box::new(
+                ResolutionError::new(
+                    ResolutionErrorCode::EmptySpecifier,
+                    "module specifier must not be empty",
+                    context,
+                )
+                .with_resolution_attempt(
+                    request.specifier.clone(),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            ));
         }
 
         if let Some(record) = self.builtins.get(specifier) {
@@ -1063,14 +1174,22 @@ impl DeterministicModuleResolver {
 
         if is_relative_specifier(specifier) {
             let referrer = request.referrer.as_deref().ok_or_else(|| {
-                Box::new(ResolutionError::new(
-                    ResolutionErrorCode::InvalidReferrer,
-                    format!(
-                        "relative specifier '{}' requires a referrer module",
-                        request.specifier
+                Box::new(
+                    ResolutionError::new(
+                        ResolutionErrorCode::InvalidReferrer,
+                        format!(
+                            "relative specifier '{}' requires a referrer module",
+                            request.specifier
+                        ),
+                        context,
+                    )
+                    .with_resolution_attempt(
+                        request.specifier.clone(),
+                        None,
+                        None,
+                        probe_sequence.clone(),
                     ),
-                    context,
-                ))
+                )
             })?;
             if let Some(external_referrer) = referrer.strip_prefix("external:") {
                 let base_dir = external_referrer_directory(external_referrer);
@@ -1079,38 +1198,59 @@ impl DeterministicModuleResolver {
                 let (relative_probes, candidate) =
                     self.lookup_external_candidate_with_probes(&resolved_base, request.style);
                 probe_sequence.extend(relative_probes);
-                return candidate.map_or_else(
-                    || {
-                        Err(Box::new(ResolutionError::new(
+                return match candidate {
+                    Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
+                    None => Err(Box::new(
+                        ResolutionError::new(
                             ResolutionErrorCode::ModuleNotFound,
                             format!(
                                 "unable to resolve relative specifier '{}' from '{}'",
                                 request.specifier, referrer
                             ),
                             context,
-                        )))
-                    },
-                    |(resolved, record)| Ok((resolved, record, probe_sequence)),
-                );
+                        )
+                        .with_resolution_attempt(
+                            request.specifier.clone(),
+                            None,
+                            None,
+                            probe_sequence,
+                        ),
+                    )),
+                };
             }
-            let base_dir = self.referrer_directory(referrer, context)?;
+            let base_dir = self
+                .referrer_directory(referrer, context)
+                .map_err(|error| {
+                    Box::new((*error).with_resolution_attempt(
+                        request.specifier.clone(),
+                        None,
+                        None,
+                        probe_sequence.clone(),
+                    ))
+                })?;
             let resolved_base = normalize_absolute_path(&join_paths(&base_dir, specifier));
             let (relative_probes, candidate) =
                 self.lookup_workspace_candidate_with_probes(&resolved_base, request.style);
             probe_sequence.extend(relative_probes);
-            return candidate.map_or_else(
-                || {
-                    Err(Box::new(ResolutionError::new(
+            return match candidate {
+                Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
+                None => Err(Box::new(
+                    ResolutionError::new(
                         ResolutionErrorCode::ModuleNotFound,
                         format!(
                             "unable to resolve relative specifier '{}' from '{}'",
                             request.specifier, referrer
                         ),
                         context,
-                    )))
-                },
-                |(resolved, record)| Ok((resolved, record, probe_sequence)),
-            );
+                    )
+                    .with_resolution_attempt(
+                        request.specifier.clone(),
+                        None,
+                        None,
+                        probe_sequence,
+                    ),
+                )),
+            };
         }
 
         if specifier.starts_with('/') {
@@ -1118,16 +1258,22 @@ impl DeterministicModuleResolver {
             let (absolute_probes, candidate) =
                 self.lookup_workspace_candidate_with_probes(&resolved_base, request.style);
             probe_sequence.extend(absolute_probes);
-            return candidate.map_or_else(
-                || {
-                    Err(Box::new(ResolutionError::new(
+            return match candidate {
+                Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
+                None => Err(Box::new(
+                    ResolutionError::new(
                         ResolutionErrorCode::ModuleNotFound,
                         format!("unable to resolve absolute specifier '{specifier}'"),
                         context,
-                    )))
-                },
-                |(resolved, record)| Ok((resolved, record, probe_sequence)),
-            );
+                    )
+                    .with_resolution_attempt(
+                        request.specifier.clone(),
+                        None,
+                        None,
+                        probe_sequence,
+                    ),
+                )),
+            };
         }
 
         let (external_probes, external_candidate) =
@@ -1145,11 +1291,19 @@ impl DeterministicModuleResolver {
             return Ok((resolved, record, probe_sequence));
         }
 
-        Err(Box::new(ResolutionError::new(
-            ResolutionErrorCode::ModuleNotFound,
-            format!("unable to resolve bare specifier '{specifier}'"),
-            context,
-        )))
+        Err(Box::new(
+            ResolutionError::new(
+                ResolutionErrorCode::ModuleNotFound,
+                format!("unable to resolve bare specifier '{specifier}'"),
+                context,
+            )
+            .with_resolution_attempt(
+                request.specifier.clone(),
+                None,
+                None,
+                probe_sequence,
+            ),
+        ))
     }
 
     fn referrer_directory(
@@ -1222,16 +1376,33 @@ impl ModuleResolver for DeterministicModuleResolver {
             && record.syntax == ModuleSyntax::EsModule
             && request.compatibility_mode != CompatibilityMode::BunCompat
         {
-            return Err(Box::new(ResolutionError::new(
-                ResolutionErrorCode::UnsupportedSpecifier,
-                format!(
-                    "ERR_REQUIRE_ESM: require() of ES module '{}' is not supported; use dynamic import() or provide a CommonJS entry point",
-                    canonical_specifier
+            return Err(Box::new(
+                ResolutionError::new(
+                    ResolutionErrorCode::UnsupportedSpecifier,
+                    format!(
+                        "ERR_REQUIRE_ESM: require() of ES module '{}' is not supported; use dynamic import() or provide a CommonJS entry point",
+                        canonical_specifier
+                    ),
+                    context,
+                )
+                .with_resolution_attempt(
+                    request.specifier.clone(),
+                    Some(canonical_specifier.clone()),
+                    Some(record.provenance.kind),
+                    probe_sequence.clone(),
                 ),
-                context,
-            )));
+            ));
         }
-        policy.authorize(request, record, context)?;
+        policy
+            .authorize(request, record, context)
+            .map_err(|error| {
+                Box::new((*error).with_resolution_attempt(
+                    request.specifier.clone(),
+                    Some(canonical_specifier.clone()),
+                    Some(record.provenance.kind),
+                    probe_sequence.clone(),
+                ))
+            })?;
 
         let resolved = ResolvedModule {
             request_specifier: request.specifier.clone(),
@@ -2303,6 +2474,10 @@ mod tests {
             trace_id: "t".to_string(),
             decision_id: "d".to_string(),
             policy_id: "p".to_string(),
+            request_specifier: String::new(),
+            canonical_specifier: None,
+            source_kind: None,
+            probe_sequence: Vec::new(),
             event,
         };
         let e: Box<dyn std::error::Error> = Box::new(err);
@@ -2625,6 +2800,79 @@ mod tests {
     }
 
     #[test]
+    fn resolution_outcome_trace_record_roundtrip_preserves_required_fields() {
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_workspace_module(
+                "/app/lib.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
+            )
+            .unwrap();
+
+        let outcome = resolver
+            .resolve(
+                &ModuleRequest::new("./lib", ImportStyle::Import).with_referrer("/app/main.mjs"),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .unwrap();
+
+        let trace = outcome.trace_record();
+        assert_eq!(trace.schema_version, MODULE_RESOLUTION_TRACE_SCHEMA_VERSION);
+        assert_eq!(trace.request_specifier, "./lib");
+        assert_eq!(trace.canonical_specifier, "/app/lib.mjs");
+        assert_eq!(trace.source_kind, "workspace");
+        assert_eq!(trace.probe_sequence, vec!["/app/lib", "/app/lib.mjs"]);
+        assert_eq!(trace.outcome, "allow");
+        assert_eq!(trace.error_code, "none");
+
+        let restored: ModuleResolutionTraceRecord =
+            serde_json::from_str(&trace.to_json_line().expect("serialize")).expect("deserialize");
+        assert_eq!(restored, trace);
+    }
+
+    #[test]
+    fn resolution_error_trace_record_preserves_partial_probe_sequence() {
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_workspace_module(
+                "/app/main.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './missing';"),
+            )
+            .unwrap();
+
+        let error = resolver
+            .resolve(
+                &ModuleRequest::new("./missing", ImportStyle::Import)
+                    .with_referrer("/app/main.mjs"),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .unwrap_err();
+
+        let trace = error.trace_record();
+        assert_eq!(trace.schema_version, MODULE_RESOLUTION_TRACE_SCHEMA_VERSION);
+        assert_eq!(trace.request_specifier, "./missing");
+        assert_eq!(trace.canonical_specifier, "./missing");
+        assert_eq!(trace.source_kind, "unresolved");
+        assert_eq!(
+            trace.probe_sequence,
+            vec![
+                "/app/missing",
+                "/app/missing.mjs",
+                "/app/missing.js",
+                "/app/missing/index.mjs",
+                "/app/missing/index.js"
+            ]
+        );
+        assert_eq!(trace.outcome, "deny");
+        assert_eq!(
+            trace.error_code,
+            ResolutionErrorCode::ModuleNotFound.stable_code()
+        );
+    }
+
+    #[test]
     fn capability_policy_hook_serde_roundtrip() {
         let mut granted = BTreeSet::new();
         granted.insert(RuntimeCapability::FsRead);
@@ -2681,6 +2929,10 @@ mod tests {
             trace_id: "t".to_string(),
             decision_id: "d".to_string(),
             policy_id: "p".to_string(),
+            request_specifier: String::new(),
+            canonical_specifier: None,
+            source_kind: None,
+            probe_sequence: Vec::new(),
             event: ev,
         };
         let json = serde_json::to_string(&err).expect("serialize");

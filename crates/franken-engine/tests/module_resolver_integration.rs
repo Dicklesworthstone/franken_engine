@@ -18,6 +18,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
@@ -1198,6 +1199,110 @@ fn error_context_propagates_ids() {
     assert_eq!(err.trace_id, "trace-err");
     assert_eq!(err.decision_id, "decision-err");
     assert_eq!(err.policy_id, "policy-err");
+}
+
+#[test]
+fn module_resolution_trace_jsonl_contract_round_trip_for_allow_and_deny() {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module(
+            "/app/src/main.mjs",
+            esm("import './lib'; import './missing';"),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module("/app/src/lib.mjs", esm("export default 1;"))
+        .unwrap();
+
+    let allow = resolver
+        .resolve(
+            &ModuleRequest::new("./lib", ImportStyle::Import).with_referrer("/app/src/main.mjs"),
+            &ctx_named("trace-allow", "decision-allow", "policy-allow"),
+            &AllowAllPolicy,
+        )
+        .expect("workspace import should resolve");
+    let deny = resolver
+        .resolve(
+            &ModuleRequest::new("./missing", ImportStyle::Import)
+                .with_referrer("/app/src/main.mjs"),
+            &ctx_named("trace-deny", "decision-deny", "policy-deny"),
+            &AllowAllPolicy,
+        )
+        .expect_err("missing import should fail");
+
+    let artifact_root = std::env::temp_dir().join(format!(
+        "module_resolution_trace_contract_{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&artifact_root).expect("trace artifact directory should be created");
+
+    let trace_path = artifact_root.join("module_resolution_trace.jsonl");
+    let allow_trace = allow.trace_record();
+    let deny_trace = deny.trace_record();
+    let trace_jsonl = format!(
+        "{}\n{}\n",
+        allow_trace
+            .to_json_line()
+            .expect("allow trace should serialize"),
+        deny_trace
+            .to_json_line()
+            .expect("deny trace should serialize"),
+    );
+    fs::write(&trace_path, trace_jsonl).expect("trace artifact should be written");
+
+    let restored = fs::read_to_string(&trace_path).expect("trace artifact should be readable");
+    let decoded = restored
+        .lines()
+        .map(|line| serde_json::from_str::<ModuleResolutionTraceRecord>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(decoded.len(), 2);
+
+    assert_eq!(decoded[0], allow_trace);
+    assert_eq!(
+        decoded[0].schema_version,
+        MODULE_RESOLUTION_TRACE_SCHEMA_VERSION
+    );
+    assert_eq!(decoded[0].component, "module_resolver");
+    assert_eq!(decoded[0].event, "module_resolution");
+    assert_eq!(decoded[0].request_specifier, "./lib");
+    assert_eq!(decoded[0].canonical_specifier, "/app/src/lib.mjs");
+    assert_eq!(decoded[0].source_kind, "workspace");
+    assert_eq!(
+        decoded[0].probe_sequence,
+        vec!["/app/src/lib", "/app/src/lib.mjs"]
+    );
+    assert_eq!(decoded[0].outcome, "allow");
+    assert_eq!(decoded[0].error_code, "none");
+
+    assert_eq!(decoded[1], deny_trace);
+    assert_eq!(
+        decoded[1].schema_version,
+        MODULE_RESOLUTION_TRACE_SCHEMA_VERSION
+    );
+    assert_eq!(decoded[1].component, "module_resolver");
+    assert_eq!(decoded[1].event, "module_resolution");
+    assert_eq!(decoded[1].request_specifier, "./missing");
+    assert_eq!(decoded[1].canonical_specifier, "./missing");
+    assert_eq!(decoded[1].source_kind, "unresolved");
+    assert_eq!(
+        decoded[1].probe_sequence,
+        vec![
+            "/app/src/missing",
+            "/app/src/missing.mjs",
+            "/app/src/missing.js",
+            "/app/src/missing/index.mjs",
+            "/app/src/missing/index.js"
+        ]
+    );
+    assert_eq!(decoded[1].outcome, "deny");
+    assert_eq!(
+        decoded[1].error_code,
+        ResolutionErrorCode::ModuleNotFound.stable_code()
+    );
 }
 
 // -----------------------------------------------------------------------

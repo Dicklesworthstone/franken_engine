@@ -484,3 +484,160 @@ fn track_e_charter_word_count_exceeds_minimum() {
         "charter doc should have >= 100 words, got {word_count}"
     );
 }
+
+// ===== PearlTower enrichment session 2026-03-14 =====
+
+#[test]
+fn track_e_contract_deterministic_double_parse() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let a: Value = serde_json::from_str(&raw).expect("parse 1");
+    let b: Value = serde_json::from_str(&raw).expect("parse 2");
+    assert_eq!(a, b);
+}
+
+#[test]
+fn track_e_contract_json_pretty_roundtrip_stable() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    let pretty = serde_json::to_string_pretty(&value).expect("pretty");
+    let reparsed: Value = serde_json::from_str(&pretty).expect("reparse");
+    assert_eq!(value, reparsed);
+}
+
+#[test]
+fn track_e_contract_has_track_id() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    let track_id = value["track"]["id"].as_str().expect("track.id");
+    assert!(!track_id.trim().is_empty());
+}
+
+#[test]
+fn track_e_contract_bead_id_is_hierarchical() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    let bead_id = value["bead_id"].as_str().expect("bead_id");
+    assert!(
+        bead_id.starts_with("bd-"),
+        "bead_id must start with bd-: {bead_id}"
+    );
+}
+
+#[test]
+fn track_e_contract_outputs_blocking_reports_exists() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    assert!(
+        value["outputs"]["blocking_reports"].is_object()
+            || value["outputs"]["blocking_reports"].is_array(),
+        "outputs.blocking_reports must exist"
+    );
+}
+
+#[test]
+fn track_e_contract_activation_gate_has_required_fields() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    let gate = &value["activation_gate"];
+    assert!(gate.is_object(), "activation_gate must be an object");
+}
+
+#[test]
+fn track_e_contract_responsibilities_are_nonempty() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    if let Some(responsibilities) = value["responsibilities"].as_array() {
+        assert!(!responsibilities.is_empty());
+        for r in responsibilities {
+            assert!(
+                r.as_str().is_some_and(|s| !s.trim().is_empty()),
+                "each responsibility must be a non-empty string"
+            );
+        }
+    }
+}
+
+#[test]
+fn track_e_contract_operator_verification_commands_are_nonempty() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    if let Some(cmds) = value["operator_verification"].as_array() {
+        assert!(!cmds.is_empty());
+        for cmd in cmds {
+            assert!(
+                cmd.as_str().is_some_and(|s| !s.trim().is_empty()),
+                "operator verification command must be nonempty"
+            );
+        }
+    }
+}
+
+#[test]
+fn enrichment_charter_mentions_counterexample() {
+    let path = repo_root().join("docs/FRX_TRACK_E_VERIFICATION_FUZZ_FORMAL_COVERAGE_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.contains("counterexample") || doc.contains("Counterexample"),
+        "charter must mention counterexample handling"
+    );
+}
+
+#[test]
+fn enrichment_charter_mentions_metamorphic() {
+    let path = repo_root().join("docs/FRX_TRACK_E_VERIFICATION_FUZZ_FORMAL_COVERAGE_SPRINT_V1.md");
+    let doc = fs::read_to_string(&path).expect("read doc");
+    assert!(
+        doc.contains("metamorphic"),
+        "charter must mention metamorphic relations"
+    );
+}
+
+#[test]
+fn enrichment_contract_schema_version_has_frx_prefix() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    let sv = value["schema_version"].as_str().expect("schema_version");
+    assert!(
+        sv.starts_with("frx."),
+        "schema_version must start with frx.: {sv}"
+    );
+}
+
+#[test]
+fn enrichment_contract_json_is_nonempty_and_valid() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    assert!(raw.len() > 100, "contract JSON must be substantial");
+    let _: Value = serde_json::from_str(&raw).expect("must be valid JSON");
+}
+
+#[test]
+fn enrichment_confidence_trajectory_bundle_exists() {
+    let path =
+        repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
+    let raw = fs::read_to_string(&path).expect("read JSON");
+    let value: Value = serde_json::from_str(&raw).expect("parse");
+    assert!(
+        value["outputs"]["confidence_trajectory_bundle"].is_object(),
+        "outputs.confidence_trajectory_bundle must exist"
+    );
+}

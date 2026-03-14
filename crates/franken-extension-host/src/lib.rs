@@ -7025,6 +7025,11 @@ mod delegate_cell_tests {
             .unwrap_or_else(|_| "./scripts/run_guardplane_policy_actions_suite.sh ci".to_string())
     }
 
+    fn load_guardplane_policy_actions_runner_script() -> String {
+        std::fs::read_to_string("../../scripts/run_guardplane_policy_actions_suite.sh")
+            .expect("read guardplane policy actions runner")
+    }
+
     #[test]
     fn delegate_manifest_validation_rejects_invalid_configuration() {
         let empty_delegator = DelegateCellManifest {
@@ -7471,6 +7476,41 @@ mod delegate_cell_tests {
         assert_eq!(
             guardplane_action_from_posterior(850_000),
             GuardplanePolicyAction::Quarantine
+        );
+    }
+
+    #[test]
+    fn guardplane_policy_actions_runner_script_uses_unique_repo_local_namespaces() {
+        let script = load_guardplane_policy_actions_runner_script();
+
+        for snippet in [
+            "rch is required for guardplane policy actions heavy commands",
+            r#"run_stamp="${timestamp}_uid${uid}_${mode}_$$""#,
+            ".rch_target/guardplane_policy_actions_uid",
+            r#"run_dir="${artifact_root}/${run_stamp}""#,
+            "cargo test -p frankenengine-extension-host --lib guardplane_policy_actions_runner_script_uses_unique_repo_local_namespaces",
+        ] {
+            assert!(
+                script.contains(snippet),
+                "runner script missing required snippet: {snippet}"
+            );
+        }
+
+        assert!(
+            !script.contains("/tmp/rch_target_franken_engine_guardplane_policy_actions"),
+            "runner script must not default guardplane target dir under /tmp"
+        );
+        assert!(
+            !script.contains(r#"run_dir="$artifact_root/$timestamp""#),
+            "runner script must not use a timestamp-only artifact namespace"
+        );
+        assert!(
+            !script.contains("trace-guardplane-policy-actions-${timestamp}"),
+            "runner script must not use a timestamp-only trace identifier"
+        );
+        assert!(
+            !script.contains("decision-guardplane-policy-actions-${timestamp}"),
+            "runner script must not use a timestamp-only decision identifier"
         );
     }
 

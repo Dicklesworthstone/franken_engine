@@ -532,3 +532,336 @@ fn enrichment_cross_cutting_schema_version_in_decision() {
     let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
     assert_eq!(dec.schema_version, SCHEMA_VERSION);
 }
+
+// ===== PearlTower enrichment batch 2 — 2026-03-14 =====
+
+// ---------------------------------------------------------------------------
+// OptimizationStrategy — net_value / within_regret_budget / context_satisfies
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_strategy_net_value_reward_minus_cost() {
+    let s = make_strategy("s-nv", StrategyKind::Tiering, 100_000, 20_000);
+    assert_eq!(s.net_value(), 80_000);
+}
+
+#[test]
+fn enrichment_strategy_net_value_zero_when_cost_exceeds_reward() {
+    let s = make_strategy("s-neg", StrategyKind::Tiering, 10_000, 50_000);
+    // saturating_sub means no underflow
+    assert_eq!(s.net_value(), 0);
+}
+
+#[test]
+fn enrichment_strategy_within_regret_budget_true() {
+    let s = make_strategy("s-rb", StrategyKind::CachePolicy, 100_000, 20_000);
+    // worst_case_regret = cost / 2 = 10_000
+    assert!(s.within_regret_budget(10_000));
+    assert!(s.within_regret_budget(20_000));
+}
+
+#[test]
+fn enrichment_strategy_within_regret_budget_false() {
+    let s = make_strategy("s-rb2", StrategyKind::CachePolicy, 100_000, 40_000);
+    // worst_case_regret = 20_000
+    assert!(!s.within_regret_budget(10_000));
+}
+
+#[test]
+fn enrichment_strategy_context_satisfies_no_requirements() {
+    let s = make_strategy("s-ctx", StrategyKind::Tiering, 100_000, 20_000);
+    let ctx = make_context();
+    assert!(
+        s.context_satisfies(&ctx),
+        "empty required_features should always be satisfied"
+    );
+}
+
+#[test]
+fn enrichment_strategy_context_satisfies_with_features() {
+    let mut s = make_strategy("s-ctx2", StrategyKind::Tiering, 100_000, 20_000);
+    s.required_features = BTreeSet::from([FeatureKey::RequestRate]);
+    let ctx = make_context();
+    assert!(s.context_satisfies(&ctx));
+}
+
+#[test]
+fn enrichment_strategy_context_not_satisfied_missing_feature() {
+    let mut s = make_strategy("s-ctx3", StrategyKind::Tiering, 100_000, 20_000);
+    s.required_features = BTreeSet::from([FeatureKey::GcPauseFrequency]);
+    let ctx = make_context();
+    assert!(
+        !s.context_satisfies(&ctx),
+        "GcPauseFrequency not in context, should fail"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// WorkloadContext — with_label / get
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_workload_context_with_label() {
+    let features = BTreeMap::from([(FeatureKey::RequestRate, 500)]);
+    let ctx = WorkloadContext::with_label(features, "high-traffic");
+    assert_eq!(ctx.label.as_deref(), Some("high-traffic"));
+    assert_eq!(ctx.get(FeatureKey::RequestRate), Some(500));
+}
+
+#[test]
+fn enrichment_workload_context_get_present() {
+    let ctx = make_context();
+    assert_eq!(ctx.get(FeatureKey::RequestRate), Some(1000));
+    assert_eq!(ctx.get(FeatureKey::PayloadSize), Some(512));
+}
+
+#[test]
+fn enrichment_workload_context_get_absent() {
+    let ctx = make_context();
+    assert_eq!(ctx.get(FeatureKey::GcPauseFrequency), None);
+}
+
+#[test]
+fn enrichment_workload_context_serde_roundtrip() {
+    let ctx = make_context();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let restored: WorkloadContext = serde_json::from_str(&json).unwrap();
+    assert_eq!(ctx, restored);
+}
+
+// ---------------------------------------------------------------------------
+// PolicyConstraint::tag() — all unique
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_policy_constraint_tags_all_unique() {
+    let constraints = [
+        PolicyConstraint::AllowedKinds {
+            kinds: BTreeSet::new(),
+        },
+        PolicyConstraint::ForbiddenStrategies {
+            strategy_ids: BTreeSet::new(),
+        },
+        PolicyConstraint::MaxCost {
+            limit_millionths: 0,
+        },
+        PolicyConstraint::MaxRegret {
+            limit_millionths: 0,
+        },
+        PolicyConstraint::MinReward {
+            threshold_millionths: 0,
+        },
+        PolicyConstraint::ForceStrategy {
+            strategy_id: "x".to_string(),
+        },
+    ];
+    let tags: BTreeSet<&str> = constraints.iter().map(|c| c.tag()).collect();
+    assert_eq!(
+        tags.len(),
+        6,
+        "each constraint variant must have a unique tag"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SelectionDecision::is_override
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_selection_decision_is_override_with_force() {
+    let strategies = vec![make_strategy("s1", StrategyKind::Tiering, 100_000, 20_000)];
+    let constraints = vec![PolicyConstraint::ForceStrategy {
+        strategy_id: "s1".to_string(),
+    }];
+    let selector = ContextualSelector::with_defaults(strategies, constraints);
+    let ctx = make_context();
+    let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
+    assert!(dec.is_override(), "ForceStrategy should produce override");
+    assert_eq!(dec.selected_strategy_id.as_deref(), Some("s1"));
+}
+
+// ---------------------------------------------------------------------------
+// ForbiddenStrategies constraint
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_forbidden_strategy_excluded() {
+    let strategies = vec![
+        make_strategy("good", StrategyKind::CachePolicy, 200_000, 10_000),
+        make_strategy("bad", StrategyKind::Tiering, 300_000, 5_000),
+    ];
+    let constraints = vec![PolicyConstraint::ForbiddenStrategies {
+        strategy_ids: BTreeSet::from(["bad".to_string()]),
+    }];
+    let selector = ContextualSelector::with_defaults(strategies, constraints);
+    let ctx = make_context();
+    let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
+    assert_eq!(
+        dec.selected_strategy_id.as_deref(),
+        Some("good"),
+        "forbidden strategy should be excluded despite higher net value"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MinReward constraint filters low-reward strategies
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_min_reward_filters_low_reward() {
+    let strategies = vec![
+        make_strategy("low", StrategyKind::Tiering, 5_000, 1_000),
+        make_strategy("high", StrategyKind::CachePolicy, 200_000, 10_000),
+    ];
+    let constraints = vec![PolicyConstraint::MinReward {
+        threshold_millionths: 100_000,
+    }];
+    let selector = ContextualSelector::with_defaults(strategies, constraints);
+    let ctx = make_context();
+    let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
+    assert_eq!(
+        dec.selected_strategy_id.as_deref(),
+        Some("high"),
+        "low-reward strategy should be filtered"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MaxRegret constraint
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_max_regret_filters_risky() {
+    let mut risky = make_strategy("risky", StrategyKind::Tiering, 500_000, 400_000);
+    risky.worst_case_regret_millionths = 90_000;
+    let safe = make_strategy("safe", StrategyKind::CachePolicy, 100_000, 10_000);
+    let constraints = vec![PolicyConstraint::MaxRegret {
+        limit_millionths: 50_000,
+    }];
+    let selector = ContextualSelector::with_defaults(vec![risky, safe], constraints);
+    let ctx = make_context();
+    let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
+    assert_eq!(dec.selected_strategy_id.as_deref(), Some("safe"));
+}
+
+// ---------------------------------------------------------------------------
+// ContextualSelector — strategy_count / new with custom budget
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_selector_strategy_count() {
+    let selector = make_selector();
+    assert_eq!(selector.strategy_count(), 2);
+}
+
+#[test]
+fn enrichment_selector_strategy_count_empty() {
+    let selector = ContextualSelector::with_defaults(vec![], vec![]);
+    assert_eq!(selector.strategy_count(), 0);
+}
+
+#[test]
+fn enrichment_selector_new_custom_budget() {
+    let selector = ContextualSelector::new(vec![], vec![], 99_000);
+    assert_eq!(selector.exploration_budget, 99_000);
+}
+
+// ---------------------------------------------------------------------------
+// Serde roundtrips for OptimizationStrategy, SelectionDecision
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_optimization_strategy_serde_roundtrip() {
+    let s = make_strategy("s-rt", StrategyKind::Tiering, 100_000, 20_000);
+    let json = serde_json::to_string(&s).unwrap();
+    let restored: OptimizationStrategy = serde_json::from_str(&json).unwrap();
+    assert_eq!(s, restored);
+}
+
+#[test]
+fn enrichment_selection_decision_serde_roundtrip() {
+    let selector = make_selector();
+    let ctx = make_context();
+    let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
+    let json = serde_json::to_string(&dec).unwrap();
+    let restored: frankenengine_engine::contextual_policy_selector::SelectionDecision =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(dec, restored);
+}
+
+// ---------------------------------------------------------------------------
+// FeatureKey::as_str — all unique non-empty
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_feature_key_as_str_all_unique() {
+    let strs: BTreeSet<&str> = FeatureKey::ALL.iter().map(|k| k.as_str()).collect();
+    assert_eq!(strs.len(), FeatureKey::ALL.len());
+    for s in &strs {
+        assert!(!s.is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// StrategyKind::as_str — all unique non-empty
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_strategy_kind_as_str_all_unique() {
+    let strs: BTreeSet<&str> = StrategyKind::ALL.iter().map(|k| k.as_str()).collect();
+    assert_eq!(strs.len(), StrategyKind::ALL.len());
+    for s in &strs {
+        assert!(!s.is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ContextualSelector serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_contextual_selector_serde_roundtrip() {
+    let selector = make_selector();
+    let json = serde_json::to_string(&selector).unwrap();
+    let restored: ContextualSelector = serde_json::from_str(&json).unwrap();
+    assert_eq!(selector, restored);
+}
+
+// ---------------------------------------------------------------------------
+// MaxCost constraint filters expensive strategies
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_max_cost_filters_expensive() {
+    let strategies = vec![
+        make_strategy("cheap", StrategyKind::Tiering, 50_000, 5_000),
+        make_strategy("expensive", StrategyKind::CachePolicy, 200_000, 100_000),
+    ];
+    let constraints = vec![PolicyConstraint::MaxCost {
+        limit_millionths: 10_000,
+    }];
+    let selector = ContextualSelector::with_defaults(strategies, constraints);
+    let ctx = make_context();
+    let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
+    assert_eq!(
+        dec.selected_strategy_id.as_deref(),
+        Some("cheap"),
+        "expensive strategy should be filtered by MaxCost"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Missing features produces MissingFeatures reason
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_missing_features_filters_strategy() {
+    let mut s = make_strategy("needs-gc", StrategyKind::Tiering, 500_000, 10_000);
+    s.required_features = BTreeSet::from([FeatureKey::GcPauseFrequency, FeatureKey::ModuleCount]);
+    let fallback = make_strategy("basic", StrategyKind::Default, 10_000, 1_000);
+    let selector = ContextualSelector::with_defaults(vec![s, fallback], vec![]);
+    let ctx = make_context(); // does not have GcPauseFrequency or ModuleCount
+    let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
+    // The strategy needing missing features should be filtered; basic should win
+    assert_eq!(dec.selected_strategy_id.as_deref(), Some("basic"));
+}

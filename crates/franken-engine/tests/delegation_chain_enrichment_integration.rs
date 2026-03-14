@@ -969,3 +969,233 @@ fn enrichment_chain_hash_depends_on_leaf_delegate() {
         "different delegates should produce different hashes"
     );
 }
+
+// ===== PearlTower enrichment batch 2 — 2026-03-14 =====
+
+// ===========================================================================
+// AuthorizationProof serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_authorization_proof_serde_roundtrip() {
+    let (chain, root_sk, leaf_delegate) = valid_chain_fixture();
+    let ctx = make_ctx(&root_sk);
+    let proof = verify_chain(
+        &chain,
+        RuntimeCapability::VmDispatch,
+        &leaf_delegate,
+        &ctx,
+        &NoRevocationOracle,
+    )
+    .unwrap();
+    let json = serde_json::to_string(&proof).unwrap();
+    let restored: frankenengine_engine::delegation_chain::AuthorizationProof =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(proof, restored);
+}
+
+// ===========================================================================
+// DelegationChain full serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_delegation_chain_full_serde_roundtrip() {
+    let (chain, _, _) = valid_chain_fixture();
+    let json = serde_json::to_string(&chain).unwrap();
+    let restored: DelegationChain = serde_json::from_str(&json).unwrap();
+    assert_eq!(chain, restored);
+    assert_eq!(chain.len(), restored.len());
+}
+
+// ===========================================================================
+// DelegationVerificationContext serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_verification_context_serde_roundtrip() {
+    let root_sk = make_sk(1);
+    let ctx = make_ctx(&root_sk);
+    let json = serde_json::to_string(&ctx).unwrap();
+    let restored: DelegationVerificationContext = serde_json::from_str(&json).unwrap();
+    assert_eq!(ctx, restored);
+}
+
+// ===========================================================================
+// DelegationLinkSummary serde roundtrip
+// ===========================================================================
+
+#[test]
+fn enrichment_link_summary_serde_roundtrip() {
+    let summary = DelegationLinkSummary {
+        index: 2,
+        token_id: EngineObjectId([0xCC; 32]),
+        issuer: make_principal(5),
+        delegate: make_principal(6),
+        capability_count: 4,
+        zone: "zone-b".to_string(),
+        not_before_tick: 200,
+        expiry_tick: 2000,
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let restored: DelegationLinkSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, restored);
+}
+
+// ===========================================================================
+// Zone mismatch error path
+// ===========================================================================
+
+#[test]
+fn enrichment_zone_mismatch_produces_error() {
+    let (chain, root_sk, leaf_delegate) = valid_chain_fixture();
+    let mut ctx = make_ctx(&root_sk);
+    ctx.required_zone = Some("zone-x".to_string()); // chain uses zone-a
+    let err = verify_chain(
+        &chain,
+        RuntimeCapability::VmDispatch,
+        &leaf_delegate,
+        &ctx,
+        &NoRevocationOracle,
+    )
+    .unwrap_err();
+    match err {
+        ChainError::ZoneMismatch {
+            expected_zone,
+            actual_zone,
+            ..
+        } => {
+            assert_eq!(expected_zone, "zone-x");
+            assert_eq!(actual_zone, "zone-a");
+        }
+        other => panic!("expected ZoneMismatch, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// Unauthorized root error path
+// ===========================================================================
+
+#[test]
+fn enrichment_unauthorized_root_produces_error() {
+    let (chain, _, leaf_delegate) = valid_chain_fixture();
+    let wrong_sk = make_sk(99); // not the root key
+    let ctx = make_ctx(&wrong_sk);
+    let err = verify_chain(
+        &chain,
+        RuntimeCapability::VmDispatch,
+        &leaf_delegate,
+        &ctx,
+        &NoRevocationOracle,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ChainError::UnauthorizedRoot { .. }),
+        "expected UnauthorizedRoot, got {err:?}"
+    );
+}
+
+// ===========================================================================
+// No required zone — verification passes without zone check
+// ===========================================================================
+
+#[test]
+fn enrichment_no_required_zone_passes() {
+    let (chain, root_sk, leaf_delegate) = valid_chain_fixture();
+    let mut ctx = make_ctx(&root_sk);
+    ctx.required_zone = None;
+    let result = verify_chain(
+        &chain,
+        RuntimeCapability::VmDispatch,
+        &leaf_delegate,
+        &ctx,
+        &NoRevocationOracle,
+    );
+    assert!(result.is_ok());
+}
+
+// ===========================================================================
+// DelegationChain::len and is_empty
+// ===========================================================================
+
+#[test]
+fn enrichment_chain_len_and_is_empty() {
+    let empty = DelegationChain::new(vec![]);
+    assert_eq!(empty.len(), 0);
+    assert!(empty.is_empty());
+
+    let (chain, _, _) = valid_chain_fixture();
+    assert_eq!(chain.len(), 3);
+    assert!(!chain.is_empty());
+}
+
+// ===========================================================================
+// with_authorized_root constructor
+// ===========================================================================
+
+#[test]
+fn enrichment_with_authorized_root_sets_single_root() {
+    let vk = make_sk(10).verification_key();
+    let ctx = DelegationVerificationContext::with_authorized_root(vk.clone());
+    assert_eq!(ctx.authorized_roots.len(), 1);
+    assert!(ctx.authorized_roots.contains(&vk));
+}
+
+// ===========================================================================
+// principal_id_from_verification_key — different keys, different principals
+// ===========================================================================
+
+#[test]
+fn enrichment_principal_id_clone_and_eq() {
+    let vk = make_sk(7).verification_key();
+    let p = principal_id_from_verification_key(&vk);
+    let p_clone = p.clone();
+    assert_eq!(p, p_clone);
+}
+
+// ===========================================================================
+// Single-link chain verification
+// ===========================================================================
+
+#[test]
+fn enrichment_single_link_chain_valid() {
+    let root_sk = make_sk(1);
+    let leaf = make_principal(50);
+    let token = make_bound_token(&root_sk, leaf.clone(), &[RuntimeCapability::VmDispatch]);
+    let chain = DelegationChain::new(vec![token]);
+    let ctx = make_ctx(&root_sk);
+    let proof = verify_chain(
+        &chain,
+        RuntimeCapability::VmDispatch,
+        &leaf,
+        &ctx,
+        &NoRevocationOracle,
+    )
+    .unwrap();
+    assert_eq!(proof.chain_summary.len(), 1);
+    assert_eq!(proof.authorized_capability, RuntimeCapability::VmDispatch);
+}
+
+// ===========================================================================
+// Revocation of specific link
+// ===========================================================================
+
+#[test]
+fn enrichment_revocation_of_second_link() {
+    let (chain, root_sk, leaf_delegate) = valid_chain_fixture();
+    let ctx = make_ctx(&root_sk);
+    let mut revoked = BTreeSet::new();
+    revoked.insert(chain.links[1].jti.clone()); // revoke only link 1
+    let oracle = SetRevocationOracle { revoked };
+    let err = verify_chain(
+        &chain,
+        RuntimeCapability::VmDispatch,
+        &leaf_delegate,
+        &ctx,
+        &oracle,
+    )
+    .unwrap_err();
+    match err {
+        ChainError::RevokedLink { index, .. } => assert_eq!(index, 1),
+        other => panic!("expected RevokedLink at 1, got {other:?}"),
+    }
+}

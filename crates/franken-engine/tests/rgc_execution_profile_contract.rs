@@ -530,3 +530,149 @@ fn gate_runner_paths_are_repo_relative() {
         );
     }
 }
+
+// ===== PearlTower enrichment session 2026-03-14 =====
+
+#[test]
+fn enrichment_gate_runner_script_references_execution_profile() {
+    let contract = parse_contract();
+    assert!(
+        contract
+            .gate_runner
+            .script
+            .contains("execution_profile_contract"),
+        "gate script must reference execution_profile_contract: {}",
+        contract.gate_runner.script
+    );
+}
+
+#[test]
+fn enrichment_gate_runner_replay_wrapper_references_execution_profile() {
+    let contract = parse_contract();
+    assert!(
+        contract
+            .gate_runner
+            .replay_wrapper
+            .contains("execution_profile_contract"),
+        "replay wrapper must reference execution_profile_contract: {}",
+        contract.gate_runner.replay_wrapper
+    );
+}
+
+#[test]
+fn enrichment_contract_serde_to_value_roundtrip() {
+    let original = parse_contract();
+    let value = serde_json::to_value(&original).expect("to_value");
+    let back: ExecutionProfileContract =
+        serde_json::from_value(value).expect("from_value roundtrip");
+    assert_eq!(original, back);
+}
+
+#[test]
+fn enrichment_raw_json_is_valid_and_nonempty() {
+    assert!(!CONTRACT_JSON.is_empty());
+    assert!(
+        CONTRACT_JSON.len() > 200,
+        "contract JSON must be substantial"
+    );
+    let _: Value = serde_json::from_str(CONTRACT_JSON).expect("must parse as Value");
+}
+
+#[test]
+fn enrichment_raw_json_pretty_roundtrip_is_stable() {
+    let raw: Value = serde_json::from_str(CONTRACT_JSON).unwrap();
+    let pretty = serde_json::to_string_pretty(&raw).unwrap();
+    let reparsed: Value = serde_json::from_str(&pretty).unwrap();
+    assert_eq!(raw, reparsed);
+}
+
+#[test]
+fn enrichment_policy_id_format_is_prefixed_and_nonempty() {
+    let contract = parse_contract();
+    assert!(
+        contract.policy_id.starts_with("policy-"),
+        "policy_id must start with 'policy-'"
+    );
+    assert!(
+        contract.policy_id.len() > 7,
+        "policy_id must be more than just 'policy-'"
+    );
+}
+
+#[test]
+fn enrichment_operator_verification_commands_are_unique() {
+    let contract = parse_contract();
+    let mut seen = BTreeSet::new();
+    for cmd in &contract.operator_verification {
+        assert!(
+            seen.insert(cmd.clone()),
+            "duplicate operator verification command: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_required_artifacts_include_events_jsonl() {
+    let contract = parse_contract();
+    let artifacts: BTreeSet<&str> = contract
+        .required_artifacts
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        artifacts.contains("events.jsonl"),
+        "required_artifacts must include events.jsonl"
+    );
+}
+
+#[test]
+fn enrichment_banned_readme_fragments_are_nonempty_strings() {
+    let contract = parse_contract();
+    for fragment in &contract.banned_readme_fragments {
+        assert!(
+            !fragment.trim().is_empty(),
+            "banned readme fragment must not be empty"
+        );
+        assert!(
+            fragment.len() >= 3,
+            "banned readme fragment too short to be meaningful: {fragment}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_required_readme_fragments_are_nonempty_strings() {
+    let contract = parse_contract();
+    for fragment in &contract.required_readme_fragments {
+        assert!(
+            !fragment.trim().is_empty(),
+            "required readme fragment must not be empty"
+        );
+    }
+}
+
+#[test]
+fn enrichment_required_migration_fragments_are_nonempty_strings() {
+    let contract = parse_contract();
+    for fragment in &contract.required_migration_fragments {
+        assert!(
+            !fragment.trim().is_empty(),
+            "required migration fragment must not be empty"
+        );
+    }
+}
+
+#[test]
+fn enrichment_gate_runner_script_has_sh_extension() {
+    let contract = parse_contract();
+    assert!(
+        contract.gate_runner.script.ends_with(".sh"),
+        "gate script must be a .sh file: {}",
+        contract.gate_runner.script
+    );
+    assert!(
+        contract.gate_runner.replay_wrapper.ends_with(".sh"),
+        "replay wrapper must be a .sh file: {}",
+        contract.gate_runner.replay_wrapper
+    );
+}

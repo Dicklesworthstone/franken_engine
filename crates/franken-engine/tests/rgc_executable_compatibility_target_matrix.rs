@@ -688,3 +688,145 @@ fn matrix_coverage_rows_have_nonempty_row_ids() {
         );
     }
 }
+
+// ===== PearlTower enrichment session 2026-03-14 =====
+
+#[test]
+fn enrichment_matrix_clone_equality() {
+    let matrix = parse_matrix();
+    let cloned = matrix.clone();
+    assert_eq!(matrix, cloned);
+}
+
+#[test]
+fn enrichment_matrix_debug_contains_schema_version() {
+    let matrix = parse_matrix();
+    let debug = format!("{:?}", matrix);
+    assert!(debug.contains("rgc.executable-compatibility-target-matrix.v1"));
+}
+
+#[test]
+fn enrichment_coverage_row_requirement_ids_are_nonempty() {
+    let matrix = parse_matrix();
+    for row in &matrix.coverage_rows {
+        assert!(
+            !row.requirement_id.trim().is_empty(),
+            "requirement_id must not be empty for row {}",
+            row.row_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_coverage_row_gate_owners_are_nonempty() {
+    let matrix = parse_matrix();
+    for row in &matrix.coverage_rows {
+        assert!(
+            !row.gate_owner.trim().is_empty(),
+            "gate_owner must not be empty for row {}",
+            row.row_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_coverage_row_test_kinds_are_recognized() {
+    let matrix = parse_matrix();
+    let allowed = BTreeSet::from(["unit", "integration", "e2e"]);
+    for row in &matrix.coverage_rows {
+        assert!(
+            allowed.contains(row.test_kind.as_str()),
+            "unrecognized test_kind '{}' for row {}",
+            row.test_kind,
+            row.row_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_coverage_row_artifact_paths_include_run_manifest() {
+    let matrix = parse_matrix();
+    for row in &matrix.coverage_rows {
+        assert!(
+            row.artifact_paths
+                .iter()
+                .any(|p| p.ends_with("run_manifest.json")),
+            "row {} must include run_manifest.json in artifact_paths",
+            row.row_id
+        );
+    }
+}
+
+#[test]
+fn enrichment_waiver_governance_required_fields_are_unique() {
+    let matrix = parse_matrix();
+    let mut seen = BTreeSet::new();
+    for field in &matrix.waiver_governance.waiver_required_fields {
+        assert!(
+            seen.insert(field.clone()),
+            "duplicate waiver required field: {field}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_react_contract_ref_docs_exist_in_repo() {
+    let matrix = parse_matrix();
+    let root = repo_root();
+    let contract_doc_path = root.join(&matrix.react_capability_contract_ref.contract_doc);
+    assert!(
+        contract_doc_path.exists(),
+        "react capability contract doc must exist: {}",
+        contract_doc_path.display()
+    );
+    let contract_json_path = root.join(&matrix.react_capability_contract_ref.contract_json);
+    assert!(
+        contract_json_path.exists(),
+        "react capability contract json must exist: {}",
+        contract_json_path.display()
+    );
+}
+
+#[test]
+fn enrichment_react_contract_ref_product_surface_beads_start_with_bd() {
+    let matrix = parse_matrix();
+    for bead in &matrix.react_capability_contract_ref.product_surface_beads {
+        assert!(
+            bead.starts_with("bd-"),
+            "product surface bead must start with bd-: {bead}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_required_capability_ids_are_unique_and_nonempty() {
+    let matrix = parse_matrix();
+    let mut seen = BTreeSet::new();
+    for cap_id in &matrix.react_capability_contract_ref.required_capability_ids {
+        assert!(
+            !cap_id.trim().is_empty(),
+            "required capability id must not be empty"
+        );
+        assert!(
+            seen.insert(cap_id.clone()),
+            "duplicate required_capability_id: {cap_id}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_scope_snapshot_source_is_nonempty() {
+    let matrix = parse_matrix();
+    assert!(
+        !matrix.scope.snapshot_source.trim().is_empty(),
+        "scope snapshot_source must describe the data source"
+    );
+}
+
+#[test]
+fn enrichment_serde_to_value_roundtrip() {
+    let matrix = parse_matrix();
+    let val = serde_json::to_value(&matrix).expect("to_value");
+    let back: CompatibilityMatrix = serde_json::from_value(val).expect("from_value roundtrip");
+    assert_eq!(matrix, back);
+}

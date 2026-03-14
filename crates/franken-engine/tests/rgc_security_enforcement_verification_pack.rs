@@ -622,6 +622,35 @@ fn vectors_all_command_templates_are_nonempty() {
     }
 }
 
+#[test]
+fn vectors_command_templates_reference_real_gate_script() {
+    let vectors = parse_vectors();
+    for vector in &vectors.vectors {
+        assert!(
+            vector
+                .command_template
+                .starts_with("./scripts/run_rgc_security_enforcement_verification_pack.sh "),
+            "vector {} must reference the real RGC-059 gate script",
+            vector.scenario_id
+        );
+        assert!(
+            vector
+                .command_template
+                .split_whitespace()
+                .any(|token| token == "test"),
+            "vector {} must execute the gate in test mode",
+            vector.scenario_id
+        );
+        assert!(
+            !vector
+                .command_template
+                .contains("frankenctl verify security"),
+            "vector {} must not reference a phantom frankenctl security subcommand",
+            vector.scenario_id
+        );
+    }
+}
+
 // ---------- additional coverage ----------
 
 #[test]

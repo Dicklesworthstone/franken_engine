@@ -407,3 +407,211 @@ fn conditions_are_distinct_across_rules() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: deeper contract coverage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn actions_are_distinct_across_all_rules() {
+    let decision = parse_decision();
+    let mut actions = BTreeSet::new();
+    for rule in &decision.rules {
+        assert!(
+            actions.insert(rule.action.clone()),
+            "duplicate action across rules: {}",
+            rule.action
+        );
+    }
+    assert_eq!(actions.len(), decision.rules.len());
+}
+
+#[test]
+fn compile_legal_action_is_compile_to_frir() {
+    let decision = parse_decision();
+    let compile_rule = decision
+        .rules
+        .iter()
+        .find(|r| r.decision == "compile_legal")
+        .unwrap();
+    assert_eq!(
+        compile_rule.action, "compile_to_frir",
+        "compile_legal must produce FRIR output"
+    );
+}
+
+#[test]
+fn fallback_actions_do_not_include_compile_to_frir() {
+    let decision = parse_decision();
+    for rule in decision
+        .rules
+        .iter()
+        .filter(|r| r.decision == "fallback_required")
+    {
+        assert_ne!(
+            rule.action, "compile_to_frir",
+            "fallback rules must not compile to FRIR: {}",
+            rule.rule_id
+        );
+    }
+}
+
+#[test]
+fn evidence_fields_include_claim_id_and_evidence_id() {
+    let decision = parse_decision();
+    let fields: BTreeSet<&str> = decision
+        .required_evidence_fields
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(fields.contains("claim_id"), "must require claim_id");
+    assert!(fields.contains("evidence_id"), "must require evidence_id");
+}
+
+#[test]
+fn evidence_fields_include_calibration_and_hash() {
+    let decision = parse_decision();
+    let fields: BTreeSet<&str> = decision
+        .required_evidence_fields
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        fields.contains("calibration_summary"),
+        "must require calibration_summary"
+    );
+    assert!(
+        fields.contains("assumptions_hash"),
+        "must require assumptions_hash"
+    );
+}
+
+#[test]
+fn evidence_field_count_is_seven() {
+    let decision = parse_decision();
+    assert_eq!(
+        decision.required_evidence_fields.len(),
+        7,
+        "expected exactly 7 evidence fields"
+    );
+}
+
+#[test]
+fn raw_json_is_valid_utf8_and_nonempty() {
+    assert!(!DECISION_JSON.is_empty());
+    assert!(
+        DECISION_JSON.len() > 100,
+        "JSON too short to be valid contract"
+    );
+}
+
+#[test]
+fn raw_json_schema_version_string_is_present_verbatim() {
+    assert!(DECISION_JSON.contains("frx.compile-fallback-decision.v1"));
+}
+
+#[test]
+fn raw_json_has_no_trailing_commas_in_arrays() {
+    let raw: Value = serde_json::from_str(DECISION_JSON).unwrap();
+    let re_serialized = serde_json::to_string_pretty(&raw).unwrap();
+    let reparsed: Value = serde_json::from_str(&re_serialized).unwrap();
+    assert_eq!(
+        raw, reparsed,
+        "round-trip through pretty-print must be stable"
+    );
+}
+
+#[test]
+fn condition_keywords_reference_known_signal_vocabulary() {
+    let decision = parse_decision();
+    let known_tokens = [
+        "invariant",
+        "proven",
+        "regression",
+        "unsupported",
+        "semantic",
+        "calibration",
+        "threshold",
+        "budget",
+        "violation",
+        "drift",
+        "integrity",
+        "provenance",
+        "verification",
+        "failed",
+    ];
+    for rule in &decision.rules {
+        let cond_lower = rule.condition.to_lowercase();
+        let has_known = known_tokens.iter().any(|t| cond_lower.contains(t));
+        assert!(
+            has_known,
+            "condition for {} must reference at least one known signal token: {}",
+            rule.rule_id, rule.condition
+        );
+    }
+}
+
+#[test]
+fn decision_struct_debug_format_contains_schema_version() {
+    let decision = parse_decision();
+    let debug = format!("{:?}", decision);
+    assert!(debug.contains("frx.compile-fallback-decision.v1"));
+}
+
+#[test]
+fn decision_struct_clone_is_equal() {
+    let decision = parse_decision();
+    let cloned = decision.clone();
+    assert_eq!(decision, cloned);
+}
+
+#[test]
+fn serde_to_value_and_back_preserves_fields() {
+    let decision = parse_decision();
+    let val = serde_json::to_value(&decision).unwrap();
+    let back: CompileFallbackDecision = serde_json::from_value(val).unwrap();
+    assert_eq!(decision, back);
+}
+
+#[test]
+fn fallback_rule_actions_are_all_distinct_from_compile() {
+    let decision = parse_decision();
+    let compile_action = decision
+        .rules
+        .iter()
+        .find(|r| r.decision == "compile_legal")
+        .unwrap()
+        .action
+        .clone();
+    for rule in decision
+        .rules
+        .iter()
+        .filter(|r| r.decision == "fallback_required")
+    {
+        assert_ne!(
+            rule.action, compile_action,
+            "fallback action {} must differ from compile action",
+            rule.rule_id
+        );
+    }
+}
+
+#[test]
+fn decision_rule_ordering_stability() {
+    let d1 = parse_decision();
+    let d2 = parse_decision();
+    for (a, b) in d1.rules.iter().zip(d2.rules.iter()) {
+        assert_eq!(a.rule_id, b.rule_id, "rule ordering must be deterministic");
+    }
+}
+
+#[test]
+fn evidence_fields_are_sorted_alphabetically() {
+    let decision = parse_decision();
+    let mut sorted = decision.required_evidence_fields.clone();
+    sorted.sort();
+    assert_eq!(
+        decision.required_evidence_fields, sorted,
+        "evidence fields should be alphabetically sorted"
+    );
+}

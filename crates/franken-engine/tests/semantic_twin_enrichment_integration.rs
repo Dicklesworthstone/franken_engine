@@ -514,3 +514,280 @@ fn enrichment_cross_cutting_events_have_component() {
         assert_eq!(event.component, SEMANTIC_TWIN_COMPONENT);
     }
 }
+
+// ===== PearlTower enrichment batch 2 — 2026-03-14 =====
+
+// ---------------------------------------------------------------------------
+// SemanticTwinSpecification — validate catches invalid specs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_spec_validate_rejects_duplicate_variable_ids() {
+    let mut spec = default_spec();
+    let dup = spec.state_variables[0].clone();
+    spec.state_variables.push(dup);
+    let result = spec.validate();
+    assert!(
+        result.is_err(),
+        "validate must reject duplicate variable ids"
+    );
+}
+
+#[test]
+fn enrichment_spec_validate_rejects_transition_missing_variable() {
+    use frankenengine_engine::semantic_twin::{TransitionGuard, TwinStateTransition};
+    let mut spec = default_spec();
+    spec.transitions.push(TwinStateTransition {
+        transition_id: "bad-transition".to_string(),
+        source_variable: "nonexistent-var".to_string(),
+        target_variable: spec.state_variables[0].id.clone(),
+        trigger_event: "test-trigger".to_string(),
+        telemetry_contract: "test".to_string(),
+        guard: Some(TransitionGuard {
+            variable: "always".to_string(),
+            op: frankenengine_engine::assumptions_ledger::MonitorOp::Gt,
+            threshold_millionths: 0,
+        }),
+    });
+    let result = spec.validate();
+    assert!(
+        result.is_err(),
+        "validate must reject transitions referencing missing variables"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SemanticTwinSpecification — build_assumption_ledger
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_spec_build_assumption_ledger_succeeds() {
+    let spec = default_spec();
+    let ledger = spec.build_assumption_ledger(
+        "decision-bl",
+        1,
+        DemotionPolicy::default(),
+    );
+    assert!(ledger.is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// SemanticTwinRuntime — multiple observations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_runtime_multiple_observations_no_panic() {
+    let mut rt = default_runtime();
+    let spec = rt.specification().clone();
+    for var in &spec.state_variables {
+        let _ = rt.observe(&var.id, 500_000, 1);
+    }
+}
+
+#[test]
+fn enrichment_runtime_observe_increments_epoch() {
+    let mut rt = default_runtime();
+    let var_id = rt.specification().state_variables[0].id.clone();
+    let r1 = rt.observe(&var_id, 500_000, 1);
+    let r2 = rt.observe(&var_id, 600_000, 2);
+    // Events from second observation should reference later timestamps
+    assert!(!r2.events.is_empty());
+    if !r1.events.is_empty() && !r2.events.is_empty() {
+        assert!(r2.events[0].observed_value_millionths >= r1.events[0].observed_value_millionths);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TelemetryContractRef — validate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_telemetry_contract_ref_validate_valid() {
+    use frankenengine_engine::semantic_twin::TelemetryContractRef;
+    let tcr = TelemetryContractRef {
+        namespace: SignalNamespace::Frir,
+        signal_key: "latency_ns".to_string(),
+        units: "nanoseconds".to_string(),
+    };
+    assert!(tcr.validate().is_ok());
+}
+
+#[test]
+fn enrichment_telemetry_contract_ref_validate_missing_signal_key() {
+    use frankenengine_engine::semantic_twin::TelemetryContractRef;
+    let tcr = TelemetryContractRef {
+        namespace: SignalNamespace::Frir,
+        signal_key: String::new(),
+        units: "nanoseconds".to_string(),
+    };
+    let result = tcr.validate();
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_telemetry_contract_ref_validate_missing_units() {
+    use frankenengine_engine::semantic_twin::TelemetryContractRef;
+    let tcr = TelemetryContractRef {
+        namespace: SignalNamespace::Frir,
+        signal_key: "latency_ns".to_string(),
+        units: String::new(),
+    };
+    let result = tcr.validate();
+    assert!(result.is_err());
+}
+
+#[test]
+fn enrichment_telemetry_contract_ref_serde_roundtrip() {
+    use frankenengine_engine::semantic_twin::TelemetryContractRef;
+    let tcr = TelemetryContractRef {
+        namespace: SignalNamespace::RuntimeDecisionCore,
+        signal_key: "decision_latency".to_string(),
+        units: "ms".to_string(),
+    };
+    let json = serde_json::to_string(&tcr).unwrap();
+    let restored: TelemetryContractRef = serde_json::from_str(&json).unwrap();
+    assert_eq!(tcr, restored);
+}
+
+// ---------------------------------------------------------------------------
+// SemanticTwinLogEvent — serde roundtrip and fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_log_event_serde_roundtrip() {
+    let mut rt = default_runtime();
+    let var_id = rt.specification().state_variables[0].id.clone();
+    let result = rt.observe(&var_id, 500_000, 1);
+    assert!(!result.events.is_empty());
+    let event = &result.events[0];
+    let json = serde_json::to_string(event).unwrap();
+    let restored: frankenengine_engine::semantic_twin::SemanticTwinLogEvent =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(event, &restored);
+}
+
+#[test]
+fn enrichment_log_event_json_field_names() {
+    let mut rt = default_runtime();
+    let var_id = rt.specification().state_variables[0].id.clone();
+    let result = rt.observe(&var_id, 500_000, 1);
+    assert!(!result.events.is_empty());
+    let json = serde_json::to_string(&result.events[0]).unwrap();
+    for field in &[
+        "schema_version",
+        "component",
+        "trace_id",
+        "decision_id",
+        "timestamp_ns",
+        "variable_id",
+    ] {
+        assert!(
+            json.contains(&format!("\"{}\"", field)),
+            "missing: {}",
+            field
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SemanticTwinObservationResult — serde roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_observation_result_serde_roundtrip() {
+    let mut rt = default_runtime();
+    let var_id = rt.specification().state_variables[0].id.clone();
+    let result = rt.observe(&var_id, 500_000, 1);
+    let json = serde_json::to_string(&result).unwrap();
+    let restored: frankenengine_engine::semantic_twin::SemanticTwinObservationResult =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(result, restored);
+}
+
+// ---------------------------------------------------------------------------
+// TransitionGuard / TwinStateTransition — serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_transition_guard_serde_roundtrip() {
+    use frankenengine_engine::semantic_twin::TransitionGuard;
+    let guard = TransitionGuard {
+        condition: "threshold_exceeded".to_string(),
+        parameters: std::collections::BTreeMap::from([(
+            "threshold".to_string(),
+            "100".to_string(),
+        )]),
+    };
+    let json = serde_json::to_string(&guard).unwrap();
+    let restored: TransitionGuard = serde_json::from_str(&json).unwrap();
+    assert_eq!(guard, restored);
+}
+
+#[test]
+fn enrichment_state_variable_serde_roundtrip() {
+    let spec = default_spec();
+    let var = &spec.state_variables[0];
+    let json = serde_json::to_string(var).unwrap();
+    let restored: frankenengine_engine::semantic_twin::TwinStateVariable =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(var, &restored);
+}
+
+// ---------------------------------------------------------------------------
+// CausalAdjustmentStrategy — serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_causal_adjustment_strategy_serde_roundtrip() {
+    let spec = default_spec();
+    let strategy = &spec.adjustment_strategies[0];
+    let json = serde_json::to_string(strategy).unwrap();
+    let restored: frankenengine_engine::semantic_twin::CausalAdjustmentStrategy =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(strategy, &restored);
+}
+
+// ---------------------------------------------------------------------------
+// IdentifiabilityAssumption — serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_identifiability_assumption_serde_roundtrip() {
+    let spec = default_spec();
+    let assumption = &spec.assumptions[0];
+    let json = serde_json::to_string(assumption).unwrap();
+    let restored: frankenengine_engine::semantic_twin::IdentifiabilityAssumption =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(assumption, &restored);
+}
+
+// ---------------------------------------------------------------------------
+// Specification — transitions are internally consistent
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_spec_transitions_reference_valid_variables() {
+    let spec = default_spec();
+    let var_ids: BTreeSet<&str> = spec.state_variables.iter().map(|v| v.id.as_str()).collect();
+    for t in &spec.transitions {
+        assert!(
+            var_ids.contains(t.from_variable.as_str()),
+            "transition {} references unknown from_variable {}",
+            t.id,
+            t.from_variable
+        );
+        assert!(
+            var_ids.contains(t.to_variable.as_str()),
+            "transition {} references unknown to_variable {}",
+            t.id,
+            t.to_variable
+        );
+    }
+}
+
+#[test]
+fn enrichment_spec_transition_ids_unique() {
+    let spec = default_spec();
+    let ids: BTreeSet<&str> = spec.transitions.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids.len(), spec.transitions.len());
+}

@@ -647,7 +647,7 @@ fn enrichment_scope_chain_current_handle_after_push() {
 
 #[test]
 fn enrichment_scope_chain_get_env_returns_correct_record() {
-    let mut chain = ScopeChain::new();
+    let chain = ScopeChain::new();
     let h = chain.current_handle().unwrap();
     let env = chain.get_env(h).unwrap();
     assert_eq!(env.env_kind, EnvironmentKind::Global);

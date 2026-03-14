@@ -61,6 +61,11 @@ struct GateRunner {
     replay_wrapper: String,
     strict_mode: String,
     manifest_schema_version: String,
+    manifest_set_root_env: String,
+    auto_discover_toggle_env: String,
+    auto_discover_mode: String,
+    manifest_filename_template: String,
+    matrix_input_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +94,18 @@ fn parse_contract() -> CrossPlatformMatrixContract {
 
 fn load_doc() -> String {
     let path = repo_root().join("docs/RGC_CROSS_PLATFORM_MATRIX_V1.md");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn load_gate_script() -> String {
+    let path = repo_root().join("scripts/run_rgc_cross_platform_matrix_gate.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn load_replay_wrapper() -> String {
+    let path = repo_root().join("scripts/e2e/rgc_cross_platform_matrix_replay.sh");
     fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
@@ -188,7 +205,7 @@ fn rgc_063_doc_contains_required_sections() {
 fn rgc_063_contract_is_versioned_and_target_complete() {
     let contract = parse_contract();
     assert_eq!(contract.schema_version, MATRIX_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.0.0");
+    assert_eq!(contract.contract_version, "1.1.0");
     assert_eq!(contract.bead_id, "bd-1lsy.11.13");
     assert_eq!(contract.policy_id, "policy-rgc-cross-platform-matrix-v1");
 
@@ -281,6 +298,7 @@ fn rgc_063_contract_declares_required_logs_artifacts_and_drift_classes() {
         ("workflow_behavior_drift", "critical"),
         ("unexplained_digest_drift", "critical"),
         ("missing_target_input", "critical"),
+        ("candidate_target_input_missing", "warning"),
         ("missing_baseline_input", "critical"),
     ] {
         assert!(
@@ -450,6 +468,28 @@ fn rgc_063_gate_runner_and_operator_commands_are_wired() {
         contract.gate_runner.manifest_schema_version,
         "franken-engine.rgc-cross-platform-matrix.run-manifest.v1"
     );
+    assert_eq!(
+        contract.gate_runner.manifest_set_root_env,
+        "RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT"
+    );
+    assert_eq!(
+        contract.gate_runner.auto_discover_toggle_env,
+        "RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS"
+    );
+    assert!(
+        contract
+            .gate_runner
+            .auto_discover_mode
+            .contains("latest complete manifest set")
+    );
+    assert_eq!(
+        contract.gate_runner.manifest_filename_template,
+        "<target-id>.run_manifest.json"
+    );
+    assert_eq!(
+        contract.gate_runner.matrix_input_sources,
+        vec!["env", "auto_discovered", "missing"]
+    );
 
     let repo = repo_root();
     assert!(repo.join(&contract.gate_runner.script).exists());
@@ -461,6 +501,10 @@ fn rgc_063_gate_runner_and_operator_commands_are_wired() {
             .iter()
             .any(|cmd| cmd.contains("run_rgc_cross_platform_matrix_gate.sh ci"))
     );
+    assert!(contract.operator_verification.iter().any(|cmd| {
+        cmd.contains("RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT")
+            && cmd.contains("rgc_cross_platform_matrix_replay.sh matrix")
+    }));
 }
 
 #[test]
@@ -570,6 +614,23 @@ fn rgc_063_all_drift_classes_have_nonempty_description() {
 }
 
 #[test]
+fn rgc_063_doc_mentions_manifest_auto_discovery_contract() {
+    let doc = load_doc();
+    for needle in [
+        "RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT",
+        "RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS",
+        "<target-id>.run_manifest.json",
+        "auto_discovered",
+        "candidate_target_input_missing",
+    ] {
+        assert!(
+            doc.contains(needle),
+            "doc missing auto-discovery needle {needle}"
+        );
+    }
+}
+
+#[test]
 fn rgc_063_contract_has_nonempty_bead_id() {
     let contract = parse_contract();
     assert!(!contract.bead_id.trim().is_empty());
@@ -586,6 +647,14 @@ fn rgc_063_gate_runner_has_nonempty_script() {
     let contract = parse_contract();
     assert!(!contract.gate_runner.script.trim().is_empty());
     assert!(!contract.gate_runner.replay_wrapper.trim().is_empty());
+    assert!(!contract.gate_runner.auto_discover_mode.trim().is_empty());
+    assert!(
+        !contract
+            .gate_runner
+            .manifest_filename_template
+            .trim()
+            .is_empty()
+    );
 }
 
 // ---------- additional enrichment tests ----------
@@ -757,6 +826,31 @@ fn rgc_063_operator_verification_commands_are_nonempty_strings() {
             "operator verification command must not be empty"
         );
     }
+}
+
+#[test]
+fn rgc_063_gate_script_declares_manifest_auto_discovery_helpers() {
+    let script = load_gate_script();
+    for needle in [
+        "RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT",
+        "RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS",
+        "find_latest_complete_manifest_set_dir",
+        "auto_discover_target_manifests",
+        "<target-id>.run_manifest.json",
+        "candidate_target_input_missing",
+        "auto_discovered_manifest_set_dir",
+    ] {
+        assert!(
+            script.contains(needle),
+            "gate script missing auto-discovery needle {needle}"
+        );
+    }
+}
+
+#[test]
+fn rgc_063_replay_wrapper_enables_manifest_auto_discovery() {
+    let wrapper = load_replay_wrapper();
+    assert!(wrapper.contains("RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS"));
 }
 
 #[test]

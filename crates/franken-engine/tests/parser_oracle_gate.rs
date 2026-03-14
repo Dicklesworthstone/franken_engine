@@ -679,3 +679,130 @@ fn report_decision_fallback_not_triggered_when_no_drift_in_fail_closed() {
     assert!(!report.decision.promotion_blocked);
     let _ = fs::remove_file(path);
 }
+
+// ===== PearlTower enrichment session 2026-03-14 =====
+
+#[test]
+fn enrichment_derive_seed_varies_by_mode() {
+    let a = derive_seed(1, "fixture_x", ParserMode::ScalarReference);
+    let b = derive_seed(1, "fixture_x", ParserMode::Parallel { workers: 2 });
+    assert_ne!(a, b, "different modes must produce different seeds");
+}
+
+#[test]
+fn enrichment_derive_seed_varies_by_invocation() {
+    let a = derive_seed(1, "f", ParserMode::ScalarReference);
+    let b = derive_seed(2, "f", ParserMode::ScalarReference);
+    assert_ne!(
+        a, b,
+        "different invocation indices must produce different seeds"
+    );
+}
+
+#[test]
+fn enrichment_drift_class_ordering() {
+    assert!(DriftClass::Equivalent < DriftClass::SemanticDrift);
+    assert!(DriftClass::SemanticDrift < DriftClass::DiagnosticsDrift);
+    assert!(DriftClass::DiagnosticsDrift < DriftClass::HarnessNondeterminism);
+    assert!(DriftClass::HarnessNondeterminism < DriftClass::ArtifactIntegrityFailure);
+}
+
+#[test]
+fn enrichment_drift_class_debug_all_unique() {
+    use std::collections::BTreeSet;
+    let all = [
+        DriftClass::Equivalent,
+        DriftClass::SemanticDrift,
+        DriftClass::DiagnosticsDrift,
+        DriftClass::HarnessNondeterminism,
+        DriftClass::ArtifactIntegrityFailure,
+    ];
+    let dbgs: BTreeSet<String> = all.iter().map(|v| format!("{:?}", v)).collect();
+    assert_eq!(dbgs.len(), 5);
+}
+
+#[test]
+fn enrichment_drift_class_serde_roundtrip() {
+    let all = [
+        DriftClass::Equivalent,
+        DriftClass::SemanticDrift,
+        DriftClass::DiagnosticsDrift,
+        DriftClass::HarnessNondeterminism,
+        DriftClass::ArtifactIntegrityFailure,
+    ];
+    for dc in &all {
+        let json = serde_json::to_string(dc).unwrap();
+        let back: DriftClass = serde_json::from_str(&json).unwrap();
+        assert_eq!(dc, &back);
+    }
+}
+
+#[test]
+fn enrichment_oracle_partition_serde_roundtrip() {
+    let all = [OraclePartition::Smoke, OraclePartition::Full];
+    for p in &all {
+        let json = serde_json::to_string(p).unwrap();
+        let back: OraclePartition = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, &back);
+    }
+}
+
+#[test]
+fn enrichment_oracle_gate_mode_serde_roundtrip() {
+    let all = [OracleGateMode::FailClosed, OracleGateMode::ReportOnly];
+    for m in &all {
+        let json = serde_json::to_string(m).unwrap();
+        let back: OracleGateMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, &back);
+    }
+}
+
+#[test]
+fn enrichment_parser_oracle_config_defaults_are_sensible() {
+    let config =
+        ParserOracleConfig::with_defaults(OraclePartition::Smoke, OracleGateMode::FailClosed, 100);
+    assert!(!config.trace_id.is_empty());
+    assert!(!config.decision_id.is_empty());
+    assert!(!config.policy_id.is_empty());
+    assert_eq!(config.seed, 100);
+}
+
+#[test]
+fn enrichment_oracle_report_serde_for_clean_run() {
+    let fixtures = json!([
+        { "id": "serde_clean", "family_id": "fam", "goal": "script", "source": "var x = 1", "expected_hash": fixture_hash("var x = 1", ParseGoal::Script) }
+    ]);
+    let path = write_fixture_catalog(fixtures);
+    let mut config =
+        ParserOracleConfig::with_defaults(OraclePartition::Full, OracleGateMode::FailClosed, 200);
+    config.fixture_catalog_path = path.clone();
+    config.trace_id = "trace-serde".to_string();
+    config.decision_id = "decision-serde".to_string();
+    config.policy_id = "policy-serde".to_string();
+    let report = run_parser_oracle(&config).expect("oracle");
+    let json_str = serde_json::to_string(&report).expect("serialize report");
+    let _: serde_json::Value = serde_json::from_str(&json_str).expect("reparse report");
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn enrichment_oracle_report_deterministic_for_same_input() {
+    let fixtures = json!([
+        { "id": "det_check", "family_id": "fam", "goal": "script", "source": "1+2", "expected_hash": fixture_hash("1+2", ParseGoal::Script) }
+    ]);
+    let path = write_fixture_catalog(fixtures);
+    let mut config =
+        ParserOracleConfig::with_defaults(OraclePartition::Full, OracleGateMode::FailClosed, 200);
+    config.fixture_catalog_path = path.clone();
+    config.trace_id = "trace-det".to_string();
+    config.decision_id = "decision-det".to_string();
+    config.policy_id = "policy-det".to_string();
+    let r1 = run_parser_oracle(&config).expect("oracle 1");
+    let r2 = run_parser_oracle(&config).expect("oracle 2");
+    assert_eq!(
+        r1.decision.fallback_triggered,
+        r2.decision.fallback_triggered
+    );
+    assert_eq!(r1.decision.promotion_blocked, r2.decision.promotion_blocked);
+    let _ = fs::remove_file(path);
+}

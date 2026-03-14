@@ -14,6 +14,7 @@
     "schema_version",
     "bead_id",
     "deterministic_env_schema_version",
+    "cargo_target_dir",
     "trace_id",
     "decision_id",
     "policy_id",

@@ -155,6 +155,50 @@ fn low_loss_assessment() -> LossAssessment {
     }
 }
 
+fn approved_receipt_for_prepared_declassification(
+    orch: &mut ExecutionOrchestrator,
+    pkg: &ExtensionPackage,
+    prepared: &frankenengine_engine::execution_orchestrator::PreparedRuntimeFlowGuards,
+    signing_key: &SigningKey,
+) -> (
+    String,
+    frankenengine_engine::ifc_artifacts::DeclassificationReceipt,
+) {
+    let obligation = prepared
+        .ir2_flow_proof_artifact
+        .required_declassifications
+        .first()
+        .expect("prepared flow guards should expose one declassification obligation");
+    let request = DeclassificationRequest {
+        request_id: format!("req-{}", prepared.trace_id),
+        source_label: Label::Secret,
+        sink_clearance: Label::Public,
+        extension_id: pkg.extension_id.clone(),
+        code_location: "execution_orchestrator_integration::declassify".to_string(),
+        trace_id: prepared.trace_id.clone(),
+        requested_route_id: TEST_DECLASS_ROUTE_ID.to_string(),
+        decision_contract_id: prepared.decision_id.clone(),
+        is_emergency: false,
+        timestamp_ms: 1_700_000_010_000,
+    };
+    let mut pipeline = DeclassificationPipeline::default();
+    let receipt = pipeline
+        .process(
+            &request,
+            &declassification_policy(&pkg.extension_id),
+            &low_loss_assessment(),
+            signing_key,
+        )
+        .expect("declassification request should be approved");
+
+    orch.trust_declassification_authorizer_for_contract(
+        prepared.decision_id.clone(),
+        signing_key.verification_key(),
+    );
+
+    (obligation.obligation_id.clone(), receipt)
+}
+
 // =========================================================================
 // Section 1: End-to-end pipeline
 // =========================================================================
@@ -236,36 +280,12 @@ fn staged_receipt_allows_public_orchestrator_declassification_without_internal_g
     assert_eq!(obligation.capability.as_deref(), Some("declassify.audit"));
     assert_eq!(obligation.decision_contract_id, prepared.decision_id);
 
-    let request = DeclassificationRequest {
-        request_id: "req-orchestrator-declass".to_string(),
-        source_label: Label::Secret,
-        sink_clearance: Label::Public,
-        extension_id: pkg.extension_id.clone(),
-        code_location: "execution_orchestrator_integration::declassify".to_string(),
-        trace_id: prepared.trace_id.clone(),
-        requested_route_id: TEST_DECLASS_ROUTE_ID.to_string(),
-        decision_contract_id: prepared.decision_id.clone(),
-        is_emergency: false,
-        timestamp_ms: 1_700_000_010_000,
-    };
     let signing_key = SigningKey::from_bytes([23u8; 32]);
-    let mut pipeline = DeclassificationPipeline::default();
-    let receipt = pipeline
-        .process(
-            &request,
-            &declassification_policy(&pkg.extension_id),
-            &low_loss_assessment(),
-            &signing_key,
-        )
-        .expect("declassification request should be approved");
-
-    orch.trust_declassification_authorizer_for_contract(
-        prepared.decision_id.clone(),
-        signing_key.verification_key(),
-    );
+    let (obligation_id, receipt) =
+        approved_receipt_for_prepared_declassification(&mut orch, &pkg, &prepared, &signing_key);
     orch.stage_declassification_receipt_for_obligation(
         prepared.trace_id.clone(),
-        obligation.obligation_id.clone(),
+        obligation_id,
         receipt,
     );
 
@@ -277,6 +297,79 @@ fn staged_receipt_allows_public_orchestrator_declassification_without_internal_g
     assert_eq!(result.decision_id, prepared.decision_id);
     assert_eq!(result.execution_value, "undefined");
     assert!(result.instructions_executed > 0);
+}
+
+#[test]
+fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
+    let mut orch = default_orch();
+    let pkg = package_with_caps(
+        "ext-declassify-retry",
+        r#""hostcall<\"declassify.audit\"> secret_token";"#,
+        &["declassify.audit"],
+    );
+
+    let first_prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("initial preflight should succeed");
+    let first_obligation = first_prepared
+        .ir2_flow_proof_artifact
+        .required_declassifications
+        .first()
+        .expect("initial preflight should expose a declassification obligation");
+    let bad_signing_key = SigningKey::from_bytes([24u8; 32]);
+    let (_, bad_receipt) = approved_receipt_for_prepared_declassification(
+        &mut orch,
+        &pkg,
+        &first_prepared,
+        &bad_signing_key,
+    );
+    let mut wrong_trace_receipt = bad_receipt.clone();
+    wrong_trace_receipt.replay_linkage = "trace-other".to_string();
+    wrong_trace_receipt
+        .sign(&bad_signing_key)
+        .expect("mutated receipt should be re-signed for a valid invalid-linkage test");
+    orch.stage_declassification_receipt_for_obligation(
+        first_prepared.trace_id.clone(),
+        first_obligation.obligation_id.clone(),
+        wrong_trace_receipt,
+    );
+
+    let first_err = orch
+        .execute(&pkg)
+        .expect_err("invalid staged receipt should fail closed");
+    match first_err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("receipt-linked declassification failed"));
+            assert!(detail.contains("replay linkage does not match trace"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let second_prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("fresh preflight should still succeed after the failed attempt");
+    assert_ne!(second_prepared.trace_id, first_prepared.trace_id);
+    assert_ne!(second_prepared.decision_id, first_prepared.decision_id);
+
+    let good_signing_key = SigningKey::from_bytes([25u8; 32]);
+    let (second_obligation_id, good_receipt) = approved_receipt_for_prepared_declassification(
+        &mut orch,
+        &pkg,
+        &second_prepared,
+        &good_signing_key,
+    );
+    orch.stage_declassification_receipt_for_obligation(
+        second_prepared.trace_id.clone(),
+        second_obligation_id,
+        good_receipt,
+    );
+
+    let result = orch
+        .execute(&pkg)
+        .expect("fresh preflight and valid receipt should recover after the failed attempt");
+    assert_eq!(result.trace_id, second_prepared.trace_id);
+    assert_eq!(result.decision_id, second_prepared.decision_id);
+    assert_eq!(result.execution_value, "undefined");
 }
 
 #[test]

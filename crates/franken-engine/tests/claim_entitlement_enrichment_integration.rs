@@ -1143,3 +1143,249 @@ fn enrichment_disqualifier_rule_set_serde_roundtrip() {
     let back: DisqualifierRuleSet = serde_json::from_str(&json).unwrap();
     assert_eq!(back, rule_set);
 }
+
+// ===== PearlTower enrichment batch 2 — 2026-03-14 =====
+
+// =========================================================================
+// W. Contract from_embedded_json loads and validates
+// =========================================================================
+
+#[test]
+fn enrichment_contract_from_embedded_json_validates() {
+    let contract = ClaimEntitlementContract::from_embedded_json();
+    let result = contract.validate();
+    assert!(
+        result.is_ok(),
+        "embedded contract must validate: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn enrichment_contract_from_embedded_json_has_atoms() {
+    let contract = ClaimEntitlementContract::from_embedded_json();
+    assert!(
+        !contract.claim_atom_catalog.atoms.is_empty(),
+        "embedded contract must have atoms"
+    );
+}
+
+#[test]
+fn enrichment_contract_from_embedded_json_has_morphisms() {
+    let contract = ClaimEntitlementContract::from_embedded_json();
+    assert!(
+        !contract.evidence_morphism_catalog.morphisms.is_empty(),
+        "embedded contract must have morphisms"
+    );
+}
+
+// =========================================================================
+// X. lattice_has_cycle — empty lattice has no cycle
+// =========================================================================
+
+#[test]
+fn enrichment_lattice_no_cycle_empty() {
+    let lattice = SideConstraintLattice {
+        schema_version: "v1".to_string(),
+        top_constraint_id: "top".to_string(),
+        bottom_constraint_id: "bottom".to_string(),
+        constraints: vec![],
+        cover_relations: vec![],
+    };
+    assert!(!lattice_has_cycle(&lattice));
+}
+
+#[test]
+fn enrichment_lattice_no_cycle_linear() {
+    let lattice = SideConstraintLattice {
+        schema_version: "v1".to_string(),
+        top_constraint_id: "a".to_string(),
+        bottom_constraint_id: "c".to_string(),
+        constraints: vec![
+            SideConstraint {
+                constraint_id: "a".to_string(),
+                constraint_class: "x".to_string(),
+                description: "a".to_string(),
+            },
+            SideConstraint {
+                constraint_id: "b".to_string(),
+                constraint_class: "x".to_string(),
+                description: "b".to_string(),
+            },
+            SideConstraint {
+                constraint_id: "c".to_string(),
+                constraint_class: "x".to_string(),
+                description: "c".to_string(),
+            },
+        ],
+        cover_relations: vec![
+            ConstraintRelation {
+                lower_constraint_id: "c".into(),
+                higher_constraint_id: "b".into(),
+            },
+            ConstraintRelation {
+                lower_constraint_id: "b".into(),
+                higher_constraint_id: "a".into(),
+            },
+        ],
+    };
+    assert!(!lattice_has_cycle(&lattice));
+}
+
+// =========================================================================
+// Y. ClaimDomain / ClaimTier BTreeSet ordering
+// =========================================================================
+
+#[test]
+fn enrichment_claim_domain_btreeset_dedup() {
+    let mut set = BTreeSet::new();
+    set.insert(ClaimDomain::Compatibility);
+    set.insert(ClaimDomain::Performance);
+    set.insert(ClaimDomain::Security);
+    set.insert(ClaimDomain::React);
+    set.insert(ClaimDomain::Rollout);
+    set.insert(ClaimDomain::Compatibility); // dup
+    assert_eq!(set.len(), 5);
+}
+
+#[test]
+fn enrichment_claim_tier_btreeset_dedup() {
+    let mut set = BTreeSet::new();
+    set.insert(ClaimTier::ShippedFact);
+    set.insert(ClaimTier::ScopedObserved);
+    set.insert(ClaimTier::FrontierAmbition);
+    set.insert(ClaimTier::ShippedFact); // dup
+    assert_eq!(set.len(), 3);
+}
+
+// =========================================================================
+// Z. Full evaluation outputs have consistent scenario counts
+// =========================================================================
+
+#[test]
+fn enrichment_evaluate_outputs_scenario_counts_consistent() {
+    let contract = minimal_contract();
+    let scenarios = minimal_scenario_set();
+    let outputs = contract
+        .evaluate_scenarios(&scenarios)
+        .expect("should succeed");
+    let scenario_count = scenarios.scenarios.len();
+    assert_eq!(
+        outputs.claim_entitlement_report.evaluated_scenarios.len(),
+        scenario_count
+    );
+    assert_eq!(
+        outputs.missing_evidence_cutsets.evaluated_scenarios.len(),
+        scenario_count
+    );
+    assert_eq!(
+        outputs.impossibility_certificates.evaluated_scenarios.len(),
+        scenario_count
+    );
+    assert_eq!(
+        outputs.counterexample_ledger.evaluated_scenarios.len(),
+        scenario_count
+    );
+}
+
+// =========================================================================
+// AA. ClaimEvaluationOutputs serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_claim_evaluation_outputs_serde_roundtrip() {
+    let contract = minimal_contract();
+    let scenarios = minimal_scenario_set();
+    let outputs = contract
+        .evaluate_scenarios(&scenarios)
+        .expect("should succeed");
+    let json = serde_json::to_string(&outputs).unwrap();
+    let back: frankenengine_engine::claim_entitlement::ClaimEvaluationOutputs =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(back, outputs);
+}
+
+// =========================================================================
+// AB. Evaluation with disqualifying evidence triggers rule
+// =========================================================================
+
+#[test]
+fn enrichment_evaluate_with_triggered_disqualifier() {
+    let contract = minimal_contract();
+    let scenarios = ClaimEvaluationScenarioSet {
+        schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+        scenario_version: "v1".to_string(),
+        scenarios: vec![ClaimEvaluationScenario {
+            scenario_id: "disqualify-scenario".to_string(),
+            description: "scenario with disqualifier".to_string(),
+            evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+            observed_evidence: vec![ObservedEvidence {
+                evidence_kind: "counterexample_suite".to_string(),
+                state: EvidenceState::Fresh,
+                triggered_rule_ids: vec!["rule-forbid".to_string()],
+            }],
+            satisfied_constraints: vec![],
+            expected_outcomes: vec![],
+        }],
+    };
+    let outputs = contract
+        .evaluate_scenarios(&scenarios)
+        .expect("should succeed");
+    let verdicts = &outputs.claim_entitlement_report.evaluated_scenarios[0].verdicts;
+    // atom-shipped is target of rule-forbid, so it should be disqualified
+    let shipped = verdicts
+        .iter()
+        .find(|v| v.atom_id == "atom-shipped")
+        .unwrap();
+    assert!(
+        !shipped.active_rule_ids.is_empty(),
+        "disqualifier should have activated"
+    );
+}
+
+// =========================================================================
+// AC. MissingEvidenceCutset and ImpossibilityCertificate serde
+// =========================================================================
+
+#[test]
+fn enrichment_missing_evidence_cutset_serde_roundtrip() {
+    let cutset = MissingEvidenceCutset {
+        cutset_id: "cs-1".to_string(),
+        target_atom_id: "atom-x".to_string(),
+        missing_evidence_kinds: vec!["kind-a".to_string(), "kind-b".to_string()],
+        missing_side_constraints: vec!["sc-1".to_string()],
+        minimal: true,
+    };
+    let json = serde_json::to_string(&cutset).unwrap();
+    let back: MissingEvidenceCutset = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, cutset);
+}
+
+#[test]
+fn enrichment_impossibility_certificate_serde_roundtrip() {
+    let cert = ImpossibilityCertificate {
+        certificate_id: "ic-1".to_string(),
+        target_atom_id: "atom-x".to_string(),
+        blocking_rule_id: "rule-a".to_string(),
+        required_evidence_kind: "kind-a".to_string(),
+        impossibility_reason: "cannot produce kind-a evidence".to_string(),
+    };
+    let json = serde_json::to_string(&cert).unwrap();
+    let back: ImpossibilityCertificate = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, cert);
+}
+
+#[test]
+fn enrichment_counterexample_ledger_entry_serde_roundtrip() {
+    let entry = CounterexampleLedgerEntry {
+        entry_id: "cle-1".to_string(),
+        triggered_rule_id: "rule-a".to_string(),
+        evidence_kind: "kind-a".to_string(),
+        evidence_state: EvidenceState::Fresh,
+        affected_atom_ids: vec!["atom-1".to_string()],
+        verdict: DisqualifierVerdict::Forbid,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: CounterexampleLedgerEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, entry);
+}

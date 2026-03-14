@@ -167,6 +167,21 @@ fn zero_placeholder_scan_gate_script_uses_repo_local_rch_target_dir() {
 }
 
 #[test]
+fn zero_placeholder_scan_gate_script_uses_unique_artifact_dir_namespace() {
+    let script = read_repo_text("scripts/run_rgc_zero_placeholder_scan.sh");
+    assert!(
+        script.contains("uid=\"$(id -u)\""),
+        "gate script should derive the local uid for artifact namespacing"
+    );
+    assert!(
+        script.contains(
+            "RGC_ZERO_PLACEHOLDER_SCAN_OUT_DIR:-${artifact_root}/${timestamp}_uid${uid}_${mode}_$$"
+        ),
+        "gate script should namespace default artifact output by uid, mode, and pid"
+    );
+}
+
+#[test]
 fn zero_placeholder_inventory_counts_match_expectations() {
     let inventory = zscan::zero_placeholder_scan_inventory();
     assert_eq!(

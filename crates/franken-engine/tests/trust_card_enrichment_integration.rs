@@ -1068,3 +1068,166 @@ fn enrichment_json_format_round_trips() {
     let restored: TrustCard = serde_json::from_str(&json_str).unwrap();
     assert_eq!(card, restored);
 }
+
+// ===== PearlTower enrichment batch 2 — 2026-03-14 =====
+
+// =========================================================================
+// AI. TrustCard serde roundtrip preserves all fields
+// =========================================================================
+
+#[test]
+fn enrichment_trust_card_serde_roundtrip() {
+    let graph = test_graph_with_extension();
+    let generator = TrustCardGenerator::new();
+    let card = generator
+        .generate(&graph, "ext-1", SecurityEpoch::from_raw(2), 15_000_000_000)
+        .unwrap();
+    let json = serde_json::to_string(&card).unwrap();
+    let restored: TrustCard = serde_json::from_str(&json).unwrap();
+    assert_eq!(card, restored);
+}
+
+// =========================================================================
+// AJ. TrustCardDiff serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_trust_card_diff_serde_roundtrip() {
+    let card_a = make_card(TrustLevel::Unknown, 20);
+    let card_b = make_card(TrustLevel::Provisional, 40);
+    let diff = TrustCardDiff::compute(&card_a, &card_b);
+    let json = serde_json::to_string(&diff).unwrap();
+    let restored: TrustCardDiff = serde_json::from_str(&json).unwrap();
+    assert_eq!(diff, restored);
+}
+
+// =========================================================================
+// AK. RiskDriver serde roundtrip
+// =========================================================================
+
+#[test]
+fn enrichment_risk_driver_serde_roundtrip() {
+    let driver = RiskDriver {
+        description: "low publisher trust".to_string(),
+        contribution: 15,
+    };
+    let json = serde_json::to_string(&driver).unwrap();
+    let restored: RiskDriver = serde_json::from_str(&json).unwrap();
+    assert_eq!(driver, restored);
+}
+
+#[test]
+fn enrichment_evidence_summary_serde_roundtrip() {
+    let summary = EvidenceSummary {
+        positive_count: 5,
+        negative_count: 3,
+        neutral_count: 2,
+        most_recent_ns: Some(5_000_000_000),
+        most_recent_description: Some("test evidence".to_string()),
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let restored: EvidenceSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, restored);
+}
+
+#[test]
+fn enrichment_provenance_summary_serde_roundtrip() {
+    let summary = ProvenanceSummary {
+        publisher_verified: true,
+        build_attested: true,
+        dependency_risk: 30_000,
+        has_provenance_gap: false,
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let restored: ProvenanceSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, restored);
+}
+
+#[test]
+fn enrichment_generator_config_serde_roundtrip() {
+    let cfg = GeneratorConfig::default();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let restored: GeneratorConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(cfg, restored);
+}
+
+#[test]
+fn enrichment_update_notification_serde_roundtrip() {
+    let notif = UpdateNotification {
+        extension_id: "ext-42".to_string(),
+        old_level: TrustLevel::Unknown,
+        new_level: TrustLevel::Trusted,
+        triggering_evidence_summary: "ev-1, ev-2".to_string(),
+        timestamp_ns: 99_000,
+    };
+    let json = serde_json::to_string(&notif).unwrap();
+    let restored: UpdateNotification = serde_json::from_str(&json).unwrap();
+    assert_eq!(notif, restored);
+}
+
+#[test]
+fn enrichment_cache_invalidate_all_clears() {
+    let mut cache = TrustCardCache::new();
+    let mut graph = ReputationGraph::new();
+    graph.register_publisher(test_publisher("pub-1"));
+    graph
+        .register_extension(test_extension("ext-1", "pub-1"))
+        .unwrap();
+    graph
+        .register_extension(test_extension("ext-2", "pub-1"))
+        .unwrap();
+    let generator = TrustCardGenerator::new();
+    let epoch = SecurityEpoch::from_raw(1);
+    let now = 10_000_000_000u64;
+    cache
+        .get_or_generate(&generator, &graph, "ext-1", epoch, now)
+        .unwrap();
+    cache
+        .get_or_generate(&generator, &graph, "ext-2", epoch, now)
+        .unwrap();
+    assert_eq!(cache.cached_count(), 2);
+    cache.invalidate_all();
+    assert_eq!(cache.cached_count(), 0);
+}
+
+#[test]
+fn enrichment_generator_determinism() {
+    let graph = test_graph_with_extension();
+    let generator = TrustCardGenerator::new();
+    let epoch = SecurityEpoch::from_raw(1);
+    let now = 10_000_000_000u64;
+    let card1 = generator.generate(&graph, "ext-1", epoch, now).unwrap();
+    let card2 = generator.generate(&graph, "ext-1", epoch, now).unwrap();
+    assert_eq!(card1, card2, "generator must be deterministic");
+}
+
+#[test]
+fn enrichment_card_with_provenance() {
+    let graph = test_graph_with_provenance();
+    let generator = TrustCardGenerator::new();
+    let card = generator
+        .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
+        .unwrap();
+    assert!(card.provenance.publisher_verified);
+    assert!(card.provenance.build_attested);
+    assert!(!card.provenance.has_provenance_gap);
+}
+
+#[test]
+fn enrichment_pipeline_drain_clears_pending() {
+    let mut pipeline = UpdatePipeline::new();
+    pipeline.subscribe("ext-1");
+    let tt = make_transition(
+        "ext-1",
+        TrustLevel::Unknown,
+        TrustLevel::Suspicious,
+        vec!["ev-1".into()],
+        false,
+        None,
+        1_000,
+    );
+    pipeline.on_trust_transition(&tt);
+    assert_eq!(pipeline.pending_count(), 1);
+    let _ = pipeline.drain_notifications();
+    assert_eq!(pipeline.pending_count(), 0);
+}

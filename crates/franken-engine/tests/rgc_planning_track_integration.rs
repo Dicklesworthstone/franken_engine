@@ -652,3 +652,168 @@ fn enrichment_risk_level_field_is_nonempty_and_recognized() {
         );
     }
 }
+
+// ===== PearlTower enrichment session 2026-03-14 =====
+
+#[test]
+fn enrichment_wave_handoff_coordination_events_are_nonempty() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let whm = &bundle.wave_handoff_matrix;
+    assert!(
+        !whm.coordination_dry_run.events.is_empty(),
+        "coordination dry-run must emit at least one event"
+    );
+    for event in &whm.coordination_dry_run.events {
+        assert!(
+            !event.is_empty(),
+            "coordination event strings must be nonempty"
+        );
+    }
+}
+
+#[test]
+fn enrichment_wave_handoff_validation_flags_all_true() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let whm = &bundle.wave_handoff_matrix;
+    assert!(
+        whm.protocol_validation.valid,
+        "protocol_validation must pass"
+    );
+    assert!(whm.handoff_validation.valid, "handoff_validation must pass");
+    assert!(
+        whm.transition_validation.valid,
+        "transition_validation must pass"
+    );
+}
+
+#[test]
+fn enrichment_wave_handoff_serde_roundtrip() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let whm = &bundle.wave_handoff_matrix;
+    let json = serde_json::to_string(whm).expect("serialize wave_handoff_matrix");
+    let restored: Value = serde_json::from_str(&json).expect("parse whm json");
+    assert_eq!(
+        restored["schema_version"].as_str().unwrap(),
+        WAVE_HANDOFF_MATRIX_SCHEMA_VERSION
+    );
+    assert_eq!(restored["bead_id"].as_str().unwrap(), BEAD_ID);
+    assert!(restored["protocol_validation"].is_object());
+    assert!(restored["handoff_validation"].is_object());
+    assert!(restored["transition_validation"].is_object());
+    assert!(restored["coordination_dry_run"].is_object());
+}
+
+#[test]
+fn enrichment_scope_contract_open_bead_ids_are_hierarchical() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    for bead_id in &bundle.scope_contract_snapshot.open_bead_ids {
+        assert!(
+            bead_id.starts_with("bd-"),
+            "open bead id must start with bd-: {bead_id}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_scope_contract_required_log_fields_include_trace_id() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    let fields: std::collections::BTreeSet<&str> = bundle
+        .scope_contract_snapshot
+        .required_structured_log_fields
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        fields.contains("trace_id"),
+        "required_structured_log_fields must include trace_id"
+    );
+}
+
+#[test]
+fn enrichment_doc_json_track_name_is_nonempty() {
+    let doc: Value = serde_json::from_str(DOC_JSON).expect("doc json");
+    let track_name = doc["track"]["name"].as_str().expect("track name");
+    assert!(
+        !track_name.is_empty(),
+        "doc json track name must be nonempty"
+    );
+}
+
+#[test]
+fn enrichment_doc_json_source_contracts_have_schema_versions() {
+    let doc: Value = serde_json::from_str(DOC_JSON).expect("doc json");
+    let source_contracts = doc["source_contracts"]
+        .as_array()
+        .expect("source_contracts");
+    for sc in source_contracts {
+        let sv = sc["schema_version"].as_str().unwrap_or("");
+        assert!(!sv.is_empty(), "source contract must have a schema_version");
+    }
+}
+
+#[test]
+fn enrichment_written_summary_is_nonempty_markdown() {
+    let out_dir = unique_temp_dir("summary_check");
+    let argv = vec![
+        "franken_rgc_planning_track".to_string(),
+        "--out-dir".to_string(),
+        out_dir.display().to_string(),
+    ];
+    let artifacts = write_rgc_planning_track_bundle(&out_dir, &argv).expect("write bundle");
+    let summary = fs::read_to_string(&artifacts.summary_path).expect("read summary");
+    assert!(!summary.is_empty(), "summary.md must be nonempty");
+    assert!(
+        summary.contains('#'),
+        "summary.md should contain markdown headings"
+    );
+}
+
+#[test]
+fn enrichment_milestone_ci_gate_commands_reference_scripts_or_rch() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    for milestone in &bundle.milestone_gatebook.milestones {
+        let cmd = &milestone.ci_gate.command;
+        assert!(
+            cmd.contains("rch") || cmd.contains("scripts/"),
+            "ci_gate command for {} must reference rch or scripts/: {cmd}",
+            milestone.milestone
+        );
+    }
+}
+
+#[test]
+fn enrichment_risk_entries_accepted_until_after_last_reviewed() {
+    let bundle =
+        build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
+    for entry in &bundle.risk_acceptance_ledger.entries {
+        assert!(
+            entry.accepted_until_utc >= entry.last_reviewed_utc,
+            "accepted_until must be >= last_reviewed for {}: {} vs {}",
+            entry.risk_id,
+            entry.accepted_until_utc,
+            entry.last_reviewed_utc
+        );
+    }
+}
+
+#[test]
+fn enrichment_bundle_component_constant_matches_expected() {
+    assert_eq!(
+        COMPONENT, "rgc_planning_track",
+        "COMPONENT must be 'rgc_planning_track'"
+    );
+}
+
+#[test]
+fn enrichment_bead_id_starts_with_bd_prefix() {
+    assert!(
+        BEAD_ID.starts_with("bd-"),
+        "BEAD_ID must start with bd-: {BEAD_ID}"
+    );
+}

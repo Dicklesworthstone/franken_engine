@@ -1105,6 +1105,22 @@ fn classify_no_label_with_implements_marker() {
 }
 
 #[test]
+fn classify_no_label_with_mixed_type_import_specifier_marker() {
+    assert_eq!(
+        classify_source_language(None, "import { type Foo, bar } from './foo';"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn classify_no_label_with_mixed_type_export_specifier_marker() {
+    assert_eq!(
+        classify_source_language(None, "export { type Foo, bar } from './foo';"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
 fn classify_mts_extension() {
     assert_eq!(
         classify_source_language(Some("module.mts"), "const x = 1;"),
@@ -1879,6 +1895,44 @@ fn normalize_mixed_regular_and_type_imports() {
 }
 
 #[test]
+fn normalize_mixed_named_type_and_runtime_import_specifiers() {
+    let source = "import { type Foo, bar, type Baz as Qux } from 'pkg';\nconst x = bar;";
+    let output = normalize(source).unwrap();
+    assert!(
+        output
+            .normalized_source
+            .contains("import { bar } from 'pkg';")
+    );
+    assert!(!output.normalized_source.contains("type Foo"));
+    assert!(!output.normalized_source.contains("type Baz"));
+}
+
+#[test]
+fn normalize_default_plus_type_only_named_import_specifiers() {
+    let source = "import React, { type FC } from 'react';\nconst App = React;";
+    let output = normalize(source).unwrap();
+    assert!(
+        output
+            .normalized_source
+            .contains("import React from 'react';")
+    );
+    assert!(!output.normalized_source.contains("type FC"));
+}
+
+#[test]
+fn normalize_mixed_named_type_and_runtime_export_specifiers() {
+    let source = "export { type Foo, bar, type Baz as Qux } from 'pkg';\nconst x = 1;";
+    let output = normalize(source).unwrap();
+    assert!(
+        output
+            .normalized_source
+            .contains("export { bar } from 'pkg';")
+    );
+    assert!(!output.normalized_source.contains("type Foo"));
+    assert!(!output.normalized_source.contains("type Baz"));
+}
+
+#[test]
 fn normalize_multiple_enums() {
     let source = "enum A { X, Y }\nenum B { P = 10, Q }";
     let output = normalize(source).unwrap();
@@ -2233,6 +2287,30 @@ fn enrichment_mixed_imports_only_type_imports_removed() {
     let output = normalize(source).unwrap();
     assert!(output.normalized_source.contains("import { useState }"));
     assert!(!output.normalized_source.contains("import type"));
+}
+
+#[test]
+fn enrichment_mixed_named_import_specifiers_only_runtime_values_remain() {
+    let source =
+        "import { type FC, useState, type PropsWithChildren } from 'react';\nconst x = useState;";
+    let output = normalize(source).unwrap();
+    assert!(
+        output
+            .normalized_source
+            .contains("import { useState } from 'react';")
+    );
+    assert!(!output.normalized_source.contains("type FC"));
+    assert!(!output.normalized_source.contains("PropsWithChildren"));
+}
+
+#[test]
+fn enrichment_export_type_named_reexport_becomes_empty_source_when_alone() {
+    let source = "export type { Foo, Bar } from './types';";
+    let result = normalize(source);
+    assert!(matches!(
+        result.unwrap_err(),
+        TsNormalizationError::EmptySource
+    ));
 }
 
 #[test]

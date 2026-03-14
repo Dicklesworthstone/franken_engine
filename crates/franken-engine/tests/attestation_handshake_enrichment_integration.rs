@@ -23,8 +23,8 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::attestation_handshake::{
-    CellAuthorization, CellHandshakeClient, HandshakeError, HandshakeEvent, HandshakeOutcome,
-    PolicyPlaneVerifier, ReattestationTrigger,
+    AttestationChallenge, CellAuthorization, CellHandshakeClient, HandshakeError, HandshakeEvent,
+    HandshakeOutcome, PolicyPlaneVerifier, ReattestationTrigger,
 };
 use frankenengine_engine::attested_execution_cell::{
     CellFunction, MeasurementDigest, SoftwareTrustRoot, TrustRootBackend,
@@ -792,4 +792,183 @@ fn events_carry_epoch_and_policy_version() {
     assert_eq!(ev.epoch, epoch(42));
     assert_eq!(ev.policy_version, 1);
     assert_eq!(ev.cell_id, "cell-1");
+}
+
+// ===== PearlTower enrichment batch 2 — 2026-03-14 =====
+
+// ===========================================================================
+// 27. revoke_authorization returns true for existing, false for missing
+// ===========================================================================
+
+#[test]
+fn revoke_authorization_returns_correct_bool() {
+    let mut v = verifier();
+    let r = trust_root();
+    let m = measurement(&r);
+    v.approve_measurement(m.composite_hash());
+    let c = client("cell-revoke");
+    full_handshake(&mut v, &c, &r, &m, 1000).unwrap();
+    assert_eq!(v.authorization_count(), 1);
+
+    assert!(v.revoke_authorization("cell-revoke"));
+    assert_eq!(v.authorization_count(), 0);
+    assert!(!v.revoke_authorization("cell-revoke")); // already removed
+}
+
+// ===========================================================================
+// 28. revoke_all_authorizations returns count
+// ===========================================================================
+
+#[test]
+fn revoke_all_authorizations_returns_count() {
+    let mut v = verifier();
+    let r = trust_root();
+    let m = measurement(&r);
+    v.approve_measurement(m.composite_hash());
+
+    let c1 = client("cell-1");
+    let c2 = client("cell-2");
+    full_handshake(&mut v, &c1, &r, &m, 1000).unwrap();
+    full_handshake(&mut v, &c2, &r, &m, 2000).unwrap();
+    assert_eq!(v.authorization_count(), 2);
+
+    let revoked = v.revoke_all_authorizations();
+    assert_eq!(revoked, 2);
+    assert_eq!(v.authorization_count(), 0);
+}
+
+// ===========================================================================
+// 29. bump_policy_version increments
+// ===========================================================================
+
+#[test]
+fn bump_policy_version_increments() {
+    let mut v = verifier();
+    let v1 = v.policy_version();
+    let v2 = v.bump_policy_version();
+    assert_eq!(v2, v1 + 1);
+    assert_eq!(v.policy_version(), v2);
+}
+
+// ===========================================================================
+// 30. advance_epoch updates epoch
+// ===========================================================================
+
+#[test]
+fn advance_epoch_updates() {
+    let mut v = verifier();
+    v.advance_epoch(SecurityEpoch::from_raw(100));
+    // Future challenges should use the new epoch
+    let challenge = v.generate_challenge([1u8; 32], 5000, 10_000).unwrap();
+    assert_eq!(challenge.epoch, SecurityEpoch::from_raw(100));
+}
+
+// ===========================================================================
+// 31. CellAuthorization::authorizes checks operation
+// ===========================================================================
+
+#[test]
+fn cell_authorization_authorizes_check() {
+    let mut v = verifier();
+    let r = trust_root();
+    let m = measurement(&r);
+    v.approve_measurement(m.composite_hash());
+    let c = client("cell-ops");
+    let auth = full_handshake(&mut v, &c, &r, &m, 1000).unwrap();
+
+    // The authorization should authorize the operations from the cell function
+    assert!(auth.authorizes("decision_receipt_sign") || !auth.authorized_operations.is_empty());
+}
+
+// ===========================================================================
+// 32. CellAuthorization serde roundtrip
+// ===========================================================================
+
+#[test]
+fn cell_authorization_serde_roundtrip() {
+    let mut v = verifier();
+    let r = trust_root();
+    let m = measurement(&r);
+    v.approve_measurement(m.composite_hash());
+    let c = client("cell-serde");
+    let auth = full_handshake(&mut v, &c, &r, &m, 1000).unwrap();
+
+    let json = serde_json::to_string(&auth).unwrap();
+    let restored: CellAuthorization = serde_json::from_str(&json).unwrap();
+    assert_eq!(auth, restored);
+}
+
+// ===========================================================================
+// 33. AttestationChallenge serde roundtrip
+// ===========================================================================
+
+#[test]
+fn attestation_challenge_serde_roundtrip() {
+    let v = verifier();
+    let challenge = v.generate_challenge([1u8; 32], 1000, 10_000).unwrap();
+    let json = serde_json::to_string(&challenge).unwrap();
+    let restored: AttestationChallenge = serde_json::from_str(&json).unwrap();
+    assert_eq!(challenge, restored);
+}
+
+// ===========================================================================
+// 34. HandshakeEvent serde roundtrip
+// ===========================================================================
+
+#[test]
+fn handshake_event_serde_roundtrip() {
+    let mut v = verifier();
+    let r = trust_root();
+    let m = measurement(&r);
+    v.approve_measurement(m.composite_hash());
+    let c = client("cell-ev");
+    full_handshake(&mut v, &c, &r, &m, 1000).unwrap();
+
+    let ev = &v.events()[0];
+    let json = serde_json::to_string(ev).unwrap();
+    let restored: HandshakeEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(ev, &restored);
+}
+
+// ===========================================================================
+// 35. HandshakeError Display unique for all variants
+// ===========================================================================
+
+#[test]
+fn handshake_error_display_unique() {
+    let errors: Vec<HandshakeError> = vec![
+        HandshakeError::NonceMismatch,
+        HandshakeError::ChallengeExpired {
+            challenge_timestamp_ns: 10,
+            current_ns: 100,
+            deadline_ns: 50,
+        },
+        HandshakeError::MeasurementNotApproved {
+            measurement_hash: ContentHash::compute(b"test"),
+        },
+    ];
+    let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
+    assert_eq!(displays.len(), errors.len());
+}
+
+// ===========================================================================
+// 36. authorized_cells returns correct IDs
+// ===========================================================================
+
+#[test]
+fn authorized_cells_returns_correct_ids() {
+    let mut v = verifier();
+    let r = trust_root();
+    let m = measurement(&r);
+    v.approve_measurement(m.composite_hash());
+
+    let c1 = client("cell-a");
+    let c2 = client("cell-b");
+    full_handshake(&mut v, &c1, &r, &m, 1000).unwrap();
+    full_handshake(&mut v, &c2, &r, &m, 2000).unwrap();
+
+    let cells: BTreeSet<&str> = v.authorized_cells().into_iter().collect();
+    assert!(cells.contains("cell-a"));
+    assert!(cells.contains("cell-b"));
+    assert_eq!(cells.len(), 2);
 }

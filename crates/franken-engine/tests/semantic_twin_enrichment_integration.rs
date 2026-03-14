@@ -545,7 +545,7 @@ fn enrichment_spec_validate_rejects_transition_missing_variable() {
         telemetry_contract: "test".to_string(),
         guard: Some(TransitionGuard {
             variable: "always".to_string(),
-            op: frankenengine_engine::assumptions_ledger::MonitorOp::Gt,
+            op: frankenengine_engine::assumptions_ledger::MonitorOp::Ge,
             threshold_millionths: 0,
         }),
     });
@@ -563,11 +563,7 @@ fn enrichment_spec_validate_rejects_transition_missing_variable() {
 #[test]
 fn enrichment_spec_build_assumption_ledger_succeeds() {
     let spec = default_spec();
-    let ledger = spec.build_assumption_ledger(
-        "decision-bl",
-        1,
-        DemotionPolicy::default(),
-    );
+    let ledger = spec.build_assumption_ledger("decision-bl", 1, DemotionPolicy::default());
     assert!(ledger.is_ok());
 }
 
@@ -608,6 +604,8 @@ fn enrichment_telemetry_contract_ref_validate_valid() {
         namespace: SignalNamespace::Frir,
         signal_key: "latency_ns".to_string(),
         units: "nanoseconds".to_string(),
+        deterministic: true,
+        required: true,
     };
     assert!(tcr.validate().is_ok());
 }
@@ -619,6 +617,8 @@ fn enrichment_telemetry_contract_ref_validate_missing_signal_key() {
         namespace: SignalNamespace::Frir,
         signal_key: String::new(),
         units: "nanoseconds".to_string(),
+        deterministic: true,
+        required: true,
     };
     let result = tcr.validate();
     assert!(result.is_err());
@@ -631,6 +631,8 @@ fn enrichment_telemetry_contract_ref_validate_missing_units() {
         namespace: SignalNamespace::Frir,
         signal_key: "latency_ns".to_string(),
         units: String::new(),
+        deterministic: true,
+        required: true,
     };
     let result = tcr.validate();
     assert!(result.is_err());
@@ -643,6 +645,8 @@ fn enrichment_telemetry_contract_ref_serde_roundtrip() {
         namespace: SignalNamespace::RuntimeDecisionCore,
         signal_key: "decision_latency".to_string(),
         units: "ms".to_string(),
+        deterministic: false,
+        required: true,
     };
     let json = serde_json::to_string(&tcr).unwrap();
     let restored: TelemetryContractRef = serde_json::from_str(&json).unwrap();
@@ -712,11 +716,9 @@ fn enrichment_observation_result_serde_roundtrip() {
 fn enrichment_transition_guard_serde_roundtrip() {
     use frankenengine_engine::semantic_twin::TransitionGuard;
     let guard = TransitionGuard {
-        condition: "threshold_exceeded".to_string(),
-        parameters: std::collections::BTreeMap::from([(
-            "threshold".to_string(),
-            "100".to_string(),
-        )]),
+        variable: "threshold_var".to_string(),
+        op: frankenengine_engine::assumptions_ledger::MonitorOp::Ge,
+        threshold_millionths: 100_000_000,
     };
     let json = serde_json::to_string(&guard).unwrap();
     let restored: TransitionGuard = serde_json::from_str(&json).unwrap();
@@ -771,16 +773,16 @@ fn enrichment_spec_transitions_reference_valid_variables() {
     let var_ids: BTreeSet<&str> = spec.state_variables.iter().map(|v| v.id.as_str()).collect();
     for t in &spec.transitions {
         assert!(
-            var_ids.contains(t.from_variable.as_str()),
-            "transition {} references unknown from_variable {}",
-            t.id,
-            t.from_variable
+            var_ids.contains(t.source_variable.as_str()),
+            "transition {} references unknown source_variable {}",
+            t.transition_id,
+            t.source_variable
         );
         assert!(
-            var_ids.contains(t.to_variable.as_str()),
-            "transition {} references unknown to_variable {}",
-            t.id,
-            t.to_variable
+            var_ids.contains(t.target_variable.as_str()),
+            "transition {} references unknown target_variable {}",
+            t.transition_id,
+            t.target_variable
         );
     }
 }
@@ -788,6 +790,10 @@ fn enrichment_spec_transitions_reference_valid_variables() {
 #[test]
 fn enrichment_spec_transition_ids_unique() {
     let spec = default_spec();
-    let ids: BTreeSet<&str> = spec.transitions.iter().map(|t| t.id.as_str()).collect();
+    let ids: BTreeSet<&str> = spec
+        .transitions
+        .iter()
+        .map(|t| t.transition_id.as_str())
+        .collect();
     assert_eq!(ids.len(), spec.transitions.len());
 }

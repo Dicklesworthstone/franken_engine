@@ -867,3 +867,145 @@ fn all_trace_events_have_non_empty_event_field() {
         }
     }
 }
+
+// ===== PearlTower enrichment session 2026-03-14 =====
+
+#[test]
+fn enrichment_contract_deterministic_double_parse() {
+    let path = repo_root().join("docs/frx_canonical_react_behavior_corpus_v1.json");
+    let a: CorpusContract = load_json(&path);
+    let b: CorpusContract = load_json(&path);
+    assert_eq!(a.schema_version, b.schema_version);
+    assert_eq!(a.bead_id, b.bead_id);
+}
+
+#[test]
+fn enrichment_contract_schema_version_has_frx_prefix() {
+    let path = repo_root().join("docs/frx_canonical_react_behavior_corpus_v1.json");
+    let contract: CorpusContract = load_json(&path);
+    assert!(
+        contract.schema_version.starts_with("frx."),
+        "schema_version must start with frx.: {}",
+        contract.schema_version
+    );
+}
+
+#[test]
+fn enrichment_contract_bead_id_is_hierarchical() {
+    let path = repo_root().join("docs/frx_canonical_react_behavior_corpus_v1.json");
+    let contract: CorpusContract = load_json(&path);
+    assert!(
+        contract.bead_id.starts_with("bd-"),
+        "bead_id must start with bd-: {}",
+        contract.bead_id
+    );
+}
+
+#[test]
+fn enrichment_contract_generated_by_references_bead() {
+    let path = repo_root().join("docs/frx_canonical_react_behavior_corpus_v1.json");
+    let contract: CorpusContract = load_json(&path);
+    assert!(
+        contract.generated_by.starts_with("bd-"),
+        "generated_by must reference a bead: {}",
+        contract.generated_by
+    );
+}
+
+#[test]
+fn enrichment_contract_minimum_fixture_count_is_positive() {
+    let path = repo_root().join("docs/frx_canonical_react_behavior_corpus_v1.json");
+    let contract: CorpusContract = load_json(&path);
+    assert!(
+        contract.corpus.minimum_fixture_count > 0,
+        "minimum_fixture_count must be positive"
+    );
+}
+
+#[test]
+fn enrichment_fixture_count_meets_contract_minimum() {
+    let path = repo_root().join("docs/frx_canonical_react_behavior_corpus_v1.json");
+    let contract: CorpusContract = load_json(&path);
+    let files = list_json_files(&fixtures_dir(), ".fixture.json");
+    assert!(
+        files.len() >= contract.corpus.minimum_fixture_count,
+        "corpus must have at least {} fixtures, found {}",
+        contract.corpus.minimum_fixture_count,
+        files.len()
+    );
+}
+
+#[test]
+fn enrichment_all_fixtures_have_nonempty_expected_observables() {
+    let files = list_json_files(&fixtures_dir(), ".fixture.json");
+    for path in &files {
+        let fixture: FixtureSpec = load_json(path);
+        assert!(
+            !fixture.expected_observable.is_empty(),
+            "expected_observable must not be empty in {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn enrichment_all_traces_have_at_least_one_event() {
+    let files = list_json_files(&traces_dir(), ".trace.json");
+    for path in &files {
+        let trace: ObservableTrace = load_json(path);
+        assert!(
+            !trace.events.is_empty(),
+            "trace {} must have at least one event",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn enrichment_fixture_refs_are_unique_across_corpus() {
+    let files = list_json_files(&fixtures_dir(), ".fixture.json");
+    let mut seen = BTreeSet::new();
+    for path in &files {
+        let fixture: FixtureSpec = load_json(path);
+        assert!(
+            seen.insert(fixture.fixture_ref.clone()),
+            "duplicate fixture_ref '{}' in {}",
+            fixture.fixture_ref,
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn enrichment_contract_determinism_flags_are_set() {
+    let path = repo_root().join("docs/frx_canonical_react_behavior_corpus_v1.json");
+    let contract: CorpusContract = load_json(&path);
+    assert!(
+        contract
+            .determinism_contract
+            .require_stable_fixture_ref_and_scenario_id,
+        "determinism contract must require stable fixture_ref and scenario_id"
+    );
+}
+
+#[test]
+fn enrichment_contract_fixture_schema_version_is_nonempty() {
+    let path = repo_root().join("docs/frx_canonical_react_behavior_corpus_v1.json");
+    let contract: CorpusContract = load_json(&path);
+    assert!(
+        !contract
+            .determinism_contract
+            .fixture_schema_version
+            .trim()
+            .is_empty(),
+        "fixture_schema_version must not be empty"
+    );
+    assert!(
+        !contract
+            .determinism_contract
+            .trace_schema_version
+            .trim()
+            .is_empty(),
+        "trace_schema_version must not be empty"
+    );
+}

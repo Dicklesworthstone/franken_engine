@@ -666,7 +666,7 @@ fn enrichment_wave_handoff_coordination_events_are_nonempty() {
     );
     for event in &whm.coordination_dry_run.events {
         assert!(
-            !event.is_empty(),
+            !event.event.is_empty(),
             "coordination event strings must be nonempty"
         );
     }

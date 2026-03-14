@@ -1240,8 +1240,8 @@ fn enrichment_lattice_no_cycle_linear() {
 fn enrichment_claim_domain_btreeset_dedup() {
     let mut set = BTreeSet::new();
     set.insert(ClaimDomain::Compatibility);
-    set.insert(ClaimDomain::Performance);
-    set.insert(ClaimDomain::Security);
+    set.insert(ClaimDomain::ShippedSurface);
+    set.insert(ClaimDomain::Supremacy);
     set.insert(ClaimDomain::React);
     set.insert(ClaimDomain::Rollout);
     set.insert(ClaimDomain::Compatibility); // dup
@@ -1283,7 +1283,10 @@ fn enrichment_evaluate_outputs_scenario_counts_consistent() {
         scenario_count
     );
     assert_eq!(
-        outputs.counterexample_ledger.evaluated_scenarios.len(),
+        outputs
+            .claim_counterexample_ledger
+            .evaluated_scenarios
+            .len(),
         scenario_count
     );
 }
@@ -1348,13 +1351,15 @@ fn enrichment_evaluate_with_triggered_disqualifier() {
 // =========================================================================
 
 #[test]
-fn enrichment_missing_evidence_cutset_serde_roundtrip() {
+fn enrichment_missing_evidence_cutset_serde_roundtrip_v2() {
     let cutset = MissingEvidenceCutset {
         cutset_id: "cs-1".to_string(),
-        target_atom_id: "atom-x".to_string(),
+        atom_id: "atom-x".to_string(),
+        supporting_morphism_id: "morph-x".to_string(),
         missing_evidence_kinds: vec!["kind-a".to_string(), "kind-b".to_string()],
-        missing_side_constraints: vec!["sc-1".to_string()],
-        minimal: true,
+        missing_constraint_ids: vec!["sc-1".to_string()],
+        blocking_rule_ids: vec![],
+        cost: 2,
     };
     let json = serde_json::to_string(&cutset).unwrap();
     let back: MissingEvidenceCutset = serde_json::from_str(&json).unwrap();
@@ -1362,13 +1367,13 @@ fn enrichment_missing_evidence_cutset_serde_roundtrip() {
 }
 
 #[test]
-fn enrichment_impossibility_certificate_serde_roundtrip() {
+fn enrichment_impossibility_certificate_serde_roundtrip_v2() {
     let cert = ImpossibilityCertificate {
         certificate_id: "ic-1".to_string(),
-        target_atom_id: "atom-x".to_string(),
+        atom_id: "atom-x".to_string(),
         blocking_rule_id: "rule-a".to_string(),
-        required_evidence_kind: "kind-a".to_string(),
-        impossibility_reason: "cannot produce kind-a evidence".to_string(),
+        evidence_kind: "kind-a".to_string(),
+        remediation: "cannot produce kind-a evidence".to_string(),
     };
     let json = serde_json::to_string(&cert).unwrap();
     let back: ImpossibilityCertificate = serde_json::from_str(&json).unwrap();
@@ -1376,14 +1381,13 @@ fn enrichment_impossibility_certificate_serde_roundtrip() {
 }
 
 #[test]
-fn enrichment_counterexample_ledger_entry_serde_roundtrip() {
+fn enrichment_counterexample_ledger_entry_serde_roundtrip_v2() {
     let entry = CounterexampleLedgerEntry {
         entry_id: "cle-1".to_string(),
-        triggered_rule_id: "rule-a".to_string(),
+        atom_id: "atom-1".to_string(),
+        blocking_rule_id: "rule-a".to_string(),
         evidence_kind: "kind-a".to_string(),
-        evidence_state: EvidenceState::Fresh,
-        affected_atom_ids: vec!["atom-1".to_string()],
-        verdict: DisqualifierVerdict::Forbid,
+        remediation: "fix the counterexample".to_string(),
     };
     let json = serde_json::to_string(&entry).unwrap();
     let back: CounterexampleLedgerEntry = serde_json::from_str(&json).unwrap();

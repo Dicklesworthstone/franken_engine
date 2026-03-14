@@ -488,7 +488,7 @@ fn track_e_charter_word_count_exceeds_minimum() {
 // ===== PearlTower enrichment session 2026-03-14 =====
 
 #[test]
-fn track_e_contract_deterministic_double_parse() {
+fn track_e_contract_deterministic_double_parse_v2() {
     let path =
         repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");

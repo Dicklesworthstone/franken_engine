@@ -281,8 +281,20 @@ fn readme_references_operator_runbook_gate_and_replay() {
         "README missing parser operator/developer runbook gate command"
     );
     assert!(
-        readme.contains("./scripts/e2e/parser_operator_developer_runbook_replay.sh"),
-        "README missing parser operator/developer runbook replay command"
+        readme.contains("target_rch_parser_operator_developer_runbook_"),
+        "README missing repo-local parser operator/developer runbook target-dir guidance"
+    );
+    assert!(
+        readme.contains("step_logs/step_*.log"),
+        "README missing parser operator/developer runbook step log artifact"
+    );
+    assert!(
+        readme.contains("./scripts/e2e/parser_operator_developer_runbook_replay.sh ci"),
+        "README missing parser operator/developer runbook ci replay command"
+    );
+    assert!(
+        readme.contains("./scripts/e2e/parser_operator_developer_runbook_replay.sh drill"),
+        "README missing parser operator/developer runbook drill replay command"
     );
 }
 

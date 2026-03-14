@@ -756,7 +756,7 @@ mod tests {
         let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1));
         fast_path.publish(vec![1, 2, 3]);
 
-        let result = fast_path.read_clone_or_else(|| vec![]);
+        let result = fast_path.read_clone_or_else(std::vec::Vec::new);
         assert_eq!(result.value, vec![1, 2, 3]);
     }
 

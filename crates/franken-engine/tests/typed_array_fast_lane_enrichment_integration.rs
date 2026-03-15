@@ -559,6 +559,18 @@ fn enrichment_error_detached_buffer_display() {
 }
 
 #[test]
+fn enrichment_error_misaligned_byte_offset_display() {
+    let err = FastLaneError::MisalignedByteOffset {
+        offset: 6,
+        alignment: 4,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("6"));
+    assert!(msg.contains("4"));
+    assert!(msg.contains("multiple"));
+}
+
+#[test]
 fn enrichment_error_invalid_byte_length_display() {
     let err = FastLaneError::InvalidByteLength {
         expected: 80,
@@ -600,6 +612,17 @@ fn enrichment_error_is_std_error() {
 #[test]
 fn enrichment_error_serde_detached_buffer() {
     let err = FastLaneError::DetachedBuffer;
+    let json = serde_json::to_string(&err).unwrap();
+    let back: FastLaneError = serde_json::from_str(&json).unwrap();
+    assert_eq!(err, back);
+}
+
+#[test]
+fn enrichment_error_serde_misaligned_byte_offset() {
+    let err = FastLaneError::MisalignedByteOffset {
+        offset: 2,
+        alignment: 4,
+    };
     let json = serde_json::to_string(&err).unwrap();
     let back: FastLaneError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, back);
@@ -798,6 +821,25 @@ fn enrichment_validate_byte_length_mismatch_uint32() {
     };
     let err = validate_typed_array(&v).unwrap_err();
     assert!(matches!(err, FastLaneError::InvalidByteLength { .. }));
+}
+
+#[test]
+fn enrichment_validate_misaligned_byte_offset_rejected() {
+    let v = TypedArrayValidation {
+        kind: TypedArrayKind::Int32,
+        byte_length: 40,
+        element_count: 10,
+        is_detached: false,
+        is_shared: false,
+        byte_offset: 2,
+    };
+    assert_eq!(
+        validate_typed_array(&v).unwrap_err(),
+        FastLaneError::MisalignedByteOffset {
+            offset: 2,
+            alignment: 4,
+        }
+    );
 }
 
 #[test]

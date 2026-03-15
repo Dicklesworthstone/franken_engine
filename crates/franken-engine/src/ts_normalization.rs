@@ -774,17 +774,11 @@ fn source_label_has_typescript_extension(source_label: &str) -> bool {
 }
 
 fn source_looks_typescript(source: &str) -> bool {
-    if source.contains("import type ")
-        || source.contains("import { type ")
-        || source.contains("import {type ")
+    if source_contains_type_only_import_export_syntax(source)
         || source.contains(" as const")
         || source.contains("!:")
         || source.contains("interface ")
         || source.contains("enum ")
-        || source.contains("export { type ")
-        || source.contains("export {type ")
-        || source.contains("export type {")
-        || source.contains("export type *")
         || source.contains(" implements ")
     {
         return true;
@@ -795,11 +789,8 @@ fn source_looks_typescript(source: &str) -> bool {
 
 fn line_looks_like_typescript_construct(line: &str) -> bool {
     let trimmed = line.trim_start();
-    if trimmed.starts_with("export type ") || trimmed.starts_with("export interface ") {
-        return true;
-    }
-    if (trimmed.starts_with("import {") || trimmed.starts_with("export {"))
-        && trimmed.contains("type ")
+    if statement_uses_type_only_import_export_syntax(trimmed)
+        || trimmed.starts_with("export interface ")
     {
         return true;
     }
@@ -1103,18 +1094,17 @@ fn find_import_export_statement_end(source: &str, start: usize) -> Option<usize>
 fn rewrite_type_only_import_export_statement(statement: &str) -> Option<String> {
     let start = statement.find(|ch: char| !ch.is_ascii_whitespace())?;
     if starts_with_keyword(statement, start, "import") {
-        let after_import = skip_ascii_whitespace(statement, start + "import".len());
-        if after_import > start + "import".len()
-            && starts_with_keyword(statement, after_import, "type")
+        let after_import = next_code_token_index(statement, start + "import".len())?;
+        if starts_with_keyword(statement, after_import, "type")
+            && next_code_token_index(statement, after_import + "type".len())
+                .is_some_and(|index| !starts_with_keyword(statement, index, "from"))
         {
             return Some(String::new());
         }
     } else if starts_with_keyword(statement, start, "export") {
-        let after_export = skip_ascii_whitespace(statement, start + "export".len());
-        if after_export > start + "export".len()
-            && starts_with_keyword(statement, after_export, "type")
-        {
-            let after_type = skip_ascii_whitespace(statement, after_export + "type".len());
+        let after_export = next_code_token_index(statement, start + "export".len())?;
+        if starts_with_keyword(statement, after_export, "type") {
+            let after_type = next_code_token_index(statement, after_export + "type".len())?;
             if statement[after_type..].starts_with('{') || statement[after_type..].starts_with('*')
             {
                 return Some(String::new());
@@ -1177,7 +1167,7 @@ fn filter_runtime_named_specifiers(specifiers: &str) -> (Vec<String>, bool) {
             continue;
         }
 
-        if starts_with_keyword(trimmed, 0, "type") {
+        if is_type_only_named_specifier(trimmed) {
             removed_any = true;
             continue;
         }
@@ -1684,6 +1674,91 @@ fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {
     }
 
     index
+}
+
+fn next_code_token_index(source: &str, start: usize) -> Option<usize> {
+    let mut cursor = start;
+    let mut state = LexicalRewriteState::Code;
+    while let Some((index, ch)) = next_code_scan_char(source, &mut cursor, &mut state) {
+        if !ch.is_ascii_whitespace() {
+            return Some(index);
+        }
+    }
+
+    None
+}
+
+fn statement_uses_type_only_import_export_syntax(statement: &str) -> bool {
+    let Some(start) = next_code_token_index(statement, 0) else {
+        return false;
+    };
+
+    if starts_with_keyword(statement, start, "import") {
+        let Some(after_import) = next_code_token_index(statement, start + "import".len()) else {
+            return false;
+        };
+        if starts_with_keyword(statement, after_import, "type") {
+            return next_code_token_index(statement, after_import + "type".len())
+                .is_some_and(|index| !starts_with_keyword(statement, index, "from"));
+        }
+    } else if starts_with_keyword(statement, start, "export") {
+        let Some(after_export) = next_code_token_index(statement, start + "export".len()) else {
+            return false;
+        };
+        if starts_with_keyword(statement, after_export, "type") {
+            return next_code_token_index(statement, after_export + "type".len())
+                .is_some_and(|index| !starts_with_keyword(statement, index, "from"));
+        }
+    } else {
+        return false;
+    }
+
+    let Some(brace_start) = find_top_level_char(statement, start, '{') else {
+        return false;
+    };
+    let Some(brace_end) = find_matching_delimiter(statement, brace_start, '{', '}') else {
+        return false;
+    };
+
+    statement[brace_start + 1..brace_end]
+        .split(',')
+        .map(str::trim)
+        .any(is_type_only_named_specifier)
+}
+
+fn source_contains_type_only_import_export_syntax(source: &str) -> bool {
+    let mut cursor = 0usize;
+    let mut state = LexicalRewriteState::Code;
+    while let Some((index, _)) = next_code_scan_char(source, &mut cursor, &mut state) {
+        if !is_statement_start(source, index)
+            || (!starts_with_keyword(source, index, "import")
+                && !starts_with_keyword(source, index, "export"))
+        {
+            continue;
+        }
+
+        let Some(statement_end) = find_import_export_statement_end(source, index) else {
+            return false;
+        };
+        if statement_uses_type_only_import_export_syntax(&source[index..statement_end]) {
+            return true;
+        }
+        cursor = statement_end;
+    }
+
+    false
+}
+
+fn is_type_only_named_specifier(specifier: &str) -> bool {
+    let Some(start) = next_code_token_index(specifier, 0) else {
+        return false;
+    };
+    if !starts_with_keyword(specifier, start, "type") {
+        return false;
+    }
+
+    next_code_token_index(specifier, start + "type".len())
+        .is_some_and(|index| !starts_with_keyword(specifier, index, "as"))
 }
 
 fn trim_trailing_inline_whitespace(output: &mut String) {
@@ -3134,10 +3209,31 @@ abstract class Base { }"#;
     }
 
     #[test]
+    fn elide_type_only_imports_preserves_runtime_specifier_named_type() {
+        let source = "import { type as runtimeType, keep } from \"pkg\";";
+        let result = elide_type_only_imports(source);
+        assert_eq!(result, source);
+    }
+
+    #[test]
+    fn elide_type_only_imports_preserves_runtime_default_import_named_type() {
+        let source = "import type from \"pkg\";";
+        let result = elide_type_only_imports(source);
+        assert_eq!(result, source);
+    }
+
+    #[test]
     fn elide_type_only_imports_rewrites_mixed_named_export_specifiers() {
         let source = "export { type Foo, bar, type Baz as Qux } from \"pkg\";";
         let result = elide_type_only_imports(source);
         assert_eq!(result, "export { bar } from \"pkg\";");
+    }
+
+    #[test]
+    fn elide_type_only_imports_preserves_runtime_export_specifier_named_type() {
+        let source = "export { type as runtimeType, keep } from \"pkg\";";
+        let result = elide_type_only_imports(source);
+        assert_eq!(result, source);
     }
 
     #[test]
@@ -3591,6 +3687,22 @@ abstract class Base { }"#;
         assert_eq!(
             classify_source_language(None, "export { type Foo, bar } from './foo';"),
             SourceLanguage::TypeScript
+        );
+    }
+
+    #[test]
+    fn classify_source_language_keeps_runtime_binding_named_type_as_javascript() {
+        assert_eq!(
+            classify_source_language(None, "import { type as runtimeType } from './foo';"),
+            SourceLanguage::JavaScript
+        );
+        assert_eq!(
+            classify_source_language(None, "export { type as runtimeType } from './foo';"),
+            SourceLanguage::JavaScript
+        );
+        assert_eq!(
+            classify_source_language(None, "import type from './foo';"),
+            SourceLanguage::JavaScript
         );
     }
 

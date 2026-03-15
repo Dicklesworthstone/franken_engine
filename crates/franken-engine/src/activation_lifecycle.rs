@@ -961,6 +961,9 @@ impl ActivationLifecycleController {
         entry.descriptor.version = pin.version.clone();
         entry.descriptor.version_hash = pin.version_hash.clone();
         entry.state = LifecycleState::Active;
+        if old_state == LifecycleState::PendingActivation {
+            entry.injected_secret_keys.clear();
+        }
         entry.last_rollback_tick = Some(tick);
         entry.crash_detector.reset();
         self.transition_count += 1;
@@ -1344,6 +1347,32 @@ mod tests {
         // PendingActivation but no known_good yet.
         let err = ctrl.rollback("comp-a", "trace-1").unwrap_err();
         assert!(matches!(err, LifecycleError::NoKnownGoodVersion { .. }));
+    }
+
+    #[test]
+    fn rollback_from_reactivation_pending_clears_injected_secret_keys() {
+        let mut ctrl = make_controller();
+        activate_component(&mut ctrl, "comp-a", "1.0.0");
+        ctrl.deactivate("comp-a", "trace-1").unwrap();
+        ctrl.begin_activation("comp-a", &passing_validation("comp-a", "1.0.0"), "trace-1")
+            .unwrap();
+        ctrl.inject_secrets(
+            "comp-a",
+            &[EphemeralSecret::new("stale_key", vec![0xCC])],
+            "trace-1",
+        )
+        .unwrap();
+
+        let entry = ctrl.find_component("comp-a").unwrap();
+        assert_eq!(entry.state, LifecycleState::PendingActivation);
+        assert_eq!(entry.injected_secret_keys, vec!["stale_key"]);
+
+        let pin = ctrl.rollback("comp-a", "trace-1").unwrap();
+        assert_eq!(pin.version, "1.0.0");
+
+        let entry = ctrl.find_component("comp-a").unwrap();
+        assert_eq!(entry.state, LifecycleState::Active);
+        assert!(entry.injected_secret_keys.is_empty());
     }
 
     // -- crash-loop detection -----------------------------------------------

@@ -1121,6 +1121,22 @@ fn classify_no_label_with_mixed_type_export_specifier_marker() {
 }
 
 #[test]
+fn classify_no_label_with_runtime_binding_named_type_keeps_javascript() {
+    assert_eq!(
+        classify_source_language(None, "import { type as runtimeType } from './foo';"),
+        SourceLanguage::JavaScript
+    );
+    assert_eq!(
+        classify_source_language(None, "export { type as runtimeType } from './foo';"),
+        SourceLanguage::JavaScript
+    );
+    assert_eq!(
+        classify_source_language(None, "import type from './foo';"),
+        SourceLanguage::JavaScript
+    );
+}
+
+#[test]
 fn classify_mts_extension() {
     assert_eq!(
         classify_source_language(Some("module.mts"), "const x = 1;"),
@@ -1215,6 +1231,25 @@ fn prepare_source_entry_ts_hashes_differ() {
         prepared.source_ingestion.original_source_hash,
         prepared.source_ingestion.normalized_source_hash
     );
+}
+
+#[test]
+fn prepare_source_entry_js_runtime_binding_named_type_stays_javascript() {
+    let source = "import { type as runtimeType } from './pkg';\nconst value = runtimeType;";
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        source,
+        "runtime_type_binding.js",
+        "t-rt-type",
+        "d-rt-type",
+        "p-rt-type",
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.source_ingestion.source_language,
+        SourceLanguage::JavaScript
+    );
+    assert!(!prepared.source_ingestion.normalization_applied);
+    assert_eq!(prepared.prepared_source, source);
 }
 
 #[test]
@@ -1920,6 +1955,17 @@ fn normalize_default_plus_type_only_named_import_specifiers() {
 }
 
 #[test]
+fn normalize_runtime_binding_named_type_specifier_is_preserved() {
+    let source = "import { type as runtimeType, keep } from 'pkg';\nconst x = runtimeType ?? keep;";
+    let output = normalize(source).unwrap();
+    assert!(
+        output
+            .normalized_source
+            .contains("import { type as runtimeType, keep } from 'pkg';")
+    );
+}
+
+#[test]
 fn normalize_mixed_named_type_and_runtime_export_specifiers() {
     let source = "export { type Foo, bar, type Baz as Qux } from 'pkg';\nconst x = 1;";
     let output = normalize(source).unwrap();
@@ -1930,6 +1976,13 @@ fn normalize_mixed_named_type_and_runtime_export_specifiers() {
     );
     assert!(!output.normalized_source.contains("type Foo"));
     assert!(!output.normalized_source.contains("type Baz"));
+}
+
+#[test]
+fn normalize_runtime_default_import_named_type_is_preserved() {
+    let source = "import type from 'pkg';\nconst x = type;";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("import type from 'pkg';"));
 }
 
 #[test]

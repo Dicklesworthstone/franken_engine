@@ -375,8 +375,15 @@ fn select_partition_end(
         .map(|boundary| boundary.end)
 }
 
+fn collect_internal_partition_boundaries(input: &[u8]) -> Vec<PartitionBoundary> {
+    let len = input.len() as u64;
+    let mut boundaries = collect_partition_boundaries(input);
+    boundaries.retain(|boundary| boundary.end < len);
+    boundaries
+}
+
 fn has_deterministic_split_points(input: &[u8]) -> bool {
-    !collect_partition_boundaries(input).is_empty()
+    !collect_internal_partition_boundaries(input).is_empty()
 }
 
 /// Compute deterministic chunk boundaries using depth-aware split points.
@@ -392,8 +399,7 @@ pub fn compute_chunk_plan(input: &[u8], max_workers: u32) -> ChunkPlan {
         };
     }
 
-    let mut boundaries = collect_partition_boundaries(input);
-    boundaries.retain(|boundary| boundary.end < len);
+    let boundaries = collect_internal_partition_boundaries(input);
     if boundaries.is_empty() {
         let chunks = vec![(0, len)];
         let plan_hash = compute_plan_hash(&chunks);
@@ -2077,12 +2083,16 @@ fn check_parity(parallel: &[Token], serial: &[Token]) -> ParityResult {
 /// Compute a routing digest for the given input and configuration.
 pub fn compute_routing_digest(source: &str, config: &ParallelConfig) -> RoutingDigest {
     let input_bytes = source.len() as u64;
-    let has_partition_points = has_deterministic_split_points(source.as_bytes());
+    let internal_boundaries = collect_internal_partition_boundaries(source.as_bytes());
+    let has_partition_points = !internal_boundaries.is_empty();
     let should_parallel =
         input_bytes >= config.min_parallel_bytes && config.max_workers > 1 && has_partition_points;
 
     let effective_workers = if should_parallel {
-        config.max_workers.min(input_bytes as u32)
+        config
+            .max_workers
+            .min(input_bytes as u32)
+            .min(internal_boundaries.len() as u32 + 1)
     } else {
         1
     };
@@ -2280,6 +2290,22 @@ mod tests {
     }
 
     #[test]
+    fn trailing_eof_newline_does_not_trigger_parallel_routing() {
+        let config = ParallelConfig {
+            min_parallel_bytes: 1,
+            max_workers: 8,
+            ..default_config()
+        };
+        let input = make_input("only_one_boundary_at_eof\n", &config);
+        let output = parse(&input).unwrap();
+        assert_eq!(output.mode, ParserMode::Serial);
+        assert!(matches!(
+            output.serial_reason,
+            Some(SerialReason::NoDeterministicSplitPoints)
+        ));
+    }
+
+    #[test]
     fn single_worker_routes_to_serial() {
         let config = ParallelConfig {
             max_workers: 1,
@@ -2395,6 +2421,12 @@ mod tests {
                 "chunk boundary {end} was not a validated safe split point"
             );
         }
+    }
+
+    #[test]
+    fn has_deterministic_split_points_requires_internal_boundary() {
+        assert!(!has_deterministic_split_points(b"only_eof_boundary\n"));
+        assert!(has_deterministic_split_points(b"internal\nboundary"));
     }
 
     // --- Merge tests ---
@@ -3223,6 +3255,33 @@ mod tests {
         assert_eq!(digest.decision, ParserMode::Serial);
         assert!(!digest.has_partition_points);
         assert!(digest.rationale.contains("no deterministic split points"));
+    }
+
+    #[test]
+    fn routing_digest_trailing_eof_newline_stays_serial() {
+        let config = ParallelConfig {
+            min_parallel_bytes: 1,
+            max_workers: 8,
+            ..default_config()
+        };
+        let digest = compute_routing_digest("only_one_boundary_at_eof\n", &config);
+        assert_eq!(digest.decision, ParserMode::Serial);
+        assert_eq!(digest.effective_workers, 1);
+        assert!(!digest.has_partition_points);
+        assert!(digest.rationale.contains("no deterministic split points"));
+    }
+
+    #[test]
+    fn routing_digest_effective_workers_track_available_internal_boundaries() {
+        let config = ParallelConfig {
+            min_parallel_bytes: 1,
+            max_workers: 8,
+            ..default_config()
+        };
+        let digest = compute_routing_digest("left_chunk\nright_chunk_without_more_splits", &config);
+        assert_eq!(digest.decision, ParserMode::Parallel);
+        assert_eq!(digest.effective_workers, 2);
+        assert!(digest.has_partition_points);
     }
 
     #[test]

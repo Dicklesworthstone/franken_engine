@@ -503,6 +503,13 @@ pub struct ArrayProfile {
 pub enum FastLaneError {
     /// The typed array's buffer has been detached.
     DetachedBuffer,
+    /// Byte offset is not aligned to the element size.
+    MisalignedByteOffset {
+        /// Actual byte offset.
+        offset: u64,
+        /// Required alignment in bytes.
+        alignment: u64,
+    },
     /// Byte length does not match expected value.
     InvalidByteLength {
         /// Expected byte length.
@@ -522,6 +529,12 @@ impl std::fmt::Display for FastLaneError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DetachedBuffer => write!(f, "typed array buffer is detached"),
+            Self::MisalignedByteOffset { offset, alignment } => {
+                write!(
+                    f,
+                    "misaligned byte offset: offset {offset} must be a multiple of {alignment}"
+                )
+            }
             Self::InvalidByteLength { expected, actual } => {
                 write!(f, "invalid byte length: expected {expected}, got {actual}")
             }
@@ -721,14 +734,22 @@ pub fn compute_element_size(kind: &TypedArrayKind) -> u64 {
 ///
 /// Checks:
 /// 1. Buffer is not detached.
-/// 2. `byte_length` equals `element_count * element_size`.
-/// 3. `byte_offset + byte_length` does not overflow.
+/// 2. `byte_offset` is aligned to the element size.
+/// 3. `byte_length` equals `element_count * element_size`.
+/// 4. `byte_offset + byte_length` does not overflow.
 pub fn validate_typed_array(validation: &TypedArrayValidation) -> Result<(), FastLaneError> {
     if validation.is_detached {
         return Err(FastLaneError::DetachedBuffer);
     }
 
     let element_size = compute_element_size(&validation.kind);
+    if validation.byte_offset % element_size != 0 {
+        return Err(FastLaneError::MisalignedByteOffset {
+            offset: validation.byte_offset,
+            alignment: element_size,
+        });
+    }
+
     let expected_byte_length = validation
         .element_count
         .checked_mul(element_size)
@@ -1154,6 +1175,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_misaligned_byte_offset() {
+        let v = TypedArrayValidation {
+            kind: TypedArrayKind::Int32,
+            byte_length: 40,
+            element_count: 10,
+            is_detached: false,
+            is_shared: false,
+            byte_offset: 2,
+        };
+        assert_eq!(
+            validate_typed_array(&v),
+            Err(FastLaneError::MisalignedByteOffset {
+                offset: 2,
+                alignment: 4,
+            })
+        );
+    }
+
+    #[test]
     fn validate_overflow_protection() {
         let v = TypedArrayValidation {
             kind: TypedArrayKind::Float64,
@@ -1511,5 +1551,17 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("40"));
         assert!(msg.contains("80"));
+    }
+
+    #[test]
+    fn error_display_misaligned_byte_offset() {
+        let err = FastLaneError::MisalignedByteOffset {
+            offset: 6,
+            alignment: 4,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("6"));
+        assert!(msg.contains("4"));
+        assert!(msg.contains("multiple"));
     }
 }

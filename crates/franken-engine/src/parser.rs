@@ -2474,10 +2474,11 @@ fn parse_statement(
     {
         return self::parse_continue_statement(statement, span);
     }
-    if statement.starts_with("function ") || statement.starts_with("function*(") {
-        return self::parse_function_declaration(statement, span, context);
-    }
-    if statement.starts_with("async function ") {
+    if statement.starts_with("function ")
+        || statement.starts_with("function*")
+        || statement.starts_with("async function ")
+        || statement.starts_with("async function*")
+    {
         return self::parse_function_declaration(statement, span, context);
     }
     if statement.starts_with('{') && statement.ends_with('}') {
@@ -6899,6 +6900,15 @@ fn parse_function_declaration(
         )
     };
 
+    if name.is_none() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "function declarations require a binding name",
+            context.source_label.to_string(),
+            Some(span),
+        ));
+    }
+
     // Parse parameters.
     let (params_src, rest) = extract_balanced(rest, '(', ')').ok_or_else(|| {
         ParseError::new(
@@ -10591,6 +10601,52 @@ mod tests {
             }
             other => panic!("expected FunctionDeclaration, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn generator_function_declaration_without_space_after_function_keyword() {
+        let tree = parse_script("function* gen() { yield 1 }");
+        match &tree.body[0] {
+            Statement::FunctionDeclaration(f) => {
+                assert_eq!(f.name.as_deref(), Some("gen"));
+                assert!(!f.is_async);
+                assert!(f.is_generator);
+            }
+            other => panic!("expected FunctionDeclaration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn async_generator_function_declaration_without_space_after_function_keyword() {
+        let tree = parse_script("async function* gen() { yield 1 }");
+        match &tree.body[0] {
+            Statement::FunctionDeclaration(f) => {
+                assert_eq!(f.name.as_deref(), Some("gen"));
+                assert!(f.is_async);
+                assert!(f.is_generator);
+            }
+            other => panic!("expected FunctionDeclaration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anonymous_function_statement_is_rejected() {
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("function () { return 1 }", ParseGoal::Script)
+            .expect_err("anonymous function statement must fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert!(err.message.contains("binding name"));
+    }
+
+    #[test]
+    fn anonymous_generator_function_statement_is_rejected() {
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("function* () { yield 1 }", ParseGoal::Script)
+            .expect_err("anonymous generator statement must fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert!(err.message.contains("binding name"));
     }
 
     #[test]

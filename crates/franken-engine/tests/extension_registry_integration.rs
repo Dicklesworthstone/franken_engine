@@ -457,6 +457,53 @@ fn search_respects_limit() {
 }
 
 #[test]
+fn search_limit_applies_after_sorting() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    let v = PackageVersion::new(1, 0, 0);
+
+    let later = manifest("testorg", "zz-top", v, &pub_id, &vk);
+    publish(&mut reg, &later, &sk).unwrap();
+
+    let earlier = manifest("testorg", "aa-first", v, &pub_id, &vk);
+    publish(&mut reg, &earlier, &sk).unwrap();
+
+    let results = reg.search(&PackageQuery {
+        limit: 1,
+        ..PackageQuery::default()
+    });
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].manifest.name, "aa-first");
+}
+
+#[test]
+fn publish_rejects_manifest_publisher_key_mismatch() {
+    let (mut reg, pub_id, sk, vk) = setup();
+    let rogue_sk = signing_key(19);
+    let rogue_vk = vk_from(&rogue_sk);
+    let v = PackageVersion::new(1, 0, 0);
+    let m = manifest("testorg", "ext", v, &pub_id, &rogue_vk);
+
+    let result = publish(&mut reg, &m, &sk);
+    assert!(matches!(
+        result,
+        Err(RegistryError::PublisherKeyMismatch { publisher_id }) if publisher_id == pub_id
+    ));
+
+    let last_event = reg.export_audit_log().last().unwrap();
+    assert_eq!(last_event.event_type, RegistryEventType::VerificationFailed);
+    assert_eq!(last_event.outcome, EventOutcome::Denied);
+    assert_eq!(last_event.publisher_id, Some(pub_id.clone()));
+    assert_eq!(last_event.scope.as_deref(), Some("testorg"));
+    assert_eq!(last_event.name.as_deref(), Some("ext"));
+    assert_eq!(last_event.version, Some(v));
+    assert_eq!(
+        last_event.error_code.as_deref(),
+        Some("publisher_key_mismatch")
+    );
+    assert_eq!(vk, reg.get_publisher(&pub_id).unwrap().verification_key);
+}
+
+#[test]
 fn search_revoked_visibility() {
     let (mut reg, pub_id, sk, vk) = setup();
     let v1 = PackageVersion::new(1, 0, 0);

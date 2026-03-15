@@ -260,6 +260,25 @@ fn integration_validate_typed_array_byte_length_mismatch() {
 }
 
 #[test]
+fn integration_validate_typed_array_misaligned_offset() {
+    let v = TypedArrayValidation {
+        kind: TypedArrayKind::Int32,
+        byte_length: 40,
+        element_count: 10,
+        is_detached: false,
+        is_shared: false,
+        byte_offset: 2,
+    };
+    assert_eq!(
+        validate_typed_array(&v).unwrap_err(),
+        FastLaneError::MisalignedByteOffset {
+            offset: 2,
+            alignment: 4,
+        }
+    );
+}
+
+#[test]
 fn integration_validate_typed_array_overflow() {
     let v = TypedArrayValidation {
         kind: TypedArrayKind::BigInt64,
@@ -475,6 +494,10 @@ fn integration_certify_fast_lane_serde_roundtrip() {
 fn integration_fast_lane_error_serde_roundtrip() {
     let errors = vec![
         FastLaneError::DetachedBuffer,
+        FastLaneError::MisalignedByteOffset {
+            offset: 2,
+            alignment: 4,
+        },
         FastLaneError::InvalidByteLength {
             expected: 80,
             actual: 100,
@@ -496,6 +519,14 @@ fn integration_fast_lane_error_display() {
         FastLaneError::DetachedBuffer
             .to_string()
             .contains("detached")
+    );
+    assert!(
+        FastLaneError::MisalignedByteOffset {
+            offset: 2,
+            alignment: 4,
+        }
+        .to_string()
+        .contains("multiple")
     );
     assert!(
         FastLaneError::OverflowProtection
@@ -655,6 +686,10 @@ fn enrichment_deopt_reason_debug_all_variants() {
 fn enrichment_fast_lane_error_debug_all_variants() {
     let errors = vec![
         FastLaneError::DetachedBuffer,
+        FastLaneError::MisalignedByteOffset {
+            offset: 2,
+            alignment: 4,
+        },
         FastLaneError::InvalidByteLength {
             expected: 1,
             actual: 2,
@@ -893,6 +928,10 @@ fn enrichment_evidence_manifest_clone() {
 fn enrichment_fast_lane_error_clone() {
     let errors = vec![
         FastLaneError::DetachedBuffer,
+        FastLaneError::MisalignedByteOffset {
+            offset: 2,
+            alignment: 4,
+        },
         FastLaneError::InvalidByteLength {
             expected: 10,
             actual: 20,
@@ -1569,6 +1608,17 @@ fn enrichment_error_display_invalid_element_kind_text() {
     let msg = FastLaneError::InvalidElementKind.to_string();
     assert!(msg.contains("invalid"));
     assert!(msg.contains("element kind"));
+}
+
+#[test]
+fn enrichment_error_display_misaligned_offset_text() {
+    let msg = FastLaneError::MisalignedByteOffset {
+        offset: 6,
+        alignment: 4,
+    }
+    .to_string();
+    assert!(msg.contains("offset"));
+    assert!(msg.contains("multiple"));
 }
 
 // ---------------------------------------------------------------------------

@@ -61,6 +61,8 @@ pub enum RegistryError {
     PublisherNotFound { publisher_id: EngineObjectId },
     /// Publisher key has been revoked.
     PublisherRevoked { publisher_id: EngineObjectId },
+    /// Manifest-embedded publisher key does not match the registered publisher key.
+    PublisherKeyMismatch { publisher_id: EngineObjectId },
     /// Package with this name and version already exists.
     PackageAlreadyExists {
         scope: String,
@@ -110,6 +112,12 @@ impl fmt::Display for RegistryError {
             }
             Self::PublisherRevoked { publisher_id } => {
                 write!(f, "publisher revoked: {publisher_id}")
+            }
+            Self::PublisherKeyMismatch { publisher_id } => {
+                write!(
+                    f,
+                    "manifest publisher key does not match registered publisher: {publisher_id}"
+                )
             }
             Self::PackageAlreadyExists {
                 scope,
@@ -875,6 +883,22 @@ impl ExtensionRegistry {
             });
         }
 
+        if manifest.publisher_key != publisher.verification_key {
+            self.emit_event(
+                RegistryEventType::VerificationFailed,
+                EventOutcome::Denied,
+                Some(pub_id.clone()),
+                None,
+                Some(manifest.scope.clone()),
+                Some(manifest.name.clone()),
+                Some(manifest.version),
+                Some("publisher_key_mismatch".to_string()),
+            );
+            return Err(RegistryError::PublisherKeyMismatch {
+                publisher_id: pub_id,
+            });
+        }
+
         // 3. Verify scope ownership.
         if !self.publisher_owns_scope(&pub_id, &manifest.scope) {
             return Err(RegistryError::ScopeNotOwned {
@@ -1009,7 +1033,6 @@ impl ExtensionRegistry {
                 }
                 true
             })
-            .take(query.limit)
             .collect();
         results.sort_by(|a, b| {
             a.manifest
@@ -1018,6 +1041,7 @@ impl ExtensionRegistry {
                 .then(a.manifest.name.cmp(&b.manifest.name))
                 .then(a.manifest.version.cmp(&b.manifest.version))
         });
+        results.truncate(query.limit);
         results
     }
 
@@ -1078,6 +1102,14 @@ impl ExtensionRegistry {
             errors.push("publisher revoked or not found".to_string());
         }
 
+        let publisher_key_matches_registry = self
+            .get_publisher(&pkg.manifest.publisher_id)
+            .is_some_and(|publisher| publisher.verification_key == pkg.manifest.publisher_key);
+        if !publisher_key_matches_registry {
+            errors
+                .push("manifest publisher key does not match registered publisher key".to_string());
+        }
+
         let package_active = !pkg.revoked;
         if !package_active {
             errors.push("package has been revoked".to_string());
@@ -1093,6 +1125,7 @@ impl ExtensionRegistry {
         let valid = structure_valid
             && artifacts_root_valid
             && publisher_active
+            && publisher_key_matches_registry
             && package_active
             && signature_valid;
 
@@ -1959,6 +1992,9 @@ mod tests {
             RegistryError::PublisherRevoked {
                 publisher_id: EngineObjectId([0; 32]),
             },
+            RegistryError::PublisherKeyMismatch {
+                publisher_id: EngineObjectId([0; 32]),
+            },
             RegistryError::PackageAlreadyExists {
                 scope: "s".to_string(),
                 name: "n".to_string(),
@@ -2118,6 +2154,9 @@ mod tests {
             },
             RegistryError::PublisherRevoked {
                 publisher_id: EngineObjectId([2; 32]),
+            },
+            RegistryError::PublisherKeyMismatch {
+                publisher_id: EngineObjectId([9; 32]),
             },
             RegistryError::PackageAlreadyExists {
                 scope: "sc".to_string(),
@@ -2372,6 +2411,75 @@ mod tests {
             ..PackageQuery::default()
         });
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn search_limit_applies_after_deterministic_sort() {
+        let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
+        let v = PackageVersion::new(1, 0, 0);
+
+        let later = build_manifest("testorg", "zz-top", v, &pub_id, &vk);
+        sign_and_publish(&mut reg, &later, &sk).unwrap();
+
+        let earlier = build_manifest("testorg", "aa-first", v, &pub_id, &vk);
+        sign_and_publish(&mut reg, &earlier, &sk).unwrap();
+
+        let results = reg.search(&PackageQuery {
+            limit: 1,
+            ..PackageQuery::default()
+        });
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].manifest.name, "aa-first");
+    }
+
+    #[test]
+    fn verify_package_reports_manifest_publisher_key_mismatch() {
+        let (mut reg, pub_id, sk, _) = setup_registry_with_publisher();
+        let rogue_vk = test_verification_key_from(&second_signing_key());
+        let v = PackageVersion::new(1, 0, 0);
+        let manifest = build_manifest("testorg", "ext", v, &pub_id, &rogue_vk);
+        let package_id = SignedPackage::derive_package_id(&manifest).unwrap();
+        let signature = sign_preimage(&sk, &manifest.unsigned_bytes()).unwrap();
+
+        reg.package_index.push((
+            package_id.clone(),
+            PackageKey {
+                scope: "testorg".to_string(),
+                name: "ext".to_string(),
+                version: v,
+            },
+        ));
+        reg.packages.push(SignedPackage {
+            manifest,
+            signature,
+            package_id: package_id.clone(),
+            published_at: reg.current_tick,
+            revoked: false,
+            revoked_at: None,
+            revocation_reason: None,
+        });
+
+        let result = reg.verify_package("testorg", "ext", v).unwrap();
+        assert!(!result.valid);
+        assert!(!result.signature_valid);
+        assert_eq!(result.publisher_key, rogue_vk);
+        assert!(
+            result.errors.iter().any(
+                |error| error.contains("publisher key does not match registered publisher key")
+            )
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("signature verification failed"))
+        );
+        let last_event = reg.export_audit_log().last().unwrap();
+        assert_eq!(last_event.event_type, RegistryEventType::VerificationFailed);
+        assert_eq!(last_event.outcome, EventOutcome::Denied);
+        assert_eq!(last_event.package_id, Some(package_id));
+        assert_eq!(last_event.publisher_id, Some(pub_id));
+        assert_eq!(last_event.version, Some(v));
     }
 
     #[test]
